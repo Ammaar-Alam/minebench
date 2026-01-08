@@ -35,8 +35,8 @@ export function VoteBar({
   onVote: (choice: VoteChoice) => void;
 }) {
   return (
-    <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-      <div className="text-sm text-muted">Which build is better?</div>
+    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div className="text-sm font-medium text-fg">Which build is better?</div>
       <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap">
         <VoteButton disabled={disabled} label="Vote A" onClick={() => onVote("A")} />
         <VoteButton disabled={disabled} label="Vote B" onClick={() => onVote("B")} />

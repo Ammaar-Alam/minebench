@@ -22,10 +22,10 @@
     --success: 152 60% 34%;
 
     /* Background effects */
-    --bg-mesh-opacity: 0.55;
-    --bg-anim-opacity: 0.30;
-    --bg-grid-opacity: 0.55;
-    --bg-noise-opacity: 0.028;
+    --bg-mesh-opacity: 0.40;
+    --bg-anim-opacity: 0.20;
+    --bg-grid-opacity: 0.20;
+    --bg-noise-opacity: 0.02;
   }
 
   :root[data-theme="dark"] {
@@ -45,8 +45,8 @@
     --success: 152 70% 44%;
 
     --bg-mesh-opacity: 0.18;
-    --bg-anim-opacity: 0.12;
-    --bg-grid-opacity: 0.26;
+    --bg-anim-opacity: 0.10;
+    --bg-grid-opacity: 0.22;
     --bg-noise-opacity: 0.05;
   }
 
@@ -130,7 +130,7 @@
 
 @layer components {
   .mb-panel {
-    @apply relative overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border;
+    @apply relative overflow-hidden rounded-3xl bg-card/80 shadow-soft backdrop-blur-xl ring-1 ring-border;
   }
 
   .mb-panel::before {
@@ -149,19 +149,19 @@
   }
 
   .mb-subpanel {
-    @apply rounded-2xl bg-bg/40 ring-1 ring-border/70;
+    @apply rounded-2xl bg-bg/60 ring-1 ring-border/70;
   }
 
   .mb-badge {
-    @apply inline-flex items-center gap-2 rounded-full bg-bg/60 px-3 py-1 text-xs font-medium text-muted ring-1 ring-border/80;
+    @apply inline-flex items-center gap-2 rounded-full bg-bg/70 px-3 py-1 text-xs font-medium text-muted ring-1 ring-border/80;
   }
 
   .mb-dot {
-    @apply h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_0_3px_hsl(var(--accent)_/_0.18)];
+    @apply h-1.5 w-1.5 rounded-sm bg-accent shadow-[0_0_0_3px_hsl(var(--accent)_/_0.18)];
   }
 
   .mb-field {
-    @apply w-full rounded-xl border border-border bg-bg/40 px-3 text-sm text-fg shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] outline-none transition;
+    @apply w-full rounded-xl border border-border bg-bg/70 px-3 text-sm text-fg shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] outline-none transition;
   }
 
   .mb-field:focus-visible {
@@ -172,7 +172,7 @@
   }
 
   .mb-btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg transition focus-visible:outline-none;
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg transition duration-150 ease-out focus-visible:outline-none;
   }
 
   .mb-btn:focus-visible {
@@ -184,18 +184,34 @@
   }
 
   .mb-btn-primary {
-    @apply bg-accent/20 ring-1 ring-accent/40 hover:bg-accent/25;
+    @apply bg-accent/20 ring-1 ring-accent/40 hover:bg-accent/25 hover:shadow-glow;
   }
 
   .mb-btn-ghost {
-    @apply bg-bg/30 ring-1 ring-border/80 hover:bg-bg/50;
+    @apply bg-bg/50 ring-1 ring-border/80 hover:bg-bg/60 hover:shadow-soft;
   }
 
   .mb-btn-danger {
-    @apply bg-danger/20 ring-1 ring-danger/40 hover:bg-danger/25;
+    @apply bg-danger/20 ring-1 ring-danger/40 hover:bg-danger/25 hover:shadow-soft;
   }
 
   .mb-kbd {
     @apply rounded-md border border-border/80 bg-bg/50 px-1.5 py-0.5 font-mono text-[11px] text-muted;
+  }
+
+  .mb-chip {
+    @apply inline-flex select-none items-center gap-2 rounded-full bg-bg/55 px-3 py-1.5 text-sm font-medium text-fg ring-1 ring-border/80 transition duration-150 ease-out;
+  }
+
+  .mb-chip:hover {
+    @apply bg-bg/70;
+  }
+
+  .mb-chip[aria-pressed="true"] {
+    @apply bg-accent/20 ring-accent/40 shadow-glow;
+  }
+
+  .mb-chip[disabled] {
+    @apply cursor-not-allowed opacity-55;
   }
 }

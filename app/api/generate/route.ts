@@ -13,6 +13,9 @@ const reqSchema = z.object({
   modelKeys: z.array(z.string()).min(1).max(8),
 });
 
+const STREAM_PAD = " ".repeat(2048);
+const PING_INTERVAL_MS = 15_000;
+
 function isModelKey(v: string): v is ModelKey {
   try {
     getModelByKey(v as ModelKey);
@@ -40,6 +43,7 @@ export async function POST(req: Request) {
 
   const encoder = new TextEncoder();
   let closed = false;
+  let ping: ReturnType<typeof setInterval> | null = null;
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -50,18 +54,27 @@ export async function POST(req: Request) {
         } catch {
           // client disconnected / stream already closed
           closed = true;
+          if (ping) clearInterval(ping);
         }
       };
+
+      ping = setInterval(() => {
+        send({ type: "ping", ts: Date.now() });
+      }, PING_INTERVAL_MS);
 
       const safeClose = () => {
         if (closed) return;
         closed = true;
         try {
+          if (ping) clearInterval(ping);
           controller.close();
         } catch {
           // already closed
         }
       };
+
+      // A larger first chunk helps avoid proxy buffering so the client receives events immediately.
+      send({ type: "hello", ts: Date.now(), pad: STREAM_PAD });
 
       let pending = modelKeys.length;
       for (const modelKey of modelKeys) {
@@ -109,13 +122,15 @@ export async function POST(req: Request) {
     },
     cancel() {
       closed = true;
+      if (ping) clearInterval(ping);
     },
   });
 
   return new Response(stream, {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store",
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
       "X-Accel-Buffering": "no",
     },
   });

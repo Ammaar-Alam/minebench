@@ -14,8 +14,10 @@ function getInitialTheme(): Theme {
     if (fromDom === "dark" || fromDom === "light") return fromDom;
   }
   if (typeof window !== "undefined") {
-    const saved = window.localStorage.getItem(THEME_KEY);
-    if (saved === "dark" || saved === "light") return saved;
+    try {
+      const saved = window.localStorage.getItem(THEME_KEY);
+      if (saved === "dark" || saved === "light") return saved;
+    } catch {}
   }
   return "light";
 }
@@ -23,12 +25,14 @@ function getInitialTheme(): Theme {
 function applyTheme(theme: Theme) {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
-  window.localStorage.setItem(THEME_KEY, theme);
+  try {
+    window.localStorage.setItem(THEME_KEY, theme);
+  } catch {}
 }
 
 function CubeMark() {
   return (
-    <div className="grid h-9 w-9 place-items-center rounded-xl bg-card/60 shadow-soft ring-1 ring-border">
+    <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-card/70 via-bg/40 to-accent/15 shadow-soft ring-1 ring-border backdrop-blur">
       <svg
         aria-hidden="true"
         className="h-5 w-5 text-accent"
@@ -133,7 +137,10 @@ export function SiteHeader() {
           <CubeMark />
           <div className="leading-tight">
             <div className="font-display text-sm font-semibold tracking-tight text-fg">
-              MineBench
+              <span className="text-fg">Mine</span>
+              <span className="bg-gradient-to-r from-accent to-accent2 bg-clip-text text-transparent">
+                Bench
+              </span>
             </div>
             <div className="text-xs text-muted">
               A/B voxel builds • Elo arena • sandbox
@@ -141,7 +148,7 @@ export function SiteHeader() {
           </div>
         </Link>
 
-        <nav className="flex items-center gap-1 rounded-full bg-bg/50 p-1 ring-1 ring-border">
+        <nav className="flex items-center gap-1 rounded-full bg-bg/50 p-1 shadow-soft ring-1 ring-border">
           <NavLink href="/" label="Arena" />
           <NavLink href="/sandbox" label="Sandbox" />
           <NavLink href="/leaderboard" label="Leaderboard" />

@@ -29,22 +29,38 @@ export function PromptPicker({
   return (
     <label className="flex min-w-64 flex-col gap-1">
       <div className="text-xs font-medium text-muted">Prompt</div>
-      <select
-        className="mb-field h-10"
-        value={selectedPromptId ?? ""}
-        onChange={(e) => onChangePromptId(e.target.value)}
-      >
-        {prompts.length === 0 ? (
-          <option value="" disabled>
-            No prompts (seed required)
-          </option>
-        ) : null}
-        {prompts.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.text}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          className="mb-field h-10 w-full appearance-none pr-10"
+          value={selectedPromptId ?? ""}
+          onChange={(e) => onChangePromptId(e.target.value)}
+        >
+          {prompts.length === 0 ? (
+            <option value="" disabled>
+              No prompts (seed required)
+            </option>
+          ) : null}
+          {prompts.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.text}
+            </option>
+          ))}
+        </select>
+        <svg
+          aria-hidden="true"
+          className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+          viewBox="0 0 24 24"
+          fill="none"
+        >
+          <path
+            d="m7 10 5 5 5-5"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.8"
+          />
+        </svg>
+      </div>
     </label>
   );
 }

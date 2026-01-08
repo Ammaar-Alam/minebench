@@ -159,10 +159,12 @@ export function Arena() {
             />
           </div>
 
-          <VoteBar
-            disabled={state.kind !== "ready" || submitting}
-            onVote={handleVote}
-          />
+          <div className="mb-subpanel p-4">
+            <VoteBar
+              disabled={state.kind !== "ready" || submitting}
+              onVote={handleVote}
+            />
+          </div>
 
           <div className="mb-subpanel flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
             <div className="flex flex-col gap-1">

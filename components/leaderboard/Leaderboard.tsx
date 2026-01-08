@@ -48,8 +48,8 @@ export function Leaderboard() {
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
-        <table className="w-full text-left text-sm">
+      <div className="overflow-x-auto rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
+        <table className="min-w-[760px] w-full text-left text-sm">
           <thead className="border-b border-border bg-bg/25 text-xs uppercase tracking-wide text-muted">
             <tr>
               <th className="px-4 py-3">Model</th>

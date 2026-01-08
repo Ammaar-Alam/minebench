@@ -11,6 +11,7 @@
     "db:wait": "node scripts/wait-for-db.mjs",
     "dev:setup": "pnpm env:ensure && pnpm atlas && pnpm db:reset && pnpm db:wait && pnpm prisma:migrate && pnpm dev",
     "dev": "next dev",
+    "prebuild": "prisma generate",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

@@ -70,8 +70,11 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     controls: OrbitControls;
   } | null>(null);
 
-  const [spacePanning, setSpacePanning] = useState(false);
+  type DragMode = "orbit" | "pan";
+  const [dragMode, setDragMode] = useState<DragMode>("orbit");
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const dragModeBeforeSpaceRef = useRef<DragMode>("orbit");
+  const spaceHeldRef = useRef(false);
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
 
@@ -96,6 +99,13 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       }
     } catch {}
   }
+
+  useEffect(() => {
+    const three = threeRef.current;
+    if (!three) return;
+    three.controls.mouseButtons.LEFT = dragMode === "pan" ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
+    three.controls.touches.ONE = dragMode === "pan" ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE;
+  }, [dragMode]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -302,20 +312,21 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
   return (
     <div
       ref={containerRef}
-      className={`relative h-full w-full ${spacePanning ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
+      className={`relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${dragMode === "pan" ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
       tabIndex={0}
       onPointerDown={() => containerRef.current?.focus()}
       onBlur={() => {
-        setSpacePanning(false);
-        const three = threeRef.current;
-        if (three) three.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+        if (spaceHeldRef.current) {
+          spaceHeldRef.current = false;
+          setDragMode(dragModeBeforeSpaceRef.current);
+        }
       }}
       onKeyDown={(e) => {
         if (e.code === "Space" && !e.repeat) {
           e.preventDefault();
-          setSpacePanning(true);
-          const three = threeRef.current;
-          if (three) three.controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+          spaceHeldRef.current = true;
+          dragModeBeforeSpaceRef.current = dragMode;
+          setDragMode("pan");
         }
         if ((e.key === "r" || e.key === "R") && !e.repeat) {
           e.preventDefault();
@@ -328,15 +339,22 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       }}
       onKeyUp={(e) => {
         if (e.code === "Space") {
-          setSpacePanning(false);
-          const three = threeRef.current;
-          if (three) three.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+          if (!spaceHeldRef.current) return;
+          spaceHeldRef.current = false;
+          setDragMode(dragModeBeforeSpaceRef.current);
         }
       }}
     >
       <div ref={mountRef} className="h-full w-full" />
 
       <div className="absolute right-3 top-3 flex items-center gap-2">
+        <button
+          aria-pressed={dragMode === "pan"}
+          className={`mb-btn h-9 px-3 text-xs ${dragMode === "pan" ? "mb-btn-primary" : "mb-btn-ghost"}`}
+          onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
+        >
+          Pan <span className="hidden sm:inline"><span className="mb-kbd">Space</span></span>
+        </button>
         <button className="mb-btn mb-btn-ghost h-9 px-3 text-xs" onClick={fitView}>
           Fit <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
         </button>

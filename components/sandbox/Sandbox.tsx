@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent } from "@/lib/ai/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
@@ -16,6 +16,7 @@ type ModelResult = {
   attempt?: number;
   retryReason?: string;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
+  startedAt?: number;
 };
 
 function groupByProvider() {
@@ -49,8 +50,15 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
       )
   );
   const [running, setRunning] = useState(false);
+  const [, forceRender] = useState(0);
 
   const providers = useMemo(() => groupByProvider(), []);
+
+  useEffect(() => {
+    if (!running) return;
+    const id = window.setInterval(() => forceRender((c) => c + 1), 250);
+    return () => window.clearInterval(id);
+  }, [running]);
 
   function toggleModel(key: ModelKey) {
     setSelectedModelKeys((prev) =>
@@ -62,16 +70,19 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
     if (!prompt.trim() || selectedModelKeys.length !== 2) return;
 
     setRunning(true);
+    forceRender((c) => c + 1);
     setResults((prev) => {
       const next = new Map(prev);
+      const now = Date.now();
       for (const key of selectedModelKeys) {
         next.set(key, {
           modelKey: key,
           status: "loading",
           voxelBuild: null,
-          attempt: 1,
+          attempt: 0,
           retryReason: undefined,
           metrics: undefined,
+          startedAt: now,
         });
       }
       return next;
@@ -111,17 +122,35 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
             console.warn("Failed to parse NDJSON line", e);
             continue;
           }
-          if (evt.type === "start") continue;
+          if (evt.type === "hello" || evt.type === "ping") continue;
+
+          if (evt.type === "start") {
+            setResults((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(evt.modelKey);
+              next.set(evt.modelKey, {
+                modelKey: evt.modelKey,
+                status: "loading",
+                voxelBuild: null,
+                attempt: 1,
+                startedAt: existing?.startedAt ?? Date.now(),
+              });
+              return next;
+            });
+            continue;
+          }
 
           if (evt.type === "retry") {
             setResults((prev) => {
               const next = new Map(prev);
+              const existing = next.get(evt.modelKey);
               next.set(evt.modelKey, {
                 modelKey: evt.modelKey,
                 status: "loading",
                 voxelBuild: null,
                 attempt: evt.attempt,
                 retryReason: evt.reason,
+                startedAt: existing?.startedAt ?? Date.now(),
               });
               return next;
             });
@@ -136,17 +165,20 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                 attempt: existing?.attempt,
                 retryReason: undefined,
                 metrics: evt.metrics,
+                startedAt: existing?.startedAt,
               });
               return next;
             });
           } else if (evt.type === "error") {
             setResults((prev) => {
               const next = new Map(prev);
+              const existing = next.get(evt.modelKey);
               next.set(evt.modelKey, {
                 modelKey: evt.modelKey,
                 status: "error",
                 voxelBuild: null,
                 error: evt.message,
+                startedAt: existing?.startedAt,
               });
               return next;
             });
@@ -180,6 +212,8 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   const resultCards = selectedModelKeys.map((key) => {
     const model = MODEL_CATALOG.find((m) => m.key === key);
     const r = results.get(key);
+    const elapsedMs =
+      r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     return (
       <VoxelViewerCard
         key={key}
@@ -191,6 +225,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
         error={r?.status === "error" ? r.error : undefined}
         attempt={r?.status === "loading" ? r.attempt : undefined}
         retryReason={r?.status === "loading" ? r.retryReason : undefined}
+        elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
         palette={palette}
       />
@@ -229,27 +264,59 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
 
             <label className="flex flex-col gap-1">
               <div className="text-xs font-medium text-muted">Grid</div>
-              <select
-                className="mb-field h-10"
-                value={gridSize}
-                onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
-              >
-                <option value={32}>32</option>
-                <option value={64}>64</option>
-                <option value={128}>128</option>
-              </select>
+              <div className="relative">
+                <select
+                  className="mb-field h-10 w-full appearance-none pr-10"
+                  value={gridSize}
+                  onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
+                >
+                  <option value={32}>32</option>
+                  <option value={64}>64</option>
+                  <option value={128}>128</option>
+                </select>
+                <svg
+                  aria-hidden="true"
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="m7 10 5 5 5-5"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </div>
             </label>
 
             <label className="flex flex-col gap-1">
               <div className="text-xs font-medium text-muted">Palette</div>
-              <select
-                className="mb-field h-10"
-                value={palette}
-                onChange={(e) => setPalette(e.target.value as Palette)}
-              >
-                <option value="simple">Simple</option>
-                <option value="advanced">Advanced</option>
-              </select>
+              <div className="relative">
+                <select
+                  className="mb-field h-10 w-full appearance-none pr-10"
+                  value={palette}
+                  onChange={(e) => setPalette(e.target.value as Palette)}
+                >
+                  <option value="simple">Simple</option>
+                  <option value="advanced">Advanced</option>
+                </select>
+                <svg
+                  aria-hidden="true"
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="m7 10 5 5 5-5"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </div>
             </label>
           </div>
 
@@ -263,26 +330,31 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
               {providers.map((g) => (
                 <div key={g.key} className="mb-subpanel p-4">
                   <div className="text-xs font-semibold text-fg">{g.label}</div>
-                  <div className="mt-3 flex flex-col gap-2">
-                    {g.models.map((m) => (
-                      <label
-                        key={m.key}
-                        className="flex items-center gap-2 text-sm text-fg"
-                      >
-                        <input
-                          className="h-4 w-4 accent-accent"
-                          type="checkbox"
-                          checked={selectedModelKeys.includes(m.key)}
-                          disabled={
-                            running ||
-                            (!selectedModelKeys.includes(m.key) &&
-                              selectedModelKeys.length >= 2)
-                          }
-                          onChange={() => toggleModel(m.key)}
-                        />
-                        <span>{m.displayName}</span>
-                      </label>
-                    ))}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {g.models.map((m) => {
+                      const selected = selectedModelKeys.includes(m.key);
+                      const disabled = running || (!selected && selectedModelKeys.length >= 2);
+                      return (
+                        <button
+                          key={m.key}
+                          type="button"
+                          className="mb-chip"
+                          aria-pressed={selected}
+                          disabled={disabled}
+                          onClick={() => toggleModel(m.key)}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={
+                              selected
+                                ? "h-2.5 w-2.5 rounded-sm bg-accent shadow-[0_0_0_3px_hsl(var(--accent)_/_0.16)]"
+                                : "h-2.5 w-2.5 rounded-sm bg-border/80"
+                            }
+                          />
+                          <span className="truncate">{m.displayName}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
