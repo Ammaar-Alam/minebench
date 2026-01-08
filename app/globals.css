@@ -5,6 +5,30 @@
 @layer base {
   :root {
     /* Colors (HSL channels) */
+    --bg: 0 0% 99%;
+    --bg2: 220 20% 97%;
+    --card: 0 0% 100%;
+    --card2: 220 20% 98%;
+    --border: 220 16% 86%;
+    --fg: 222 28% 10%;
+    --muted: 222 10% 36%;
+    --muted2: 222 8% 52%;
+
+    /* Brand + status */
+    --accent: 152 70% 38%;
+    --accent2: 282 82% 62%;
+    --danger: 0 80% 52%;
+    --warn: 40 95% 52%;
+    --success: 152 60% 34%;
+
+    /* Background effects */
+    --bg-mesh-opacity: 0.55;
+    --bg-anim-opacity: 0.30;
+    --bg-grid-opacity: 0.55;
+    --bg-noise-opacity: 0.028;
+  }
+
+  :root[data-theme="dark"] {
     --bg: 222 35% 6%;
     --bg2: 224 40% 4%;
     --card: 223 28% 10%;
@@ -14,12 +38,16 @@
     --muted: 220 10% 72%;
     --muted2: 220 9% 56%;
 
-    /* Brand + status */
     --accent: 168 88% 52%;
     --accent2: 282 82% 68%;
     --danger: 0 80% 62%;
     --warn: 40 95% 58%;
     --success: 152 70% 44%;
+
+    --bg-mesh-opacity: 0.18;
+    --bg-anim-opacity: 0.12;
+    --bg-grid-opacity: 0.26;
+    --bg-noise-opacity: 0.05;
   }
 
   html,
@@ -29,31 +57,74 @@
 
   body {
     font-family: var(--font-sans), system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-    background:
-      radial-gradient(900px 520px at 12% -5%, hsl(var(--accent) / 0.16), transparent 65%),
-      radial-gradient(820px 520px at 88% 0%, hsl(var(--accent2) / 0.14), transparent 60%),
-      linear-gradient(to bottom, hsl(var(--bg2)), hsl(var(--bg)));
     background-color: hsl(var(--bg));
     color: hsl(var(--fg));
   }
 
-  body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
+  @keyframes mb-gradient-shift {
+    0%,
+    100% {
+      background-position: 0% 50%;
+      opacity: 1;
+    }
+    50% {
+      background-position: 100% 50%;
+      opacity: 0.85;
+    }
+  }
+
+  .mb-bg-grid {
+    opacity: var(--bg-grid-opacity);
     background-image:
-      linear-gradient(to right, hsl(var(--border) / 0.08) 1px, transparent 1px),
-      linear-gradient(to bottom, hsl(var(--border) / 0.08) 1px, transparent 1px),
-      linear-gradient(to right, hsl(var(--border) / 0.13) 1px, transparent 1px),
-      linear-gradient(to bottom, hsl(var(--border) / 0.13) 1px, transparent 1px);
-    background-size: 28px 28px, 28px 28px, 140px 140px, 140px 140px;
-    opacity: 0.38;
-    mix-blend-mode: screen;
+      linear-gradient(to right, hsl(var(--border) / 0.26) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.26) 1px, transparent 1px),
+      linear-gradient(to right, hsl(var(--border) / 0.40) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.40) 1px, transparent 1px);
+    background-size: 26px 26px, 26px 26px, 156px 156px, 156px 156px;
+  }
+
+  :root[data-theme="dark"] .mb-bg-grid {
+    opacity: var(--bg-grid-opacity);
+    background-image:
+      linear-gradient(to right, hsl(var(--fg) / 0.05) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--fg) / 0.05) 1px, transparent 1px),
+      linear-gradient(to right, hsl(var(--fg) / 0.09) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--fg) / 0.09) 1px, transparent 1px);
+  }
+
+  .mb-bg-noise {
+    opacity: var(--bg-noise-opacity);
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  }
+
+  .mb-bg-mesh {
+    opacity: var(--bg-mesh-opacity);
+    background:
+      radial-gradient(ellipse 80% 60% at 5% 10%, rgba(96, 165, 250, 0.5) 0%, transparent 50%),
+      radial-gradient(ellipse 70% 50% at 95% 5%, rgba(167, 139, 250, 0.45) 0%, transparent 50%),
+      radial-gradient(ellipse 60% 55% at 80% 70%, rgba(251, 191, 36, 0.35) 0%, transparent 50%),
+      radial-gradient(ellipse 75% 60% at 15% 80%, rgba(244, 114, 182, 0.35) 0%, transparent 50%),
+      radial-gradient(ellipse 50% 40% at 50% 100%, rgba(139, 92, 246, 0.25) 0%, transparent 50%);
+  }
+
+  .mb-bg-anim {
+    opacity: var(--bg-anim-opacity);
+    background: linear-gradient(
+      135deg,
+      rgba(96, 165, 250, 0.25) 0%,
+      rgba(167, 139, 250, 0.2) 20%,
+      rgba(244, 114, 182, 0.18) 40%,
+      rgba(251, 191, 36, 0.2) 60%,
+      rgba(139, 92, 246, 0.2) 80%,
+      rgba(96, 165, 250, 0.25) 100%
+    );
+    background-size: 300% 300%;
+    animation: mb-gradient-shift 14s ease-in-out infinite;
   }
 
   ::selection {
-    background: hsl(var(--accent) / 0.25);
+    background: hsl(var(--accent) / 0.22);
+    color: hsl(var(--fg));
   }
 }
 

@@ -25,7 +25,7 @@ export default {
         success: "hsl(var(--success))",
       },
       boxShadow: {
-        soft: "0 10px 30px hsl(0 0% 0% / 0.35)",
+        soft: "0 12px 32px hsl(220 40% 2% / 0.14)",
         glow: "0 0 0 1px hsl(var(--accent) / 0.28), 0 18px 40px hsl(var(--accent) / 0.10)",
       },
     }

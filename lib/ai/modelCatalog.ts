@@ -50,14 +50,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     key: "anthropic_claude_4_5_sonnet",
     provider: "anthropic",
-    modelId: "claude-4.5-sonnet",
+    modelId: "claude-sonnet-4-5",
     displayName: "Claude 4.5 Sonnet",
     enabled: true,
   },
   {
     key: "anthropic_claude_4_5_opus",
     provider: "anthropic",
-    modelId: "claude-4.5-opus",
+    modelId: "claude-opus-4-5",
     displayName: "Claude 4.5 Opus",
     enabled: true,
   },

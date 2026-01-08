@@ -2,6 +2,29 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+
+type Theme = "light" | "dark";
+
+const THEME_KEY = "mb-theme";
+
+function getInitialTheme(): Theme {
+  if (typeof document !== "undefined") {
+    const fromDom = document.documentElement.dataset.theme;
+    if (fromDom === "dark" || fromDom === "light") return fromDom;
+  }
+  if (typeof window !== "undefined") {
+    const saved = window.localStorage.getItem(THEME_KEY);
+    if (saved === "dark" || saved === "light") return saved;
+  }
+  return "light";
+}
+
+function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  window.localStorage.setItem(THEME_KEY, theme);
+}
 
 function CubeMark() {
   return (
@@ -27,6 +50,60 @@ function CubeMark() {
         />
       </svg>
     </div>
+  );
+}
+
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== THEME_KEY) return;
+      if (e.newValue === "dark" || e.newValue === "light") {
+        setTheme(e.newValue);
+        applyTheme(e.newValue);
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  function toggleTheme() {
+    const next: Theme = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    applyTheme(next);
+  }
+
+  return (
+    <button
+      type="button"
+      aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      className="rounded-full px-3 py-2 text-sm text-muted transition hover:bg-card/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      onClick={toggleTheme}
+    >
+      <span className="flex items-center gap-2">
+        <span className="hidden sm:inline">{theme === "dark" ? "Light" : "Dark"}</span>
+        <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="none">
+          {theme === "dark" ? (
+            <path
+              d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.364-6.364-1.414 1.414M7.05 16.95l-1.414 1.414m0-11.314L7.05 7.05m9.9 9.9 1.414 1.414M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.5"
+            />
+          ) : (
+            <path
+              d="M21 13.2A7.5 7.5 0 0 1 10.8 3a6.8 6.8 0 1 0 10.2 10.2Z"
+              stroke="currentColor"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="1.5"
+            />
+          )}
+        </svg>
+      </span>
+    </button>
   );
 }
 
@@ -68,6 +145,8 @@ export function SiteHeader() {
           <NavLink href="/" label="Arena" />
           <NavLink href="/sandbox" label="Sandbox" />
           <NavLink href="/leaderboard" label="Leaderboard" />
+          <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
+          <ThemeToggle />
         </nav>
       </div>
     </header>
