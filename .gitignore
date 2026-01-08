@@ -6,6 +6,7 @@ node_modules
 
 .env
 .env.*.local
+.env.local
 !.env.example
 
 prisma/dev.db
