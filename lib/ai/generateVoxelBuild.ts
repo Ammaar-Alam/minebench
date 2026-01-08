@@ -1,6 +1,6 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
-import { extractFirstJsonObject } from "@/lib/ai/jsonExtract";
+import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
@@ -13,6 +13,12 @@ const MAX_BLOCKS_BY_GRID: Record<32 | 64 | 128, number> = {
   32: 15000,
   64: 40000,
   128: 50000,
+};
+
+const MIN_BLOCKS_BY_GRID: Record<32 | 64 | 128, number> = {
+  32: 80,
+  64: 200,
+  128: 300,
 };
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
@@ -90,9 +96,11 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
   const paletteDefs = getPalette(params.palette);
   const maxAttempts = params.maxAttempts ?? 3;
 
+  const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
   const system = buildSystemPrompt({
     gridSize: params.gridSize,
     maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
+    minBlocks,
     palette: params.palette,
   });
 
@@ -120,7 +128,7 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
       });
       previousText = text;
 
-      const json = extractFirstJsonObject(text);
+      const json = extractBestVoxelBuildJson(text);
       if (!json) {
         lastError = "Could not find a valid JSON object in the response";
         continue;
@@ -135,6 +143,11 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
       if (validated.value.build.blocks.length === 0) {
         lastError =
           "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
+        continue;
+      }
+
+      if (validated.value.build.blocks.length < minBlocks) {
+        lastError = `Build too small (${validated.value.build.blocks.length} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
         continue;
       }
 

@@ -3,6 +3,7 @@ import { getPalette } from "@/lib/blocks/palettes";
 export function buildSystemPrompt(opts: {
   gridSize: number;
   maxBlocks: number;
+  minBlocks: number;
   palette: "simple" | "advanced";
 }): string {
   const paletteBlocks = getPalette(opts.palette);
@@ -30,6 +31,7 @@ export function buildSystemPrompt(opts: {
     "- If the prompt includes specific features (e.g., 'with sails'), include them clearly.",
     "- Use appropriate materials (e.g., planks/logs for wood structures; wool for cloth/sails; stone for foundations; water for sea).",
     "- Keep the build reasonably sized so it fits in the grid and is fast to render.",
+    `- Prefer builds with at least ~${opts.minBlocks} blocks (unless the prompt explicitly asks for something tiny).`,
     "",
     "CONSTRAINTS",
     `- Do not exceed ${opts.maxBlocks} total blocks.`,
