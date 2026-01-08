@@ -39,10 +39,28 @@ export async function POST(req: Request) {
   }
 
   const encoder = new TextEncoder();
+  let closed = false;
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = (evt: GenerateEvent) => {
-        controller.enqueue(encoder.encode(JSON.stringify(evt) + "\n"));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(evt) + "\n"));
+        } catch {
+          // client disconnected / stream already closed
+          closed = true;
+        }
+      };
+
+      const safeClose = () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // already closed
+        }
       };
 
       let pending = modelKeys.length;
@@ -85,9 +103,12 @@ export async function POST(req: Request) {
           })
           .finally(() => {
             pending -= 1;
-            if (pending === 0) controller.close();
+            if (pending === 0) safeClose();
           });
       }
+    },
+    cancel() {
+      closed = true;
     },
   });
 

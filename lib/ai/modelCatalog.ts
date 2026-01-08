@@ -64,14 +64,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     key: "gemini_3_0_pro",
     provider: "gemini",
-    modelId: "gemini-3.0-pro",
+    modelId: "gemini-3-pro",
     displayName: "Gemini 3.0 Pro",
     enabled: true,
   },
   {
     key: "gemini_3_0_flash",
     provider: "gemini",
-    modelId: "gemini-3.0-flash",
+    modelId: "gemini-3-flash-preview",
     displayName: "Gemini 3.0 Flash",
     enabled: true,
   },
@@ -82,4 +82,3 @@ export function getModelByKey(key: ModelKey): ModelCatalogEntry {
   if (!found) throw new Error(`Unknown model key: ${key}`);
   return found;
 }
-
