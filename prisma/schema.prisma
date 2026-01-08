@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Model {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  provider    String
+  modelId     String
+  displayName String
+  enabled     Boolean  @default(true)
+  isBaseline  Boolean  @default(false)
+
+  eloRating     Float @default(1500)
+  shownCount    Int   @default(0)
+  winCount      Int   @default(0)
+  lossCount     Int   @default(0)
+  drawCount     Int   @default(0)
+  bothBadCount  Int   @default(0)
+
+  builds Build[]
+  matchupsAsA Matchup[] @relation("MatchupModelA")
+  matchupsAsB Matchup[] @relation("MatchupModelB")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled])
+}
+
+model Prompt {
+  id        String   @id @default(cuid())
+  text      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  builds  Build[]
+  matchups Matchup[]
+
+  @@unique([text])
+  @@index([active])
+}
+
+model Build {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  promptId String
+  prompt   Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  modelId String
+  model   Model @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  gridSize Int
+  palette  String
+  mode     String
+
+  voxelData         Json
+  blockCount        Int
+  generationTimeMs  Int
+
+  matchupsAsA Matchup[] @relation("MatchupBuildA")
+  matchupsAsB Matchup[] @relation("MatchupBuildB")
+
+  @@unique([promptId, modelId, gridSize, palette, mode])
+  @@index([promptId])
+  @@index([modelId])
+}
+
+model Matchup {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  promptId String
+  prompt   Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  modelAId String
+  modelA   Model @relation("MatchupModelA", fields: [modelAId], references: [id], onDelete: Restrict)
+
+  modelBId String
+  modelB   Model @relation("MatchupModelB", fields: [modelBId], references: [id], onDelete: Restrict)
+
+  buildAId String
+  buildA   Build @relation("MatchupBuildA", fields: [buildAId], references: [id], onDelete: Restrict)
+
+  buildBId String
+  buildB   Build @relation("MatchupBuildB", fields: [buildBId], references: [id], onDelete: Restrict)
+
+  votes Vote[]
+
+  @@index([promptId, createdAt])
+}
+
+model Vote {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  matchupId String
+  matchup   Matchup @relation(fields: [matchupId], references: [id], onDelete: Cascade)
+
+  sessionId String
+  choice    String
+
+  @@unique([matchupId, sessionId])
+  @@index([sessionId])
+}

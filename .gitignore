@@ -1,0 +1,13 @@
+node_modules
+.next
+.turbo
+
+.DS_Store
+
+.env
+.env.*.local
+!.env.example
+
+prisma/dev.db
+
+*.log
