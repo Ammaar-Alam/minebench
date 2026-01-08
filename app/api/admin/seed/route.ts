@@ -123,7 +123,6 @@ export async function POST(req: Request) {
       prompt: job.promptText,
       gridSize: ARENA_SETTINGS.gridSize,
       palette: ARENA_SETTINGS.palette,
-      mode: ARENA_SETTINGS.mode,
     });
 
     if (!r.ok) {
@@ -156,4 +155,3 @@ export async function POST(req: Request) {
     remainingEstimate: "Run again to continue seeding",
   });
 }
-

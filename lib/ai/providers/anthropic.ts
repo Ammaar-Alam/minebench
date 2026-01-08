@@ -6,7 +6,6 @@ export async function anthropicGenerateText(params: {
   modelId: string;
   system: string;
   user: string;
-  temperature: number;
   maxTokens: number;
 }): Promise<{ text: string }> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -22,7 +21,6 @@ export async function anthropicGenerateText(params: {
     body: JSON.stringify({
       model: params.modelId,
       max_tokens: params.maxTokens,
-      temperature: params.temperature,
       system: params.system,
       messages: [{ role: "user", content: params.user }],
     }),
@@ -41,4 +39,3 @@ export async function anthropicGenerateText(params: {
       .join("") ?? "";
   return { text };
 }
-

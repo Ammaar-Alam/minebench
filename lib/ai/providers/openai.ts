@@ -6,7 +6,6 @@ export async function openaiGenerateText(params: {
   modelId: string;
   system: string;
   user: string;
-  temperature: number;
 }): Promise<{ text: string }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
@@ -19,7 +18,6 @@ export async function openaiGenerateText(params: {
     },
     body: JSON.stringify({
       model: params.modelId,
-      temperature: params.temperature,
       messages: [
         { role: "system", content: params.system },
         { role: "user", content: params.user },
@@ -36,4 +34,3 @@ export async function openaiGenerateText(params: {
   const text = data.choices?.[0]?.message?.content ?? "";
   return { text };
 }
-

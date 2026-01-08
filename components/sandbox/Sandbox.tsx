@@ -5,7 +5,6 @@ import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent } from "@/lib/ai/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 
-type Mode = "precise" | "creative";
 type Palette = "simple" | "advanced";
 type GridSize = 32 | 64 | 128;
 
@@ -34,7 +33,6 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
   const [gridSize, setGridSize] = useState<GridSize>(64);
   const [palette, setPalette] = useState<Palette>("simple");
-  const [mode, setMode] = useState<Mode>("precise");
   const [selectedModelKeys, setSelectedModelKeys] = useState<ModelKey[]>(
     MODEL_CATALOG.filter((m) => m.enabled).slice(0, 3).map((m) => m.key)
   );
@@ -77,7 +75,6 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
           prompt,
           gridSize,
           palette,
-          mode,
           modelKeys: selectedModelKeys,
         }),
       });
@@ -190,18 +187,6 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
             >
               <option value="simple">Simple</option>
               <option value="advanced">Advanced</option>
-            </select>
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <div className="text-xs font-medium text-muted">Mode</div>
-            <select
-              className="h-10 rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none ring-accent/40 transition focus:ring-2"
-              value={mode}
-              onChange={(e) => setMode(e.target.value as Mode)}
-            >
-              <option value="precise">Precise</option>
-              <option value="creative">Creative</option>
             </select>
           </label>
         </div>

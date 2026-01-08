@@ -6,7 +6,6 @@ export async function geminiGenerateText(params: {
   modelId: string;
   system: string;
   user: string;
-  temperature: number;
 }): Promise<{ text: string }> {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
@@ -24,7 +23,6 @@ export async function geminiGenerateText(params: {
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: params.system }] },
       contents: [{ role: "user", parts: [{ text: params.user }] }],
-      generationConfig: { temperature: params.temperature },
     }),
   });
 
@@ -38,4 +36,3 @@ export async function geminiGenerateText(params: {
     data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   return { text };
 }
-

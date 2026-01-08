@@ -114,7 +114,7 @@ export function Arena() {
             </div>
             <div className="text-xl font-semibold leading-tight">{title}</div>
             <div className="mt-1 text-sm text-muted">
-              Vote for the better build. Fixed settings: 32³, simple palette, Precise mode.
+              Vote for the better build. Fixed settings: 32³, simple palette.
             </div>
           </div>
 

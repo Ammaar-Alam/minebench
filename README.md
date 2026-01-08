@@ -17,11 +17,7 @@ It has two modes:
 
 ```bash
 pnpm install
-pnpm atlas
-pnpm db:up
-cp .env.example .env
-pnpm prisma:migrate
-pnpm dev
+pnpm dev:setup
 ```
 
 Prisma reads `.env` (not `.env.local`), so make sure `DATABASE_URL` is set there.
@@ -54,6 +50,8 @@ Repeat until it reports seeding is complete (it seeds in small batches to avoid 
 ```bash
 pnpm dev:setup
 ```
+
+`pnpm dev:setup` recreates the local Docker Postgres volume (drops local data). If you want to keep your local DB state, use `pnpm db:up` instead.
 
 ## Texture attribution
 

@@ -1,14 +1,12 @@
 import type { ModelKey } from "@/lib/ai/modelCatalog";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
-export type GenerationMode = "precise" | "creative";
 export type PaletteMode = "simple" | "advanced";
 
 export type GenerateRequest = {
   prompt: string;
   gridSize: 32 | 64 | 128;
   palette: PaletteMode;
-  mode: GenerationMode;
   modelKeys: ModelKey[];
 };
 
@@ -17,4 +15,3 @@ export type GenerateEvent =
   | { type: "retry"; modelKey: ModelKey; attempt: number }
   | { type: "result"; modelKey: ModelKey; voxelBuild: VoxelBuild; metrics: { blockCount: number; warnings: string[]; generationTimeMs: number } }
   | { type: "error"; modelKey: ModelKey; message: string };
-

@@ -6,9 +6,10 @@
   "scripts": {
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d",
     "env:ensure": "node scripts/ensure-env.mjs",
     "db:wait": "node scripts/wait-for-db.mjs",
-    "dev:setup": "pnpm env:ensure && pnpm atlas && pnpm db:up && pnpm db:wait && pnpm prisma:migrate && pnpm dev",
+    "dev:setup": "pnpm env:ensure && pnpm atlas && pnpm db:reset && pnpm db:wait && pnpm prisma:migrate && pnpm dev",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

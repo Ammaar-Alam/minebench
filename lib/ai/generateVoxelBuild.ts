@@ -15,17 +15,11 @@ const MAX_BLOCKS_BY_GRID: Record<32 | 64 | 128, number> = {
   128: 50000,
 };
 
-const TEMPERATURE_BY_MODE: Record<"precise" | "creative", number> = {
-  precise: 0,
-  creative: 0.7,
-};
-
 export type GenerateVoxelBuildParams = {
   modelKey: ModelKey;
   prompt: string;
   gridSize: 32 | 64 | 128;
   palette: "simple" | "advanced";
-  mode: "precise" | "creative";
   maxAttempts?: number;
   onRetry?: (attempt: number, reason: string) => void;
 };
@@ -46,14 +40,12 @@ async function providerGenerateText(args: {
   modelId: string;
   system: string;
   user: string;
-  temperature: number;
 }): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
       modelId: args.modelId,
       system: args.system,
       user: args.user,
-      temperature: args.temperature,
     });
   }
 
@@ -62,7 +54,6 @@ async function providerGenerateText(args: {
       modelId: args.modelId,
       system: args.system,
       user: args.user,
-      temperature: args.temperature,
       maxTokens: 8192,
     });
   }
@@ -71,7 +62,6 @@ async function providerGenerateText(args: {
     modelId: args.modelId,
     system: args.system,
     user: args.user,
-    temperature: args.temperature,
   });
 }
 
@@ -98,8 +88,6 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
     palette: params.palette,
   });
 
-  const temperature = TEMPERATURE_BY_MODE[params.mode];
-
   let previousText = "";
   let lastError = "";
   const start = Date.now();
@@ -121,7 +109,6 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
         modelId: model.modelId,
         system,
         user,
-        temperature,
       });
       previousText = text;
 
@@ -162,4 +149,3 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
 export function maxBlocksForGrid(gridSize: 32 | 64 | 128) {
   return MAX_BLOCKS_BY_GRID[gridSize];
 }
-

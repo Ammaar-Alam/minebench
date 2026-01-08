@@ -10,7 +10,6 @@ const reqSchema = z.object({
   prompt: z.string().min(1).max(800),
   gridSize: z.union([z.literal(32), z.literal(64), z.literal(128)]),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
-  mode: z.union([z.literal("precise"), z.literal("creative")]),
   modelKeys: z.array(z.string()).min(1).max(8),
 });
 
@@ -55,8 +54,7 @@ export async function POST(req: Request) {
           prompt: body.prompt,
           gridSize: body.gridSize,
           palette: body.palette,
-          mode: body.mode,
-          onRetry: (attempt, reason) => send({ type: "retry", modelKey, attempt }),
+          onRetry: (attempt) => send({ type: "retry", modelKey, attempt }),
         })
           .then((r) => {
             if (r.ok) {
@@ -100,4 +98,3 @@ export async function POST(req: Request) {
     },
   });
 }
-
