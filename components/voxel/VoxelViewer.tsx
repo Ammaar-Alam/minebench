@@ -102,7 +102,7 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     if (!mount) return;
 
     const scene = new THREE.Scene();
-    scene.fog = new THREE.FogExp2(0x05070b, 0.035);
+    // Keep the viewer bright/legible (avoid heavy fog/dark shading).
 
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
     camera.position.set(10, 8, 10);
@@ -143,16 +143,23 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     controls.addEventListener("start", stopAutoRotate);
     controls.addEventListener("end", stopAutoRotate);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+    const hemi = new THREE.HemisphereLight(0xeaf2ff, 0x1a2330, 0.75);
+    scene.add(hemi);
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.75);
     scene.add(ambient);
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
     keyLight.position.set(6, 10, 8);
     scene.add(keyLight);
 
-    const fillLight = new THREE.DirectionalLight(0x9bb3ff, 0.35);
+    const fillLight = new THREE.DirectionalLight(0xcfe3ff, 0.5);
     fillLight.position.set(-8, 6, -6);
     scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.22);
+    rimLight.position.set(-10, 7, 10);
+    scene.add(rimLight);
 
     const grid = new THREE.GridHelper(160, 160, 0x2a2f3a, 0x161a22);
     grid.position.y = -0.5;

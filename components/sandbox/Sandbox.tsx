@@ -37,7 +37,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   const [gridSize, setGridSize] = useState<GridSize>(64);
   const [palette, setPalette] = useState<Palette>("simple");
   const [selectedModelKeys, setSelectedModelKeys] = useState<ModelKey[]>(
-    MODEL_CATALOG.filter((m) => m.enabled).slice(0, 3).map((m) => m.key)
+    ["openai_gpt_5_mini", "gemini_3_0_flash"]
   );
   const [results, setResults] = useState<Map<ModelKey, ModelResult>>(
     () =>
@@ -54,12 +54,12 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
 
   function toggleModel(key: ModelKey) {
     setSelectedModelKeys((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+      prev.includes(key) ? prev.filter((k) => k !== key) : prev.length >= 2 ? prev : [...prev, key]
     );
   }
 
   async function runGenerate() {
-    if (!prompt.trim() || selectedModelKeys.length === 0) return;
+    if (!prompt.trim() || selectedModelKeys.length !== 2) return;
 
     setRunning(true);
     setResults((prev) => {
@@ -255,6 +255,10 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
 
           <div className="mt-5">
             <div className="text-xs font-medium text-muted">Models</div>
+            <div className="mt-1 text-xs text-muted">
+              Select exactly <span className="font-mono">2</span> models to compare.
+              <span className="ml-2 font-mono">{selectedModelKeys.length}/2</span>
+            </div>
             <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
               {providers.map((g) => (
                 <div key={g.key} className="mb-subpanel p-4">
@@ -269,6 +273,11 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                           className="h-4 w-4 accent-accent"
                           type="checkbox"
                           checked={selectedModelKeys.includes(m.key)}
+                          disabled={
+                            running ||
+                            (!selectedModelKeys.includes(m.key) &&
+                              selectedModelKeys.length >= 2)
+                          }
                           onChange={() => toggleModel(m.key)}
                         />
                         <span>{m.displayName}</span>
@@ -283,7 +292,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
           <div className="mt-5 flex items-center justify-end">
             <button
               className="mb-btn mb-btn-primary h-11 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={running || selectedModelKeys.length === 0 || !prompt.trim()}
+              disabled={running || selectedModelKeys.length !== 2 || !prompt.trim()}
               onClick={runGenerate}
             >
               {running ? "Generating…" : "Generate"}
