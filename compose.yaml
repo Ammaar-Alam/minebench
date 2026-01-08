@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: minebench
+      POSTGRES_PASSWORD: minebench
+      POSTGRES_DB: minebench
+    volumes:
+      - minebench_pgdata:/var/lib/postgresql/data
+
+volumes:
+  minebench_pgdata:

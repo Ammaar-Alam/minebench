@@ -18,6 +18,7 @@ It has two modes:
 ```bash
 pnpm install
 pnpm atlas
+pnpm db:up
 pnpm prisma:migrate
 pnpm dev
 ```
@@ -29,6 +30,11 @@ Copy `.env.example` to `.env.local` and set:
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 - `GOOGLE_AI_API_KEY`
+
+### No DB / no keys?
+
+- You can run `pnpm dev` and use `http://localhost:3000/sandbox` without a database.
+- The Arena (`/`) + leaderboard require a working `DATABASE_URL` and seeded builds.
 
 ## Seeding curated prompts (Arena)
 
