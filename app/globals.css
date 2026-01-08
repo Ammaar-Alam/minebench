@@ -2,7 +2,57 @@
 @tailwind components;
 @tailwind utilities;
 
-html,
-body {
-  height: 100%;
+@layer base {
+  :root {
+    /* Colors (HSL channels) */
+    --bg: 222 35% 6%;
+    --bg2: 224 40% 4%;
+    --card: 223 28% 10%;
+    --card2: 223 24% 12%;
+    --border: 223 18% 18%;
+    --fg: 220 25% 96%;
+    --muted: 220 10% 72%;
+    --muted2: 220 9% 56%;
+
+    /* Brand + status */
+    --accent: 168 88% 52%;
+    --accent2: 282 82% 68%;
+    --danger: 0 80% 62%;
+    --warn: 40 95% 58%;
+    --success: 152 70% 44%;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    font-family: var(--font-sans), system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background:
+      radial-gradient(900px 520px at 12% -5%, hsl(var(--accent) / 0.16), transparent 65%),
+      radial-gradient(820px 520px at 88% 0%, hsl(var(--accent2) / 0.14), transparent 60%),
+      linear-gradient(to bottom, hsl(var(--bg2)), hsl(var(--bg)));
+    background-color: hsl(var(--bg));
+    color: hsl(var(--fg));
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.08) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.08) 1px, transparent 1px),
+      linear-gradient(to right, hsl(var(--border) / 0.13) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.13) 1px, transparent 1px);
+    background-size: 28px 28px, 28px 28px, 140px 140px, 140px 140px;
+    opacity: 0.38;
+    mix-blend-mode: screen;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.25);
+  }
 }
