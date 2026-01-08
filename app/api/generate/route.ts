@@ -41,6 +41,9 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "No valid modelKeys" }, { status: 400 });
   }
 
+  const debugRaw = process.env.AI_DEBUG === "1";
+  const RAW_TEXT_MAX = 200_000;
+
   const encoder = new TextEncoder();
   let closed = false;
   let ping: ReturnType<typeof setInterval> | null = null;
@@ -49,6 +52,10 @@ export async function POST(req: Request) {
     start(controller) {
       const send = (evt: GenerateEvent) => {
         if (closed) return;
+        if (debugRaw && evt.type === "error" && evt.rawText) {
+          console.log(`[ai debug] ${evt.modelKey} error: ${evt.message}`);
+          console.log(`[ai debug] ${evt.modelKey} rawText:\n${evt.rawText}`);
+        }
         try {
           controller.enqueue(encoder.encode(JSON.stringify(evt) + "\n"));
         } catch {
@@ -104,6 +111,7 @@ export async function POST(req: Request) {
                 type: "error",
                 modelKey,
                 message: r.error,
+                rawText: debugRaw && r.rawText ? r.rawText.slice(0, RAW_TEXT_MAX) : undefined,
               });
             }
           })

@@ -1,24 +1,59 @@
 export function extractFirstJsonObject(text: string): unknown | null {
-  const start = text.indexOf("{");
-  if (start < 0) return null;
+  for (const slice of topLevelJsonObjectSlices(text)) {
+    try {
+      return JSON.parse(slice);
+    } catch {
+      // keep scanning, models sometimes include multiple objects or a malformed one before the real payload
+    }
+  }
+  return null;
+}
 
+function topLevelJsonObjectSlices(text: string): string[] {
+  const slices: string[] = [];
   let depth = 0;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === "{") depth++;
-    else if (ch === "}") depth--;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
 
-    if (depth === 0) {
-      const slice = text.slice(start, i + 1);
-      try {
-        return JSON.parse(slice);
-      } catch {
-        return null;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+      continue;
+    }
+
+    if (ch === "}") {
+      if (depth === 0) continue;
+      depth--;
+      if (depth === 0 && start >= 0) {
+        slices.push(text.slice(start, i + 1));
+        start = -1;
       }
     }
   }
 
-  return null;
+  return slices;
 }
 
 function voxelBlocksLength(value: unknown): number | null {
@@ -34,30 +69,7 @@ export function extractBestVoxelBuildJson(text: string): unknown | null {
 
   // Scan for multiple JSON objects and pick the one that most looks like a VoxelBuild.
   // This prevents accidentally extracting a small example object if the model outputs more than one JSON object.
-  const maxCandidates = 32;
-  let searchFrom = 0;
-
-  while (candidates.length < maxCandidates) {
-    const start = text.indexOf("{", searchFrom);
-    if (start < 0) break;
-
-    let depth = 0;
-    let foundEnd = -1;
-    for (let i = start; i < text.length; i++) {
-      const ch = text[i];
-      if (ch === "{") depth++;
-      else if (ch === "}") depth--;
-
-      if (depth === 0) {
-        foundEnd = i;
-        break;
-      }
-    }
-
-    if (foundEnd < 0) break;
-    searchFrom = foundEnd + 1;
-
-    const slice = text.slice(start, foundEnd + 1);
+  for (const slice of topLevelJsonObjectSlices(text)) {
     try {
       const parsed = JSON.parse(slice) as unknown;
       const len = voxelBlocksLength(parsed);

@@ -24,6 +24,7 @@ export function VoxelViewerCard({
   elapsedMs,
   metrics,
   error,
+  debugRawText,
   palette = "simple",
 }: {
   title: string;
@@ -37,6 +38,7 @@ export function VoxelViewerCard({
   elapsedMs?: number;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
   error?: string;
+  debugRawText?: string;
   palette?: "simple" | "advanced";
 }) {
   const build = useMemo(() => asVoxelBuild(voxelBuild), [voxelBuild]);
@@ -116,7 +118,19 @@ export function VoxelViewerCard({
 
         {error ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/70 px-4 text-center text-sm text-danger">
-            {error}
+            <div className="flex w-full max-w-[92%] flex-col items-center gap-3">
+              <div>{error}</div>
+              {debugRawText ? (
+                <details className="w-full rounded-md border border-border/70 bg-bg/30 p-3 text-left text-xs text-muted">
+                  <summary className="cursor-pointer select-none font-semibold text-fg">
+                    Raw model output (debug)
+                  </summary>
+                  <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted">
+{debugRawText}
+                  </pre>
+                </details>
+              ) : null}
+            </div>
           </div>
         ) : null}
 
@@ -138,6 +152,8 @@ export function VoxelViewerCard({
             </ul>
           </details>
         ) : null}
+
+        {/* debugRawText shown in error overlay so it stays visible */}
       </div>
     </div>
   );

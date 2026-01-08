@@ -3,6 +3,7 @@ import { getPalette } from "@/lib/blocks/palettes";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
+import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
 import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
 import { geminiGenerateText } from "@/lib/ai/providers/gemini";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
@@ -20,6 +21,20 @@ const MIN_BLOCKS_BY_GRID: Record<32 | 64 | 128, number> = {
   64: 200,
   128: 300,
 };
+
+function defaultMaxOutputTokens(gridSize: 32 | 64 | 128): number {
+  // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
+  if (gridSize === 32) return 32768;
+  if (gridSize === 64) return 65536;
+  return 65536;
+}
+
+function approxMaxBlocksForTokenBudget(opts: { maxOutputTokens: number; minBlocks: number; hardMax: number }): number {
+  // rough heuristic: each block entry costs ~10-20 tokens depending on provider + whitespace
+  // use 12 to allow more detail while still reducing truncation risk
+  const est = Math.floor(opts.maxOutputTokens / 12);
+  return Math.max(opts.minBlocks, Math.min(opts.hardMax, est));
+}
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 const DEFAULT_TEMPERATURE = 0.2;
@@ -49,14 +64,17 @@ async function providerGenerateText(args: {
   modelId: string;
   system: string;
   user: string;
+  jsonSchema: Record<string, unknown>;
+  maxOutputTokens: number;
 }): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
       modelId: args.modelId,
       system: args.system,
       user: args.user,
-      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
     });
   }
 
@@ -74,8 +92,9 @@ async function providerGenerateText(args: {
     modelId: args.modelId,
     system: args.system,
     user: args.user,
-    maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    maxOutputTokens: args.maxOutputTokens,
     temperature: DEFAULT_TEMPERATURE,
+    jsonSchema: args.jsonSchema,
   });
 }
 
@@ -97,6 +116,17 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
   const maxAttempts = params.maxAttempts ?? 3;
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
+  const maxOutputTokens = defaultMaxOutputTokens(params.gridSize);
+  const schemaMaxBlocks = approxMaxBlocksForTokenBudget({
+    maxOutputTokens,
+    minBlocks,
+    hardMax: MAX_BLOCKS_BY_GRID[params.gridSize],
+  });
+  const jsonSchema = makeVoxelBuildJsonSchema({
+    gridSize: params.gridSize,
+    minBlocks,
+    maxBlocks: schemaMaxBlocks,
+  }) as unknown as Record<string, unknown>;
   const system = buildSystemPrompt({
     gridSize: params.gridSize,
     maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
@@ -125,6 +155,8 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
         modelId: model.modelId,
         system,
         user,
+        jsonSchema,
+        maxOutputTokens,
       });
       previousText = text;
 

@@ -16,4 +16,4 @@ export type GenerateEvent =
   | { type: "start"; modelKey: ModelKey }
   | { type: "retry"; modelKey: ModelKey; attempt: number; reason?: string }
   | { type: "result"; modelKey: ModelKey; voxelBuild: VoxelBuild; metrics: { blockCount: number; warnings: string[]; generationTimeMs: number } }
-  | { type: "error"; modelKey: ModelKey; message: string };
+  | { type: "error"; modelKey: ModelKey; message: string; rawText?: string };

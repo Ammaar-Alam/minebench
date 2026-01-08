@@ -13,6 +13,7 @@ type ModelResult = {
   status: "idle" | "loading" | "success" | "error";
   voxelBuild: unknown | null;
   error?: string;
+  rawText?: string;
   attempt?: number;
   retryReason?: string;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
@@ -170,6 +171,9 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
               return next;
             });
           } else if (evt.type === "error") {
+            if (evt.rawText) {
+              console.warn(`[ai debug] ${evt.modelKey} rawText`, evt.rawText);
+            }
             setResults((prev) => {
               const next = new Map(prev);
               const existing = next.get(evt.modelKey);
@@ -178,6 +182,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                 status: "error",
                 voxelBuild: null,
                 error: evt.message,
+                rawText: evt.rawText,
                 startedAt: existing?.startedAt,
               });
               return next;
@@ -223,6 +228,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
+        debugRawText={r?.status === "error" ? r.rawText : undefined}
         attempt={r?.status === "loading" ? r.attempt : undefined}
         retryReason={r?.status === "loading" ? r.retryReason : undefined}
         elapsedMs={elapsedMs}

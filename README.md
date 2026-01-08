@@ -24,11 +24,20 @@ Prisma reads `.env` (not `.env.local`), so make sure `DATABASE_URL` is set there
 
 Copy `.env.example` to `.env` and set:
 
-- `DATABASE_URL` (Vercel Postgres connection string)
+- `DATABASE_URL` (Postgres connection string; use Supabase pooler on Vercel)
+- `DIRECT_URL` (direct Postgres connection string; used for Prisma migrations)
 - `ADMIN_TOKEN` (protects `/api/admin/*`)
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 - `GOOGLE_AI_API_KEY`
+
+### Using Supabase (Vercel)
+
+If you're using Supabase Postgres, set:
+
+- `DATABASE_URL` to the Supabase **Connection pooler** connection string
+- `DIRECT_URL` to the Supabase **Direct connection** connection string
+- Make sure the pooler URL includes `pgbouncer=true` (Prisma needs this for transaction pooling)
 
 ### No DB / no keys?
 
@@ -40,7 +49,11 @@ Copy `.env.example` to `.env` and set:
 After setting env vars, run the admin seed route:
 
 ```bash
-curl -X POST http://localhost:3000/api/admin/seed -H "Authorization: Bearer $ADMIN_TOKEN"
+# Prompts + model catalog only (no AI calls)
+curl -X POST "http://localhost:3000/api/admin/seed?generateBuilds=0" -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# Full seed (generates missing builds; repeat until done)
+curl -X POST "http://localhost:3000/api/admin/seed" -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 Repeat until it reports seeding is complete (it seeds in small batches to avoid timeouts).

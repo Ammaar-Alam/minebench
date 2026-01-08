@@ -24,12 +24,14 @@ const ARENA_SETTINGS = {
 };
 
 const MAX_BATCH = 3;
+const FALSE_VALUES = new Set(["0", "false", "no"]);
 
 export async function POST(req: Request) {
   const denied = requireAdmin(req);
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
 
   const url = new URL(req.url);
+  const generateBuilds = !FALSE_VALUES.has((url.searchParams.get("generateBuilds") ?? "").trim().toLowerCase());
   const batchSizeRaw = Number(url.searchParams.get("batchSize") ?? "2");
   const batchSize = Math.max(1, Math.min(MAX_BATCH, Number.isFinite(batchSizeRaw) ? batchSizeRaw : 2));
 
@@ -77,6 +79,15 @@ export async function POST(req: Request) {
       });
     }
   });
+
+  if (!generateBuilds) {
+    const [promptCount, modelCount] = await Promise.all([
+      prisma.prompt.count({ where: { active: true } }),
+      prisma.model.count({ where: { enabled: true, isBaseline: false } }),
+    ]);
+
+    return NextResponse.json({ ok: true, done: true, seeded: 0, promptCount, modelCount });
+  }
 
   const prompts = await prisma.prompt.findMany({
     where: { active: true },

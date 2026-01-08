@@ -1,3 +1,5 @@
+type JsonSchema = Record<string, unknown>;
+
 type GeminiGenerateContentResponse = {
   candidates?: { content?: { parts?: { text?: string }[] } }[];
 };
@@ -8,9 +10,11 @@ export async function geminiGenerateText(params: {
   user: string;
   maxOutputTokens?: number;
   temperature?: number;
+  jsonSchema?: JsonSchema;
 }): Promise<{ text: string }> {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
+  if (!params.jsonSchema) throw new Error("Missing jsonSchema for Gemini JSON mode");
 
   const url = new URL(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
@@ -32,16 +36,25 @@ export async function geminiGenerateText(params: {
       },
     };
 
-    const payloads: object[] = [
-      {
+    const tokenCandidates = [basePayload.generationConfig.maxOutputTokens, 65536, 32768, 16384, 8192]
+      .filter((n) => Number.isFinite(n) && (n as number) > 0)
+      .map((n) => Math.floor(n as number));
+    const uniqTokens: number[] = [];
+    for (const t of tokenCandidates) if (!uniqTokens.includes(t)) uniqTokens.push(t);
+
+    const payloads: object[] = [];
+    for (const tok of uniqTokens) {
+      payloads.push({
         ...basePayload,
         generationConfig: {
           ...(basePayload.generationConfig as object),
+          maxOutputTokens: tok,
           responseMimeType: "application/json",
+          responseJsonSchema: params.jsonSchema,
         },
-      },
-      basePayload,
-    ];
+      });
+    }
+    payloads.push(basePayload);
 
     let lastBody = "";
     for (const payload of payloads) {
@@ -53,6 +66,8 @@ export async function geminiGenerateText(params: {
       });
       if (res.ok) break;
       lastBody = await res.text().catch(() => "");
+      // Retry with smaller token budget if that looks like the issue
+      if (res.status === 400 && lastBody.toLowerCase().includes("maxoutputtokens")) continue;
       // Retry once without responseMimeType if it was rejected.
       if (payload === basePayload) break;
     }
