@@ -15,6 +15,9 @@ const MAX_BLOCKS_BY_GRID: Record<32 | 64 | 128, number> = {
   128: 50000,
 };
 
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+const DEFAULT_TEMPERATURE = 0.2;
+
 export type GenerateVoxelBuildParams = {
   modelKey: ModelKey;
   prompt: string;
@@ -46,6 +49,8 @@ async function providerGenerateText(args: {
       modelId: args.modelId,
       system: args.system,
       user: args.user,
+      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      temperature: DEFAULT_TEMPERATURE,
     });
   }
 
@@ -54,7 +59,8 @@ async function providerGenerateText(args: {
       modelId: args.modelId,
       system: args.system,
       user: args.user,
-      maxTokens: 8192,
+      maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      temperature: DEFAULT_TEMPERATURE,
     });
   }
 
@@ -62,6 +68,8 @@ async function providerGenerateText(args: {
     modelId: args.modelId,
     system: args.system,
     user: args.user,
+    maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+    temperature: DEFAULT_TEMPERATURE,
   });
 }
 
@@ -121,6 +129,12 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
       const validated = validateParsedJson(json, paletteDefs, params.gridSize);
       if (!validated.ok) {
         lastError = validated.error;
+        continue;
+      }
+
+      if (validated.value.build.blocks.length === 0) {
+        lastError =
+          "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
         continue;
       }
 

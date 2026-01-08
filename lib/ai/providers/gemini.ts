@@ -6,6 +6,8 @@ export async function geminiGenerateText(params: {
   modelId: string;
   system: string;
   user: string;
+  maxOutputTokens?: number;
+  temperature?: number;
 }): Promise<{ text: string }> {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
@@ -17,19 +19,59 @@ export async function geminiGenerateText(params: {
   );
   url.searchParams.set("key", apiKey);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180_000);
+  let res: Response | null = null;
+  try {
+    const basePayload = {
       systemInstruction: { parts: [{ text: params.system }] },
       contents: [{ role: "user", parts: [{ text: params.user }] }],
-    }),
-  });
+      generationConfig: {
+        temperature: params.temperature ?? 0.2,
+        maxOutputTokens: params.maxOutputTokens ?? 8192,
+      },
+    };
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Gemini error ${res.status}: ${body}`);
+    const payloads: object[] = [
+      {
+        ...basePayload,
+        generationConfig: {
+          ...(basePayload.generationConfig as object),
+          responseMimeType: "application/json",
+        },
+      },
+      basePayload,
+    ];
+
+    let lastBody = "";
+    for (const payload of payloads) {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) break;
+      lastBody = await res.text().catch(() => "");
+      // Retry once without responseMimeType if it was rejected.
+      if (payload === basePayload) break;
+    }
+
+    if (!res) throw new Error("Gemini request failed");
+    if (!res.ok) {
+      const body = lastBody || (await res.text().catch(() => ""));
+      throw new Error(`Gemini error ${res.status}: ${body}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Gemini request timed out");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
+
+  if (!res) throw new Error("Gemini request failed");
 
   const data = (await res.json()) as GeminiGenerateContentResponse;
   const text =

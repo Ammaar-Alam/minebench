@@ -25,9 +25,16 @@ export function buildSystemPrompt(opts: {
     "- y is vertical (height). y=0 is ground level.",
     `- Prefer to center the build around x≈${center}, z≈${center}.`,
     "",
+    "CONSTRUCTION GUIDELINES",
+    "- Match the prompt literally and prioritize recognizability over tiny or generic builds.",
+    "- If the prompt includes specific features (e.g., 'with sails'), include them clearly.",
+    "- Use appropriate materials (e.g., planks/logs for wood structures; wool for cloth/sails; stone for foundations; water for sea).",
+    "- Keep the build reasonably sized so it fits in the grid and is fast to render.",
+    "",
     "CONSTRAINTS",
     `- Do not exceed ${opts.maxBlocks} total blocks.`,
     "- Every block type must be from the available block list below.",
+    "- Use the block IDs EXACTLY as listed. Unknown IDs will be dropped.",
     "",
     "AVAILABLE BLOCKS",
     blockList,
@@ -52,4 +59,3 @@ export function buildRepairPrompt(params: {
     params.previousOutput,
   ].join("\n");
 }
-
