@@ -81,7 +81,9 @@ export function makeVoxelBuildJsonSchema(params: {
         },
       },
     },
-    required: ["version", "blocks"],
+    // OpenAI structured outputs (strict) requires required[] to include every key in properties.
+    // boxes/lines can be empty arrays when unused.
+    required: ["version", "boxes", "lines", "blocks"],
     additionalProperties: false,
   } as const;
 }

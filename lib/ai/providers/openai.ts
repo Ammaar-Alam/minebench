@@ -13,7 +13,9 @@ function extractTextFromChatCompletions(data: OpenAIChatResponse): string {
   const content = data.choices?.[0]?.message?.content;
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
-    return content.map((c) => (c && typeof c === "object" ? String((c as { text?: unknown }).text ?? "") : "")).join("");
+    return content
+      .map((c) => (c && typeof c === "object" ? String((c as { text?: unknown }).text ?? "") : ""))
+      .join("");
   }
   return "";
 }
@@ -59,7 +61,7 @@ function sleepMs(ms: number) {
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
-  opts: { tries: number; minDelayMs: number; maxDelayMs: number }
+  opts: { tries: number; minDelayMs: number; maxDelayMs: number },
 ): Promise<Response> {
   let lastErr: unknown = null;
   for (let i = 0; i < opts.tries; i++) {
@@ -96,7 +98,7 @@ function looksLikeTokenLimitError(body: string): boolean {
   return (
     b.includes("max_output_tokens") ||
     b.includes("max_completion_tokens") ||
-    b.includes("maximum") && b.includes("tokens") ||
+    (b.includes("maximum") && b.includes("tokens")) ||
     b.includes("too many tokens") ||
     b.includes("token limit")
   );
@@ -116,7 +118,9 @@ export async function openaiGenerateText(params: {
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for OpenAI structured output");
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
-  const useHighReasoning = params.modelId === "gpt-5.2" || params.modelId === "gpt-5.2-pro";
+  const isResponsesOnlyModel = params.modelId === "gpt-5.1-codex-max";
+  const useHighReasoning =
+    params.modelId === "gpt-5.2" || params.modelId === "gpt-5.2-pro" || isGpt5Family;
   // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
   // so we omit the parameter entirely and let the API use the default.
   const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
@@ -164,7 +168,7 @@ export async function openaiGenerateText(params: {
             max_output_tokens: tok,
           }),
         },
-        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 }
+        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
       );
 
       if (res.ok) break;
@@ -181,9 +185,14 @@ export async function openaiGenerateText(params: {
       if (text) return { text };
     } else {
       const body = lastBody || (await res.text().catch(() => ""));
+      const rid = requestIdFromResponse(res);
+      // gpt-5.1-codex-max is Responses-only; chat/completions will always fail
+      if (isResponsesOnlyModel) {
+        throw new Error(`OpenAI error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
+      }
+
       // Fall back for environments/models that still require chat/completions.
       if (res.status !== 404 && res.status !== 400) {
-        const rid = requestIdFromResponse(res);
         throw new Error(`OpenAI error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
       }
     }
@@ -195,6 +204,10 @@ export async function openaiGenerateText(params: {
     throw err;
   } finally {
     clearTimeout(timeout);
+  }
+
+  if (isResponsesOnlyModel) {
+    throw new Error("OpenAI model gpt-5.1-codex-max only supports the /v1/responses endpoint");
   }
 
   let res: Response | null = null;
@@ -212,7 +225,7 @@ export async function openaiGenerateText(params: {
           model: params.modelId,
           temperature,
           max_completion_tokens: tok,
-        reasoning_effort: useHighReasoning ? "high" : undefined,
+          reasoning_effort: useHighReasoning ? "high" : undefined,
           response_format: {
             type: "json_schema",
             json_schema: {
@@ -227,7 +240,7 @@ export async function openaiGenerateText(params: {
           ],
         }),
       },
-      { tries: 3, minDelayMs: 400, maxDelayMs: 2000 }
+      { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
     );
     if (res.ok) break;
     lastBody = await res.text().catch(() => "");
@@ -259,14 +272,14 @@ export async function openaiGenerateText(params: {
             ],
           }),
         },
-        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 }
+        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
       );
 
       if (!retry.ok) {
         const retryBody = await retry.text().catch(() => "");
         const rid = requestIdFromResponse(retry);
         throw new Error(
-          `OpenAI error ${retry.status}${rid ? ` (request ${rid})` : ""}: ${retryBody || body}`
+          `OpenAI error ${retry.status}${rid ? ` (request ${rid})` : ""}: ${retryBody || body}`,
         );
       }
 

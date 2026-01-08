@@ -17,6 +17,42 @@ function requireAdmin(req: Request): string | null {
   return null;
 }
 
+function getDbInfo() {
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+
+  try {
+    const u = new URL(url);
+    const database = u.pathname.replace(/^\//, "");
+    const pgbouncer = u.searchParams.get("pgbouncer") === "true";
+
+    return {
+      host: u.hostname,
+      port: u.port || "5432",
+      database,
+      pgbouncer,
+    };
+  } catch {
+    return { host: "unknown", port: "unknown", database: "unknown", pgbouncer: false };
+  }
+}
+
+function providerKeyStatus() {
+  return {
+    openai: Boolean(process.env.OPENAI_API_KEY),
+    anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
+    gemini: Boolean(process.env.GOOGLE_AI_API_KEY),
+  };
+}
+
+function isProviderConfigured(provider: string) {
+  const status = providerKeyStatus();
+  if (provider === "openai") return status.openai;
+  if (provider === "anthropic") return status.anthropic;
+  if (provider === "gemini") return status.gemini;
+  return true;
+}
+
 const ARENA_SETTINGS = {
   gridSize: 32 as const,
   palette: "simple" as const,
@@ -25,15 +61,19 @@ const ARENA_SETTINGS = {
 
 const MAX_BATCH = 3;
 const FALSE_VALUES = new Set(["0", "false", "no"]);
+const TRUE_VALUES = new Set(["1", "true", "yes"]);
 
 export async function POST(req: Request) {
   const denied = requireAdmin(req);
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
 
   const url = new URL(req.url);
+  const runId = crypto.randomUUID().slice(0, 8);
+  const dryRun = TRUE_VALUES.has((url.searchParams.get("dryRun") ?? "").trim().toLowerCase());
   const generateBuilds = !FALSE_VALUES.has((url.searchParams.get("generateBuilds") ?? "").trim().toLowerCase());
   const batchSizeRaw = Number(url.searchParams.get("batchSize") ?? "2");
   const batchSize = Math.max(1, Math.min(MAX_BATCH, Number.isFinite(batchSizeRaw) ? batchSizeRaw : 2));
+  const keyStatus = providerKeyStatus();
 
   await prisma.$transaction(async (tx) => {
     await tx.model.upsert({
@@ -51,6 +91,7 @@ export async function POST(req: Request) {
     });
 
     for (const m of MODEL_CATALOG) {
+      const enabled = m.enabled && isProviderConfigured(m.provider);
       await tx.model.upsert({
         where: { key: m.key },
         create: {
@@ -58,7 +99,7 @@ export async function POST(req: Request) {
           provider: m.provider,
           modelId: m.modelId,
           displayName: m.displayName,
-          enabled: m.enabled,
+          enabled,
           isBaseline: false,
           eloRating: 1500,
         },
@@ -66,7 +107,7 @@ export async function POST(req: Request) {
           provider: m.provider,
           modelId: m.modelId,
           displayName: m.displayName,
-          enabled: m.enabled,
+          enabled,
         },
       });
     }
@@ -86,7 +127,17 @@ export async function POST(req: Request) {
       prisma.model.count({ where: { enabled: true, isBaseline: false } }),
     ]);
 
-    return NextResponse.json({ ok: true, done: true, seeded: 0, promptCount, modelCount });
+    return NextResponse.json({
+      ok: true,
+      done: true,
+      seeded: 0,
+      promptCount,
+      modelCount,
+      settings: ARENA_SETTINGS,
+      db: getDbInfo(),
+      providerKeys: keyStatus,
+      runId,
+    });
   }
 
   const prompts = await prisma.prompt.findMany({
@@ -111,6 +162,27 @@ export async function POST(req: Request) {
   });
 
   const existingSet = new Set(existing.map((b) => `${b.promptId}:${b.modelId}`));
+  const totalExpectedBuilds = prompts.length * models.length;
+  const existingBuilds = existingSet.size;
+  const remainingBefore = Math.max(0, totalExpectedBuilds - existingBuilds);
+
+  if (dryRun) {
+    return NextResponse.json({
+      ok: true,
+      done: remainingBefore === 0,
+      seeded: 0,
+      promptCount: prompts.length,
+      modelCount: models.length,
+      totalExpectedBuilds,
+      existingBuilds,
+      remainingBuilds: remainingBefore,
+      settings: ARENA_SETTINGS,
+      db: getDbInfo(),
+      providerKeys: keyStatus,
+      runId,
+    });
+  }
+
   const pending: { promptId: string; promptText: string; modelId: string; modelKey: ModelKey }[] = [];
 
   for (const p of prompts) {
@@ -124,11 +196,32 @@ export async function POST(req: Request) {
   }
 
   if (pending.length === 0) {
-    return NextResponse.json({ ok: true, done: true, seeded: 0 });
+    return NextResponse.json({
+      ok: true,
+      done: true,
+      seeded: 0,
+      promptCount: prompts.length,
+      modelCount: models.length,
+      totalExpectedBuilds,
+      existingBuilds,
+      remainingBuilds: remainingBefore,
+      settings: ARENA_SETTINGS,
+      db: getDbInfo(),
+      providerKeys: keyStatus,
+      runId,
+    });
   }
 
   let seeded = 0;
-  for (const job of pending) {
+  const startedAt = Date.now();
+  console.log(`[seed:${runId}] starting batch (size=${pending.length}, remaining≈${remainingBefore})`);
+
+  const seededJobs: { promptId: string; modelKey: ModelKey }[] = [];
+  for (const [idx, job] of pending.entries()) {
+    console.log(
+      `[seed:${runId}] generating ${idx + 1}/${pending.length} model=${job.modelKey} promptId=${job.promptId}`
+    );
+
     const r = await generateVoxelBuild({
       modelKey: job.modelKey,
       prompt: job.promptText,
@@ -138,7 +231,17 @@ export async function POST(req: Request) {
 
     if (!r.ok) {
       return NextResponse.json(
-        { ok: false, error: r.error, modelKey: job.modelKey, prompt: job.promptText },
+        {
+          ok: false,
+          error: r.error,
+          modelKey: job.modelKey,
+          promptId: job.promptId,
+          prompt: job.promptText,
+          settings: ARENA_SETTINGS,
+          db: getDbInfo(),
+          providerKeys: keyStatus,
+          runId,
+        },
         { status: 502 }
       );
     }
@@ -157,12 +260,28 @@ export async function POST(req: Request) {
     });
 
     seeded += 1;
+    seededJobs.push({ promptId: job.promptId, modelKey: job.modelKey });
   }
+
+  const durationMs = Date.now() - startedAt;
+  const remainingAfter = Math.max(0, remainingBefore - seeded);
+  console.log(`[seed:${runId}] batch complete (seeded=${seeded}, remaining≈${remainingAfter}, durationMs=${durationMs})`);
 
   return NextResponse.json({
     ok: true,
     done: false,
     seeded,
+    promptCount: prompts.length,
+    modelCount: models.length,
+    totalExpectedBuilds,
+    existingBuilds,
+    remainingBuilds: remainingAfter,
+    seededJobs,
+    durationMs,
+    settings: ARENA_SETTINGS,
+    db: getDbInfo(),
+    providerKeys: keyStatus,
     remainingEstimate: "Run again to continue seeding",
+    runId,
   });
 }

@@ -170,6 +170,7 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
         : buildRepairPrompt({
             error: lastError || "Invalid JSON",
             previousOutput: previousText.slice(0, 20000),
+            originalPrompt: params.prompt,
           });
 
     if (attempt > 1) params.onRetry?.(attempt, lastError);
