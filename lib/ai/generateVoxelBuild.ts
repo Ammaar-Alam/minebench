@@ -10,10 +10,11 @@ import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
+// 75% of grid volume — with primitives (boxes/lines) we can handle much larger builds efficiently
 const MAX_BLOCKS_BY_GRID: Record<32 | 64 | 128, number> = {
-  32: 15000,
-  64: 40000,
-  128: 50000,
+  32: Math.floor(32 ** 3 * 0.75),   // 24,576
+  64: Math.floor(64 ** 3 * 0.75),   // 196,608
+  128: Math.floor(128 ** 3 * 0.75), // 1,572,864
 };
 
 const MIN_BLOCKS_BY_GRID: Record<32 | 64 | 128, number> = {
