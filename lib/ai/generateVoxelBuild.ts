@@ -110,6 +110,30 @@ function validateParsedJson(
   });
 }
 
+function buildBounds(build: VoxelBuild) {
+  if (build.blocks.length === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  for (const b of build.blocks) {
+    if (b.x < minX) minX = b.x;
+    if (b.y < minY) minY = b.y;
+    if (b.z < minZ) minZ = b.z;
+    if (b.x > maxX) maxX = b.x;
+    if (b.y > maxY) maxY = b.y;
+    if (b.z > maxZ) maxZ = b.z;
+  }
+
+  const spanX = maxX - minX + 1;
+  const spanY = maxY - minY + 1;
+  const spanZ = maxZ - minZ + 1;
+  return { minX, minY, minZ, maxX, maxY, maxZ, spanX, spanY, spanZ };
+}
+
 export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Promise<GenerateVoxelBuildResult> {
   const model = getModelByKey(params.modelKey);
   const paletteDefs = getPalette(params.palette);
@@ -181,6 +205,23 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
       if (validated.value.build.blocks.length < minBlocks) {
         lastError = `Build too small (${validated.value.build.blocks.length} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
         continue;
+      }
+
+      const bounds = buildBounds(validated.value.build);
+      if (bounds) {
+        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.55));
+        const minHeight = Math.max(4, Math.floor(params.gridSize * 0.14));
+        const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
+
+        if (maxFootprintSpan < minFootprint) {
+          lastError = `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.`;
+          continue;
+        }
+
+        if (bounds.spanY < minHeight) {
+          lastError = `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.`;
+          continue;
+        }
       }
 
       const generationTimeMs = Date.now() - start;

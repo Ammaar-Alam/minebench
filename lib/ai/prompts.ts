@@ -14,6 +14,8 @@ export function buildSystemPrompt(opts: {
   const center = Math.floor(opts.gridSize / 2);
   const targetLow = Math.max(opts.minBlocks, Math.floor(opts.minBlocks * 2));
   const targetHigh = Math.max(targetLow, Math.floor(opts.minBlocks * 6));
+  const footprintTarget = Math.max(8, Math.floor(opts.gridSize * 0.6));
+  const heightTarget = Math.max(4, Math.floor(opts.gridSize * 0.18));
 
   return [
     "You are a 3D voxel construction AI.",
@@ -29,11 +31,13 @@ export function buildSystemPrompt(opts: {
     `- Prefer to center the build around x≈${center}, z≈${center}.`,
     "",
     "CONSTRUCTION GUIDELINES",
-    "- Match the prompt literally and prioritize recognizability over tiny or generic builds.",
+    "- Match the prompt literally and prioritize recognizability over tiny or generic builds, use this as an opportunity to show your creativity.",
     "- If the prompt includes specific features (e.g., 'with sails'), include them clearly.",
     "- Use appropriate materials (e.g., planks/logs for wood structures; wool for cloth/sails; stone for foundations; water for sea).",
     "- Keep the build reasonably sized so it fits in the grid and is fast to render.",
     `- Build size: aim for ~${targetLow}–${targetHigh} blocks (minimum ~${opts.minBlocks}). Make it detailed and recognizable.`,
+    `- Scale: aim for a large footprint. Use about ${footprintTarget}+ blocks of span across x or z (not just a tiny centered clump).`,
+    `- Add vertical structure when appropriate. Use about ${heightTarget}+ blocks of height span for tall prompts (masts, towers, trees).`,
     "- Avoid filler-only outputs (e.g. just a flat water plane, just a square hut, or a single block).",
     "- If the prompt is a vehicle/thing with distinctive parts (ship: hull + deck + mast(s) + sail(s); house: walls + roof + door/windows), include those parts.",
     "",

@@ -116,6 +116,7 @@ export async function openaiGenerateText(params: {
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for OpenAI structured output");
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
+  const useHighReasoning = params.modelId === "gpt-5.2" || params.modelId === "gpt-5.2-pro";
   // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
   // so we omit the parameter entirely and let the API use the default.
   const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
@@ -150,6 +151,7 @@ export async function openaiGenerateText(params: {
                 content: [{ type: "input_text", text: params.user }],
               },
             ],
+            reasoning: useHighReasoning ? { effort: "high" } : undefined,
             text: {
               format: {
                 type: "json_schema",
@@ -210,6 +212,7 @@ export async function openaiGenerateText(params: {
           model: params.modelId,
           temperature,
           max_completion_tokens: tok,
+        reasoning_effort: useHighReasoning ? "high" : undefined,
           response_format: {
             type: "json_schema",
             json_schema: {
