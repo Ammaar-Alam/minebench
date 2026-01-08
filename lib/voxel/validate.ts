@@ -9,9 +9,33 @@ const blockSchema = z.object({
   type: z.string().min(1),
 });
 
+const pointSchema = z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  z: z.number().int(),
+});
+
+const boxSchema = z.object({
+  x1: z.number().int(),
+  y1: z.number().int(),
+  z1: z.number().int(),
+  x2: z.number().int(),
+  y2: z.number().int(),
+  z2: z.number().int(),
+  type: z.string().min(1),
+});
+
+const lineSchema = z.object({
+  from: pointSchema,
+  to: pointSchema,
+  type: z.string().min(1),
+});
+
 const buildSchema = z.object({
   version: z.literal("1.0"),
   blocks: z.array(blockSchema),
+  boxes: z.array(boxSchema).optional(),
+  lines: z.array(lineSchema).optional(),
 });
 
 export type ValidateVoxelOptions = {
@@ -59,12 +83,95 @@ function normalizeBlockType(rawType: string, allowed: Set<string>): string | nul
   return null;
 }
 
+function clampInt(n: number, min: number, max: number): number {
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+
+function expandBuildPrimitives(
+  data: z.infer<typeof buildSchema>,
+  opts: ValidateVoxelOptions
+): { ok: true; blocks: { x: number; y: number; z: number; type: string }[] } | { ok: false; error: string } {
+  const expanded: { x: number; y: number; z: number; type: string }[] = [];
+
+  // Safety limit to prevent pathological expansions (e.g., a full solid 128^3 cube).
+  const expansionLimit = Math.max(opts.maxBlocks * 2, 20000);
+  let count = 0;
+  const push = (b: { x: number; y: number; z: number; type: string }) => {
+    expanded.push(b);
+    count += 1;
+    if (count > expansionLimit) throw new Error(`Too many blocks after expanding primitives (${count})`);
+  };
+
+  const boxes = data.boxes ?? [];
+  const lines = data.lines ?? [];
+
+  try {
+    for (const box of boxes) {
+      const xMin = Math.min(box.x1, box.x2);
+      const xMax = Math.max(box.x1, box.x2);
+      const yMin = Math.min(box.y1, box.y2);
+      const yMax = Math.max(box.y1, box.y2);
+      const zMin = Math.min(box.z1, box.z2);
+      const zMax = Math.max(box.z1, box.z2);
+
+      // Expand inclusive ranges. Coordinates are validated/dropped later, so we don’t clamp here.
+      for (let x = xMin; x <= xMax; x++) {
+        for (let y = yMin; y <= yMax; y++) {
+          for (let z2 = zMin; z2 <= zMax; z2++) {
+            push({ x, y, z: z2, type: box.type });
+          }
+        }
+      }
+    }
+
+    for (const line of lines) {
+      const x1 = line.from.x;
+      const y1 = line.from.y;
+      const z1 = line.from.z;
+      const x2 = line.to.x;
+      const y2 = line.to.y;
+      const z2 = line.to.z;
+
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      const dz = z2 - z1;
+      const steps = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+
+      if (steps <= 0) {
+        push({ x: x1, y: y1, z: z1, type: line.type });
+        continue;
+      }
+
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        // DDA line; duplicates are fine (deduped later)
+        const x = Math.round(x1 + dx * t);
+        const y = Math.round(y1 + dy * t);
+        const z = Math.round(z1 + dz * t);
+        push({ x, y, z, type: line.type });
+      }
+    }
+
+    // Explicit blocks last so they can override primitives at the same coordinate.
+    for (const b of data.blocks) push(b);
+
+    return { ok: true, blocks: expanded };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Failed to expand primitives" };
+  }
+}
+
 export function validateVoxelBuild(
   input: unknown,
   opts: ValidateVoxelOptions
 ): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
   const parsed = buildSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.message };
+
+  const expanded = expandBuildPrimitives(parsed.data, opts);
+  if (!expanded.ok) return { ok: false, error: expanded.error };
 
   const allowed = new Set(opts.palette.map((b) => b.id));
   const warnings: string[] = [];
@@ -75,7 +182,7 @@ export function validateVoxelBuild(
   const keyToBlock = new Map<number, { x: number; y: number; z: number; type: string }>();
   const encode = (x: number, y: number, z: number) => x | (y << 7) | (z << 14);
 
-  for (const b of parsed.data.blocks) {
+  for (const b of expanded.blocks) {
     if (b.x < 0 || b.y < 0 || b.z < 0) {
       droppedNegative += 1;
       continue;
@@ -92,10 +199,15 @@ export function validateVoxelBuild(
       continue;
     }
 
-    keyToBlock.set(encode(b.x, b.y, b.z), {
-      x: b.x,
-      y: b.y,
-      z: b.z,
+    // ensure we store ints even if something slipped through
+    const x = clampInt(Math.trunc(b.x), 0, opts.gridSize - 1);
+    const y = clampInt(Math.trunc(b.y), 0, opts.gridSize - 1);
+    const z3 = clampInt(Math.trunc(b.z), 0, opts.gridSize - 1);
+
+    keyToBlock.set(encode(x, y, z3), {
+      x,
+      y,
+      z: z3,
       type: normalizedType,
     });
   }
