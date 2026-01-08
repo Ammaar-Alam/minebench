@@ -30,8 +30,8 @@ function groupByProvider() {
   return Array.from(groups.values());
 }
 
-export function Sandbox() {
-  const [prompt, setPrompt] = useState("a pirate ship with sails");
+export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
+  const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
   const [gridSize, setGridSize] = useState<GridSize>(64);
   const [palette, setPalette] = useState<Palette>("simple");
   const [mode, setMode] = useState<Mode>("precise");
@@ -142,6 +142,7 @@ export function Sandbox() {
         voxelBuild={r?.status === "success" ? r.voxelBuild : null}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
+        palette={palette}
       />
     );
   });
@@ -243,4 +244,3 @@ export function Sandbox() {
     </div>
   );
 }
-

@@ -33,6 +33,7 @@ export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
   const [selectedPromptId, setSelectedPromptId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
 
   const matchup = state.kind === "ready" ? state.matchup : null;
 
@@ -44,7 +45,7 @@ export function Arena() {
   useEffect(() => {
     let cancelled = false;
     setState({ kind: "loading" });
-    fetchMatchup(selectedPromptId)
+    fetchMatchup(undefined)
       .then((m) => {
         if (cancelled) return;
         setSelectedPromptId(m.prompt.id);
@@ -60,7 +61,31 @@ export function Arena() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPromptId]);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedPromptId) return;
+    if (matchup?.prompt.id === selectedPromptId) return;
+
+    let cancelled = false;
+    setState({ kind: "loading" });
+    fetchMatchup(selectedPromptId)
+      .then((m) => {
+        if (cancelled) return;
+        setState({ kind: "ready", matchup: m });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setState({
+          kind: "error",
+          message: err instanceof Error ? err.message : "Failed to load matchup",
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [matchup?.prompt.id, selectedPromptId]);
 
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
@@ -89,7 +114,7 @@ export function Arena() {
             </div>
             <div className="text-xl font-semibold leading-tight">{title}</div>
             <div className="mt-1 text-sm text-muted">
-              Vote for the better build. Curated prompts only.
+              Vote for the better build. Fixed settings: 32³, simple palette, Precise mode.
             </div>
           </div>
 
@@ -102,6 +127,13 @@ export function Arena() {
         {state.kind === "error" ? (
           <div className="rounded-lg border border-border bg-bg/40 p-3 text-sm text-red-300">
             {state.message}
+          </div>
+        ) : null}
+
+        {state.kind === "error" ? (
+          <div className="rounded-lg border border-border bg-bg/30 p-3 text-sm text-muted">
+            If this is a fresh install, seed curated prompts/builds via{" "}
+            <span className="font-mono">/api/admin/seed</span> (see README).
           </div>
         ) : null}
 
@@ -124,8 +156,30 @@ export function Arena() {
           disabled={state.kind !== "ready" || submitting}
           onVote={handleVote}
         />
+
+        <div className="mt-2 flex flex-col gap-2 rounded-xl border border-border bg-bg/30 p-3 text-sm text-muted md:flex-row md:items-center md:justify-between">
+          <div className="flex flex-col gap-1">
+            <div>Want full control (models / grid / palette)?</div>
+            <div className="text-xs text-muted">
+              Try a custom prompt in Sandbox.
+            </div>
+          </div>
+          <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+            <input
+              className="h-9 w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none ring-accent/40 transition focus:ring-2 md:w-72"
+              placeholder="your own prompt…"
+              value={customPrompt}
+              onChange={(e) => setCustomPrompt(e.target.value)}
+            />
+            <a
+              className="inline-flex h-9 items-center justify-center rounded-md bg-accent/15 px-3 text-sm font-semibold text-fg ring-1 ring-accent/30 transition hover:bg-accent/20"
+              href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
+            >
+              Open Sandbox
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
-

@@ -34,6 +34,11 @@ export function PromptPicker({
         value={selectedPromptId ?? ""}
         onChange={(e) => onChangePromptId(e.target.value)}
       >
+        {prompts.length === 0 ? (
+          <option value="" disabled>
+            No prompts (seed required)
+          </option>
+        ) : null}
         {prompts.map((p) => (
           <option key={p.id} value={p.id}>
             {p.text}
@@ -43,4 +48,3 @@ export function PromptPicker({
     </label>
   );
 }
-

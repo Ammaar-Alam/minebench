@@ -5,8 +5,16 @@ export function SiteFooter() {
         <div>MineBench</div>
         <div className="flex flex-col gap-1 md:items-end">
           <div>
-            Textures: Faithful pack (see{" "}
-            <span className="font-mono">faithful-32x-1.21.11/LICENSE.txt</span>)
+            Textures:{" "}
+            <a
+              className="text-fg underline decoration-border underline-offset-4 hover:decoration-fg"
+              href="https://faithfulpack.net/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Faithful Pack
+            </a>{" "}
+            (see <span className="font-mono">faithful-32x-1.21.11/LICENSE.txt</span>)
           </div>
         </div>
       </div>
