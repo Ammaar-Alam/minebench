@@ -64,7 +64,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     key: "gemini_3_0_pro",
     provider: "gemini",
-    modelId: "gemini-3-pro",
+    modelId: "gemini-3-pro-preview",
     displayName: "Gemini 3.0 Pro",
     enabled: true,
   },
