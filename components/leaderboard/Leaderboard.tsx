@@ -25,26 +25,32 @@ export function Leaderboard() {
   }, []);
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="rounded-2xl border border-border bg-card/40 p-4">
-        <div className="text-xs font-medium uppercase tracking-wide text-muted">
-          Leaderboard
-        </div>
-        <div className="text-xl font-semibold">Global Elo</div>
-        <div className="mt-1 text-sm text-muted">
-          Curated prompts only. K=16. “Both bad” penalizes via Baseline.
+    <div className="flex flex-col gap-6">
+      <div className="mb-panel p-5">
+        <div className="mb-panel-inner flex flex-col gap-2">
+          <div className="mb-badge w-fit">
+            <span className="mb-dot" />
+            <span className="text-fg">Leaderboard</span>
+            <span className="hidden text-muted2 sm:inline">curated prompts only</span>
+          </div>
+          <div className="font-display text-2xl font-semibold tracking-tight">
+            Global Elo
+          </div>
+          <div className="text-sm text-muted">
+            K=16. “Both bad” penalizes via Baseline.
+          </div>
         </div>
       </div>
 
       {error ? (
-        <div className="rounded-lg border border-border bg-bg/40 p-3 text-sm text-red-300">
+        <div className="mb-subpanel p-3 text-sm text-danger">
           {error}
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+      <div className="overflow-hidden rounded-3xl bg-card/55 shadow-soft ring-1 ring-border">
         <table className="w-full text-left text-sm">
-          <thead className="border-b border-border text-xs uppercase tracking-wide text-muted">
+          <thead className="border-b border-border bg-bg/25 text-xs uppercase tracking-wide text-muted">
             <tr>
               <th className="px-4 py-3">Model</th>
               <th className="px-4 py-3">Rating</th>
@@ -83,4 +89,3 @@ export function Leaderboard() {
     </div>
   );
 }
-

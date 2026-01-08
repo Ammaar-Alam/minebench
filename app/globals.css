@@ -56,3 +56,75 @@
     background: hsl(var(--accent) / 0.25);
   }
 }
+
+@layer components {
+  .mb-panel {
+    @apply relative overflow-hidden rounded-3xl bg-card/55 shadow-soft ring-1 ring-border;
+  }
+
+  .mb-panel::before {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    pointer-events: none;
+    background:
+      radial-gradient(520px 260px at 0% 0%, hsl(var(--accent) / 0.18), transparent 62%),
+      radial-gradient(640px 300px at 100% 0%, hsl(var(--accent2) / 0.16), transparent 58%),
+      linear-gradient(to bottom, hsl(var(--card2) / 0.60), transparent 60%);
+  }
+
+  .mb-panel-inner {
+    @apply relative;
+  }
+
+  .mb-subpanel {
+    @apply rounded-2xl bg-bg/35 ring-1 ring-border/70;
+  }
+
+  .mb-badge {
+    @apply inline-flex items-center gap-2 rounded-full bg-bg/55 px-3 py-1 text-xs font-medium text-muted ring-1 ring-border/80;
+  }
+
+  .mb-dot {
+    @apply h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_0_3px_hsl(var(--accent)_/_0.18)];
+  }
+
+  .mb-field {
+    @apply w-full rounded-xl border border-border bg-bg/40 px-3 text-sm text-fg shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] outline-none transition;
+  }
+
+  .mb-field:focus-visible {
+    border-color: hsl(var(--accent) / 0.55);
+    box-shadow:
+      0 0 0 4px hsl(var(--accent) / 0.18),
+      inset 0 1px 0 hsl(0 0% 100% / 0.06);
+  }
+
+  .mb-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg transition focus-visible:outline-none;
+  }
+
+  .mb-btn:focus-visible {
+    box-shadow: 0 0 0 4px hsl(var(--accent) / 0.18);
+  }
+
+  .mb-btn:active {
+    transform: translateY(1px);
+  }
+
+  .mb-btn-primary {
+    @apply bg-accent/18 ring-1 ring-accent/35 hover:bg-accent/22;
+  }
+
+  .mb-btn-ghost {
+    @apply bg-bg/30 ring-1 ring-border/80 hover:bg-bg/45;
+  }
+
+  .mb-btn-danger {
+    @apply bg-danger/16 ring-1 ring-danger/35 hover:bg-danger/20;
+  }
+
+  .mb-kbd {
+    @apply rounded-md border border-border/80 bg-bg/45 px-1.5 py-0.5 font-mono text-[11px] text-muted;
+  }
+}

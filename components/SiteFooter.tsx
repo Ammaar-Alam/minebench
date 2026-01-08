@@ -1,13 +1,18 @@
 export function SiteFooter() {
   return (
-    <footer className="border-t border-border py-6 text-sm text-muted">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div>MineBench</div>
+    <footer className="border-t border-border py-8 text-sm text-muted">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="flex flex-col gap-1">
+          <div className="font-display text-sm font-semibold text-fg">MineBench</div>
+          <div className="text-xs text-muted2">
+            A benchmark for AI spatial reasoning via Minecraft-style voxel builds.
+          </div>
+        </div>
         <div className="flex flex-col gap-1 md:items-end">
           <div>
             Textures:{" "}
             <a
-              className="text-fg underline decoration-border underline-offset-4 hover:decoration-fg"
+              className="text-fg underline decoration-border/70 underline-offset-4 hover:decoration-fg"
               href="https://faithfulpack.net/"
               target="_blank"
               rel="noreferrer"

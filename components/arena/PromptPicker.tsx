@@ -27,10 +27,10 @@ export function PromptPicker({
   }, []);
 
   return (
-    <label className="flex flex-col gap-1">
+    <label className="flex min-w-64 flex-col gap-1">
       <div className="text-xs font-medium text-muted">Prompt</div>
       <select
-        className="h-10 w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none ring-accent/40 transition focus:ring-2"
+        className="mb-field h-10"
         value={selectedPromptId ?? ""}
         onChange={(e) => onChangePromptId(e.target.value)}
       >

@@ -11,14 +11,15 @@ function VoteButton({
   label: string;
   onClick: () => void;
   disabled?: boolean;
-  variant?: "default" | "danger";
+  variant?: "default" | "ghost" | "danger";
 }) {
   const base =
-    "h-10 rounded-md px-3 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed";
-  const cls =
-    variant === "danger"
-      ? `${base} bg-red-500/15 text-red-200 ring-1 ring-red-400/30 hover:bg-red-500/20`
-      : `${base} bg-accent/15 text-fg ring-1 ring-accent/30 hover:bg-accent/20`;
+    "mb-btn h-10 disabled:cursor-not-allowed disabled:opacity-50";
+  const cls = (() => {
+    if (variant === "danger") return `${base} mb-btn-danger`;
+    if (variant === "ghost") return `${base} mb-btn-ghost`;
+    return `${base} mb-btn-primary`;
+  })();
   return (
     <button className={cls} disabled={disabled} onClick={onClick}>
       {label}
@@ -42,6 +43,7 @@ export function VoteBar({
         <VoteButton
           disabled={disabled}
           label="Tie"
+          variant="ghost"
           onClick={() => onVote("TIE")}
         />
         <VoteButton
@@ -54,4 +56,3 @@ export function VoteBar({
     </div>
   );
 }
-

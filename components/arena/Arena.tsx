@@ -105,78 +105,86 @@ export function Arena() {
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 rounded-2xl border border-border bg-card/40 p-4">
-        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-          <div>
-            <div className="text-xs font-medium uppercase tracking-wide text-muted">
-              Arena
+    <div className="flex flex-col gap-6">
+      <div className="mb-panel p-5">
+        <div className="mb-panel-inner flex flex-col gap-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div className="flex flex-col gap-2">
+              <div className="mb-badge w-fit">
+                <span className="mb-dot" />
+                <span className="text-fg">Arena</span>
+                <span className="hidden text-muted2 sm:inline">
+                  32³ • simple palette • head-to-head
+                </span>
+              </div>
+              <div className="font-display text-2xl font-semibold leading-tight tracking-tight md:text-3xl">
+                {title}
+              </div>
+              <div className="text-sm text-muted">
+                Vote for the better build. New matchup loads instantly after each vote.
+              </div>
             </div>
-            <div className="text-xl font-semibold leading-tight">{title}</div>
-            <div className="mt-1 text-sm text-muted">
-              Vote for the better build. Fixed settings: 32³, simple palette.
-            </div>
-          </div>
 
-          <PromptPicker
-            selectedPromptId={selectedPromptId}
-            onChangePromptId={(id) => setSelectedPromptId(id)}
-          />
-        </div>
-
-        {state.kind === "error" ? (
-          <div className="rounded-lg border border-border bg-bg/40 p-3 text-sm text-red-300">
-            {state.message}
-          </div>
-        ) : null}
-
-        {state.kind === "error" ? (
-          <div className="rounded-lg border border-border bg-bg/30 p-3 text-sm text-muted">
-            If this is a fresh install, seed curated prompts/builds via{" "}
-            <span className="font-mono">/api/admin/seed</span> (see README).
-          </div>
-        ) : null}
-
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <VoxelViewerCard
-            title="A"
-            subtitle={matchup ? matchup.a.model.displayName : undefined}
-            voxelBuild={matchup?.a.build ?? null}
-            autoRotate
-          />
-          <VoxelViewerCard
-            title="B"
-            subtitle={matchup ? matchup.b.model.displayName : undefined}
-            voxelBuild={matchup?.b.build ?? null}
-            autoRotate
-          />
-        </div>
-
-        <VoteBar
-          disabled={state.kind !== "ready" || submitting}
-          onVote={handleVote}
-        />
-
-        <div className="mt-2 flex flex-col gap-2 rounded-xl border border-border bg-bg/30 p-3 text-sm text-muted md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-col gap-1">
-            <div>Want full control (models / grid / palette)?</div>
-            <div className="text-xs text-muted">
-              Try a custom prompt in Sandbox.
-            </div>
-          </div>
-          <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
-            <input
-              className="h-9 w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none ring-accent/40 transition focus:ring-2 md:w-72"
-              placeholder="your own prompt…"
-              value={customPrompt}
-              onChange={(e) => setCustomPrompt(e.target.value)}
+            <PromptPicker
+              selectedPromptId={selectedPromptId}
+              onChangePromptId={(id) => setSelectedPromptId(id)}
             />
-            <a
-              className="inline-flex h-9 items-center justify-center rounded-md bg-accent/15 px-3 text-sm font-semibold text-fg ring-1 ring-accent/30 transition hover:bg-accent/20"
-              href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
-            >
-              Open Sandbox
-            </a>
+          </div>
+
+          {state.kind === "error" ? (
+            <div className="mb-subpanel p-3 text-sm text-danger">
+              {state.message}
+            </div>
+          ) : null}
+
+          {state.kind === "error" ? (
+            <div className="mb-subpanel p-3 text-sm text-muted">
+              If this is a fresh install, seed curated prompts/builds via{" "}
+              <span className="font-mono">/api/admin/seed</span> (see README).
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <VoxelViewerCard
+              title="A"
+              subtitle={matchup ? matchup.a.model.displayName : undefined}
+              voxelBuild={matchup?.a.build ?? null}
+              autoRotate
+            />
+            <VoxelViewerCard
+              title="B"
+              subtitle={matchup ? matchup.b.model.displayName : undefined}
+              voxelBuild={matchup?.b.build ?? null}
+              autoRotate
+            />
+          </div>
+
+          <VoteBar
+            disabled={state.kind !== "ready" || submitting}
+            onVote={handleVote}
+          />
+
+          <div className="mb-subpanel flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-1">
+              <div className="text-sm text-fg">Want full control?</div>
+              <div className="text-xs text-muted">
+                Pick models, grid size, palette — and stream results as they complete.
+              </div>
+            </div>
+            <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
+              <input
+                className="mb-field h-10 md:w-80"
+                placeholder="your own prompt…"
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+              />
+              <a
+                className="mb-btn mb-btn-primary h-10"
+                href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
+              >
+                Open Sandbox
+              </a>
+            </div>
           </div>
         </div>
       </div>
