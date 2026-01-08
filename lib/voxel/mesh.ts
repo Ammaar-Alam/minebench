@@ -170,7 +170,8 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
     maxX = maxY = maxZ = 0;
   }
   const cx = (minX + maxX + 1) / 2;
-  const cy = (minY + maxY + 1) / 2;
+  // Keep the build grounded (y=0) while still centering in X/Z for consistent framing.
+  const cy = minY;
   const cz = (minZ + maxZ + 1) / 2;
 
   const opaque = makeBucket();

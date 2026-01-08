@@ -44,7 +44,10 @@ export async function openaiGenerateText(params: {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
-  const temperature = params.temperature ?? 0.2;
+  const isGpt5Family = params.modelId.startsWith("gpt-5");
+  // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
+  // so we omit the parameter entirely and let the API use the default.
+  const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
   const maxOutputTokens = params.maxOutputTokens ?? 8192;
 
   const controller = new AbortController();

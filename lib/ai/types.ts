@@ -11,6 +11,8 @@ export type GenerateRequest = {
 };
 
 export type GenerateEvent =
+  | { type: "hello"; ts: number; pad?: string }
+  | { type: "ping"; ts: number }
   | { type: "start"; modelKey: ModelKey }
   | { type: "retry"; modelKey: ModelKey; attempt: number; reason?: string }
   | { type: "result"; modelKey: ModelKey; voxelBuild: VoxelBuild; metrics: { blockCount: number; warnings: string[]; generationTimeMs: number } }

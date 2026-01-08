@@ -22,6 +22,7 @@ export async function anthropicGenerateText(params: {
       headers: {
         "Content-Type": "application/json",
         "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
       },
       signal: controller.signal,
       body: JSON.stringify({
