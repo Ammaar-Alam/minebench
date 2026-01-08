@@ -13,7 +13,10 @@ function requireAdmin(req: Request): string | null {
   const auth = req.headers.get("authorization") ?? "";
   const match = auth.match(/^Bearer\s+(.+)$/i);
   if (!match) return "Missing Authorization header";
-  if (match[1] !== token) return "Invalid token";
+  const presented = match[1].trim();
+  if (presented !== token.trim()) {
+    return "Invalid token (must match ADMIN_TOKEN; note Next.js dev loads .env.local before .env)";
+  }
   return null;
 }
 
@@ -149,6 +152,37 @@ export async function POST(req: Request) {
     where: { enabled: true, isBaseline: false },
     orderBy: { createdAt: "asc" },
   });
+
+  if (prompts.length === 0) {
+    return NextResponse.json({
+      ok: false,
+      done: true,
+      seeded: 0,
+      error: "No active prompts found. Add prompts to CURATED_PROMPTS and rerun seed.",
+      promptCount: 0,
+      modelCount: models.length,
+      settings: ARENA_SETTINGS,
+      db: getDbInfo(),
+      providerKeys: keyStatus,
+      runId,
+    });
+  }
+
+  if (models.length === 0) {
+    return NextResponse.json({
+      ok: false,
+      done: true,
+      seeded: 0,
+      error:
+        "No enabled models found. Set at least one provider API key (OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY) or enable models for configured providers.",
+      promptCount: prompts.length,
+      modelCount: 0,
+      settings: ARENA_SETTINGS,
+      db: getDbInfo(),
+      providerKeys: keyStatus,
+      runId,
+    });
+  }
 
   const existing = await prisma.build.findMany({
     where: {
