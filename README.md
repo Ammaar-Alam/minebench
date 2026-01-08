@@ -19,11 +19,14 @@ It has two modes:
 pnpm install
 pnpm atlas
 pnpm db:up
+cp .env.example .env
 pnpm prisma:migrate
 pnpm dev
 ```
 
-Copy `.env.example` to `.env.local` and set:
+Prisma reads `.env` (not `.env.local`), so make sure `DATABASE_URL` is set there.
+
+Copy `.env.example` to `.env` and set:
 
 - `DATABASE_URL` (Vercel Postgres connection string)
 - `ADMIN_TOKEN` (protects `/api/admin/*`)
@@ -45,6 +48,12 @@ curl -X POST http://localhost:3000/api/admin/seed -H "Authorization: Bearer $ADM
 ```
 
 Repeat until it reports seeding is complete (it seeds in small batches to avoid timeouts).
+
+## One-command dev
+
+```bash
+pnpm dev:setup
+```
 
 ## Texture attribution
 
