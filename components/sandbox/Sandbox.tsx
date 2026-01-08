@@ -13,6 +13,9 @@ type ModelResult = {
   status: "idle" | "loading" | "success" | "error";
   voxelBuild: unknown | null;
   error?: string;
+  attempt?: number;
+  retryReason?: string;
+  metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
 };
 
 function groupByProvider() {
@@ -62,7 +65,14 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
     setResults((prev) => {
       const next = new Map(prev);
       for (const key of selectedModelKeys) {
-        next.set(key, { modelKey: key, status: "loading", voxelBuild: null });
+        next.set(key, {
+          modelKey: key,
+          status: "loading",
+          voxelBuild: null,
+          attempt: 1,
+          retryReason: undefined,
+          metrics: undefined,
+        });
       }
       return next;
     });
@@ -94,16 +104,38 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
 
         for (const line of lines) {
           if (!line.trim()) continue;
-          const evt = JSON.parse(line) as GenerateEvent;
+          let evt: GenerateEvent | null = null;
+          try {
+            evt = JSON.parse(line) as GenerateEvent;
+          } catch (e) {
+            console.warn("Failed to parse NDJSON line", e);
+            continue;
+          }
           if (evt.type === "start") continue;
 
-          if (evt.type === "result") {
+          if (evt.type === "retry") {
             setResults((prev) => {
               const next = new Map(prev);
               next.set(evt.modelKey, {
                 modelKey: evt.modelKey,
+                status: "loading",
+                voxelBuild: null,
+                attempt: evt.attempt,
+                retryReason: evt.reason,
+              });
+              return next;
+            });
+          } else if (evt.type === "result") {
+            setResults((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(evt.modelKey);
+              next.set(evt.modelKey, {
+                modelKey: evt.modelKey,
                 status: "success",
                 voxelBuild: evt.voxelBuild,
+                attempt: existing?.attempt,
+                retryReason: undefined,
+                metrics: evt.metrics,
               });
               return next;
             });
@@ -121,6 +153,23 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
           }
         }
       }
+
+      setResults((prev) => {
+        const next = new Map(prev);
+        for (const key of selectedModelKeys) {
+          const r = next.get(key);
+          if (!r) continue;
+          if (r.status === "loading") {
+            next.set(key, {
+              ...r,
+              status: "error",
+              voxelBuild: null,
+              error: r.error ?? "Stream ended before a result was received",
+            });
+          }
+        }
+        return next;
+      });
     } catch (err) {
       console.error(err);
     } finally {
@@ -137,8 +186,12 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
         title={model?.displayName ?? key}
         subtitle={model?.provider}
         voxelBuild={r?.status === "success" ? r.voxelBuild : null}
+        animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
+        attempt={r?.status === "loading" ? r.attempt : undefined}
+        retryReason={r?.status === "loading" ? r.retryReason : undefined}
+        metrics={r?.status === "success" ? r.metrics : undefined}
         palette={palette}
       />
     );

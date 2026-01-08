@@ -72,7 +72,7 @@ export async function POST(req: Request) {
           prompt: body.prompt,
           gridSize: body.gridSize,
           palette: body.palette,
-          onRetry: (attempt) => send({ type: "retry", modelKey, attempt }),
+          onRetry: (attempt, reason) => send({ type: "retry", modelKey, attempt, reason }),
         })
           .then((r) => {
             if (r.ok) {
@@ -116,6 +116,7 @@ export async function POST(req: Request) {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
     },
   });
 }

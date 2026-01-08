@@ -48,7 +48,7 @@ export function Leaderboard() {
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-3xl bg-card/55 shadow-soft ring-1 ring-border">
+      <div className="overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
         <table className="w-full text-left text-sm">
           <thead className="border-b border-border bg-bg/25 text-xs uppercase tracking-wide text-muted">
             <tr>

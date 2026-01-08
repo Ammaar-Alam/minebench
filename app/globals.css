@@ -59,7 +59,7 @@
 
 @layer components {
   .mb-panel {
-    @apply relative overflow-hidden rounded-3xl bg-card/55 shadow-soft ring-1 ring-border;
+    @apply relative overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border;
   }
 
   .mb-panel::before {
@@ -78,11 +78,11 @@
   }
 
   .mb-subpanel {
-    @apply rounded-2xl bg-bg/35 ring-1 ring-border/70;
+    @apply rounded-2xl bg-bg/40 ring-1 ring-border/70;
   }
 
   .mb-badge {
-    @apply inline-flex items-center gap-2 rounded-full bg-bg/55 px-3 py-1 text-xs font-medium text-muted ring-1 ring-border/80;
+    @apply inline-flex items-center gap-2 rounded-full bg-bg/60 px-3 py-1 text-xs font-medium text-muted ring-1 ring-border/80;
   }
 
   .mb-dot {
@@ -113,18 +113,18 @@
   }
 
   .mb-btn-primary {
-    @apply bg-accent/18 ring-1 ring-accent/35 hover:bg-accent/22;
+    @apply bg-accent/20 ring-1 ring-accent/40 hover:bg-accent/25;
   }
 
   .mb-btn-ghost {
-    @apply bg-bg/30 ring-1 ring-border/80 hover:bg-bg/45;
+    @apply bg-bg/30 ring-1 ring-border/80 hover:bg-bg/50;
   }
 
   .mb-btn-danger {
-    @apply bg-danger/16 ring-1 ring-danger/35 hover:bg-danger/20;
+    @apply bg-danger/20 ring-1 ring-danger/40 hover:bg-danger/25;
   }
 
   .mb-kbd {
-    @apply rounded-md border border-border/80 bg-bg/45 px-1.5 py-0.5 font-mono text-[11px] text-muted;
+    @apply rounded-md border border-border/80 bg-bg/50 px-1.5 py-0.5 font-mono text-[11px] text-muted;
   }
 }

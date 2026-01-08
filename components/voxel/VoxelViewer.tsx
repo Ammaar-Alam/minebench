@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
@@ -12,6 +12,7 @@ type ViewerProps = {
   voxelBuild: VoxelBuild | null;
   palette: "simple" | "advanced";
   autoRotate?: boolean;
+  animateIn?: boolean;
 };
 
 let atlasPromise: Promise<THREE.Texture> | null = null;
@@ -27,26 +28,41 @@ function loadAtlasTexture(): Promise<THREE.Texture> {
 
 function frameObject(camera: THREE.PerspectiveCamera, controls: OrbitControls, obj: THREE.Object3D) {
   const box = new THREE.Box3().setFromObject(obj);
-  const size = box.getSize(new THREE.Vector3());
-  const center = box.getCenter(new THREE.Vector3());
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+
+  const center = sphere.center;
+  const radius = Math.max(0.001, sphere.radius);
 
   controls.target.copy(center);
 
-  const maxDim = Math.max(size.x, size.y, size.z);
-  const fov = (camera.fov * Math.PI) / 180;
-  const distance = maxDim / (2 * Math.tan(fov / 2));
+  const vFov = THREE.MathUtils.degToRad(camera.fov);
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
+  const fitHeight = radius / Math.sin(vFov / 2);
+  const fitWidth = radius / Math.sin(hFov / 2);
+  const distance = Math.max(fitHeight, fitWidth);
 
-  camera.position.set(center.x + distance * 1.2, center.y + distance * 0.9, center.z + distance * 1.2);
-  camera.near = Math.max(0.05, distance / 100);
-  camera.far = distance * 30;
+  const dir = new THREE.Vector3(1, 0.85, 1).normalize();
+  camera.position.copy(center).addScaledVector(dir, distance * 1.25);
+  camera.near = Math.max(0.05, distance / 250);
+  camera.far = Math.max(200, distance * 60);
   camera.updateProjectionMatrix();
 
+  controls.minDistance = Math.max(0.5, distance * 0.12);
+  controls.maxDistance = Math.max(40, distance * 14);
+
   controls.update();
+  controls.saveState();
+
+  return box;
 }
 
-export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
+export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: ViewerProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const mountRef = useRef<HTMLDivElement | null>(null);
   const voxelGroupRef = useRef<VoxelGroup | null>(null);
+  const gridRef = useRef<THREE.GridHelper | null>(null);
+  const revealRafRef = useRef<number | null>(null);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -54,7 +70,32 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
     controls: OrbitControls;
   } | null>(null);
 
+  const [spacePanning, setSpacePanning] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
+
+  function fitView() {
+    const three = threeRef.current;
+    const vg = voxelGroupRef.current;
+    if (!three || !vg) return;
+    const box = frameObject(three.camera, three.controls, vg.group);
+    if (gridRef.current) {
+      gridRef.current.position.y = box.min.y - 0.5;
+    }
+  }
+
+  async function toggleFullscreen() {
+    const el = containerRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {}
+  }
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -73,6 +114,8 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(mount.clientWidth, mount.clientHeight, false);
+    camera.aspect = mount.clientWidth / Math.max(1, mount.clientHeight);
+    camera.updateProjectionMatrix();
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
 
@@ -82,10 +125,17 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
     controls.rotateSpeed = 0.55;
     controls.zoomSpeed = 0.8;
     controls.panSpeed = 0.7;
+    controls.enablePan = true;
+    controls.screenSpacePanning = true;
     controls.minDistance = 2;
     controls.maxDistance = 80;
     controls.autoRotate = false;
     controls.autoRotateSpeed = 0.6;
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
+    };
 
     const stopAutoRotate = () => {
       controls.autoRotate = false;
@@ -104,9 +154,10 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
     fillLight.position.set(-8, 6, -6);
     scene.add(fillLight);
 
-    const grid = new THREE.GridHelper(24, 24, 0x2a2f3a, 0x161a22);
+    const grid = new THREE.GridHelper(160, 160, 0x2a2f3a, 0x161a22);
     grid.position.y = -0.5;
     scene.add(grid);
+    gridRef.current = grid;
 
     threeRef.current = { scene, camera, renderer, controls };
 
@@ -127,10 +178,22 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
     });
     ro.observe(mount);
 
+    const onDblClick = () => fitView();
+    const onContextMenu = (e: Event) => e.preventDefault();
+    renderer.domElement.addEventListener("dblclick", onDblClick);
+    renderer.domElement.addEventListener("contextmenu", onContextMenu);
+
+    const onFullscreenChange = () => {
+      const el = containerRef.current;
+      setIsFullscreen(Boolean(el && document.fullscreenElement === el));
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+
     return () => {
       threeRef.current = null;
       ro.disconnect();
       window.cancelAnimationFrame(raf);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
       controls.removeEventListener("start", stopAutoRotate);
       controls.removeEventListener("end", stopAutoRotate);
       controls.dispose();
@@ -141,8 +204,16 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
         voxelGroupRef.current = null;
       }
 
+      scene.remove(grid);
+      grid.geometry.dispose();
+      if (Array.isArray(grid.material)) grid.material.forEach((m) => m.dispose());
+      else grid.material.dispose();
+
       renderer.dispose();
+      renderer.domElement.removeEventListener("dblclick", onDblClick);
+      renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       renderer.domElement.remove();
+      gridRef.current = null;
     };
   }, []);
 
@@ -154,6 +225,11 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
       const tex = await loadAtlasTexture();
       if (cancelled) return;
 
+      if (revealRafRef.current) {
+        window.cancelAnimationFrame(revealRafRef.current);
+        revealRafRef.current = null;
+      }
+
       if (voxelGroupRef.current) {
         three.scene.remove(voxelGroupRef.current.group);
         voxelGroupRef.current.dispose();
@@ -164,12 +240,51 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
       const vg = createVoxelGroup(voxelBuild, paletteDefs, tex);
       voxelGroupRef.current = vg;
       three.scene.add(vg.group);
-      frameObject(three.camera, three.controls, vg.group);
+      fitView();
+      three.controls.autoRotate = Boolean(autoRotate);
+
+      if (!animateIn) return;
+
+      const geometries: { geo: THREE.BufferGeometry; total: number }[] = [];
+      vg.group.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const geo = child.geometry;
+        if (!(geo instanceof THREE.BufferGeometry)) return;
+        const total = geo.getIndex()?.count ?? geo.getAttribute("position")?.count ?? 0;
+        if (total <= 0) return;
+        geo.setDrawRange(0, 0);
+        geometries.push({ geo, total });
+      });
+
+      if (geometries.length === 0) return;
+
+      const durationMs = 900;
+      const start = performance.now();
+
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - start) / durationMs);
+        const eased = 1 - Math.pow(1 - t, 3);
+        for (const g of geometries) {
+          const count = Math.floor((g.total * eased) / 3) * 3;
+          g.geo.setDrawRange(0, count);
+        }
+        if (t < 1) {
+          revealRafRef.current = window.requestAnimationFrame(tick);
+        } else {
+          revealRafRef.current = null;
+        }
+      };
+
+      revealRafRef.current = window.requestAnimationFrame(tick);
     })();
     return () => {
       cancelled = true;
+      if (revealRafRef.current) {
+        window.cancelAnimationFrame(revealRafRef.current);
+        revealRafRef.current = null;
+      }
     };
-  }, [voxelBuild, paletteDefs]);
+  }, [voxelBuild, paletteDefs, autoRotate, animateIn]);
 
   useEffect(() => {
     const three = threeRef.current;
@@ -177,5 +292,52 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate }: ViewerProps) {
     three.controls.autoRotate = Boolean(autoRotate);
   }, [autoRotate]);
 
-  return <div ref={mountRef} className="h-full w-full" />;
+  return (
+    <div
+      ref={containerRef}
+      className={`relative h-full w-full ${spacePanning ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
+      tabIndex={0}
+      onPointerDown={() => containerRef.current?.focus()}
+      onBlur={() => {
+        setSpacePanning(false);
+        const three = threeRef.current;
+        if (three) three.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+      }}
+      onKeyDown={(e) => {
+        if (e.code === "Space" && !e.repeat) {
+          e.preventDefault();
+          setSpacePanning(true);
+          const three = threeRef.current;
+          if (three) three.controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
+        }
+        if ((e.key === "r" || e.key === "R") && !e.repeat) {
+          e.preventDefault();
+          fitView();
+        }
+        if ((e.key === "f" || e.key === "F") && !e.repeat) {
+          e.preventDefault();
+          void toggleFullscreen();
+        }
+      }}
+      onKeyUp={(e) => {
+        if (e.code === "Space") {
+          setSpacePanning(false);
+          const three = threeRef.current;
+          if (three) three.controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+        }
+      }}
+    >
+      <div ref={mountRef} className="h-full w-full" />
+
+      <div className="absolute right-3 top-3 flex items-center gap-2">
+        <button className="mb-btn mb-btn-ghost h-9 px-3 text-xs" onClick={fitView}>
+          Fit <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
+        </button>
+        <button className="mb-btn mb-btn-ghost h-9 px-3 text-xs" onClick={() => void toggleFullscreen()}>
+          {isFullscreen ? "Exit" : "Full"}{" "}
+          <span className="hidden sm:inline"><span className="mb-kbd">F</span></span>
+        </button>
+      </div>
+    </div>
+  );
 }
