@@ -11,16 +11,30 @@ export function PromptPicker({
   onChangePromptId: (id: string) => void;
 }) {
   const [prompts, setPrompts] = useState<PromptListResponse["prompts"]>([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setStatus("loading");
+    setError(null);
     fetch("/api/arena/prompts", { method: "GET" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Failed prompts"))))
+      .then(async (r) => {
+        if (r.ok) return (await r.json()) as PromptListResponse;
+        const text = await r.text().catch(() => "");
+        throw new Error(text || `Failed to load prompts (${r.status})`);
+      })
       .then((data: PromptListResponse) => {
         if (cancelled) return;
         setPrompts(data.prompts);
+        setStatus("ready");
       })
-      .catch(() => {});
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setPrompts([]);
+        setStatus("error");
+        setError(e instanceof Error ? e.message : "Failed to load prompts");
+      });
     return () => {
       cancelled = true;
     };
@@ -35,9 +49,14 @@ export function PromptPicker({
           value={selectedPromptId ?? ""}
           onChange={(e) => onChangePromptId(e.target.value)}
         >
-          {prompts.length === 0 ? (
+          {status === "loading" ? (
             <option value="" disabled>
-              No prompts (seed required)
+              Loading prompts…
+            </option>
+          ) : null}
+          {status !== "loading" && prompts.length === 0 ? (
+            <option value="" disabled>
+              {status === "error" ? "Failed to load prompts" : "No prompts (seed required)"}
             </option>
           ) : null}
           {prompts.map((p) => (
@@ -61,6 +80,11 @@ export function PromptPicker({
           />
         </svg>
       </div>
+      {status === "error" && error ? (
+        <div className="text-xs text-danger">
+          {error}
+        </div>
+      ) : null}
     </label>
   );
 }
