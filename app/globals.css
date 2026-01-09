@@ -214,4 +214,12 @@
   .mb-chip[disabled] {
     @apply cursor-not-allowed opacity-55;
   }
+
+  .mb-clamp-3 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    word-break: break-word;
+  }
 }

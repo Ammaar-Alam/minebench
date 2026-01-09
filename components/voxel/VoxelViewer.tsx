@@ -26,13 +26,73 @@ function loadAtlasTexture(): Promise<THREE.Texture> {
   return atlasPromise;
 }
 
-function frameObject(camera: THREE.PerspectiveCamera, controls: OrbitControls, obj: THREE.Object3D) {
-  const box = new THREE.Box3().setFromObject(obj);
-  const sphere = new THREE.Sphere();
-  box.getBoundingSphere(sphere);
+type BuildBounds = { box: THREE.Box3; center: THREE.Vector3; radius: number };
 
-  const center = sphere.center;
-  const radius = Math.max(0.001, sphere.radius);
+function computeBuildBounds(build: VoxelBuild, allowed: Set<string>): BuildBounds {
+  const blocks = build.blocks.filter((b) => allowed.has(b.type));
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+  let sumX = 0, sumY = 0, sumZ = 0;
+  let count = 0;
+
+  for (const b of blocks) {
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    minZ = Math.min(minZ, b.z);
+    maxX = Math.max(maxX, b.x);
+    maxY = Math.max(maxY, b.y);
+    maxZ = Math.max(maxZ, b.z);
+  }
+
+  if (!Number.isFinite(minX)) {
+    minX = minY = minZ = 0;
+    maxX = maxY = maxZ = 0;
+  }
+
+  const cx = (minX + maxX + 1) / 2;
+  const cy = minY;
+  const cz = (minZ + maxZ + 1) / 2;
+
+  for (const b of blocks) {
+    sumX += b.x - cx + 0.5;
+    sumY += b.y - cy + 0.5;
+    sumZ += b.z - cz + 0.5;
+    count += 1;
+  }
+
+  const box = new THREE.Box3(
+    new THREE.Vector3(minX - cx, minY - cy, minZ - cz),
+    new THREE.Vector3(maxX - cx + 1, maxY - cy + 1, maxZ - cz + 1)
+  );
+
+  const center = count
+    ? new THREE.Vector3(sumX / count, sumY / count, sumZ / count)
+    : box.getCenter(new THREE.Vector3());
+
+  const corners = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+  ];
+
+  let radius = 0.001;
+  for (const p of corners) {
+    radius = Math.max(radius, p.distanceTo(center));
+  }
+
+  return { box, center, radius };
+}
+
+function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, bounds: BuildBounds) {
+  const center = bounds.center;
+  const radius = Math.max(0.001, bounds.radius);
 
   controls.target.copy(center);
 
@@ -43,7 +103,7 @@ function frameObject(camera: THREE.PerspectiveCamera, controls: OrbitControls, o
   const distance = Math.max(fitHeight, fitWidth);
 
   const dir = new THREE.Vector3(1, 0.85, 1).normalize();
-  camera.position.copy(center).addScaledVector(dir, distance * 1.25);
+  camera.position.copy(center).addScaledVector(dir, distance * 1.3);
   camera.near = Math.max(0.05, distance / 250);
   camera.far = Math.max(200, distance * 60);
   camera.updateProjectionMatrix();
@@ -53,8 +113,6 @@ function frameObject(camera: THREE.PerspectiveCamera, controls: OrbitControls, o
 
   controls.update();
   controls.saveState();
-
-  return box;
 }
 
 export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: ViewerProps) {
@@ -63,6 +121,8 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
   const voxelGroupRef = useRef<VoxelGroup | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const revealRafRef = useRef<number | null>(null);
+  const boundsRef = useRef<BuildBounds | null>(null);
+  const autoRotateRef = useRef(false);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -81,10 +141,11 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
   function fitView() {
     const three = threeRef.current;
     const vg = voxelGroupRef.current;
-    if (!three || !vg) return;
-    const box = frameObject(three.camera, three.controls, vg.group);
+    const bounds = boundsRef.current;
+    if (!three || !vg || !bounds) return;
+    frameBounds(three.camera, three.controls, bounds);
     if (gridRef.current) {
-      gridRef.current.position.y = box.min.y - 0.5;
+      gridRef.current.position.y = bounds.box.min.y - 0.5;
     }
   }
 
@@ -140,18 +201,22 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     controls.minDistance = 2;
     controls.maxDistance = 80;
     controls.autoRotate = false;
-    controls.autoRotateSpeed = 0.6;
+    controls.autoRotateSpeed = 0.7;
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
       RIGHT: THREE.MOUSE.PAN,
     };
 
-    const stopAutoRotate = () => {
+    const onStart = () => {
+      if (!autoRotateRef.current) return;
       controls.autoRotate = false;
     };
-    controls.addEventListener("start", stopAutoRotate);
-    controls.addEventListener("end", stopAutoRotate);
+    const onEnd = () => {
+      controls.autoRotate = autoRotateRef.current;
+    };
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
 
     const hemi = new THREE.HemisphereLight(0xeaf2ff, 0x1a2330, 0.75);
     scene.add(hemi);
@@ -211,8 +276,8 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       ro.disconnect();
       window.cancelAnimationFrame(raf);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
-      controls.removeEventListener("start", stopAutoRotate);
-      controls.removeEventListener("end", stopAutoRotate);
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
       controls.dispose();
 
       if (voxelGroupRef.current) {
@@ -220,6 +285,7 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
         voxelGroupRef.current.dispose();
         voxelGroupRef.current = null;
       }
+      boundsRef.current = null;
 
       scene.remove(grid);
       grid.geometry.dispose();
@@ -252,13 +318,18 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
         voxelGroupRef.current.dispose();
         voxelGroupRef.current = null;
       }
+      boundsRef.current = null;
 
       if (!voxelBuild) return;
+
+      const allowed = new Set(paletteDefs.map((p) => p.id));
+      boundsRef.current = computeBuildBounds(voxelBuild, allowed);
       const vg = createVoxelGroup(voxelBuild, paletteDefs, tex);
       voxelGroupRef.current = vg;
       three.scene.add(vg.group);
       fitView();
-      three.controls.autoRotate = Boolean(autoRotate);
+      autoRotateRef.current = Boolean(autoRotate);
+      three.controls.autoRotate = autoRotateRef.current;
 
       if (!animateIn) return;
 
@@ -306,7 +377,8 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
-    three.controls.autoRotate = Boolean(autoRotate);
+    autoRotateRef.current = Boolean(autoRotate);
+    three.controls.autoRotate = autoRotateRef.current;
   }, [autoRotate]);
 
   return (

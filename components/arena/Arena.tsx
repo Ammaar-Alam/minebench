@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArenaMatchup, VoteChoice } from "@/lib/arena/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
-import { PromptPicker } from "@/components/arena/PromptPicker";
 import { VoteBar } from "@/components/arena/VoteBar";
 
 type ArenaState =
@@ -31,7 +30,6 @@ async function submitVote(matchupId: string, choice: VoteChoice) {
 
 export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
-  const [selectedPromptId, setSelectedPromptId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
   const [revealMatchupId, setRevealMatchupId] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState("");
@@ -39,18 +37,12 @@ export function Arena() {
   const matchup = state.kind === "ready" ? state.matchup : null;
   const revealModels = Boolean(matchup && revealMatchupId === matchup.id);
 
-  const title = useMemo(() => {
-    if (!matchup) return "Arena";
-    return matchup.prompt.text;
-  }, [matchup]);
-
   useEffect(() => {
     let cancelled = false;
     setState({ kind: "loading" });
     fetchMatchup(undefined)
       .then((m) => {
         if (cancelled) return;
-        setSelectedPromptId(m.prompt.id);
         setState({ kind: "ready", matchup: m });
       })
       .catch((err: unknown) => {
@@ -65,37 +57,13 @@ export function Arena() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!selectedPromptId) return;
-    if (matchup?.prompt.id === selectedPromptId) return;
-
-    let cancelled = false;
-    setState({ kind: "loading" });
-    fetchMatchup(selectedPromptId)
-      .then((m) => {
-        if (cancelled) return;
-        setState({ kind: "ready", matchup: m });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setState({
-          kind: "error",
-          message: err instanceof Error ? err.message : "Failed to load matchup",
-        });
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [matchup?.prompt.id, selectedPromptId]);
-
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     setSubmitting(true);
     setRevealMatchupId(matchup.id);
     try {
       await submitVote(matchup.id, choice);
-      const next = await fetchMatchup(matchup.prompt.id);
+      const next = await fetchMatchup(undefined);
       setState({ kind: "ready", matchup: next });
     } catch (err) {
       setState({
@@ -109,11 +77,27 @@ export function Arena() {
     }
   }
 
+  async function handleSkip() {
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const next = await fetchMatchup(undefined);
+      setState({ kind: "ready", matchup: next });
+    } catch (err) {
+      setState({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Failed to load matchup",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-6">
       <div className="mb-panel p-5">
         <div className="mb-panel-inner flex flex-col gap-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div className="flex flex-col gap-2">
               <div className="mb-badge w-fit">
                 <span className="mb-dot" />
@@ -122,18 +106,21 @@ export function Arena() {
                   64³ • simple palette • head-to-head
                 </span>
               </div>
-              <div className="font-display text-2xl font-semibold leading-tight tracking-tight md:text-3xl">
-                {title}
-              </div>
-              <div className="text-sm text-muted">
-                Vote for the better build. New matchup loads instantly after each vote.
+
+              <div className="mb-subpanel max-w-[52rem] px-4 py-3">
+                <div className="text-xs font-medium text-muted">Prompt</div>
+                <div
+                  className="mb-clamp-3 mt-1 font-display text-xl font-semibold leading-snug tracking-tight text-fg md:text-2xl"
+                  title={matchup?.prompt.text ?? ""}
+                >
+                  {matchup?.prompt.text ?? "Loading…"}
+                </div>
               </div>
             </div>
+          </div>
 
-            <PromptPicker
-              selectedPromptId={selectedPromptId}
-              onChangePromptId={(id) => setSelectedPromptId(id)}
-            />
+          <div className="text-sm text-muted">
+            Vote for the better build. New random matchup loads instantly after each vote (or skip).
           </div>
 
           {state.kind === "error" ? (
@@ -168,6 +155,7 @@ export function Arena() {
             <VoteBar
               disabled={state.kind !== "ready" || submitting}
               onVote={handleVote}
+              onSkip={handleSkip}
             />
           </div>
 

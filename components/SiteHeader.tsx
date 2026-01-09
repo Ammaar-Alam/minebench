@@ -82,31 +82,29 @@ function ThemeToggle() {
     <button
       type="button"
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      className="rounded-full px-3 py-2 text-sm text-muted transition hover:bg-card/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      className="grid h-10 w-10 place-items-center rounded-full bg-bg/50 text-muted ring-1 ring-border/80 transition hover:bg-bg/65 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       onClick={toggleTheme}
     >
-      <span className="flex items-center gap-2">
-        <span className="hidden sm:inline">{theme === "dark" ? "Light" : "Dark"}</span>
-        <svg aria-hidden="true" className="h-4 w-4" viewBox="0 0 24 24" fill="none">
-          {theme === "dark" ? (
-            <path
-              d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.364-6.364-1.414 1.414M7.05 16.95l-1.414 1.414m0-11.314L7.05 7.05m9.9 9.9 1.414 1.414M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="1.5"
-            />
-          ) : (
-            <path
-              d="M21 13.2A7.5 7.5 0 0 1 10.8 3a6.8 6.8 0 1 0 10.2 10.2Z"
-              stroke="currentColor"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="1.5"
-            />
-          )}
-        </svg>
-      </span>
+      <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none">
+        {theme === "dark" ? (
+          <path
+            d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.364-6.364-1.414 1.414M7.05 16.95l-1.414 1.414m0-11.314L7.05 7.05m9.9 9.9 1.414 1.414M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+          />
+        ) : (
+          <path
+            d="M21 13.2A7.5 7.5 0 0 1 10.8 3a6.8 6.8 0 1 0 10.2 10.2Z"
+            stroke="currentColor"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="1.6"
+          />
+        )}
+      </svg>
     </button>
   );
 }
@@ -119,8 +117,8 @@ function NavLink({ href, label }: { href: string; label: string }) {
       aria-current={active ? "page" : undefined}
       className={
         active
-          ? "rounded-full bg-card/70 px-3 py-2 text-sm font-medium text-fg shadow-soft ring-1 ring-border"
-          : "rounded-full px-3 py-2 text-sm text-muted transition hover:bg-card/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          ? "inline-flex h-10 items-center rounded-full bg-card/70 px-4 text-sm font-medium text-fg shadow-soft ring-1 ring-border"
+          : "inline-flex h-10 items-center rounded-full px-4 text-sm text-muted transition hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       }
       href={href}
     >
@@ -131,8 +129,15 @@ function NavLink({ href, label }: { href: string; label: string }) {
 
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-20 -mx-4 border-b border-border bg-bg/75 px-4 py-4 backdrop-blur">
-      <div className="flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-20 border-b border-border bg-bg/75 backdrop-blur relative">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-4">
+        <a
+          href="#main"
+          className="sr-only rounded-full bg-card/80 px-4 py-2 text-sm text-fg ring-1 ring-border focus:not-sr-only focus:absolute focus:left-4 focus:top-3"
+        >
+          Skip to content
+        </a>
+
         <Link className="group flex items-center gap-3" href="/">
           <CubeMark />
           <div className="leading-tight">
@@ -148,7 +153,7 @@ export function SiteHeader() {
           </div>
         </Link>
 
-        <nav className="flex items-center gap-1 rounded-full bg-bg/50 p-1 shadow-soft ring-1 ring-border">
+        <nav className="flex items-center gap-1 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border">
           <NavLink href="/" label="Arena" />
           <NavLink href="/sandbox" label="Sandbox" />
           <NavLink href="/leaderboard" label="Leaderboard" />

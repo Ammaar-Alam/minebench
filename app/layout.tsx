@@ -56,18 +56,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="absolute inset-0 mb-bg-noise" />
         </div>
 
-        <div className="relative z-10 mx-auto flex min-h-dvh w-full max-w-6xl flex-col px-4">
-          <a
-            href="#main"
-            className="sr-only rounded-full bg-card/80 px-4 py-2 text-sm text-fg ring-1 ring-border focus:not-sr-only focus:mt-3 focus:self-start"
-          >
-            Skip to content
-          </a>
+        <div className="relative z-10 flex min-h-dvh flex-col">
           <SiteHeader />
-          <main id="main" className="flex-1 py-6">
-            {children}
-          </main>
-          <SiteFooter />
+          <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4">
+            <main id="main" className="flex-1 py-6">
+              {children}
+            </main>
+            <SiteFooter />
+          </div>
         </div>
       </body>
     </html>

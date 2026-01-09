@@ -7,6 +7,8 @@ export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
 
+type EligiblePrompt = { id: string; text: string };
+
 function getOrSetSessionId(res: NextResponse, req: Request) {
   const cookieHeader = req.headers.get("cookie") ?? "";
   const match = cookieHeader.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`));
@@ -22,19 +24,52 @@ function getOrSetSessionId(res: NextResponse, req: Request) {
   return id;
 }
 
+function randomPick<T>(items: T[]): T | null {
+  return items.length ? (items[Math.floor(Math.random() * items.length)] ?? null) : null;
+}
+
+async function getEligiblePrompts(): Promise<EligiblePrompt[]> {
+  const rows = await prisma.build.findMany({
+    where: {
+      gridSize: 64,
+      palette: "simple",
+      mode: "precise",
+      model: { enabled: true, isBaseline: false },
+      prompt: { active: true },
+    },
+    select: { promptId: true, modelId: true },
+  });
+
+  const modelsByPromptId = new Map<string, Set<string>>();
+  for (const r of rows) {
+    const set = modelsByPromptId.get(r.promptId) ?? new Set<string>();
+    set.add(r.modelId);
+    modelsByPromptId.set(r.promptId, set);
+  }
+
+  const eligiblePromptIds = Array.from(modelsByPromptId.entries())
+    .filter(([, models]) => models.size >= 2)
+    .map(([promptId]) => promptId);
+
+  if (eligiblePromptIds.length === 0) return [];
+
+  return await prisma.prompt.findMany({
+    where: { id: { in: eligiblePromptIds }, active: true },
+    select: { id: true, text: true },
+  });
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const promptId = url.searchParams.get("promptId") ?? undefined;
 
-  const prompt =
-    (promptId
-      ? await prisma.prompt.findFirst({ where: { id: promptId, active: true } })
-      : null) ??
-    (await prisma.prompt.findFirst({ where: { active: true }, orderBy: { createdAt: "asc" } }));
+  const eligible = await getEligiblePrompts();
+  const requested = promptId ? eligible.find((p) => p.id === promptId) : null;
+  const prompt = requested ?? randomPick(eligible);
 
   if (!prompt) {
     return NextResponse.json(
-      { error: "No prompts found. Seed the database first." },
+      { error: "No seeded prompts found. Seed curated prompts/builds first." },
       { status: 409 }
     );
   }
@@ -57,7 +92,15 @@ export async function GET(req: Request) {
     );
   }
 
-  const models = builds.map((b) => b.model);
+  const modelsById = new Map<string, (typeof builds)[number]["model"]>();
+  const buildsByModelId = new Map<string, (typeof builds)[number][]>();
+  for (const b of builds) {
+    modelsById.set(b.modelId, b.model);
+    const list = buildsByModelId.get(b.modelId) ?? [];
+    list.push(b);
+    buildsByModelId.set(b.modelId, list);
+  }
+  const models = Array.from(modelsById.values());
   const pickWeight = (m: (typeof models)[number]) => 1 / (m.shownCount + 1);
 
   const modelA = weightedPick(models, pickWeight);
@@ -71,8 +114,8 @@ export async function GET(req: Request) {
     );
   }
 
-  const buildA = builds.find((b) => b.modelId === modelA.id);
-  const buildB = builds.find((b) => b.modelId === modelB.id);
+  const buildA = randomPick(buildsByModelId.get(modelA.id) ?? []);
+  const buildB = randomPick(buildsByModelId.get(modelB.id) ?? []);
   if (!buildA || !buildB) {
     return NextResponse.json({ error: "Missing seeded build" }, { status: 500 });
   }
