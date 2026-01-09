@@ -33,9 +33,14 @@ export function Arena() {
   const [submitting, setSubmitting] = useState(false);
   const [revealMatchupId, setRevealMatchupId] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState("");
+  const [promptExpanded, setPromptExpanded] = useState(false);
 
   const matchup = state.kind === "ready" ? state.matchup : null;
   const revealModels = Boolean(matchup && revealMatchupId === matchup.id);
+
+  useEffect(() => {
+    setPromptExpanded(false);
+  }, [matchup?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,10 +112,22 @@ export function Arena() {
                 </span>
               </div>
 
-              <div className="mb-subpanel max-w-[52rem] px-4 py-3">
-                <div className="text-xs font-medium text-muted">Prompt</div>
+              <div className="mb-subpanel w-full px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs font-medium text-muted">Prompt</div>
+                  {matchup?.prompt.text && matchup.prompt.text.length > 160 ? (
+                    <button
+                      type="button"
+                      aria-expanded={promptExpanded}
+                      className="mb-btn mb-btn-ghost h-8 px-3 text-[11px]"
+                      onClick={() => setPromptExpanded((v) => !v)}
+                    >
+                      {promptExpanded ? "Collapse" : "Expand"}
+                    </button>
+                  ) : null}
+                </div>
                 <div
-                  className="mb-clamp-3 mt-1 font-display text-xl font-semibold leading-snug tracking-tight text-fg md:text-2xl"
+                  className={`${promptExpanded ? "" : "mb-clamp-prompt"} mt-1 font-display text-lg font-semibold leading-snug tracking-tight text-fg md:text-xl`}
                   title={matchup?.prompt.text ?? ""}
                 >
                   {matchup?.prompt.text ?? "Loading…"}

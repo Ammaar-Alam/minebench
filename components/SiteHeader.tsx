@@ -83,10 +83,10 @@ function ThemeToggle() {
       type="button"
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      className="grid h-9 w-9 place-items-center rounded-full bg-bg/50 text-muted ring-1 ring-border/80 transition hover:bg-bg/65 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:w-10"
+      className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:w-10"
       onClick={toggleTheme}
     >
-      <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none">
+      <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none">
         {theme === "dark" ? (
           <path
             d="M12 3v2m0 14v2m9-9h-2M5 12H3m15.364-6.364-1.414 1.414M7.05 16.95l-1.414 1.414m0-11.314L7.05 7.05m9.9 9.9 1.414 1.414M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"
@@ -97,7 +97,7 @@ function ThemeToggle() {
           />
         ) : (
           <path
-            d="M21 13.2A7.5 7.5 0 0 1 10.8 3a6.8 6.8 0 1 0 10.2 10.2Z"
+            d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79Z"
             stroke="currentColor"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -130,7 +130,7 @@ function NavLink({ href, label }: { href: string; label: string }) {
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-bg/75 backdrop-blur relative">
-      <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-4 py-4">
+      <div className="mx-auto flex w-full max-w-[92rem] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
         <a
           href="#main"
           className="sr-only rounded-full bg-card/80 px-4 py-2 text-sm text-fg ring-1 ring-border focus:not-sr-only focus:absolute focus:left-4 focus:top-3"
@@ -146,12 +146,12 @@ export function SiteHeader() {
               <span className="bg-gradient-to-r from-accent to-accent2 bg-clip-text text-transparent">
                 Bench
               </span>
-            </div>
-            <div className="text-xs text-muted">
-              A/B voxel builds • Elo arena • sandbox
-            </div>
-          </div>
-        </Link>
+	            </div>
+	            <div className="text-xs text-muted">
+	              A/B voxel builds • Elo arena • sandbox + local
+	            </div>
+	          </div>
+	        </Link>
 
         <nav className="flex items-center gap-1 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border">
           <NavLink href="/" label="Arena" />

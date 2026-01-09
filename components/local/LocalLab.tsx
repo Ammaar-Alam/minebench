@@ -181,8 +181,8 @@ export function LocalLab() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
-        <div className="lg:col-span-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div>
           <div className="mb-panel p-5">
             <div className="mb-panel-inner flex flex-col gap-5">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -288,7 +288,7 @@ export function LocalLab() {
           </div>
         </div>
 
-        <div className="lg:col-span-2">
+        <div>
           <div className="mb-panel p-5">
             <div className="mb-panel-inner flex flex-col gap-4">
               <div className="flex items-start justify-between gap-3">

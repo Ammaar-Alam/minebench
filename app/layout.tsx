@@ -58,7 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
         <div className="relative z-10 flex min-h-dvh flex-col">
           <SiteHeader />
-          <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-4">
+          <div className="mx-auto flex w-full max-w-[92rem] flex-1 flex-col px-4 sm:px-6 lg:px-8">
             <main id="main" className="flex-1 py-6">
               {children}
             </main>

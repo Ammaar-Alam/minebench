@@ -34,9 +34,6 @@ function computeBuildBounds(build: VoxelBuild, allowed: Set<string>): BuildBound
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
-  let sumX = 0, sumY = 0, sumZ = 0;
-  let count = 0;
-
   for (const b of blocks) {
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
@@ -55,21 +52,12 @@ function computeBuildBounds(build: VoxelBuild, allowed: Set<string>): BuildBound
   const cy = minY;
   const cz = (minZ + maxZ + 1) / 2;
 
-  for (const b of blocks) {
-    sumX += b.x - cx + 0.5;
-    sumY += b.y - cy + 0.5;
-    sumZ += b.z - cz + 0.5;
-    count += 1;
-  }
-
   const box = new THREE.Box3(
     new THREE.Vector3(minX - cx, minY - cy, minZ - cz),
     new THREE.Vector3(maxX - cx + 1, maxY - cy + 1, maxZ - cz + 1)
   );
 
-  const center = count
-    ? new THREE.Vector3(sumX / count, sumY / count, sumZ / count)
-    : box.getCenter(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
 
   const corners = [
     new THREE.Vector3(box.min.x, box.min.y, box.min.z),
@@ -96,17 +84,23 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
 
   controls.target.copy(center);
 
+  const size = bounds.box.getSize(new THREE.Vector3());
+  const horiz = Math.max(0.001, Math.max(size.x, size.z));
+  const tallness = size.y / horiz;
+  const yBias = THREE.MathUtils.clamp(0.38 + tallness * 0.22, 0.38, 0.86);
+
   const vFov = THREE.MathUtils.degToRad(camera.fov);
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
   const fitHeight = radius / Math.sin(vFov / 2);
   const fitWidth = radius / Math.sin(hFov / 2);
   const distance = Math.max(fitHeight, fitWidth);
 
-  const dir = new THREE.Vector3(1, 0.85, 1).normalize();
-  camera.position.copy(center).addScaledVector(dir, distance * 1.3);
+  const dir = new THREE.Vector3(1, yBias, 1).normalize();
+  camera.position.copy(center).addScaledVector(dir, distance * 1.16);
   camera.near = Math.max(0.05, distance / 250);
   camera.far = Math.max(200, distance * 60);
   camera.updateProjectionMatrix();
+  camera.lookAt(center);
 
   controls.minDistance = Math.max(0.5, distance * 0.12);
   controls.maxDistance = Math.max(40, distance * 14);

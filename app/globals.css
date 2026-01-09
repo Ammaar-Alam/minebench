@@ -184,15 +184,30 @@
   }
 
   .mb-btn-primary {
-    @apply bg-accent/20 ring-1 ring-accent/40 hover:bg-accent/25 hover:shadow-glow;
+    @apply ring-1 ring-accent/45 hover:shadow-glow;
+    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.30), hsl(var(--accent) / 0.16));
+  }
+
+  .mb-btn-primary:hover {
+    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.34), hsl(var(--accent) / 0.18));
   }
 
   .mb-btn-ghost {
-    @apply bg-bg/50 ring-1 ring-border/80 hover:bg-bg/60 hover:shadow-soft;
+    @apply ring-1 ring-border/80 hover:shadow-soft;
+    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.72), hsl(var(--bg) / 0.46));
+  }
+
+  .mb-btn-ghost:hover {
+    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.80), hsl(var(--bg) / 0.52));
   }
 
   .mb-btn-danger {
-    @apply bg-danger/20 ring-1 ring-danger/40 hover:bg-danger/25 hover:shadow-soft;
+    @apply ring-1 ring-danger/45 hover:shadow-soft;
+    background-image: linear-gradient(to bottom, hsl(var(--danger) / 0.28), hsl(var(--danger) / 0.14));
+  }
+
+  .mb-btn-danger:hover {
+    background-image: linear-gradient(to bottom, hsl(var(--danger) / 0.32), hsl(var(--danger) / 0.16));
   }
 
   .mb-kbd {
@@ -221,5 +236,19 @@
     -webkit-line-clamp: 3;
     overflow: hidden;
     word-break: break-word;
+  }
+
+  .mb-clamp-prompt {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
+  @media (min-width: 768px) {
+    .mb-clamp-prompt {
+      -webkit-line-clamp: 6;
+    }
   }
 }

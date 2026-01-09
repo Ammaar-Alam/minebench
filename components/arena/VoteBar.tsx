@@ -16,7 +16,7 @@ function VoteButton({
   className?: string;
 }) {
   const base =
-    "mb-btn h-11 disabled:cursor-not-allowed disabled:opacity-50";
+    "mb-btn h-12 rounded-2xl disabled:cursor-not-allowed disabled:opacity-50 hover:-translate-y-0.5";
   const cls = (() => {
     if (variant === "danger") return `${base} mb-btn-danger`;
     if (variant === "ghost") return `${base} mb-btn-ghost`;
