@@ -5,7 +5,7 @@ export type PaletteMode = "simple" | "advanced";
 
 export type GenerateRequest = {
   prompt: string;
-  gridSize: 32 | 64 | 128;
+  gridSize: 64 | 128 | 256;
   palette: PaletteMode;
   modelKeys: ModelKey[];
 };

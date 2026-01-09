@@ -153,7 +153,8 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const allowed = new Set(palette.map((p) => p.id));
 
   const blocks = build.blocks.filter((b) => allowed.has(b.type));
-  const encode = (x: number, y: number, z: number) => x | (y << 7) | (z << 14);
+  // 8 bits per coordinate supports up to 256³ grids.
+  const encode = (x: number, y: number, z: number) => x | (y << 8) | (z << 16);
   const occupied = new Set<number>();
   for (const b of blocks) occupied.add(encode(b.x, b.y, b.z));
 

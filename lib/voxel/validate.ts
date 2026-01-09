@@ -95,7 +95,7 @@ function expandBuildPrimitives(
 ): { ok: true; blocks: { x: number; y: number; z: number; type: string }[] } | { ok: false; error: string } {
   const expanded: { x: number; y: number; z: number; type: string }[] = [];
 
-  // Safety limit to prevent pathological expansions (e.g., a full solid 128^3 cube).
+  // Safety limit to prevent pathological expansions (e.g., a full solid 256^3 cube).
   const expansionLimit = Math.max(opts.maxBlocks * 2, 20000);
   let count = 0;
   const push = (b: { x: number; y: number; z: number; type: string }) => {
@@ -180,7 +180,8 @@ export function validateVoxelBuild(
   const droppedUnknownTypeCounts = new Map<string, number>();
 
   const keyToBlock = new Map<number, { x: number; y: number; z: number; type: string }>();
-  const encode = (x: number, y: number, z: number) => x | (y << 7) | (z << 14);
+  // 8 bits per coordinate supports up to 256³ grids.
+  const encode = (x: number, y: number, z: number) => x | (y << 8) | (z << 16);
 
   for (const b of expanded.blocks) {
     if (b.x < 0 || b.y < 0 || b.z < 0) {

@@ -6,7 +6,7 @@ import type { GenerateEvent } from "@/lib/ai/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 
 type Palette = "simple" | "advanced";
-type GridSize = 32 | 64 | 128;
+type GridSize = 64 | 128 | 256;
 
 type ModelResult = {
   modelKey: ModelKey;
@@ -276,9 +276,9 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                   value={gridSize}
                   onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
                 >
-                  <option value={32}>32</option>
                   <option value={64}>64</option>
                   <option value={128}>128</option>
+                  <option value={256}>256</option>
                 </select>
                 <svg
                   aria-hidden="true"

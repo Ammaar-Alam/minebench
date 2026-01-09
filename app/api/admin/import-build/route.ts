@@ -58,8 +58,8 @@ export async function POST(req: Request) {
 
   const gridSizeRaw = url.searchParams.get("gridSize");
   const gridSize = gridSizeRaw ? Number(gridSizeRaw) : 64;
-  if (gridSize !== 32 && gridSize !== 64 && gridSize !== 128) {
-    return NextResponse.json({ error: "Invalid gridSize (allowed: 32, 64, 128)" }, { status: 400 });
+  if (gridSize !== 64 && gridSize !== 128 && gridSize !== 256) {
+    return NextResponse.json({ error: "Invalid gridSize (allowed: 64, 128, 256)" }, { status: 400 });
   }
 
   const palette = ((url.searchParams.get("palette") ?? "simple").trim().toLowerCase() as "simple" | "advanced");

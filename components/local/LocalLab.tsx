@@ -9,18 +9,18 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 
 type Palette = "simple" | "advanced";
-type GridSize = 32 | 64 | 128;
+type GridSize = 64 | 128 | 256;
 
 const MAX_BLOCKS_BY_GRID: Record<GridSize, number> = {
-  32: Math.floor(32 ** 3 * 0.75), // 24,576
   64: Math.floor(64 ** 3 * 0.75), // 196,608
   128: Math.floor(128 ** 3 * 0.75), // 1,572,864
+  256: 2_000_000,
 };
 
 const MIN_BLOCKS_BY_GRID: Record<GridSize, number> = {
-  32: 80,
   64: 200,
   128: 300,
+  256: 500,
 };
 
 function cx(...classes: Array<string | false | null | undefined>) {
@@ -192,7 +192,7 @@ export function LocalLab() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center gap-1 rounded-full bg-bg/55 p-1 ring-1 ring-border/80">
-                    {([32, 64, 128] as GridSize[]).map((g) => (
+                    {([64, 128, 256] as GridSize[]).map((g) => (
                       <button
                         key={g}
                         type="button"
