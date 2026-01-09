@@ -253,44 +253,44 @@ Options:
   console.log(`\n🔍 Missing builds: ${missing.length}`);
 
   // upload existing builds if requested
-  if (opts.upload) {
+    if (opts.upload) {
     if (existing.length === 0) {
       console.log("\n📤 No existing builds to upload.");
     } else {
       console.log("\n📤 Uploading existing builds...");
       for (const job of existing) {
-        process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
-        const result = await uploadBuild(job);
-        console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
+          process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
+          const result = await uploadBuild(job);
+          console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
+        }
       }
-    }
   }
 
   // generate missing builds only if --generate flag is set
   if (opts.generate && missing.length > 0) {
-    console.log("\n🚀 Starting generation...\n");
+  console.log("\n🚀 Starting generation...\n");
 
-    let success = 0;
-    let failed = 0;
+  let success = 0;
+  let failed = 0;
 
-    for (const job of missing) {
-      const result = await generateAndSave(job);
-      if (result.ok) {
-        console.log(`    ✅ Saved (${result.blockCount} blocks)`);
-        success++;
+  for (const job of missing) {
+    const result = await generateAndSave(job);
+    if (result.ok) {
+      console.log(`    ✅ Saved (${result.blockCount} blocks)`);
+      success++;
 
-        if (opts.upload) {
-          process.stdout.write(`    📤 Uploading...`);
-          const uploadResult = await uploadBuild(job);
-          console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
-        }
-      } else {
-        console.log(`    ❌ Failed: ${result.error}`);
-        failed++;
+      if (opts.upload) {
+        process.stdout.write(`    📤 Uploading...`);
+        const uploadResult = await uploadBuild(job);
+        console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
       }
+    } else {
+      console.log(`    ❌ Failed: ${result.error}`);
+      failed++;
     }
+  }
 
-    console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
+  console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
   } else if (missing.length > 0 && !opts.generate) {
     console.log("\n💡 Use --generate to generate missing builds.");
   } else if (missing.length === 0) {

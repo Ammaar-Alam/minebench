@@ -184,7 +184,8 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       powerPreference: "high-performance",
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    renderer.setSize(mount.clientWidth, mount.clientHeight, false);
+    // important: keep canvas css size in sync with the mount, otherwise we end up showing only a corner
+    renderer.setSize(mount.clientWidth, mount.clientHeight, true);
     camera.aspect = mount.clientWidth / Math.max(1, mount.clientHeight);
     camera.updateProjectionMatrix();
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -253,19 +254,22 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
 
       const vg = voxelGroupRef.current;
       if (vg && autoRotateRef.current && !userInteractingRef.current) {
-        vg.group.rotation.y += dt * 0.65;
+        vg.group.rotation.y += dt * 0.25;
       }
       renderer.render(scene, camera);
     };
     raf = window.requestAnimationFrame(render);
 
-    const ro = new ResizeObserver(() => {
+    const onResize = () => {
       const w = mount.clientWidth;
       const h = mount.clientHeight;
-      renderer.setSize(w, h, false);
+      if (w === 0 || h === 0) return;
+      renderer.setSize(w, h, true);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-    });
+      fitView();
+    };
+    const ro = new ResizeObserver(onResize);
     ro.observe(mount);
 
     const onDblClick = () => fitView();
@@ -412,7 +416,7 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
         const vg = voxelGroupRef.current;
         if (!vg) return;
         const dx = e.clientX - drag.startX;
-        vg.group.rotation.y = drag.startRotY + dx * 0.006;
+        vg.group.rotation.y = drag.startRotY + dx * 0.003;
       }}
       onPointerUp={(e) => {
         const drag = dragRotateRef.current;
