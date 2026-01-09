@@ -130,6 +130,29 @@ curl -X POST "http://localhost:3000/api/admin/seed?batchSize=2" \
 
 Repeat until it reports `done: true`. Arena requires seeded builds.
 
+### Import builds from ChatGPT web (no API calls)
+
+If you want to avoid API usage, you can generate a voxel build JSON using **chatgpt.com** and import it directly.
+
+- Copy/paste prompt template: `docs/chatgpt-web-voxel-prompt.md`
+- Import endpoint: `POST /api/admin/import-build`
+
+```bash
+# 1) Get prompt IDs
+curl -sS "http://localhost:3000/api/arena/prompts"
+
+# 2) Save the ChatGPT response JSON into a local file (gitignored)
+mkdir -p uploads
+# (save as uploads/build.json)
+
+# 3) Import the build (defaults: 64³, simple palette, mode=precise)
+curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptId=YOUR_PROMPT_ID&overwrite=1" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  --data-binary "@uploads/build.json"
+```
+
+The import route validates the JSON (including expanding `boxes`/`lines`) and stores it as a `Build` in Postgres.
+
 ## Texture attribution
 This repo includes the Faithful texture pack at `faithful-32x-1.21.11`.
 See `faithful-32x-1.21.11/LICENSE.txt` for license details.
