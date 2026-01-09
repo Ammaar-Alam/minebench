@@ -170,24 +170,32 @@ The import route validates the JSON (including expanding `boxes`/`lines`) and st
 For generating builds at scale, use the batch generation script:
 
 ```bash
-# check current status (shows missing builds per prompt)
-pnpm batch:status
-
-# generate all missing builds
+# show status of all builds (default, no generation)
 pnpm batch:generate
 
-# generate for a specific prompt only
+# upload existing builds to production
+pnpm batch:generate --upload
+
+# generate missing builds
+pnpm batch:generate --generate
+
+# generate missing builds and upload all to production
+pnpm batch:generate --generate --upload
+
+# filter by prompt
 pnpm batch:generate --prompt steampunk
 
-# generate for specific models only
+# filter by model
 pnpm batch:generate --model gemini
 
-# generate and upload to production in one step
-pnpm batch:generate --upload
+# combine filters with generate/upload
+pnpm batch:generate --generate --upload --prompt castle --model sonnet
 
 # show help
 pnpm batch:generate --help
 ```
+
+**Note:** By default, the script only shows status. Use `--generate` to generate missing builds and `--upload` to upload existing builds to production.
 
 #### Folder structure
 
@@ -238,19 +246,29 @@ uploads/
 
 #### Recommended workflow
 
-1. **Generate one prompt at a time** (to manage costs):
+1. **Check status** to see what's missing:
    ```bash
-   pnpm batch:generate --prompt steampunk
+   pnpm batch:generate
    ```
 
-2. **Or generate one model at a time**:
+2. **Generate one prompt at a time** (to manage costs):
    ```bash
-   pnpm batch:generate --model sonnet
+   pnpm batch:generate --generate --prompt steampunk
    ```
 
-3. **Upload after generating**:
+3. **Or generate one model at a time**:
+   ```bash
+   pnpm batch:generate --generate --model sonnet
+   ```
+
+4. **Upload existing builds to production**:
    ```bash
    pnpm batch:generate --upload
+   ```
+
+5. **Generate and upload in one step**:
+   ```bash
+   pnpm batch:generate --generate --upload --prompt castle
    ```
 
 The script prints individual curl commands for manual upload if you prefer more control.

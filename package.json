@@ -21,7 +21,7 @@
     "atlas": "node scripts/build-texture-atlas.mjs",
     "atlas:audit": "node scripts/audit-texture-pack.mjs",
     "batch:generate": "npx tsx scripts/batch-generate.ts",
-    "batch:status": "npx tsx scripts/batch-generate.ts --dry-run"
+    "batch:status": "npx tsx scripts/batch-generate.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

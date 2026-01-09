@@ -3,11 +3,12 @@
  * Batch Generate & Upload Script for MineBench
  * 
  * Usage:
- *   pnpm batch:generate                     # Generate all missing builds
- *   pnpm batch:generate --prompt "castle"   # Generate for prompts matching "castle"
- *   pnpm batch:generate --model gemini      # Generate only for gemini models
- *   pnpm batch:generate --dry-run           # Show what would be generated
- *   pnpm batch:generate --upload            # Upload to prod after generating
+ *   pnpm batch:generate                     # Show status of all builds
+ *   pnpm batch:generate --upload            # Upload existing builds to prod
+ *   pnpm batch:generate --generate          # Generate missing builds
+ *   pnpm batch:generate --generate --upload # Generate missing and upload all
+ *   pnpm batch:generate --prompt "castle"   # Filter by prompt
+ *   pnpm batch:generate --model gemini      # Filter by model
  * 
  * Environment:
  *   Requires .env with OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY
@@ -69,7 +70,7 @@ function getJsonPath(promptSlug: string, modelSlug: string): string {
 function parseArgs() {
   const args = process.argv.slice(2);
   return {
-    dryRun: args.includes("--dry-run"),
+    generate: args.includes("--generate"),
     upload: args.includes("--upload"),
     promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
     modelFilter: args.find((a, i) => args[i - 1] === "--model") || null,
@@ -217,15 +218,16 @@ async function main() {
 MineBench Batch Generate Script
 
 Usage:
-  pnpm batch:generate                     # Generate all missing builds
-  pnpm batch:generate --prompt castle     # Generate for prompts matching "castle"  
-  pnpm batch:generate --model gemini      # Generate only for gemini models
-  pnpm batch:generate --dry-run           # Show what would be generated
-  pnpm batch:generate --upload            # Upload to prod after generating
+  pnpm batch:generate                     # Show status of all builds
+  pnpm batch:generate --upload            # Upload existing builds to prod
+  pnpm batch:generate --generate          # Generate missing builds
+  pnpm batch:generate --generate --upload # Generate missing and upload all
+  pnpm batch:generate --prompt castle     # Filter by prompt
+  pnpm batch:generate --model gemini      # Filter by model
 
 Options:
-  --dry-run         Show status and commands without generating
-  --upload          Upload generated builds to production
+  --generate        Generate missing builds (off by default)
+  --upload          Upload builds to production
   --prompt <str>    Filter prompts by slug
   --model <str>     Filter models by slug
   --help, -h        Show this help
@@ -247,59 +249,55 @@ Options:
   printStatus(allJobs);
 
   const missing = getMissingJobs(allJobs);
+  const existing = allJobs.filter((j) => !isEmptyPlaceholder(j.filePath));
   console.log(`\n🔍 Missing builds: ${missing.length}`);
 
-  if (opts.dryRun) {
-    console.log("\n[DRY RUN] Would generate:");
-    for (const j of missing) {
-      console.log(`  - ${j.promptSlug}-${j.modelSlug}.json`);
+  // upload existing builds if requested
+  if (opts.upload) {
+    if (existing.length === 0) {
+      console.log("\n📤 No existing builds to upload.");
+    } else {
+      console.log("\n📤 Uploading existing builds...");
+      for (const job of existing) {
+        process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
+        const result = await uploadBuild(job);
+        console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
+      }
     }
-    printUploadCommands(allJobs);
-    return;
   }
 
-  if (missing.length === 0) {
-    console.log("✨ All builds already exist!");
-    if (opts.upload) {
-      console.log("\n📤 Uploading all builds...");
-      for (const job of allJobs) {
-        if (!isEmptyPlaceholder(job.filePath)) {
-          process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
-          const result = await uploadBuild(job);
-          console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
+  // generate missing builds only if --generate flag is set
+  if (opts.generate && missing.length > 0) {
+    console.log("\n🚀 Starting generation...\n");
+
+    let success = 0;
+    let failed = 0;
+
+    for (const job of missing) {
+      const result = await generateAndSave(job);
+      if (result.ok) {
+        console.log(`    ✅ Saved (${result.blockCount} blocks)`);
+        success++;
+
+        if (opts.upload) {
+          process.stdout.write(`    📤 Uploading...`);
+          const uploadResult = await uploadBuild(job);
+          console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
         }
+      } else {
+        console.log(`    ❌ Failed: ${result.error}`);
+        failed++;
       }
-    } else {
-      printUploadCommands(allJobs);
     }
-    return;
+
+    console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
+  } else if (missing.length > 0 && !opts.generate) {
+    console.log("\n💡 Use --generate to generate missing builds.");
+  } else if (missing.length === 0) {
+    console.log("✨ All builds already exist!");
   }
 
-  console.log("\n🚀 Starting generation...\n");
-
-  let success = 0;
-  let failed = 0;
-
-  for (const job of missing) {
-    const result = await generateAndSave(job);
-    if (result.ok) {
-      console.log(`    ✅ Saved (${result.blockCount} blocks)`);
-      success++;
-
-      if (opts.upload) {
-        process.stdout.write(`    📤 Uploading...`);
-        const uploadResult = await uploadBuild(job);
-        console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
-      }
-    } else {
-      console.log(`    ❌ Failed: ${result.error}`);
-      failed++;
-    }
-  }
-
-  console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
-
-  if (!opts.upload && success > 0) {
+  if (!opts.upload) {
     printUploadCommands(allJobs);
   }
 }
