@@ -97,7 +97,7 @@ export function VoxelViewerCard({
           {build ? (
             <div className="pointer-events-none absolute bottom-3 left-3 hidden gap-2 sm:flex">
               <span className="mb-badge">
-                Drag: orbit • Pan: <span className="mb-kbd">Space</span>+drag or Pan • Scroll: zoom • Dbl‑click: fit
+                Drag: rotate • Pan: <span className="mb-kbd">Space</span>+drag or Pan • Scroll: zoom • Dbl‑click: fit
               </span>
             </div>
           ) : null}

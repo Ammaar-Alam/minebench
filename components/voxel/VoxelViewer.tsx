@@ -117,6 +117,12 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
   const revealRafRef = useRef<number | null>(null);
   const boundsRef = useRef<BuildBounds | null>(null);
   const autoRotateRef = useRef(false);
+  const userInteractingRef = useRef(false);
+  const dragRotateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startRotY: number;
+  } | null>(null);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -192,6 +198,7 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     controls.panSpeed = 0.7;
     controls.enablePan = true;
     controls.screenSpacePanning = true;
+    controls.enableRotate = false;
     controls.minDistance = 2;
     controls.maxDistance = 80;
     controls.autoRotate = false;
@@ -203,11 +210,10 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     };
 
     const onStart = () => {
-      if (!autoRotateRef.current) return;
-      controls.autoRotate = false;
+      userInteractingRef.current = true;
     };
     const onEnd = () => {
-      controls.autoRotate = autoRotateRef.current;
+      userInteractingRef.current = false;
     };
     controls.addEventListener("start", onStart);
     controls.addEventListener("end", onEnd);
@@ -238,12 +244,20 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     threeRef.current = { scene, camera, renderer, controls };
 
     let raf = 0;
-    const render = () => {
+    let last = performance.now();
+    const render = (now: number) => {
       raf = window.requestAnimationFrame(render);
+      const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+      last = now;
       controls.update();
+
+      const vg = voxelGroupRef.current;
+      if (vg && autoRotateRef.current && !userInteractingRef.current) {
+        vg.group.rotation.y += dt * 0.65;
+      }
       renderer.render(scene, camera);
     };
-    render();
+    raf = window.requestAnimationFrame(render);
 
     const ro = new ResizeObserver(() => {
       const w = mount.clientWidth;
@@ -323,7 +337,6 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       three.scene.add(vg.group);
       fitView();
       autoRotateRef.current = Boolean(autoRotate);
-      three.controls.autoRotate = autoRotateRef.current;
 
       if (!animateIn) return;
 
@@ -372,7 +385,7 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     const three = threeRef.current;
     if (!three) return;
     autoRotateRef.current = Boolean(autoRotate);
-    three.controls.autoRotate = autoRotateRef.current;
+    three.controls.autoRotate = false;
   }, [autoRotate]);
 
   return (
@@ -380,7 +393,39 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       ref={containerRef}
       className={`relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${dragMode === "pan" ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
       tabIndex={0}
-      onPointerDown={() => containerRef.current?.focus()}
+      onPointerDown={(e) => {
+        containerRef.current?.focus();
+        if (dragMode !== "orbit") return;
+        if (e.button !== 0) return;
+        const vg = voxelGroupRef.current;
+        if (!vg) return;
+        userInteractingRef.current = true;
+        dragRotateRef.current = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startRotY: vg.group.rotation.y,
+        };
+      }}
+      onPointerMove={(e) => {
+        const drag = dragRotateRef.current;
+        if (!drag || drag.pointerId !== e.pointerId) return;
+        const vg = voxelGroupRef.current;
+        if (!vg) return;
+        const dx = e.clientX - drag.startX;
+        vg.group.rotation.y = drag.startRotY + dx * 0.006;
+      }}
+      onPointerUp={(e) => {
+        const drag = dragRotateRef.current;
+        if (!drag || drag.pointerId !== e.pointerId) return;
+        dragRotateRef.current = null;
+        userInteractingRef.current = false;
+      }}
+      onPointerCancel={(e) => {
+        const drag = dragRotateRef.current;
+        if (!drag || drag.pointerId !== e.pointerId) return;
+        dragRotateRef.current = null;
+        userInteractingRef.current = false;
+      }}
       onBlur={() => {
         if (spaceHeldRef.current) {
           spaceHeldRef.current = false;
