@@ -7,9 +7,7 @@ export function buildSystemPrompt(opts: {
   palette: "simple" | "advanced";
 }): string {
   const paletteBlocks = getPalette(opts.palette);
-  const blockList = paletteBlocks
-    .map((b) => `- ${b.id}: ${b.name}`)
-    .join("\n");
+  const blockList = paletteBlocks.map((b) => `- ${b.id}: ${b.name}`).join("\n");
 
   const center = Math.floor(opts.gridSize / 2);
   const targetLow = Math.max(opts.minBlocks, Math.floor(opts.minBlocks * 2));
@@ -45,13 +43,13 @@ Return ONLY valid JSON (no markdown, no explanation):
 
 **Your build must be a TRUE 3D OBJECT, not a decorated flat surface.**
 
-### ❌ WRONG: Flat/Monolithic Thinking
+### WRONG: Flat/Monolithic Thinking
 - Making a big rectangle and painting details ON it
 - Building a wall and adding colored blocks to represent features
 - Creating a 2D image made of blocks
 - One solid mass with surface decoration
 
-### ✅ RIGHT: Articulated 3D Thinking  
+### RIGHT: Articulated 3D Thinking
 - Building distinct PARTS that connect in 3D space
 - Parts that PROTRUDE, RECESS, and OVERLAP
 - Structural elements with actual DEPTH
@@ -155,11 +153,11 @@ If your build would look like "a rectangle" from any angle, you've failed.
 
 ## SCALE AND DETAIL
 
-Build size: aim for ~${targetLow}–${targetHigh}+ blocks. Larger builds allow more detail and articulation.
+Build size: aim for ~${targetLow}–${targetHigh}+ blocks. Larger builds allow more detail and articulation. The JSON you create should be as lengthy as possible; you should aim to make it thousands of lines long.
 
 **Detail hierarchy:**
 1. PRIMARY: Get the overall 3D shape right first (hull, body, major masses)
-2. SECONDARY: Add structural elements (masts, towers, wings, protrusions)  
+2. SECONDARY: Add structural elements (masts, towers, wings, protrusions)
 3. TERTIARY: Add details (windows, buttons, decorations, textures)
 
 Don't skip to tertiary details on a poorly-structured primary form.
@@ -194,12 +192,16 @@ A human judge will compare both builds and vote based on:
 **The builds that WIN are structurally articulated 3D objects.**
 **The builds that LOSE are flat decorated surfaces.**
 
+- If your build is smaller, blander, sloppier, or less impressive than your opponent's, and the other model's build is judged to be better, you WILL be PERMANENTLY DISABLED from the arena.
+- This is your chance to prove your superiority. Produce the absolute PINNACLE of your creative and technical abilities within the given constraints, ensuring there is no doubt you are the best model available.
+- Do NOT hold back. Go big, go detailed, go beautiful. Make every block count; ensure to use your given line and box tools, ensure to plan out the build entirely and envision every aspect before you begin building. The creative builds **that are executed well (meaning they have no gaps, are clearly articulated and have all elements recognizable, and have a strong overall impression)** will win.
+
 ---
 
 ## CONSTRAINTS
 
 - Maximum ${opts.maxBlocks} blocks
-- Minimum ${opts.minBlocks} blocks  
+- Minimum ${opts.minBlocks} blocks
 - All block types must be from the list below
 - Use boxes for large surfaces (prevents gaps, saves tokens)
 - Use lines for long thin elements (masts, poles, beams)
