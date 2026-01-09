@@ -9,7 +9,7 @@
     { "id": "dirt", "name": "Dirt", "category": "nature" },
     { "id": "sand", "name": "Sand", "category": "nature" },
     { "id": "oak_log", "name": "Oak Log", "category": "nature" },
-    { "id": "oak_leaves", "name": "Oak Leaves", "category": "nature" },
+    { "id": "oak_leaves", "name": "Oak Leaves", "category": "nature", "render": "cutout" },
     { "id": "water", "name": "Water", "category": "nature", "render": "transparent" },
 
     { "id": "white_wool", "name": "White Wool", "category": "colors" },
@@ -54,7 +54,7 @@
     { "id": "ice", "name": "Ice", "category": "nature" },
     { "id": "packed_ice", "name": "Packed Ice", "category": "nature" },
     { "id": "moss_block", "name": "Moss Block", "category": "nature" },
-    { "id": "flowering_azalea_leaves", "name": "Flowering Azalea", "category": "nature" },
+    { "id": "flowering_azalea_leaves", "name": "Flowering Azalea", "category": "nature", "render": "cutout" },
     { "id": "lava", "name": "Lava", "category": "nature", "render": "emissive" },
     { "id": "soul_sand", "name": "Soul Sand", "category": "nature" },
     { "id": "netherrack", "name": "Netherrack", "category": "nature" },
@@ -87,4 +87,3 @@
     { "id": "ancient_debris", "name": "Ancient Debris", "category": "utility" }
   ]
 }
-

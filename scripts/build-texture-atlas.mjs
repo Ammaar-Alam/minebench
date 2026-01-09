@@ -82,8 +82,26 @@ async function main() {
       const col = index % cols;
       const row = Math.floor(index / cols);
 
-      const input = await sharp(path.join(srcDir, `${key}.png`))
-        .ensureAlpha()
+      const file = path.join(srcDir, `${key}.png`);
+      const base = sharp(file);
+      const meta = await base.metadata();
+      let pipeline = base.ensureAlpha();
+
+      // Handle animated textures (e.g. 32x1024 water/lava strips): take the first frame.
+      if (
+        typeof meta.width === "number" &&
+        typeof meta.height === "number" &&
+        (meta.width !== TILE_SIZE || meta.height !== TILE_SIZE)
+      ) {
+        pipeline = pipeline.extract({
+          left: 0,
+          top: 0,
+          width: Math.min(TILE_SIZE, meta.width),
+          height: Math.min(TILE_SIZE, meta.height)
+        });
+      }
+
+      const input = await pipeline
         .resize(TILE_SIZE, TILE_SIZE, {
           fit: "fill",
           kernel: sharp.kernel.nearest

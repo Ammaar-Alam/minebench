@@ -18,7 +18,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "prisma:dev": "prisma migrate dev",
-    "atlas": "node scripts/build-texture-atlas.mjs"
+    "atlas": "node scripts/build-texture-atlas.mjs",
+    "atlas:audit": "node scripts/audit-texture-pack.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

@@ -9,11 +9,12 @@ type MeshBucket = {
   positions: number[];
   normals: number[];
   uvs: number[];
+  colors: number[];
   indices: number[];
 };
 
 function makeBucket(): MeshBucket {
-  return { positions: [], normals: [], uvs: [], indices: [] };
+  return { positions: [], normals: [], uvs: [], colors: [], indices: [] };
 }
 
 type Direction = {
@@ -126,6 +127,7 @@ function buildGeometry(bucket: MeshBucket): THREE.BufferGeometry | null {
   geo.setAttribute("position", new THREE.Float32BufferAttribute(bucket.positions, 3));
   geo.setAttribute("normal", new THREE.Float32BufferAttribute(bucket.normals, 3));
   geo.setAttribute("uv", new THREE.Float32BufferAttribute(bucket.uvs, 2));
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(bucket.colors, 3));
   geo.setIndex(bucket.indices);
   geo.computeBoundingSphere();
   return geo;
@@ -175,14 +177,41 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const cz = (minZ + maxZ + 1) / 2;
 
   const opaque = makeBucket();
+  const cutout = makeBucket();
   const transparent = makeBucket();
   const emissive = makeBucket();
 
   function bucketFor(blockType: string): MeshBucket {
     const kind = getRenderKind(blockType) ?? "opaque";
     if (kind === "transparent") return transparent;
+    if (kind === "cutout") return cutout;
     if (kind === "emissive") return emissive;
     return opaque;
+  }
+
+  function srgbByteToLinear(byte: number): number {
+    const s = Math.min(1, Math.max(0, byte / 255));
+    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  }
+
+  function hexToLinearRgb(hex: number): [number, number, number] {
+    return [
+      srgbByteToLinear((hex >> 16) & 0xff),
+      srgbByteToLinear((hex >> 8) & 0xff),
+      srgbByteToLinear(hex & 0xff),
+    ];
+  }
+
+  const tintLeaves = hexToLinearRgb(0x48b518);
+  const tintGrass = hexToLinearRgb(0x7fb238);
+  const tintWater = hexToLinearRgb(0x3f76e4);
+  const tintWhite: [number, number, number] = [1, 1, 1];
+
+  function faceTint(blockType: string, face: Face): [number, number, number] {
+    if (blockType === "oak_leaves") return tintLeaves;
+    if (blockType === "water") return tintWater;
+    if (blockType === "grass_block" && face === "up") return tintGrass;
+    return tintWhite;
   }
 
   for (const b of blocks) {
@@ -199,6 +228,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
       const texKey = getTextureKey(b.type, d.face);
       if (!hasAtlasKey(texKey)) continue;
       const uv = getAtlasUv(texKey);
+      const tint = faceTint(b.type, d.face);
 
       const verts = d.quad(bx, by, bz);
       const bucket = bucketFor(b.type);
@@ -206,6 +236,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
       for (const [vx, vy, vz] of verts) {
         bucket.positions.push(vx, vy, vz);
         bucket.normals.push(d.nx, d.ny, d.nz);
+        bucket.colors.push(tint[0], tint[1], tint[2]);
       }
 
       bucket.uvs.push(
@@ -228,27 +259,36 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
 
-  const matOpaque = new THREE.MeshStandardMaterial({ map: atlasTexture });
+  const matOpaque = new THREE.MeshStandardMaterial({ map: atlasTexture, vertexColors: true });
+  const matCutout = new THREE.MeshStandardMaterial({
+    map: atlasTexture,
+    alphaTest: 0.45,
+    vertexColors: true,
+  });
   const matTransparent = new THREE.MeshStandardMaterial({
     map: atlasTexture,
     transparent: true,
     opacity: 0.85,
     depthWrite: false,
+    vertexColors: true,
   });
   const matEmissive = new THREE.MeshStandardMaterial({
     map: atlasTexture,
     emissive: new THREE.Color(0xffffff),
     emissiveIntensity: 0.6,
+    vertexColors: true,
   });
 
   const group = new THREE.Group();
   group.name = "VoxelGroup";
 
   const geoOpaque = buildGeometry(opaque);
+  const geoCutout = buildGeometry(cutout);
   const geoTransparent = buildGeometry(transparent);
   const geoEmissive = buildGeometry(emissive);
 
   if (geoOpaque) group.add(new THREE.Mesh(geoOpaque, matOpaque));
+  if (geoCutout) group.add(new THREE.Mesh(geoCutout, matCutout));
   if (geoTransparent) group.add(new THREE.Mesh(geoTransparent, matTransparent));
   if (geoEmissive) group.add(new THREE.Mesh(geoEmissive, matEmissive));
 

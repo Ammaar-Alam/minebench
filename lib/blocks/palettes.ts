@@ -1,6 +1,6 @@
 import palettesRaw from "@/lib/blocks/palettes.json";
 
-export type RenderKind = "opaque" | "transparent" | "emissive";
+export type RenderKind = "opaque" | "transparent" | "cutout" | "emissive";
 
 export type BlockDefinition = {
   id: string;
