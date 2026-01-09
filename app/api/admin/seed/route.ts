@@ -102,7 +102,6 @@ export async function POST(req: Request) {
     });
 
     for (const m of MODEL_CATALOG) {
-      const enabled = m.enabled && isProviderConfigured(m.provider);
       await tx.model.upsert({
         where: { key: m.key },
         create: {
@@ -110,7 +109,7 @@ export async function POST(req: Request) {
           provider: m.provider,
           modelId: m.modelId,
           displayName: m.displayName,
-          enabled,
+          enabled: m.enabled,
           isBaseline: false,
           eloRating: 1500,
         },
@@ -118,7 +117,7 @@ export async function POST(req: Request) {
           provider: m.provider,
           modelId: m.modelId,
           displayName: m.displayName,
-          enabled,
+          enabled: m.enabled,
         },
       });
     }

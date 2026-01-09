@@ -139,15 +139,21 @@ If you want to avoid API usage, you can generate a voxel build JSON using **chat
 - Import endpoint: `POST /api/admin/import-build`
 
 ```bash
-# 1) Get prompt IDs
+# 1) Get prompt IDs (optional — you can also import by promptText)
 curl -sS "http://localhost:3000/api/arena/prompts"
 
 # 2) Save the ChatGPT response JSON into a local file (gitignored)
 mkdir -p uploads
 # (save as uploads/build.json)
 
-# 3) Import the build (defaults: 64³, simple palette, mode=precise)
+# 3) Import the build by promptId (defaults: 64³, simple palette, mode=precise)
 curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptId=YOUR_PROMPT_ID&overwrite=1" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  --data-binary "@uploads/build.json"
+
+# Or import by promptText (URL-encoded)
+ENC_PROMPT="$(node -p 'encodeURIComponent(process.argv[1])' 'YOUR PROMPT TEXT HERE')"
+curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptText=$ENC_PROMPT&overwrite=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   --data-binary "@uploads/build.json"
 ```

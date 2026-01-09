@@ -1,6 +1,7 @@
-import { z } from "zod";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
+import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import { maxBlocksForGrid } from "@/lib/ai/generateVoxelBuild";
@@ -23,17 +24,6 @@ function requireAdmin(req: Request): string | null {
   return null;
 }
 
-const querySchema = z.object({
-  modelKey: z.string().min(1),
-  promptId: z.string().min(1),
-  overwrite: z
-    .union([z.literal("1"), z.literal("true"), z.literal("yes"), z.literal("0"), z.literal("false"), z.literal("no")])
-    .optional(),
-  gridSize: z.union([z.literal("32"), z.literal("64"), z.literal("128")]).optional(),
-  palette: z.union([z.literal("simple"), z.literal("advanced")]).optional(),
-  mode: z.string().min(1).optional(),
-});
-
 function truthy(v: string | undefined): boolean {
   if (!v) return false;
   const s = v.trim().toLowerCase();
@@ -45,26 +35,84 @@ export async function POST(req: Request) {
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
 
   const url = new URL(req.url);
-  const parsedQuery = querySchema.safeParse(Object.fromEntries(url.searchParams.entries()));
-  if (!parsedQuery.success) {
-    return NextResponse.json({ error: parsedQuery.error.message }, { status: 400 });
+  const modelKeyRaw = (url.searchParams.get("modelKey") ?? "").trim();
+  if (!modelKeyRaw) {
+    return NextResponse.json({ error: "Missing required query param: modelKey" }, { status: 400 });
   }
 
-  const { modelKey, promptId } = parsedQuery.data;
-  const overwrite = truthy(parsedQuery.data.overwrite);
-  const gridSize = Number(parsedQuery.data.gridSize ?? "64") as 32 | 64 | 128;
-  const palette = (parsedQuery.data.palette ?? "simple") as "simple" | "advanced";
-  const mode = parsedQuery.data.mode ?? "precise";
+  let modelKey: ModelKey;
+  try {
+    modelKey = modelKeyRaw as ModelKey;
+    getModelByKey(modelKey);
+  } catch {
+    return NextResponse.json({ error: `Unknown modelKey: ${modelKeyRaw}` }, { status: 400 });
+  }
 
-  const model = await prisma.model.findUnique({ where: { key: modelKey } });
-  if (!model) return NextResponse.json({ error: `Unknown modelKey: ${modelKey}` }, { status: 404 });
-  if (model.isBaseline) return NextResponse.json({ error: "Cannot import builds for baseline model" }, { status: 400 });
+  const promptId = (url.searchParams.get("promptId") ?? "").trim();
+  const promptText = (url.searchParams.get("promptText") ?? "").trim();
+  if (!promptId && !promptText) {
+    return NextResponse.json({ error: "Missing required query param: promptId or promptText" }, { status: 400 });
+  }
 
-  const prompt = await prisma.prompt.findUnique({ where: { id: promptId } });
+  const overwrite = truthy(url.searchParams.get("overwrite") ?? undefined);
+
+  const gridSizeRaw = url.searchParams.get("gridSize");
+  const gridSize = gridSizeRaw ? Number(gridSizeRaw) : 64;
+  if (gridSize !== 32 && gridSize !== 64 && gridSize !== 128) {
+    return NextResponse.json({ error: "Invalid gridSize (allowed: 32, 64, 128)" }, { status: 400 });
+  }
+
+  const palette = ((url.searchParams.get("palette") ?? "simple").trim().toLowerCase() as "simple" | "advanced");
+  if (palette !== "simple" && palette !== "advanced") {
+    return NextResponse.json({ error: "Invalid palette (allowed: simple, advanced)" }, { status: 400 });
+  }
+
+  const mode = (url.searchParams.get("mode") ?? "precise").trim();
+  if (!mode) return NextResponse.json({ error: "Invalid mode (must be non-empty)" }, { status: 400 });
+
+  const modelEntry = getModelByKey(modelKey);
+  const model = await prisma.model.upsert({
+    where: { key: modelEntry.key },
+    create: {
+      key: modelEntry.key,
+      provider: modelEntry.provider,
+      modelId: modelEntry.modelId,
+      displayName: modelEntry.displayName,
+      enabled: true,
+      isBaseline: false,
+    },
+    update: {
+      provider: modelEntry.provider,
+      modelId: modelEntry.modelId,
+      displayName: modelEntry.displayName,
+      enabled: true,
+    },
+  });
+
+  if (model.isBaseline) {
+    return NextResponse.json({ error: "Cannot import builds for baseline model" }, { status: 400 });
+  }
+
+  const prompt = promptId
+    ? await prisma.prompt.findUnique({ where: { id: promptId } })
+    : await prisma.prompt.upsert({
+        where: { text: promptText },
+        create: { text: promptText, active: true },
+        update: { active: true },
+      });
+
   if (!prompt) return NextResponse.json({ error: `Unknown promptId: ${promptId}` }, { status: 404 });
+  if (!prompt.active) {
+    await prisma.prompt.update({ where: { id: prompt.id }, data: { active: true } });
+  }
 
-  const json = (await req.json().catch(() => null)) as unknown;
-  if (!json) return NextResponse.json({ error: "Missing JSON request body" }, { status: 400 });
+  const raw = await req.text();
+  if (!raw.trim()) return NextResponse.json({ error: "Request body is empty (expected voxel build JSON)" }, { status: 400 });
+
+  const json = extractBestVoxelBuildJson(raw);
+  if (!json) {
+    return NextResponse.json({ error: "Could not find a valid JSON object in the request body" }, { status: 400 });
+  }
 
   const paletteDefs = getPalette(palette);
   const validated = validateVoxelBuild(json, {
@@ -91,6 +139,11 @@ export async function POST(req: Request) {
     ? await prisma.build.update({
         where: { id: existing.id },
         data: {
+          promptId: prompt.id,
+          modelId: model.id,
+          gridSize,
+          palette,
+          mode,
           voxelData: validated.value.build,
           blockCount,
           generationTimeMs: 0,
@@ -112,12 +165,11 @@ export async function POST(req: Request) {
   return NextResponse.json({
     ok: true,
     buildId: saved.id,
-    promptId: prompt.id,
-    modelKey: model.key,
+    prompt: { id: prompt.id, text: prompt.text },
+    model: { id: model.id, key: model.key, provider: model.provider, displayName: model.displayName },
     settings: { gridSize, palette, mode },
     blockCount,
     warnings: validated.value.warnings,
     overwritten: Boolean(existing),
   });
 }
-
