@@ -106,8 +106,14 @@ function buildJobList(promptFilter: string | null, modelFilter: string | null): 
   return jobs;
 }
 
+function isEmptyPlaceholder(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return true;
+  const content = fs.readFileSync(filePath, "utf-8").trim();
+  return content === "{}" || content === "";
+}
+
 function getMissingJobs(jobs: Job[]): Job[] {
-  return jobs.filter((j) => !fs.existsSync(j.filePath));
+  return jobs.filter((j) => isEmptyPlaceholder(j.filePath));
 }
 
 async function generateAndSave(job: Job): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
@@ -177,8 +183,8 @@ function printStatus(jobs: Job[]) {
   }
 
   for (const [slug, group] of promptGroups) {
-    const existing = group.filter((j) => fs.existsSync(j.filePath));
-    const missing = group.filter((j) => !fs.existsSync(j.filePath));
+    const existing = group.filter((j) => !isEmptyPlaceholder(j.filePath));
+    const missing = group.filter((j) => isEmptyPlaceholder(j.filePath));
 
     console.log(`  ${slug}: ${existing.length}/${group.length} models`);
     if (existing.length > 0) {
@@ -195,7 +201,7 @@ function printUploadCommands(jobs: Job[]) {
   console.log("# Run these commands to upload all existing builds to production:\n");
 
   for (const job of jobs) {
-    if (fs.existsSync(job.filePath)) {
+    if (!isEmptyPlaceholder(job.filePath)) {
       console.log(`# ${job.promptSlug} × ${job.modelSlug}`);
       console.log(getUploadCommand(job));
       console.log("");
@@ -257,7 +263,7 @@ Options:
     if (opts.upload) {
       console.log("\n📤 Uploading all builds...");
       for (const job of allJobs) {
-        if (fs.existsSync(job.filePath)) {
+        if (!isEmptyPlaceholder(job.filePath)) {
           process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
           const result = await uploadBuild(job);
           console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
