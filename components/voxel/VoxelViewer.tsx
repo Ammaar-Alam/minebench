@@ -120,11 +120,6 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
   const boundsRef = useRef<BuildBounds | null>(null);
   const autoRotateRef = useRef(false);
   const userInteractingRef = useRef(false);
-  const dragRotateRef = useRef<{
-    pointerId: number;
-    startX: number;
-    startRotY: number;
-  } | null>(null);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -201,11 +196,14 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     controls.panSpeed = 0.7;
     controls.enablePan = true;
     controls.screenSpacePanning = true;
-    controls.enableRotate = false;
+    controls.enableRotate = true;
     controls.minDistance = 2;
     controls.maxDistance = 80;
     controls.autoRotate = false;
     controls.autoRotateSpeed = 0.7;
+    // Allow users to tilt up/down enough to see undersides, without letting the camera fully flip.
+    controls.minPolarAngle = 0.02;
+    controls.maxPolarAngle = Math.PI - 0.02;
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.ROTATE,
       MIDDLE: THREE.MOUSE.DOLLY,
@@ -401,36 +399,6 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       tabIndex={0}
       onPointerDown={(e) => {
         containerRef.current?.focus();
-        if (dragMode !== "orbit") return;
-        if (e.button !== 0) return;
-        const vg = voxelGroupRef.current;
-        if (!vg) return;
-        userInteractingRef.current = true;
-        dragRotateRef.current = {
-          pointerId: e.pointerId,
-          startX: e.clientX,
-          startRotY: vg.group.rotation.y,
-        };
-      }}
-      onPointerMove={(e) => {
-        const drag = dragRotateRef.current;
-        if (!drag || drag.pointerId !== e.pointerId) return;
-        const vg = voxelGroupRef.current;
-        if (!vg) return;
-        const dx = e.clientX - drag.startX;
-        vg.group.rotation.y = drag.startRotY + dx * 0.003;
-      }}
-      onPointerUp={(e) => {
-        const drag = dragRotateRef.current;
-        if (!drag || drag.pointerId !== e.pointerId) return;
-        dragRotateRef.current = null;
-        userInteractingRef.current = false;
-      }}
-      onPointerCancel={(e) => {
-        const drag = dragRotateRef.current;
-        if (!drag || drag.pointerId !== e.pointerId) return;
-        dragRotateRef.current = null;
-        userInteractingRef.current = false;
       }}
       onBlur={() => {
         if (spaceHeldRef.current) {
