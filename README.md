@@ -104,6 +104,12 @@ Prisma uses `.env` for CLI operations. If you set `DATABASE_URL` in `.env.local`
 
 ### Seeding the Arena (curated prompts + builds)
 
+Make sure your shell has `ADMIN_TOKEN` set (or add it to `.env` and restart `pnpm dev`):
+
+```bash
+export ADMIN_TOKEN="..."
+```
+
 ```bash
 # Prompts + model catalog only (no AI calls)
 curl -X POST "http://localhost:3000/api/admin/seed?generateBuilds=0" \

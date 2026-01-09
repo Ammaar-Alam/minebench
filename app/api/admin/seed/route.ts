@@ -10,10 +10,18 @@ function requireAdmin(req: Request): string | null {
   const token = process.env.ADMIN_TOKEN;
   if (!token) return "Missing ADMIN_TOKEN on server";
 
-  const auth = req.headers.get("authorization") ?? "";
+  const auth = req.headers.get("authorization");
+  if (!auth) return "Missing Authorization header (expected: Authorization: Bearer <ADMIN_TOKEN>)";
+
   const match = auth.match(/^Bearer\s+(.+)$/i);
-  if (!match) return "Missing Authorization header";
-  const presented = match[1].trim();
+  if (!match) {
+    return "Invalid Authorization header (expected: Authorization: Bearer <ADMIN_TOKEN>)";
+  }
+
+  const presented = match[1]?.trim();
+  if (!presented) {
+    return "Empty Bearer token (did you set $ADMIN_TOKEN when running curl?)";
+  }
   if (presented !== token.trim()) {
     return "Invalid token (must match ADMIN_TOKEN; note Next.js dev loads .env.local before .env)";
   }
@@ -57,7 +65,7 @@ function isProviderConfigured(provider: string) {
 }
 
 const ARENA_SETTINGS = {
-  gridSize: 32 as const,
+  gridSize: 64 as const,
   palette: "simple" as const,
   mode: "precise" as const,
 };

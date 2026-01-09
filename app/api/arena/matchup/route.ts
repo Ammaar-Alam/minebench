@@ -42,7 +42,7 @@ export async function GET(req: Request) {
   const builds = await prisma.build.findMany({
     where: {
       promptId: prompt.id,
-      gridSize: 32,
+      gridSize: 64,
       palette: "simple",
       mode: "precise",
       model: { enabled: true, isBaseline: false },
