@@ -33,9 +33,11 @@ export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
   const [selectedPromptId, setSelectedPromptId] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
+  const [revealMatchupId, setRevealMatchupId] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState("");
 
   const matchup = state.kind === "ready" ? state.matchup : null;
+  const revealModels = Boolean(matchup && revealMatchupId === matchup.id);
 
   const title = useMemo(() => {
     if (!matchup) return "Arena";
@@ -90,6 +92,7 @@ export function Arena() {
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     setSubmitting(true);
+    setRevealMatchupId(matchup.id);
     try {
       await submitVote(matchup.id, choice);
       const next = await fetchMatchup(matchup.prompt.id);
@@ -101,6 +104,8 @@ export function Arena() {
       });
     } finally {
       setSubmitting(false);
+      // Note: we intentionally keep revealMatchupId set to the voted matchup id.
+      // The next matchup has a different id, so model names remain hidden again.
     }
   }
 
@@ -147,13 +152,13 @@ export function Arena() {
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <VoxelViewerCard
               title="A"
-              subtitle={matchup ? matchup.a.model.displayName : undefined}
+              subtitle={revealModels ? matchup?.a.model.displayName : undefined}
               voxelBuild={matchup?.a.build ?? null}
               autoRotate
             />
             <VoxelViewerCard
               title="B"
-              subtitle={matchup ? matchup.b.model.displayName : undefined}
+              subtitle={revealModels ? matchup?.b.model.displayName : undefined}
               voxelBuild={matchup?.b.build ?? null}
               autoRotate
             />
