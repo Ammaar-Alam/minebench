@@ -9,18 +9,18 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 
 type Palette = "simple" | "advanced";
-type GridSize = 64 | 128 | 256;
+type GridSize = 64 | 256 | 512;
 
 const MAX_BLOCKS_BY_GRID: Record<GridSize, number> = {
   64: Math.floor(64 ** 3 * 0.75), // 196,608
-  128: Math.floor(128 ** 3 * 0.75), // 1,572,864
   256: 2_000_000,
+  512: 4_000_000,
 };
 
 const MIN_BLOCKS_BY_GRID: Record<GridSize, number> = {
   64: 200,
-  128: 300,
   256: 500,
+  512: 800,
 };
 
 function cx(...classes: Array<string | false | null | undefined>) {
@@ -81,7 +81,7 @@ function CopyButton({
 }
 
 export function LocalLab() {
-  const [gridSize, setGridSize] = useState<GridSize>(64);
+  const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
 
   const defaultSystem = useMemo(() => {
@@ -192,7 +192,7 @@ export function LocalLab() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center gap-1 rounded-full bg-bg/55 p-1 ring-1 ring-border/80">
-                    {([64, 128, 256] as GridSize[]).map((g) => (
+                    {([64, 256, 512] as GridSize[]).map((g) => (
                       <button
                         key={g}
                         type="button"

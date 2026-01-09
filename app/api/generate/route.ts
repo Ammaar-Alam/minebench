@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 const reqSchema = z.object({
   prompt: z.string().min(1).max(800),
-  gridSize: z.union([z.literal(64), z.literal(128), z.literal(256)]),
+  gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8),
 });

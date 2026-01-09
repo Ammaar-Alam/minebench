@@ -103,7 +103,7 @@ export function Arena() {
                 <span className="mb-dot" />
                 <span className="text-fg">Arena</span>
                 <span className="hidden text-muted2 sm:inline">
-                  64³ • simple palette • head-to-head
+                  256³ • simple palette • head-to-head
                 </span>
               </div>
 

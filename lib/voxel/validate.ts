@@ -180,8 +180,8 @@ export function validateVoxelBuild(
   const droppedUnknownTypeCounts = new Map<string, number>();
 
   const keyToBlock = new Map<number, { x: number; y: number; z: number; type: string }>();
-  // 8 bits per coordinate supports up to 256³ grids.
-  const encode = (x: number, y: number, z: number) => x | (y << 8) | (z << 16);
+  // 10 bits per coordinate supports up to 1024³ grids (covers 512³).
+  const encode = (x: number, y: number, z: number) => x | (y << 10) | (z << 20);
 
   for (const b of expanded.blocks) {
     if (b.x < 0 || b.y < 0 || b.z < 0) {

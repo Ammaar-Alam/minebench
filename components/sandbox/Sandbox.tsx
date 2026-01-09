@@ -6,7 +6,7 @@ import type { GenerateEvent } from "@/lib/ai/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 
 type Palette = "simple" | "advanced";
-type GridSize = 64 | 128 | 256;
+type GridSize = 64 | 256 | 512;
 
 type ModelResult = {
   modelKey: ModelKey;
@@ -36,7 +36,7 @@ function groupByProvider() {
 
 export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
-  const [gridSize, setGridSize] = useState<GridSize>(64);
+  const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
   const [selectedModelKeys, setSelectedModelKeys] = useState<ModelKey[]>(
     ["openai_gpt_5_mini", "gemini_3_0_flash"]
@@ -276,10 +276,10 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                   value={gridSize}
                   onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
                 >
-                  <option value={64}>64</option>
-                  <option value={128}>128</option>
-                  <option value={256}>256</option>
-                </select>
+	                  <option value={64}>64</option>
+	                  <option value={256}>256</option>
+	                  <option value={512}>512</option>
+	                </select>
                 <svg
                   aria-hidden="true"
                   className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"

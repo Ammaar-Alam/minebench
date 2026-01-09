@@ -65,7 +65,7 @@ function isProviderConfigured(provider: string) {
 }
 
 const ARENA_SETTINGS = {
-  gridSize: 64 as const,
+  gridSize: 256 as const,
   palette: "simple" as const,
   mode: "precise" as const,
 };

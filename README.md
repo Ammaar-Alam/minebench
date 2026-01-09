@@ -14,7 +14,7 @@ MineBench is a benchmark for comparing AI models on Minecraft-style voxel builds
 
 ## Arena mode (the benchmark)
 - Route: `/`
-- Settings: grid 64, simple palette, mode "precise"
+- Settings: grid 256, simple palette, mode "precise"
 - Prompts: `lib/arena/curatedPrompts.ts`
 - Matchups: models are sampled with inverse weight of `shownCount` to balance exposure
 - Voting: A, B, Tie, Both bad (one vote per matchup per session cookie)
@@ -22,7 +22,7 @@ MineBench is a benchmark for comparing AI models on Minecraft-style voxel builds
 
 ## Sandbox mode (exploration)
 - Route: `/sandbox`
-- Choose prompt, grid (64/128/256), palette (simple/advanced), and two models
+- Choose prompt, grid (64/256/512), palette (simple/advanced), and two models
 - Streams NDJSON events as each model finishes
 - Useful for quick comparisons but does not affect the leaderboard
 
@@ -58,8 +58,8 @@ Primitives are expanded server-side, then validated, deduplicated, and clamped t
 
 ## Validation and constraints (enforced)
 - Grid coordinates must be in `[0, gridSize - 1]`
-- Max blocks = 75% of grid volume (64: 196,608; 128: 1,572,864; 256: 2,000,000 cap)
-- Min blocks = 200 / 300 / 500 for 64 / 128 / 256
+- Max blocks = 75% of grid volume (64: 196,608; 256: 2,000,000 cap; 512: 4,000,000 cap)
+- Min blocks = 200 / 500 / 800 for 64 / 256 / 512
 - Minimum footprint ~55% of grid width and minimum height ~14% of grid height
 - Unknown block types are normalized when possible or dropped with warnings
 - Out-of-bounds blocks are dropped; duplicates are deduped
@@ -151,7 +151,7 @@ curl -sS "http://localhost:3000/api/arena/prompts"
 mkdir -p uploads
 # (save as uploads/build.json)
 
-# 3) Import the build by promptId (defaults: 64³, simple palette, mode=precise)
+# 3) Import the build by promptId (defaults: 256³, simple palette, mode=precise)
 curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptId=YOUR_PROMPT_ID&overwrite=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   --data-binary "@uploads/build.json"

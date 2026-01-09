@@ -31,7 +31,7 @@ function randomPick<T>(items: T[]): T | null {
 async function getEligiblePrompts(): Promise<EligiblePrompt[]> {
   const rows = await prisma.build.findMany({
     where: {
-      gridSize: 64,
+      gridSize: 256,
       palette: "simple",
       mode: "precise",
       model: { enabled: true, isBaseline: false },
@@ -77,7 +77,7 @@ export async function GET(req: Request) {
   const builds = await prisma.build.findMany({
     where: {
       promptId: prompt.id,
-      gridSize: 64,
+      gridSize: 256,
       palette: "simple",
       mode: "precise",
       model: { enabled: true, isBaseline: false },

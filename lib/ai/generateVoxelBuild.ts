@@ -11,20 +11,20 @@ import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 // 75% of grid volume — with primitives (boxes/lines) we can handle much larger builds efficiently
-const MAX_BLOCKS_BY_GRID: Record<64 | 128 | 256, number> = {
-  64: Math.floor(64 ** 3 * 0.75),   // 196,608
-  128: Math.floor(128 ** 3 * 0.75), // 1,572,864
-  // Cap 256 to keep validation/rendering practical (still plenty for real benchmarks).
+const MAX_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
+  64: Math.floor(64 ** 3 * 0.75), // 196,608
+  // Cap higher grids to keep validation/rendering practical.
   256: 2_000_000,
+  512: 4_000_000,
 };
 
-const MIN_BLOCKS_BY_GRID: Record<64 | 128 | 256, number> = {
+const MIN_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
   64: 200,
-  128: 300,
   256: 500,
+  512: 800,
 };
 
-function defaultMaxOutputTokens(gridSize: 64 | 128 | 256): number {
+function defaultMaxOutputTokens(gridSize: 64 | 256 | 512): number {
   // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
   if (gridSize === 64) return 65536;
   return 65536;
@@ -43,7 +43,7 @@ const DEFAULT_TEMPERATURE = 0.2;
 export type GenerateVoxelBuildParams = {
   modelKey: ModelKey;
   prompt: string;
-  gridSize: 64 | 128 | 256;
+  gridSize: 64 | 256 | 512;
   palette: "simple" | "advanced";
   maxAttempts?: number;
   onRetry?: (attempt: number, reason: string) => void;
@@ -102,7 +102,7 @@ async function providerGenerateText(args: {
 function validateParsedJson(
   json: unknown,
   palette: BlockDefinition[],
-  gridSize: 64 | 128 | 256
+  gridSize: 64 | 256 | 512
 ) {
   return validateVoxelBuild(json, {
     palette,
@@ -248,6 +248,6 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
   };
 }
 
-export function maxBlocksForGrid(gridSize: 64 | 128 | 256) {
+export function maxBlocksForGrid(gridSize: 64 | 256 | 512) {
   return MAX_BLOCKS_BY_GRID[gridSize];
 }

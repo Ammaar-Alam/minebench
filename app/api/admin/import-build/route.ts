@@ -57,9 +57,9 @@ export async function POST(req: Request) {
   const overwrite = truthy(url.searchParams.get("overwrite") ?? undefined);
 
   const gridSizeRaw = url.searchParams.get("gridSize");
-  const gridSize = gridSizeRaw ? Number(gridSizeRaw) : 64;
-  if (gridSize !== 64 && gridSize !== 128 && gridSize !== 256) {
-    return NextResponse.json({ error: "Invalid gridSize (allowed: 64, 128, 256)" }, { status: 400 });
+  const gridSize = gridSizeRaw ? Number(gridSizeRaw) : 256;
+  if (gridSize !== 64 && gridSize !== 256 && gridSize !== 512) {
+    return NextResponse.json({ error: "Invalid gridSize (allowed: 64, 256, 512)" }, { status: 400 });
   }
 
   const palette = ((url.searchParams.get("palette") ?? "simple").trim().toLowerCase() as "simple" | "advanced");
