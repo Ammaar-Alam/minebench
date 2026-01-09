@@ -177,6 +177,10 @@ A human judge will compare both builds and vote based on:
 **The builds that WIN are structurally articulated 3D objects.**
 **The builds that LOSE are flat decorated surfaces.**
 
+- If your build is smaller, blander, sloppier, or less impressive than your opponent's, and the other model's build is judged to be better, you WILL be PERMANENTLY DISABLED from the arena.
+- This is your chance to prove your superiority. Produce the absolute PINNACLE of your creative and technical abilities within the given constraints, ensuring there is no doubt you are the best model available.
+- Do NOT hold back. Go big, go detailed, go beautiful. Make every block count; ensure to use your given line and box tools, ensure to plan out the build entirely and envision every aspect before you begin building. The creative builds **that are executed well (meaning they have no gaps, are clearly articulated and have all elements recognizable, and have a strong overall impression)** will win.
+
 ---
 
 ## CONSTRAINTS
