@@ -3,7 +3,7 @@ export type Provider = "openai" | "anthropic" | "gemini";
 export type ModelKey =
   | "openai_gpt_5_2"
   | "openai_gpt_5_2_pro"
-  | "openai_gpt_5_1_codex_max"
+  | "openai_gpt_5_2_codex"
   | "openai_gpt_5_mini"
   | "openai_gpt_4_1"
   | "anthropic_claude_4_5_sonnet"
@@ -35,10 +35,10 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     enabled: true,
   },
   {
-    key: "openai_gpt_5_1_codex_max",
+    key: "openai_gpt_5_2_codex",
     provider: "openai",
-    modelId: "gpt-5.1-codex-max",
-    displayName: "GPT 5.1 Codex Max",
+    modelId: "gpt-5.2-codex",
+    displayName: "GPT 5.2 Codex",
     enabled: true,
   },
   {

@@ -118,7 +118,7 @@ export async function openaiGenerateText(params: {
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for OpenAI structured output");
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
-  const isResponsesOnlyModel = params.modelId === "gpt-5.1-codex-max";
+  const isResponsesOnlyModel = params.modelId === "gpt-5.2-codex";
   const useHighReasoning =
     params.modelId === "gpt-5.2" || params.modelId === "gpt-5.2-pro" || isGpt5Family;
   // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
@@ -179,17 +179,17 @@ export async function openaiGenerateText(params: {
 
     if (!res) throw new Error("OpenAI request failed");
 
-    if (res.ok) {
-      const data = (await res.json()) as OpenAIResponsesResponse;
-      const text = extractTextFromResponses(data);
-      if (text) return { text };
-    } else {
-      const body = lastBody || (await res.text().catch(() => ""));
-      const rid = requestIdFromResponse(res);
-      // gpt-5.1-codex-max is Responses-only; chat/completions will always fail
-      if (isResponsesOnlyModel) {
-        throw new Error(`OpenAI error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
-      }
+      if (res.ok) {
+        const data = (await res.json()) as OpenAIResponsesResponse;
+        const text = extractTextFromResponses(data);
+        if (text) return { text };
+      } else {
+        const body = lastBody || (await res.text().catch(() => ""));
+        const rid = requestIdFromResponse(res);
+        // gpt-5.2-codex is Responses-only; chat/completions will always fail
+        if (isResponsesOnlyModel) {
+          throw new Error(`OpenAI error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
+        }
 
       // Fall back for environments/models that still require chat/completions.
       if (res.status !== 404 && res.status !== 400) {
@@ -207,7 +207,7 @@ export async function openaiGenerateText(params: {
   }
 
   if (isResponsesOnlyModel) {
-    throw new Error("OpenAI model gpt-5.1-codex-max only supports the /v1/responses endpoint");
+    throw new Error("OpenAI model gpt-5.2-codex only supports the /v1/responses endpoint");
   }
 
   let res: Response | null = null;

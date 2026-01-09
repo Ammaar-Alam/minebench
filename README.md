@@ -211,7 +211,7 @@ uploads/
 |-----------|-----------|
 | `openai_gpt_5_2` | `gpt-5-2` |
 | `openai_gpt_5_2_pro` | `gpt-5-2-pro` |
-| `openai_gpt_5_1_codex_max` | `gpt-5-1-codex` |
+| `openai_gpt_5_2_codex` | `gpt-5-2-codex` |
 | `openai_gpt_5_mini` | `gpt-5-mini` |
 | `openai_gpt_4_1` | `gpt-4-1` |
 | `anthropic_claude_4_5_sonnet` | `sonnet` |
