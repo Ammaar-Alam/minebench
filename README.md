@@ -26,6 +26,11 @@ MineBench is a benchmark for comparing AI models on Minecraft-style voxel builds
 - Streams NDJSON events as each model finishes
 - Useful for quick comparisons but does not affect the leaderboard
 
+## Local Lab (bring-your-own JSON)
+- Route: `/local`
+- Shows the exact MineBench system prompt (editable + copyable) so you can run the task in any model (including local LLMs)
+- Paste the resulting JSON to preview the voxel build client-side (nothing is uploaded or saved)
+
 ## Task format (voxel JSON)
 Models must return JSON with primitives (boxes/lines) plus explicit blocks:
 

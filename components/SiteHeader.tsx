@@ -83,7 +83,7 @@ function ThemeToggle() {
       type="button"
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      className="grid h-10 w-10 place-items-center rounded-full bg-bg/50 text-muted ring-1 ring-border/80 transition hover:bg-bg/65 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="grid h-9 w-9 place-items-center rounded-full bg-bg/50 text-muted ring-1 ring-border/80 transition hover:bg-bg/65 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:w-10"
       onClick={toggleTheme}
     >
       <svg aria-hidden="true" className="h-5 w-5" viewBox="0 0 24 24" fill="none">
@@ -117,8 +117,8 @@ function NavLink({ href, label }: { href: string; label: string }) {
       aria-current={active ? "page" : undefined}
       className={
         active
-          ? "inline-flex h-10 items-center rounded-full bg-card/70 px-4 text-sm font-medium text-fg shadow-soft ring-1 ring-border"
-          : "inline-flex h-10 items-center rounded-full px-4 text-sm text-muted transition hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          ? "inline-flex h-9 items-center rounded-full bg-card/70 px-3 text-xs font-medium text-fg shadow-soft ring-1 ring-border sm:h-10 sm:px-4 sm:text-sm"
+          : "inline-flex h-9 items-center rounded-full px-3 text-xs text-muted transition hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:px-4 sm:text-sm"
       }
       href={href}
     >
@@ -156,6 +156,7 @@ export function SiteHeader() {
         <nav className="flex items-center gap-1 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border">
           <NavLink href="/" label="Arena" />
           <NavLink href="/sandbox" label="Sandbox" />
+          <NavLink href="/local" label="Local" />
           <NavLink href="/leaderboard" label="Leaderboard" />
           <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
           <ThemeToggle />
