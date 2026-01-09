@@ -275,7 +275,8 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const matEmissive = new THREE.MeshStandardMaterial({
     map: atlasTexture,
     emissive: new THREE.Color(0xffffff),
-    emissiveIntensity: 0.6,
+    emissiveMap: atlasTexture,
+    emissiveIntensity: 0.25,
     vertexColors: true,
   });
 
