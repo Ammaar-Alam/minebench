@@ -87,7 +87,8 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
   const size = bounds.box.getSize(new THREE.Vector3());
   const horiz = Math.max(0.001, Math.max(size.x, size.z));
   const tallness = size.y / horiz;
-  const yBias = THREE.MathUtils.clamp(0.38 + tallness * 0.22, 0.38, 0.86);
+  // slightly more top-down by default (about +10%)
+  const yBias = THREE.MathUtils.clamp((0.38 + tallness * 0.22) * 1.1, 0.38, 0.95);
 
   const vFov = THREE.MathUtils.degToRad(camera.fov);
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
@@ -96,7 +97,8 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
   const distance = Math.max(fitHeight, fitWidth);
 
   const dir = new THREE.Vector3(1, yBias, 1).normalize();
-  camera.position.copy(center).addScaledVector(dir, distance * 1.16);
+  // slightly closer default framing
+  camera.position.copy(center).addScaledVector(dir, distance * 1.1);
   camera.near = Math.max(0.05, distance / 250);
   camera.far = Math.max(200, distance * 60);
   camera.updateProjectionMatrix();
