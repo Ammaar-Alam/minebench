@@ -165,6 +165,96 @@ curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_g
 
 The import route validates the JSON (including expanding `boxes`/`lines`) and stores it as a `Build` in Postgres.
 
+### Batch generation (automated workflow)
+
+For generating builds at scale, use the batch generation script:
+
+```bash
+# check current status (shows missing builds per prompt)
+pnpm batch:status
+
+# generate all missing builds
+pnpm batch:generate
+
+# generate for a specific prompt only
+pnpm batch:generate --prompt steampunk
+
+# generate for specific models only
+pnpm batch:generate --model gemini
+
+# generate and upload to production in one step
+pnpm batch:generate --upload
+
+# show help
+pnpm batch:generate --help
+```
+
+#### Folder structure
+
+Generated builds are saved to `uploads/{prompt-slug}/`:
+
+```
+uploads/
+├── castle/
+│   ├── castle-gpt-5-2.json
+│   ├── castle-sonnet.json
+│   └── ...
+├── steampunk/
+│   ├── steampunk-gpt-5-2.json
+│   └── ...
+└── ...
+```
+
+#### Model slugs
+
+| Model Key | File Slug |
+|-----------|-----------|
+| `openai_gpt_5_2` | `gpt-5-2` |
+| `openai_gpt_5_2_pro` | `gpt-5-2-pro` |
+| `openai_gpt_5_1_codex_max` | `gpt-5-1-codex` |
+| `openai_gpt_5_mini` | `gpt-5-mini` |
+| `openai_gpt_4_1` | `gpt-4-1` |
+| `anthropic_claude_4_5_sonnet` | `sonnet` |
+| `anthropic_claude_4_5_opus` | `opus` |
+| `gemini_3_0_pro` | `gemini-pro` |
+| `gemini_3_0_flash` | `gemini-flash` |
+
+#### Prompt slugs
+
+| Slug | Prompt |
+|------|--------|
+| `steampunk` | A steampunk airship... |
+| `carrier` | A flying aircraft carrier... |
+| `locomotive` | A steam locomotive |
+| `skyscraper` | A skyscraper |
+| `treehouse` | A treehouse village... |
+| `cottage` | A cozy cottage |
+| `worldtree` | A massive world tree... |
+| `floating` | A floating island ecosystem... |
+| `shipwreck` | An underwater shipwreck... |
+| `phoenix` | A phoenix rising from flames... |
+| `knight` | A knight in armor |
+| `castle` | A medieval stone castle... |
+
+#### Recommended workflow
+
+1. **Generate one prompt at a time** (to manage costs):
+   ```bash
+   pnpm batch:generate --prompt steampunk
+   ```
+
+2. **Or generate one model at a time**:
+   ```bash
+   pnpm batch:generate --model sonnet
+   ```
+
+3. **Upload after generating**:
+   ```bash
+   pnpm batch:generate --upload
+   ```
+
+The script prints individual curl commands for manual upload if you prefer more control.
+
 ## Texture attribution
 This repo includes the Faithful texture pack at `faithful-32x-1.21.11`.
 See `faithful-32x-1.21.11/LICENSE.txt` for license details.
