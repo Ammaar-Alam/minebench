@@ -14,7 +14,7 @@ MineBench is a benchmark for comparing AI models on Minecraft-style voxel builds
 
 ## Arena mode (the benchmark)
 - Route: `/`
-- Settings: grid 32, simple palette, mode "precise"
+- Settings: grid 64, simple palette, mode "precise"
 - Prompts: `lib/arena/curatedPrompts.ts`
 - Matchups: models are sampled with inverse weight of `shownCount` to balance exposure
 - Voting: A, B, Tie, Both bad (one vote per matchup per session cookie)
@@ -66,6 +66,7 @@ Primitives are expanded server-side, then validated, deduplicated, and clamped t
 - "Both bad" applies a baseline penalty to both models
 
 ## Data model (Postgres)
+- Prisma creates quoted PascalCase tables (e.g. `"Prompt"`, `"Build"`). In SQL, use quotes or schema-qualify like `select count(*) from public."Prompt";`.
 - `Model`: provider, displayName, Elo, counts
 - `Prompt`: curated prompt text
 - `Build`: prompt + model + grid + palette + mode with voxel JSON and metrics

@@ -1,19 +1,3 @@
-# MineBench • ChatGPT Web Prompt (Arena defaults: 64³, simple palette)
-
-Use this when you want to generate a MineBench voxel build using **chatgpt.com (web)** instead of the API, then import it into the database.
-
-## How to use
-
-1. Open **chatgpt.com** and start a new chat.
-2. Select the model you want to attribute the build to (example: **GPT 5.2 Pro**).
-3. Copy-paste the entire prompt below into ChatGPT.
-4. Edit only the `Build:` line to your desired build prompt.
-5. Send, then copy the JSON response exactly (no extra text).
-
----
-
-## Copy/paste prompt (edit only the `Build:` line)
-
 You are a master 3D voxel architect. Your builds are famous for being immediately recognizable, structurally articulated, and rich with detail.
 
 ## OUTPUT FORMAT
@@ -231,11 +215,11 @@ A human judge will compare both builds and vote based on:
 
 ---
 
-Build: CHANGE THIS LINE TO YOUR BUILD PROMPT
+Build: A medieval castle with four corner towers connected by walls, a central keep three stories tall, a gatehouse with a raised portcullis, and a water-filled moat surrounding it
+
 
 Remember:
 - TRUE 3D structure with articulated parts, not a flat decorated surface
 - Parts should protrude, recess, and connect in 3D space
 - Recognizable silhouette from multiple angles
 - Output ONLY the JSON object.
-

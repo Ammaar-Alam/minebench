@@ -156,10 +156,15 @@ export async function POST(req: Request) {
     orderBy: { createdAt: "asc" },
   });
 
-  const models = await prisma.model.findMany({
+  const modelsAll = await prisma.model.findMany({
     where: { enabled: true, isBaseline: false },
     orderBy: { createdAt: "asc" },
   });
+
+  const modelsGeneratable = modelsAll.filter((m) => isProviderConfigured(m.provider));
+  const skippedModelKeys = modelsAll
+    .filter((m) => !isProviderConfigured(m.provider))
+    .map((m) => m.key);
 
   if (prompts.length === 0) {
     return NextResponse.json({
@@ -168,7 +173,7 @@ export async function POST(req: Request) {
       seeded: 0,
       error: "No active prompts found. Add prompts to CURATED_PROMPTS and rerun seed.",
       promptCount: 0,
-      modelCount: models.length,
+      modelCount: modelsAll.length,
       settings: ARENA_SETTINGS,
       db: getDbInfo(),
       providerKeys: keyStatus,
@@ -176,7 +181,7 @@ export async function POST(req: Request) {
     });
   }
 
-  if (models.length === 0) {
+  if (modelsAll.length === 0) {
     return NextResponse.json({
       ok: false,
       done: true,
@@ -198,26 +203,64 @@ export async function POST(req: Request) {
       palette: ARENA_SETTINGS.palette,
       mode: ARENA_SETTINGS.mode,
       promptId: { in: prompts.map((p) => p.id) },
-      modelId: { in: models.map((m) => m.id) },
+      modelId: { in: modelsAll.map((m) => m.id) },
     },
     select: { promptId: true, modelId: true },
   });
 
   const existingSet = new Set(existing.map((b) => `${b.promptId}:${b.modelId}`));
-  const totalExpectedBuilds = prompts.length * models.length;
+
+  const totalExpectedBuilds = prompts.length * modelsAll.length;
   const existingBuilds = existingSet.size;
   const remainingBefore = Math.max(0, totalExpectedBuilds - existingBuilds);
+
+  const generatableModelIds = new Set(modelsGeneratable.map((m) => m.id));
+  const existingGeneratableSet = new Set(
+    existing.filter((b) => generatableModelIds.has(b.modelId)).map((b) => `${b.promptId}:${b.modelId}`)
+  );
+  const totalExpectedBuildsGeneratable = prompts.length * modelsGeneratable.length;
+  const existingBuildsGeneratable = existingGeneratableSet.size;
+  const remainingBeforeGeneratable = Math.max(0, totalExpectedBuildsGeneratable - existingBuildsGeneratable);
 
   if (dryRun) {
     return NextResponse.json({
       ok: true,
-      done: remainingBefore === 0,
+      done: remainingBeforeGeneratable === 0,
       seeded: 0,
       promptCount: prompts.length,
-      modelCount: models.length,
+      modelCount: modelsAll.length,
+      modelCountGeneratable: modelsGeneratable.length,
       totalExpectedBuilds,
       existingBuilds,
       remainingBuilds: remainingBefore,
+      totalExpectedBuildsGeneratable,
+      existingBuildsGeneratable,
+      remainingBuildsGeneratable: remainingBeforeGeneratable,
+      skippedModelKeys,
+      settings: ARENA_SETTINGS,
+      db: getDbInfo(),
+      providerKeys: keyStatus,
+      runId,
+    });
+  }
+
+  if (modelsGeneratable.length === 0) {
+    return NextResponse.json({
+      ok: false,
+      done: true,
+      seeded: 0,
+      error:
+        "No provider API keys are configured, so no builds can be generated automatically. Use generateBuilds=0 to seed prompts/models only, or set a provider API key to generate builds.",
+      promptCount: prompts.length,
+      modelCount: modelsAll.length,
+      modelCountGeneratable: 0,
+      totalExpectedBuilds,
+      existingBuilds,
+      remainingBuilds: remainingBefore,
+      totalExpectedBuildsGeneratable,
+      existingBuildsGeneratable,
+      remainingBuildsGeneratable: remainingBeforeGeneratable,
+      skippedModelKeys,
       settings: ARENA_SETTINGS,
       db: getDbInfo(),
       providerKeys: keyStatus,
@@ -228,7 +271,7 @@ export async function POST(req: Request) {
   const pending: { promptId: string; promptText: string; modelId: string; modelKey: ModelKey }[] = [];
 
   for (const p of prompts) {
-    for (const m of models) {
+    for (const m of modelsGeneratable) {
       const key = `${p.id}:${m.id}`;
       if (existingSet.has(key)) continue;
       pending.push({ promptId: p.id, promptText: p.text, modelId: m.id, modelKey: m.key as ModelKey });
@@ -243,10 +286,15 @@ export async function POST(req: Request) {
       done: true,
       seeded: 0,
       promptCount: prompts.length,
-      modelCount: models.length,
+      modelCount: modelsAll.length,
+      modelCountGeneratable: modelsGeneratable.length,
       totalExpectedBuilds,
       existingBuilds,
       remainingBuilds: remainingBefore,
+      totalExpectedBuildsGeneratable,
+      existingBuildsGeneratable,
+      remainingBuildsGeneratable: remainingBeforeGeneratable,
+      skippedModelKeys,
       settings: ARENA_SETTINGS,
       db: getDbInfo(),
       providerKeys: keyStatus,
@@ -307,6 +355,7 @@ export async function POST(req: Request) {
 
   const durationMs = Date.now() - startedAt;
   const remainingAfter = Math.max(0, remainingBefore - seeded);
+  const remainingAfterGeneratable = Math.max(0, remainingBeforeGeneratable - seeded);
   console.log(`[seed:${runId}] batch complete (seeded=${seeded}, remaining≈${remainingAfter}, durationMs=${durationMs})`);
 
   return NextResponse.json({
@@ -314,10 +363,15 @@ export async function POST(req: Request) {
     done: false,
     seeded,
     promptCount: prompts.length,
-    modelCount: models.length,
+    modelCount: modelsAll.length,
+    modelCountGeneratable: modelsGeneratable.length,
     totalExpectedBuilds,
     existingBuilds,
     remainingBuilds: remainingAfter,
+    totalExpectedBuildsGeneratable,
+    existingBuildsGeneratable,
+    remainingBuildsGeneratable: remainingAfterGeneratable,
+    skippedModelKeys,
     seededJobs,
     durationMs,
     settings: ARENA_SETTINGS,
