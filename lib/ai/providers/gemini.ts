@@ -1,3 +1,5 @@
+import { consumeSseStream } from "@/lib/ai/providers/sse";
+
 type JsonSchema = Record<string, unknown>;
 
 type GeminiGenerateContentResponse = {
@@ -11,17 +13,20 @@ export async function geminiGenerateText(params: {
   maxOutputTokens?: number;
   temperature?: number;
   jsonSchema?: JsonSchema;
+  onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for Gemini JSON mode");
 
+  const method = params.onDelta ? "streamGenerateContent" : "generateContent";
   const url = new URL(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       params.modelId
-    )}:generateContent`
+    )}:${method}`
   );
   url.searchParams.set("key", apiKey);
+  if (params.onDelta) url.searchParams.set("alt", "sse");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180_000);
@@ -58,9 +63,11 @@ export async function geminiGenerateText(params: {
 
     let lastBody = "";
     for (const payload of payloads) {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (params.onDelta) headers.Accept = "text/event-stream";
       res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         signal: controller.signal,
         body: JSON.stringify(payload),
       });
@@ -88,8 +95,29 @@ export async function geminiGenerateText(params: {
 
   if (!res) throw new Error("Gemini request failed");
 
+  if (params.onDelta) {
+    let text = "";
+    await consumeSseStream(res, (evt) => {
+      if (evt.data === "[DONE]") return;
+      let parsed: GeminiGenerateContentResponse | null = null;
+      try {
+        parsed = JSON.parse(evt.data) as GeminiGenerateContentResponse;
+      } catch {
+        return;
+      }
+      const chunk =
+        parsed.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+      if (!chunk) return;
+      const delta = chunk.startsWith(text) ? chunk.slice(text.length) : chunk;
+      if (!delta) return;
+      text += delta;
+      params.onDelta?.(delta);
+    });
+    return { text };
+  }
+
   const data = (await res.json()) as GeminiGenerateContentResponse;
-  const text =
-    data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  if (params.onDelta) params.onDelta(text);
   return { text };
 }

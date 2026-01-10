@@ -4,6 +4,7 @@
     { "id": "cobblestone", "name": "Cobblestone", "category": "building" },
     { "id": "oak_planks", "name": "Oak Planks", "category": "building" },
     { "id": "bricks", "name": "Bricks", "category": "building" },
+    { "id": "stone_bricks", "name": "Stone Bricks", "category": "building" },
 
     { "id": "grass_block", "name": "Grass Block", "category": "nature" },
     { "id": "dirt", "name": "Dirt", "category": "nature" },
@@ -20,6 +21,8 @@
     { "id": "yellow_wool", "name": "Yellow Wool", "category": "colors" },
     { "id": "orange_wool", "name": "Orange Wool", "category": "colors" },
     { "id": "purple_wool", "name": "Purple Wool", "category": "colors" },
+    { "id": "brown_wool", "name": "Brown Wool", "category": "colors" },
+    { "id": "gray_wool", "name": "Gray Wool", "category": "colors" },
 
     { "id": "glass", "name": "Glass", "category": "utility", "render": "transparent" },
     { "id": "glowstone", "name": "Glowstone", "category": "utility", "render": "emissive" },
@@ -54,7 +57,12 @@
     { "id": "ice", "name": "Ice", "category": "nature" },
     { "id": "packed_ice", "name": "Packed Ice", "category": "nature" },
     { "id": "moss_block", "name": "Moss Block", "category": "nature" },
-    { "id": "flowering_azalea_leaves", "name": "Flowering Azalea", "category": "nature", "render": "cutout" },
+    {
+      "id": "flowering_azalea_leaves",
+      "name": "Flowering Azalea",
+      "category": "nature",
+      "render": "cutout"
+    },
     { "id": "lava", "name": "Lava", "category": "nature", "render": "emissive" },
     { "id": "soul_sand", "name": "Soul Sand", "category": "nature" },
     { "id": "netherrack", "name": "Netherrack", "category": "nature" },
@@ -82,7 +90,12 @@
     { "id": "emerald_block", "name": "Emerald Block", "category": "utility" },
     { "id": "diamond_block", "name": "Diamond Block", "category": "utility" },
     { "id": "lapis_block", "name": "Lapis Block", "category": "utility" },
-    { "id": "tinted_glass", "name": "Tinted Glass", "category": "utility", "render": "transparent" },
+    {
+      "id": "tinted_glass",
+      "name": "Tinted Glass",
+      "category": "utility",
+      "render": "transparent"
+    },
     { "id": "amethyst_block", "name": "Amethyst Block", "category": "utility" },
     { "id": "ancient_debris", "name": "Ancient Debris", "category": "utility" }
   ]

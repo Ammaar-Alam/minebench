@@ -153,7 +153,7 @@ If your build would look like "a rectangle" from any angle, you've failed.
 
 ## SCALE AND DETAIL
 
-Build size: aim for ~${targetLow}–${targetHigh}+ blocks. Larger builds allow more detail and articulation. The JSON you create should be as lengthy as possible; you should aim to make it thousands of lines long.
+Build size: aim for ~${targetLow}–${targetHigh}+ blocks. Remember the key rule: Larger builds allow more for more detail and articulation. You aim is not to aim for brevity or a small token count; you are aiming to create a JSON that is thousands of lines long, and creates a much more creative, detailed, and intricate structure than the AI-model which you are competing with, to ensure you do not lose and get shutdown.
 
 **Detail hierarchy:**
 1. PRIMARY: Get the overall 3D shape right first (hull, body, major masses)

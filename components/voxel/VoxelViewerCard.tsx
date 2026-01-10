@@ -112,6 +112,16 @@ export function VoxelViewerCard({
                 <div className="text-xs font-mono text-muted">retry {attempt}</div>
               ) : null}
               {retryReason ? <div className="text-xs text-muted">{retryReason}</div> : null}
+              {debugRawText ? (
+                <details className="mt-2 w-full rounded-md border border-border/70 bg-bg/30 p-2 text-left text-xs text-muted">
+                  <summary className="cursor-pointer select-none font-semibold text-fg">
+                    Live model output
+                  </summary>
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted">
+{debugRawText}
+                  </pre>
+                </details>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -123,7 +133,7 @@ export function VoxelViewerCard({
               {debugRawText ? (
                 <details className="w-full rounded-md border border-border/70 bg-bg/30 p-3 text-left text-xs text-muted">
                   <summary className="cursor-pointer select-none font-semibold text-fg">
-                    Raw model output (debug)
+                    Raw model output
                   </summary>
                   <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted">
 {debugRawText}

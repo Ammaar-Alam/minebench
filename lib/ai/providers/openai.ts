@@ -1,4 +1,5 @@
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
+import { consumeSseStream } from "@/lib/ai/providers/sse";
 
 type OpenAIChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -7,6 +8,15 @@ type OpenAIChatResponse = {
 type OpenAIResponsesResponse = {
   output_text?: unknown;
   output?: unknown;
+};
+
+type OpenAIResponsesStreamEvent = {
+  type?: unknown;
+  delta?: unknown;
+};
+
+type OpenAIChatCompletionsStreamChunk = {
+  choices?: { delta?: { content?: unknown } }[];
 };
 
 function extractTextFromChatCompletions(data: OpenAIChatResponse): string {
@@ -111,6 +121,7 @@ export async function openaiGenerateText(params: {
   maxOutputTokens?: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
+  onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
@@ -141,6 +152,7 @@ export async function openaiGenerateText(params: {
           headers: {
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
+            ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
           },
           signal: controller.signal,
           body: JSON.stringify({
@@ -166,6 +178,7 @@ export async function openaiGenerateText(params: {
             },
             temperature,
             max_output_tokens: tok,
+            stream: Boolean(params.onDelta),
           }),
         },
         { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
@@ -179,17 +192,38 @@ export async function openaiGenerateText(params: {
 
     if (!res) throw new Error("OpenAI request failed");
 
-      if (res.ok) {
-        const data = (await res.json()) as OpenAIResponsesResponse;
-        const text = extractTextFromResponses(data);
+    if (res.ok) {
+      if (params.onDelta) {
+        let text = "";
+        await consumeSseStream(res, (evt) => {
+          if (evt.data === "[DONE]") return;
+          let parsed: OpenAIResponsesStreamEvent | null = null;
+          try {
+            parsed = JSON.parse(evt.data) as OpenAIResponsesStreamEvent;
+          } catch {
+            return;
+          }
+          if (parsed?.type === "response.output_text.delta" && typeof parsed.delta === "string") {
+            const delta = parsed.delta;
+            if (delta) {
+              text += delta;
+              params.onDelta?.(delta);
+            }
+          }
+        });
         if (text) return { text };
-      } else {
-        const body = lastBody || (await res.text().catch(() => ""));
-        const rid = requestIdFromResponse(res);
-        // gpt-5.2-codex is Responses-only; chat/completions will always fail
-        if (isResponsesOnlyModel) {
-          throw new Error(`OpenAI error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
-        }
+      }
+
+      const data = (await res.json()) as OpenAIResponsesResponse;
+      const text = extractTextFromResponses(data);
+      if (text) return { text };
+    } else {
+      const body = lastBody || (await res.text().catch(() => ""));
+      const rid = requestIdFromResponse(res);
+      // gpt-5.2-codex is Responses-only; chat/completions will always fail
+      if (isResponsesOnlyModel) {
+        throw new Error(`OpenAI error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
+      }
 
       // Fall back for environments/models that still require chat/completions.
       if (res.status !== 404 && res.status !== 400) {
@@ -220,12 +254,14 @@ export async function openaiGenerateText(params: {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
         },
         body: JSON.stringify({
           model: params.modelId,
           temperature,
           max_completion_tokens: tok,
           reasoning_effort: useHighReasoning ? "high" : undefined,
+          stream: Boolean(params.onDelta),
           response_format: {
             type: "json_schema",
             json_schema: {
@@ -250,6 +286,25 @@ export async function openaiGenerateText(params: {
 
   if (!res) throw new Error("OpenAI request failed");
 
+  if (res.ok && params.onDelta) {
+    let text = "";
+    await consumeSseStream(res, (evt) => {
+      if (evt.data === "[DONE]") return;
+      let parsed: OpenAIChatCompletionsStreamChunk | null = null;
+      try {
+        parsed = JSON.parse(evt.data) as OpenAIChatCompletionsStreamChunk;
+      } catch {
+        return;
+      }
+      const chunk = parsed?.choices?.[0]?.delta?.content;
+      if (typeof chunk === "string" && chunk) {
+        text += chunk;
+        params.onDelta?.(chunk);
+      }
+    });
+    return { text };
+  }
+
   if (!res.ok) {
     const body = lastBody || (await res.text().catch(() => ""));
     // Some models/environments may not support response_format. Retry once without it.
@@ -266,6 +321,7 @@ export async function openaiGenerateText(params: {
             model: params.modelId,
             temperature,
             max_completion_tokens: maxOutputTokens,
+            stream: false,
             messages: [
               { role: "system", content: params.system },
               { role: "user", content: params.user },
@@ -285,6 +341,7 @@ export async function openaiGenerateText(params: {
 
       const retryData = (await retry.json()) as OpenAIChatResponse;
       const retryText = extractTextFromChatCompletions(retryData);
+      if (params.onDelta) params.onDelta(retryText);
       return { text: retryText };
     }
 
@@ -294,5 +351,6 @@ export async function openaiGenerateText(params: {
 
   const data = (await res.json()) as OpenAIChatResponse;
   const text = extractTextFromChatCompletions(data);
+  if (params.onDelta) params.onDelta(text);
   return { text };
 }

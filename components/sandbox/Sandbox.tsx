@@ -20,6 +20,8 @@ type ModelResult = {
   startedAt?: number;
 };
 
+const MAX_LIVE_RAW_TEXT_CHARS = 80_000;
+
 function groupByProvider() {
   const groups = new Map<string, { key: string; label: string; models: typeof MODEL_CATALOG }>();
   for (const m of MODEL_CATALOG) {
@@ -135,6 +137,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                 status: "loading",
                 voxelBuild: null,
                 attempt: 1,
+                rawText: "",
                 startedAt: existing?.startedAt ?? Date.now(),
               });
               return next;
@@ -152,7 +155,31 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                 voxelBuild: null,
                 attempt: evt.attempt,
                 retryReason: evt.reason,
+                rawText: "",
                 startedAt: existing?.startedAt ?? Date.now(),
+              });
+              return next;
+            });
+          } else if (evt.type === "delta") {
+            if (!evt.delta) continue;
+            setResults((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(evt.modelKey);
+              const prevText = existing?.rawText ?? "";
+              let nextText = prevText + evt.delta;
+              if (nextText.length > MAX_LIVE_RAW_TEXT_CHARS) {
+                nextText = nextText.slice(nextText.length - MAX_LIVE_RAW_TEXT_CHARS);
+              }
+              next.set(evt.modelKey, {
+                modelKey: evt.modelKey,
+                status: existing?.status ?? "loading",
+                voxelBuild: existing?.voxelBuild ?? null,
+                attempt: existing?.attempt,
+                retryReason: existing?.retryReason,
+                metrics: existing?.metrics,
+                startedAt: existing?.startedAt,
+                rawText: nextText,
+                error: existing?.error,
               });
               return next;
             });
@@ -168,6 +195,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                 retryReason: undefined,
                 metrics: evt.metrics,
                 startedAt: existing?.startedAt,
+                rawText: undefined,
               });
               return next;
             });
@@ -183,7 +211,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                 status: "error",
                 voxelBuild: null,
                 error: evt.message,
-                rawText: evt.rawText,
+                rawText: evt.rawText ?? existing?.rawText,
                 startedAt: existing?.startedAt,
               });
               return next;
@@ -220,6 +248,8 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
     const r = results.get(key);
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
+    const liveRawText =
+      r?.status === "loading" || r?.status === "error" ? r.rawText : undefined;
     return (
       <VoxelViewerCard
         key={key}
@@ -229,7 +259,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
-        debugRawText={r?.status === "error" ? r.rawText : undefined}
+        debugRawText={liveRawText}
         attempt={r?.status === "loading" ? r.attempt : undefined}
         retryReason={r?.status === "loading" ? r.retryReason : undefined}
         elapsedMs={elapsedMs}

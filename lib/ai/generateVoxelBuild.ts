@@ -47,6 +47,7 @@ export type GenerateVoxelBuildParams = {
   palette: "simple" | "advanced";
   maxAttempts?: number;
   onRetry?: (attempt: number, reason: string) => void;
+  onDelta?: (delta: string) => void;
 };
 
 export type GenerateVoxelBuildResult =
@@ -67,6 +68,7 @@ async function providerGenerateText(args: {
   user: string;
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
+  onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
@@ -76,6 +78,7 @@ async function providerGenerateText(args: {
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
+      onDelta: args.onDelta,
     });
   }
 
@@ -86,6 +89,7 @@ async function providerGenerateText(args: {
       user: args.user,
       maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
       temperature: DEFAULT_TEMPERATURE,
+      onDelta: args.onDelta,
     });
   }
 
@@ -96,6 +100,7 @@ async function providerGenerateText(args: {
     maxOutputTokens: args.maxOutputTokens,
     temperature: DEFAULT_TEMPERATURE,
     jsonSchema: args.jsonSchema,
+    onDelta: args.onDelta,
   });
 }
 
@@ -183,6 +188,7 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
         user,
         jsonSchema,
         maxOutputTokens,
+        onDelta: params.onDelta,
       });
       previousText = text;
 

@@ -93,6 +93,7 @@ export async function POST(req: Request) {
           gridSize: body.gridSize,
           palette: body.palette,
           onRetry: (attempt, reason) => send({ type: "retry", modelKey, attempt, reason }),
+          onDelta: (delta) => send({ type: "delta", modelKey, delta }),
         })
           .then((r) => {
             if (r.ok) {
