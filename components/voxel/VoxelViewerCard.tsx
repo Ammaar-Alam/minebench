@@ -7,9 +7,9 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 const VIEWER_MAX_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
-  64: 180_000,
-  256: 260_000,
-  512: 420_000,
+  64: 230_000,
+  256: 650_000,
+  512: 1_100_000,
 };
 
 export function VoxelViewerCard({

@@ -37,10 +37,14 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   openai_gpt_5_2_codex: "gpt-5-2-codex",
   openai_gpt_5_mini: "gpt-5-mini",
   openai_gpt_4_1: "gpt-4-1",
+  openai_gpt_4o: "gpt-4o",
   anthropic_claude_4_5_sonnet: "sonnet",
   anthropic_claude_4_5_opus: "opus",
   gemini_3_0_pro: "gemini-pro",
   gemini_3_0_flash: "gemini-flash",
+  gemini_2_5_pro: "gemini-2-5-pro",
+  moonshot_kimi_k2: "kimi-k2",
+  deepseek_v3_2: "deepseek-v3-2",
 };
 
 export const MODEL_KEY_BY_SLUG = Object.fromEntries(

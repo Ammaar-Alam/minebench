@@ -1,4 +1,4 @@
-export type Provider = "openai" | "anthropic" | "gemini";
+export type Provider = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek";
 
 export type ModelKey =
   | "openai_gpt_5_2"
@@ -6,10 +6,14 @@ export type ModelKey =
   | "openai_gpt_5_2_codex"
   | "openai_gpt_5_mini"
   | "openai_gpt_4_1"
+  | "openai_gpt_4o"
   | "anthropic_claude_4_5_sonnet"
   | "anthropic_claude_4_5_opus"
   | "gemini_3_0_pro"
-  | "gemini_3_0_flash";
+  | "gemini_3_0_flash"
+  | "gemini_2_5_pro"
+  | "moonshot_kimi_k2"
+  | "deepseek_v3_2";
 
 export type ModelCatalogEntry = {
   key: ModelKey;
@@ -56,6 +60,13 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     enabled: true,
   },
   {
+    key: "openai_gpt_4o",
+    provider: "openai",
+    modelId: "gpt-4o",
+    displayName: "GPT 4o",
+    enabled: true,
+  },
+  {
     key: "anthropic_claude_4_5_sonnet",
     provider: "anthropic",
     modelId: "claude-sonnet-4-5",
@@ -81,6 +92,27 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     provider: "gemini",
     modelId: "gemini-3-flash-preview",
     displayName: "Gemini 3.0 Flash",
+    enabled: true,
+  },
+  {
+    key: "gemini_2_5_pro",
+    provider: "gemini",
+    modelId: "gemini-2.5-pro",
+    displayName: "Gemini 2.5 Pro",
+    enabled: true,
+  },
+  {
+    key: "moonshot_kimi_k2",
+    provider: "moonshot",
+    modelId: "kimi-k2-0905-preview",
+    displayName: "Kimi K2",
+    enabled: true,
+  },
+  {
+    key: "deepseek_v3_2",
+    provider: "deepseek",
+    modelId: "deepseek-chat",
+    displayName: "DeepSeek V3.2",
     enabled: true,
   },
 ];

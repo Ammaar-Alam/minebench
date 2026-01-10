@@ -53,6 +53,8 @@ function providerKeyStatus() {
     openai: Boolean(process.env.OPENAI_API_KEY),
     anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
     gemini: Boolean(process.env.GOOGLE_AI_API_KEY),
+    moonshot: Boolean(process.env.MOONSHOT_API_KEY),
+    deepseek: Boolean(process.env.DEEPSEEK_API_KEY),
   };
 }
 
@@ -61,6 +63,8 @@ function isProviderConfigured(provider: string) {
   if (provider === "openai") return status.openai;
   if (provider === "anthropic") return status.anthropic;
   if (provider === "gemini") return status.gemini;
+  if (provider === "moonshot") return status.moonshot;
+  if (provider === "deepseek") return status.deepseek;
   return true;
 }
 

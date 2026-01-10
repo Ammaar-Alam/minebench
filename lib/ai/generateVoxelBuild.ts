@@ -5,7 +5,9 @@ import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
 import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
+import { deepseekGenerateText } from "@/lib/ai/providers/deepseek";
 import { geminiGenerateText } from "@/lib/ai/providers/gemini";
+import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -66,7 +68,7 @@ export type GenerateVoxelBuildResult =
   | { ok: false; error: string; rawText?: string; generationTimeMs: number };
 
 async function providerGenerateText(args: {
-  provider: "openai" | "anthropic" | "gemini";
+  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek";
   modelId: string;
   system: string;
   user: string;
@@ -97,13 +99,35 @@ async function providerGenerateText(args: {
     });
   }
 
-  return geminiGenerateText({
+  if (args.provider === "gemini") {
+    return geminiGenerateText({
+      modelId: args.modelId,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
+      onDelta: args.onDelta,
+    });
+  }
+
+  if (args.provider === "moonshot") {
+    return moonshotGenerateText({
+      modelId: args.modelId,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      temperature: DEFAULT_TEMPERATURE,
+      onDelta: args.onDelta,
+    });
+  }
+
+  return deepseekGenerateText({
     modelId: args.modelId,
     system: args.system,
     user: args.user,
     maxOutputTokens: args.maxOutputTokens,
     temperature: DEFAULT_TEMPERATURE,
-    jsonSchema: args.jsonSchema,
     onDelta: args.onDelta,
   });
 }

@@ -183,9 +183,22 @@ function groupByProvider() {
   const groups = new Map<string, { key: string; label: string; models: typeof MODEL_CATALOG }>();
   for (const m of MODEL_CATALOG) {
     if (!m.enabled) continue;
+    const label =
+      m.provider === "openai"
+        ? "openai"
+        : m.provider === "anthropic"
+          ? "anthropic"
+          : m.provider === "gemini"
+            ? "gemini"
+            : m.provider === "moonshot"
+              ? "moonshot (kimi)"
+              : m.provider === "deepseek"
+                ? "deepseek"
+                : m.provider;
+
     const g = groups.get(m.provider) ?? {
       key: m.provider,
-      label: m.provider,
+      label,
       models: [],
     };
     g.models.push(m);
@@ -537,7 +550,12 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
             <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
               {providers.map((g) => (
                 <div key={g.key} className="mb-subpanel p-4">
-                  <div className="text-xs font-semibold text-fg">{g.label}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold text-fg">{g.label}</div>
+                    <div className="text-[11px] text-muted">
+                      <span className="font-mono">{g.models.length}</span>
+                    </div>
+                  </div>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {g.models.map((m) => {
                       const selected = selectedModelKeys.includes(m.key);
@@ -550,6 +568,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                           aria-pressed={selected}
                           disabled={disabled}
                           onClick={() => toggleModel(m.key)}
+                          title={m.modelId}
                         >
                           <span
                             aria-hidden="true"

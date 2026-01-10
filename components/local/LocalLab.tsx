@@ -12,9 +12,9 @@ type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
 
 const MAX_BLOCKS_BY_GRID: Record<GridSize, number> = {
-  64: Math.floor(64 ** 3 * 0.75), // 196,608
-  256: 2_000_000,
-  512: 4_000_000,
+  64: Math.floor(64 ** 3 * 0.95),
+  256: Math.floor(256 ** 3 * 0.95),
+  512: Math.floor(512 ** 3 * 0.95),
 };
 
 const MIN_BLOCKS_BY_GRID: Record<GridSize, number> = {
@@ -103,7 +103,7 @@ export function LocalLab() {
   }, [defaultSystem, systemIsDefault]);
 
   const [taskPrompt, setTaskPrompt] = useState(
-    "A warm wooden cabin beside a pond, with a stone chimney, a small dock, and a few trees."
+    "A warm wooden cabin beside a pond, with a stone chimney, a small dock, and a few trees.",
   );
   const userPrompt = useMemo(() => buildUserPrompt(taskPrompt.trim()), [taskPrompt]);
 
@@ -122,7 +122,12 @@ export function LocalLab() {
   function renderFromText(text: string) {
     const trimmed = text.trim();
     if (!trimmed) {
-      setRendered({ kind: "error", build: null, warnings: [], message: "Paste a JSON object first." });
+      setRendered({
+        kind: "error",
+        build: null,
+        warnings: [],
+        message: "Paste a JSON object first.",
+      });
       return;
     }
 
@@ -138,7 +143,8 @@ export function LocalLab() {
         kind: "error",
         build: null,
         warnings: [],
-        message: "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
+        message:
+          "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
       });
       return;
     }
@@ -186,7 +192,9 @@ export function LocalLab() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-sm font-semibold text-fg">Prompt settings</div>
-                  <div className="text-xs text-muted">These settings affect the prompt and validation.</div>
+                  <div className="text-xs text-muted">
+                    These settings affect the prompt and validation.
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center gap-1 rounded-full bg-bg/55 p-1 ring-1 ring-border/80">
@@ -223,8 +231,8 @@ export function LocalLab() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-fg">System prompt</div>
                     <div className="text-xs text-muted">
-                      Paste this into your model as the <span className="font-mono">system</span> instruction.
-                      Edit it if you want — this page never uploads anything.
+                      Paste this into your model as the <span className="font-mono">system</span>{" "}
+                      instruction. Edit it if you want — this page never uploads anything.
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -259,13 +267,17 @@ export function LocalLab() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-fg">User prompt</div>
                     <div className="text-xs text-muted">
-                      This is the message you send after the system prompt. Keep it short; let the system prompt enforce
-                      structure.
+                      This is the message you send after the system prompt. Keep it short; let the
+                      system prompt enforce structure.
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <CopyButton label="Copy user" text={userPrompt} disabled={!taskPrompt.trim()} />
-                    <CopyButton label="Copy both" text={combinedPrompt} disabled={!taskPrompt.trim()} />
+                    <CopyButton
+                      label="Copy both"
+                      text={combinedPrompt}
+                      disabled={!taskPrompt.trim()}
+                    />
                   </div>
                 </div>
 
@@ -278,7 +290,9 @@ export function LocalLab() {
                   {taskPrompt.trim() ? (
                     <pre className="whitespace-pre-wrap">{userPrompt}</pre>
                   ) : (
-                    <div className="text-muted">Type a prompt to generate a copyable user message.</div>
+                    <div className="text-muted">
+                      Type a prompt to generate a copyable user message.
+                    </div>
                   )}
                 </div>
               </div>
@@ -292,9 +306,7 @@ export function LocalLab() {
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-fg">Render JSON</div>
-                  <div className="text-xs text-muted">
-                    Paste your model output to preview.
-                  </div>
+                  <div className="text-xs text-muted">Paste your model output to preview.</div>
                 </div>
                 <button
                   type="button"
@@ -320,15 +332,14 @@ export function LocalLab() {
               />
 
               {rendered.kind === "error" && rendered.message ? (
-                <div className="mb-subpanel p-3 text-sm text-danger">
-                  {rendered.message}
-                </div>
+                <div className="mb-subpanel p-3 text-sm text-danger">{rendered.message}</div>
               ) : null}
 
               {rendered.kind === "ready" && rendered.warnings.length ? (
                 <div className="mb-subpanel p-3 text-xs text-muted">
                   <div className="font-semibold text-fg">
-                    Rendered with {rendered.warnings.length} warning{rendered.warnings.length === 1 ? "" : "s"}.
+                    Rendered with {rendered.warnings.length} warning
+                    {rendered.warnings.length === 1 ? "" : "s"}.
                   </div>
                   <ul className="mt-2 list-disc space-y-1 pl-4">
                     {rendered.warnings.slice(0, 4).map((w, i) => (
@@ -361,7 +372,8 @@ export function LocalLab() {
           </div>
 
           <div className="mt-4 text-xs text-muted">
-            Tip: press <span className="mb-kbd">⌘</span>+<span className="mb-kbd">Enter</span> to render.
+            Tip: press <span className="mb-kbd">⌘</span>+<span className="mb-kbd">Enter</span> to
+            render.
           </div>
         </div>
       </div>
