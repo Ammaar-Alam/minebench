@@ -111,8 +111,8 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     key: "deepseek_v3_2",
     provider: "deepseek",
-    modelId: "deepseek-chat",
-    displayName: "DeepSeek V3.2",
+    modelId: "deepseek-v3.2-speciale",
+    displayName: "DeepSeek V3.2 Speciale",
     enabled: true,
   },
 ];

@@ -44,7 +44,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   gemini_3_0_flash: "gemini-flash",
   gemini_2_5_pro: "gemini-2-5-pro",
   moonshot_kimi_k2: "kimi-k2",
-  deepseek_v3_2: "deepseek-v3-2",
+  deepseek_v3_2: "deepseek-v3-2-speciale",
 };
 
 export const MODEL_KEY_BY_SLUG = Object.fromEntries(

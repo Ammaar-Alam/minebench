@@ -54,7 +54,8 @@ export async function deepseekGenerateText(params: {
         ],
         stream: Boolean(params.onDelta),
         temperature: params.temperature ?? 0.2,
-        max_tokens: params.maxOutputTokens ?? 8192,
+        max_tokens: params.maxOutputTokens ?? 65536,
+        thinking: { type: "enabled" },
       }),
     });
   } catch (err) {
