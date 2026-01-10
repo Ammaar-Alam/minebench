@@ -42,6 +42,10 @@ export function Arena() {
     setPromptExpanded(false);
   }, [matchup?.id]);
 
+  function sleepMs(ms: number) {
+    return new Promise<void>((resolve) => setTimeout(resolve, ms));
+  }
+
   useEffect(() => {
     let cancelled = false;
     setState({ kind: "loading" });
@@ -67,8 +71,12 @@ export function Arena() {
     setSubmitting(true);
     setRevealMatchupId(matchup.id);
     try {
+      const revealAt = Date.now();
       await submitVote(matchup.id, choice);
       const next = await fetchMatchup(undefined);
+      const minRevealMs = 550;
+      const remaining = minRevealMs - (Date.now() - revealAt);
+      if (remaining > 0) await sleepMs(remaining);
       setState({ kind: "ready", matchup: next });
     } catch (err) {
       setState({
@@ -83,10 +91,15 @@ export function Arena() {
   }
 
   async function handleSkip() {
-    if (submitting) return;
+    if (!matchup || submitting) return;
     setSubmitting(true);
     try {
+      const revealAt = Date.now();
+      setRevealMatchupId(matchup.id);
       const next = await fetchMatchup(undefined);
+      const minRevealMs = 650;
+      const remaining = minRevealMs - (Date.now() - revealAt);
+      if (remaining > 0) await sleepMs(remaining);
       setState({ kind: "ready", matchup: next });
     } catch (err) {
       setState({
@@ -112,22 +125,33 @@ export function Arena() {
               <div className="mb-subpanel w-full px-4 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs font-medium text-muted">Prompt</div>
-                  {matchup?.prompt.text && matchup.prompt.text.length > 160 ? (
-                    <button
-                      type="button"
-                      aria-expanded={promptExpanded}
-                      className="mb-btn mb-btn-ghost h-8 px-3 text-[11px]"
-                      onClick={() => setPromptExpanded((v) => !v)}
-                    >
-                      {promptExpanded ? "Collapse" : "Expand"}
-                    </button>
-                  ) : null}
+                  {(() => {
+                    const canExpand = Boolean(matchup?.prompt.text && matchup.prompt.text.length > 160);
+                    return (
+                      <button
+                        type="button"
+                        aria-expanded={promptExpanded}
+                        className={`mb-btn mb-btn-ghost h-8 px-3 text-[11px] ${canExpand ? "" : "invisible"}`}
+                        onClick={() => setPromptExpanded((v) => !v)}
+                        disabled={!canExpand}
+                      >
+                        {promptExpanded ? "Collapse" : "Expand"}
+                      </button>
+                    );
+                  })()}
                 </div>
-                <div
-                  className={`${promptExpanded ? "" : "mb-clamp-prompt"} mt-1 font-display text-lg font-semibold leading-snug tracking-tight text-fg md:text-xl`}
-                  title={matchup?.prompt.text ?? ""}
-                >
-                  {matchup?.prompt.text ?? "Loading…"}
+                <div className="mt-1 h-28 overflow-hidden md:h-32">
+                  <div
+                    className={`h-full pr-1 ${promptExpanded ? "overflow-auto" : "overflow-hidden"}`}
+                    aria-label="Prompt text"
+                  >
+                    <div
+                      className={`${promptExpanded ? "" : "mb-clamp-prompt"} font-display text-lg font-semibold leading-snug tracking-tight text-fg md:text-xl`}
+                      title={matchup?.prompt.text ?? ""}
+                    >
+                      {matchup?.prompt.text ?? "Loading…"}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -152,14 +176,22 @@ export function Arena() {
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <VoxelViewerCard
-              title="A"
-              subtitle={revealModels ? matchup?.a.model.displayName : undefined}
+              title={revealModels ? matchup?.a.model.displayName ?? "Build A" : "Build A"}
+              subtitle={
+                revealModels
+                  ? `${matchup?.a.model.provider ?? ""}`
+                  : "Model hidden"
+              }
               voxelBuild={matchup?.a.build ?? null}
               autoRotate
             />
             <VoxelViewerCard
-              title="B"
-              subtitle={revealModels ? matchup?.b.model.displayName : undefined}
+              title={revealModels ? matchup?.b.model.displayName ?? "Build B" : "Build B"}
+              subtitle={
+                revealModels
+                  ? `${matchup?.b.model.provider ?? ""}`
+                  : "Model hidden"
+              }
               voxelBuild={matchup?.b.build ?? null}
               autoRotate
             />

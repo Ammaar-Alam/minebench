@@ -68,11 +68,11 @@ export function VoxelViewerCard({
       <div className="mb-panel-inner">
         <div className="flex items-start justify-between gap-3 border-b border-border bg-bg/10 px-4 py-3">
           <div className="min-w-0">
-            <div className="font-display text-sm font-semibold tracking-tight text-fg">
+            <div className="font-display text-base font-semibold tracking-tight text-fg">
               {title}
             </div>
             {subtitle ? (
-              <div className="truncate text-xs text-muted">{subtitle}</div>
+              <div className="truncate text-sm font-medium text-muted">{subtitle}</div>
             ) : null}
           </div>
           <div className="shrink-0 text-right text-xs text-muted">
