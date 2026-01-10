@@ -17,6 +17,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
 import { MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
 
@@ -142,7 +143,7 @@ async function generateAndSave(job: Job): Promise<{ ok: boolean; error?: string;
 
 function getUploadCommand(job: Job): string {
   const encPromptJs = `node -p 'encodeURIComponent(process.argv[1])' "${job.promptText.replace(/'/g, "'\\''")}"`;
-  return `cd /Users/alam/GitHub/minebench && set -a && source .env && set +a && PROMPT='${job.promptText.replace(/'/g, "'\\''")}' && ENC_PROMPT="$(${encPromptJs})" && curl -sS -X POST "https://minebench.vercel.app/api/admin/import-build?modelKey=${job.modelKey}&promptText=$ENC_PROMPT&overwrite=1" -H "Authorization: Bearer $ADMIN_TOKEN" --data-binary "@${job.filePath}"`;
+  return `cd /Users/alam/GitHub/minebench && set -a && source .env && set +a && PROMPT='${job.promptText.replace(/'/g, "'\\''")}' && ENC_PROMPT="$(${encPromptJs})" && gzip -c "${job.filePath}" | curl -sS -X POST "https://minebench.vercel.app/api/admin/import-build?modelKey=${job.modelKey}&promptText=$ENC_PROMPT&overwrite=1" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -H "Content-Encoding: gzip" --data-binary @-`;
 }
 
 async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
@@ -151,27 +152,56 @@ async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
     return { ok: false, error: "ADMIN_TOKEN not set" };
   }
 
-  const json = fs.readFileSync(job.filePath, "utf-8");
+  const jsonBytes = fs.readFileSync(job.filePath);
+  const gzipped = gzipSync(jsonBytes);
   const url = new URL(`${PROD_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText);
   url.searchParams.set("overwrite", "1");
 
-  const resp = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: json,
-  });
-
-  if (!resp.ok) {
+  async function doUpload(opts: { body: Buffer; headers: Record<string, string> }) {
+    const resp = await fetch(url.toString(), {
+      method: "POST",
+      headers: opts.headers,
+      body: opts.body,
+    });
     const text = await resp.text();
-    return { ok: false, error: `HTTP ${resp.status}: ${text}` };
+    return { ok: resp.ok, status: resp.status, text };
   }
 
-  return { ok: true };
+  const baseHeaders = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+  };
+
+  const gzipAttempt = await doUpload({
+    headers: { ...baseHeaders, "Content-Encoding": "gzip" },
+    body: gzipped,
+  });
+
+  if (gzipAttempt.ok) return { ok: true };
+
+  // If prod hasn't been deployed with gzip support yet, it'll try to parse gzipped bytes as text,
+  // resulting in a "no JSON object found" error. Retry identity once to provide a clearer error.
+  const looksLikeGzipUnsupported =
+    gzipAttempt.status === 415 || (gzipAttempt.status === 400 && gzipAttempt.text.includes("Could not find a valid JSON object"));
+
+  if (looksLikeGzipUnsupported) {
+    const identityAttempt = await doUpload({ headers: baseHeaders, body: jsonBytes });
+    if (identityAttempt.ok) return { ok: true };
+    if (identityAttempt.status === 413) {
+      return {
+        ok: false,
+        error:
+          `HTTP 413: ${identityAttempt.text}\n\n` +
+          `Your client is sending gzip, but production doesn't appear to be decoding it yet. Deploy the updated ` +
+          `/api/admin/import-build route (gzip support) and retry.`,
+      };
+    }
+    return { ok: false, error: `HTTP ${identityAttempt.status}: ${identityAttempt.text}` };
+  }
+
+  return { ok: false, error: `HTTP ${gzipAttempt.status}: ${gzipAttempt.text}` };
 }
 
 function printStatus(jobs: Job[]) {

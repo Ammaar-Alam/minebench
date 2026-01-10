@@ -5,6 +5,7 @@ import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import { maxBlocksForGrid } from "@/lib/ai/generateVoxelBuild";
+import { gunzipSync } from "node:zlib";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,33 @@ function truthy(v: string | undefined): boolean {
   if (!v) return false;
   const s = v.trim().toLowerCase();
   return s === "1" || s === "true" || s === "yes";
+}
+
+async function readRequestBodyText(req: Request): Promise<{ ok: true; text: string } | { ok: false; error: string; status: number }> {
+  const encoding = (req.headers.get("content-encoding") ?? "").split(",")[0]?.trim().toLowerCase();
+  const bytes = Buffer.from(await req.arrayBuffer());
+
+  const isGzipMagic = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+  const wantsGzip = encoding === "gzip" || encoding === "x-gzip";
+
+  if (wantsGzip || isGzipMagic) {
+    // If a proxy strips Content-Encoding, sniff for gzip magic bytes so uploads still work.
+    // If a platform decompresses but forgets to strip the header, avoid double-gunzipping.
+    if (!isGzipMagic) return { ok: true, text: bytes.toString("utf-8") };
+
+    try {
+      const text = gunzipSync(bytes).toString("utf-8");
+      return { ok: true, text };
+    } catch {
+      return { ok: false, error: "Invalid gzip request body", status: 400 };
+    }
+  }
+
+  if (!encoding || encoding === "identity") {
+    return { ok: true, text: bytes.toString("utf-8") };
+  }
+
+  return { ok: false, error: `Unsupported Content-Encoding: ${encoding}`, status: 415 };
 }
 
 export async function POST(req: Request) {
@@ -106,7 +134,12 @@ export async function POST(req: Request) {
     await prisma.prompt.update({ where: { id: prompt.id }, data: { active: true } });
   }
 
-  const raw = await req.text();
+  const rawBody = await readRequestBodyText(req);
+  if (!rawBody.ok) {
+    return NextResponse.json({ error: rawBody.error }, { status: rawBody.status });
+  }
+
+  const raw = rawBody.text;
   if (!raw.trim()) return NextResponse.json({ error: "Request body is empty (expected voxel build JSON)" }, { status: 400 });
 
   const json = extractBestVoxelBuildJson(raw);
