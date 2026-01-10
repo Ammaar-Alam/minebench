@@ -273,6 +273,23 @@ uploads/
 
 The script prints individual curl commands for manual upload if you prefer more control.
 
+### Import builds from `uploads/` into your local DB
+
+If you already have voxel JSONs on disk (for example in `uploads/astronaut/*.json`) and want to seed your local Postgres without making any AI calls, use:
+
+```bash
+# show what the importer can see
+pnpm prompt
+
+# import one custom prompt (creates the Prompt row if needed)
+pnpm prompt --import --prompt astronaut --text "An astronaut in a space suit"
+
+# overwrite existing builds for that prompt/model/settings
+pnpm prompt --import --prompt astronaut --text "An astronaut in a space suit" --overwrite
+```
+
+For long prompts, you can also drop a `uploads/<slug>/prompt.txt` file and omit `--text`.
+
 ## Texture attribution
 This repo includes the Faithful texture pack at `faithful-32x-1.21.11`.
 See `faithful-32x-1.21.11/LICENSE.txt` for license details.
