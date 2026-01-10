@@ -23,6 +23,7 @@ type ModelResult = {
 function groupByProvider() {
   const groups = new Map<string, { key: string; label: string; models: typeof MODEL_CATALOG }>();
   for (const m of MODEL_CATALOG) {
+    if (!m.enabled) continue;
     const g = groups.get(m.provider) ?? {
       key: m.provider,
       label: m.provider,
