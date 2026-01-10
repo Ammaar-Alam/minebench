@@ -246,9 +246,6 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
             <div className="mb-badge w-fit">
               <span className="mb-dot" />
               <span className="text-fg">Sandbox</span>
-              <span className="hidden text-muted2 sm:inline">
-                choose models • stream results
-              </span>
             </div>
             <div className="font-display text-2xl font-semibold tracking-tight">
               Generate + compare
@@ -329,8 +326,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
           <div className="mt-5">
             <div className="text-xs font-medium text-muted">Models</div>
             <div className="mt-1 text-xs text-muted">
-              Select exactly <span className="font-mono">2</span> models to compare.
-              <span className="ml-2 font-mono">{selectedModelKeys.length}/2</span>
+              <span className="font-mono">{selectedModelKeys.length}/2</span>
             </div>
             <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
               {providers.map((g) => (

@@ -31,13 +31,9 @@ export function Leaderboard() {
           <div className="mb-badge w-fit">
             <span className="mb-dot" />
             <span className="text-fg">Leaderboard</span>
-            <span className="hidden text-muted2 sm:inline">curated prompts only</span>
           </div>
           <div className="font-display text-2xl font-semibold tracking-tight">
-            Global Elo
-          </div>
-          <div className="text-sm text-muted">
-            K=16. “Both bad” penalizes via Baseline.
+            Rankings
           </div>
         </div>
       </div>

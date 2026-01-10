@@ -169,14 +169,12 @@ export function LocalLab() {
           <div className="mb-badge w-fit">
             <span className="mb-dot" />
             <span className="text-fg">Local Lab</span>
-            <span className="hidden text-muted2 sm:inline">prompt kit + JSON renderer</span>
           </div>
           <div className="font-display text-2xl font-semibold tracking-tight md:text-3xl">
-            Test MineBench locally (no uploads)
+            Test MineBench locally
           </div>
           <div className="text-sm text-muted">
-            Copy the exact system prompt, run it in any model (ChatGPT, Claude, Gemini, local LLMs), then paste the
-            resulting JSON here to preview the build.
+            Copy the system prompt, run it in any model, then paste the JSON here to preview.
           </div>
         </div>
       </div>
@@ -295,7 +293,7 @@ export function LocalLab() {
                 <div>
                   <div className="text-sm font-semibold text-fg">Render JSON</div>
                   <div className="text-xs text-muted">
-                    Paste your model output (JSON). We’ll validate it against the selected grid + palette.
+                    Paste your model output to preview.
                   </div>
                 </div>
                 <button
@@ -345,7 +343,6 @@ export function LocalLab() {
 
               <VoxelViewerCard
                 title="Preview"
-                subtitle={rendered.kind === "ready" ? `${gridSize}³ • ${palette}` : undefined}
                 voxelBuild={rendered.kind === "ready" ? rendered.build : null}
                 palette={palette}
                 autoRotate

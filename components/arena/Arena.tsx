@@ -107,9 +107,6 @@ export function Arena() {
               <div className="mb-badge w-fit">
                 <span className="mb-dot" />
                 <span className="text-fg">Arena</span>
-                <span className="hidden text-muted2 sm:inline">
-                  256³ • simple palette • head-to-head
-                </span>
               </div>
 
               <div className="mb-subpanel w-full px-4 py-3">
@@ -137,7 +134,7 @@ export function Arena() {
           </div>
 
           <div className="text-sm text-muted">
-            Vote for the better build. New random matchup loads instantly after each vote (or skip).
+            Vote for the better build.
           </div>
 
           {state.kind === "error" ? (
@@ -179,9 +176,6 @@ export function Arena() {
           <div className="mb-subpanel flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
             <div className="flex flex-col gap-1">
               <div className="text-sm text-fg">Want full control?</div>
-              <div className="text-xs text-muted">
-                Pick models, grid size, palette — and stream results as they complete.
-              </div>
             </div>
             <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
               <input

@@ -147,9 +147,6 @@ export function SiteHeader() {
                 Bench
               </span>
 	            </div>
-	            <div className="text-xs text-muted">
-	              A/B voxel builds • Elo arena • sandbox + local
-	            </div>
 	          </div>
 	        </Link>
 
