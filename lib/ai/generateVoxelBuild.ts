@@ -246,7 +246,7 @@ export async function generateVoxelBuild(
 
       const bounds = buildBounds(expandedBuild);
       if (bounds) {
-        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.25));
+        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.15));
         const minHeight = Math.max(4, Math.floor(params.gridSize * 0.1));
         const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
 
