@@ -46,6 +46,7 @@ function parseArgs() {
   return {
     generate: args.includes("--generate"),
     upload: args.includes("--upload"),
+    overwrite: args.includes("--overwrite"),
     promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
     modelFilter: args.find((a, i) => args[i - 1] === "--model") || null,
     promptText: args.find((a, i) => args[i - 1] === "--promptText") || null,
@@ -262,6 +263,7 @@ Usage:
   pnpm batch:generate --upload            # Upload existing builds to prod
   pnpm batch:generate --generate          # Generate missing builds
   pnpm batch:generate --generate --upload # Generate missing and upload all
+  pnpm batch:generate --generate --overwrite # Regenerate even if JSON exists
   pnpm batch:generate --prompt castle     # Filter by prompt
   pnpm batch:generate --model gemini      # Filter by model
   pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit"
@@ -269,6 +271,7 @@ Usage:
 Options:
   --generate        Generate missing builds (off by default)
   --upload          Upload builds to production
+  --overwrite       When generating, overwrite existing JSON files
   --prompt <str>    Filter prompts by slug
   --model <str>     Filter models by slug
   --promptText <s>  Prompt text override (only when filtered to 1 prompt)
@@ -320,44 +323,45 @@ Options:
   console.log(`\n🔍 Missing builds: ${missing.length}`);
 
   // upload existing builds if requested
-    if (opts.upload) {
+  if (opts.upload) {
     if (existing.length === 0) {
       console.log("\n📤 No existing builds to upload.");
     } else {
       console.log("\n📤 Uploading existing builds...");
       for (const job of existing) {
-          process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
-          const result = await uploadBuild(job);
-          console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
-        }
+        process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
+        const result = await uploadBuild(job);
+        console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
       }
-  }
-
-  // generate missing builds only if --generate flag is set
-  if (opts.generate && missing.length > 0) {
-  console.log("\n🚀 Starting generation...\n");
-
-  let success = 0;
-  let failed = 0;
-
-  for (const job of missing) {
-    const result = await generateAndSave(job);
-    if (result.ok) {
-      console.log(`    ✅ Saved (${result.blockCount} blocks)`);
-      success++;
-
-      if (opts.upload) {
-        process.stdout.write(`    📤 Uploading...`);
-        const uploadResult = await uploadBuild(job);
-        console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
-      }
-    } else {
-      console.log(`    ❌ Failed: ${result.error}`);
-      failed++;
     }
   }
 
-  console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
+  // generate missing builds only if --generate flag is set
+  const jobsToGenerate = opts.generate ? (opts.overwrite ? allJobs : missing) : [];
+  if (opts.generate && jobsToGenerate.length > 0) {
+    console.log("\n🚀 Starting generation...\n");
+
+    let success = 0;
+    let failed = 0;
+
+    for (const job of jobsToGenerate) {
+      const result = await generateAndSave(job);
+      if (result.ok) {
+        console.log(`    ✅ Saved (${result.blockCount} blocks)`);
+        success++;
+
+        if (opts.upload) {
+          process.stdout.write(`    📤 Uploading...`);
+          const uploadResult = await uploadBuild(job);
+          console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
+        }
+      } else {
+        console.log(`    ❌ Failed: ${result.error}`);
+        failed++;
+      }
+    }
+
+    console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
   } else if (missing.length > 0 && !opts.generate) {
     console.log("\n💡 Use --generate to generate missing builds.");
   } else if (missing.length === 0) {

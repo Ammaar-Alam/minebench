@@ -344,6 +344,7 @@ export function LocalLab() {
               <VoxelViewerCard
                 title="Preview"
                 voxelBuild={rendered.kind === "ready" ? rendered.build : null}
+                gridSize={gridSize}
                 palette={palette}
                 autoRotate
                 metrics={

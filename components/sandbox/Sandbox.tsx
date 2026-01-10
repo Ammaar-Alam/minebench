@@ -430,6 +430,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
         title={model?.displayName ?? key}
         subtitle={model?.provider}
         voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
+        gridSize={gridSize}
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}

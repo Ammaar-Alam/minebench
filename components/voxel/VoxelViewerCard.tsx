@@ -2,20 +2,21 @@
 
 import { useMemo, ReactNode } from "react";
 import { VoxelViewer } from "@/components/voxel/VoxelViewer";
+import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { validateVoxelBuild } from "@/lib/voxel/validate";
 
-function asVoxelBuild(value: unknown): VoxelBuild | null {
-  if (!value || typeof value !== "object") return null;
-  const v = value as { version?: unknown; blocks?: unknown };
-  if (v.version !== "1.0") return null;
-  if (!Array.isArray(v.blocks)) return null;
-  return value as VoxelBuild;
-}
+const VIEWER_MAX_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
+  64: 180_000,
+  256: 260_000,
+  512: 420_000,
+};
 
 export function VoxelViewerCard({
   title,
   subtitle,
   voxelBuild,
+  gridSize = 256,
   autoRotate = true,
   animateIn,
   isLoading,
@@ -30,6 +31,7 @@ export function VoxelViewerCard({
   title: string;
   subtitle?: ReactNode;
   voxelBuild: unknown | null;
+  gridSize?: 64 | 256 | 512;
   autoRotate?: boolean;
   animateIn?: boolean;
   isLoading?: boolean;
@@ -41,9 +43,24 @@ export function VoxelViewerCard({
   debugRawText?: string;
   palette?: "simple" | "advanced";
 }) {
-  const build = useMemo(() => asVoxelBuild(voxelBuild), [voxelBuild]);
-  const blockCount = build?.blocks.length ?? 0;
+  const rendered = useMemo(() => {
+    if (!voxelBuild) return { build: null as VoxelBuild | null, warnings: [] as string[], error: null as string | null };
+    const paletteDefs = getPalette(palette);
+    const maxBlocks = VIEWER_MAX_BLOCKS_BY_GRID[gridSize] ?? VIEWER_MAX_BLOCKS_BY_GRID[256];
+    const validated = validateVoxelBuild(voxelBuild, {
+      gridSize,
+      palette: paletteDefs,
+      maxBlocks,
+    });
+    if (!validated.ok) return { build: null, warnings: [], error: validated.error };
+    return { build: validated.value.build, warnings: validated.value.warnings, error: null };
+  }, [voxelBuild, gridSize, palette]);
+
+  const build = rendered.build;
+  const warnings = metrics?.warnings ?? rendered.warnings;
+  const blockCount = metrics?.blockCount ?? build?.blocks.length ?? 0;
   const isThinking = Boolean(isLoading && attempt && attempt > 0 && !debugRawText);
+  const combinedError = error ?? rendered.error ?? undefined;
 
   const timing = useMemo(() => {
     const ms = metrics?.generationTimeMs;
@@ -80,9 +97,9 @@ export function VoxelViewerCard({
               <div className="flex flex-col items-end gap-0.5">
                 <span className="font-mono">{blockCount} blocks</span>
                 {timing ? <span className="font-mono">{timing}</span> : null}
-                {metrics?.warnings?.length ? (
+                {warnings.length ? (
                   <span className="font-mono">
-                    {metrics.warnings.length} warning{metrics.warnings.length === 1 ? "" : "s"}
+                    {warnings.length} warning{warnings.length === 1 ? "" : "s"}
                   </span>
                 ) : null}
               </div>
@@ -140,10 +157,10 @@ export function VoxelViewerCard({
           </div>
         ) : null}
 
-        {error ? (
+        {combinedError ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/70 px-4 text-center text-sm text-danger">
             <div className="flex w-full max-w-[92%] flex-col items-center gap-3">
-              <div>{error}</div>
+              <div>{combinedError}</div>
               {debugRawText ? (
                 <details className="w-full rounded-md border border-border/70 bg-bg/30 p-3 text-left text-xs text-muted">
                   <summary className="cursor-pointer select-none font-semibold text-fg">
@@ -158,19 +175,19 @@ export function VoxelViewerCard({
           </div>
         ) : null}
 
-        {!build && !isLoading && !error ? (
+        {!build && !isLoading && !combinedError ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/20 text-sm text-muted">
             No build yet
           </div>
         ) : null}
 
-        {metrics?.warnings?.length ? (
+        {warnings.length ? (
           <details className="border-t border-border bg-bg/10 px-4 py-3 text-xs text-muted">
             <summary className="cursor-pointer select-none font-semibold text-fg">
-              Warnings ({metrics.warnings.length})
+              Warnings ({warnings.length})
             </summary>
             <ul className="mt-2 list-disc space-y-1 pl-4">
-              {metrics.warnings.map((w, i) => (
+              {warnings.map((w, i) => (
                 <li key={i}>{w}</li>
               ))}
             </ul>

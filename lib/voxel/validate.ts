@@ -49,6 +49,23 @@ export type ValidatedVoxelBuild = {
   warnings: string[];
 };
 
+export function parseVoxelBuildSpec(
+  input: unknown
+): { ok: true; value: VoxelBuild } | { ok: false; error: string } {
+  const parsed = buildSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.message };
+
+  return {
+    ok: true,
+    value: {
+      version: "1.0",
+      boxes: parsed.data.boxes ?? [],
+      lines: parsed.data.lines ?? [],
+      blocks: parsed.data.blocks,
+    },
+  };
+}
+
 const TYPE_ALIASES: Record<string, string> = {
   // Common LLM drift / minecraft namespace prefixes
   "oak_plank": "oak_planks",

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
-import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { maxBlocksForGrid } from "@/lib/ai/generateVoxelBuild";
 import { gunzipSync } from "node:zlib";
 
@@ -155,6 +155,9 @@ export async function POST(req: Request) {
   });
   if (!validated.ok) return NextResponse.json({ error: validated.error }, { status: 400 });
 
+  const spec = parseVoxelBuildSpec(json);
+  if (!spec.ok) return NextResponse.json({ error: spec.error }, { status: 400 });
+
   const blockCount = validated.value.build.blocks.length;
 
   const existing = await prisma.build.findFirst({
@@ -177,7 +180,7 @@ export async function POST(req: Request) {
           gridSize,
           palette,
           mode,
-          voxelData: validated.value.build,
+          voxelData: spec.value,
           blockCount,
           generationTimeMs: 0,
         },
@@ -189,7 +192,7 @@ export async function POST(req: Request) {
           gridSize,
           palette,
           mode,
-          voxelData: validated.value.build,
+          voxelData: spec.value,
           blockCount,
           generationTimeMs: 0,
         },

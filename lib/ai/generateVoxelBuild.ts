@@ -7,7 +7,7 @@ import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
 import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
 import { geminiGenerateText } from "@/lib/ai/providers/gemini";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
-import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 // 75% of grid volume — with primitives (boxes/lines) we can handle much larger builds efficiently
@@ -206,20 +206,23 @@ export async function generateVoxelBuild(
         continue;
       }
 
-      if (validated.value.build.blocks.length === 0) {
+      const expandedBuild = validated.value.build;
+      const blockCount = expandedBuild.blocks.length;
+
+      if (blockCount === 0) {
         lastError =
           "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
         continue;
       }
 
-      if (validated.value.build.blocks.length < minBlocks) {
-        lastError = `Build too small (${validated.value.build.blocks.length} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
+      if (blockCount < minBlocks) {
+        lastError = `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
         continue;
       }
 
-      const bounds = buildBounds(validated.value.build);
+      const bounds = buildBounds(expandedBuild);
       if (bounds) {
-        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.35));
+        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.25));
         const minHeight = Math.max(4, Math.floor(params.gridSize * 0.1));
         const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
 
@@ -234,12 +237,18 @@ export async function generateVoxelBuild(
         }
       }
 
+      const spec = parseVoxelBuildSpec(json);
+      if (!spec.ok) {
+        lastError = spec.error;
+        continue;
+      }
+
       const generationTimeMs = Date.now() - start;
       return {
         ok: true,
-        build: validated.value.build,
+        build: spec.value,
         warnings: validated.value.warnings,
-        blockCount: validated.value.build.blocks.length,
+        blockCount,
         generationTimeMs,
         rawText: text,
       };
