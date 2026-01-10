@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { ArenaMatchup, VoteChoice } from "@/lib/arena/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { VoteBar } from "@/components/arena/VoteBar";
+import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
+import { ModelReveal } from "@/components/arena/ModelReveal";
 
 type ArenaState =
   | { kind: "loading" }
@@ -34,12 +36,18 @@ export function Arena() {
   const [revealMatchupId, setRevealMatchupId] = useState<string | null>(null);
   const [customPrompt, setCustomPrompt] = useState("");
   const [promptExpanded, setPromptExpanded] = useState(false);
+  const [animKey, setAnimKey] = useState(0);
 
   const matchup = state.kind === "ready" ? state.matchup : null;
   const revealModels = Boolean(matchup && revealMatchupId === matchup.id);
 
   useEffect(() => {
     setPromptExpanded(false);
+  }, [matchup?.id]);
+
+  useEffect(() => {
+    if (!matchup?.id) return;
+    setAnimKey((k) => k + 1);
   }, [matchup?.id]);
 
   function sleepMs(ms: number) {
@@ -74,7 +82,7 @@ export function Arena() {
       const revealAt = Date.now();
       await submitVote(matchup.id, choice);
       const next = await fetchMatchup(undefined);
-      const minRevealMs = 550;
+      const minRevealMs = 900;
       const remaining = minRevealMs - (Date.now() - revealAt);
       if (remaining > 0) await sleepMs(remaining);
       setState({ kind: "ready", matchup: next });
@@ -85,8 +93,6 @@ export function Arena() {
       });
     } finally {
       setSubmitting(false);
-      // Note: we intentionally keep revealMatchupId set to the voted matchup id.
-      // The next matchup has a different id, so model names remain hidden again.
     }
   }
 
@@ -97,7 +103,7 @@ export function Arena() {
       const revealAt = Date.now();
       setRevealMatchupId(matchup.id);
       const next = await fetchMatchup(undefined);
-      const minRevealMs = 650;
+      const minRevealMs = 800;
       const remaining = minRevealMs - (Date.now() - revealAt);
       if (remaining > 0) await sleepMs(remaining);
       setState({ kind: "ready", matchup: next });
@@ -111,54 +117,48 @@ export function Arena() {
     }
   }
 
+  const promptText = matchup?.prompt.text ?? "";
+  const isLongPrompt = promptText.length > 120;
+
   return (
     <div className="flex flex-col gap-6">
       <div className="mb-panel p-5">
-        <div className="mb-panel-inner flex flex-col gap-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div className="flex flex-col gap-2">
-              <div className="mb-badge w-fit">
-                <span className="mb-dot" />
-                <span className="text-fg">Arena</span>
-              </div>
-
-              <div className="mb-subpanel w-full px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs font-medium text-muted">Prompt</div>
-                  {(() => {
-                    const canExpand = Boolean(matchup?.prompt.text && matchup.prompt.text.length > 160);
-                    return (
-                      <button
-                        type="button"
-                        aria-expanded={promptExpanded}
-                        className={`mb-btn mb-btn-ghost h-8 px-3 text-[11px] ${canExpand ? "" : "invisible"}`}
-                        onClick={() => setPromptExpanded((v) => !v)}
-                        disabled={!canExpand}
-                      >
-                        {promptExpanded ? "Collapse" : "Expand"}
-                      </button>
-                    );
-                  })()}
-                </div>
-                <div className="mt-1 h-28 overflow-hidden md:h-32">
-                  <div
-                    className={`h-full pr-1 ${promptExpanded ? "overflow-auto" : "overflow-hidden"}`}
-                    aria-label="Prompt text"
-                  >
-                    <div
-                      className={`${promptExpanded ? "" : "mb-clamp-prompt"} font-display text-lg font-semibold leading-snug tracking-tight text-fg md:text-xl`}
-                      title={matchup?.prompt.text ?? ""}
-                    >
-                      {matchup?.prompt.text ?? "Loading…"}
-                    </div>
-                  </div>
-                </div>
-              </div>
+        <div className="mb-panel-inner flex flex-col gap-5">
+          {/* header row */}
+          <div className="flex items-start justify-between gap-4">
+            <div className="mb-badge w-fit">
+              <span className="mb-dot" />
+              <span className="text-fg">Arena</span>
             </div>
+            {isLongPrompt && (
+              <button
+                type="button"
+                aria-expanded={promptExpanded}
+                className="mb-btn mb-btn-ghost h-8 px-3 text-[11px]"
+                onClick={() => setPromptExpanded((v) => !v)}
+              >
+                {promptExpanded ? "Collapse" : "Expand"}
+              </button>
+            )}
           </div>
 
-          <div className="text-sm text-muted">
-            Vote for the better build.
+          {/* prompt area - compact */}
+          <div className="mb-subpanel px-4 py-3">
+            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted/70">
+              Prompt
+            </div>
+            <div
+              className={`${promptExpanded ? "max-h-48 overflow-auto" : "max-h-16 overflow-hidden"} transition-all duration-200`}
+            >
+              <div
+                className={`${promptExpanded ? "" : "mb-clamp-3"} text-[15px] font-medium leading-relaxed text-fg`}
+              >
+                <AnimatedPrompt
+                  text={promptText || "Loading…"}
+                  isExpanded={promptExpanded}
+                />
+              </div>
+            </div>
           </div>
 
           {state.kind === "error" ? (
@@ -167,36 +167,39 @@ export function Arena() {
             </div>
           ) : null}
 
-          {state.kind === "error" ? (
-            <div className="mb-subpanel p-3 text-sm text-muted">
-              If this is a fresh install, seed curated prompts/builds via{" "}
-              <span className="font-mono">/api/admin/seed</span> (see README).
+          {/* builds grid */}
+          <div key={animKey} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="mb-card-enter">
+              <VoxelViewerCard
+                title="Build A"
+                subtitle={
+                  <ModelReveal
+                    revealed={revealModels}
+                    provider={matchup?.a.model.provider}
+                    modelName={matchup?.a.model.displayName}
+                  />
+                }
+                voxelBuild={matchup?.a.build ?? null}
+                autoRotate
+              />
             </div>
-          ) : null}
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <VoxelViewerCard
-              title={revealModels ? matchup?.a.model.displayName ?? "Build A" : "Build A"}
-              subtitle={
-                revealModels
-                  ? `${matchup?.a.model.provider ?? ""}`
-                  : "Model hidden"
-              }
-              voxelBuild={matchup?.a.build ?? null}
-              autoRotate
-            />
-            <VoxelViewerCard
-              title={revealModels ? matchup?.b.model.displayName ?? "Build B" : "Build B"}
-              subtitle={
-                revealModels
-                  ? `${matchup?.b.model.provider ?? ""}`
-                  : "Model hidden"
-              }
-              voxelBuild={matchup?.b.build ?? null}
-              autoRotate
-            />
+            <div className="mb-card-enter mb-card-enter-delay">
+              <VoxelViewerCard
+                title="Build B"
+                subtitle={
+                  <ModelReveal
+                    revealed={revealModels}
+                    provider={matchup?.b.model.provider}
+                    modelName={matchup?.b.model.displayName}
+                  />
+                }
+                voxelBuild={matchup?.b.build ?? null}
+                autoRotate
+              />
+            </div>
           </div>
 
+          {/* vote bar */}
           <div className="mb-subpanel p-4">
             <VoteBar
               disabled={state.kind !== "ready" || submitting}
@@ -205,13 +208,12 @@ export function Arena() {
             />
           </div>
 
+          {/* sandbox cta */}
           <div className="mb-subpanel flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
-            <div className="flex flex-col gap-1">
-              <div className="text-sm text-fg">Want full control?</div>
-            </div>
+            <div className="text-sm text-muted">Want full control?</div>
             <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
               <input
-                className="mb-field h-10 md:w-80"
+                className="mb-field h-10 md:w-72"
                 placeholder="your own prompt…"
                 value={customPrompt}
                 onChange={(e) => setCustomPrompt(e.target.value)}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, ReactNode } from "react";
 import { VoxelViewer } from "@/components/voxel/VoxelViewer";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
@@ -28,7 +28,7 @@ export function VoxelViewerCard({
   palette = "simple",
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   voxelBuild: unknown | null;
   autoRotate?: boolean;
   animateIn?: boolean;
@@ -72,7 +72,7 @@ export function VoxelViewerCard({
               {title}
             </div>
             {subtitle ? (
-              <div className="truncate text-sm font-medium text-muted">{subtitle}</div>
+              <div className="min-h-[1.5rem] text-sm">{subtitle}</div>
             ) : null}
           </div>
           <div className="shrink-0 text-right text-xs text-muted">
