@@ -281,6 +281,12 @@ If you already have voxel JSONs on disk (for example in `uploads/astronaut/*.jso
 # show what the importer can see
 pnpm prompt
 
+# create a new prompt folder + prompt.txt + placeholder JSONs (enabled models)
+pnpm prompt --init --prompt arcade --text "A classic arcade cabinet with ..."
+
+# generate missing builds for that prompt (writes JSONs into uploads/arcade/*.json)
+pnpm batch:generate --generate --prompt arcade
+
 # import one custom prompt (creates the Prompt row if needed)
 pnpm prompt --import --prompt astronaut --text "An astronaut in a space suit"
 

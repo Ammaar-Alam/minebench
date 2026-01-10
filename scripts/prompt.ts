@@ -7,6 +7,7 @@
  *
  * Usage:
  *   pnpm prompt                           # Show importable uploads status
+ *   pnpm prompt --init --prompt arcade --text "A classic arcade cabinet with ..."
  *   pnpm prompt --import --prompt astronaut --text "An astronaut in a space suit"
  *   pnpm prompt --import --prompt fighter-jet --text-file uploads/fighter-jet/prompt.txt
  *   pnpm prompt --import --prompt astronaut --overwrite
@@ -22,20 +23,26 @@ import * as fs from "fs";
 import * as path from "path";
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
-import { getModelByKey, ModelKey } from "../lib/ai/modelCatalog";
+import { getModelByKey, MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
 import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
 import { getPalette } from "../lib/blocks/palettes";
 import { validateVoxelBuild } from "../lib/voxel/validate";
 import { maxBlocksForGrid } from "../lib/ai/generateVoxelBuild";
-import { MODEL_KEY_BY_SLUG, MODEL_SLUG, PROMPT_MAP } from "./uploadsCatalog";
-
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-const PROMPT_TEXT_FILENAME = "prompt.txt";
+import {
+  listUploadPromptSlugs,
+  MODEL_KEY_BY_SLUG,
+  MODEL_SLUG,
+  PROMPT_MAP,
+  PROMPT_TEXT_FILENAME,
+  readUploadPromptText,
+  UPLOADS_DIR,
+} from "./uploadsCatalog";
 
 type PaletteName = "simple" | "advanced";
 
 type Args = {
   help: boolean;
+  init: boolean;
   import: boolean;
   dryRun: boolean;
   overwrite: boolean;
@@ -76,6 +83,7 @@ function parseArgs(): Args {
 
   return {
     help: argv.includes("--help") || argv.includes("-h"),
+    init: argv.includes("--init"),
     import: argv.includes("--import"),
     dryRun: argv.includes("--dry-run"),
     overwrite: argv.includes("--overwrite"),
@@ -92,23 +100,6 @@ function parseArgs(): Args {
 function ensureDir(dir: string) {
   if (fs.existsSync(dir)) return;
   fs.mkdirSync(dir, { recursive: true });
-}
-
-function listPromptSlugs(): string[] {
-  if (!fs.existsSync(UPLOADS_DIR)) return [];
-  const entries = fs.readdirSync(UPLOADS_DIR, { withFileTypes: true });
-  return entries
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .filter((name) => !name.startsWith("."))
-    .sort();
-}
-
-function readPromptTextFromFolder(promptSlug: string): string | null {
-  const p = path.join(UPLOADS_DIR, promptSlug, PROMPT_TEXT_FILENAME);
-  if (!fs.existsSync(p)) return null;
-  const text = fs.readFileSync(p, "utf-8").trim();
-  return text ? text : null;
 }
 
 function readPromptTextFromFile(filePath: string): string | null {
@@ -139,8 +130,51 @@ function matchesFilter(value: string, filter: string | null): boolean {
   return value.toLowerCase().includes(filter.toLowerCase());
 }
 
+function slugify(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+}
+
+function initPromptFolder(opts: { promptSlug: string; promptText: string; overwrite: boolean; dryRun: boolean }) {
+  const slug = opts.promptSlug;
+  if (!slug) throw new Error("Invalid prompt slug (empty after normalization)");
+
+  const promptDir = path.join(UPLOADS_DIR, slug);
+  const promptPath = path.join(promptDir, PROMPT_TEXT_FILENAME);
+  const promptText = opts.promptText.trim();
+  if (!promptText) throw new Error("Prompt text cannot be empty");
+
+  if (opts.dryRun) {
+    console.log(`\n[dry-run] would create ${path.join("uploads", slug)}/ and write ${path.join("uploads", slug, PROMPT_TEXT_FILENAME)}`);
+    return;
+  }
+
+  ensureDir(promptDir);
+
+  if (fs.existsSync(promptPath) && !opts.overwrite) {
+    const existing = fs.readFileSync(promptPath, "utf-8").trim();
+    if (existing && existing !== promptText) {
+      throw new Error(`prompt.txt already exists for "${slug}". Re-run with --overwrite to replace it.`);
+    }
+  }
+
+  fs.writeFileSync(promptPath, `${promptText}\n`);
+
+  const enabledModels = MODEL_CATALOG.filter((m) => m.enabled).map((m) => m.key);
+  for (const modelKey of enabledModels) {
+    const modelSlug = MODEL_SLUG[modelKey];
+    const filePath = path.join(promptDir, `${slug}-${modelSlug}.json`);
+    if (fs.existsSync(filePath)) continue;
+    fs.writeFileSync(filePath, "{}\n");
+  }
+}
+
 function buildJobs(args: Args, promptTextBySlug: Map<string, string | null>) {
-  const promptSlugs = listPromptSlugs().filter((slug) => matchesFilter(slug, args.promptFilter));
+  const promptSlugs = listUploadPromptSlugs().filter((slug) => matchesFilter(slug, args.promptFilter));
   const jobs: Job[] = [];
   const warnings: string[] = [];
 
@@ -201,13 +235,15 @@ MineBench Prompt Import Script
 
 Usage:
   pnpm prompt
+  pnpm prompt --init --prompt arcade --text "A classic arcade cabinet with ..."
   pnpm prompt --import --prompt astronaut --text "An astronaut in a space suit"
   pnpm prompt --import --prompt fighter-jet --text-file uploads/fighter-jet/prompt.txt
 
 Options:
+  --init              Create uploads/<slug>/prompt.txt + placeholder JSONs for enabled models
   --import            Import builds into local DB (Prisma)
   --dry-run           Show what would be imported (with --import)
-  --overwrite         Overwrite existing builds in DB
+  --overwrite         Overwrite existing builds in DB (and prompt.txt when used with --init)
   --prompt <slug>     Filter prompt folders by substring (e.g. "castle")
   --model <str>       Filter models by slug or key substring (e.g. "gemini", "sonnet")
   --text <prompt>     Prompt text (only allowed if importing exactly one prompt)
@@ -224,10 +260,20 @@ Prompt text resolution order:
 `);
 }
 
-function printStatus(promptSlugs: string[], promptTextBySlug: Map<string, string | null>, jobs: Job[], warnings: string[]) {
+function printStatus(
+  promptSlugs: string[],
+  promptTextBySlug: Map<string, string | null>,
+  jobs: Job[],
+  warnings: string[],
+  promptFilter: string | null
+) {
   console.log("\n📦 Uploads Status\n");
   if (promptSlugs.length === 0) {
-    console.log("No prompt folders found in ./uploads");
+    if (promptFilter) {
+      console.log(`No matching prompt folders found in ./uploads (filter: "${promptFilter}")`);
+    } else {
+      console.log("No prompt folders found in ./uploads");
+    }
     return;
   }
 
@@ -283,15 +329,64 @@ async function main() {
 
   ensureDir(UPLOADS_DIR);
 
+  const rawPromptArg = args.promptFilter?.trim() ?? null;
+  const initSlug = rawPromptArg ? slugify(rawPromptArg) : null;
+  const initDirExists = initSlug ? fs.existsSync(path.join(UPLOADS_DIR, initSlug)) : false;
+
+  if (args.init) {
+    if (!rawPromptArg) {
+      console.error("\nError: --init requires --prompt <slug>");
+      process.exitCode = 1;
+      return;
+    }
+
+    const promptText =
+      (args.textFile ? readPromptTextFromFile(args.textFile) : args.text?.trim() ?? null) ??
+      (initSlug ? PROMPT_MAP[initSlug] ?? null : null);
+
+    if (!promptText) {
+      console.error("\nError: Missing prompt text. Provide --text, --text-file, or add it to scripts/uploadsCatalog.ts PROMPT_MAP.");
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      if (initSlug && initSlug !== rawPromptArg.toLowerCase()) {
+        console.log(`\nℹ️  Normalized slug "${rawPromptArg}" -> "${initSlug}"`);
+      }
+      initPromptFolder({ promptSlug: initSlug ?? rawPromptArg.toLowerCase(), promptText, overwrite: args.overwrite, dryRun: args.dryRun });
+      if (!args.dryRun) console.log(`\n✅ Initialized ${path.join("uploads", initSlug ?? rawPromptArg.toLowerCase())}/`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to init prompt folder";
+      console.error(`\nError: ${message}`);
+      process.exitCode = 1;
+      return;
+    }
+  } else if (args.import && (args.text || args.textFile) && rawPromptArg && initSlug && !initDirExists) {
+    // Convenience: if you try to import a brand-new prompt by slug + text, initialize the uploads folder first.
+    const promptText = args.textFile ? readPromptTextFromFile(args.textFile) : args.text?.trim() ?? null;
+    if (promptText && initSlug === rawPromptArg.toLowerCase()) {
+      try {
+        initPromptFolder({ promptSlug: initSlug, promptText, overwrite: args.overwrite, dryRun: args.dryRun });
+        if (!args.dryRun) console.log(`\n✅ Initialized ${path.join("uploads", initSlug)}/`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to init prompt folder";
+        console.error(`\nError: ${message}`);
+        process.exitCode = 1;
+        return;
+      }
+    }
+  }
+
   const promptTextBySlug = new Map<string, string | null>();
-  for (const slug of listPromptSlugs()) {
-    const fromFolder = readPromptTextFromFolder(slug);
+  for (const slug of listUploadPromptSlugs()) {
+    const fromFolder = readUploadPromptText(slug);
     const fromCatalog = PROMPT_MAP[slug] ?? null;
     promptTextBySlug.set(slug, fromFolder ?? fromCatalog);
   }
 
   const { promptSlugs, jobs, warnings } = buildJobs(args, promptTextBySlug);
-  printStatus(promptSlugs, promptTextBySlug, jobs, warnings);
+  printStatus(promptSlugs, promptTextBySlug, jobs, warnings, args.promptFilter);
 
   if (!args.import) return;
 
@@ -302,7 +397,17 @@ async function main() {
   }
 
   if ((args.text || args.textFile) && promptSlugs.length !== 1) {
-    console.error("\nError: --text/--text-file can only be used when importing exactly one prompt (use --prompt to narrow it down).");
+    if (promptSlugs.length === 0) {
+      console.error(
+        `\nError: No matching prompt folder found in ./uploads.\n\n` +
+          `Create one first:\n` +
+          `  pnpm prompt --init --prompt ${args.promptFilter ?? "<slug>"} --text "..."`
+      );
+    } else {
+      console.error(
+        "\nError: --text/--text-file can only be used when importing exactly one prompt (use --prompt to narrow it down)."
+      );
+    }
     process.exitCode = 1;
     return;
   }

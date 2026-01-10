@@ -20,7 +20,7 @@ import * as path from "path";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
 import { MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
-import { MODEL_SLUG, PROMPT_MAP } from "./uploadsCatalog";
+import { loadPromptMapFromUploads, MODEL_SLUG } from "./uploadsCatalog";
 
 // load env
 import "dotenv/config";
@@ -61,11 +61,11 @@ function getEnabledModels(): ModelKey[] {
   return MODEL_CATALOG.filter((m) => m.enabled).map((m) => m.key);
 }
 
-function buildJobList(promptFilter: string | null, modelFilter: string | null): Job[] {
+function buildJobList(promptMap: Record<string, string>, promptFilter: string | null, modelFilter: string | null): Job[] {
   const jobs: Job[] = [];
   const models = getEnabledModels();
 
-  for (const [promptSlug, promptText] of Object.entries(PROMPT_MAP)) {
+  for (const [promptSlug, promptText] of Object.entries(promptMap)) {
     if (promptFilter && !promptSlug.includes(promptFilter.toLowerCase())) continue;
 
     for (const modelKey of models) {
@@ -245,8 +245,9 @@ Options:
   // ensure base uploads dir exists
   ensureDir(UPLOADS_DIR);
 
-  const allJobs = buildJobList(opts.promptFilter, opts.modelFilter);
-  console.log(`📋 Total jobs: ${allJobs.length} (${Object.keys(PROMPT_MAP).length} prompts × ${getEnabledModels().length} models)`);
+  const promptMap = loadPromptMapFromUploads();
+  const allJobs = buildJobList(promptMap, opts.promptFilter, opts.modelFilter);
+  console.log(`📋 Total jobs: ${allJobs.length} (${Object.keys(promptMap).length} prompts × ${getEnabledModels().length} models)`);
 
   if (opts.promptFilter) console.log(`   Filtered by prompt: "${opts.promptFilter}"`);
   if (opts.modelFilter) console.log(`   Filtered by model: "${opts.modelFilter}"`);
