@@ -2,13 +2,14 @@ import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
-import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
+import { getModelByKey, ModelKey, ModelCatalogEntry } from "@/lib/ai/modelCatalog";
 import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
 import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
 import { deepseekGenerateText } from "@/lib/ai/providers/deepseek";
 import { geminiGenerateText } from "@/lib/ai/providers/gemini";
 import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
+import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
@@ -46,6 +47,30 @@ function approxMaxBlocksForTokenBudget(opts: {
 const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 const DEFAULT_TEMPERATURE = 0.2;
 
+// check if a direct provider API key is available
+function hasDirectProviderKey(provider: string): boolean {
+  switch (provider) {
+    case "openai":
+      return Boolean(process.env.OPENAI_API_KEY);
+    case "anthropic":
+      return Boolean(process.env.ANTHROPIC_API_KEY);
+    case "gemini":
+      return Boolean(process.env.GOOGLE_AI_API_KEY);
+    case "moonshot":
+      return Boolean(process.env.MOONSHOT_API_KEY);
+    case "deepseek":
+      return Boolean(process.env.DEEPSEEK_API_KEY);
+    case "xai":
+      return Boolean(process.env.XAI_API_KEY);
+    default:
+      return false;
+  }
+}
+
+function hasOpenRouterKey(): boolean {
+  return Boolean(process.env.OPENROUTER_API_KEY);
+}
+
 export type GenerateVoxelBuildParams = {
   modelKey: ModelKey;
   prompt: string;
@@ -67,8 +92,9 @@ export type GenerateVoxelBuildResult =
     }
   | { ok: false; error: string; rawText?: string; generationTimeMs: number };
 
-async function providerGenerateText(args: {
-  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek";
+// call the direct provider (OpenAI, Anthropic, etc.)
+async function callDirectProvider(args: {
+  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai";
   modelId: string;
   system: string;
   user: string;
@@ -122,8 +148,75 @@ async function providerGenerateText(args: {
     });
   }
 
-  return deepseekGenerateText({
-    modelId: args.modelId,
+  if (args.provider === "deepseek") {
+    return deepseekGenerateText({
+      modelId: args.modelId,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      temperature: DEFAULT_TEMPERATURE,
+      onDelta: args.onDelta,
+    });
+  }
+
+  // xai doesn't have a direct public API we support yet; throw to trigger OpenRouter fallback
+  throw new Error("xAI direct API not supported; use OpenRouter fallback");
+}
+
+// unified provider call with OpenRouter fallback
+async function providerGenerateText(args: {
+  model: ModelCatalogEntry;
+  system: string;
+  user: string;
+  jsonSchema: Record<string, unknown>;
+  maxOutputTokens: number;
+  onDelta?: (delta: string) => void;
+}): Promise<{ text: string }> {
+  const { model } = args;
+  const hasDirect = hasDirectProviderKey(model.provider);
+  const hasOpenRouter = hasOpenRouterKey();
+
+  // if we have neither key and there's an openrouter model id, error out
+  if (!hasDirect && !hasOpenRouter) {
+    if (model.openRouterModelId) {
+      throw new Error(
+        `Missing API key for ${model.provider}. Set ${model.provider.toUpperCase()}_API_KEY or OPENROUTER_API_KEY.`,
+      );
+    }
+    throw new Error(`Missing API key for ${model.provider}. Set ${model.provider.toUpperCase()}_API_KEY.`);
+  }
+
+  // try direct provider first if we have the key
+  if (hasDirect) {
+    try {
+      return await callDirectProvider({
+        provider: model.provider,
+        modelId: model.modelId,
+        system: args.system,
+        user: args.user,
+        jsonSchema: args.jsonSchema,
+        maxOutputTokens: args.maxOutputTokens,
+        onDelta: args.onDelta,
+      });
+    } catch (directErr) {
+      // if no OpenRouter fallback available, rethrow
+      if (!hasOpenRouter || !model.openRouterModelId) {
+        throw directErr;
+      }
+      // otherwise, fall through to OpenRouter
+      console.warn(
+        `Direct ${model.provider} call failed, falling back to OpenRouter: ${directErr instanceof Error ? directErr.message : String(directErr)}`,
+      );
+    }
+  }
+
+  // use OpenRouter (either as primary when no direct key, or as fallback)
+  if (!model.openRouterModelId) {
+    throw new Error(`No OpenRouter model ID configured for ${model.key}`);
+  }
+
+  return openrouterGenerateText({
+    modelId: model.openRouterModelId,
     system: args.system,
     user: args.user,
     maxOutputTokens: args.maxOutputTokens,
@@ -208,8 +301,7 @@ export async function generateVoxelBuild(
 
     try {
       const { text } = await providerGenerateText({
-        provider: model.provider,
-        modelId: model.modelId,
+        model,
         system,
         user,
         jsonSchema,

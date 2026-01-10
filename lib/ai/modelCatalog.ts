@@ -1,4 +1,4 @@
-export type Provider = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek";
+export type Provider = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai";
 
 export type ModelKey =
   | "openai_gpt_5_2"
@@ -13,7 +13,8 @@ export type ModelKey =
   | "gemini_3_0_flash"
   | "gemini_2_5_pro"
   | "moonshot_kimi_k2"
-  | "deepseek_v3_2";
+  | "deepseek_v3_2"
+  | "xai_grok_4_1";
 
 export type ModelCatalogEntry = {
   key: ModelKey;
@@ -21,6 +22,8 @@ export type ModelCatalogEntry = {
   modelId: string;
   displayName: string;
   enabled: boolean;
+  // optional: OpenRouter model ID for fallback when direct provider key is missing/invalid
+  openRouterModelId?: string;
 };
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
@@ -30,6 +33,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gpt-5.2",
     displayName: "GPT 5.2",
     enabled: true,
+    openRouterModelId: "openai/gpt-5.2",
   },
   {
     key: "openai_gpt_5_2_pro",
@@ -37,6 +41,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gpt-5.2-pro",
     displayName: "GPT 5.2 Pro",
     enabled: true,
+    openRouterModelId: "openai/gpt-5.2-pro",
   },
   {
     key: "openai_gpt_5_2_codex",
@@ -44,6 +49,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gpt-5.2-codex",
     displayName: "GPT 5.2 Codex",
     enabled: false,
+    openRouterModelId: "openai/gpt-5.2-codex",
   },
   {
     key: "openai_gpt_5_mini",
@@ -51,6 +57,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gpt-5-mini",
     displayName: "GPT 5 Mini",
     enabled: true,
+    openRouterModelId: "openai/gpt-5-mini",
   },
   {
     key: "openai_gpt_4_1",
@@ -58,6 +65,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gpt-4.1",
     displayName: "GPT 4.1",
     enabled: true,
+    openRouterModelId: "openai/gpt-4.1",
   },
   {
     key: "openai_gpt_4o",
@@ -65,6 +73,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gpt-4o",
     displayName: "GPT 4o",
     enabled: true,
+    openRouterModelId: "openai/gpt-4o",
   },
   {
     key: "anthropic_claude_4_5_sonnet",
@@ -72,6 +81,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "claude-sonnet-4-5",
     displayName: "Claude 4.5 Sonnet",
     enabled: true,
+    openRouterModelId: "anthropic/claude-sonnet-4-5",
   },
   {
     key: "anthropic_claude_4_5_opus",
@@ -79,6 +89,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "claude-opus-4-5",
     displayName: "Claude 4.5 Opus",
     enabled: true,
+    openRouterModelId: "anthropic/claude-opus-4-5",
   },
   {
     key: "gemini_3_0_pro",
@@ -86,6 +97,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gemini-3-pro-preview",
     displayName: "Gemini 3.0 Pro",
     enabled: true,
+    openRouterModelId: "google/gemini-3-pro-preview",
   },
   {
     key: "gemini_3_0_flash",
@@ -93,6 +105,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gemini-3-flash-preview",
     displayName: "Gemini 3.0 Flash",
     enabled: true,
+    openRouterModelId: "google/gemini-3-flash-preview",
   },
   {
     key: "gemini_2_5_pro",
@@ -100,6 +113,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gemini-2.5-pro",
     displayName: "Gemini 2.5 Pro",
     enabled: true,
+    openRouterModelId: "google/gemini-2.5-pro",
   },
   {
     key: "moonshot_kimi_k2",
@@ -107,6 +121,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "kimi-k2-0905-preview",
     displayName: "Kimi K2",
     enabled: true,
+    openRouterModelId: "moonshotai/kimi-k2-thinking",
   },
   {
     key: "deepseek_v3_2",
@@ -114,6 +129,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "deepseek-reasoner",
     displayName: "DeepSeek V3.2",
     enabled: true,
+    openRouterModelId: "deepseek/deepseek-v3.2",
+  },
+  {
+    key: "xai_grok_4_1",
+    provider: "xai",
+    modelId: "grok-4.1-fast",
+    displayName: "Grok 4.1",
+    enabled: true,
+    openRouterModelId: "x-ai/grok-4.1-fast",
   },
 ];
 
