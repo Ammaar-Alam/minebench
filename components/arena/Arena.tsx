@@ -125,12 +125,12 @@ export function Arena() {
       <div className="mb-panel p-4">
         <div className="mb-panel-inner flex flex-col gap-3">
           {/* header + prompt inline */}
-          <div className="flex items-start gap-3">
+          <div className="flex items-center gap-3">
             <div className="mb-badge shrink-0">
               <span className="mb-dot" />
               <span className="text-fg">Prompt</span>
             </div>
-            <div className="min-w-0 flex-1">
+            <div className="min-w-0 flex-1 py-1">
               <div
                 className={`${promptExpanded ? "max-h-32 overflow-auto" : "max-h-[2.6rem] overflow-hidden"} text-[14px] font-medium leading-snug text-fg transition-all duration-200`}
               >
@@ -199,27 +199,8 @@ export function Arena() {
         </div>
       </div>
 
-      {/* sandbox cta - smaller */}
-      <div className="mb-panel flex items-center justify-between gap-3 p-3">
-        <span className="text-xs text-muted">Try your own prompt →</span>
-        <div className="flex items-center gap-2">
-          <input
-            className="mb-field h-8 w-48 text-xs md:w-56"
-            placeholder="describe a build…"
-            value={customPrompt}
-            onChange={(e) => setCustomPrompt(e.target.value)}
-          />
-          <a
-            className="mb-btn mb-btn-primary h-8 px-3 text-xs"
-            href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
-          >
-            Sandbox
-          </a>
-        </div>
-      </div>
-
       {/* explanatory section */}
-      <div className="mb-panel overflow-hidden p-8 md:p-10">
+      <div className="mb-panel mb-panel-solid overflow-hidden p-8 md:p-10">
         <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
           <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent ring-1 ring-accent/20">
             <span>Unofficial Benchmark</span>
@@ -227,7 +208,7 @@ export function Arena() {
           <h2 className="mb-4 font-display text-2xl font-bold tracking-tight text-fg md:text-3xl">
             Spatial Intelligence Test
           </h2>
-          <p className="mb-12 text-base leading-relaxed text-muted">
+          <p className="mb-12 text-base leading-relaxed text-fg/85">
             MineBench evaluates how well AI models understand 3D space.
             Models must generate raw JSON coordinates for Minecraft blocks—no images, no 3D tools.
             We visualize their pure code output here.
@@ -243,7 +224,7 @@ export function Arena() {
                 </svg>
               </div>
               <div className="mb-2 font-semibold text-fg">Pure Logic</div>
-              <div className="text-sm leading-relaxed text-muted">
+              <div className="text-sm leading-relaxed text-fg/75">
                 Models blindly derive 3D coordinates using only math and spatial reasoning.
               </div>
             </div>
@@ -258,7 +239,7 @@ export function Arena() {
                 </svg>
               </div>
               <div className="mb-2 font-semibold text-fg">Elo Rated</div>
-              <div className="text-sm leading-relaxed text-muted">
+              <div className="text-sm leading-relaxed text-fg/75">
                 Builds are ranked via head-to-head voting, creating a live leaderboard of spatial skill.
               </div>
             </div>
@@ -271,11 +252,37 @@ export function Arena() {
                   <path d="M3 5v14c0 1.66 4 3 9 3s 9-1.34 9-3V5" />
                 </svg>
               </div>
-              <div className="mb-2 font-semibold text-fg">Open Data</div>
-              <div className="text-sm leading-relaxed text-muted">
-                All prompts, generations, and voting data are open source for research.
+              <div className="mb-2 font-semibold text-fg">Recorded Data</div>
+              <div className="text-sm leading-relaxed text-fg/75">
+                Prompts, generations, and votes are stored to compute rankings and track performance.
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* sandbox cta - moved to bottom & polished */}
+      <div className="mb-panel mb-panel-solid flex flex-col items-center gap-4 p-6 text-center md:p-7">
+        <div className="flex flex-col items-center gap-1">
+          <h3 className="font-semibold text-fg">Want to test a model yourself?</h3>
+          <p className="text-sm text-fg/70">
+            Enter any prompt to generate a 3D build in the Sandbox.
+          </p>
+        </div>
+        <div className="relative flex w-full max-w-md items-center">
+          <input
+            className="mb-field h-12 w-full pr-24 text-base shadow-sm focus:ring-accent/20"
+            placeholder="e.g. A giant rubber duck..."
+            value={customPrompt}
+            onChange={(e) => setCustomPrompt(e.target.value)}
+          />
+          <div className="absolute right-1.5 top-1.5 bottom-1.5">
+            <a
+              className="mb-btn mb-btn-primary h-full px-4 text-sm shadow-sm"
+              href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
+            >
+              Generate
+            </a>
           </div>
         </div>
       </div>

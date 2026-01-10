@@ -200,6 +200,22 @@
       linear-gradient(to bottom, hsl(var(--card2) / 0.60), transparent 60%);
   }
 
+  /* for long-form readable content on top of the mesh bg */
+  .mb-panel-solid {
+    background-color: hsl(var(--card) / 0.96);
+  }
+
+  :root[data-theme="dark"] .mb-panel-solid {
+    background-color: hsl(var(--card) / 0.86);
+  }
+
+  .mb-panel-solid::before {
+    background:
+      radial-gradient(520px 260px at 0% 0%, hsl(var(--accent) / 0.10), transparent 62%),
+      radial-gradient(640px 300px at 100% 0%, hsl(var(--accent2) / 0.10), transparent 58%),
+      linear-gradient(to bottom, hsl(var(--card2) / 0.40), transparent 60%);
+  }
+
   .mb-panel-inner {
     @apply relative;
   }
