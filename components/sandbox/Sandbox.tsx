@@ -26,6 +26,8 @@ type ModelResult = {
 const MAX_LIVE_RAW_TEXT_CHARS = 80_000;
 const PREVIEW_MAX_BLOCKS = 30_000;
 const PREVIEW_THROTTLE_MS = 450;
+const PREVIEW_MAX_BOXES = 600;
+const PREVIEW_MAX_LINES = 800;
 
 function findArrayStart(text: string, field: string): number {
   const idx = text.indexOf(`"${field}"`);
@@ -90,13 +92,18 @@ function buildPreviewFromRawText(opts: {
   palette: Palette;
 }): VoxelBuild | null {
   const blocksIdx = findArrayStart(opts.rawText, "blocks");
-  if (blocksIdx < 0) return null;
+  const boxesIdx = findArrayStart(opts.rawText, "boxes");
+  const linesIdx = findArrayStart(opts.rawText, "lines");
 
-  const slices = extractObjectSlicesFromArray(opts.rawText, blocksIdx, PREVIEW_MAX_BLOCKS);
-  if (slices.length === 0) return null;
+  const blockSlices =
+    blocksIdx >= 0 ? extractObjectSlicesFromArray(opts.rawText, blocksIdx, PREVIEW_MAX_BLOCKS) : [];
+  const boxSlices =
+    boxesIdx >= 0 ? extractObjectSlicesFromArray(opts.rawText, boxesIdx, PREVIEW_MAX_BOXES) : [];
+  const lineSlices =
+    linesIdx >= 0 ? extractObjectSlicesFromArray(opts.rawText, linesIdx, PREVIEW_MAX_LINES) : [];
 
   const blocks: { x: number; y: number; z: number; type: string }[] = [];
-  for (const s of slices) {
+  for (const s of blockSlices) {
     try {
       const parsed = JSON.parse(s) as unknown;
       if (!parsed || typeof parsed !== "object") continue;
@@ -112,10 +119,56 @@ function buildPreviewFromRawText(opts: {
     }
   }
 
-  if (blocks.length === 0) return null;
+  const boxes: { x1: number; y1: number; z1: number; x2: number; y2: number; z2: number; type: string }[] = [];
+  for (const s of boxSlices) {
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      if (!parsed || typeof parsed !== "object") continue;
+      const p = parsed as {
+        x1?: unknown; y1?: unknown; z1?: unknown;
+        x2?: unknown; y2?: unknown; z2?: unknown;
+        type?: unknown;
+      };
+      const x1 = typeof p.x1 === "number" ? Math.trunc(p.x1) : null;
+      const y1 = typeof p.y1 === "number" ? Math.trunc(p.y1) : null;
+      const z1 = typeof p.z1 === "number" ? Math.trunc(p.z1) : null;
+      const x2 = typeof p.x2 === "number" ? Math.trunc(p.x2) : null;
+      const y2 = typeof p.y2 === "number" ? Math.trunc(p.y2) : null;
+      const z2 = typeof p.z2 === "number" ? Math.trunc(p.z2) : null;
+      const type = typeof p.type === "string" ? p.type : null;
+      if (x1 == null || y1 == null || z1 == null || x2 == null || y2 == null || z2 == null || !type) continue;
+      boxes.push({ x1, y1, z1, x2, y2, z2, type });
+    } catch {
+      // ignore
+    }
+  }
+
+  const lines: { from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number }; type: string }[] = [];
+  for (const s of lineSlices) {
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      if (!parsed || typeof parsed !== "object") continue;
+      const p = parsed as { from?: unknown; to?: unknown; type?: unknown };
+      const fromObj = p.from && typeof p.from === "object" ? (p.from as { x?: unknown; y?: unknown; z?: unknown }) : null;
+      const toObj = p.to && typeof p.to === "object" ? (p.to as { x?: unknown; y?: unknown; z?: unknown }) : null;
+      const type = typeof p.type === "string" ? p.type : null;
+      const fx = fromObj && typeof fromObj.x === "number" ? Math.trunc(fromObj.x) : null;
+      const fy = fromObj && typeof fromObj.y === "number" ? Math.trunc(fromObj.y) : null;
+      const fz = fromObj && typeof fromObj.z === "number" ? Math.trunc(fromObj.z) : null;
+      const tx = toObj && typeof toObj.x === "number" ? Math.trunc(toObj.x) : null;
+      const ty = toObj && typeof toObj.y === "number" ? Math.trunc(toObj.y) : null;
+      const tz = toObj && typeof toObj.z === "number" ? Math.trunc(toObj.z) : null;
+      if (fx == null || fy == null || fz == null || tx == null || ty == null || tz == null || !type) continue;
+      lines.push({ from: { x: fx, y: fy, z: fz }, to: { x: tx, y: ty, z: tz }, type });
+    } catch {
+      // ignore
+    }
+  }
+
+  if (blocks.length === 0 && boxes.length === 0 && lines.length === 0) return null;
 
   const validated = validateVoxelBuild(
-    { version: "1.0", blocks },
+    { version: "1.0", blocks, boxes, lines },
     {
       gridSize: opts.gridSize,
       palette: getPalette(opts.palette),
