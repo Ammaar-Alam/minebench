@@ -121,37 +121,18 @@ export function Arena() {
   const isLongPrompt = promptText.length > 120;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="mb-panel p-5">
-        <div className="mb-panel-inner flex flex-col gap-5">
-          {/* header row */}
-          <div className="flex items-start justify-between gap-4">
-            <div className="mb-badge w-fit">
+    <div className="flex flex-col gap-4">
+      <div className="mb-panel p-4">
+        <div className="mb-panel-inner flex flex-col gap-3">
+          {/* header + prompt inline */}
+          <div className="flex items-start gap-3">
+            <div className="mb-badge shrink-0">
               <span className="mb-dot" />
-              <span className="text-fg">Arena</span>
+              <span className="text-fg">Prompt</span>
             </div>
-            {isLongPrompt && (
-              <button
-                type="button"
-                aria-expanded={promptExpanded}
-                className="mb-btn mb-btn-ghost h-8 px-3 text-[11px]"
-                onClick={() => setPromptExpanded((v) => !v)}
-              >
-                {promptExpanded ? "Collapse" : "Expand"}
-              </button>
-            )}
-          </div>
-
-          {/* prompt area - compact */}
-          <div className="mb-subpanel px-4 py-3">
-            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted/70">
-              Prompt
-            </div>
-            <div
-              className={`${promptExpanded ? "max-h-48 overflow-auto" : "max-h-16 overflow-hidden"} transition-all duration-200`}
-            >
+            <div className="min-w-0 flex-1">
               <div
-                className={`${promptExpanded ? "" : "mb-clamp-3"} text-[15px] font-medium leading-relaxed text-fg`}
+                className={`${promptExpanded ? "max-h-32 overflow-auto" : "max-h-[2.6rem] overflow-hidden"} text-[14px] font-medium leading-snug text-fg transition-all duration-200`}
               >
                 <AnimatedPrompt
                   text={promptText || "Loading…"}
@@ -159,16 +140,26 @@ export function Arena() {
                 />
               </div>
             </div>
+            {isLongPrompt && (
+              <button
+                type="button"
+                aria-expanded={promptExpanded}
+                className="mb-btn mb-btn-ghost h-7 shrink-0 px-2.5 text-[10px]"
+                onClick={() => setPromptExpanded((v) => !v)}
+              >
+                {promptExpanded ? "Less" : "More"}
+              </button>
+            )}
           </div>
 
           {state.kind === "error" ? (
-            <div className="mb-subpanel p-3 text-sm text-danger">
+            <div className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
               {state.message}
             </div>
           ) : null}
 
           {/* builds grid */}
-          <div key={animKey} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div key={animKey} className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <div className="mb-card-enter">
               <VoxelViewerCard
                 title="Build A"
@@ -199,31 +190,91 @@ export function Arena() {
             </div>
           </div>
 
-          {/* vote bar */}
-          <div className="mb-subpanel p-4">
-            <VoteBar
-              disabled={state.kind !== "ready" || submitting}
-              onVote={handleVote}
-              onSkip={handleSkip}
-            />
-          </div>
+          {/* vote bar - no wrapper panel */}
+          <VoteBar
+            disabled={state.kind !== "ready" || submitting}
+            onVote={handleVote}
+            onSkip={handleSkip}
+          />
+        </div>
+      </div>
 
-          {/* sandbox cta */}
-          <div className="mb-subpanel flex flex-col gap-3 p-4 md:flex-row md:items-center md:justify-between">
-            <div className="text-sm text-muted">Want full control?</div>
-            <div className="flex w-full flex-col gap-2 md:w-auto md:flex-row md:items-center">
-              <input
-                className="mb-field h-10 md:w-72"
-                placeholder="your own prompt…"
-                value={customPrompt}
-                onChange={(e) => setCustomPrompt(e.target.value)}
-              />
-              <a
-                className="mb-btn mb-btn-primary h-10"
-                href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
-              >
-                Open Sandbox
-              </a>
+      {/* sandbox cta - smaller */}
+      <div className="mb-panel flex items-center justify-between gap-3 p-3">
+        <span className="text-xs text-muted">Try your own prompt →</span>
+        <div className="flex items-center gap-2">
+          <input
+            className="mb-field h-8 w-48 text-xs md:w-56"
+            placeholder="describe a build…"
+            value={customPrompt}
+            onChange={(e) => setCustomPrompt(e.target.value)}
+          />
+          <a
+            className="mb-btn mb-btn-primary h-8 px-3 text-xs"
+            href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
+          >
+            Sandbox
+          </a>
+        </div>
+      </div>
+
+      {/* explanatory section */}
+      <div className="mb-panel overflow-hidden p-8 md:p-10">
+        <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
+          <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent ring-1 ring-accent/20">
+            <span>Unofficial Benchmark</span>
+          </div>
+          <h2 className="mb-4 font-display text-2xl font-bold tracking-tight text-fg md:text-3xl">
+            Spatial Intelligence Test
+          </h2>
+          <p className="mb-12 text-base leading-relaxed text-muted">
+            MineBench evaluates how well AI models understand 3D space.
+            Models must generate raw JSON coordinates for Minecraft blocks—no images, no 3D tools.
+            We visualize their pure code output here.
+          </p>
+
+          <div className="grid w-full grid-cols-1 gap-6 text-left md:grid-cols-3">
+            <div className="rounded-xl border border-border/40 bg-bg/30 p-5">
+              <div className="mb-4 text-accent">
+                <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                  <path d="M3.3 7l8.7 5 8.7-5" />
+                  <path d="M12 22v-9" />
+                </svg>
+              </div>
+              <div className="mb-2 font-semibold text-fg">Pure Logic</div>
+              <div className="text-sm leading-relaxed text-muted">
+                Models blindly derive 3D coordinates using only math and spatial reasoning.
+              </div>
+            </div>
+            
+            <div className="rounded-xl border border-border/40 bg-bg/30 p-5">
+              <div className="mb-4 text-accent">
+                <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 3v18h18" />
+                  <path d="M18 17V9" />
+                  <path d="M13 17V5" />
+                  <path d="M8 17v-3" />
+                </svg>
+              </div>
+              <div className="mb-2 font-semibold text-fg">Elo Rated</div>
+              <div className="text-sm leading-relaxed text-muted">
+                Builds are ranked via head-to-head voting, creating a live leaderboard of spatial skill.
+              </div>
+            </div>
+            
+            <div className="rounded-xl border border-border/40 bg-bg/30 p-5">
+              <div className="mb-4 text-accent">
+                <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <ellipse cx="12" cy="5" rx="9" ry="3" />
+                  <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+                  <path d="M3 5v14c0 1.66 4 3 9 3s 9-1.34 9-3V5" />
+                </svg>
+              </div>
+              <div className="mb-2 font-semibold text-fg">Open Data</div>
+              <div className="text-sm leading-relaxed text-muted">
+                All prompts, generations, and voting data are open source for research.
+              </div>
             </div>
           </div>
         </div>
