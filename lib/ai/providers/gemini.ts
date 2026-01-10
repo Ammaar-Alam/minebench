@@ -118,6 +118,5 @@ export async function geminiGenerateText(params: {
 
   const data = (await res.json()) as GeminiGenerateContentResponse;
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-  if (params.onDelta) params.onDelta(text);
   return { text };
 }

@@ -86,6 +86,5 @@ export async function anthropicGenerateText(params: {
       ?.filter((c) => c.type === "text")
       .map((c) => c.text ?? "")
       .join("") ?? "";
-  if (params.onDelta) params.onDelta(text);
   return { text };
 }
