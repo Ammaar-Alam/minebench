@@ -9,6 +9,7 @@
  *   pnpm batch:generate --generate --upload # Generate missing and upload all
  *   pnpm batch:generate --prompt "castle"   # Filter by prompt
  *   pnpm batch:generate --model gemini      # Filter by model
+ *   pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit" # Custom prompt text override
  * 
  * Environment:
  *   Requires .env with OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY
@@ -20,7 +21,7 @@ import * as path from "path";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
 import { MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
-import { loadPromptMapFromUploads, MODEL_SLUG } from "./uploadsCatalog";
+import { MODEL_SLUG, PROMPT_MAP, listUploadPromptSlugs, readUploadPromptText } from "./uploadsCatalog";
 
 // load env
 import "dotenv/config";
@@ -30,7 +31,7 @@ const PROD_URL = "https://minebench.vercel.app";
 
 interface Job {
   promptSlug: string;
-  promptText: string;
+  promptText: string | null;
   modelKey: ModelKey;
   modelSlug: string;
   filePath: string;
@@ -47,6 +48,8 @@ function parseArgs() {
     upload: args.includes("--upload"),
     promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
     modelFilter: args.find((a, i) => args[i - 1] === "--model") || null,
+    promptText: args.find((a, i) => args[i - 1] === "--promptText") || null,
+    promptTextFile: args.find((a, i) => args[i - 1] === "--promptTextFile") || null,
     help: args.includes("--help") || args.includes("-h"),
   };
 }
@@ -61,12 +64,32 @@ function getEnabledModels(): ModelKey[] {
   return MODEL_CATALOG.filter((m) => m.enabled).map((m) => m.key);
 }
 
-function buildJobList(promptMap: Record<string, string>, promptFilter: string | null, modelFilter: string | null): Job[] {
+function getAllPromptSlugs(): string[] {
+  const slugs = new Set<string>(Object.keys(PROMPT_MAP));
+  for (const slug of listUploadPromptSlugs()) slugs.add(slug);
+  return Array.from(slugs).sort();
+}
+
+function resolvePromptText(promptSlug: string): string | null {
+  const fromCatalog = PROMPT_MAP[promptSlug];
+  if (fromCatalog) return fromCatalog;
+  const fromUploads = readUploadPromptText(promptSlug);
+  if (fromUploads) return fromUploads;
+  return null;
+}
+
+function buildJobList(
+  promptSlugs: string[],
+  promptTextBySlug: Map<string, string | null>,
+  promptFilter: string | null,
+  modelFilter: string | null
+): Job[] {
   const jobs: Job[] = [];
   const models = getEnabledModels();
 
-  for (const [promptSlug, promptText] of Object.entries(promptMap)) {
+  for (const promptSlug of promptSlugs) {
     if (promptFilter && !promptSlug.includes(promptFilter.toLowerCase())) continue;
+    const promptText = promptTextBySlug.get(promptSlug) ?? null;
 
     for (const modelKey of models) {
       const modelSlug = MODEL_SLUG[modelKey];
@@ -93,6 +116,10 @@ function getMissingJobs(jobs: Job[]): Job[] {
 async function generateAndSave(job: Job): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
   console.log(`  Generating ${job.promptSlug} × ${job.modelSlug}...`);
 
+  if (!job.promptText) {
+    return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
+  }
+
   const result = await generateVoxelBuild({
     modelKey: job.modelKey,
     prompt: job.promptText,
@@ -114,11 +141,18 @@ async function generateAndSave(job: Job): Promise<{ ok: boolean; error?: string;
 }
 
 function getUploadCommand(job: Job): string {
+  if (!job.promptText) {
+    return `# Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.`;
+  }
   const encPromptJs = `node -p 'encodeURIComponent(process.argv[1])' "${job.promptText.replace(/'/g, "'\\''")}"`;
   return `cd /Users/alam/GitHub/minebench && set -a && source .env && set +a && PROMPT='${job.promptText.replace(/'/g, "'\\''")}' && ENC_PROMPT="$(${encPromptJs})" && gzip -c "${job.filePath}" | curl -sS -X POST "https://minebench.vercel.app/api/admin/import-build?modelKey=${job.modelKey}&promptText=$ENC_PROMPT&overwrite=1" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -H "Content-Encoding: gzip" --data-binary @-`;
 }
 
 async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
+  if (!job.promptText) {
+    return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
+  }
+
   const token = process.env.ADMIN_TOKEN;
   if (!token) {
     return { ok: false, error: "ADMIN_TOKEN not set" };
@@ -189,10 +223,11 @@ function printStatus(jobs: Job[]) {
   }
 
   for (const [slug, group] of promptGroups) {
+    const hasPromptText = group.some((j) => Boolean(j.promptText));
     const existing = group.filter((j) => !isEmptyPlaceholder(j.filePath));
     const missing = group.filter((j) => isEmptyPlaceholder(j.filePath));
 
-    console.log(`  ${slug}: ${existing.length}/${group.length} models`);
+    console.log(`  ${slug}: ${existing.length}/${group.length} models${hasPromptText ? "" : " (⚠️ missing prompt text)"}`);
     if (existing.length > 0) {
       console.log(`    ✅ ${existing.map((j) => j.modelSlug).join(", ")}`);
     }
@@ -229,12 +264,15 @@ Usage:
   pnpm batch:generate --generate --upload # Generate missing and upload all
   pnpm batch:generate --prompt castle     # Filter by prompt
   pnpm batch:generate --model gemini      # Filter by model
+  pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit"
 
 Options:
   --generate        Generate missing builds (off by default)
   --upload          Upload builds to production
   --prompt <str>    Filter prompts by slug
   --model <str>     Filter models by slug
+  --promptText <s>  Prompt text override (only when filtered to 1 prompt)
+  --promptTextFile <path> Prompt text override read from file (only when filtered to 1 prompt)
   --help, -h        Show this help
     `);
     return;
@@ -245,9 +283,32 @@ Options:
   // ensure base uploads dir exists
   ensureDir(UPLOADS_DIR);
 
-  const promptMap = loadPromptMapFromUploads();
-  const allJobs = buildJobList(promptMap, opts.promptFilter, opts.modelFilter);
-  console.log(`📋 Total jobs: ${allJobs.length} (${Object.keys(promptMap).length} prompts × ${getEnabledModels().length} models)`);
+  const promptSlugs = getAllPromptSlugs();
+  const promptTextBySlug = new Map<string, string | null>();
+  for (const slug of promptSlugs) promptTextBySlug.set(slug, resolvePromptText(slug));
+
+  const filteredPromptSlugs = promptSlugs.filter((slug) =>
+    opts.promptFilter ? slug.includes(opts.promptFilter.toLowerCase()) : true
+  );
+
+  const promptTextOverride = opts.promptTextFile
+    ? (fs.existsSync(opts.promptTextFile) ? fs.readFileSync(opts.promptTextFile, "utf-8").trim() : "")
+    : (opts.promptText ?? "").trim();
+
+  if ((opts.promptText || opts.promptTextFile) && filteredPromptSlugs.length !== 1) {
+    console.error(
+      `\nError: --promptText/--promptTextFile requires filtering to exactly 1 prompt folder.\n` +
+        `Matched prompts: ${filteredPromptSlugs.length}\n`
+    );
+    process.exit(1);
+  }
+
+  if (promptTextOverride && filteredPromptSlugs.length === 1) {
+    promptTextBySlug.set(filteredPromptSlugs[0], promptTextOverride);
+  }
+
+  const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilter, opts.modelFilter);
+  console.log(`📋 Total jobs: ${allJobs.length} (${promptSlugs.length} prompts × ${getEnabledModels().length} models)`);
 
   if (opts.promptFilter) console.log(`   Filtered by prompt: "${opts.promptFilter}"`);
   if (opts.modelFilter) console.log(`   Filtered by model: "${opts.modelFilter}"`);

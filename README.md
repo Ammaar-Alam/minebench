@@ -244,6 +244,8 @@ uploads/
 | `knight` | A knight in armor |
 | `castle` | A medieval stone castle... |
 
+**Custom prompts:** If you add your own folders under `uploads/<slug>/`, also add `uploads/<slug>/prompt.txt` (or run `pnpm prompt --init ...`) so `pnpm batch:generate` knows what prompt text to generate/upload for that slug.
+
 #### Recommended workflow
 
 1. **Check status** to see what's missing:
