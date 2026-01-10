@@ -43,10 +43,14 @@ function getJsonPath(promptSlug: string, modelSlug: string): string {
 
 function parseArgs() {
   const args = process.argv.slice(2);
+  const attemptsRaw = args.find((a, i) => args[i - 1] === "--attempts") || null;
+  const attemptsNum = attemptsRaw ? Number(attemptsRaw) : NaN;
+  const attempts = Number.isFinite(attemptsNum) ? Math.max(1, Math.floor(attemptsNum)) : 6;
   return {
     generate: args.includes("--generate"),
     upload: args.includes("--upload"),
     overwrite: args.includes("--overwrite"),
+    attempts,
     promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
     modelFilter: args.find((a, i) => args[i - 1] === "--model") || null,
     promptText: args.find((a, i) => args[i - 1] === "--promptText") || null,
@@ -114,7 +118,7 @@ function getMissingJobs(jobs: Job[]): Job[] {
   return jobs.filter((j) => isEmptyPlaceholder(j.filePath));
 }
 
-async function generateAndSave(job: Job): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
+async function generateAndSave(job: Job, attempts: number): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
   console.log(`  Generating ${job.promptSlug} × ${job.modelSlug}...`);
 
   if (!job.promptText) {
@@ -126,6 +130,12 @@ async function generateAndSave(job: Job): Promise<{ ok: boolean; error?: string;
     prompt: job.promptText,
     gridSize: 256,
     palette: "simple",
+    maxAttempts: attempts,
+    onRetry: (attempt, reason) => {
+      const msg = (reason ?? "").trim();
+      if (!msg) return;
+      console.log(`    ↻ retry ${attempt}: ${msg}`);
+    },
   });
 
   if (!result.ok) {
@@ -272,6 +282,7 @@ Options:
   --generate        Generate missing builds (off by default)
   --upload          Upload builds to production
   --overwrite       When generating, overwrite existing JSON files
+  --attempts <n>    Max attempts per build (default 6)
   --prompt <str>    Filter prompts by slug
   --model <str>     Filter models by slug
   --promptText <s>  Prompt text override (only when filtered to 1 prompt)
@@ -345,7 +356,7 @@ Options:
     let failed = 0;
 
     for (const job of jobsToGenerate) {
-      const result = await generateAndSave(job);
+      const result = await generateAndSave(job, opts.attempts);
       if (result.ok) {
         console.log(`    ✅ Saved (${result.blockCount} blocks)`);
         success++;
@@ -356,7 +367,7 @@ Options:
           console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
         }
       } else {
-        console.log(`    ❌ Failed: ${result.error}`);
+        console.log(`    ❌ Failed after ${opts.attempts} attempts: ${result.error}`);
         failed++;
       }
     }

@@ -50,7 +50,7 @@ export type ValidatedVoxelBuild = {
 };
 
 export function parseVoxelBuildSpec(
-  input: unknown
+  input: unknown,
 ): { ok: true; value: VoxelBuild } | { ok: false; error: string } {
   const parsed = buildSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.message };
@@ -68,20 +68,20 @@ export function parseVoxelBuildSpec(
 
 const TYPE_ALIASES: Record<string, string> = {
   // Common LLM drift / minecraft namespace prefixes
-  "oak_plank": "oak_planks",
-  "wood_planks": "oak_planks",
-  "planks": "oak_planks",
-  "oak_wood": "oak_log",
-  "wood_log": "oak_log",
-  "log": "oak_log",
-  "grass": "grass_block",
-  "glowstone_block": "glowstone",
-  "iron": "iron_block",
-  "gold": "gold_block",
-  "stonebrick": "stone_bricks",
-  "stone_brick": "stone_bricks",
-  "snow_block": "snow",
-  "ice_block": "ice",
+  oak_plank: "oak_planks",
+  wood_planks: "oak_planks",
+  planks: "oak_planks",
+  oak_wood: "oak_log",
+  wood_log: "oak_log",
+  log: "oak_log",
+  grass: "grass_block",
+  glowstone_block: "glowstone",
+  iron: "iron_block",
+  gold: "gold_block",
+  stonebrick: "stone_bricks",
+  stone_brick: "stone_bricks",
+  snow_block: "snow",
+  ice_block: "ice",
 };
 
 function normalizeBlockType(rawType: string, allowed: Set<string>): string | null {
@@ -108,17 +108,20 @@ function clampInt(n: number, min: number, max: number): number {
 
 function expandBuildPrimitives(
   data: z.infer<typeof buildSchema>,
-  opts: ValidateVoxelOptions
-): { ok: true; blocks: { x: number; y: number; z: number; type: string }[] } | { ok: false; error: string } {
+  opts: ValidateVoxelOptions,
+):
+  | { ok: true; blocks: { x: number; y: number; z: number; type: string }[] }
+  | { ok: false; error: string } {
   const expanded: { x: number; y: number; z: number; type: string }[] = [];
 
   // Safety limit to prevent pathological expansions (e.g., a full solid 256^3 cube).
-  const expansionLimit = Math.max(opts.maxBlocks * 2, 20000);
+  const expansionLimit = Math.max(opts.maxBlocks * 3, 20000);
   let count = 0;
   const push = (b: { x: number; y: number; z: number; type: string }) => {
     expanded.push(b);
     count += 1;
-    if (count > expansionLimit) throw new Error(`Too many blocks after expanding primitives (${count})`);
+    if (count > expansionLimit)
+      throw new Error(`Too many blocks after expanding primitives (${count})`);
   };
 
   const boxes = data.boxes ?? [];
@@ -182,7 +185,7 @@ function expandBuildPrimitives(
 
 export function validateVoxelBuild(
   input: unknown,
-  opts: ValidateVoxelOptions
+  opts: ValidateVoxelOptions,
 ): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
   const parsed = buildSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.message };
@@ -230,8 +233,10 @@ export function validateVoxelBuild(
     });
   }
 
-  if (droppedNegative > 0) warnings.push(`Dropped ${droppedNegative} blocks with negative coordinates`);
-  if (droppedOutOfBounds > 0) warnings.push(`Dropped ${droppedOutOfBounds} blocks outside the grid bounds`);
+  if (droppedNegative > 0)
+    warnings.push(`Dropped ${droppedNegative} blocks with negative coordinates`);
+  if (droppedOutOfBounds > 0)
+    warnings.push(`Dropped ${droppedOutOfBounds} blocks outside the grid bounds`);
 
   if (droppedUnknownTypeCounts.size > 0) {
     const top = Array.from(droppedUnknownTypeCounts.entries())
