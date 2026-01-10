@@ -30,7 +30,11 @@ function defaultMaxOutputTokens(gridSize: 64 | 256 | 512): number {
   return 65536;
 }
 
-function approxMaxBlocksForTokenBudget(opts: { maxOutputTokens: number; minBlocks: number; hardMax: number }): number {
+function approxMaxBlocksForTokenBudget(opts: {
+  maxOutputTokens: number;
+  minBlocks: number;
+  hardMax: number;
+}): number {
   // rough heuristic: each block entry costs ~10-20 tokens depending on provider + whitespace
   // use 12 to allow more detail while still reducing truncation risk
   const est = Math.floor(opts.maxOutputTokens / 12);
@@ -104,11 +108,7 @@ async function providerGenerateText(args: {
   });
 }
 
-function validateParsedJson(
-  json: unknown,
-  palette: BlockDefinition[],
-  gridSize: 64 | 256 | 512
-) {
+function validateParsedJson(json: unknown, palette: BlockDefinition[], gridSize: 64 | 256 | 512) {
   return validateVoxelBuild(json, {
     palette,
     gridSize,
@@ -140,7 +140,9 @@ function buildBounds(build: VoxelBuild) {
   return { minX, minY, minZ, maxX, maxY, maxZ, spanX, spanY, spanZ };
 }
 
-export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Promise<GenerateVoxelBuildResult> {
+export async function generateVoxelBuild(
+  params: GenerateVoxelBuildParams,
+): Promise<GenerateVoxelBuildResult> {
   const model = getModelByKey(params.modelKey);
   const paletteDefs = getPalette(params.palette);
   const maxAttempts = params.maxAttempts ?? 3;
@@ -217,8 +219,8 @@ export async function generateVoxelBuild(params: GenerateVoxelBuildParams): Prom
 
       const bounds = buildBounds(validated.value.build);
       if (bounds) {
-        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.55));
-        const minHeight = Math.max(4, Math.floor(params.gridSize * 0.14));
+        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.35));
+        const minHeight = Math.max(4, Math.floor(params.gridSize * 0.1));
         const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
 
         if (maxFootprintSpan < minFootprint) {
