@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent } from "@/lib/ai/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import type { VoxelBuild } from "@/lib/voxel/types";
+import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { getPalette } from "@/lib/blocks/palettes";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -21,6 +24,107 @@ type ModelResult = {
 };
 
 const MAX_LIVE_RAW_TEXT_CHARS = 80_000;
+const PREVIEW_MAX_BLOCKS = 30_000;
+const PREVIEW_THROTTLE_MS = 450;
+
+function findArrayStart(text: string, field: string): number {
+  const idx = text.indexOf(`"${field}"`);
+  if (idx < 0) return -1;
+  const bracket = text.indexOf("[", idx);
+  return bracket;
+}
+
+function extractObjectSlicesFromArray(text: string, arrayStartIdx: number, maxItems: number): string[] {
+  const slices: string[] = [];
+  if (arrayStartIdx < 0) return slices;
+
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = arrayStartIdx; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+
+    if (ch === "}") {
+      if (depth === 0) continue;
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        slices.push(text.slice(start, i + 1));
+        start = -1;
+        if (slices.length >= maxItems) return slices;
+      }
+    }
+  }
+
+  return slices;
+}
+
+function buildPreviewFromRawText(opts: {
+  rawText: string;
+  gridSize: GridSize;
+  palette: Palette;
+}): VoxelBuild | null {
+  const blocksIdx = findArrayStart(opts.rawText, "blocks");
+  if (blocksIdx < 0) return null;
+
+  const slices = extractObjectSlicesFromArray(opts.rawText, blocksIdx, PREVIEW_MAX_BLOCKS);
+  if (slices.length === 0) return null;
+
+  const blocks: { x: number; y: number; z: number; type: string }[] = [];
+  for (const s of slices) {
+    try {
+      const parsed = JSON.parse(s) as unknown;
+      if (!parsed || typeof parsed !== "object") continue;
+      const p = parsed as { x?: unknown; y?: unknown; z?: unknown; type?: unknown };
+      const x = typeof p.x === "number" ? Math.trunc(p.x) : null;
+      const y = typeof p.y === "number" ? Math.trunc(p.y) : null;
+      const z = typeof p.z === "number" ? Math.trunc(p.z) : null;
+      const type = typeof p.type === "string" ? p.type : null;
+      if (x == null || y == null || z == null || !type) continue;
+      blocks.push({ x, y, z, type });
+    } catch {
+      // ignore
+    }
+  }
+
+  if (blocks.length === 0) return null;
+
+  const validated = validateVoxelBuild(
+    { version: "1.0", blocks },
+    {
+      gridSize: opts.gridSize,
+      palette: getPalette(opts.palette),
+      maxBlocks: PREVIEW_MAX_BLOCKS,
+    }
+  );
+  if (!validated.ok) return null;
+  return validated.value.build;
+}
 
 function groupByProvider() {
   const groups = new Map<string, { key: string; label: string; models: typeof MODEL_CATALOG }>();
@@ -55,6 +159,9 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   );
   const [running, setRunning] = useState(false);
   const [, forceRender] = useState(0);
+  const previewCacheRef = useRef(
+    new Map<ModelKey, { at: number; textLen: number; build: VoxelBuild | null }>()
+  );
 
   const providers = useMemo(() => groupByProvider(), []);
 
@@ -243,6 +350,19 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
     }
   }
 
+  function getPreviewBuild(modelKey: ModelKey, rawText: string | undefined): VoxelBuild | null {
+    if (!rawText) return null;
+    const now = Date.now();
+    const cached = previewCacheRef.current.get(modelKey);
+    const textLen = rawText.length;
+    if (cached && now - cached.at < PREVIEW_THROTTLE_MS && textLen <= cached.textLen + 80) {
+      return cached.build;
+    }
+    const build = buildPreviewFromRawText({ rawText, gridSize, palette });
+    previewCacheRef.current.set(modelKey, { at: now, textLen, build });
+    return build;
+  }
+
   const resultCards = selectedModelKeys.map((key) => {
     const model = MODEL_CATALOG.find((m) => m.key === key);
     const r = results.get(key);
@@ -250,12 +370,13 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     const liveRawText =
       r?.status === "loading" || r?.status === "error" ? r.rawText : undefined;
+    const previewBuild = r?.status === "loading" ? getPreviewBuild(key, r.rawText) : null;
     return (
       <VoxelViewerCard
         key={key}
         title={model?.displayName ?? key}
         subtitle={model?.provider}
-        voxelBuild={r?.status === "success" ? r.voxelBuild : null}
+        voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}

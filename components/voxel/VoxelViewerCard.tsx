@@ -43,6 +43,7 @@ export function VoxelViewerCard({
 }) {
   const build = useMemo(() => asVoxelBuild(voxelBuild), [voxelBuild]);
   const blockCount = build?.blocks.length ?? 0;
+  const isThinking = Boolean(isLoading && attempt && attempt > 0 && !debugRawText);
 
   const timing = useMemo(() => {
     const ms = metrics?.generationTimeMs;
@@ -103,10 +104,12 @@ export function VoxelViewerCard({
           ) : null}
         </div>
 
-        {isLoading ? (
+        {isLoading && !build ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/60 text-sm text-muted backdrop-blur-sm">
             <div className="flex max-w-[90%] flex-col items-center gap-1 text-center">
-              <div>{attempt === 0 ? "Connecting…" : "Generating…"}</div>
+              <div>
+                {attempt === 0 ? "Connecting…" : isThinking ? "Thinking…" : "Streaming…"}
+              </div>
               {elapsed ? <div className="text-xs font-mono text-muted">{elapsed}</div> : null}
               {attempt && attempt > 1 ? (
                 <div className="text-xs font-mono text-muted">retry {attempt}</div>
@@ -123,6 +126,17 @@ export function VoxelViewerCard({
                 </details>
               ) : null}
             </div>
+          </div>
+        ) : null}
+
+        {isLoading && build ? (
+          <div className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1 rounded-md border border-border/70 bg-bg/60 px-3 py-2 text-xs text-muted backdrop-blur-sm">
+            <div className="pointer-events-none">
+              {isThinking ? "Thinking…" : debugRawText ? "Streaming…" : "Generating…"}
+            </div>
+            <div className="font-mono">{blockCount.toLocaleString()} blocks</div>
+            {elapsed ? <div className="font-mono">{elapsed}</div> : null}
+            {attempt && attempt > 1 ? <div className="font-mono">retry {attempt}</div> : null}
           </div>
         ) : null}
 
