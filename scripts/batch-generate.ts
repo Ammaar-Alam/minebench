@@ -159,11 +159,14 @@ async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
   url.searchParams.set("promptText", job.promptText);
   url.searchParams.set("overwrite", "1");
 
-  async function doUpload(opts: { body: Buffer; headers: Record<string, string> }) {
+  async function doUpload(opts: { body: Uint8Array<ArrayBufferLike>; headers: Record<string, string> }) {
+    // Next's `fetch` typings only accept non-shared `ArrayBuffer` views, so coerce the buffer type
+    // without copying (Node Buffers use ArrayBuffer under the hood).
+    const body = new Uint8Array(opts.body.buffer as ArrayBuffer, opts.body.byteOffset, opts.body.byteLength);
     const resp = await fetch(url.toString(), {
       method: "POST",
       headers: opts.headers,
-      body: opts.body,
+      body,
     });
     const text = await resp.text();
     return { ok: resp.ok, status: resp.status, text };
