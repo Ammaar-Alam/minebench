@@ -134,7 +134,9 @@ export async function openaiGenerateText(params: {
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for OpenAI structured output");
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
-  const isResponsesOnlyModel = params.modelId === "gpt-5.2-codex";
+  // Some models are Responses-only (or otherwise not supported in chat/completions).
+  // For these, don't fall back to chat/completions because it hides the real failure cause.
+  const isResponsesOnlyModel = params.modelId === "gpt-5.2-pro" || params.modelId === "gpt-5.2-codex";
   const useHighReasoning =
     params.modelId === "gpt-5.2" || params.modelId === "gpt-5.2-pro" || isGpt5Family;
   // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
@@ -225,7 +227,7 @@ export async function openaiGenerateText(params: {
     } else {
       const body = lastBody || (await res.text().catch(() => ""));
       const rid = requestIdFromResponse(res);
-      // gpt-5.2-codex is Responses-only; chat/completions will always fail
+      // Responses-only models: chat/completions will always fail
       if (isResponsesOnlyModel) {
         throw new Error(`OpenAI error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
       }
@@ -248,7 +250,7 @@ export async function openaiGenerateText(params: {
   }
 
   if (isResponsesOnlyModel) {
-    throw new Error("OpenAI model gpt-5.2-codex only supports the /v1/responses endpoint");
+    throw new Error(`OpenAI model ${params.modelId} only supports the /v1/responses endpoint`);
   }
 
   let res: Response | null = null;

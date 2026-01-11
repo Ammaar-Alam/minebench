@@ -35,7 +35,8 @@ export function voxelExecToolCallJsonSchema() {
           palette: { type: "string", enum: ["simple", "advanced"] },
           seed: { type: "integer" },
         },
-        required: ["code", "gridSize", "palette"],
+        // OpenAI structured outputs (strict) requires required[] to include every key in properties.
+        required: ["code", "gridSize", "palette", "seed"],
         additionalProperties: false,
       },
     },
