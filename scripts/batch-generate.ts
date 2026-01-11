@@ -8,11 +8,12 @@
  *   pnpm batch:generate --generate          # Generate missing builds
  *   pnpm batch:generate --generate --upload # Generate missing and upload all
  *   pnpm batch:generate --prompt "castle"   # Filter by prompt
- *   pnpm batch:generate --model gemini      # Filter by model
+ *   pnpm batch:generate --model gemini      # Filter by single model
+ *   pnpm batch:generate --model gemini-pro gemini-flash --generate # Multiple models
  *   pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit" # Custom prompt text override
  * 
  * Environment:
- *   Requires .env with OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY
+ *   Requires .env with API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) or OPENROUTER_API_KEY
  *   For upload: requires ADMIN_TOKEN
  */
 
@@ -46,13 +47,24 @@ function parseArgs() {
   const attemptsRaw = args.find((a, i) => args[i - 1] === "--attempts") || null;
   const attemptsNum = attemptsRaw ? Number(attemptsRaw) : NaN;
   const attempts = Number.isFinite(attemptsNum) ? Math.max(1, Math.floor(attemptsNum)) : 6;
+
+  // collect all values after --model until next flag
+  const modelFilters: string[] = [];
+  const modelIdx = args.indexOf("--model");
+  if (modelIdx !== -1) {
+    for (let i = modelIdx + 1; i < args.length; i++) {
+      if (args[i].startsWith("--")) break;
+      modelFilters.push(args[i]);
+    }
+  }
+
   return {
     generate: args.includes("--generate"),
     upload: args.includes("--upload"),
     overwrite: args.includes("--overwrite"),
     attempts,
     promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
-    modelFilter: args.find((a, i) => args[i - 1] === "--model") || null,
+    modelFilters, // now an array
     promptText: args.find((a, i) => args[i - 1] === "--promptText") || null,
     promptTextFile: args.find((a, i) => args[i - 1] === "--promptTextFile") || null,
     help: args.includes("--help") || args.includes("-h"),
@@ -87,7 +99,7 @@ function buildJobList(
   promptSlugs: string[],
   promptTextBySlug: Map<string, string | null>,
   promptFilter: string | null,
-  modelFilter: string | null
+  modelFilters: string[]
 ): Job[] {
   const jobs: Job[] = [];
   const models = getEnabledModels();
@@ -98,7 +110,13 @@ function buildJobList(
 
     for (const modelKey of models) {
       const modelSlug = MODEL_SLUG[modelKey];
-      if (modelFilter && !modelSlug.includes(modelFilter.toLowerCase()) && !modelKey.includes(modelFilter.toLowerCase())) continue;
+      // if model filters provided, check if this model matches any of them
+      if (modelFilters.length > 0) {
+        const matchesAny = modelFilters.some(
+          (f) => modelSlug.includes(f.toLowerCase()) || modelKey.includes(f.toLowerCase())
+        );
+        if (!matchesAny) continue;
+      }
 
       const filePath = getJsonPath(promptSlug, modelSlug);
       jobs.push({ promptSlug, promptText, modelKey, modelSlug, filePath });
@@ -275,7 +293,8 @@ Usage:
   pnpm batch:generate --generate --upload # Generate missing and upload all
   pnpm batch:generate --generate --overwrite # Regenerate even if JSON exists
   pnpm batch:generate --prompt castle     # Filter by prompt
-  pnpm batch:generate --model gemini      # Filter by model
+  pnpm batch:generate --model gemini      # Filter by single model
+  pnpm batch:generate --model gemini-pro gemini-flash --generate  # Multiple models
   pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit"
 
 Options:
@@ -284,7 +303,7 @@ Options:
   --overwrite       When generating, overwrite existing JSON files
   --attempts <n>    Max attempts per build (default 6)
   --prompt <str>    Filter prompts by slug
-  --model <str>     Filter models by slug
+  --model <str...>  Filter models by slug (can specify multiple)
   --promptText <s>  Prompt text override (only when filtered to 1 prompt)
   --promptTextFile <path> Prompt text override read from file (only when filtered to 1 prompt)
   --help, -h        Show this help
@@ -321,11 +340,11 @@ Options:
     promptTextBySlug.set(filteredPromptSlugs[0], promptTextOverride);
   }
 
-  const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilter, opts.modelFilter);
+  const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilter, opts.modelFilters);
   console.log(`📋 Total jobs: ${allJobs.length} (${promptSlugs.length} prompts × ${getEnabledModels().length} models)`);
 
   if (opts.promptFilter) console.log(`   Filtered by prompt: "${opts.promptFilter}"`);
-  if (opts.modelFilter) console.log(`   Filtered by model: "${opts.modelFilter}"`);
+  if (opts.modelFilters.length > 0) console.log(`   Filtered by model(s): ${opts.modelFilters.join(", ")}`);
 
   printStatus(allJobs);
 
