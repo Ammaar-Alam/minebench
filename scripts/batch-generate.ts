@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
+import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
 import { MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
 import { MODEL_SLUG, PROMPT_MAP, listUploadPromptSlugs, readUploadPromptText } from "./uploadsCatalog";
 
@@ -161,6 +162,20 @@ async function generateAndSave(job: Job, attempts: number): Promise<{ ok: boolea
   });
 
   if (!result.ok) {
+    if (result.rawText) {
+      // Preserve the raw output for debugging/benchmarking even if validation failed.
+      ensureDir(path.dirname(job.filePath));
+      const rawPath = job.filePath.endsWith(".json") ? job.filePath.replace(/\.json$/, ".raw.txt") : `${job.filePath}.raw.txt`;
+      fs.writeFileSync(rawPath, result.rawText);
+
+      const extracted = extractBestVoxelBuildJson(result.rawText);
+      if (extracted) {
+        const failedJsonPath = job.filePath.endsWith(".json")
+          ? job.filePath.replace(/\.json$/, ".failed.json")
+          : `${job.filePath}.failed.json`;
+        fs.writeFileSync(failedJsonPath, JSON.stringify(extracted, null, 2));
+      }
+    }
     return { ok: false, error: result.error };
   }
 
