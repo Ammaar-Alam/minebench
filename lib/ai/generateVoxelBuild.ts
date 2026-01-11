@@ -44,7 +44,6 @@ function approxMaxBlocksForTokenBudget(opts: {
   return Math.max(opts.minBlocks, Math.min(opts.hardMax, est));
 }
 
-const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 const DEFAULT_TEMPERATURE = 0.2;
 
 // check if a direct provider API key is available
@@ -119,7 +118,7 @@ async function callDirectProvider(args: {
       modelId: args.modelId,
       system: args.system,
       user: args.user,
-      maxTokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       onDelta: args.onDelta,
     });
@@ -199,14 +198,8 @@ async function providerGenerateText(args: {
         onDelta: args.onDelta,
       });
     } catch (directErr) {
-      // if no OpenRouter fallback available, rethrow
-      if (!hasOpenRouter || !model.openRouterModelId) {
-        throw directErr;
-      }
-      // otherwise, fall through to OpenRouter
-      console.warn(
-        `Direct ${model.provider} call failed, falling back to OpenRouter: ${directErr instanceof Error ? directErr.message : String(directErr)}`,
-      );
+      // If a direct provider key is present, do not fall back to OpenRouter.
+      throw directErr;
     }
   }
 
