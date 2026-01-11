@@ -4,6 +4,7 @@ import type { ModelKey } from "../lib/ai/modelCatalog";
 
 export const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 export const PROMPT_TEXT_FILENAME = "prompt.txt";
+const IGNORED_UPLOAD_DIRS = new Set(["tool-runs"]);
 
 // All curated prompts with short slugs for filenames.
 // Add your custom prompts here to make them importable by scripts.
@@ -59,6 +60,7 @@ export function listUploadPromptSlugs(): string[] {
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .filter((name) => !name.startsWith("."))
+    .filter((name) => !IGNORED_UPLOAD_DIRS.has(name))
     .sort();
 }
 
