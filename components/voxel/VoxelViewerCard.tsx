@@ -7,9 +7,9 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 const VIEWER_MAX_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
-  64: 230_000,
-  256: 650_000,
-  512: 1_100_000,
+  64: 262_144,
+  256: 1_000_000,
+  512: 2_500_000,
 };
 
 export function VoxelViewerCard({
@@ -44,7 +44,12 @@ export function VoxelViewerCard({
   palette?: "simple" | "advanced";
 }) {
   const rendered = useMemo(() => {
-    if (!voxelBuild) return { build: null as VoxelBuild | null, warnings: [] as string[], error: null as string | null };
+    if (!voxelBuild)
+      return {
+        build: null as VoxelBuild | null,
+        warnings: [] as string[],
+        error: null as string | null,
+      };
     const paletteDefs = getPalette(palette);
     const maxBlocks = VIEWER_MAX_BLOCKS_BY_GRID[gridSize] ?? VIEWER_MAX_BLOCKS_BY_GRID[256];
     const validated = validateVoxelBuild(voxelBuild, {
@@ -88,9 +93,7 @@ export function VoxelViewerCard({
             <div className="font-display text-base font-semibold tracking-tight text-fg">
               {title}
             </div>
-            {subtitle ? (
-              <div className="min-h-[1.5rem] text-sm">{subtitle}</div>
-            ) : null}
+            {subtitle ? <div className="min-h-[1.5rem] text-sm">{subtitle}</div> : null}
           </div>
           <div className="shrink-0 text-right text-xs text-muted">
             {build ? (
@@ -109,7 +112,12 @@ export function VoxelViewerCard({
 
         <div className="relative h-[320px] w-full sm:h-[360px] md:h-[420px] lg:h-[520px]">
           {build ? (
-            <VoxelViewer voxelBuild={build} palette={palette} autoRotate={autoRotate} animateIn={animateIn} />
+            <VoxelViewer
+              voxelBuild={build}
+              palette={palette}
+              autoRotate={autoRotate}
+              animateIn={animateIn}
+            />
           ) : null}
 
           {build ? (
@@ -124,9 +132,7 @@ export function VoxelViewerCard({
         {isLoading && !build ? (
           <div className="absolute inset-0 flex items-center justify-center bg-bg/60 text-sm text-muted backdrop-blur-sm">
             <div className="flex max-w-[90%] flex-col items-center gap-1 text-center">
-              <div>
-                {attempt === 0 ? "Connecting…" : isThinking ? "Thinking…" : "Streaming…"}
-              </div>
+              <div>{attempt === 0 ? "Connecting…" : isThinking ? "Thinking…" : "Streaming…"}</div>
               {elapsed ? <div className="text-xs font-mono text-muted">{elapsed}</div> : null}
               {attempt && attempt > 1 ? (
                 <div className="text-xs font-mono text-muted">retry {attempt}</div>
@@ -138,7 +144,7 @@ export function VoxelViewerCard({
                     Live model output
                   </summary>
                   <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted">
-{debugRawText}
+                    {debugRawText}
                   </pre>
                 </details>
               ) : null}
@@ -167,7 +173,7 @@ export function VoxelViewerCard({
                     Raw model output
                   </summary>
                   <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted">
-{debugRawText}
+                    {debugRawText}
                   </pre>
                 </details>
               ) : null}

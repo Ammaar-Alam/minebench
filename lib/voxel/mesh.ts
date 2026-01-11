@@ -155,8 +155,13 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const blocks = build.blocks.filter((b) => allowed.has(b.type));
   // 10 bits per coordinate supports up to 1024³ grids (covers 512³).
   const encode = (x: number, y: number, z: number) => x | (y << 10) | (z << 20);
-  const occupied = new Set<number>();
-  for (const b of blocks) occupied.add(encode(b.x, b.y, b.z));
+  const blocksByPos = new Map<number, string>();
+  for (const b of blocks) blocksByPos.set(encode(b.x, b.y, b.z), b.type);
+
+  function isOccluder(blockType: string): boolean {
+    const kind = getRenderKind(blockType) ?? "opaque";
+    return kind === "opaque" || kind === "emissive";
+  }
 
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
@@ -224,7 +229,14 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
       const nx = b.x + d.dx;
       const ny = b.y + d.dy;
       const nz = b.z + d.dz;
-      if (occupied.has(encode(nx, ny, nz))) continue;
+      const neighborType = blocksByPos.get(encode(nx, ny, nz));
+      if (neighborType) {
+        // Internal faces between identical blocks are never visible.
+        if (neighborType === b.type) continue;
+        // Faces adjacent to occluding blocks are hidden. Non-occluding blocks (water/glass/leaves)
+        // should not cull neighbor faces so users can see through them (Minecraft-like).
+        if (isOccluder(neighborType)) continue;
+      }
 
       const texKey = getTextureKey(b.type, d.face);
       if (!hasAtlasKey(texKey)) continue;
