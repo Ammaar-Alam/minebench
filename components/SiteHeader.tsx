@@ -130,7 +130,7 @@ function NavLink({ href, label }: { href: string; label: string }) {
 export function SiteHeader() {
   return (
     <header className="sticky top-0 z-20 border-b border-border bg-bg/75 backdrop-blur relative">
-      <div className="mx-auto flex w-full max-w-[92rem] items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-[92rem] flex-col items-start justify-between gap-3 px-4 py-4 sm:flex-row sm:items-center sm:gap-4 sm:px-6 lg:px-8">
         <a
           href="#main"
           className="sr-only rounded-full bg-card/80 px-4 py-2 text-sm text-fg ring-1 ring-border focus:not-sr-only focus:absolute focus:left-4 focus:top-3"
@@ -150,7 +150,7 @@ export function SiteHeader() {
 	          </div>
 	        </Link>
 
-        <nav className="flex items-center gap-1 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border">
+        <nav className="flex w-full flex-wrap items-center justify-center gap-1 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border sm:w-auto sm:flex-nowrap">
           <NavLink href="/" label="Arena" />
           <NavLink href="/sandbox" label="Sandbox" />
           <NavLink href="/local" label="Local" />

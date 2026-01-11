@@ -60,16 +60,19 @@ export function VoteBar({
       {/* main row: A | Tie | B */}
       <div className="flex items-center gap-2">
         <button
-          className={`${base} mb-vote-a h-11 flex-1 px-4`}
+          aria-label="A is better"
+          className={`${base} mb-vote-a h-12 flex-1 px-3 sm:h-11 sm:px-4`}
           disabled={disabled}
           onClick={() => onVote("A")}
         >
           <ChevronLeft className="h-4 w-4 opacity-70" />
-          <span>A is better</span>
+          <span className="sm:hidden">A</span>
+          <span className="hidden sm:inline">A is better</span>
         </button>
 
         <button
-          className={`${base} mb-vote-tie h-11 px-5`}
+          aria-label="Tie"
+          className={`${base} mb-vote-tie h-12 px-4 sm:h-11 sm:px-5`}
           disabled={disabled}
           onClick={() => onVote("TIE")}
         >
@@ -78,11 +81,13 @@ export function VoteBar({
         </button>
 
         <button
-          className={`${base} mb-vote-b h-11 flex-1 px-4`}
+          aria-label="B is better"
+          className={`${base} mb-vote-b h-12 flex-1 px-3 sm:h-11 sm:px-4`}
           disabled={disabled}
           onClick={() => onVote("B")}
         >
-          <span>B is better</span>
+          <span className="sm:hidden">B</span>
+          <span className="hidden sm:inline">B is better</span>
           <ChevronRight className="h-4 w-4 opacity-70" />
         </button>
       </div>
@@ -90,16 +95,19 @@ export function VoteBar({
       {/* secondary row: Both bad | Skip */}
       <div className="flex items-center justify-center gap-2">
         <button
-          className={`${base} mb-vote-bad h-9 px-4`}
+          aria-label="Both bad"
+          className={`${base} mb-vote-bad h-10 px-3 sm:h-9 sm:px-4`}
           disabled={disabled}
           onClick={() => onVote("BOTH_BAD")}
         >
           <X className="h-3.5 w-3.5 opacity-70" />
-          <span>Both bad</span>
+          <span className="sm:hidden">Bad</span>
+          <span className="hidden sm:inline">Both bad</span>
         </button>
 
         <button
-          className={`${base} mb-vote-skip h-9 px-4`}
+          aria-label="Skip"
+          className={`${base} mb-vote-skip h-10 px-3 sm:h-9 sm:px-4`}
           disabled={disabled}
           onClick={onSkip}
         >

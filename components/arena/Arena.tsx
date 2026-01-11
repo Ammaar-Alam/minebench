@@ -125,28 +125,31 @@ export function Arena() {
       <div className="mb-panel p-4">
         <div className="mb-panel-inner flex flex-col gap-3">
           {/* header + prompt inline */}
-          <div className="flex items-center gap-3">
-            <div className="mb-badge shrink-0">
-              <span className="mb-dot" />
-              <span className="text-fg">Prompt</span>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="mb-badge shrink-0">
+                <span className="mb-dot" />
+                <span className="text-fg">Prompt</span>
+              </div>
+              {isLongPrompt ? (
+                <button
+                  type="button"
+                  aria-expanded={promptExpanded}
+                  className="mb-btn mb-btn-ghost h-8 shrink-0 px-3 text-[11px] sm:h-7 sm:px-2.5 sm:text-[10px]"
+                  onClick={() => setPromptExpanded((v) => !v)}
+                >
+                  {promptExpanded ? "Less" : "More"}
+                </button>
+              ) : null}
             </div>
-            <div className="min-w-0 flex-1 py-1">
+
+            <div className="min-w-0 flex-1">
               <div
-                className={`${promptExpanded ? "max-h-32 overflow-auto" : "max-h-[2.6rem] overflow-hidden"} text-[14px] font-medium leading-snug text-fg transition-all duration-200`}
+                className={`${promptExpanded ? "max-h-32 overflow-auto" : "max-h-[3.9rem] overflow-hidden sm:max-h-[2.6rem]"} text-[14px] font-medium leading-snug text-fg transition-all duration-200`}
               >
                 <AnimatedPrompt text={promptText || "Loading…"} isExpanded={promptExpanded} />
               </div>
             </div>
-            {isLongPrompt && (
-              <button
-                type="button"
-                aria-expanded={promptExpanded}
-                className="mb-btn mb-btn-ghost h-7 shrink-0 px-2.5 text-[10px]"
-                onClick={() => setPromptExpanded((v) => !v)}
-              >
-                {promptExpanded ? "Less" : "More"}
-              </button>
-            )}
           </div>
 
           {state.kind === "error" ? (
@@ -156,8 +159,11 @@ export function Arena() {
           ) : null}
 
           {/* builds grid */}
-          <div key={animKey} className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <div className="mb-card-enter">
+          <div
+            key={animKey}
+            className="flex w-full snap-x snap-mandatory gap-3 overflow-x-auto pb-2 md:grid md:snap-none md:grid-cols-2 md:overflow-visible md:pb-0"
+          >
+            <div className="mb-card-enter min-w-[88%] shrink-0 snap-center md:min-w-0 md:shrink md:snap-none">
               <VoxelViewerCard
                 title="Build A"
                 subtitle={
@@ -171,7 +177,7 @@ export function Arena() {
                 autoRotate
               />
             </div>
-            <div className="mb-card-enter mb-card-enter-delay">
+            <div className="mb-card-enter mb-card-enter-delay min-w-[88%] shrink-0 snap-center md:min-w-0 md:shrink md:snap-none">
               <VoxelViewerCard
                 title="Build B"
                 subtitle={
@@ -187,6 +193,11 @@ export function Arena() {
             </div>
           </div>
 
+          <div className="flex items-center justify-between text-xs text-muted md:hidden">
+            <span>Swipe to compare</span>
+            <span className="font-mono">A ⇄ B</span>
+          </div>
+
           {/* vote bar - no wrapper panel */}
           <VoteBar
             disabled={state.kind !== "ready" || submitting}
@@ -198,21 +209,21 @@ export function Arena() {
 
       {/* explanatory section */}
       <div className="mb-panel mb-panel-solid overflow-hidden p-8 md:p-10">
-        <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
+        <div className="mx-auto flex w-full max-w-7xl flex-col items-center text-center">
           <div className="mb-5 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent ring-1 ring-accent/20">
             <span>Unofficial Benchmark</span>
           </div>
           <h2 className="mb-4 font-display text-2xl font-bold tracking-tight text-fg md:text-3xl">
             Spatial Intelligence Test
           </h2>
-          <p className="mb-12 text-base leading-relaxed text-fg/85">
+          <p className="mb-12 max-w-2xl text-base leading-relaxed text-fg/85">
             MineBench evaluates how well AI models understand 3D space. Models must generate raw
             JSON coordinates for Minecraft blocks—no images, no 3D tools. We visualize their pure
             code output here.
           </p>
 
-          <div className="grid w-full grid-cols-1 gap-6 text-left md:grid-cols-3">
-            <div className="rounded-xl border border-border/40 bg-bg/30 p-5">
+          <div className="grid w-full grid-cols-1 gap-4 text-left sm:gap-5 md:grid-cols-2 lg:grid-cols-3 lg:gap-6">
+            <div className="flex h-full flex-col rounded-2xl border border-border/40 bg-bg/30 p-6">
               <div className="mb-4 text-accent">
                 <svg
                   className="h-6 w-6"
@@ -236,7 +247,7 @@ export function Arena() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-border/40 bg-bg/30 p-5">
+            <div className="flex h-full flex-col rounded-2xl border border-border/40 bg-bg/30 p-6">
               <div className="mb-4 text-accent">
                 <svg
                   className="h-6 w-6"
@@ -260,7 +271,7 @@ export function Arena() {
               </div>
             </div>
 
-            <div className="rounded-xl border border-border/40 bg-bg/30 p-5">
+            <div className="flex h-full flex-col rounded-2xl border border-border/40 bg-bg/30 p-6">
               <div className="mb-4 text-accent">
                 <svg
                   className="h-6 w-6"
