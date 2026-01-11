@@ -8,8 +8,8 @@ import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 const VIEWER_MAX_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
   64: 262_144,
-  256: 1_000_000,
-  512: 2_500_000,
+  256: 1_500_000,
+  512: 5_000_000,
 };
 
 export function VoxelViewerCard({
