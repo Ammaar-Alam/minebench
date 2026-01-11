@@ -111,6 +111,13 @@ function buildJobList(
   const jobs: Job[] = [];
   const models = getEnabledModels();
 
+  const normalizedModelFilters = modelFilters.map((f) => f.trim().toLowerCase()).filter(Boolean);
+  const knownModelSlugs = new Set(models.map((k) => MODEL_SLUG[k].toLowerCase()));
+  const knownModelKeys = new Set(models.map((k) => k.toLowerCase()));
+  const exactModelFilters = new Set(
+    normalizedModelFilters.filter((f) => knownModelSlugs.has(f) || knownModelKeys.has(f))
+  );
+
   for (const promptSlug of promptSlugs) {
     if (promptFilter && !promptSlug.includes(promptFilter.toLowerCase())) continue;
     const promptText = promptTextBySlug.get(promptSlug) ?? null;
@@ -118,10 +125,16 @@ function buildJobList(
     for (const modelKey of models) {
       const modelSlug = MODEL_SLUG[modelKey];
       // if model filters provided, check if this model matches any of them
-      if (modelFilters.length > 0) {
-        const matchesAny = modelFilters.some(
-          (f) => modelSlug.includes(f.toLowerCase()) || modelKey.includes(f.toLowerCase())
-        );
+      if (normalizedModelFilters.length > 0) {
+        const slugLower = modelSlug.toLowerCase();
+        const keyLower = modelKey.toLowerCase();
+
+        const matchesAny = normalizedModelFilters.some((f) => {
+          // If the user provided an exact model slug/key (matching any known model),
+          // treat it as an exact match. This avoids cases like "gpt-5-2" also matching "gpt-5-2-pro".
+          if (exactModelFilters.has(f)) return f === slugLower || f === keyLower;
+          return slugLower.includes(f) || keyLower.includes(f);
+        });
         if (!matchesAny) continue;
       }
 
