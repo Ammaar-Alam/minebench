@@ -106,28 +106,59 @@ function clampInt(n: number, min: number, max: number): number {
   return n;
 }
 
-function expandBuildPrimitives(
-  data: z.infer<typeof buildSchema>,
+export function validateVoxelBuild(
+  input: unknown,
   opts: ValidateVoxelOptions,
-):
-  | { ok: true; blocks: { x: number; y: number; z: number; type: string }[] }
-  | { ok: false; error: string } {
-  const expanded: { x: number; y: number; z: number; type: string }[] = [];
+): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+  const parsed = buildSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.message };
 
-  // Safety limit to prevent pathological expansions (e.g., a full solid 256^3 cube).
-  const expansionLimit = Math.max(opts.maxBlocks * 10, 20000);
-  let count = 0;
-  const push = (b: { x: number; y: number; z: number; type: string }) => {
-    expanded.push(b);
-    count += 1;
-    if (count > expansionLimit)
-      throw new Error(`Too many blocks after expanding primitives (${count})`);
+  const allowed = new Set(opts.palette.map((b) => b.id));
+  const warnings: string[] = [];
+  let droppedNegative = 0;
+  let droppedOutOfBounds = 0;
+  const droppedUnknownTypeCounts = new Map<string, number>();
+
+  const keyToBlock = new Map<number, { x: number; y: number; z: number; type: string }>();
+  // 10 bits per coordinate supports up to 1024³ grids (covers 512³).
+  const encode = (x: number, y: number, z: number) => x | (y << 10) | (z << 20);
+
+  // Hard cap to prevent pathological expansions from primitives. We enforce this BEFORE building any huge intermediate arrays.
+  const expansionBudget = Math.max(opts.maxBlocks * 2, 20000);
+  let expandedCount = 0;
+  const charge = (n: number) => {
+    expandedCount += n;
+    if (expandedCount > expansionBudget) {
+      throw new Error(`Too many blocks after expanding primitives (${expandedCount})`);
+    }
   };
 
-  const boxes = data.boxes ?? [];
-  const lines = data.lines ?? [];
+  const bumpUnknownType = (rawType: string, count: number) => {
+    const key = rawType.trim() ? rawType.trim().toLowerCase() : "(empty)";
+    droppedUnknownTypeCounts.set(key, (droppedUnknownTypeCounts.get(key) ?? 0) + count);
+  };
+
+  const put = (xRaw: number, yRaw: number, zRaw: number, type: string) => {
+    if (xRaw < 0 || yRaw < 0 || zRaw < 0) {
+      droppedNegative += 1;
+      return;
+    }
+    if (xRaw >= opts.gridSize || yRaw >= opts.gridSize || zRaw >= opts.gridSize) {
+      droppedOutOfBounds += 1;
+      return;
+    }
+
+    const x = clampInt(Math.trunc(xRaw), 0, opts.gridSize - 1);
+    const y = clampInt(Math.trunc(yRaw), 0, opts.gridSize - 1);
+    const z = clampInt(Math.trunc(zRaw), 0, opts.gridSize - 1);
+
+    keyToBlock.set(encode(x, y, z), { x, y, z, type });
+  };
 
   try {
+    const boxes = parsed.data.boxes ?? [];
+    const lines = parsed.data.lines ?? [];
+
     for (const box of boxes) {
       const xMin = Math.min(box.x1, box.x2);
       const xMax = Math.max(box.x1, box.x2);
@@ -136,11 +167,20 @@ function expandBuildPrimitives(
       const zMin = Math.min(box.z1, box.z2);
       const zMax = Math.max(box.z1, box.z2);
 
-      // Expand inclusive ranges. Coordinates are validated/dropped later, so we don’t clamp here.
+      const vol = (xMax - xMin + 1) * (yMax - yMin + 1) * (zMax - zMin + 1);
+      if (!Number.isFinite(vol) || vol <= 0) continue;
+      charge(vol);
+
+      const normalizedType = normalizeBlockType(box.type, allowed);
+      if (!normalizedType) {
+        bumpUnknownType(box.type, vol);
+        continue;
+      }
+
       for (let x = xMin; x <= xMax; x++) {
         for (let y = yMin; y <= yMax; y++) {
           for (let z2 = zMin; z2 <= zMax; z2++) {
-            push({ x, y, z: z2, type: box.type });
+            put(x, y, z2, normalizedType);
           }
         }
       }
@@ -158,79 +198,43 @@ function expandBuildPrimitives(
       const dy = y2 - y1;
       const dz = z2 - z1;
       const steps = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
+      const len = Math.max(1, steps + 1);
+      charge(len);
+
+      const normalizedType = normalizeBlockType(line.type, allowed);
+      if (!normalizedType) {
+        bumpUnknownType(line.type, len);
+        continue;
+      }
 
       if (steps <= 0) {
-        push({ x: x1, y: y1, z: z1, type: line.type });
+        put(x1, y1, z1, normalizedType);
         continue;
       }
 
       for (let i = 0; i <= steps; i++) {
         const t = i / steps;
-        // DDA line; duplicates are fine (deduped later)
+        // DDA line; duplicates are fine (deduped by key map)
         const x = Math.round(x1 + dx * t);
         const y = Math.round(y1 + dy * t);
         const z = Math.round(z1 + dz * t);
-        push({ x, y, z, type: line.type });
+        put(x, y, z, normalizedType);
       }
     }
 
     // Explicit blocks last so they can override primitives at the same coordinate.
-    for (const b of data.blocks) push(b);
-
-    return { ok: true, blocks: expanded };
+    const blocks = parsed.data.blocks;
+    charge(blocks.length);
+    for (const b of blocks) {
+      const normalizedType = normalizeBlockType(b.type, allowed);
+      if (!normalizedType) {
+        bumpUnknownType(b.type, 1);
+        continue;
+      }
+      put(b.x, b.y, b.z, normalizedType);
+    }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Failed to expand primitives" };
-  }
-}
-
-export function validateVoxelBuild(
-  input: unknown,
-  opts: ValidateVoxelOptions,
-): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
-  const parsed = buildSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.message };
-
-  const expanded = expandBuildPrimitives(parsed.data, opts);
-  if (!expanded.ok) return { ok: false, error: expanded.error };
-
-  const allowed = new Set(opts.palette.map((b) => b.id));
-  const warnings: string[] = [];
-  let droppedNegative = 0;
-  let droppedOutOfBounds = 0;
-  const droppedUnknownTypeCounts = new Map<string, number>();
-
-  const keyToBlock = new Map<number, { x: number; y: number; z: number; type: string }>();
-  // 10 bits per coordinate supports up to 1024³ grids (covers 512³).
-  const encode = (x: number, y: number, z: number) => x | (y << 10) | (z << 20);
-
-  for (const b of expanded.blocks) {
-    if (b.x < 0 || b.y < 0 || b.z < 0) {
-      droppedNegative += 1;
-      continue;
-    }
-    if (b.x >= opts.gridSize || b.y >= opts.gridSize || b.z >= opts.gridSize) {
-      droppedOutOfBounds += 1;
-      continue;
-    }
-
-    const normalizedType = normalizeBlockType(b.type, allowed);
-    if (!normalizedType) {
-      const key = b.type.trim() ? b.type.trim().toLowerCase() : "(empty)";
-      droppedUnknownTypeCounts.set(key, (droppedUnknownTypeCounts.get(key) ?? 0) + 1);
-      continue;
-    }
-
-    // ensure we store ints even if something slipped through
-    const x = clampInt(Math.trunc(b.x), 0, opts.gridSize - 1);
-    const y = clampInt(Math.trunc(b.y), 0, opts.gridSize - 1);
-    const z3 = clampInt(Math.trunc(b.z), 0, opts.gridSize - 1);
-
-    keyToBlock.set(encode(x, y, z3), {
-      x,
-      y,
-      z: z3,
-      type: normalizedType,
-    });
   }
 
   if (droppedNegative > 0)

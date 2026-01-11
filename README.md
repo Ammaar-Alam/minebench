@@ -179,6 +179,9 @@ pnpm batch:generate --upload
 # generate missing builds
 pnpm batch:generate --generate
 
+# generate missing builds without voxel.exec tool usage
+pnpm batch:generate --generate --notools
+
 # generate missing builds and upload all to production
 pnpm batch:generate --generate --upload
 

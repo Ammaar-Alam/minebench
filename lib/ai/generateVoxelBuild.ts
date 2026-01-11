@@ -1,6 +1,6 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
-import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import { extractBestVoxelBuildJson, extractFirstJsonObject } from "@/lib/ai/jsonExtract";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { getModelByKey, ModelKey, ModelCatalogEntry } from "@/lib/ai/modelCatalog";
 import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
@@ -12,20 +12,13 @@ import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
-
-// 75% of grid volume — with primitives (boxes/lines) we can handle much larger builds efficiently
-const MAX_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
-  64: Math.floor(64 ** 3 * 0.75), // 196,608
-  // Cap higher grids to keep validation/rendering practical.
-  256: 2_000_000,
-  512: 4_000_000,
-};
-
-const MIN_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
-  64: 200,
-  256: 500,
-  512: 800,
-};
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
+import {
+  runVoxelExec,
+  VOXEL_EXEC_TOOL_NAME,
+  voxelExecToolCallJsonSchema,
+  voxelExecToolCallSchema,
+} from "@/lib/ai/tools/voxelExec";
 
 function defaultMaxOutputTokens(gridSize: 64 | 256 | 512): number {
   // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
@@ -76,6 +69,7 @@ export type GenerateVoxelBuildParams = {
   gridSize: 64 | 256 | 512;
   palette: "simple" | "advanced";
   maxAttempts?: number;
+  enableTools?: boolean;
   onRetry?: (attempt: number, reason: string) => void;
   onDelta?: (delta: string) => void;
 };
@@ -255,7 +249,8 @@ export async function generateVoxelBuild(
 ): Promise<GenerateVoxelBuildResult> {
   const model = getModelByKey(params.modelKey);
   const paletteDefs = getPalette(params.palette);
-  const maxAttempts = params.maxAttempts ?? 3;
+  const enableTools = params.enableTools ?? true;
+  const maxAttempts = params.maxAttempts ?? (enableTools ? 8 : 3);
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
   const maxOutputTokens = defaultMaxOutputTokens(params.gridSize);
@@ -264,17 +259,35 @@ export async function generateVoxelBuild(
     minBlocks,
     hardMax: MAX_BLOCKS_BY_GRID[params.gridSize],
   });
-  const jsonSchema = makeVoxelBuildJsonSchema({
-    gridSize: params.gridSize,
-    minBlocks,
-    maxBlocks: schemaMaxBlocks,
-  }) as unknown as Record<string, unknown>;
-  const system = buildSystemPrompt({
+  const jsonSchema = enableTools
+    ? (voxelExecToolCallJsonSchema() as unknown as Record<string, unknown>)
+    : (makeVoxelBuildJsonSchema({
+        gridSize: params.gridSize,
+        minBlocks,
+        maxBlocks: schemaMaxBlocks,
+      }) as unknown as Record<string, unknown>);
+  const baseSystem = buildSystemPrompt({
     gridSize: params.gridSize,
     maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
     minBlocks,
     palette: params.palette,
   });
+  const system = enableTools
+    ? baseSystem +
+      `\n\n## TOOL MODE (${VOXEL_EXEC_TOOL_NAME})\n\n` +
+      `You have access to a code-execution tool named "${VOXEL_EXEC_TOOL_NAME}".\n` +
+      `- You must do all planning and design yourself.\n` +
+      `- The tool only executes your JavaScript to emit voxels; it does not design anything for you.\n\n` +
+      `Inside your code you may use ONLY these runtime globals:\n` +
+      `- block(x, y, z, type)\n` +
+      `- box(x1, y1, z1, x2, y2, z2, type)\n` +
+      `- line(x1, y1, z1, x2, y2, z2, type)\n` +
+      `- rng() (seeded if you pass seed)\n` +
+      `- Math\n\n` +
+      `Return ONLY this JSON tool call object (no markdown, no extra keys):\n` +
+      `{"tool":"${VOXEL_EXEC_TOOL_NAME}","input":{"code":"...","gridSize":${params.gridSize},"palette":"${params.palette}","seed":123}}\n\n` +
+      `NEVER output the voxel build JSON directly; generate it via the tool.\n`
+    : baseSystem;
 
   let previousText = "";
   let lastError = "";
@@ -288,7 +301,10 @@ export async function generateVoxelBuild(
             error: lastError || "Invalid JSON",
             previousOutput: previousText.slice(0, 20000),
             originalPrompt: params.prompt,
-          });
+          }) +
+          (enableTools
+            ? `\n\nReminder: return ONLY the ${VOXEL_EXEC_TOOL_NAME} tool call JSON (not the build JSON).`
+            : "");
 
     if (attempt > 1) params.onRetry?.(attempt, lastError);
 
@@ -303,13 +319,44 @@ export async function generateVoxelBuild(
       });
       previousText = text;
 
-      const json = extractBestVoxelBuildJson(text);
+      const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
       if (!json) {
         lastError = "Could not find a valid JSON object in the response";
         continue;
       }
 
-      const validated = validateParsedJson(json, paletteDefs, params.gridSize);
+      const buildJson: unknown = enableTools
+        ? (() => {
+            const parsedCall = voxelExecToolCallSchema.safeParse(json);
+            if (!parsedCall.success) {
+              lastError = parsedCall.error.message;
+              return null;
+            }
+
+            const call = parsedCall.data;
+            if (call.input.gridSize !== params.gridSize) {
+              lastError = `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})`;
+              return null;
+            }
+            if (call.input.palette !== params.palette) {
+              lastError = `Tool call palette mismatch (${call.input.palette} vs ${params.palette})`;
+              return null;
+            }
+
+            const run = runVoxelExec({
+              code: call.input.code,
+              gridSize: params.gridSize,
+              palette: params.palette,
+              seed: call.input.seed,
+            });
+
+            return run.build;
+          })()
+        : json;
+
+      if (!buildJson) continue;
+
+      const validated = validateParsedJson(buildJson, paletteDefs, params.gridSize);
       if (!validated.ok) {
         lastError = validated.error;
         continue;
@@ -346,7 +393,7 @@ export async function generateVoxelBuild(
         }
       }
 
-      const spec = parseVoxelBuildSpec(json);
+      const spec = parseVoxelBuildSpec(buildJson);
       if (!spec.ok) {
         lastError = spec.error;
         continue;

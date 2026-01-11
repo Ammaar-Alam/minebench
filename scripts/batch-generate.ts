@@ -7,6 +7,7 @@
  *   pnpm batch:generate --upload            # Upload existing builds to prod
  *   pnpm batch:generate --generate          # Generate missing builds
  *   pnpm batch:generate --generate --upload # Generate missing and upload all
+ *   pnpm batch:generate --generate --notools # Generate missing builds without voxel.exec tool usage
  *   pnpm batch:generate --prompt "castle"   # Filter by prompt
  *   pnpm batch:generate --model gemini      # Filter by single model
  *   pnpm batch:generate --model gemini-pro gemini-flash --generate # Multiple models
@@ -66,6 +67,7 @@ function parseArgs() {
     generate: args.includes("--generate"),
     upload: args.includes("--upload"),
     overwrite: args.includes("--overwrite"),
+    notools: args.includes("--notools"),
     attempts,
     concurrency,
     promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
@@ -141,7 +143,11 @@ function getMissingJobs(jobs: Job[]): Job[] {
   return jobs.filter((j) => isEmptyPlaceholder(j.filePath));
 }
 
-async function generateAndSave(job: Job, attempts: number): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
+async function generateAndSave(
+  job: Job,
+  attempts: number,
+  enableTools: boolean,
+): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
   console.log(`  Generating ${job.promptSlug} × ${job.modelSlug}...`);
 
   if (!job.promptText) {
@@ -154,6 +160,7 @@ async function generateAndSave(job: Job, attempts: number): Promise<{ ok: boolea
     gridSize: 256,
     palette: "simple",
     maxAttempts: attempts,
+    enableTools,
     onRetry: (attempt, reason) => {
       const msg = (reason ?? "").trim();
       if (!msg) return;
@@ -321,6 +328,7 @@ Options:
   --generate        Generate missing builds (off by default)
   --upload          Upload builds to production
   --overwrite       When generating, overwrite existing JSON files
+  --notools         Disable voxel.exec tool usage (tools are on by default)
   --attempts <n>    Max attempts per build (default 6)
   --concurrency <n> Number of concurrent generations (default 1)
   --prompt <str>    Filter prompts by slug
@@ -403,7 +411,7 @@ Options:
           const job = queue.shift()!;
           inFlight += 1;
           void (async () => {
-            const result = await generateAndSave(job, opts.attempts);
+            const result = await generateAndSave(job, opts.attempts, !opts.notools);
             if (result.ok) {
               console.log(`    ✅ Saved (${result.blockCount} blocks)`);
               success++;
