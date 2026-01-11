@@ -81,7 +81,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "claude-sonnet-4-5",
     displayName: "Claude 4.5 Sonnet",
     enabled: true,
-    openRouterModelId: "anthropic/claude-sonnet-4-5",
+    openRouterModelId: "anthropic/claude-sonnet-4.5",
   },
   {
     key: "anthropic_claude_4_5_opus",
@@ -89,7 +89,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "claude-opus-4-5",
     displayName: "Claude 4.5 Opus",
     enabled: true,
-    openRouterModelId: "anthropic/claude-opus-4-5",
+    openRouterModelId: "anthropic/claude-opus-4.5",
   },
   {
     key: "gemini_3_0_pro",
