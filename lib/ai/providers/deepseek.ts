@@ -21,13 +21,14 @@ function requestIdFromResponse(res: Response): string | null {
 
 export async function deepseekGenerateText(params: {
   modelId: string;
+  apiKey?: string;
   system: string;
   user: string;
   maxOutputTokens?: number;
   temperature?: number;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
+  const apiKey = params.apiKey ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("Missing DEEPSEEK_API_KEY");
 
   const baseUrl = (process.env.DEEPSEEK_BASE_URL ?? "https://api.deepseek.com").replace(/\/+$/, "");

@@ -51,13 +51,14 @@ async function fetchWithRetry(
 
 export async function openrouterGenerateText(params: {
   modelId: string;
+  apiKey?: string;
   system: string;
   user: string;
   maxOutputTokens?: number;
   temperature?: number;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
+  const apiKey = params.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";

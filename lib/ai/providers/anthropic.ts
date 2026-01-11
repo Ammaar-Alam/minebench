@@ -44,13 +44,14 @@ function isSonnetOrOpus45(modelId: string): boolean {
 
 export async function anthropicGenerateText(params: {
   modelId: string;
+  apiKey?: string;
   system: string;
   user: string;
   maxTokens: number;
   temperature?: number;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = params.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const controller = new AbortController();

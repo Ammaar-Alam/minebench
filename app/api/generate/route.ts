@@ -6,11 +6,23 @@ import type { GenerateEvent, GenerateRequest } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
 
+const providerKeysSchema = z
+  .object({
+    openai: z.string().trim().min(1).max(4000).optional(),
+    anthropic: z.string().trim().min(1).max(4000).optional(),
+    gemini: z.string().trim().min(1).max(4000).optional(),
+    moonshot: z.string().trim().min(1).max(4000).optional(),
+    deepseek: z.string().trim().min(1).max(4000).optional(),
+    openrouter: z.string().trim().min(1).max(4000).optional(),
+  })
+  .optional();
+
 const reqSchema = z.object({
   prompt: z.string().min(1).max(800),
   gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8),
+  providerKeys: providerKeysSchema,
 });
 
 const STREAM_PAD = " ".repeat(2048);
@@ -39,6 +51,19 @@ export async function POST(req: Request) {
   const modelKeys = body.modelKeys.filter(isModelKey);
   if (modelKeys.length === 0) {
     return NextResponse.json({ error: "No valid modelKeys" }, { status: 400 });
+  }
+
+  const providerKeys = body.providerKeys;
+  const allowServerKeys =
+    process.env.NODE_ENV !== "production" || process.env.MINEBENCH_ALLOW_SERVER_KEYS === "1";
+  if (!allowServerKeys && (!providerKeys || Object.values(providerKeys).every((v) => !v))) {
+    return NextResponse.json(
+      {
+        error:
+          "No API keys provided. Add an OpenRouter key or a provider key (OpenAI/Anthropic/Gemini/etc.) in Sandbox settings.",
+      },
+      { status: 401 }
+    );
   }
 
   const debugRaw = process.env.AI_DEBUG === "1";
@@ -92,6 +117,8 @@ export async function POST(req: Request) {
           prompt: body.prompt,
           gridSize: body.gridSize,
           palette: body.palette,
+          providerKeys,
+          allowServerKeys,
           onRetry: (attempt, reason) => send({ type: "retry", modelKey, attempt, reason }),
           onDelta: (delta) => send({ type: "delta", modelKey, delta }),
         })

@@ -3,11 +3,21 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 
 export type PaletteMode = "simple" | "advanced";
 
+export type ProviderApiKeys = {
+  openai?: string;
+  anthropic?: string;
+  gemini?: string;
+  moonshot?: string;
+  deepseek?: string;
+  openrouter?: string;
+};
+
 export type GenerateRequest = {
   prompt: string;
   gridSize: 64 | 256 | 512;
   palette: PaletteMode;
   modelKeys: ModelKey[];
+  providerKeys?: ProviderApiKeys;
 };
 
 export type GenerateEvent =

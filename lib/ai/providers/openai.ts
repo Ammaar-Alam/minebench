@@ -121,6 +121,7 @@ function looksLikeTokenLimitError(body: string): boolean {
 
 export async function openaiGenerateText(params: {
   modelId: string;
+  apiKey?: string;
   system: string;
   user: string;
   maxOutputTokens?: number;
@@ -128,7 +129,7 @@ export async function openaiGenerateText(params: {
   jsonSchema?: Record<string, unknown>;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for OpenAI structured output");

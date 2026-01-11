@@ -8,6 +8,7 @@ type GeminiGenerateContentResponse = {
 
 export async function geminiGenerateText(params: {
   modelId: string;
+  apiKey?: string;
   system: string;
   user: string;
   maxOutputTokens?: number;
@@ -15,7 +16,7 @@ export async function geminiGenerateText(params: {
   jsonSchema?: JsonSchema;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
-  const apiKey = process.env.GOOGLE_AI_API_KEY;
+  const apiKey = params.apiKey ?? process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for Gemini JSON mode");
 

@@ -13,6 +13,7 @@ import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
+import type { ProviderApiKeys } from "@/lib/ai/types";
 import {
   runVoxelExec,
   VOXEL_EXEC_TOOL_NAME,
@@ -39,28 +40,70 @@ function approxMaxBlocksForTokenBudget(opts: {
 
 const DEFAULT_TEMPERATURE = 1.0;
 
-// check if a direct provider API key is available
-function hasDirectProviderKey(provider: string): boolean {
+function normalizeApiKey(raw: string | undefined): string | null {
+  const v = (raw ?? "").trim();
+  return v ? v : null;
+}
+
+type ProviderKeyName = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "openrouter";
+
+function envVarForProviderKey(provider: ProviderKeyName): string {
   switch (provider) {
     case "openai":
-      return Boolean(process.env.OPENAI_API_KEY);
+      return "OPENAI_API_KEY";
     case "anthropic":
-      return Boolean(process.env.ANTHROPIC_API_KEY);
+      return "ANTHROPIC_API_KEY";
     case "gemini":
-      return Boolean(process.env.GOOGLE_AI_API_KEY);
+      return "GOOGLE_AI_API_KEY";
     case "moonshot":
-      return Boolean(process.env.MOONSHOT_API_KEY);
+      return "MOONSHOT_API_KEY";
     case "deepseek":
-      return Boolean(process.env.DEEPSEEK_API_KEY);
-    case "xai":
-      return Boolean(process.env.XAI_API_KEY);
-    default:
-      return false;
+      return "DEEPSEEK_API_KEY";
+    case "openrouter":
+      return "OPENROUTER_API_KEY";
   }
 }
 
-function hasOpenRouterKey(): boolean {
-  return Boolean(process.env.OPENROUTER_API_KEY);
+function serverApiKey(provider: ProviderKeyName): string | null {
+  const envVar = envVarForProviderKey(provider);
+  return normalizeApiKey(process.env[envVar]);
+}
+
+function effectiveApiKey(opts: {
+  provider: ModelCatalogEntry["provider"] | "openrouter";
+  providerKeys?: ProviderApiKeys;
+  allowServerKeys: boolean;
+}): string | null {
+  const provider = opts.provider;
+  if (provider === "xai") return null; // only supported via OpenRouter fallback
+
+  const directKey = normalizeApiKey(
+    provider === "openrouter"
+      ? opts.providerKeys?.openrouter
+      : provider === "openai"
+        ? opts.providerKeys?.openai
+        : provider === "anthropic"
+          ? opts.providerKeys?.anthropic
+          : provider === "gemini"
+            ? opts.providerKeys?.gemini
+            : provider === "moonshot"
+              ? opts.providerKeys?.moonshot
+              : provider === "deepseek"
+                ? opts.providerKeys?.deepseek
+                : undefined,
+  );
+  if (directKey) return directKey;
+
+  if (!opts.allowServerKeys) return null;
+
+  if (provider === "openrouter") return serverApiKey("openrouter");
+  if (provider === "openai") return serverApiKey("openai");
+  if (provider === "anthropic") return serverApiKey("anthropic");
+  if (provider === "gemini") return serverApiKey("gemini");
+  if (provider === "moonshot") return serverApiKey("moonshot");
+  if (provider === "deepseek") return serverApiKey("deepseek");
+
+  return null;
 }
 
 export type GenerateVoxelBuildParams = {
@@ -70,6 +113,8 @@ export type GenerateVoxelBuildParams = {
   palette: "simple" | "advanced";
   maxAttempts?: number;
   enableTools?: boolean;
+  providerKeys?: ProviderApiKeys;
+  allowServerKeys?: boolean;
   onRetry?: (attempt: number, reason: string) => void;
   onDelta?: (delta: string) => void;
 };
@@ -89,6 +134,7 @@ export type GenerateVoxelBuildResult =
 async function callDirectProvider(args: {
   provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai";
   modelId: string;
+  apiKey?: string;
   system: string;
   user: string;
   jsonSchema: Record<string, unknown>;
@@ -98,6 +144,7 @@ async function callDirectProvider(args: {
   if (args.provider === "openai") {
     return openaiGenerateText({
       modelId: args.modelId,
+      apiKey: args.apiKey,
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
@@ -110,6 +157,7 @@ async function callDirectProvider(args: {
   if (args.provider === "anthropic") {
     return anthropicGenerateText({
       modelId: args.modelId,
+      apiKey: args.apiKey,
       system: args.system,
       user: args.user,
       maxTokens: args.maxOutputTokens,
@@ -121,6 +169,7 @@ async function callDirectProvider(args: {
   if (args.provider === "gemini") {
     return geminiGenerateText({
       modelId: args.modelId,
+      apiKey: args.apiKey,
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
@@ -133,6 +182,7 @@ async function callDirectProvider(args: {
   if (args.provider === "moonshot") {
     return moonshotGenerateText({
       modelId: args.modelId,
+      apiKey: args.apiKey,
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
@@ -144,6 +194,7 @@ async function callDirectProvider(args: {
   if (args.provider === "deepseek") {
     return deepseekGenerateText({
       modelId: args.modelId,
+      apiKey: args.apiKey,
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
@@ -163,20 +214,46 @@ async function providerGenerateText(args: {
   user: string;
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
+  providerKeys?: ProviderApiKeys;
+  allowServerKeys: boolean;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   const { model } = args;
-  const hasDirect = hasDirectProviderKey(model.provider);
-  const hasOpenRouter = hasOpenRouterKey();
+  const directKey = effectiveApiKey({
+    provider: model.provider,
+    providerKeys: args.providerKeys,
+    allowServerKeys: args.allowServerKeys,
+  });
+  const openRouterKey = effectiveApiKey({
+    provider: "openrouter",
+    providerKeys: args.providerKeys,
+    allowServerKeys: args.allowServerKeys,
+  });
+  const hasDirect = Boolean(directKey);
+  const hasOpenRouter = Boolean(openRouterKey);
 
   // if we have neither key and there's an openrouter model id, error out
   if (!hasDirect && !hasOpenRouter) {
+    const directEnvVar =
+      model.provider === "openai"
+        ? envVarForProviderKey("openai")
+        : model.provider === "anthropic"
+          ? envVarForProviderKey("anthropic")
+          : model.provider === "gemini"
+            ? envVarForProviderKey("gemini")
+            : model.provider === "moonshot"
+              ? envVarForProviderKey("moonshot")
+              : model.provider === "deepseek"
+                ? envVarForProviderKey("deepseek")
+                : null;
+
     if (model.openRouterModelId) {
       throw new Error(
-        `Missing API key for ${model.provider}. Set ${model.provider.toUpperCase()}_API_KEY or OPENROUTER_API_KEY.`,
+        `Missing API key for ${model.provider}. Provide your own ${directEnvVar ?? "provider"} key or an OpenRouter key.`,
       );
     }
-    throw new Error(`Missing API key for ${model.provider}. Set ${model.provider.toUpperCase()}_API_KEY.`);
+
+    throw new Error(`Missing API key for ${model.provider}. Provide your own ${directEnvVar ?? "provider"} key.`);
   }
 
   // try direct provider first if we have the key
@@ -185,6 +262,7 @@ async function providerGenerateText(args: {
       return await callDirectProvider({
         provider: model.provider,
         modelId: model.modelId,
+        apiKey: directKey ?? undefined,
         system: args.system,
         user: args.user,
         jsonSchema: args.jsonSchema,
@@ -204,6 +282,7 @@ async function providerGenerateText(args: {
 
   return openrouterGenerateText({
     modelId: model.openRouterModelId,
+    apiKey: openRouterKey ?? undefined,
     system: args.system,
     user: args.user,
     maxOutputTokens: args.maxOutputTokens,
@@ -251,6 +330,7 @@ export async function generateVoxelBuild(
   const paletteDefs = getPalette(params.palette);
   const enableTools = params.enableTools ?? true;
   const maxAttempts = params.maxAttempts ?? (enableTools ? 8 : 3);
+  const allowServerKeys = params.allowServerKeys ?? true;
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
   const maxOutputTokens = defaultMaxOutputTokens(params.gridSize);
@@ -315,6 +395,8 @@ export async function generateVoxelBuild(
         user,
         jsonSchema,
         maxOutputTokens,
+        providerKeys: params.providerKeys,
+        allowServerKeys,
         onDelta: params.onDelta,
       });
       previousText = text;

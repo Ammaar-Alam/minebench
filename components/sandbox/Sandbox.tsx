@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
-import type { GenerateEvent } from "@/lib/ai/types";
+import type { GenerateEvent, ProviderApiKeys } from "@/lib/ai/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
@@ -28,6 +28,52 @@ const PREVIEW_MAX_BLOCKS = 30_000;
 const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
+const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
+
+function safeJsonParseObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function loadProviderKeysFromStorage(): ProviderApiKeys {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(API_KEYS_STORAGE_KEY);
+    if (!raw) return {};
+    const obj = safeJsonParseObject(raw);
+    if (!obj) return {};
+    const keys: ProviderApiKeys = {};
+    const set = (k: keyof ProviderApiKeys) => {
+      const v = obj[k];
+      if (typeof v !== "string") return;
+      const t = v.trim();
+      if (t) keys[k] = t;
+    };
+    set("openrouter");
+    set("openai");
+    set("anthropic");
+    set("gemini");
+    set("moonshot");
+    set("deepseek");
+    return keys;
+  } catch {
+    return {};
+  }
+}
+
+function saveProviderKeysToStorage(keys: ProviderApiKeys) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(keys));
+  } catch {
+    // ignore
+  }
+}
 
 function findArrayStart(text: string, field: string): number {
   const idx = text.indexOf(`"${field}"`);
@@ -211,6 +257,8 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
+  const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
+  const [showKeys, setShowKeys] = useState(false);
   const [selectedModelKeys, setSelectedModelKeys] = useState<ModelKey[]>(
     ["openai_gpt_5_mini", "gemini_3_0_flash"]
   );
@@ -224,6 +272,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
       )
   );
   const [running, setRunning] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
   const [, forceRender] = useState(0);
   const previewCacheRef = useRef(
     new Map<ModelKey, { at: number; textLen: number; build: VoxelBuild | null }>()
@@ -237,6 +286,10 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
     return () => window.clearInterval(id);
   }, [running]);
 
+  useEffect(() => {
+    saveProviderKeysToStorage(providerKeys);
+  }, [providerKeys]);
+
   function toggleModel(key: ModelKey) {
     setSelectedModelKeys((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : prev.length >= 2 ? prev : [...prev, key]
@@ -247,6 +300,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
     if (!prompt.trim() || selectedModelKeys.length !== 2) return;
 
     setRunning(true);
+    setRequestError(null);
     forceRender((c) => c + 1);
     setResults((prev) => {
       const next = new Map(prev);
@@ -266,6 +320,19 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
     });
 
     try {
+      const sanitizedKeys: ProviderApiKeys = {};
+      const setKey = (k: keyof ProviderApiKeys, v: unknown) => {
+        if (typeof v !== "string") return;
+        const t = v.trim();
+        if (t) sanitizedKeys[k] = t;
+      };
+      setKey("openrouter", providerKeys.openrouter);
+      setKey("openai", providerKeys.openai);
+      setKey("anthropic", providerKeys.anthropic);
+      setKey("gemini", providerKeys.gemini);
+      setKey("moonshot", providerKeys.moonshot);
+      setKey("deepseek", providerKeys.deepseek);
+
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -274,10 +341,16 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
           gridSize,
           palette,
           modelKeys: selectedModelKeys,
+          providerKeys: sanitizedKeys,
         }),
       });
 
-      if (!res.ok || !res.body) throw new Error(await res.text());
+      if (!res.ok || !res.body) {
+        const txt = await res.text().catch(() => "");
+        const obj = safeJsonParseObject(txt);
+        const message = obj && typeof obj.error === "string" ? obj.error : txt || "Request failed";
+        throw new Error(message);
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -410,7 +483,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
         return next;
       });
     } catch (err) {
-      console.error(err);
+      setRequestError(err instanceof Error ? err.message : "Request failed");
     } finally {
       setRunning(false);
     }
@@ -585,6 +658,130 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <div className="text-xs font-medium text-muted">API keys (bring your own)</div>
+            <div className="mt-2 mb-subpanel p-4">
+              <div className="text-xs text-muted">
+                Keys are stored in your browser (localStorage) and sent only for this request. They are never saved to the database.
+              </div>
+
+              {requestError ? (
+                <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                  {requestError}
+                </div>
+              ) : null}
+
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                <label className="flex flex-col gap-1 md:col-span-2">
+                  <div className="text-xs font-medium text-muted">OpenRouter API key (recommended)</div>
+                  <input
+                    className="mb-field h-10 w-full"
+                    type={showKeys ? "text" : "password"}
+                    value={providerKeys.openrouter ?? ""}
+                    onChange={(e) => setProviderKeys((prev) => ({ ...prev, openrouter: e.target.value }))}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="Paste your OpenRouter key"
+                  />
+                </label>
+
+                <details className="md:col-span-2">
+                  <summary className="cursor-pointer select-none text-xs font-medium text-muted">
+                    Provider keys (optional)
+                  </summary>
+                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <label className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">OpenAI</div>
+                      <input
+                        className="mb-field h-10 w-full"
+                        type={showKeys ? "text" : "password"}
+                        value={providerKeys.openai ?? ""}
+                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, openai: e.target.value }))}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste your OpenAI key"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">Anthropic</div>
+                      <input
+                        className="mb-field h-10 w-full"
+                        type={showKeys ? "text" : "password"}
+                        value={providerKeys.anthropic ?? ""}
+                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, anthropic: e.target.value }))}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste your Anthropic key"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">Gemini (Google AI)</div>
+                      <input
+                        className="mb-field h-10 w-full"
+                        type={showKeys ? "text" : "password"}
+                        value={providerKeys.gemini ?? ""}
+                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, gemini: e.target.value }))}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste your Google AI key"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">Moonshot</div>
+                      <input
+                        className="mb-field h-10 w-full"
+                        type={showKeys ? "text" : "password"}
+                        value={providerKeys.moonshot ?? ""}
+                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, moonshot: e.target.value }))}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste your Moonshot key"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">DeepSeek</div>
+                      <input
+                        className="mb-field h-10 w-full"
+                        type={showKeys ? "text" : "password"}
+                        value={providerKeys.deepseek ?? ""}
+                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, deepseek: e.target.value }))}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste your DeepSeek key"
+                      />
+                    </label>
+                  </div>
+                </details>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="button"
+                  className="mb-btn h-9"
+                  onClick={() => {
+                    setProviderKeys({});
+                    setRequestError(null);
+                  }}
+                  disabled={running}
+                >
+                  Clear keys
+                </button>
+                <button
+                  type="button"
+                  className="mb-btn h-9"
+                  onClick={() => setShowKeys((v) => !v)}
+                  disabled={running}
+                >
+                  {showKeys ? "Hide" : "Show"}
+                </button>
+              </div>
             </div>
           </div>
 
