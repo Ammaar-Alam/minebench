@@ -88,6 +88,14 @@ function getEnabledModels(): ModelKey[] {
   return MODEL_CATALOG.filter((m) => m.enabled).map((m) => m.key);
 }
 
+function getCandidateModels(modelFilters: string[]): ModelKey[] {
+  // If the user is explicitly filtering by model, include disabled models too so
+  // existing builds (e.g. benchmark-only models) can be uploaded/status-checked.
+  // Generation will still be gated elsewhere unless the user explicitly requests it.
+  if (modelFilters.length > 0) return MODEL_CATALOG.map((m) => m.key);
+  return getEnabledModels();
+}
+
 function getAllPromptSlugs(): string[] {
   const slugs = new Set<string>(Object.keys(PROMPT_MAP));
   for (const slug of listUploadPromptSlugs()) slugs.add(slug);
@@ -109,7 +117,7 @@ function buildJobList(
   modelFilters: string[]
 ): Job[] {
   const jobs: Job[] = [];
-  const models = getEnabledModels();
+  const models = getCandidateModels(modelFilters);
 
   const normalizedModelFilters = modelFilters.map((f) => f.trim().toLowerCase()).filter(Boolean);
   const knownModelSlugs = new Set(models.map((k) => MODEL_SLUG[k].toLowerCase()));
@@ -383,7 +391,8 @@ Options:
   }
 
   const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilter, opts.modelFilters);
-  console.log(`📋 Total jobs: ${allJobs.length} (${promptSlugs.length} prompts × ${getEnabledModels().length} models)`);
+  const modelCountForSummary = getCandidateModels(opts.modelFilters).length;
+  console.log(`📋 Total jobs: ${allJobs.length} (${promptSlugs.length} prompts × ${modelCountForSummary} models)`);
 
   if (opts.promptFilter) console.log(`   Filtered by prompt: "${opts.promptFilter}"`);
   if (opts.modelFilters.length > 0) console.log(`   Filtered by model(s): ${opts.modelFilters.join(", ")}`);
