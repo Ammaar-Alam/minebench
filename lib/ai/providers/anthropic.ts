@@ -71,6 +71,7 @@ export async function anthropicGenerateText(params: {
         typeof budget === "number" && budget >= 1024
           ? { type: "enabled", budget_tokens: budget }
           : undefined;
+      const temperature = thinking ? 1 : (params.temperature ?? 0.2);
 
       res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -84,7 +85,7 @@ export async function anthropicGenerateText(params: {
         body: JSON.stringify({
           model: params.modelId,
           max_tokens: tok,
-          temperature: params.temperature ?? 0.2,
+          temperature,
           system: params.system,
           messages: [{ role: "user", content: params.user }],
           stream: Boolean(params.onDelta),

@@ -44,7 +44,7 @@ function approxMaxBlocksForTokenBudget(opts: {
   return Math.max(opts.minBlocks, Math.min(opts.hardMax, est));
 }
 
-const DEFAULT_TEMPERATURE = 0.2;
+const DEFAULT_TEMPERATURE = 1.0;
 
 // check if a direct provider API key is available
 function hasDirectProviderKey(provider: string): boolean {
