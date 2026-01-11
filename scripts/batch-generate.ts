@@ -47,6 +47,9 @@ function parseArgs() {
   const attemptsRaw = args.find((a, i) => args[i - 1] === "--attempts") || null;
   const attemptsNum = attemptsRaw ? Number(attemptsRaw) : NaN;
   const attempts = Number.isFinite(attemptsNum) ? Math.max(1, Math.floor(attemptsNum)) : 6;
+  const concurrencyRaw = args.find((a, i) => args[i - 1] === "--concurrency") || null;
+  const concurrencyNum = concurrencyRaw ? Number(concurrencyRaw) : NaN;
+  const concurrency = Number.isFinite(concurrencyNum) ? Math.max(1, Math.floor(concurrencyNum)) : 1;
 
   // collect all values after --model until next flag
   const modelFilters: string[] = [];
@@ -63,6 +66,7 @@ function parseArgs() {
     upload: args.includes("--upload"),
     overwrite: args.includes("--overwrite"),
     attempts,
+    concurrency,
     promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
     modelFilters, // now an array
     promptText: args.find((a, i) => args[i - 1] === "--promptText") || null,
@@ -296,12 +300,14 @@ Usage:
   pnpm batch:generate --model gemini      # Filter by single model
   pnpm batch:generate --model gemini-pro gemini-flash --generate  # Multiple models
   pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit"
+  pnpm batch:generate --generate --concurrency 4  # Run 4 generations at once
 
 Options:
   --generate        Generate missing builds (off by default)
   --upload          Upload builds to production
   --overwrite       When generating, overwrite existing JSON files
   --attempts <n>    Max attempts per build (default 6)
+  --concurrency <n> Number of concurrent generations (default 1)
   --prompt <str>    Filter prompts by slug
   --model <str...>  Filter models by slug (can specify multiple)
   --promptText <s>  Prompt text override (only when filtered to 1 prompt)
@@ -369,27 +375,50 @@ Options:
   // generate missing builds only if --generate flag is set
   const jobsToGenerate = opts.generate ? (opts.overwrite ? allJobs : missing) : [];
   if (opts.generate && jobsToGenerate.length > 0) {
-    console.log("\n🚀 Starting generation...\n");
+    console.log(`\n🚀 Starting generation (concurrency ${opts.concurrency})...\n`);
 
     let success = 0;
     let failed = 0;
 
-    for (const job of jobsToGenerate) {
-      const result = await generateAndSave(job, opts.attempts);
-      if (result.ok) {
-        console.log(`    ✅ Saved (${result.blockCount} blocks)`);
-        success++;
+    const queue = [...jobsToGenerate];
+    let inFlight = 0;
+    await new Promise<void>((resolve) => {
+      const launchNext = () => {
+        while (inFlight < opts.concurrency && queue.length > 0) {
+          const job = queue.shift()!;
+          inFlight += 1;
+          void (async () => {
+            const result = await generateAndSave(job, opts.attempts);
+            if (result.ok) {
+              console.log(`    ✅ Saved (${result.blockCount} blocks)`);
+              success++;
 
-        if (opts.upload) {
-          process.stdout.write(`    📤 Uploading...`);
-          const uploadResult = await uploadBuild(job);
-          console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
+              if (opts.upload) {
+                process.stdout.write(`    📤 Uploading...`);
+                const uploadResult = await uploadBuild(job);
+                console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
+              }
+            } else {
+              console.log(`    ❌ Failed after ${opts.attempts} attempts: ${result.error}`);
+              failed++;
+            }
+          })()
+            .catch((err) => {
+              failed++;
+              console.log(`    ❌ Failed after ${opts.attempts} attempts: ${err instanceof Error ? err.message : err}`);
+            })
+            .finally(() => {
+              inFlight -= 1;
+              if (queue.length === 0 && inFlight === 0) {
+                resolve();
+              } else {
+                launchNext();
+              }
+            });
         }
-      } else {
-        console.log(`    ❌ Failed after ${opts.attempts} attempts: ${result.error}`);
-        failed++;
-      }
-    }
+      };
+      launchNext();
+    });
 
     console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
   } else if (missing.length > 0 && !opts.generate) {

@@ -68,6 +68,11 @@ function sleepMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+function requestTimeoutMs(modelId: string): number {
+  if (modelId === "gpt-5.2-pro") return 3_600_000;
+  return 1_800_000;
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -138,7 +143,7 @@ export async function openaiGenerateText(params: {
   const maxOutputTokens = params.maxOutputTokens ?? 32768;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000);
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs(params.modelId));
 
   try {
     // Prefer the Responses API (works with modern OpenAI models).
