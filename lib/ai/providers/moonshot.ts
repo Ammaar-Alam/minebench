@@ -34,7 +34,7 @@ export async function moonshotGenerateText(params: {
   const url = `${baseUrl}/v1/chat/completions`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000);
+  const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   let res: Response;
   try {
@@ -61,7 +61,9 @@ export async function moonshotGenerateText(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Moonshot request timed out");
     }
-    throw err;
+    console.error("Moonshot network error:", err);
+    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
+    throw new Error(`Moonshot request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
     clearTimeout(timeout);
   }
@@ -95,4 +97,3 @@ export async function moonshotGenerateText(params: {
   const text = extractTextFromChat(data);
   return { text };
 }
-

@@ -54,7 +54,7 @@ export async function anthropicGenerateText(params: {
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000);
+  const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
   const thinkingBudget = isSonnetOrOpus45(params.modelId)
@@ -102,7 +102,9 @@ export async function anthropicGenerateText(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Anthropic request timed out");
     }
-    throw err;
+    console.error("Anthropic network error:", err);
+    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
+    throw new Error(`Anthropic request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
     clearTimeout(timeout);
   }

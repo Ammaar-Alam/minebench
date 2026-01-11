@@ -240,7 +240,9 @@ export async function openaiGenerateText(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("OpenAI request timed out");
     }
-    throw err;
+    console.error("OpenAI network error:", err);
+    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
+    throw new Error(`OpenAI request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
     clearTimeout(timeout);
   }

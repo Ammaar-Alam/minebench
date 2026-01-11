@@ -63,7 +63,7 @@ export async function openrouterGenerateText(params: {
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 180_000);
+  const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   try {
     const res = await fetchWithRetry(
@@ -122,7 +122,9 @@ export async function openrouterGenerateText(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("OpenRouter request timed out");
     }
-    throw err;
+    console.error("OpenRouter network error:", err);
+    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
+    throw new Error(`OpenRouter request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
     clearTimeout(timeout);
   }

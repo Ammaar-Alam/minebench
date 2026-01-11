@@ -115,7 +115,7 @@ function expandBuildPrimitives(
   const expanded: { x: number; y: number; z: number; type: string }[] = [];
 
   // Safety limit to prevent pathological expansions (e.g., a full solid 256^3 cube).
-  const expansionLimit = Math.max(opts.maxBlocks * 5, 20000);
+  const expansionLimit = Math.max(opts.maxBlocks * 10, 20000);
   let count = 0;
   const push = (b: { x: number; y: number; z: number; type: string }) => {
     expanded.push(b);
