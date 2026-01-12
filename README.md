@@ -304,3 +304,7 @@ For long prompts, you can also drop a `uploads/<slug>/prompt.txt` file and omit 
 ## Texture attribution
 This repo includes the Faithful texture pack at `faithful-32x-1.21.11`.
 See `faithful-32x-1.21.11/LICENSE.txt` for license details.
+
+
+
+_[Disclaimer: all documentation (including README) and frontend is almost entirely AI-created]_
