@@ -6,6 +6,9 @@ import { weightedPick } from "@/lib/arena/sampling";
 export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
+const ARENA_GRID_SIZE = 256;
+const ARENA_PALETTE = "simple";
+const ARENA_MODE = "precise";
 
 type EligiblePrompt = { id: string; text: string };
 
@@ -29,15 +32,15 @@ function randomPick<T>(items: T[]): T | null {
 }
 
 async function getEligiblePrompts(): Promise<EligiblePrompt[]> {
-  const rows = await prisma.build.findMany({
+  const rows = await prisma.build.groupBy({
+    by: ["promptId", "modelId"],
     where: {
-      gridSize: 256,
-      palette: "simple",
-      mode: "precise",
+      gridSize: ARENA_GRID_SIZE,
+      palette: ARENA_PALETTE,
+      mode: ARENA_MODE,
       model: { enabled: true, isBaseline: false },
       prompt: { active: true },
     },
-    select: { promptId: true, modelId: true },
   });
 
   const modelsByPromptId = new Map<string, Set<string>>();
@@ -59,13 +62,35 @@ async function getEligiblePrompts(): Promise<EligiblePrompt[]> {
   });
 }
 
+async function getEligiblePromptById(promptId: string): Promise<EligiblePrompt | null> {
+  const prompt = await prisma.prompt.findFirst({
+    where: { id: promptId, active: true },
+    select: { id: true, text: true },
+  });
+  if (!prompt) return null;
+
+  const models = await prisma.build.groupBy({
+    by: ["modelId"],
+    where: {
+      promptId,
+      gridSize: ARENA_GRID_SIZE,
+      palette: ARENA_PALETTE,
+      mode: ARENA_MODE,
+      model: { enabled: true, isBaseline: false },
+    },
+  });
+
+  if (models.length < 2) return null;
+  return prompt;
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const promptId = url.searchParams.get("promptId") ?? undefined;
 
-  const eligible = await getEligiblePrompts();
-  const requested = promptId ? eligible.find((p) => p.id === promptId) : null;
-  const prompt = requested ?? randomPick(eligible);
+  const requestedPrompt = promptId ? await getEligiblePromptById(promptId) : null;
+  const eligible = requestedPrompt ? [] : await getEligiblePrompts();
+  const prompt = requestedPrompt ?? randomPick(eligible);
 
   if (!prompt) {
     return NextResponse.json(
@@ -74,33 +99,36 @@ export async function GET(req: Request) {
     );
   }
 
-  const builds = await prisma.build.findMany({
+  const models = await prisma.model.findMany({
     where: {
-      promptId: prompt.id,
-      gridSize: 256,
-      palette: "simple",
-      mode: "precise",
-      model: { enabled: true, isBaseline: false },
+      enabled: true,
+      isBaseline: false,
+      builds: {
+        some: {
+          promptId: prompt.id,
+          gridSize: ARENA_GRID_SIZE,
+          palette: ARENA_PALETTE,
+          mode: ARENA_MODE,
+        },
+      },
     },
-    include: { model: true },
+    select: {
+      id: true,
+      key: true,
+      provider: true,
+      displayName: true,
+      eloRating: true,
+      shownCount: true,
+    },
   });
 
-  if (builds.length < 2) {
+  if (models.length < 2) {
     return NextResponse.json(
       { error: "Not enough seeded builds for this prompt yet." },
       { status: 409 }
     );
   }
 
-  const modelsById = new Map<string, (typeof builds)[number]["model"]>();
-  const buildsByModelId = new Map<string, (typeof builds)[number][]>();
-  for (const b of builds) {
-    modelsById.set(b.modelId, b.model);
-    const list = buildsByModelId.get(b.modelId) ?? [];
-    list.push(b);
-    buildsByModelId.set(b.modelId, list);
-  }
-  const models = Array.from(modelsById.values());
   const pickWeight = (m: (typeof models)[number]) => 1 / (m.shownCount + 1);
 
   const modelA = weightedPick(models, pickWeight);
@@ -114,8 +142,29 @@ export async function GET(req: Request) {
     );
   }
 
-  const buildA = randomPick(buildsByModelId.get(modelA.id) ?? []);
-  const buildB = randomPick(buildsByModelId.get(modelB.id) ?? []);
+  const [buildA, buildB] = await Promise.all([
+    prisma.build.findFirst({
+      where: {
+        promptId: prompt.id,
+        modelId: modelA.id,
+        gridSize: ARENA_GRID_SIZE,
+        palette: ARENA_PALETTE,
+        mode: ARENA_MODE,
+      },
+      select: { id: true, voxelData: true },
+    }),
+    prisma.build.findFirst({
+      where: {
+        promptId: prompt.id,
+        modelId: modelB.id,
+        gridSize: ARENA_GRID_SIZE,
+        palette: ARENA_PALETTE,
+        mode: ARENA_MODE,
+      },
+      select: { id: true, voxelData: true },
+    }),
+  ]);
+
   if (!buildA || !buildB) {
     return NextResponse.json({ error: "Missing seeded build" }, { status: 500 });
   }
@@ -131,14 +180,16 @@ export async function GET(req: Request) {
       },
     });
 
-    await tx.model.update({
-      where: { id: modelA.id },
-      data: { shownCount: { increment: 1 } },
-    });
-    await tx.model.update({
-      where: { id: modelB.id },
-      data: { shownCount: { increment: 1 } },
-    });
+    await Promise.all([
+      tx.model.update({
+        where: { id: modelA.id },
+        data: { shownCount: { increment: 1 } },
+      }),
+      tx.model.update({
+        where: { id: modelB.id },
+        data: { shownCount: { increment: 1 } },
+      }),
+    ]);
 
     return matchup;
   });
