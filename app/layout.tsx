@@ -36,7 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
       className={`${fontSans.variable} ${fontDisplay.variable} ${fontMono.variable}`}
     >
-      <body className="relative h-dvh overflow-hidden bg-bg text-fg antialiased isolate">
+      <body className="relative min-h-dvh bg-bg text-fg antialiased isolate">
         <Script id="mb-theme" strategy="beforeInteractive">{`
 (() => {
   try {
@@ -56,10 +56,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="absolute inset-0 mb-bg-noise" />
         </div>
 
-        <div className="relative z-10 flex h-dvh flex-col">
+        <div id="mb-shell" className="relative z-10 flex min-h-dvh flex-col">
           <SiteHeader />
-          <div className="mx-auto flex w-full max-w-[92rem] flex-1 min-h-0 flex-col px-4 sm:px-6 lg:px-8">
-            <main id="main" className="flex-1 min-h-0 overflow-y-auto py-6">
+          <div id="mb-container" className="mx-auto flex w-full max-w-[92rem] flex-1 flex-col px-4 sm:px-6 lg:px-8">
+            <main id="main" className="flex-1 py-6">
               {children}
             </main>
             <SiteFooter />

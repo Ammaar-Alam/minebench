@@ -61,6 +61,26 @@
     color: hsl(var(--fg));
   }
 
+  @media (min-width: 768px) {
+    body.mb-page-fixed {
+      height: 100dvh;
+      overflow: hidden;
+    }
+
+    body.mb-page-fixed #mb-shell {
+      height: 100dvh;
+    }
+
+    body.mb-page-fixed #mb-container {
+      min-height: 0;
+    }
+
+    body.mb-page-fixed #main {
+      min-height: 0;
+      overflow: hidden;
+    }
+  }
+
   @keyframes mb-gradient-shift {
     0%,
     100% {
