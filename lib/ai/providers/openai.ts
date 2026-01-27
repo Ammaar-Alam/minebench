@@ -119,6 +119,12 @@ function looksLikeTokenLimitError(body: string): boolean {
   );
 }
 
+function looksLikeReasoningEffortError(body: string): boolean {
+  const b = body.toLowerCase();
+  // Handle both OpenAI-style JSON error responses and plain-text messages.
+  return b.includes("reason") && b.includes("effort") && (b.includes("invalid") || b.includes("unsupported") || b.includes("enum"));
+}
+
 export async function openaiGenerateText(params: {
   modelId: string;
   apiKey?: string;
@@ -138,8 +144,12 @@ export async function openaiGenerateText(params: {
   // Some models are Responses-only (or otherwise not supported in chat/completions).
   // For these, don't fall back to chat/completions because it hides the real failure cause.
   const isResponsesOnlyModel = params.modelId === "gpt-5.2-pro" || params.modelId === "gpt-5.2-codex";
-  const useHighReasoning =
-    params.modelId === "gpt-5.2" || params.modelId === "gpt-5.2-pro" || isGpt5Family;
+  const reasoningEffortAttempts: string[] = isGpt5Family
+    ? params.modelId === "gpt-5.2-codex"
+      ? ["xhigh", "high"]
+      : ["high"]
+    : [];
+  const reasoningEffort = reasoningEffortAttempts[0];
   // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
   // so we omit the parameter entirely and let the API use the default.
   const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
@@ -153,48 +163,58 @@ export async function openaiGenerateText(params: {
     let res: Response | null = null;
     let lastBody = "";
     for (const tok of tokenFallbacks(maxOutputTokens)) {
-      res = await fetchWithRetry(
-        "https://api.openai.com/v1/responses",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
-          },
-          signal: controller.signal,
-          body: JSON.stringify({
-            model: params.modelId,
-            input: [
-              {
-                role: "system",
-                content: [{ type: "input_text", text: params.system }],
-              },
-              {
-                role: "user",
-                content: [{ type: "input_text", text: params.user }],
-              },
-            ],
-            reasoning: useHighReasoning ? { effort: "high" } : undefined,
-            text: {
-              format: {
-                type: "json_schema",
-                name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-                strict: true,
-                schema: params.jsonSchema,
-              },
+      const effortAttempts = reasoningEffortAttempts.length > 0 ? reasoningEffortAttempts : [undefined];
+      for (const [effortIdx, effort] of effortAttempts.entries()) {
+        res = await fetchWithRetry(
+          "https://api.openai.com/v1/responses",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
             },
-            temperature,
-            max_output_tokens: tok,
-            stream: Boolean(params.onDelta),
-          }),
-        },
-        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-      );
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: params.modelId,
+              input: [
+                {
+                  role: "system",
+                  content: [{ type: "input_text", text: params.system }],
+                },
+                {
+                  role: "user",
+                  content: [{ type: "input_text", text: params.user }],
+                },
+              ],
+              reasoning: effort ? { effort } : undefined,
+              text: {
+                format: {
+                  type: "json_schema",
+                  name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+                  strict: true,
+                  schema: params.jsonSchema,
+                },
+              },
+              temperature,
+              max_output_tokens: tok,
+              stream: Boolean(params.onDelta),
+            }),
+          },
+          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+        );
 
-      if (res.ok) break;
-      lastBody = await res.text().catch(() => "");
-      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
+        if (res.ok) break;
+        lastBody = await res.text().catch(() => "");
+        if (res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
+        if (res.status === 400 && effort && effortIdx < effortAttempts.length - 1 && looksLikeReasoningEffortError(lastBody)) {
+          continue;
+        }
+        break;
+      }
+
+      if (res?.ok) break;
+      if (res && res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
       break;
     }
 
@@ -270,7 +290,7 @@ export async function openaiGenerateText(params: {
           model: params.modelId,
           temperature,
           max_completion_tokens: tok,
-          reasoning_effort: useHighReasoning ? "high" : undefined,
+          reasoning_effort: reasoningEffort,
           stream: Boolean(params.onDelta),
           response_format: {
             type: "json_schema",
