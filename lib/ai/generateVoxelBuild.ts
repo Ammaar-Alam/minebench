@@ -219,11 +219,14 @@ async function providerGenerateText(args: {
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   const { model } = args;
-  const directKey = effectiveApiKey({
-    provider: model.provider,
-    providerKeys: args.providerKeys,
-    allowServerKeys: args.allowServerKeys,
-  });
+  const forceOpenRouter = Boolean(model.forceOpenRouter);
+  const directKey = forceOpenRouter
+    ? null
+    : effectiveApiKey({
+        provider: model.provider,
+        providerKeys: args.providerKeys,
+        allowServerKeys: args.allowServerKeys,
+      });
   const openRouterKey = effectiveApiKey({
     provider: "openrouter",
     providerKeys: args.providerKeys,
@@ -234,6 +237,12 @@ async function providerGenerateText(args: {
 
   // if we have neither key and there's an openrouter model id, error out
   if (!hasDirect && !hasOpenRouter) {
+    if (forceOpenRouter) {
+      throw new Error(
+        `Missing OpenRouter API key. Provide OPENROUTER_API_KEY to run ${model.displayName}.`,
+      );
+    }
+
     const directEnvVar =
       model.provider === "openai"
         ? envVarForProviderKey("openai")
@@ -257,7 +266,7 @@ async function providerGenerateText(args: {
   }
 
   // try direct provider first if we have the key
-  if (hasDirect) {
+  if (!forceOpenRouter && hasDirect) {
     try {
       return await callDirectProvider({
         provider: model.provider,

@@ -13,6 +13,7 @@ export type ModelKey =
   | "gemini_3_0_flash"
   | "gemini_2_5_pro"
   | "moonshot_kimi_k2"
+  | "moonshot_kimi_k2_5"
   | "deepseek_v3_2"
   | "xai_grok_4_1";
 
@@ -24,6 +25,8 @@ export type ModelCatalogEntry = {
   enabled: boolean;
   // optional: OpenRouter model ID for fallback when direct provider key is missing/invalid
   openRouterModelId?: string;
+  // optional: force routing via OpenRouter even if a direct provider key exists
+  forceOpenRouter?: boolean;
 };
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
@@ -122,6 +125,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Kimi K2",
     enabled: true,
     openRouterModelId: "moonshotai/kimi-k2-thinking",
+  },
+  {
+    key: "moonshot_kimi_k2_5",
+    provider: "moonshot",
+    modelId: "moonshotai/kimi-k2.5",
+    displayName: "Kimi K2.5",
+    enabled: true,
+    openRouterModelId: "moonshotai/kimi-k2.5",
+    forceOpenRouter: true,
   },
   {
     key: "deepseek_v3_2",

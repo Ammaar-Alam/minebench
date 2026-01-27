@@ -6,7 +6,7 @@ export const runtime = "nodejs";
 
 export async function GET() {
   const models = await prisma.model.findMany({
-    where: { isBaseline: false, enabled: true, shownCount: { gt: 0 } },
+    where: { isBaseline: false, enabled: true },
     orderBy: { eloRating: "desc" },
     select: {
       key: true,
