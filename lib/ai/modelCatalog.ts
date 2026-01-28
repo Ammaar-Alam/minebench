@@ -1,4 +1,12 @@
-export type Provider = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai";
+export type Provider =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "moonshot"
+  | "deepseek"
+  | "xai"
+  | "zai"
+  | "meta";
 
 export type ModelKey =
   | "openai_gpt_5_2"
@@ -17,7 +25,8 @@ export type ModelKey =
   | "moonshot_kimi_k2_5"
   | "deepseek_v3_2"
   | "xai_grok_4_1"
-  | "zai_glm_4_7";
+  | "zai_glm_4_7"
+  | "meta_llama_4_maverick";
 
 export type ModelCatalogEntry = {
   key: ModelKey;
@@ -168,6 +177,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Z.AI GLM 4.7",
     enabled: true,
     openRouterModelId: "z-ai/glm-4.7",
+    forceOpenRouter: true,
+  },
+  {
+    key: "meta_llama_4_maverick",
+    provider: "meta",
+    modelId: "llama-4-maverick",
+    displayName: "Llama 4 Maverick",
+    enabled: true,
+    openRouterModelId: "meta-llama/llama-4-maverick",
     forceOpenRouter: true,
   },
 ];
