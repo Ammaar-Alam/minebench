@@ -202,6 +202,18 @@
       box-shadow: 0 0 0 0 hsl(var(--accent) / 0);
     }
   }
+
+  @keyframes mb-vote-pulse-accent2 {
+    0% {
+      box-shadow: 0 0 0 0 hsl(var(--accent2) / 0.5);
+    }
+    70% {
+      box-shadow: 0 0 0 8px hsl(var(--accent2) / 0);
+    }
+    100% {
+      box-shadow: 0 0 0 0 hsl(var(--accent2) / 0);
+    }
+  }
 }
 
 @layer components {
@@ -374,7 +386,7 @@
 
   /* model reveal animation */
   .mb-model-reveal {
-    @apply inline-flex items-center text-sm;
+    @apply inline-flex items-center rounded-full bg-bg/60 px-2.5 py-1 text-xs font-medium ring-1 ring-border/60;
     opacity: 0;
     transform: translateY(4px) scale(0.96);
   }
@@ -390,6 +402,28 @@
 
   .mb-card-enter-delay {
     animation-delay: 60ms;
+  }
+
+  .mb-reveal-highlight-a {
+    @apply ring-2 ring-accent/50 shadow-glow;
+    animation: mb-vote-pulse 900ms ease-out 1;
+  }
+
+  .mb-reveal-highlight-b {
+    @apply ring-2 ring-accent2/50 shadow-glow;
+    animation: mb-vote-pulse-accent2 900ms ease-out 1;
+  }
+
+  .mb-reveal-dim {
+    opacity: 0.72;
+    filter: saturate(0.9);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-reveal-highlight-a,
+    .mb-reveal-highlight-b {
+      animation: none;
+    }
   }
 
   /* vote button variants */

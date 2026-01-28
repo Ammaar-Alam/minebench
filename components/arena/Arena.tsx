@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArenaMatchup, VoteChoice } from "@/lib/arena/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { VoteBar } from "@/components/arena/VoteBar";
@@ -30,29 +30,67 @@ async function submitVote(matchupId: string, choice: VoteChoice) {
   if (!res.ok) throw new Error(await res.text());
 }
 
+type RevealAction = VoteChoice | "SKIP";
+
+type RevealState =
+  | { kind: "none" }
+  | {
+      kind: "reveal";
+      matchupId: string;
+      action: RevealAction;
+      startedAt: number;
+      advanceAt: number;
+      next: ArenaMatchup | null;
+    };
+
+const REVEAL_MS_AFTER_VOTE = 2600;
+const REVEAL_MS_AFTER_SKIP = 1600;
+const TRANSITION_OUT_MS = 220;
+
 export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
   const [submitting, setSubmitting] = useState(false);
-  const [revealMatchupId, setRevealMatchupId] = useState<string | null>(null);
+  const [reveal, setReveal] = useState<RevealState>({ kind: "none" });
   const [customPrompt, setCustomPrompt] = useState("");
   const [promptExpanded, setPromptExpanded] = useState(false);
-  const [animKey, setAnimKey] = useState(0);
+  const [transitioning, setTransitioning] = useState(false);
+  const [, forceTick] = useState(0);
+  const revealRef = useRef<RevealState>({ kind: "none" });
+  const transitionRef = useRef(false);
+  const autoAdvanceTimeoutRef = useRef<number | null>(null);
 
   const matchup = state.kind === "ready" ? state.matchup : null;
-  const revealModels = Boolean(matchup && revealMatchupId === matchup.id);
+  const revealModels = Boolean(matchup && reveal.kind === "reveal" && reveal.matchupId === matchup.id);
+  const revealAction: RevealAction | null = reveal.kind === "reveal" ? reveal.action : null;
+
+  useEffect(() => {
+    revealRef.current = reveal;
+  }, [reveal]);
+
+  function clearAutoAdvance() {
+    if (autoAdvanceTimeoutRef.current != null) {
+      window.clearTimeout(autoAdvanceTimeoutRef.current);
+      autoAdvanceTimeoutRef.current = null;
+    }
+  }
 
   useEffect(() => {
     setPromptExpanded(false);
   }, [matchup?.id]);
 
-  useEffect(() => {
-    if (!matchup?.id) return;
-    setAnimKey((k) => k + 1);
-  }, [matchup?.id]);
-
   function sleepMs(ms: number) {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
+
+  useEffect(() => {
+    if (reveal.kind !== "reveal") return;
+    const id = window.setInterval(() => forceTick((t) => t + 1), 120);
+    return () => window.clearInterval(id);
+  }, [reveal.kind, revealModels]);
+
+  useEffect(() => {
+    return () => clearAutoAdvance();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,25 +112,82 @@ export function Arena() {
     };
   }, []);
 
+  const revealMeta = (() => {
+    if (!matchup || reveal.kind !== "reveal" || reveal.matchupId !== matchup.id) {
+      return { visible: false, secondsLeft: 0, progress: 0, nextReady: false };
+    }
+
+    const totalMs = Math.max(1, reveal.advanceAt - reveal.startedAt);
+    const remainingMs = Math.max(0, reveal.advanceAt - Date.now());
+    const progress = Math.min(1, Math.max(0, 1 - remainingMs / totalMs));
+    const secondsLeft = remainingMs / 1000;
+    return { visible: true, secondsLeft, progress, nextReady: Boolean(reveal.next) };
+  })();
+
+  async function advanceToNext(matchupId: string, next: ArenaMatchup) {
+    const current = revealRef.current;
+    if (current.kind !== "reveal" || current.matchupId !== matchupId) return;
+    if (transitionRef.current) return;
+
+    transitionRef.current = true;
+    setTransitioning(true);
+    clearAutoAdvance();
+
+    await sleepMs(TRANSITION_OUT_MS);
+
+    const still = revealRef.current;
+    if (still.kind !== "reveal" || still.matchupId !== matchupId) {
+      transitionRef.current = false;
+      setTransitioning(false);
+      return;
+    }
+
+    setState({ kind: "ready", matchup: next });
+    setReveal({ kind: "none" });
+    setSubmitting(false);
+
+    // Let the new matchup mount at 0 opacity, then fade back in.
+    requestAnimationFrame(() => {
+      transitionRef.current = false;
+      setTransitioning(false);
+    });
+  }
+
+  function scheduleAutoAdvance(matchupId: string, advanceAt: number, next: ArenaMatchup) {
+    clearAutoAdvance();
+    const remaining = advanceAt - Date.now();
+    const delay = Math.max(0, remaining);
+    autoAdvanceTimeoutRef.current = window.setTimeout(() => {
+      void advanceToNext(matchupId, next);
+    }, delay);
+  }
+
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     setSubmitting(true);
-    setRevealMatchupId(matchup.id);
+    clearAutoAdvance();
+    const startedAt = Date.now();
+    const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
+    setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
     try {
-      const revealAt = Date.now();
       await submitVote(matchup.id, choice);
       const next = await fetchMatchup(undefined);
-      const minRevealMs = 900;
-      const remaining = minRevealMs - (Date.now() - revealAt);
-      if (remaining > 0) await sleepMs(remaining);
-      setState({ kind: "ready", matchup: next });
+      setReveal((prev) =>
+        prev.kind === "reveal" && prev.matchupId === matchup.id
+          ? { ...prev, next }
+          : prev
+      );
+      scheduleAutoAdvance(matchup.id, advanceAt, next);
     } catch (err) {
+      clearAutoAdvance();
       setState({
         kind: "error",
         message: err instanceof Error ? err.message : "Vote failed",
       });
-    } finally {
+      setReveal({ kind: "none" });
       setSubmitting(false);
+    } finally {
+      // `submitting` stays true through the reveal so users can see the model names.
     }
   }
 
@@ -100,20 +195,27 @@ export function Arena() {
     if (!matchup || submitting) return;
     setSubmitting(true);
     try {
-      const revealAt = Date.now();
-      setRevealMatchupId(matchup.id);
+      clearAutoAdvance();
+      const startedAt = Date.now();
+      const advanceAt = startedAt + REVEAL_MS_AFTER_SKIP;
+      setReveal({ kind: "reveal", matchupId: matchup.id, action: "SKIP", startedAt, advanceAt, next: null });
       const next = await fetchMatchup(undefined);
-      const minRevealMs = 800;
-      const remaining = minRevealMs - (Date.now() - revealAt);
-      if (remaining > 0) await sleepMs(remaining);
-      setState({ kind: "ready", matchup: next });
+      setReveal((prev) =>
+        prev.kind === "reveal" && prev.matchupId === matchup.id
+          ? { ...prev, next }
+          : prev
+      );
+      scheduleAutoAdvance(matchup.id, advanceAt, next);
     } catch (err) {
+      clearAutoAdvance();
       setState({
         kind: "error",
         message: err instanceof Error ? err.message : "Failed to load matchup",
       });
-    } finally {
+      setReveal({ kind: "none" });
       setSubmitting(false);
+    } finally {
+      // `submitting` stays true through the reveal so users can see the model names.
     }
   }
 
@@ -160,10 +262,12 @@ export function Arena() {
 
           {/* builds grid */}
           <div
-            key={animKey}
-            className="flex w-full snap-x snap-mandatory gap-3 overflow-x-auto pb-2 md:grid md:snap-none md:grid-cols-2 md:overflow-visible md:pb-0"
+            key={matchup?.id ?? "loading"}
+            className={`flex w-full snap-x snap-mandatory gap-3 overflow-x-auto pb-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:grid md:snap-none md:grid-cols-2 md:overflow-visible md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
           >
-            <div className="mb-card-enter min-w-[88%] shrink-0 snap-center md:min-w-0 md:shrink md:snap-none">
+            <div
+              className={`mb-card-enter min-w-[88%] shrink-0 snap-center rounded-3xl transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
+            >
               <VoxelViewerCard
                 title="Build A"
                 subtitle={
@@ -177,7 +281,9 @@ export function Arena() {
                 autoRotate
               />
             </div>
-            <div className="mb-card-enter mb-card-enter-delay min-w-[88%] shrink-0 snap-center md:min-w-0 md:shrink md:snap-none">
+            <div
+              className={`mb-card-enter mb-card-enter-delay min-w-[88%] shrink-0 snap-center rounded-3xl transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
+            >
               <VoxelViewerCard
                 title="Build B"
                 subtitle={
@@ -198,12 +304,95 @@ export function Arena() {
             <span className="font-mono">A ⇄ B</span>
           </div>
 
-          {/* vote bar - no wrapper panel */}
-          <VoteBar
-            disabled={state.kind !== "ready" || submitting}
-            onVote={handleVote}
-            onSkip={handleSkip}
-          />
+          {/* action bar (vote buttons ↔ reveal status) */}
+          <div className="relative h-24 sm:h-[88px]">
+            <div
+              className={`absolute inset-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "pointer-events-none opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+            >
+              <VoteBar
+                disabled={state.kind !== "ready" || submitting || transitioning}
+                onVote={handleVote}
+                onSkip={handleSkip}
+              />
+            </div>
+
+            <div
+              className={`absolute inset-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "opacity-100 translate-y-0" : "pointer-events-none opacity-0 -translate-y-1"}`}
+            >
+              <div className="mb-subpanel h-full px-4 py-2.5">
+                <div className="flex h-full flex-col justify-between gap-2">
+                  <div className="flex min-w-0 items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="mb-badge bg-bg/40 text-muted ring-border/60">
+                        {revealAction === "SKIP"
+                          ? "Skipped"
+                          : revealAction === "TIE"
+                            ? "You voted: Tie"
+                            : revealAction === "BOTH_BAD"
+                              ? "You voted: Both bad"
+                              : revealAction === "A"
+                                ? "You voted: A"
+                                : revealAction === "B"
+                                  ? "You voted: B"
+                                  : "Revealed"}
+                      </span>
+
+                      <div className="hidden min-w-0 items-center gap-2 text-xs sm:flex">
+                        <span className="inline-flex h-5 items-center rounded-full bg-accent/10 px-2 font-mono text-[11px] font-semibold text-accent ring-1 ring-accent/20">
+                          A
+                        </span>
+                        <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
+                          {matchup?.a.model.displayName}
+                        </span>
+                        <span className="text-muted">vs</span>
+                        <span className="inline-flex h-5 items-center rounded-full bg-accent2/10 px-2 font-mono text-[11px] font-semibold text-accent2 ring-1 ring-accent2/20">
+                          B
+                        </span>
+                        <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
+                          {matchup?.b.model.displayName}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-3">
+                      <div className="flex items-center gap-2 text-xs text-muted">
+                        {revealMeta.nextReady ? (
+                          <span className="font-mono">
+                            Next in {Math.max(0, Math.ceil(revealMeta.secondsLeft))}s
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-2 font-mono">
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-muted/30 border-t-muted/80" />
+                            Loading…
+                          </span>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="mb-btn mb-btn-ghost h-9 px-4 text-xs"
+                        disabled={!revealMeta.nextReady || transitioning}
+                        onClick={() => {
+                          if (reveal.kind !== "reveal" || reveal.matchupId !== matchup?.id) return;
+                          if (!reveal.next) return;
+                          void advanceToNext(reveal.matchupId, reveal.next);
+                        }}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-border/40">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-accent/80 to-accent2/80 transition-[width] duration-100 ease-linear motion-reduce:transition-none"
+                      style={{ width: `${(revealMeta.progress * 100).toFixed(1)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
