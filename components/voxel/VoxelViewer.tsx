@@ -17,6 +17,40 @@ type ViewerProps = {
 
 let atlasPromise: Promise<THREE.Texture> | null = null;
 
+type ViewerTheme = "light" | "dark";
+
+function getViewerTheme(): ViewerTheme {
+  const t = document.documentElement.dataset.theme;
+  return t === "dark" ? "dark" : "light";
+}
+
+function applyGridTheme(grid: THREE.GridHelper, theme: ViewerTheme) {
+  const mats = Array.isArray(grid.material) ? grid.material : [grid.material];
+  const centerMat = mats[0];
+  const gridMat = mats.length > 1 ? mats[1] : mats[0];
+
+  const isDark = theme === "dark";
+  const centerColor = isDark ? 0x2a2f3a : 0xcbd5e1;
+  const minorColor = isDark ? 0x161a22 : 0xe2e8f0;
+
+  const set = (mat: THREE.Material | undefined, opts: { color: number; opacity: number }) => {
+    if (!mat) return;
+    if ("color" in mat && (mat as { color?: unknown }).color instanceof THREE.Color) {
+      (mat as unknown as { color: THREE.Color }).color.setHex(opts.color);
+    }
+    if ("opacity" in mat) {
+      (mat as unknown as { transparent: boolean; opacity: number; depthWrite: boolean }).transparent = true;
+      (mat as unknown as { transparent: boolean; opacity: number; depthWrite: boolean }).opacity = opts.opacity;
+      (mat as unknown as { transparent: boolean; opacity: number; depthWrite: boolean }).depthWrite = false;
+    }
+    mat.needsUpdate = true;
+  };
+
+  // Subtle in light mode; slightly stronger in dark mode to remain visible.
+  set(centerMat, { color: centerColor, opacity: isDark ? 0.55 : 0.45 });
+  set(gridMat, { color: minorColor, opacity: isDark ? 0.35 : 0.28 });
+}
+
 function loadAtlasTexture(): Promise<THREE.Texture> {
   if (atlasPromise) return atlasPromise;
   atlasPromise = new Promise((resolve, reject) => {
@@ -241,6 +275,14 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     grid.position.y = -0.5;
     scene.add(grid);
     gridRef.current = grid;
+    applyGridTheme(grid, getViewerTheme());
+
+    const root = document.documentElement;
+    const mo = new MutationObserver(() => {
+      if (!gridRef.current) return;
+      applyGridTheme(gridRef.current, getViewerTheme());
+    });
+    mo.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
 
     threeRef.current = { scene, camera, renderer, controls };
 
@@ -285,6 +327,7 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
 
     return () => {
       threeRef.current = null;
+      mo.disconnect();
       ro.disconnect();
       window.cancelAnimationFrame(raf);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
