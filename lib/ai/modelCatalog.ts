@@ -1,4 +1,4 @@
-export type Provider = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai";
+export type Provider = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai";
 
 export type ModelKey =
   | "openai_gpt_5_2"
@@ -15,7 +15,8 @@ export type ModelKey =
   | "moonshot_kimi_k2"
   | "moonshot_kimi_k2_5"
   | "deepseek_v3_2"
-  | "xai_grok_4_1";
+  | "xai_grok_4_1"
+  | "zai_glm_4_7";
 
 export type ModelCatalogEntry = {
   key: ModelKey;
@@ -150,6 +151,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Grok 4.1",
     enabled: true,
     openRouterModelId: "x-ai/grok-4.1-fast",
+  },
+  {
+    key: "zai_glm_4_7",
+    provider: "zai",
+    modelId: "glm-4.7",
+    displayName: "Z.AI GLM 4.7",
+    enabled: true,
+    openRouterModelId: "z-ai/glm-4.7",
+    forceOpenRouter: true,
   },
 ];
 

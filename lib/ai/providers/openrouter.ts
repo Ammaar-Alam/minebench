@@ -23,6 +23,27 @@ function sleepMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+function tokenFallbacks(requested: number): number[] {
+  const vals = [requested, 65536, 32768, 16384, 8192, 4096, 2048]
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .map((n) => Math.floor(n));
+  const uniq: number[] = [];
+  for (const v of vals) if (!uniq.includes(v)) uniq.push(v);
+  return uniq;
+}
+
+function looksLikeTokenLimitError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    b.includes("max_tokens") ||
+    b.includes("max output tokens") ||
+    b.includes("maximum") && b.includes("tokens") ||
+    b.includes("too many tokens") ||
+    b.includes("token limit") ||
+    b.includes("context length")
+  );
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -62,39 +83,51 @@ export async function openrouterGenerateText(params: {
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
+  const maxTokens = params.maxOutputTokens ?? 8192;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   try {
-    const res = await fetchWithRetry(
-      `${baseUrl}/v1/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://minebench.dev",
-          "X-Title": "MineBench",
-          ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+    let res: Response | null = null;
+    let lastBody = "";
+    for (const tok of tokenFallbacks(maxTokens)) {
+      res = await fetchWithRetry(
+        `${baseUrl}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://minebench.dev",
+            "X-Title": "MineBench",
+            ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: params.modelId,
+            messages: [
+              { role: "system", content: params.system },
+              { role: "user", content: params.user },
+            ],
+            stream: Boolean(params.onDelta),
+            temperature: params.temperature ?? 0.2,
+            max_tokens: tok,
+          }),
         },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: params.modelId,
-          messages: [
-            { role: "system", content: params.system },
-            { role: "user", content: params.user },
-          ],
-          stream: Boolean(params.onDelta),
-          temperature: params.temperature ?? 0.2,
-          max_tokens: params.maxOutputTokens ?? 8192,
-        }),
-      },
-      { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-    );
+        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+      );
+
+      if (res.ok) break;
+      lastBody = await res.text().catch(() => "");
+      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
+      break;
+    }
+
+    if (!res) throw new Error("OpenRouter request failed");
 
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
+      const body = lastBody || (await res.text().catch(() => ""));
       throw new Error(`OpenRouter error ${res.status}: ${body}`);
     }
 

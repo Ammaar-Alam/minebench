@@ -240,6 +240,8 @@ function groupByProvider() {
               ? "moonshot (kimi)"
               : m.provider === "deepseek"
                 ? "deepseek"
+                : m.provider === "zai"
+                  ? "z.ai"
                 : m.provider;
 
     const g = groups.get(m.provider) ?? {

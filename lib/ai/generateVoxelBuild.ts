@@ -75,7 +75,7 @@ function effectiveApiKey(opts: {
   allowServerKeys: boolean;
 }): string | null {
   const provider = opts.provider;
-  if (provider === "xai") return null; // only supported via OpenRouter fallback
+  if (provider === "xai" || provider === "zai") return null; // only supported via OpenRouter fallback
 
   const directKey = normalizeApiKey(
     provider === "openrouter"
@@ -132,7 +132,7 @@ export type GenerateVoxelBuildResult =
 
 // call the direct provider (OpenAI, Anthropic, etc.)
 async function callDirectProvider(args: {
-  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai";
+  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai";
   modelId: string;
   apiKey?: string;
   system: string;
@@ -203,8 +203,12 @@ async function callDirectProvider(args: {
     });
   }
 
-  // xai doesn't have a direct public API we support yet; throw to trigger OpenRouter fallback
-  throw new Error("xAI direct API not supported; use OpenRouter fallback");
+  if (args.provider === "xai") {
+    throw new Error("xAI direct API not supported; use OpenRouter fallback");
+  }
+
+  // Z.AI models are currently OpenRouter-only in MineBench
+  throw new Error("Z.AI direct API not supported; use OpenRouter fallback");
 }
 
 // unified provider call with OpenRouter fallback
