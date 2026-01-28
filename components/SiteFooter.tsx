@@ -22,6 +22,27 @@ export function SiteFooter() {
               </a>{" "}
               (see <span className="font-mono">faithful-32x-1.21.11/LICENSE.txt</span>)
             </div>
+            <div>
+              Inspired by{" "}
+              <a
+                className="text-fg underline decoration-border/70 underline-offset-4 hover:decoration-fg"
+                href="https://mcbench.ai/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                MC-Bench
+              </a>{" "}
+              (
+              <a
+                className="text-fg underline decoration-border/70 underline-offset-4 hover:decoration-fg"
+                href="https://github.com/mc-bench"
+                target="_blank"
+                rel="noreferrer"
+              >
+                GitHub
+              </a>
+              )
+            </div>
           </div>
         </div>
       </div>
