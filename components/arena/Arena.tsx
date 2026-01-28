@@ -242,8 +242,9 @@ export function Arena() {
               <div className="mb-2 font-semibold text-fg">Pure Logic</div>
               <div className="text-sm leading-relaxed text-fg/75">
                 Models blindly derive 3D coordinates using only math and spatial reasoning. They ARE
-                allowed to execute code (python) to help create the JSON. For reasoning only, you
-                can test out the non-thinking models in the Sandbox.
+                allowed to execute code (python) to help create the JSON; specifically they are
+                given a custom voxelBuilder tool which gives them access to primitive functions such
+                as cube, sphere, and square.
               </div>
             </div>
 
