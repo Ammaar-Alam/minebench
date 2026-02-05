@@ -106,6 +106,8 @@ export async function anthropicGenerateText(params: {
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
   const usesAdaptiveThinking = isOpus46(params.modelId);
+  const streamResponses =
+    Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true);
   const thinkingBudget = usesAdaptiveThinking
     ? null
     : isLegacyManualThinkingModel(params.modelId)
@@ -138,7 +140,7 @@ export async function anthropicGenerateText(params: {
             "Content-Type": "application/json",
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
-            ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+            ...(streamResponses ? { Accept: "text/event-stream" } : {}),
             ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
           },
           signal: controller.signal,
@@ -148,7 +150,7 @@ export async function anthropicGenerateText(params: {
             temperature,
             system: params.system,
             messages: [{ role: "user", content: params.user }],
-            stream: Boolean(params.onDelta),
+            stream: streamResponses,
             ...(thinking ? { thinking } : {}),
             ...(outputConfig ? { output_config: outputConfig } : {}),
           }),
@@ -181,7 +183,7 @@ export async function anthropicGenerateText(params: {
     throw new Error(`Anthropic error ${res.status}: ${body}`);
   }
 
-  if (params.onDelta) {
+  if (streamResponses) {
     let text = "";
     await consumeSseStream(res, (evt) => {
       if (evt.data === "[DONE]") return;

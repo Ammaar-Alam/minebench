@@ -41,6 +41,17 @@ function approxMaxBlocksForTokenBudget(opts: {
 
 const DEFAULT_TEMPERATURE = 1.0;
 
+function isBilledTimeoutStyleProviderError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("und_err_headers_timeout") ||
+    m.includes("headerstimeouterror") ||
+    m.includes("headers timeout") ||
+    m.includes("anthropic request timed out") ||
+    (m.includes("anthropic request failed") && m.includes("timeout"))
+  );
+}
+
 function normalizeApiKey(raw: string | undefined): string | null {
   const v = (raw ?? "").trim();
   return v ? v : null;
@@ -511,6 +522,9 @@ export async function generateVoxelBuild(
       };
     } catch (err) {
       lastError = err instanceof Error ? err.message : "Provider request failed";
+      // Avoid expensive duplicate retries when the upstream likely processed work
+      // but the client timed out waiting for headers/body.
+      if (isBilledTimeoutStyleProviderError(lastError)) break;
     }
   }
 
