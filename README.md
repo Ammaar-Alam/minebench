@@ -104,6 +104,8 @@ Copy `.env.example` to `.env` and set:
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 - `GOOGLE_AI_API_KEY`
+- `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1` (optional; sends the 1M context beta header for supported Claude models)
+- `ANTHROPIC_OPUS_4_6_EFFORT=max` (optional; `low|medium|high|max`, default `max`)
 - `AI_DEBUG=1` (optional; logs raw model output on errors)
 
 Prisma uses `.env` for CLI operations. If you set `DATABASE_URL` in `.env.local`, the helper script will sync it to `.env`.
@@ -227,6 +229,7 @@ uploads/
 | `openai_gpt_4_1` | `gpt-4-1` |
 | `anthropic_claude_4_5_sonnet` | `sonnet` |
 | `anthropic_claude_4_5_opus` | `opus` |
+| `anthropic_claude_4_6_opus` | `opus-4-6` |
 | `gemini_3_0_pro` | `gemini-pro` |
 | `gemini_3_0_flash` | `gemini-flash` |
 

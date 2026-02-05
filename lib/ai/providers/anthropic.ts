@@ -9,6 +9,12 @@ type AnthropicStreamEvent = {
   delta?: { type?: unknown; text?: unknown } | unknown;
 };
 
+type AnthropicEffort = "low" | "medium" | "high" | "max";
+
+const CONTEXT_1M_BETA = "context-1m-2025-08-07";
+const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
+
 function tokenFallbacks(requested: number): number[] {
   const vals = [requested, 65536, 32768, 16384, 8192]
     .filter((n) => Number.isFinite(n) && n > 0)
@@ -28,6 +34,29 @@ function looksLikeTokenLimitError(body: string): boolean {
   );
 }
 
+function looksLikeContextBetaUnavailableError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    b.includes(CONTEXT_1M_BETA) ||
+    (b.includes("anthropic-beta") &&
+      (b.includes("invalid") ||
+        b.includes("unknown") ||
+        b.includes("unsupported") ||
+        b.includes("not available") ||
+        b.includes("not enabled") ||
+        b.includes("not entitled")))
+  );
+}
+
+function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return defaultValue;
+  const normalized = raw.trim().toLowerCase();
+  if (TRUE_VALUES.has(normalized)) return true;
+  if (FALSE_VALUES.has(normalized)) return false;
+  return defaultValue;
+}
+
 function parseThinkingBudget(): number | null {
   const raw = process.env.ANTHROPIC_THINKING_BUDGET;
   if (!raw) return null;
@@ -38,8 +67,26 @@ function parseThinkingBudget(): number | null {
   return budget;
 }
 
-function isSonnetOrOpus45(modelId: string): boolean {
+function parseOpus46Effort(): AnthropicEffort {
+  const raw = (process.env.ANTHROPIC_OPUS_4_6_EFFORT ?? "").trim().toLowerCase();
+  if (raw === "low" || raw === "medium" || raw === "high" || raw === "max") return raw;
+  return "max";
+}
+
+function isLegacyManualThinkingModel(modelId: string): boolean {
   return modelId.startsWith("claude-sonnet-4-5") || modelId.startsWith("claude-opus-4-5");
+}
+
+function isOpus46(modelId: string): boolean {
+  return modelId.startsWith("claude-opus-4-6");
+}
+
+function supportsContext1mBeta(modelId: string): boolean {
+  return (
+    modelId.startsWith("claude-opus-4-6") ||
+    modelId.startsWith("claude-sonnet-4-5") ||
+    modelId.startsWith("claude-sonnet-4")
+  );
 }
 
 export async function anthropicGenerateText(params: {
@@ -58,46 +105,63 @@ export async function anthropicGenerateText(params: {
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
-  const thinkingBudget = isSonnetOrOpus45(params.modelId)
-    ? Math.max(1024, maxTokens - 1)
-    : parseThinkingBudget();
+  const usesAdaptiveThinking = isOpus46(params.modelId);
+  const thinkingBudget = usesAdaptiveThinking
+    ? null
+    : isLegacyManualThinkingModel(params.modelId)
+      ? Math.max(1024, maxTokens - 1)
+      : parseThinkingBudget();
+  const outputConfig = usesAdaptiveThinking ? { effort: parseOpus46Effort() } : undefined;
+  const betaHeaders: (string | null)[] =
+    supportsContext1mBeta(params.modelId) &&
+    parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
+      ? [CONTEXT_1M_BETA, null]
+      : [null];
 
   let res: Response | null = null;
   let lastBody = "";
   try {
-    for (const tok of tokenFallbacks(maxTokens)) {
-      const budget =
-        typeof thinkingBudget === "number" ? Math.min(thinkingBudget, tok - 1) : null;
-      const thinking =
-        typeof budget === "number" && budget >= 1024
-          ? { type: "enabled", budget_tokens: budget }
-          : undefined;
-      const temperature = thinking ? 1 : (params.temperature ?? 0.2);
+    requestLoop: for (const tok of tokenFallbacks(maxTokens)) {
+      for (const betaHeader of betaHeaders) {
+        const budget =
+          typeof thinkingBudget === "number" ? Math.min(thinkingBudget, tok - 1) : null;
+        const thinking = usesAdaptiveThinking
+          ? { type: "adaptive" as const }
+          : typeof budget === "number" && budget >= 1024
+            ? { type: "enabled" as const, budget_tokens: budget }
+            : undefined;
+        const temperature = thinking ? 1 : (params.temperature ?? 0.2);
 
-      res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-          ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: params.modelId,
-          max_tokens: tok,
-          temperature,
-          system: params.system,
-          messages: [{ role: "user", content: params.user }],
-          stream: Boolean(params.onDelta),
-          ...(thinking ? { thinking } : {}),
-        }),
-      });
+        res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+            ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+          },
+          signal: controller.signal,
+          body: JSON.stringify({
+            model: params.modelId,
+            max_tokens: tok,
+            temperature,
+            system: params.system,
+            messages: [{ role: "user", content: params.user }],
+            stream: Boolean(params.onDelta),
+            ...(thinking ? { thinking } : {}),
+            ...(outputConfig ? { output_config: outputConfig } : {}),
+          }),
+        });
 
-      if (res.ok) break;
-      lastBody = await res.text().catch(() => "");
-      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
-      break;
+        if (res.ok) break requestLoop;
+        lastBody = await res.text().catch(() => "");
+        if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue requestLoop;
+        if (betaHeader && looksLikeContextBetaUnavailableError(lastBody)) continue;
+        break requestLoop;
+      }
+
+      if (res && !res.ok) break;
     }
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {

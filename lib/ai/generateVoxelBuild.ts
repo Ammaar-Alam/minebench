@@ -21,7 +21,8 @@ import {
   voxelExecToolCallSchema,
 } from "@/lib/ai/tools/voxelExec";
 
-function defaultMaxOutputTokens(gridSize: 64 | 256 | 512): number {
+function defaultMaxOutputTokens(gridSize: 64 | 256 | 512, modelId: string): number {
+  if (modelId.startsWith("claude-opus-4-6")) return 131072;
   // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
   if (gridSize === 64) return 65536;
   return 65536;
@@ -351,7 +352,7 @@ export async function generateVoxelBuild(
   const allowServerKeys = params.allowServerKeys ?? true;
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
-  const maxOutputTokens = defaultMaxOutputTokens(params.gridSize);
+  const maxOutputTokens = defaultMaxOutputTokens(params.gridSize, model.modelId);
   const schemaMaxBlocks = approxMaxBlocksForTokenBudget({
     maxOutputTokens,
     minBlocks,
