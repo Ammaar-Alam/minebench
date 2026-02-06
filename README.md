@@ -1,38 +1,147 @@
 # MineBench
 
-MineBench is a benchmark for comparing AI models on Minecraft-style voxel builds. It focuses on spatial reasoning, prompt fidelity, and 3D structure rather than image similarity or text-only reasoning.
+MineBench is a web benchmark for comparing AI models on Minecraft-style voxel builds.
+It evaluates spatial reasoning by forcing every model through the same structured build format and constraints.
 
-![Example arena matchup](public/readme/benchmark-split.png)
+![MineBench arena preview](public/readme/benchmark-split.png)
 
-## Benchmark goals (what makes this "real")
-- Fixed task format: every model must output the same voxel JSON schema.
-- Fixed constraints: grid size, palette, min/max blocks, and structural checks.
-- Curated prompt set: Arena uses a fixed list, not user prompts.
-- Pre-seeded builds: Arena uses stored builds so every matchup is generated under identical settings.
-- Pairwise evaluation: head-to-head voting feeds a single Elo ladder.
-- Auditability: block counts, generation time, and validation warnings are stored and shown.
+## What MineBench Includes
 
-## Arena mode (the benchmark)
-- Route: `/`
-- Settings: grid 256, simple palette, mode "precise"
-- Prompts: `lib/arena/curatedPrompts.ts`
-- Matchups: models are sampled with inverse weight of `shownCount` to balance exposure
-- Voting: A, B, Tie, Both bad (one vote per matchup per session cookie)
-- Ranking: Elo K=16; "both bad" penalizes both models vs a baseline rating
+- `Arena` (`/`): head-to-head voting on pre-seeded builds with Elo ranking updates.
+- `Sandbox` (`/sandbox`):
+  - `Benchmark Compare`: compare already-seeded Arena builds without API keys.
+  - `Live Generate`: run two models live with bring-your-own API keys.
+- `Local Lab` (`/local`): copy the exact benchmark prompt, run it in any external model, and render the returned JSON locally.
+- `Leaderboard` (`/leaderboard`): model ratings and win/loss stats.
 
-## Sandbox mode (exploration)
-- Route: `/sandbox`
-- Choose prompt, grid (64/256/512), palette (simple/advanced), and two models
-- Streams NDJSON events as each model finishes
-- Useful for quick comparisons but does not affect the leaderboard
+## Quick Start (Local)
 
-## Local Lab (bring-your-own JSON)
-- Route: `/local`
-- Shows the exact MineBench system prompt (editable + copyable) so you can run the task in any model (including local LLMs)
-- Paste the resulting JSON to preview the voxel build client-side (nothing is uploaded or saved)
+This path lets you run the full app and compare existing builds from `uploads/` without generating new ones.
 
-## Task format (voxel JSON)
-Models must return JSON with primitives (boxes/lines) plus explicit blocks:
+### 1) Prerequisites
+
+- Node.js `18+`
+- `pnpm`
+- Docker (for local Postgres)
+
+### 2) Install dependencies
+
+```bash
+pnpm install
+```
+
+### 3) Create env file
+
+```bash
+cp .env.example .env
+```
+
+### 4) Start app + database
+
+```bash
+pnpm dev:setup
+```
+
+`pnpm dev:setup` will:
+- ensure `.env` exists
+- build the texture atlas
+- reset local Docker Postgres volume
+- run Prisma migrations
+- start Next.js dev server on `http://localhost:3000`
+
+### 5) Seed local DB from checked-in `uploads/`
+
+In a second terminal:
+
+```bash
+pnpm prompt --import
+```
+
+Then open:
+- `http://localhost:3000/` (Arena)
+- `http://localhost:3000/sandbox` (Benchmark Compare works immediately)
+- `http://localhost:3000/leaderboard`
+
+### Alternative startup (keep DB state)
+
+If you do not want to reset the DB volume each time:
+
+```bash
+pnpm db:up
+pnpm prisma:migrate
+pnpm dev
+```
+
+## Live Generation (Bring Your Own Keys)
+
+To generate fresh builds in `/sandbox` -> `Live Generate`:
+
+1. Open `http://localhost:3000/sandbox`
+2. Switch to `Live Generate`
+3. Enter either:
+   - an `OpenRouter` key (recommended), or
+   - provider-specific keys (OpenAI/Anthropic/Gemini/Moonshot/DeepSeek)
+4. Pick 2 models and click `Generate`
+
+Notes:
+- Keys entered in Sandbox are stored in browser `localStorage` and sent only with that request.
+- In production, `/api/generate` requires request keys unless `MINEBENCH_ALLOW_SERVER_KEYS=1`.
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and set what you need:
+
+### Core
+
+- `DATABASE_URL` (required): pooled/runtime Postgres URL
+- `DIRECT_URL` (required): direct Postgres URL for Prisma migrations
+- `ADMIN_TOKEN` (required for `/api/admin/*`)
+
+### Provider keys (any subset)
+
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GOOGLE_AI_API_KEY`
+- `MOONSHOT_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `OPENROUTER_API_KEY`
+
+### Optional provider/runtime tuning
+
+- `MINEBENCH_ALLOW_SERVER_KEYS=1` (production opt-in for server env keys in `/api/generate`)
+- `ANTHROPIC_OPUS_4_6_EFFORT=low|medium|high|max`
+- `ANTHROPIC_STREAM_RESPONSES=1`
+- `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
+- `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
+- `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`
+- `AI_DEBUG=1` (logs raw model output on failures)
+- `MINEBENCH_TOOL_OUTPUT_DIR`, `MINEBENCH_TOOL_TIMEOUT_MS`, `MINEBENCH_TOOL_MAX_*` (advanced `voxel.exec` controls)
+
+## Benchmark Behavior
+
+### Arena settings (fixed)
+
+- Grid size: `256`
+- Palette: `simple`
+- Mode: `precise`
+
+### Matchup sampling and voting
+
+- Arena matchups are sampled from pre-seeded builds only.
+- Models are sampled with inverse weighting of `shownCount` to balance exposure.
+- A session cookie (`mb_session`) is used so each session can vote once per matchup.
+- Vote options: `A`, `B`, `TIE`, `BOTH_BAD`.
+- Elo updates:
+  - `A/B/TIE`: standard pairwise update (`K=16`)
+  - `BOTH_BAD`: both models are penalized vs baseline
+
+### Rate limiting
+
+Middleware rate limits non-admin API routes to `18 requests / 10 seconds` per `IP + path`.
+
+## Voxel Task Format
+
+Models produce JSON in this schema:
 
 ```json
 {
@@ -49,266 +158,188 @@ Models must return JSON with primitives (boxes/lines) plus explicit blocks:
 }
 ```
 
-Primitives are expanded server-side, then validated, deduplicated, and clamped to the grid.
+Validation pipeline:
+- expands `boxes` and `lines`
+- normalizes/drops invalid block types
+- drops out-of-bounds coordinates
+- deduplicates final blocks
+- enforces max block limits
 
-### Block palettes
-- Simple palette: 22 blocks
-- Advanced palette: 77 total blocks (simple + 55 additional)
-- See `lib/blocks/palettes.json`
+Current generation constraints:
+- grid sizes: `64`, `256`, `512`
+- minimum blocks: `200` / `500` / `800`
+- max blocks: `196,608` / `2,000,000` / `4,000,000`
+- minimum structural span checks for width/depth and height (to reject tiny builds)
 
-## Validation and constraints (enforced)
-- Grid coordinates must be in `[0, gridSize - 1]`
-- Max blocks = 75% of grid volume (64: 196,608; 256: 2,000,000 cap; 512: 4,000,000 cap)
-- Min blocks = 200 / 500 / 800 for 64 / 256 / 512
-- Minimum footprint ~55% of grid width and minimum height ~14% of grid height
-- Unknown block types are normalized when possible or dropped with warnings
-- Out-of-bounds blocks are dropped; duplicates are deduped
-- Metrics recorded: block count, generation time, warnings
+Block palettes:
+- `simple` and `advanced` are defined in `lib/blocks/palettes.json`
 
-## Leaderboard
-- Route: `/leaderboard`
-- Elo updates from Arena votes only
-- "Both bad" applies a baseline penalty to both models
+## Seeding and Import Workflows
 
-## Data model (Postgres)
-- Prisma creates quoted PascalCase tables (e.g. `"Prompt"`, `"Build"`). In SQL, use quotes or schema-qualify like `select count(*) from public."Prompt";`.
-- `Model`: provider, displayName, Elo, counts
-- `Prompt`: curated prompt text
-- `Build`: prompt + model + grid + palette + mode with voxel JSON and metrics
-- `Matchup`: two models, two builds, one prompt
-- `Vote`: one vote per matchup per session
-
-## Local dev
+### Option A: import local JSONs from `uploads/` (no provider calls)
 
 ```bash
-pnpm install
-pnpm dev:setup
+pnpm prompt                  # inspect detected prompt folders/builds
+pnpm prompt --import         # import into local DB
+pnpm prompt --import --overwrite
 ```
 
-`pnpm dev:setup` builds the texture atlas, resets the local Docker Postgres volume, runs migrations, and starts Next.js.
-
-If you want to keep your DB state, use:
+Create a new prompt folder scaffold:
 
 ```bash
-pnpm db:up
-pnpm prisma:migrate
-pnpm dev
+pnpm prompt --init --prompt arcade --text "A classic arcade cabinet with ..."
 ```
 
-### Environment variables
-Copy `.env.example` to `.env` and set:
+### Option B: seed curated prompts + generate missing builds via API
 
-- `DATABASE_URL` (Postgres connection string)
-- `DIRECT_URL` (direct Postgres connection string for Prisma migrations)
-- `ADMIN_TOKEN` (protects `/api/admin/*`)
-- `OPENAI_API_KEY`
-- `ANTHROPIC_API_KEY`
-- `GOOGLE_AI_API_KEY`
-- `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1` (optional; sends the 1M context beta header for supported Claude models)
-- `ANTHROPIC_OPUS_4_6_EFFORT=max` (optional; `low|medium|high|max`, default `max`)
-- `ANTHROPIC_STREAM_RESPONSES=1` (optional; default enabled, recommended to avoid header timeouts on long generations)
-- `AI_DEBUG=1` (optional; logs raw model output on errors)
-
-Prisma uses `.env` for CLI operations. If you set `DATABASE_URL` in `.env.local`, the helper script will sync it to `.env`.
-
-### Seeding the Arena (curated prompts + builds)
-
-Make sure your shell has `ADMIN_TOKEN` set (or add it to `.env` and restart `pnpm dev`):
+Set `ADMIN_TOKEN` in `.env`, restart dev server, then:
 
 ```bash
-export ADMIN_TOKEN="..."
-```
-
-```bash
-# Prompts + model catalog only (no AI calls)
-curl -X POST "http://localhost:3000/api/admin/seed?generateBuilds=0" \
+# status
+curl -sS "http://localhost:3000/api/admin/status" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
-# Dry run (see how many builds remain)
-curl -X POST "http://localhost:3000/api/admin/seed?dryRun=1" \
+# prompts + model catalog only (no generation)
+curl -sS -X POST "http://localhost:3000/api/admin/seed?generateBuilds=0" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
-# Full seed (generates missing builds; repeat until done)
-curl -X POST "http://localhost:3000/api/admin/seed" \
+# dry run
+curl -sS -X POST "http://localhost:3000/api/admin/seed?dryRun=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
-# Smaller batches (1-3) to avoid timeouts
-curl -X POST "http://localhost:3000/api/admin/seed?batchSize=2" \
+# generate missing builds in batches (repeat until done=true)
+curl -sS -X POST "http://localhost:3000/api/admin/seed?batchSize=2" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-Repeat until it reports `done: true`. Arena requires seeded builds.
+At least one provider key must be configured (`OPENROUTER_API_KEY` or a direct provider key) for generation to run.
 
-### Import builds from ChatGPT web (no API calls)
+### Option C: import external model output directly
 
-If you want to avoid API usage, you can generate a voxel build JSON using **chatgpt.com** and import it directly.
-
-- Copy/paste prompt template: `docs/chatgpt-web-voxel-prompt.md`
-- Import endpoint: `POST /api/admin/import-build`
+Use this to import JSON from ChatGPT web or other tools:
 
 ```bash
-# 1) Get prompt IDs (optional — you can also import by promptText)
-curl -sS "http://localhost:3000/api/arena/prompts"
-
-# 2) Save the ChatGPT response JSON into a local file (gitignored)
-mkdir -p uploads
-# (save as uploads/build.json)
-
-# 3) Import the build by promptId (defaults: 256³, simple palette, mode=precise)
-curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptId=YOUR_PROMPT_ID&overwrite=1" \
+curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptText=$(node -p 'encodeURIComponent(process.argv[1])' 'A medieval stone castle')&overwrite=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  --data-binary "@uploads/build.json"
-
-# Or import by promptText (URL-encoded)
-ENC_PROMPT="$(node -p 'encodeURIComponent(process.argv[1])' 'YOUR PROMPT TEXT HERE')"
-curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptText=$ENC_PROMPT&overwrite=1" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  --data-binary "@uploads/build.json"
+  --data-binary "@uploads/castle/castle-gpt-5-2-pro.json"
 ```
 
-The import route validates the JSON (including expanding `boxes`/`lines`) and stores it as a `Build` in Postgres.
+Reference prompt template: `docs/chatgpt-web-voxel-prompt.md`
 
-### Batch generation (automated workflow)
+## API Reference
 
-For generating builds at scale, use the batch generation script:
+### Public routes
+
+- `POST /api/generate`
+  - body: `{ prompt, gridSize, palette, modelKeys, providerKeys? }`
+  - response: `application/x-ndjson` stream (`hello`, `start`, `retry`, `delta`, `result`, `error`, `ping`)
+- `GET /api/arena/matchup?promptId=<optional>`
+- `POST /api/arena/vote`
+  - body: `{ matchupId, choice }`
+  - `choice`: `A | B | TIE | BOTH_BAD`
+- `GET /api/arena/prompts`
+- `GET /api/sandbox/benchmark?promptId=&modelA=&modelB=`
+- `GET /api/leaderboard`
+
+### Admin routes (Bearer `ADMIN_TOKEN` required)
+
+- `GET /api/admin/status`
+- `POST /api/admin/seed?dryRun=1&generateBuilds=0&batchSize=2`
+- `POST /api/admin/import-build?modelKey=...&promptId=...|promptText=...&gridSize=256&palette=simple&mode=precise&overwrite=1`
+
+## Useful Scripts
+
+- `pnpm dev:setup`: full local bootstrap (resets DB, migrates, runs dev server)
+- `pnpm dev`: start Next.js dev server
+- `pnpm build` / `pnpm start`: production build and serve
+- `pnpm lint`: ESLint
+- `pnpm db:up` / `pnpm db:down` / `pnpm db:reset`
+- `pnpm prisma:migrate` / `pnpm prisma:dev` / `pnpm prisma:generate`
+- `pnpm atlas`: rebuild texture atlas
+- `pnpm prompt`: inspect/import prompt build files from `uploads/`
+- `pnpm batch:generate`: batch-generate and/or upload build files
+- `pnpm elo:reset --yes [--keep-history]`: reset leaderboard stats
+
+## Batch Generation Examples
 
 ```bash
-# show status of all builds (default, no generation)
+# status only
 pnpm batch:generate
 
-# upload existing builds to production
-pnpm batch:generate --upload
-
-# generate missing builds
+# generate missing files
 pnpm batch:generate --generate
 
-# generate missing builds without voxel.exec tool usage
+# generate without voxel.exec tool mode
 pnpm batch:generate --generate --notools
 
-# generate missing builds and upload all to production
-pnpm batch:generate --generate --upload
+# upload existing files to production
+pnpm batch:generate --upload
 
-# filter by prompt
-pnpm batch:generate --prompt steampunk
-
-# filter by model
-pnpm batch:generate --model gemini
-
-# combine filters with generate/upload
+# generate + upload with prompt/model filters
 pnpm batch:generate --generate --upload --prompt castle --model sonnet
 
-# show help
+# all options
 pnpm batch:generate --help
 ```
 
-**Note:** By default, the script only shows status. Use `--generate` to generate missing builds and `--upload` to upload existing builds to production.
+Build files are written under `uploads/<prompt-slug>/`.
 
-#### Folder structure
+## Quality Checks
 
-Generated builds are saved to `uploads/{prompt-slug}/`:
+- `pnpm lint` for static checks
+- no automated test suite is configured yet
 
-```
-uploads/
-├── castle/
-│   ├── castle-gpt-5-2.json
-│   ├── castle-sonnet.json
-│   └── ...
-├── steampunk/
-│   ├── steampunk-gpt-5-2.json
-│   └── ...
-└── ...
-```
+## Database Notes
 
-#### Model slugs
+Prisma models:
+- `Model`
+- `Prompt`
+- `Build`
+- `Matchup`
+- `Vote`
 
-| Model Key | File Slug |
-|-----------|-----------|
-| `openai_gpt_5_2` | `gpt-5-2` |
-| `openai_gpt_5_2_pro` | `gpt-5-2-pro` |
-| `openai_gpt_5_2_codex` | `gpt-5-2-codex` |
-| `openai_gpt_5_mini` | `gpt-5-mini` |
-| `openai_gpt_4_1` | `gpt-4-1` |
-| `anthropic_claude_4_5_sonnet` | `sonnet` |
-| `anthropic_claude_4_5_opus` | `opus` |
-| `anthropic_claude_4_6_opus` | `opus-4-6` |
-| `gemini_3_0_pro` | `gemini-pro` |
-| `gemini_3_0_flash` | `gemini-flash` |
+Prisma creates quoted PascalCase table names in Postgres.
+When querying manually, use quoted identifiers, for example:
 
-#### Prompt slugs
-
-| Slug | Prompt |
-|------|--------|
-| `steampunk` | A steampunk airship... |
-| `carrier` | A flying aircraft carrier... |
-| `locomotive` | A steam locomotive |
-| `skyscraper` | A skyscraper |
-| `treehouse` | A treehouse village... |
-| `cottage` | A cozy cottage |
-| `worldtree` | A massive world tree... |
-| `floating` | A floating island ecosystem... |
-| `shipwreck` | An underwater shipwreck... |
-| `phoenix` | A phoenix rising from flames... |
-| `knight` | A knight in armor |
-| `castle` | A medieval stone castle... |
-
-**Custom prompts:** If you add your own folders under `uploads/<slug>/`, also add `uploads/<slug>/prompt.txt` (or run `pnpm prompt --init ...`) so `pnpm batch:generate` knows what prompt text to generate/upload for that slug.
-
-#### Recommended workflow
-
-1. **Check status** to see what's missing:
-   ```bash
-   pnpm batch:generate
-   ```
-
-2. **Generate one prompt at a time** (to manage costs):
-   ```bash
-   pnpm batch:generate --generate --prompt steampunk
-   ```
-
-3. **Or generate one model at a time**:
-   ```bash
-   pnpm batch:generate --generate --model sonnet
-   ```
-
-4. **Upload existing builds to production**:
-   ```bash
-   pnpm batch:generate --upload
-   ```
-
-5. **Generate and upload in one step**:
-   ```bash
-   pnpm batch:generate --generate --upload --prompt castle
-   ```
-
-The script prints individual curl commands for manual upload if you prefer more control.
-
-### Import builds from `uploads/` into your local DB
-
-If you already have voxel JSONs on disk (for example in `uploads/astronaut/*.json`) and want to seed your local Postgres without making any AI calls, use:
-
-```bash
-# show what the importer can see
-pnpm prompt
-
-# create a new prompt folder + prompt.txt + placeholder JSONs (enabled models)
-pnpm prompt --init --prompt arcade --text "A classic arcade cabinet with ..."
-
-# generate missing builds for that prompt (writes JSONs into uploads/arcade/*.json)
-pnpm batch:generate --generate --prompt arcade
-
-# import one custom prompt (creates the Prompt row if needed)
-pnpm prompt --import --prompt astronaut --text "An astronaut in a space suit"
-
-# overwrite existing builds for that prompt/model/settings
-pnpm prompt --import --prompt astronaut --text "An astronaut in a space suit" --overwrite
+```sql
+select count(*) from public."Prompt";
 ```
 
-For long prompts, you can also drop a `uploads/<slug>/prompt.txt` file and omit `--text`.
+## Project Structure
 
-## Texture attribution
-This repo includes the Faithful texture pack at `faithful-32x-1.21.11`.
-See `faithful-32x-1.21.11/LICENSE.txt` for license details.
+```text
+app/                Next.js App Router pages and API routes
+components/         UI and voxel viewer components
+lib/ai/             generation pipeline and provider adapters
+lib/arena/          matchup sampling and Elo logic
+lib/blocks/         palette and texture atlas mapping
+lib/voxel/          voxel types, validation, mesh helpers
+prisma/             schema and migrations
+scripts/            setup, import, generation, maintenance utilities
+uploads/            local build JSON files and prompt folders
+```
 
+## Troubleshooting
 
+- `No seeded prompts found` on Arena:
+  - Run `pnpm prompt --import` or use `/api/admin/seed`.
+- `Missing ADMIN_TOKEN` / `Invalid token` on admin endpoints:
+  - Set `ADMIN_TOKEN` in `.env` and send `Authorization: Bearer $ADMIN_TOKEN`.
+- `/api/generate` returns no-key error in production:
+  - send `providerKeys` from client or set `MINEBENCH_ALLOW_SERVER_KEYS=1`.
+- DB connection errors:
+  - ensure Docker is running, `DATABASE_URL`/`DIRECT_URL` are valid, then run `pnpm db:up`.
+- Missing/broken block textures:
+  - run `pnpm atlas` to rebuild `public/textures/atlas.png`.
 
-_[Disclaimer: all documentation (including README) and frontend is almost entirely AI-created]_
+## Deployment Notes
+
+- Works well with Vercel + Supabase Postgres.
+- Recommended:
+  - `DATABASE_URL`: Supabase pooler URL (`pgbouncer=true`)
+  - `DIRECT_URL`: Supabase direct URL (for Prisma migrations)
+
+## Attribution
+
+- Textures: Faithful pack (`faithful-32x-1.21.11/`)
+- License: see `faithful-32x-1.21.11/LICENSE.txt`
