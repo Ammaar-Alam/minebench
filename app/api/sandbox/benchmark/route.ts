@@ -94,17 +94,13 @@ export async function GET(req: Request) {
       );
     }
 
-    const selectedPrompt = requestedPromptId
-      ? promptOptions.find((p) => p.id === requestedPromptId) ?? promptOptions[0]
-      : promptOptions[0];
-
     const modelRows = await prisma.model.findMany({
       where: {
         enabled: true,
         isBaseline: false,
         builds: {
           some: {
-            promptId: selectedPrompt.id,
+            promptId: { in: eligiblePromptIds },
             gridSize: ARENA_GRID_SIZE,
             palette: ARENA_PALETTE,
             mode: ARENA_MODE,
@@ -113,6 +109,7 @@ export async function GET(req: Request) {
       },
       orderBy: [{ eloRating: "desc" }, { displayName: "asc" }],
       select: {
+        id: true,
         key: true,
         provider: true,
         displayName: true,
@@ -128,6 +125,25 @@ export async function GET(req: Request) {
     }));
 
     const selection = pickPair(models, requestedModelA, requestedModelB);
+    const modelIdByKey = new Map(modelRows.map((m) => [m.key, m.id]));
+    const selectedModelAId = selection.a ? modelIdByKey.get(selection.a) ?? null : null;
+    const selectedModelBId = selection.b ? modelIdByKey.get(selection.b) ?? null : null;
+
+    const compatiblePromptIds =
+      selectedModelAId && selectedModelBId
+        ? promptOptions
+            .filter((p) => {
+              const ids = modelIdsByPromptId.get(p.id);
+              return Boolean(ids?.has(selectedModelAId) && ids?.has(selectedModelBId));
+            })
+            .map((p) => p.id)
+        : [];
+
+    const selectedPrompt = requestedPromptId
+      ? promptOptions.find((p) => p.id === requestedPromptId) ??
+        promptOptions.find((p) => compatiblePromptIds.includes(p.id)) ??
+        promptOptions[0]
+      : promptOptions.find((p) => compatiblePromptIds.includes(p.id)) ?? promptOptions[0];
 
     const [buildA, buildB] = await Promise.all([
       selection.a
