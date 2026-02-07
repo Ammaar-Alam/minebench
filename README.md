@@ -343,3 +343,4 @@ uploads/            local build JSON files and prompt folders
 
 - Textures: Faithful pack (`faithful-32x-1.21.11/`)
 - License: see `faithful-32x-1.21.11/LICENSE.txt`
+_[Disclaimer: all documentation (including README) and frontend is almost entirely AI-created]_
