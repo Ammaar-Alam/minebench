@@ -29,6 +29,16 @@ const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
 const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
+const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
+const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_mini";
+const DEFAULT_MODEL_A: ModelKey =
+  ENABLED_MODELS.find((model) => model.key === "openai_gpt_5_mini")?.key ?? FALLBACK_MODEL_A;
+const DEFAULT_MODEL_B: ModelKey =
+  ENABLED_MODELS.find(
+    (model) => model.key === "gemini_3_0_flash" && model.key !== DEFAULT_MODEL_A
+  )?.key ??
+  ENABLED_MODELS.find((model) => model.key !== DEFAULT_MODEL_A)?.key ??
+  DEFAULT_MODEL_A;
 
 function safeJsonParseObject(text: string): Record<string, unknown> | null {
   try {
@@ -225,36 +235,16 @@ function buildPreviewFromRawText(opts: {
   return validated.value.build;
 }
 
-function groupByProvider() {
-  const groups = new Map<string, { key: string; label: string; models: typeof MODEL_CATALOG }>();
-  for (const m of MODEL_CATALOG) {
-    if (!m.enabled) continue;
-    const label =
-      m.provider === "openai"
-        ? "openai"
-        : m.provider === "anthropic"
-          ? "anthropic"
-          : m.provider === "gemini"
-            ? "gemini"
-            : m.provider === "moonshot"
-              ? "moonshot (kimi)"
-              : m.provider === "deepseek"
-                ? "deepseek"
-                : m.provider === "meta"
-                  ? "meta"
-                : m.provider === "zai"
-                  ? "z.ai"
-                : m.provider;
-
-    const g = groups.get(m.provider) ?? {
-      key: m.provider,
-      label,
-      models: [],
-    };
-    g.models.push(m);
-    groups.set(m.provider, g);
-  }
-  return Array.from(groups.values());
+function providerLabel(provider: string): string {
+  if (provider === "openai") return "OpenAI";
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "gemini") return "Google";
+  if (provider === "moonshot") return "Moonshot";
+  if (provider === "deepseek") return "DeepSeek";
+  if (provider === "xai") return "xAI";
+  if (provider === "zai") return "Z.AI";
+  if (provider === "meta") return "Meta";
+  return provider;
 }
 
 export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
@@ -263,9 +253,10 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
   const [showKeys, setShowKeys] = useState(false);
-  const [selectedModelKeys, setSelectedModelKeys] = useState<ModelKey[]>(
-    ["openai_gpt_5_mini", "gemini_3_0_flash"]
-  );
+  const [modelPair, setModelPair] = useState<{ a: ModelKey; b: ModelKey }>({
+    a: DEFAULT_MODEL_A,
+    b: DEFAULT_MODEL_B,
+  });
   const [results, setResults] = useState<Map<ModelKey, ModelResult>>(
     () =>
       new Map(
@@ -282,7 +273,19 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     new Map<ModelKey, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
 
-  const providers = useMemo(() => groupByProvider(), []);
+  const modelGroups = useMemo(() => {
+    const groups = new Map<string, (typeof ENABLED_MODELS)[number][]>();
+    for (const model of ENABLED_MODELS) {
+      const key = providerLabel(model.provider);
+      const rows = groups.get(key) ?? [];
+      rows.push(model);
+      groups.set(key, rows);
+    }
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([label, models]) => ({ label, models }));
+  }, []);
+  const selectedModelKeys: ModelKey[] = [modelPair.a, modelPair.b];
 
   useEffect(() => {
     if (!running) return;
@@ -294,14 +297,20 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     saveProviderKeysToStorage(providerKeys);
   }, [providerKeys]);
 
-  function toggleModel(key: ModelKey) {
-    setSelectedModelKeys((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : prev.length >= 2 ? prev : [...prev, key]
-    );
+  function handleModelChange(slot: "a" | "b", modelKey: string) {
+    const nextKey = modelKey as ModelKey;
+    setModelPair((prev) => {
+      if (slot === "a") {
+        if (nextKey === prev.b) return prev;
+        return { a: nextKey, b: prev.b };
+      }
+      if (nextKey === prev.a) return prev;
+      return { a: prev.a, b: nextKey };
+    });
   }
 
   async function runGenerate() {
-    if (!prompt.trim() || selectedModelKeys.length !== 2) return;
+    if (!prompt.trim() || modelPair.a === modelPair.b) return;
 
     setRunning(true);
     setRequestError(null);
@@ -617,52 +626,77 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 </svg>
               </div>
             </label>
-          </div>
+            <label className="flex flex-col gap-1">
+              <div className="text-xs font-medium text-muted">Model A</div>
+              <div className="relative">
+                <select
+                  className="mb-field h-11 w-full appearance-none pr-10"
+                  value={modelPair.a}
+                  onChange={(e) => handleModelChange("a", e.target.value)}
+                  disabled={running || ENABLED_MODELS.length < 2}
+                >
+                  {modelGroups.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.models.map((model) => (
+                        <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
+                          {model.displayName}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <svg
+                  aria-hidden="true"
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="m7 10 5 5 5-5"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </div>
+            </label>
 
-          <div className="mt-5">
-            <div className="text-xs font-medium text-muted">Models</div>
-            <div className="mt-1 text-xs text-muted">
-              <span className="font-mono">{selectedModelKeys.length}/2</span>
-            </div>
-            <div className="mt-2 grid grid-cols-1 gap-3 md:grid-cols-3">
-              {providers.map((g) => (
-                <div key={g.key} className="mb-subpanel p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-xs font-semibold text-fg">{g.label}</div>
-                    <div className="text-[11px] text-muted">
-                      <span className="font-mono">{g.models.length}</span>
-                    </div>
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {g.models.map((m) => {
-                      const selected = selectedModelKeys.includes(m.key);
-                      const disabled = running || (!selected && selectedModelKeys.length >= 2);
-                      return (
-                        <button
-                          key={m.key}
-                          type="button"
-                          className="mb-chip"
-                          aria-pressed={selected}
-                          disabled={disabled}
-                          onClick={() => toggleModel(m.key)}
-                          title={m.modelId}
-                        >
-                          <span
-                            aria-hidden="true"
-                            className={
-                              selected
-                                ? "h-2.5 w-2.5 rounded-sm bg-accent shadow-[0_0_0_3px_hsl(var(--accent)_/_0.16)]"
-                                : "h-2.5 w-2.5 rounded-sm bg-border/80"
-                            }
-                          />
-                          <span className="truncate">{m.displayName}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
+            <label className="flex flex-col gap-1">
+              <div className="text-xs font-medium text-muted">Model B</div>
+              <div className="relative">
+                <select
+                  className="mb-field h-11 w-full appearance-none pr-10"
+                  value={modelPair.b}
+                  onChange={(e) => handleModelChange("b", e.target.value)}
+                  disabled={running || ENABLED_MODELS.length < 2}
+                >
+                  {modelGroups.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.models.map((model) => (
+                        <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
+                          {model.displayName}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <svg
+                  aria-hidden="true"
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                >
+                  <path
+                    d="m7 10 5 5 5-5"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </div>
+            </label>
           </div>
 
           <div className="mt-5">
@@ -792,7 +826,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           <div className="mt-5 flex items-center justify-end">
             <button
               className="mb-btn mb-btn-primary h-11 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={running || selectedModelKeys.length !== 2 || !prompt.trim()}
+              disabled={running || modelPair.a === modelPair.b || !prompt.trim()}
               onClick={runGenerate}
             >
               {running ? "Generating…" : "Generate"}
