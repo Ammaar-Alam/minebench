@@ -27,6 +27,7 @@ export function VoxelViewerCard({
   error,
   debugRawText,
   palette = "simple",
+  viewerSize = "default",
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -42,6 +43,7 @@ export function VoxelViewerCard({
   error?: string;
   debugRawText?: string;
   palette?: "simple" | "advanced";
+  viewerSize?: "default" | "arena";
 }) {
   const rendered = useMemo(() => {
     if (!voxelBuild)
@@ -85,32 +87,49 @@ export function VoxelViewerCard({
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }, [elapsedMs]);
 
+  const viewerHeightClass =
+    viewerSize === "arena"
+      ? "relative w-full h-[38vh] min-h-[220px] max-h-[300px] sm:h-[44vh] sm:min-h-[260px] sm:max-h-[360px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
+      : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
+
   return (
     <div className="mb-panel">
       <div className="mb-panel-inner">
-        <div className="flex items-start justify-between gap-3 border-b border-border bg-bg/10 px-4 py-3">
-          <div className="min-w-0">
-            <div className="font-display text-base font-semibold tracking-tight text-fg">
+        <div className="flex items-center justify-between gap-2 border-b border-border bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
+          <div className="min-w-0 flex items-center gap-2.5">
+            <div className="font-display text-[1.05rem] font-semibold tracking-tight text-fg sm:text-base">
               {title}
             </div>
-            {subtitle ? <div className="min-h-[1.5rem] text-sm">{subtitle}</div> : null}
+            {subtitle ? (
+              <div className="min-h-[1.1rem] text-[12px] sm:text-[13px]">{subtitle}</div>
+            ) : null}
           </div>
-          <div className="shrink-0 text-right text-xs text-muted">
+          <div className="shrink-0 text-right text-[11px] text-muted sm:text-xs">
             {build ? (
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="font-mono">{blockCount} blocks</span>
-                {timing ? <span className="font-mono">{timing}</span> : null}
-                {warnings.length ? (
-                  <span className="font-mono">
-                    {warnings.length} warning{warnings.length === 1 ? "" : "s"}
-                  </span>
-                ) : null}
-              </div>
+              <>
+                <div className="flex flex-col items-end gap-0.5 sm:hidden">
+                  <span className="font-mono">{blockCount} blocks</span>
+                  {warnings.length ? (
+                    <span className="font-mono">
+                      {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="hidden items-center gap-2 font-mono sm:flex">
+                  <span>{blockCount} blocks</span>
+                  {timing ? <span>• {timing}</span> : null}
+                  {warnings.length ? (
+                    <span>
+                      • {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                </div>
+              </>
             ) : null}
           </div>
         </div>
 
-        <div className="relative h-[320px] w-full sm:h-[360px] md:h-[420px] lg:h-[520px]">
+        <div className={viewerHeightClass}>
           {build ? (
             <VoxelViewer
               voxelBuild={build}
@@ -188,7 +207,7 @@ export function VoxelViewerCard({
         ) : null}
 
         {warnings.length ? (
-          <details className="border-t border-border bg-bg/10 px-4 py-3 text-xs text-muted">
+          <details className="border-t border-border bg-bg/10 px-3 py-2.5 text-xs text-muted sm:px-4 sm:py-3">
             <summary className="cursor-pointer select-none font-semibold text-fg">
               Warnings ({warnings.length})
             </summary>

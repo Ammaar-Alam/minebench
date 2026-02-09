@@ -1,7 +1,7 @@
 export function SiteFooter() {
   return (
-    <footer className="py-10 text-sm text-muted">
-      <div className="mb-subpanel px-5 py-4">
+    <footer className="py-6 text-sm text-muted sm:py-10">
+      <div className="mb-subpanel px-4 py-3 sm:px-5 sm:py-4">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-col gap-1">
             <div className="font-display text-sm font-semibold text-fg">MineBench</div>

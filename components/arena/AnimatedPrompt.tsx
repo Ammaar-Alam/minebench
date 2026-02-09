@@ -36,7 +36,8 @@ export function AnimatedPrompt({
       rafRef.current = null;
     }
 
-    if (!next || reduced) {
+    // Long prompts read better without character-by-character animation.
+    if (!next || reduced || next.length > 180) {
       setShown(next);
       setDone(true);
       return;
@@ -95,4 +96,3 @@ export function AnimatedPrompt({
     </div>
   );
 }
-

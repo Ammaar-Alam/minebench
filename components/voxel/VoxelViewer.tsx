@@ -438,6 +438,7 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
   return (
     <div
       ref={containerRef}
+      data-mb-voxel-viewer="true"
       className={`relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${dragMode === "pan" ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
       tabIndex={0}
       onPointerDown={(e) => {
@@ -475,18 +476,18 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
     >
       <div ref={mountRef} className="h-full w-full" />
 
-      <div className="absolute right-3 top-3 flex items-center gap-2">
+      <div className="absolute right-2.5 top-2.5 flex items-center gap-1.5 sm:right-3 sm:top-3 sm:gap-2">
         <button
           aria-pressed={dragMode === "pan"}
-          className={`mb-btn h-9 px-3 text-xs ${dragMode === "pan" ? "mb-btn-primary" : "mb-btn-ghost"}`}
+          className={`mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs ${dragMode === "pan" ? "mb-btn-primary" : "mb-btn-ghost"}`}
           onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
         >
           Pan <span className="hidden sm:inline"><span className="mb-kbd">Space</span></span>
         </button>
-        <button className="mb-btn mb-btn-ghost h-9 px-3 text-xs" onClick={fitView}>
+        <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={fitView}>
           Fit <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
         </button>
-        <button className="mb-btn mb-btn-ghost h-9 px-3 text-xs" onClick={() => void toggleFullscreen()}>
+        <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={() => void toggleFullscreen()}>
           {isFullscreen ? "Exit" : "Full"}{" "}
           <span className="hidden sm:inline"><span className="mb-kbd">F</span></span>
         </button>

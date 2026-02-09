@@ -4,7 +4,9 @@ import { LeaderboardPageShell } from "@/components/leaderboard/LeaderboardPageSh
 export default function LeaderboardPage() {
   return (
     <LeaderboardPageShell>
-      <Leaderboard />
+      <div className="h-full min-h-0">
+        <Leaderboard />
+      </div>
     </LeaderboardPageShell>
   );
 }

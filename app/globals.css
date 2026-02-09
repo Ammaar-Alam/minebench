@@ -61,24 +61,22 @@
     color: hsl(var(--fg));
   }
 
-  @media (min-width: 768px) {
-    body.mb-page-fixed {
-      height: 100dvh;
-      overflow: hidden;
-    }
+  body.mb-page-fixed {
+    height: 100dvh;
+    overflow: hidden;
+  }
 
-    body.mb-page-fixed #mb-shell {
-      height: 100dvh;
-    }
+  body.mb-page-fixed #mb-shell {
+    height: 100dvh;
+  }
 
-    body.mb-page-fixed #mb-container {
-      min-height: 0;
-    }
+  body.mb-page-fixed #mb-container {
+    min-height: 0;
+  }
 
-    body.mb-page-fixed #main {
-      min-height: 0;
-      overflow: hidden;
-    }
+  body.mb-page-fixed #main {
+    min-height: 0;
+    overflow: hidden;
   }
 
   @keyframes mb-gradient-shift {
@@ -350,10 +348,82 @@
     word-break: break-word;
   }
 
+  .mb-clamp-prompt-tight {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    overflow: hidden;
+    word-break: break-word;
+  }
+
   @media (min-width: 768px) {
     .mb-clamp-prompt {
       -webkit-line-clamp: 6;
     }
+
+    .mb-clamp-prompt-tight {
+      -webkit-line-clamp: 2;
+    }
+  }
+
+  .mb-prompt-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--accent) / 0.45) hsl(var(--bg) / 0.3);
+  }
+
+  .mb-prompt-scroll::-webkit-scrollbar {
+    width: 8px;
+  }
+
+  .mb-prompt-scroll::-webkit-scrollbar-track {
+    background: hsl(var(--bg) / 0.25);
+    border-radius: 999px;
+  }
+
+  .mb-prompt-scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(to bottom, hsl(var(--accent) / 0.62), hsl(var(--accent2) / 0.52));
+    border-radius: 999px;
+    border: 1px solid hsl(var(--border) / 0.75);
+  }
+
+  .mb-x-scroll {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .mb-x-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mb-carousel-track {
+    position: relative;
+    width: 100%;
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(to right, hsl(var(--accent) / 0.22), hsl(var(--accent2) / 0.24));
+    border: 1px solid hsl(var(--border) / 0.75);
+    touch-action: none;
+    user-select: none;
+    cursor: ew-resize;
+  }
+
+  .mb-carousel-thumb {
+    position: absolute;
+    top: -5px;
+    height: 14px;
+    min-width: 36px;
+    border-radius: 999px;
+    background: linear-gradient(to bottom, hsl(var(--card) / 0.96), hsl(var(--card2) / 0.92));
+    border: 1px solid hsl(var(--border));
+    box-shadow:
+      0 2px 7px hsl(0 0% 0% / 0.2),
+      0 0 0 1px hsl(var(--fg) / 0.04) inset;
+    transition: background 150ms ease;
+  }
+
+  .mb-carousel-track:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px hsl(var(--accent) / 0.28);
   }
 
   .mb-fade-in {

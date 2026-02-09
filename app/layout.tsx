@@ -59,7 +59,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div id="mb-shell" className="relative z-10 flex min-h-dvh flex-col">
           <SiteHeader />
           <div id="mb-container" className="mx-auto flex w-full max-w-[92rem] flex-1 flex-col px-4 sm:px-6 lg:px-8">
-            <main id="main" className="flex-1 py-6">
+            <main id="main" className="flex-1 py-4 sm:py-6">
               {children}
             </main>
             <SiteFooter />

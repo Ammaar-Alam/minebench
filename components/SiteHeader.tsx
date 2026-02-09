@@ -32,7 +32,7 @@ function applyTheme(theme: Theme) {
 
 function CubeMark() {
   return (
-    <div className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-card/70 via-bg/40 to-accent/15 shadow-soft ring-1 ring-border backdrop-blur">
+    <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-card/70 via-bg/40 to-accent/15 shadow-soft ring-1 ring-border backdrop-blur sm:h-9 sm:w-9">
       <svg
         aria-hidden="true"
         className="h-5 w-5 text-accent"
@@ -86,7 +86,7 @@ function ThemeToggle() {
       type="button"
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      className="grid h-9 w-9 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:w-10"
+      className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:w-10"
       onClick={toggleTheme}
     >
       <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none">
@@ -120,8 +120,8 @@ function NavLink({ href, label }: { href: string; label: string }) {
       aria-current={active ? "page" : undefined}
       className={
         active
-          ? "inline-flex h-9 items-center rounded-full bg-card/70 px-3 text-xs font-medium text-fg shadow-soft ring-1 ring-border sm:h-10 sm:px-4 sm:text-sm"
-          : "inline-flex h-9 items-center rounded-full px-3 text-xs text-muted transition hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:px-4 sm:text-sm"
+          ? "inline-flex h-11 shrink-0 items-center rounded-full bg-card/75 px-4 text-[13px] font-semibold text-fg shadow-soft ring-1 ring-border sm:h-10 sm:px-4 sm:text-sm"
+          : "inline-flex h-11 shrink-0 items-center rounded-full px-4 text-[13px] text-muted transition hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:px-4 sm:text-sm"
       }
       href={href}
     >
@@ -142,7 +142,7 @@ function SocialIconLink({
   return (
     <a
       aria-label={label}
-      className="inline-flex h-9 w-9 items-center justify-center text-muted transition hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50 sm:h-10 sm:w-10"
+      className="inline-flex h-11 w-11 items-center justify-center text-muted transition hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50 sm:h-10 sm:w-10"
       href={href}
       rel="noreferrer"
       target="_blank"
@@ -155,8 +155,8 @@ function SocialIconLink({
 
 export function SiteHeader() {
   return (
-    <header className="sticky top-0 z-20 border-b border-border bg-bg/75 backdrop-blur relative">
-      <div className="mx-auto flex w-full max-w-[92rem] flex-col items-start justify-between gap-3 px-4 py-4 sm:flex-row sm:items-center sm:gap-4 sm:px-6 lg:px-8">
+    <header className="relative sticky top-0 z-20 border-b border-border bg-bg/75 backdrop-blur">
+      <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 sm:py-4 lg:px-8">
         <a
           href="#main"
           className="sr-only rounded-full bg-card/80 px-4 py-2 text-sm text-fg ring-1 ring-border focus:not-sr-only focus:absolute focus:left-4 focus:top-3"
@@ -164,20 +164,23 @@ export function SiteHeader() {
           Skip to content
         </a>
 
-        <div className="flex items-center gap-3">
-          <Link className="group flex items-center gap-3" href="/">
-            <CubeMark />
-            <div className="leading-tight">
-              <div className="font-display text-sm font-semibold tracking-tight text-fg">
-                <span className="text-fg">Mine</span>
-                <span className="bg-gradient-to-r from-accent to-accent2 bg-clip-text text-transparent">
-                  Bench
-                </span>
+        <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-start sm:gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <Link className="group flex min-w-0 items-center gap-3" href="/">
+              <CubeMark />
+              <div className="leading-tight">
+                <div className="font-display text-base font-semibold tracking-tight text-fg sm:text-sm">
+                  <span className="text-fg">Mine</span>
+                  <span className="bg-gradient-to-r from-accent to-accent2 bg-clip-text text-transparent">
+                    Bench
+                  </span>
+                </div>
               </div>
-            </div>
-          </Link>
-          <div className="h-5 w-px bg-border/70" aria-hidden="true" />
-          <div className="flex items-center gap-2">
+            </Link>
+            <div className="hidden h-5 w-px bg-border/70 sm:block" aria-hidden="true" />
+          </div>
+
+          <div className="flex items-center rounded-full bg-bg/50 px-0.5 ring-1 ring-border/70 sm:bg-transparent sm:px-0 sm:ring-0">
             <SocialIconLink
               href="https://www.linkedin.com/in/ammaar-alam/"
               label="Ammaar Alam on LinkedIn"
@@ -223,11 +226,13 @@ export function SiteHeader() {
           </div>
         </div>
 
-        <nav className="flex w-full flex-wrap items-center justify-center gap-1 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border sm:w-auto sm:flex-nowrap">
-          <NavLink href="/" label="Arena" />
-          <NavLink href="/sandbox" label="Sandbox" />
-          <NavLink href="/local" label="Local" />
-          <NavLink href="/leaderboard" label="Leaderboard" />
+        <nav className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-[1.15rem] bg-bg/55 p-1 shadow-soft ring-1 ring-border sm:flex sm:w-auto sm:flex-nowrap sm:items-center sm:gap-1 sm:rounded-full">
+          <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <NavLink href="/" label="Arena" />
+            <NavLink href="/sandbox" label="Sandbox" />
+            <NavLink href="/local" label="Local" />
+            <NavLink href="/leaderboard" label="Leaderboard" />
+          </div>
           <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
           <ThemeToggle />
         </nav>
