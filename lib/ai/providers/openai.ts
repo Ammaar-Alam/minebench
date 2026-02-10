@@ -10,6 +10,21 @@ type OpenAIResponsesResponse = {
   output?: unknown;
 };
 
+type OpenAIBackgroundStatus =
+  | "queued"
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "incomplete";
+
+type OpenAIResponsesBackgroundResponse = OpenAIResponsesResponse & {
+  id?: unknown;
+  status?: unknown;
+  error?: unknown;
+  incomplete_details?: unknown;
+};
+
 type OpenAIResponsesStreamEvent = {
   type?: unknown;
   delta?: unknown;
@@ -18,6 +33,26 @@ type OpenAIResponsesStreamEvent = {
 type OpenAIChatCompletionsStreamChunk = {
   choices?: { delta?: { content?: unknown } }[];
 };
+
+const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
+
+function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return defaultValue;
+  const normalized = raw.trim().toLowerCase();
+  if (TRUE_VALUES.has(normalized)) return true;
+  if (FALSE_VALUES.has(normalized)) return false;
+  return defaultValue;
+}
+
+function parseIntEnv(name: string, defaultValue: number): number {
+  const raw = process.env[name];
+  if (!raw) return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.max(0, Math.floor(parsed));
+}
 
 function extractTextFromChatCompletions(data: OpenAIChatResponse): string {
   const content = data.choices?.[0]?.message?.content;
@@ -64,12 +99,56 @@ function requestIdFromResponse(res: Response): string | null {
   );
 }
 
+function backgroundStatusOf(value: unknown): OpenAIBackgroundStatus | null {
+  if (value === "queued" || value === "in_progress" || value === "completed" || value === "failed" || value === "cancelled" || value === "incomplete") {
+    return value;
+  }
+  return null;
+}
+
+function isBackgroundPending(status: OpenAIBackgroundStatus | null): boolean {
+  return status === "queued" || status === "in_progress";
+}
+
+function summarizeBackgroundError(data: OpenAIResponsesBackgroundResponse): string | null {
+  const errorObj = data.error;
+  if (errorObj && typeof errorObj === "object") {
+    const message = (errorObj as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  }
+  const incomplete = data.incomplete_details;
+  if (incomplete && typeof incomplete === "object") {
+    const reason = (incomplete as { reason?: unknown }).reason;
+    if (typeof reason === "string" && reason.trim()) return reason.trim();
+  }
+  return null;
+}
+
 function sleepMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
+function isTransportTimeoutError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  const cause = err instanceof Error && err.cause ? String(err.cause).toLowerCase() : "";
+  return (
+    msg.includes("und_err_headers_timeout") ||
+    msg.includes("headerstimeouterror") ||
+    msg.includes("headers timeout") ||
+    cause.includes("und_err_headers_timeout") ||
+    cause.includes("headerstimeouterror") ||
+    cause.includes("headers timeout")
+  );
+}
+
 function requestTimeoutMs(modelId: string): number {
-  if (modelId === "gpt-5.2-pro") return 3_600_000;
+  const globalOverrideMs = parseIntEnv("OPENAI_REQUEST_TIMEOUT_MS", 0);
+  if (globalOverrideMs > 0) return globalOverrideMs;
+  if (modelId === "gpt-5.2-pro") {
+    const proOverrideMs = parseIntEnv("OPENAI_GPT5_PRO_TIMEOUT_MS", 0);
+    if (proOverrideMs > 0) return proOverrideMs;
+    return 7_200_000;
+  }
   return 1_800_000;
 }
 
@@ -91,12 +170,55 @@ async function fetchWithRetry(
       return res;
     } catch (e) {
       lastErr = e;
+      // A headers-timeout can still represent a billed upstream run; avoid
+      // duplicating spend by retrying the same request automatically.
+      if (isTransportTimeoutError(e)) throw e;
       if (i === opts.tries - 1) throw e;
       const delay = Math.min(opts.maxDelayMs, opts.minDelayMs * Math.pow(2, i));
       await sleepMs(delay);
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("OpenAI request failed");
+}
+
+async function pollBackgroundResponse(opts: {
+  apiKey: string;
+  responseId: string;
+  signal: AbortSignal;
+  pollIntervalMs: number;
+}): Promise<OpenAIResponsesBackgroundResponse> {
+  let current: OpenAIResponsesBackgroundResponse = { id: opts.responseId, status: "queued" };
+  let status = backgroundStatusOf(current.status);
+
+  while (isBackgroundPending(status)) {
+    if (opts.pollIntervalMs > 0) await sleepMs(opts.pollIntervalMs);
+
+    const res = await fetchWithRetry(
+      `https://api.openai.com/v1/responses/${encodeURIComponent(opts.responseId)}`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${opts.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        signal: opts.signal,
+      },
+      { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+    );
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      const rid = requestIdFromResponse(res);
+      throw new Error(
+        `OpenAI background poll error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`,
+      );
+    }
+
+    current = (await res.json()) as OpenAIResponsesBackgroundResponse;
+    status = backgroundStatusOf(current.status);
+  }
+
+  return current;
 }
 
 function tokenFallbacks(requested: number): number[] {
@@ -154,6 +276,14 @@ export async function openaiGenerateText(params: {
   // so we omit the parameter entirely and let the API use the default.
   const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
   const maxOutputTokens = params.maxOutputTokens ?? 32768;
+  const streamResponses =
+    Boolean(params.onDelta) || parseBooleanEnv("OPENAI_STREAM_RESPONSES", true);
+  const useBackgroundMode =
+    isResponsesOnlyModel &&
+    !params.onDelta &&
+    parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", params.modelId === "gpt-5.2-pro");
+  const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 2_000);
+  const streamForRequest = useBackgroundMode ? false : streamResponses;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), requestTimeoutMs(params.modelId));
@@ -172,7 +302,7 @@ export async function openaiGenerateText(params: {
             headers: {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
-              ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+              ...(streamForRequest ? { Accept: "text/event-stream" } : {}),
             },
             signal: controller.signal,
             body: JSON.stringify({
@@ -188,6 +318,8 @@ export async function openaiGenerateText(params: {
                 },
               ],
               reasoning: effort ? { effort } : undefined,
+              background: useBackgroundMode || undefined,
+              store: useBackgroundMode || undefined,
               text: {
                 format: {
                   type: "json_schema",
@@ -198,7 +330,7 @@ export async function openaiGenerateText(params: {
               },
               temperature,
               max_output_tokens: tok,
-              stream: Boolean(params.onDelta),
+              stream: streamForRequest,
             }),
           },
           { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
@@ -221,7 +353,7 @@ export async function openaiGenerateText(params: {
     if (!res) throw new Error("OpenAI request failed");
 
     if (res.ok) {
-      if (params.onDelta) {
+      if (streamForRequest) {
         let text = "";
         await consumeSseStream(res, (evt) => {
           if (evt.data === "[DONE]") return;
@@ -242,9 +374,37 @@ export async function openaiGenerateText(params: {
         if (text) return { text };
       }
 
-      const data = (await res.json()) as OpenAIResponsesResponse;
+      let data = (await res.json()) as OpenAIResponsesBackgroundResponse;
+      if (useBackgroundMode) {
+        const initialStatus = backgroundStatusOf(data.status);
+        const responseId = typeof data.id === "string" ? data.id : null;
+        if (isBackgroundPending(initialStatus)) {
+          if (!responseId) throw new Error("OpenAI background response missing id");
+          data = await pollBackgroundResponse({
+            apiKey,
+            responseId,
+            signal: controller.signal,
+            pollIntervalMs: backgroundPollIntervalMs,
+          });
+        }
+
+        const finalStatus = backgroundStatusOf(data.status);
+        if (finalStatus && finalStatus !== "completed") {
+          const reason = summarizeBackgroundError(data);
+          throw new Error(
+            `OpenAI background response ended with status ${finalStatus}${reason ? `: ${reason}` : ""}`,
+          );
+        }
+      }
+
       const text = extractTextFromResponses(data);
       if (text) return { text };
+      if (useBackgroundMode) {
+        const finalStatus = backgroundStatusOf(data.status);
+        throw new Error(
+          `OpenAI background response returned no output text${finalStatus ? ` (status ${finalStatus})` : ""}`,
+        );
+      }
     } else {
       const body = lastBody || (await res.text().catch(() => ""));
       const rid = requestIdFromResponse(res);
@@ -284,14 +444,14 @@ export async function openaiGenerateText(params: {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
-          ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+          ...(streamResponses ? { Accept: "text/event-stream" } : {}),
         },
         body: JSON.stringify({
           model: params.modelId,
           temperature,
           max_completion_tokens: tok,
           reasoning_effort: reasoningEffort,
-          stream: Boolean(params.onDelta),
+          stream: streamResponses,
           response_format: {
             type: "json_schema",
             json_schema: {
@@ -316,7 +476,7 @@ export async function openaiGenerateText(params: {
 
   if (!res) throw new Error("OpenAI request failed");
 
-  if (res.ok && params.onDelta) {
+  if (res.ok && streamResponses) {
     let text = "";
     await consumeSseStream(res, (evt) => {
       if (evt.data === "[DONE]") return;

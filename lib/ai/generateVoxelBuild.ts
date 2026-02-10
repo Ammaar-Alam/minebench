@@ -47,7 +47,10 @@ function isBilledTimeoutStyleProviderError(message: string): boolean {
     m.includes("und_err_headers_timeout") ||
     m.includes("headerstimeouterror") ||
     m.includes("headers timeout") ||
+    m.includes("openai request timed out") ||
     m.includes("anthropic request timed out") ||
+    m.includes("request timed out") ||
+    (m.includes("openai request failed") && m.includes("timeout")) ||
     (m.includes("anthropic request failed") && m.includes("timeout"))
   );
 }
