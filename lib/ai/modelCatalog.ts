@@ -26,6 +26,7 @@ export type ModelKey =
   | "moonshot_kimi_k2_5"
   | "deepseek_v3_2"
   | "xai_grok_4_1"
+  | "zai_glm_5"
   | "zai_glm_4_7"
   | "meta_llama_4_maverick";
 
@@ -178,6 +179,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Grok 4.1",
     enabled: true,
     openRouterModelId: "x-ai/grok-4.1-fast",
+  },
+  {
+    key: "zai_glm_5",
+    provider: "zai",
+    modelId: "glm-5",
+    displayName: "Z.AI GLM 5",
+    enabled: true,
+    openRouterModelId: "z-ai/glm-5",
+    forceOpenRouter: true,
   },
   {
     key: "zai_glm_4_7",

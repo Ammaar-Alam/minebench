@@ -50,6 +50,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   moonshot_kimi_k2_5: "kimi-k2-5",
   deepseek_v3_2: "deepseek-v3-2",
   xai_grok_4_1: "grok-4-1",
+  zai_glm_5: "glm-5",
   zai_glm_4_7: "glm-4-7",
   meta_llama_4_maverick: "llama-4-maverick",
 };

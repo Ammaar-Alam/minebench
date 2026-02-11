@@ -23,6 +23,7 @@ import {
 
 function defaultMaxOutputTokens(gridSize: 64 | 256 | 512, modelId: string): number {
   if (modelId.startsWith("claude-opus-4-6")) return 131072;
+  if (modelId === "glm-5") return 131072;
   // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
   if (gridSize === 64) return 65536;
   return 65536;
@@ -320,6 +321,10 @@ async function providerGenerateText(args: {
     user: args.user,
     maxOutputTokens: args.maxOutputTokens,
     temperature: DEFAULT_TEMPERATURE,
+    reasoningEffortAttempts:
+      model.openRouterModelId === "z-ai/glm-5"
+        ? ["xhigh", "high", "medium", "low"]
+        : undefined,
     onDelta: args.onDelta,
   });
 }

@@ -32,6 +32,18 @@ function tokenFallbacks(requested: number): number[] {
   return uniq;
 }
 
+function reasoningEffortFallbacks(requested: string[] | undefined): (string | undefined)[] {
+  if (!requested || requested.length === 0) return [undefined];
+  const normalized = requested
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+  const uniq: string[] = [];
+  for (const v of normalized) if (!uniq.includes(v)) uniq.push(v);
+  // Final no-reasoning attempt keeps requests resilient when a routed provider
+  // rejects reasoning controls for a specific backend.
+  return [...uniq, undefined];
+}
+
 function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
   return (
@@ -41,6 +53,16 @@ function looksLikeTokenLimitError(body: string): boolean {
     b.includes("too many tokens") ||
     b.includes("token limit") ||
     b.includes("context length")
+  );
+}
+
+function looksLikeReasoningConfigError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    (b.includes("reasoning") && b.includes("effort") && (b.includes("invalid") || b.includes("unsupported") || b.includes("enum"))) ||
+    (b.includes("reasoning") && b.includes("unsupported")) ||
+    (b.includes("reasoning") && b.includes("unknown")) ||
+    b.includes("only one of \"reasoning.effort\" and \"reasoning.max_tokens\"")
   );
 }
 
@@ -77,6 +99,7 @@ export async function openrouterGenerateText(params: {
   user: string;
   maxOutputTokens?: number;
   temperature?: number;
+  reasoningEffortAttempts?: string[];
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENROUTER_API_KEY;
@@ -84,6 +107,7 @@ export async function openrouterGenerateText(params: {
 
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
   const maxTokens = params.maxOutputTokens ?? 8192;
+  const effortAttempts = reasoningEffortFallbacks(params.reasoningEffortAttempts);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
@@ -92,35 +116,49 @@ export async function openrouterGenerateText(params: {
     let res: Response | null = null;
     let lastBody = "";
     for (const tok of tokenFallbacks(maxTokens)) {
-      res = await fetchWithRetry(
-        `${baseUrl}/v1/chat/completions`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://minebench.dev",
-            "X-Title": "MineBench",
-            ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+      let tryLowerTokenBudget = false;
+      for (const [effortIdx, effort] of effortAttempts.entries()) {
+        res = await fetchWithRetry(
+          `${baseUrl}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": "https://minebench.dev",
+              "X-Title": "MineBench",
+              ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: params.modelId,
+              messages: [
+                { role: "system", content: params.system },
+                { role: "user", content: params.user },
+              ],
+              stream: Boolean(params.onDelta),
+              temperature: params.temperature ?? 0.2,
+              max_tokens: tok,
+              reasoning: effort ? { effort } : undefined,
+            }),
           },
-          signal: controller.signal,
-          body: JSON.stringify({
-            model: params.modelId,
-            messages: [
-              { role: "system", content: params.system },
-              { role: "user", content: params.user },
-            ],
-            stream: Boolean(params.onDelta),
-            temperature: params.temperature ?? 0.2,
-            max_tokens: tok,
-          }),
-        },
-        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-      );
+          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+        );
 
-      if (res.ok) break;
-      lastBody = await res.text().catch(() => "");
-      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
+        if (res.ok) break;
+        lastBody = await res.text().catch(() => "");
+        if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
+          tryLowerTokenBudget = true;
+          break;
+        }
+        if (res.status === 400 && effortIdx < effortAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+          continue;
+        }
+        break;
+      }
+
+      if (res?.ok) break;
+      if (tryLowerTokenBudget) continue;
       break;
     }
 
