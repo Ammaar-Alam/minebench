@@ -6,6 +6,7 @@ export type Provider =
   | "deepseek"
   | "xai"
   | "zai"
+  | "qwen"
   | "meta";
 
 export type ModelKey =
@@ -28,6 +29,7 @@ export type ModelKey =
   | "xai_grok_4_1"
   | "zai_glm_5"
   | "zai_glm_4_7"
+  | "qwen_qwen3_max_thinking"
   | "meta_llama_4_maverick";
 
 export type ModelCatalogEntry = {
@@ -196,6 +198,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Z.AI GLM 4.7",
     enabled: true,
     openRouterModelId: "z-ai/glm-4.7",
+    forceOpenRouter: true,
+  },
+  {
+    key: "qwen_qwen3_max_thinking",
+    provider: "qwen",
+    modelId: "qwen3-max-thinking",
+    displayName: "Qwen3 Max Thinking",
+    enabled: true,
+    openRouterModelId: "qwen/qwen3-max-thinking",
     forceOpenRouter: true,
   },
   {

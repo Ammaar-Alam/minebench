@@ -24,6 +24,7 @@ import {
 function defaultMaxOutputTokens(gridSize: 64 | 256 | 512, modelId: string): number {
   if (modelId.startsWith("claude-opus-4-6")) return 131072;
   if (modelId === "glm-5") return 131072;
+  if (modelId === "qwen3-max-thinking") return 32768;
   // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
   if (gridSize === 64) return 65536;
   return 65536;
@@ -91,7 +92,7 @@ function effectiveApiKey(opts: {
   allowServerKeys: boolean;
 }): string | null {
   const provider = opts.provider;
-  if (provider === "xai" || provider === "zai" || provider === "meta") return null; // only supported via OpenRouter fallback
+  if (provider === "xai" || provider === "zai" || provider === "qwen" || provider === "meta") return null; // only supported via OpenRouter fallback
 
   const directKey = normalizeApiKey(
     provider === "openrouter"
@@ -148,7 +149,7 @@ export type GenerateVoxelBuildResult =
 
 // call the direct provider (OpenAI, Anthropic, etc.)
 async function callDirectProvider(args: {
-  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai" | "meta";
+  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai" | "qwen" | "meta";
   modelId: string;
   apiKey?: string;
   system: string;
@@ -226,6 +227,11 @@ async function callDirectProvider(args: {
   // Z.AI models are currently OpenRouter-only in MineBench
   if (args.provider === "zai") {
     throw new Error("Z.AI direct API not supported; use OpenRouter fallback");
+  }
+
+  // Qwen models are currently OpenRouter-only in MineBench
+  if (args.provider === "qwen") {
+    throw new Error("Qwen direct API not supported; use OpenRouter fallback");
   }
 
   // Meta models are currently OpenRouter-only in MineBench
@@ -324,6 +330,8 @@ async function providerGenerateText(args: {
     reasoningEffortAttempts:
       model.openRouterModelId === "z-ai/glm-5"
         ? ["xhigh", "high", "medium", "low"]
+        : model.openRouterModelId === "qwen/qwen3-max-thinking"
+          ? ["xhigh", "high", "medium", "low"]
         : undefined,
     onDelta: args.onDelta,
   });
