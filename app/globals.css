@@ -79,6 +79,10 @@
     overflow: hidden;
   }
 
+  body.mb-page-fixed #mb-footer {
+    flex-shrink: 0;
+  }
+
   @keyframes mb-gradient-shift {
     0%,
     100% {

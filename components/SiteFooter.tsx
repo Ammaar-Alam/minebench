@@ -1,50 +1,40 @@
 export function SiteFooter() {
   return (
-    <footer className="py-6 text-sm text-muted sm:py-10">
-      <div className="mb-subpanel px-4 py-3 sm:px-5 sm:py-4">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex flex-col gap-1">
-            <div className="font-display text-sm font-semibold text-fg">MineBench</div>
-            <div className="text-xs text-muted2">
-              A benchmark for AI spatial reasoning via Minecraft-style voxel builds.
-            </div>
-          </div>
-          <div className="flex flex-col gap-1 md:items-end">
-            <div>
-              Textures:{" "}
-              <a
-                className="text-fg underline decoration-border/70 underline-offset-4 hover:decoration-fg"
-                href="https://faithfulpack.net/"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Faithful Pack
-              </a>{" "}
-              (see <span className="font-mono">faithful-32x-1.21.11/LICENSE.txt</span>)
-            </div>
-            <div>
-              Inspired by{" "}
-              <a
-                className="text-fg underline decoration-border/70 underline-offset-4 hover:decoration-fg"
-                href="https://mcbench.ai/"
-                target="_blank"
-                rel="noreferrer"
-              >
-                MC-Bench
-              </a>{" "}
-              (
-              <a
-                className="text-fg underline decoration-border/70 underline-offset-4 hover:decoration-fg"
-                href="https://github.com/mc-bench"
-                target="_blank"
-                rel="noreferrer"
-              >
-                GitHub
-              </a>
-              )
-            </div>
-          </div>
-        </div>
+    <footer
+      id="mb-footer"
+      className="border-t border-border/60 py-2.5 text-xs text-muted"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <span>
+          <span className="font-medium text-fg">MineBench</span>
+          <span className="mx-1.5 text-border">|</span>
+          AI spatial reasoning benchmark
+        </span>
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span>
+            Textures:{" "}
+            <a
+              className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"
+              href="https://faithfulpack.net/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Faithful Pack
+            </a>
+          </span>
+          <span className="text-border">·</span>
+          <span>
+            Inspired by{" "}
+            <a
+              className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"
+              href="https://mcbench.ai/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              MC-Bench
+            </a>
+          </span>
+        </span>
       </div>
     </footer>
   );

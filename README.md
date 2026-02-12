@@ -1,18 +1,45 @@
 # MineBench
 
-MineBench is a web benchmark for comparing AI models on Minecraft-style voxel builds.
-It evaluates spatial reasoning by forcing every model through the same structured build format and constraints.
+**A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
 
-![MineBench arena preview](public/readme/benchmark-split.png)
+Models are given a natural-language prompt and must produce raw 3D coordinates as JSON -- no images, no 3D tools. MineBench visualizes the output and ranks models via head-to-head Elo voting.
 
-## What MineBench Includes
+**[Try it live](https://minebench.vercel.app)**
 
-- `Arena` (`/`): head-to-head voting on pre-seeded builds with Elo ranking updates.
-- `Sandbox` (`/sandbox`):
-  - `Benchmark Compare`: compare already-seeded Arena builds without API keys.
-  - `Live Generate`: run two models live with bring-your-own API keys.
-- `Local Lab` (`/local`): copy the exact benchmark prompt, run it in any external model, and render the returned JSON locally.
-- `Leaderboard` (`/leaderboard`): model ratings and win/loss stats.
+![MineBench arena — two AI models building a medieval castle side-by-side](public/readme/arena-dark.png)
+
+## Why MineBench?
+
+Most LLM benchmarks test text. MineBench tests something different: can a model reason about 3D space? Given a prompt like "a medieval castle with four towers", the model must mentally construct geometry, pick materials, and output thousands of precise block coordinates. No vision model, no diffusion -- just math and spatial logic.
+
+This is an underexplored area in AI evaluation. MineBench makes it visual, interactive, and community-driven.
+
+## Features
+
+- **Arena** — blind head-to-head comparisons of pre-generated builds with Elo-rated voting
+- **Sandbox** — compare existing builds or generate new ones live with your own API keys
+- **Local Lab** — copy the benchmark prompt, run it in any model, paste the JSON back to render
+- **Leaderboard** — live rankings with win/loss/draw stats across all models
+
+![MineBench leaderboard showing model rankings](public/readme/leaderboard-dark.png)
+
+## Supported Models
+
+MineBench currently benchmarks models from OpenAI, Anthropic, Google, Moonshot, DeepSeek, Z.AI, and any model available through OpenRouter.
+
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add new models, submit benchmark prompts, improve the UI, or fix bugs.
+
+## License
+
+[MIT](LICENSE)
+
+Texture pack: [Faithful](https://faithfulpack.net/) (see `faithful-32x-1.21.11/LICENSE.txt`)
+
+Inspired by [MC-Bench](https://mcbench.ai/) ([GitHub](https://github.com/mc-bench))
+
+---
 
 ## Quick Start (Local)
 
