@@ -298,7 +298,7 @@ export function LocalLab() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-fg">System prompt</div>
                     <div className="text-xs text-muted">
-                      Here's the default system prompt the official benchmark uses. Feel free to
+                      Here&apos;s the default system prompt the official benchmark uses. Feel free to
                       play around with it.
                     </div>
                   </div>
@@ -447,9 +447,9 @@ export function LocalLab() {
                   Press the Copy Both button to copy the system prompt with your user prompt.
                 </div>
                 <div className="mt-2 text-xs leading-relaxed text-muted">
-                  Note: If you're generating the build through a site like chatgpt.com directly, add
+                  Note: If you&apos;re generating the build through a site like chatgpt.com directly, add
                   one final line asking for a downloadable JSON file or artifact attachment instead
-                  of raw JSON text. Otherwise the model will output just raw text and hit it's
+                  of raw JSON text. Otherwise the model will output just raw text and hit it&apos;s
                   output limit.
                 </div>
                 <div className="mt-2 rounded-lg border border-border/70 bg-bg/45 p-2 font-mono text-[11px] leading-snug text-muted">
