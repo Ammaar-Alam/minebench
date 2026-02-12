@@ -6,7 +6,7 @@ Models are given a natural-language prompt and must produce raw 3D coordinates a
 
 **[Try it live](https://minebench.vercel.app)**
 
-![MineBench arena — Opus 4.5 versus Opus 4.6](public/readme/benchmark-split.png)
+![MineBench arena — Opus 4.5 versus Opus 4.6](public/readme/benchmark-split.gif)
 
 ## Why MineBench?
 
@@ -16,7 +16,7 @@ As it turns out, this kind of spatial reasoning correlates strongly with a model
 
 MineBench, unlike other benchmarks, gives an easy way to visually determine (at least one aspect of) a model's raw intelligence. The ELO system also ends up highlighting which models are clearly 'bench-maxed' (i.e. when a model has amazing benchmarks on paper, but clearly lacks in real world usage).
 
-![MineBench arena — two AI models building a medieval castle side-by-side](public/readme/arena-dark.png)
+![MineBench arena — two AI models building a medieval castle side-by-side](public/readme/arena-dark.gif)
 
 ## Features
 
