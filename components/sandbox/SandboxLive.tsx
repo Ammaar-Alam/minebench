@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent, ProviderApiKeys } from "@/lib/ai/types";
+import {
+  SandboxGifExportButton,
+  type SandboxGifExportTarget,
+} from "@/components/sandbox/SandboxGifExportButton";
+import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
@@ -272,6 +277,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const previewCacheRef = useRef(
     new Map<ModelKey, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
+  const viewerARef = useRef<VoxelViewerHandle | null>(null);
+  const viewerBRef = useRef<VoxelViewerHandle | null>(null);
 
   const modelGroups = useMemo(() => {
     const groups = new Map<string, (typeof ENABLED_MODELS)[number][]>();
@@ -515,9 +522,25 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     return build;
   }
 
-  const resultCards = selectedModelKeys.map((key) => {
+  const compareTargets: SandboxGifExportTarget[] = selectedModelKeys
+    .map((key, idx) => {
+      const model = MODEL_CATALOG.find((m) => m.key === key);
+      const result = results.get(key);
+      if (!model || result?.status !== "success") return null;
+      const viewerRef = idx === 0 ? viewerARef : viewerBRef;
+      return {
+        viewerRef,
+        modelName: model.displayName,
+        company: providerLabel(model.provider),
+        blockCount: result.metrics?.blockCount ?? 0,
+      };
+    })
+    .filter((target): target is SandboxGifExportTarget => Boolean(target));
+
+  const resultCards = selectedModelKeys.map((key, idx) => {
     const model = MODEL_CATALOG.find((m) => m.key === key);
     const r = results.get(key);
+    const viewerRef = idx === 0 ? viewerARef : viewerBRef;
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     const liveRawText =
@@ -527,7 +550,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       <VoxelViewerCard
         key={key}
         title={model?.displayName ?? key}
-        subtitle={model?.provider}
+        subtitle={model ? providerLabel(model.provider) : undefined}
         voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
         gridSize={gridSize}
         animateIn={r?.status === "success"}
@@ -539,6 +562,24 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
         palette={palette}
+        viewerRef={viewerRef}
+        actions={
+          r?.status === "success" && model ? (
+            <SandboxGifExportButton
+              targets={[
+                {
+                  viewerRef,
+                  modelName: model.displayName,
+                  company: providerLabel(model.provider),
+                  blockCount: r.metrics?.blockCount ?? 0,
+                },
+              ]}
+              promptText={prompt}
+              iconOnly
+              label="Export GIF"
+            />
+          ) : null
+        }
       />
     );
   });
@@ -823,7 +864,12 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             </div>
           </div>
 
-          <div className="mt-5 flex items-center justify-end">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+            <SandboxGifExportButton
+              targets={compareTargets}
+              promptText={prompt}
+              label="Export comparison GIF"
+            />
             <button
               className="mb-btn mb-btn-primary h-11 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={running || modelPair.a === modelPair.b || !prompt.trim()}

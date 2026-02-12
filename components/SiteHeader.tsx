@@ -108,12 +108,12 @@ function NavLink({ href, label }: { href: string; label: string }) {
       aria-current={active ? "page" : undefined}
       className={
         active
-          ? "inline-flex h-11 shrink-0 items-center rounded-full bg-card/75 px-4 text-[13px] font-semibold text-fg shadow-soft ring-1 ring-border sm:h-10 sm:px-4 sm:text-sm"
-          : "inline-flex h-11 shrink-0 items-center rounded-full px-4 text-[13px] text-muted transition hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:px-4 sm:text-sm"
+          ? "inline-flex h-11 shrink-0 items-center rounded-full border border-accent/45 bg-gradient-to-b from-accent/22 via-accent/14 to-accent2/18 px-4 text-[13px] font-semibold text-fg shadow-[0_10px_28px_-18px_rgba(45,211,191,0.95),inset_0_1px_0_rgba(255,255,255,0.08)] ring-1 ring-accent/20 sm:h-10 sm:px-4 sm:text-sm"
+          : "inline-flex h-11 shrink-0 items-center rounded-full border border-transparent px-4 text-[13px] text-muted/90 transition hover:border-border/60 hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:px-4 sm:text-sm"
       }
       href={href}
     >
-      {label}
+      <span>{label}</span>
     </Link>
   );
 }

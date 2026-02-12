@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
@@ -13,6 +13,11 @@ type ViewerProps = {
   palette: "simple" | "advanced";
   autoRotate?: boolean;
   animateIn?: boolean;
+};
+
+export type VoxelViewerHandle = {
+  hasBuild: () => boolean;
+  captureFrame: (opts?: { rotationY?: number; width?: number; height?: number }) => HTMLCanvasElement | null;
 };
 
 let atlasPromise: Promise<THREE.Texture> | null = null;
@@ -145,7 +150,10 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
   controls.saveState();
 }
 
-export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: ViewerProps) {
+export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function VoxelViewer(
+  { voxelBuild, palette, autoRotate, animateIn },
+  ref
+) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mountRef = useRef<HTMLDivElement | null>(null);
   const voxelGroupRef = useRef<VoxelGroup | null>(null);
@@ -179,6 +187,77 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       gridRef.current.position.y = bounds.box.min.y - 0.5;
     }
   }
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      hasBuild() {
+        return Boolean(voxelGroupRef.current && threeRef.current);
+      },
+      captureFrame(opts) {
+        const three = threeRef.current;
+        const vg = voxelGroupRef.current;
+        if (!three || !vg) return null;
+
+        const { scene, camera, renderer, controls } = three;
+        const previousY = vg.group.rotation.y;
+        if (typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY)) {
+          vg.group.rotation.y = opts.rotationY;
+        }
+
+        controls.update();
+        renderer.render(scene, camera);
+
+        const source = renderer.domElement;
+        const width = Math.max(1, Math.floor(opts?.width ?? source.width));
+        const height = Math.max(1, Math.floor(opts?.height ?? source.height));
+        const frame = document.createElement("canvas");
+        frame.width = width;
+        frame.height = height;
+        const ctx = frame.getContext("2d");
+        if (!ctx) {
+          if (typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY)) {
+            vg.group.rotation.y = previousY;
+            controls.update();
+            renderer.render(scene, camera);
+          }
+          return null;
+        }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        // Preserve aspect ratio (avoid stretching) by cropping the source canvas to the target ratio.
+        const srcW = source.width;
+        const srcH = source.height;
+        const dstW = width;
+        const dstH = height;
+        let sx = 0;
+        let sy = 0;
+        let sw = srcW;
+        let sh = srcH;
+        const srcAspect = srcW > 0 && srcH > 0 ? srcW / srcH : 1;
+        const dstAspect = dstW > 0 && dstH > 0 ? dstW / dstH : 1;
+        if (srcAspect > dstAspect) {
+          // Too wide: crop left/right.
+          sw = Math.max(1, Math.round(srcH * dstAspect));
+          sx = Math.round((srcW - sw) / 2);
+        } else if (srcAspect < dstAspect) {
+          // Too tall: crop top/bottom.
+          sh = Math.max(1, Math.round(srcW / dstAspect));
+          sy = Math.round((srcH - sh) / 2);
+        }
+        ctx.drawImage(source, sx, sy, sw, sh, 0, 0, dstW, dstH);
+
+        if (typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY)) {
+          vg.group.rotation.y = previousY;
+          controls.update();
+          renderer.render(scene, camera);
+        }
+
+        return frame;
+      },
+    }),
+    []
+  );
 
   async function toggleFullscreen() {
     const el = containerRef.current;
@@ -494,4 +573,6 @@ export function VoxelViewer({ voxelBuild, palette, autoRotate, animateIn }: View
       </div>
     </div>
   );
-}
+});
+
+VoxelViewer.displayName = "VoxelViewer";
