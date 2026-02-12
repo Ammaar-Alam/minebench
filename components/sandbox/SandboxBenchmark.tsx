@@ -131,7 +131,7 @@ export function SandboxBenchmark() {
         modelA?: string;
         modelB?: string;
       },
-      opts?: { initial?: boolean }
+      opts?: { initial?: boolean },
     ) => {
       const requestId = ++requestIdRef.current;
       const isInitial = Boolean(opts?.initial);
@@ -158,7 +158,7 @@ export function SandboxBenchmark() {
         else setRefreshing(false);
       }
     },
-    []
+    [],
   );
 
   useEffect(() => {
@@ -167,7 +167,7 @@ export function SandboxBenchmark() {
         modelA: DEFAULT_MODEL_A,
         modelB: DEFAULT_MODEL_B,
       },
-      { initial: true }
+      { initial: true },
     );
   }, [runLoad]);
 
@@ -192,7 +192,7 @@ export function SandboxBenchmark() {
         modelA: modelPair.a,
         modelB: modelPair.b,
       },
-      { initial: false }
+      { initial: false },
     );
   }
 
@@ -208,7 +208,7 @@ export function SandboxBenchmark() {
         modelA: nextPair.a,
         modelB: nextPair.b,
       },
-      { initial: false }
+      { initial: false },
     );
   }
 
@@ -256,7 +256,9 @@ export function SandboxBenchmark() {
             subtitle={
               model ? (
                 <span className="inline-flex items-center gap-2 text-xs text-muted">
-                  <span className="uppercase tracking-[0.08em]">{providerLabel(model.provider)}</span>
+                  <span className="uppercase tracking-[0.08em]">
+                    {providerLabel(model.provider)}
+                  </span>
                   <span className="font-mono">Elo {Math.round(model.eloRating)}</span>
                 </span>
               ) : (
@@ -310,10 +312,10 @@ export function SandboxBenchmark() {
               <span className="text-fg">Benchmark Compare</span>
             </div>
             <div className="font-display text-2xl font-semibold tracking-tight">
-              Compare seeded Arena builds
+              Compare Arena Builds Directly
             </div>
             <div className="text-sm text-muted">
-              Pick any curated benchmark prompt and compare two models instantly, with no API keys.
+              Pick any curated benchmark prompt and compare two models.
             </div>
           </div>
 
@@ -368,7 +370,11 @@ export function SandboxBenchmark() {
                   {modelGroups.map((group) => (
                     <optgroup key={group.label} label={group.label}>
                       {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
+                        <option
+                          key={model.key}
+                          value={model.key}
+                          disabled={model.key === modelPair.b}
+                        >
                           {model.displayName}
                         </option>
                       ))}
@@ -404,7 +410,11 @@ export function SandboxBenchmark() {
                   {modelGroups.map((group) => (
                     <optgroup key={group.label} label={group.label}>
                       {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
+                        <option
+                          key={model.key}
+                          value={model.key}
+                          disabled={model.key === modelPair.a}
+                        >
                           {model.displayName}
                         </option>
                       ))}
@@ -486,7 +496,7 @@ export function SandboxBenchmark() {
                           modelA: modelPair.a,
                           modelB: modelPair.b,
                         },
-                        { initial: false }
+                        { initial: false },
                       )
                     }
                     disabled={loading || refreshing}
@@ -529,10 +539,14 @@ export function SandboxBenchmark() {
       </div>
 
       {loading && !data ? (
-        <div className="mb-panel p-10 text-center text-sm text-muted">Loading benchmark builds…</div>
+        <div className="mb-panel p-10 text-center text-sm text-muted">
+          Loading benchmark builds…
+        </div>
       ) : null}
 
-      {!loading && data ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{cards}</div> : null}
+      {!loading && data ? (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{cards}</div>
+      ) : null}
     </div>
   );
 }
