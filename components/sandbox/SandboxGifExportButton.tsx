@@ -20,14 +20,15 @@ type Props = {
 };
 
 // GIFs are a compromise: higher FPS + small rotation steps look smoother, but cost encode time + file size.
-// These defaults target "pretty smooth" while keeping render time reasonable.
-const FRAME_DELAY_MS = 10; // 25fps (GIF delay is in 1/100s units under the hood)
-const FRAME_COUNT = 128; // ~5.6s total, last frame matches first for a seamless loop
+// These defaults favor high-quality output.
+const TARGET_FPS = 60;
+const FRAME_DELAY_MS = Math.round(1000 / TARGET_FPS); // quantized to 10ms in GIF, effectively ~50fps in playback
+const FRAME_COUNT = 128; // ~2.6s total at encoded delay, last frame matches first for a seamless loop
 const MAX_IN_FLIGHT_FRAMES = 6; // pipeline main-thread capture with worker encoding
 const YIELD_EVERY_FRAMES = 50; // keep UI responsive without adding ~16ms per frame
 const CAPTURE_SUPERSAMPLE = 1.35;
-const EXPORT_SIZE_SINGLE = { width: 1080, height: 640 };
-const EXPORT_SIZE_COMPARE = { width: 1728, height: 972 };
+const EXPORT_SIZE_SINGLE = { width: 1920, height: 1080 };
+const EXPORT_SIZE_COMPARE = { width: 1920, height: 1080 };
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
