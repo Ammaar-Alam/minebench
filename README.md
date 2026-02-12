@@ -10,7 +10,7 @@ Models are given a natural-language prompt and must produce raw 3D coordinates a
 
 ## Why MineBench?
 
-Most LLM benchmarks test text. MineBench tests something different: can a model reason about 3D space? Given a prompt like "a medieval castle with four towers", the model must mentally construct geometry, pick materials, and output thousands of precise block coordinates. No vision model, no diffusion – just math and spatial logic.
+Most LLM benchmarks test text and raw accuracy. MineBench instead tests whether a model reason about 3D space. Given a prompt like "a medieval castle with four towers", the model must mentally construct geometry, pick materials, and output thousands of precise block coordinates. No vision model or diffusion – just math and spatial logic.
 
 As it turns out, this kind of spatial reasoning correlates strongly with a model's raw general intelligence; the MineBench leaderboard tracks, anecdotally, the same hierarchy that most people observe in real-world usage: the smartest reasoning models are clearly visible when asked to produce visual builds.
 
