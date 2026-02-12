@@ -2,7 +2,7 @@
 
 **A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
 
-Models are given a natural-language prompt and must produce raw 3D coordinates as JSON -- no images, no 3D tools. MineBench visualizes the output and ranks models via head-to-head Elo voting.
+Models are given a natural-language prompt and must produce raw 3D coordinates as JSON -- no images, no 3D tools. MineBench visualizes the output and ranks models via head-to-head ELO voting.
 
 **[Try it live](https://minebench.vercel.app)**
 
@@ -10,13 +10,15 @@ Models are given a natural-language prompt and must produce raw 3D coordinates a
 
 ## Why MineBench?
 
-Most LLM benchmarks test text. MineBench tests something different: can a model reason about 3D space? Given a prompt like "a medieval castle with four towers", the model must mentally construct geometry, pick materials, and output thousands of precise block coordinates. No vision model, no diffusion -- just math and spatial logic.
+Most LLM benchmarks test text. MineBench tests something different: can a model reason about 3D space? Given a prompt like "a medieval castle with four towers", the model must mentally construct geometry, pick materials, and output thousands of precise block coordinates. No vision model, no diffusion – just math and spatial logic.
 
-This is an underexplored area in AI evaluation. MineBench makes it visual, interactive, and community-driven.
+As it turns out, this kind of spatial reasoning correlates strongly with a model's raw general intelligence; the MineBench leaderboard tracks, anecdotally, the same hierarchy that most people observe in real-world usage: the smartest reasoning models are clearly visible when asked to produce visual builds.
+
+MineBench, unlike other benchmarks, gives an easy way to visually determine (at least one aspect of) a model's raw intelligence. The ELO system also ends up highlighting which models are clearly 'bench-maxed' (i.e. when a model has amazing benchmarks on paper, but clearly lacks in real world usage).
 
 ## Features
 
-- **Arena** — blind head-to-head comparisons of pre-generated builds with Elo-rated voting
+- **Arena** — blind head-to-head comparisons of pre-generated builds with ELO-rated voting
 - **Sandbox** — compare existing builds or generate new ones live with your own API keys
 - **Local Lab** — copy the benchmark prompt, run it in any model, paste the JSON back to render
 - **Leaderboard** — live rankings with win/loss/draw stats across all models
@@ -162,7 +164,7 @@ Copy `.env.example` to `.env` and set what you need:
 - Models are sampled with inverse weighting of `shownCount` to balance exposure.
 - A session cookie (`mb_session`) is used so each session can vote once per matchup.
 - Vote options: `A`, `B`, `TIE`, `BOTH_BAD`.
-- Elo updates:
+- ELO updates:
   - `A/B/TIE`: standard pairwise update (`K=16`)
   - `BOTH_BAD`: both models are penalized vs baseline
 
@@ -342,7 +344,7 @@ select count(*) from public."Prompt";
 app/                Next.js App Router pages and API routes
 components/         UI and voxel viewer components
 lib/ai/             generation pipeline and provider adapters
-lib/arena/          matchup sampling and Elo logic
+lib/arena/          matchup sampling and ELO logic
 lib/blocks/         palette and texture atlas mapping
 lib/voxel/          voxel types, validation, mesh helpers
 prisma/             schema and migrations
