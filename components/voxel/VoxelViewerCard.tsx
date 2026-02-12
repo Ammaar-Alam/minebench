@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, ReactNode } from "react";
-import { VoxelViewer } from "@/components/voxel/VoxelViewer";
+import { useMemo, ReactNode, RefObject } from "react";
+import { VoxelViewer, type VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
@@ -28,6 +28,8 @@ export function VoxelViewerCard({
   debugRawText,
   palette = "simple",
   viewerSize = "default",
+  actions,
+  viewerRef,
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -44,6 +46,8 @@ export function VoxelViewerCard({
   debugRawText?: string;
   palette?: "simple" | "advanced";
   viewerSize?: "default" | "arena";
+  actions?: ReactNode;
+  viewerRef?: RefObject<VoxelViewerHandle | null>;
 }) {
   const rendered = useMemo(() => {
     if (!voxelBuild)
@@ -104,34 +108,38 @@ export function VoxelViewerCard({
               <div className="min-h-[1.1rem] text-[12px] sm:text-[13px]">{subtitle}</div>
             ) : null}
           </div>
-          <div className="shrink-0 text-right text-[11px] text-muted sm:text-xs">
-            {build ? (
-              <>
-                <div className="flex flex-col items-end gap-0.5 sm:hidden">
-                  <span className="font-mono">{blockCount} blocks</span>
-                  {warnings.length ? (
-                    <span className="font-mono">
-                      {warnings.length} warning{warnings.length === 1 ? "" : "s"}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="hidden items-center gap-2 font-mono sm:flex">
-                  <span>{blockCount} blocks</span>
-                  {timing ? <span>• {timing}</span> : null}
-                  {warnings.length ? (
-                    <span>
-                      • {warnings.length} warning{warnings.length === 1 ? "" : "s"}
-                    </span>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
+          <div className="shrink-0 flex items-center gap-2">
+            {actions ? <div className="flex items-center">{actions}</div> : null}
+            <div className="text-right text-[11px] text-muted sm:text-xs">
+              {build ? (
+                <>
+                  <div className="flex flex-col items-end gap-0.5 sm:hidden">
+                    <span className="font-mono">{blockCount} blocks</span>
+                    {warnings.length ? (
+                      <span className="font-mono">
+                        {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="hidden items-center gap-2 font-mono sm:flex">
+                    <span>{blockCount} blocks</span>
+                    {timing ? <span>• {timing}</span> : null}
+                    {warnings.length ? (
+                      <span>
+                        • {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+            </div>
           </div>
         </div>
 
         <div className={viewerHeightClass}>
           {build ? (
             <VoxelViewer
+              ref={viewerRef}
               voxelBuild={build}
               palette={palette}
               autoRotate={autoRotate}

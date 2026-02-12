@@ -1,6 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  SandboxGifExportButton,
+  type SandboxGifExportTarget,
+} from "@/components/sandbox/SandboxGifExportButton";
+import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 
 type Palette = "simple" | "advanced";
@@ -116,6 +121,8 @@ export function SandboxBenchmark() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
+  const viewerARef = useRef<VoxelViewerHandle | null>(null);
+  const viewerBRef = useRef<VoxelViewerHandle | null>(null);
 
   const runLoad = useCallback(
     async (
@@ -217,6 +224,21 @@ export function SandboxBenchmark() {
   const selectedPromptText = data?.selectedPrompt?.text ?? "";
   const gridSize = toGridSize(data?.settings.gridSize ?? 256);
   const palette = toPalette(data?.settings.palette ?? "simple");
+  const compareTargets: SandboxGifExportTarget[] = data
+    ? (["a", "b"] as const)
+        .map((slot) => {
+          const build = data.builds[slot];
+          if (!build) return null;
+          const viewerRef = slot === "a" ? viewerARef : viewerBRef;
+          return {
+            viewerRef,
+            modelName: build.model.displayName,
+            company: providerLabel(build.model.provider),
+            blockCount: build.metrics.blockCount,
+          };
+        })
+        .filter((target): target is SandboxGifExportTarget => Boolean(target))
+    : [];
 
   const cards = data
     ? (["a", "b"] as const).map((slot) => {
@@ -224,6 +246,7 @@ export function SandboxBenchmark() {
         const selectedModelKey = slot === "a" ? modelPair.a : modelPair.b;
         const fallbackModel = data.models.find((m) => m.key === selectedModelKey);
         const model = build?.model ?? fallbackModel;
+        const viewerRef = slot === "a" ? viewerARef : viewerBRef;
         const title = model ? model.displayName : slot === "a" ? "Model A" : "Model B";
 
         return (
@@ -244,6 +267,24 @@ export function SandboxBenchmark() {
             gridSize={gridSize}
             palette={palette}
             animateIn
+            viewerRef={viewerRef}
+            actions={
+              build && model ? (
+                <SandboxGifExportButton
+                  targets={[
+                    {
+                      viewerRef,
+                      modelName: model.displayName,
+                      company: providerLabel(model.provider),
+                      blockCount: build.metrics.blockCount,
+                    },
+                  ]}
+                  promptText={selectedPromptText}
+                  iconOnly
+                  label="Export GIF"
+                />
+              ) : null
+            }
             metrics={
               build
                 ? {
@@ -389,44 +430,98 @@ export function SandboxBenchmark() {
           </div>
 
           <div className="mt-4 mb-subpanel p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <div className="text-xs font-medium text-muted">Selected prompt</div>
-                <div className="mt-1 text-sm leading-relaxed text-fg">
-                  {selectedPromptText || "Loading benchmark prompt…"}
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 flex-col gap-1">
+                  <div className="text-xs font-medium text-muted">Selected prompt</div>
+                  <div className="text-xs text-muted">
+                    <span className="font-mono">
+                      {gridSize} grid • {palette} palette • {data?.settings.mode ?? "precise"} mode
+                    </span>
+                  </div>
                 </div>
-                <div className="mt-2 text-xs text-muted">
-                  <span className="font-mono">
-                    {gridSize} grid • {palette} palette • {data?.settings.mode ?? "precise"} mode
-                  </span>
+
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+                  <SandboxGifExportButton
+                    targets={compareTargets}
+                    promptText={selectedPromptText}
+                    label="Export comparison GIF"
+                    className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+                  />
+
+                  <button
+                    type="button"
+                    className="mb-btn mb-btn-ghost h-8 rounded-full border border-border/70 bg-bg/55 px-2.5 text-[11px] tracking-[0.01em] backdrop-blur-sm hover:bg-bg/70 sm:h-9 sm:px-3 sm:text-xs"
+                    onClick={handleRandomPrompt}
+                    disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
+                    title="Pick a random prompt"
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                        <rect
+                          x="5"
+                          y="5"
+                          width="14"
+                          height="14"
+                          rx="3"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                        />
+                        <circle cx="9" cy="9" r="1.1" fill="currentColor" />
+                        <circle cx="12" cy="12" r="1.1" fill="currentColor" />
+                        <circle cx="15" cy="15" r="1.1" fill="currentColor" />
+                      </svg>
+                      <span>Random</span>
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="mb-btn mb-btn-ghost h-8 rounded-full border border-border/70 bg-bg/55 px-2.5 text-[11px] tracking-[0.01em] backdrop-blur-sm hover:bg-bg/70 sm:h-9 sm:px-3 sm:text-xs"
+                    onClick={() =>
+                      void runLoad(
+                        {
+                          promptId,
+                          modelA: modelPair.a,
+                          modelB: modelPair.b,
+                        },
+                        { initial: false }
+                      )
+                    }
+                    disabled={loading || refreshing}
+                    title="Refresh builds"
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+                        fill="none"
+                      >
+                        <path
+                          d="M20 12a8 8 0 1 1-2.34-5.66"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.7"
+                        />
+                        <path
+                          d="M20 4v6h-6"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.7"
+                        />
+                      </svg>
+                      <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
+                    </span>
+                  </button>
                 </div>
               </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  className="mb-btn mb-btn-ghost h-9"
-                  onClick={handleRandomPrompt}
-                  disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
-                >
-                  Random prompt
-                </button>
-                <button
-                  type="button"
-                  className="mb-btn h-9"
-                  onClick={() =>
-                    void runLoad(
-                      {
-                        promptId,
-                        modelA: modelPair.a,
-                        modelB: modelPair.b,
-                      },
-                      { initial: false }
-                    )
-                  }
-                  disabled={loading || refreshing}
-                >
-                  {refreshing ? "Refreshing…" : "Refresh"}
-                </button>
+
+              <div className="text-sm leading-relaxed text-fg">
+                {selectedPromptText || "Loading benchmark prompt…"}
               </div>
             </div>
           </div>
