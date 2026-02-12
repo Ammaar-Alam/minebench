@@ -1,8 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import faviconIcon from "@/app/icon.png";
 
 type Theme = "light" | "dark";
 
@@ -32,27 +34,13 @@ function applyTheme(theme: Theme) {
 
 function CubeMark() {
   return (
-    <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-card/70 via-bg/40 to-accent/15 shadow-soft ring-1 ring-border backdrop-blur sm:h-9 sm:w-9">
-      <svg
-        aria-hidden="true"
-        className="h-5 w-5 text-accent"
-        fill="none"
-        viewBox="0 0 24 24"
-      >
-        <path
-          d="M12 2 4.5 6.2v11.6L12 22l7.5-4.2V6.2L12 2Z"
-          stroke="currentColor"
-          strokeLinejoin="round"
-          strokeWidth="1.5"
-        />
-        <path
-          d="M12 2v20M4.5 6.2 12 10.4l7.5-4.2"
-          stroke="currentColor"
-          strokeLinejoin="round"
-          strokeOpacity="0.55"
-          strokeWidth="1.5"
-        />
-      </svg>
+    <div className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl bg-gradient-to-br from-card/70 via-bg/40 to-accent/15 shadow-soft ring-1 ring-border backdrop-blur sm:h-9 sm:w-9">
+      <Image
+        src={faviconIcon}
+        alt="MineBench icon"
+        className="h-7 w-7 object-contain sm:h-6 sm:w-6"
+        priority
+      />
     </div>
   );
 }
