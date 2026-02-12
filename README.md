@@ -2,7 +2,7 @@
 
 **A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
 
-Models are given a natural-language prompt and must produce raw 3D coordinates as JSON -- no images, no 3D tools. MineBench visualizes the output and ranks models via head-to-head ELO voting.
+Models are given a natural-language prompt and must produce raw 3D coordinates as JSON. They are provided no images or 3D tools, only a custom voxelBuilder function which allows them to make a JSON past their token output limit and gives primitive tools such as lines, rectangles, and cubes. MineBench visualizes the output and ranks models via head-to-head ELO voting.
 
 **[Try it live](https://minebench.vercel.app)**
 
