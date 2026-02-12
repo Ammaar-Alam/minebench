@@ -35,11 +35,14 @@ function reset() {
 }
 
 function post(msg: OutMessage, transfer?: Transferable[]) {
+  const workerSelf = self as unknown as {
+    postMessage: (message: OutMessage, transfer?: Transferable[]) => void;
+  };
   if (transfer && transfer.length > 0) {
-    self.postMessage(msg, transfer);
+    workerSelf.postMessage(msg, transfer);
     return;
   }
-  self.postMessage(msg);
+  workerSelf.postMessage(msg);
 }
 
 self.onmessage = (event: MessageEvent<InMessage>) => {
