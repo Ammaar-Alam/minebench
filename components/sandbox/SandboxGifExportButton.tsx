@@ -21,11 +21,13 @@ type Props = {
 
 // GIFs are a compromise: higher FPS + small rotation steps look smoother, but cost encode time + file size.
 // These defaults target "pretty smooth" while keeping render time reasonable.
-const FRAME_DELAY_MS = 40; // 25fps (GIF delay is in 1/100s units under the hood)
-const FRAME_COUNT = 141; // ~5.6s total, last frame matches first for a seamless loop
-const MAX_IN_FLIGHT_FRAMES = 3; // pipeline main-thread capture with worker encoding
-const YIELD_EVERY_FRAMES = 6; // keep UI responsive without adding ~16ms per frame
+const FRAME_DELAY_MS = 10; // 25fps (GIF delay is in 1/100s units under the hood)
+const FRAME_COUNT = 128; // ~5.6s total, last frame matches first for a seamless loop
+const MAX_IN_FLIGHT_FRAMES = 6; // pipeline main-thread capture with worker encoding
+const YIELD_EVERY_FRAMES = 50; // keep UI responsive without adding ~16ms per frame
 const CAPTURE_SUPERSAMPLE = 1.35;
+const EXPORT_SIZE_SINGLE = { width: 1080, height: 640 };
+const EXPORT_SIZE_COMPARE = { width: 1728, height: 972 };
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
@@ -70,7 +72,7 @@ function wrapTextLines(
   ctx: CanvasRenderingContext2D,
   text: string,
   maxWidth: number,
-  maxLines: number
+  maxLines: number,
 ): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return [];
@@ -110,7 +112,7 @@ function roundedRectPath(
   y: number,
   width: number,
   height: number,
-  radius: number
+  radius: number,
 ) {
   const r = Math.max(0, Math.min(radius, width / 2, height / 2));
   ctx.beginPath();
@@ -130,7 +132,7 @@ function drawBaseBackdrop(
     title: string;
     promptLines: string[];
     urlText: string;
-  }
+  },
 ) {
   // Keep the background smooth and low-detail so the 256-color GIF palette is spent on the builds (less "static").
   ctx.fillStyle = "#0b1220";
@@ -149,7 +151,7 @@ function drawBaseBackdrop(
     Math.max(40, Math.min(width, height) * 0.12),
     width * 0.55,
     height * 0.35,
-    Math.max(width, height) * 0.85
+    Math.max(width, height) * 0.85,
   );
   vignette.addColorStop(0, "rgba(255, 255, 255, 0.05)");
   vignette.addColorStop(0.55, "rgba(255, 255, 255, 0)");
@@ -185,7 +187,7 @@ function drawPanel(
     height: number;
     target: SandboxGifExportTarget;
     capture: HTMLCanvasElement;
-  }
+  },
 ) {
   const { x, y, width, height, target, capture } = opts;
   const captureX = x + PANEL_PAD;
@@ -207,7 +209,8 @@ function drawPanel(
   ctx.textBaseline = "top";
   ctx.fillText(target.company.toUpperCase(), x + PANEL_PAD, y + 12);
 
-  const modelLine = target.modelName.length > 24 ? `${target.modelName.slice(0, 23)}...` : target.modelName;
+  const modelLine =
+    target.modelName.length > 24 ? `${target.modelName.slice(0, 23)}...` : target.modelName;
   ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
   ctx.font = '700 23px "Sora", "Avenir Next", "Segoe UI", sans-serif';
   ctx.fillText(modelLine, x + PANEL_PAD, y + 27);
@@ -241,11 +244,11 @@ function drawPanel(
 async function buildGifBlob(
   targets: SandboxGifExportTarget[],
   promptText: string,
-  onProgress?: (done: number, total: number) => void
+  onProgress?: (done: number, total: number) => void,
 ) {
   const count = targets.length;
-  const width = count === 1 ? 880 : 1152;
-  const height = 540;
+  const width = count === 1 ? EXPORT_SIZE_SINGLE.width : EXPORT_SIZE_COMPARE.width;
+  const height = count === 1 ? EXPORT_SIZE_SINGLE.height : EXPORT_SIZE_COMPARE.height;
   const panelBottom = EXPORT_MARGIN_BOTTOM;
   const panelGap = count === 1 ? 0 : PANEL_GAP;
   const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
@@ -330,7 +333,7 @@ async function buildGifBlob(
     frameCtx,
     `Prompt: ${normalizedPrompt || "sandbox prompt"}`,
     width - 56,
-    2
+    2,
   );
   const panelTop = Math.max(86, 54 + promptLines.length * 16 + 22);
   const panelHeight = height - panelTop - panelBottom;
@@ -384,7 +387,7 @@ async function buildGifBlob(
           delay: FRAME_DELAY_MS,
           pixels: buffer,
         },
-        [buffer]
+        [buffer],
       );
       const tracked = ackPromise.then(() => {
         completed += 1;
@@ -423,13 +426,7 @@ function triggerDownload(blob: Blob, fileName: string) {
   URL.revokeObjectURL(url);
 }
 
-export function SandboxGifExportButton({
-  targets,
-  promptText,
-  label,
-  iconOnly,
-  className,
-}: Props) {
+export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className }: Props) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -471,7 +468,7 @@ export function SandboxGifExportButton({
     ? progress
       ? `Rendering ${Math.max(0, progress.done)}/${progress.total}`
       : "Rendering..."
-    : label ?? (targets.length === 2 ? "Export comparison GIF" : "Export GIF");
+    : (label ?? (targets.length === 2 ? "Export comparison GIF" : "Export GIF"));
   const buttonTitle = error ?? displayLabel;
 
   return (
@@ -484,7 +481,11 @@ export function SandboxGifExportButton({
       className={`${iconOnly ? "mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg" : "mb-btn mb-btn-ghost h-9 rounded-full border border-border/70 bg-bg/55 px-3 text-xs tracking-[0.01em] backdrop-blur-sm sm:text-sm"} disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
     >
       <span className={`inline-flex items-center ${iconOnly ? "justify-center" : "gap-1.5"}`}>
-        <svg aria-hidden="true" viewBox="0 0 24 24" className={`h-4 w-4 ${exporting ? "animate-pulse" : ""}`}>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          className={`h-4 w-4 ${exporting ? "animate-pulse" : ""}`}
+        >
           <path
             d="M4 8a3 3 0 0 1 3-3h1.4l1.1-1.6A2 2 0 0 1 11.2 2h1.6a2 2 0 0 1 1.7.9L15.6 5H17a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8Z"
             fill="none"
