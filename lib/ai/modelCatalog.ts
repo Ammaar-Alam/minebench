@@ -66,7 +66,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     provider: "openai",
     modelId: "gpt-5.2-codex",
     displayName: "GPT 5.2 Codex",
-    enabled: false,
+    enabled: true,
     openRouterModelId: "openai/gpt-5.2-codex",
   },
   {
