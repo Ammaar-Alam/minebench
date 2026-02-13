@@ -16,7 +16,7 @@ function ModeSegmentedControl({
   className?: string;
 }) {
   const options: Array<{ value: SandboxMode; label: string }> = [
-    { value: "benchmark", label: "Benchmark Compare" },
+    { value: "benchmark", label: "Model Comparison" },
     { value: "live", label: "Live Generate" },
   ];
 
@@ -77,7 +77,8 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
               <span className="text-fg">Sandbox Mode</span>
             </div>
             <div className="hidden text-xs text-muted sm:block">
-              Benchmark compare uses seeded Arena builds. Live generate uses your own keys.
+              Compare builds by specific models or generate your own builds with custom prompts
+              (requires your own API keys).
             </div>
           </div>
 

@@ -23,7 +23,7 @@ type Props = {
 // These defaults favor high-quality output.
 const TARGET_FPS = 60;
 const FRAME_DELAY_MS = Math.round(1000 / TARGET_FPS); // quantized to 10ms in GIF, effectively ~50fps in playback
-const FRAME_COUNT = 128; // ~2.6s total at encoded delay, last frame matches first for a seamless loop
+const FRAME_COUNT = 160; // ~3.2s total at encoded delay, last frame matches first for a seamless loop
 const MAX_IN_FLIGHT_FRAMES = 6; // pipeline main-thread capture with worker encoding
 const YIELD_EVERY_FRAMES = 50; // keep UI responsive without adding ~16ms per frame
 const CAPTURE_SUPERSAMPLE = 1.35;
