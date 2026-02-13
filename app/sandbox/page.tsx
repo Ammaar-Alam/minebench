@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Sandbox } from "@/components/sandbox/Sandbox";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { breadcrumbJsonLd, DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 export const metadata: Metadata = {
   title: "Sandbox Voxel Generator",
@@ -30,6 +30,11 @@ export const metadata: Metadata = {
   },
 };
 
+const breadcrumbData = breadcrumbJsonLd([
+  { name: "Arena", path: "/" },
+  { name: "Sandbox", path: "/sandbox" },
+]);
+
 export default async function SandboxPage({
   searchParams,
 }: {
@@ -40,6 +45,10 @@ export default async function SandboxPage({
   const prompt = typeof promptParam === "string" ? promptParam : undefined;
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbData) }}
+      />
       <h1 className="sr-only">MineBench sandbox for AI voxel builds</h1>
       <Sandbox initialPrompt={prompt} />
     </>

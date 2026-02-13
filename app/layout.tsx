@@ -101,7 +101,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      data-theme="light"
+      data-theme="dark"
       suppressHydrationWarning
       className={`${fontSans.variable} ${fontDisplay.variable} ${fontMono.variable}`}
     >
@@ -117,7 +117,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   try {
     const key = "mb-theme";
     const saved = localStorage.getItem(key);
-    const theme = saved === "dark" ? "dark" : "light";
+    const theme = saved === "light" ? "light" : "dark";
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
   } catch {}

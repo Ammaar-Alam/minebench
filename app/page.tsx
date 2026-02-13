@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Arena } from "@/components/arena/Arena";
-import { DEFAULT_OG_IMAGE, SEO_KEYWORDS } from "@/lib/seo";
+import { breadcrumbJsonLd, DEFAULT_OG_IMAGE, SEO_KEYWORDS } from "@/lib/seo";
 
 export const metadata: Metadata = {
   title: "Voxel Build AI Benchmark",
@@ -25,9 +25,15 @@ export const metadata: Metadata = {
   },
 };
 
+const breadcrumbData = breadcrumbJsonLd([{ name: "Arena", path: "/" }]);
+
 export default function HomePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbData) }}
+      />
       <h1 className="sr-only">MineBench AI voxel build benchmark</h1>
       <Arena />
     </>

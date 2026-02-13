@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Leaderboard } from "@/components/leaderboard/Leaderboard";
 import { LeaderboardPageShell } from "@/components/leaderboard/LeaderboardPageShell";
-import { DEFAULT_OG_IMAGE } from "@/lib/seo";
+import { breadcrumbJsonLd, DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 export const metadata: Metadata = {
   title: "AI Benchmark Leaderboard",
@@ -29,9 +29,18 @@ export const metadata: Metadata = {
   },
 };
 
+const breadcrumbData = breadcrumbJsonLd([
+  { name: "Arena", path: "/" },
+  { name: "Leaderboard", path: "/leaderboard" },
+]);
+
 export default function LeaderboardPage() {
   return (
     <LeaderboardPageShell>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbData) }}
+      />
       <h1 className="sr-only">MineBench AI benchmark leaderboard</h1>
       <div className="h-full min-h-0">
         <Leaderboard />

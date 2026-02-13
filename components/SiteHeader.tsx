@@ -21,7 +21,7 @@ function getInitialTheme(): Theme {
       if (saved === "dark" || saved === "light") return saved;
     } catch {}
   }
-  return "light";
+  return "dark";
 }
 
 function applyTheme(theme: Theme) {
@@ -46,9 +46,9 @@ function CubeMark() {
 }
 
 function ThemeToggle() {
-  // Avoid SSR/CSR mismatch: the server always renders light, so hydrate as light then
+  // Avoid SSR/CSR mismatch: the server renders dark, so hydrate as dark then
   // sync from DOM/localStorage after mount.
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
     setTheme(getInitialTheme());
