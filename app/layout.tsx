@@ -1,9 +1,18 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Spline_Sans, Unbounded } from "next/font/google";
 import Script from "next/script";
 import "./globals.css";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
+import {
+  DEFAULT_OG_IMAGE,
+  SEO_KEYWORDS,
+  SITE_DESCRIPTION,
+  SITE_NAME,
+  SITE_URL,
+  softwareApplicationJsonLd,
+  websiteJsonLd,
+} from "@/lib/seo";
 
 const fontSans = Spline_Sans({
   subsets: ["latin"],
@@ -23,9 +32,69 @@ const fontMono = IBM_Plex_Mono({
   weight: ["400", "500"],
 });
 
+const googleSiteVerification = process.env.GOOGLE_SITE_VERIFICATION;
+
 export const metadata: Metadata = {
-  title: "MineBench",
-  description: "Minecraft-style voxel benchmark for comparing AI models",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: `${SITE_NAME} | AI Voxel Build Benchmark`,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  keywords: [...SEO_KEYWORDS],
+  alternates: {
+    canonical: "/",
+  },
+  authors: [{ name: SITE_NAME }],
+  creator: SITE_NAME,
+  publisher: SITE_NAME,
+  category: "technology",
+  robots: {
+    index: true,
+    follow: true,
+    googleBot: {
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+      "max-snippet": -1,
+      "max-video-preview": -1,
+    },
+  },
+  openGraph: {
+    type: "website",
+    locale: "en_US",
+    url: SITE_URL,
+    siteName: SITE_NAME,
+    title: `${SITE_NAME} | AI Voxel Build Benchmark`,
+    description: SITE_DESCRIPTION,
+    images: [
+      {
+        url: DEFAULT_OG_IMAGE,
+        alt: "MineBench arena comparing AI-generated voxel builds",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: `${SITE_NAME} | AI Voxel Build Benchmark`,
+    description: SITE_DESCRIPTION,
+    images: [DEFAULT_OG_IMAGE],
+  },
+  manifest: "/manifest.webmanifest",
+  ...(googleSiteVerification ? { verification: { google: googleSiteVerification } } : {}),
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f6f8fb" },
+    { media: "(prefers-color-scheme: dark)", color: "#06080b" },
+  ],
+};
+
+const structuredData = {
+  "@context": "https://schema.org",
+  "@graph": [websiteJsonLd, softwareApplicationJsonLd],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -37,6 +106,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       className={`${fontSans.variable} ${fontDisplay.variable} ${fontMono.variable}`}
     >
       <body className="relative min-h-dvh bg-bg text-fg antialiased isolate">
+        <script
+          type="application/ld+json"
+          // Structured data for search engines.
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
+        />
+
         <Script id="mb-theme" strategy="beforeInteractive">{`
 (() => {
   try {

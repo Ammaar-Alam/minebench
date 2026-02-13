@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { LEGACY_HOSTS, SITE_HOST } from "@/lib/seo";
 
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
@@ -12,7 +13,24 @@ function getIp(req: NextRequest) {
   return "unknown";
 }
 
+function maybeRedirectToCanonicalHost(req: NextRequest) {
+  if (process.env.NODE_ENV !== "production") return null;
+  const hostHeader = req.headers.get("host");
+  if (!hostHeader) return null;
+
+  const host = hostHeader.split(":")[0]?.toLowerCase();
+  if (!host || !LEGACY_HOSTS.has(host)) return null;
+
+  const nextUrl = req.nextUrl.clone();
+  nextUrl.protocol = "https";
+  nextUrl.host = SITE_HOST;
+  return NextResponse.redirect(nextUrl, 308);
+}
+
 export function middleware(req: NextRequest) {
+  const canonicalRedirect = maybeRedirectToCanonicalHost(req);
+  if (canonicalRedirect) return canonicalRedirect;
+
   const { pathname } = req.nextUrl;
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
@@ -41,5 +59,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/:path*"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

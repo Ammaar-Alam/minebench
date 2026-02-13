@@ -30,7 +30,7 @@ import { MODEL_SLUG, PROMPT_MAP, listUploadPromptSlugs, readUploadPromptText } f
 import "dotenv/config";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-const PROD_URL = "https://minebench.vercel.app";
+const PROD_URL = "https://minebench.ai";
 
 interface Job {
   promptSlug: string;
@@ -221,7 +221,7 @@ function getUploadCommand(job: Job): string {
     return `# Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.`;
   }
   const encPromptJs = `node -p 'encodeURIComponent(process.argv[1])' "${job.promptText.replace(/'/g, "'\\''")}"`;
-  return `cd /Users/alam/GitHub/minebench && set -a && source .env && set +a && PROMPT='${job.promptText.replace(/'/g, "'\\''")}' && ENC_PROMPT="$(${encPromptJs})" && gzip -c "${job.filePath}" | curl -sS -X POST "https://minebench.vercel.app/api/admin/import-build?modelKey=${job.modelKey}&promptText=$ENC_PROMPT&overwrite=1" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -H "Content-Encoding: gzip" --data-binary @-`;
+  return `cd /Users/alam/GitHub/minebench && set -a && source .env && set +a && PROMPT='${job.promptText.replace(/'/g, "'\\''")}' && ENC_PROMPT="$(${encPromptJs})" && gzip -c "${job.filePath}" | curl -sS -X POST "https://minebench.ai/api/admin/import-build?modelKey=${job.modelKey}&promptText=$ENC_PROMPT&overwrite=1" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -H "Content-Encoding: gzip" --data-binary @-`;
 }
 
 async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {

@@ -674,9 +674,9 @@ export function Arena() {
             Spatial Intelligence Test
           </h2>
           <p className="mb-8 max-w-2xl text-[15px] leading-relaxed text-fg/85 sm:mb-12 sm:text-base">
-            MineBench evaluates how well AI models understand 3D space. Models must generate raw
-            JSON coordinates for Minecraft blocks—no images, no 3D tools. We visualize their pure
-            code output here.
+            MineBench is an AI benchmark and LLM benchmark for Minecraft-style voxel builds.
+            Models must generate raw JSON coordinates for blocks with no images or 3D tools. We
+            visualize their pure code output here.
           </p>
 
           <div className="grid w-full grid-cols-1 gap-3.5 text-left sm:gap-5 md:grid-cols-2 lg:grid-cols-3 lg:gap-6">
