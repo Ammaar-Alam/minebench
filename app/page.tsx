@@ -3,7 +3,6 @@ import { Arena } from "@/components/arena/Arena";
 import { breadcrumbJsonLd, DEFAULT_OG_IMAGE, SEO_KEYWORDS } from "@/lib/seo";
 
 export const metadata: Metadata = {
-  title: "Voxel Build AI Benchmark",
   description:
     "Compare AI models in a Minecraft-style voxel build benchmark. Vote on head-to-head generations and track a live LLM leaderboard.",
   keywords: [...SEO_KEYWORDS],

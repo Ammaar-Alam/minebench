@@ -4,7 +4,7 @@ import { LeaderboardPageShell } from "@/components/leaderboard/LeaderboardPageSh
 import { breadcrumbJsonLd, DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 export const metadata: Metadata = {
-  title: "AI Benchmark Leaderboard",
+  title: "Leaderboards",
   description:
     "View live MineBench rankings for AI spatial reasoning and voxel build performance.",
   keywords: [

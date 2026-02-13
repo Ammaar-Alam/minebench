@@ -37,8 +37,8 @@ const googleSiteVerification = process.env.GOOGLE_SITE_VERIFICATION;
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: `${SITE_NAME} | AI Voxel Build Benchmark`,
-    template: `%s | ${SITE_NAME}`,
+    default: SITE_NAME,
+    template: `${SITE_NAME} | %s`,
   },
   description: SITE_DESCRIPTION,
   applicationName: SITE_NAME,

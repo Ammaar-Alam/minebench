@@ -3,7 +3,7 @@ import { Sandbox } from "@/components/sandbox/Sandbox";
 import { breadcrumbJsonLd, DEFAULT_OG_IMAGE } from "@/lib/seo";
 
 export const metadata: Metadata = {
-  title: "Sandbox Voxel Generator",
+  title: "Sandbox",
   description:
     "Generate and compare AI voxel builds from custom prompts in the MineBench sandbox.",
   keywords: [

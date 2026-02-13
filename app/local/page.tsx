@@ -3,7 +3,7 @@ import { LocalLab } from "@/components/local/LocalLab";
 import { breadcrumbJsonLd } from "@/lib/seo";
 
 export const metadata: Metadata = {
-  title: "Local Lab",
+  title: "Local",
   description:
     "Run MineBench prompts with your own model setup and validate voxel JSON output locally.",
   alternates: {
