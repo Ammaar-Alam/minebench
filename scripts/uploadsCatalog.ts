@@ -53,6 +53,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   zai_glm_5: "glm-5",
   zai_glm_4_7: "glm-4-7",
   qwen_qwen3_max_thinking: "qwen3-max-thinking",
+  qwen_qwen3_5_397b_a17b: "qwen3-5-397b-a17b",
   meta_llama_4_maverick: "llama-4-maverick",
 };
 

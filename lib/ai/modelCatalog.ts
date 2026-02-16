@@ -30,6 +30,7 @@ export type ModelKey =
   | "zai_glm_5"
   | "zai_glm_4_7"
   | "qwen_qwen3_max_thinking"
+  | "qwen_qwen3_5_397b_a17b"
   | "meta_llama_4_maverick";
 
 export type ModelCatalogEntry = {
@@ -207,6 +208,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Qwen3 Max Thinking",
     enabled: true,
     openRouterModelId: "qwen/qwen3-max-thinking",
+    forceOpenRouter: true,
+  },
+  {
+    key: "qwen_qwen3_5_397b_a17b",
+    provider: "qwen",
+    modelId: "qwen3.5-397b-a17b",
+    displayName: "Qwen 3.5 397B A17B",
+    enabled: true,
+    openRouterModelId: "qwen/qwen3.5-397b-a17b",
     forceOpenRouter: true,
   },
   {

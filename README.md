@@ -29,7 +29,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 
 ## Supported Models
 
-MineBench currently benchmarks models from OpenAI, Anthropic, Google, Moonshot, DeepSeek, Z.AI, and any model available through OpenRouter.
+MineBench currently benchmarks models from OpenAI, Anthropic, Google, Moonshot, DeepSeek, xAI, Z.AI, Qwen, Meta, and any model available through OpenRouter.
 
 ## Contributing
 

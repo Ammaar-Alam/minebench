@@ -66,6 +66,7 @@ function providerLabel(provider: string): string {
   if (provider === "deepseek") return "DeepSeek";
   if (provider === "xai") return "xAI";
   if (provider === "zai") return "Z.AI";
+  if (provider === "qwen") return "Qwen";
   if (provider === "meta") return "Meta";
   return provider;
 }

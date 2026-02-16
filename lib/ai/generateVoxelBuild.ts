@@ -24,7 +24,7 @@ import {
 function defaultMaxOutputTokens(gridSize: 64 | 256 | 512, modelId: string): number {
   if (modelId.startsWith("claude-opus-4-6")) return 131072;
   if (modelId === "glm-5") return 131072;
-  if (modelId === "qwen3-max-thinking") return 32768;
+  if (modelId === "qwen3-max-thinking" || modelId === "qwen3.5-397b-a17b") return 32768;
   // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
   if (gridSize === 64) return 65536;
   return 65536;
@@ -330,7 +330,8 @@ async function providerGenerateText(args: {
     reasoningEffortAttempts:
       model.openRouterModelId === "z-ai/glm-5"
         ? ["xhigh", "high", "medium", "low"]
-        : model.openRouterModelId === "qwen/qwen3-max-thinking"
+        : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
+            model.openRouterModelId === "qwen/qwen3.5-397b-a17b"
           ? ["xhigh", "high", "medium", "low"]
         : undefined,
     onDelta: args.onDelta,
