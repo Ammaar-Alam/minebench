@@ -310,9 +310,7 @@ export async function openaiGenerateText(params: {
   // For these, don't fall back to chat/completions because it hides the real failure cause.
   const isResponsesOnlyModel = params.modelId === "gpt-5.2-pro" || params.modelId === "gpt-5.2-codex";
   const reasoningEffortAttempts: string[] = isGpt5Family
-    ? params.modelId === "gpt-5.2-codex"
-      ? ["xhigh", "high"]
-      : ["high"]
+    ? ["xhigh", "high"]
     : isGptOssFamily
       ? ["xhigh", "high", "medium", "low"]
       : [];

@@ -361,16 +361,18 @@ async function providerGenerateText(args: {
     reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
     reasoningEffortAttempts:
-      model.openRouterModelId === "z-ai/glm-5"
-        ? ["xhigh", "high", "medium", "low"]
-      : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
-            model.openRouterModelId === "qwen/qwen3.5-397b-a17b"
+      model.openRouterModelId.startsWith("openai/gpt-5")
+        ? ["xhigh", "high"]
+        : model.openRouterModelId === "z-ai/glm-5"
           ? ["xhigh", "high", "medium", "low"]
-          : model.openRouterModelId === "openai/gpt-oss-120b"
+          : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
+              model.openRouterModelId === "qwen/qwen3.5-397b-a17b"
             ? ["xhigh", "high", "medium", "low"]
-          : model.openRouterModelId === "minimax/minimax-m2.5"
-            ? ["xhigh", "high", "medium", "low", "minimal"]
-          : undefined,
+            : model.openRouterModelId === "openai/gpt-oss-120b"
+              ? ["xhigh", "high", "medium", "low"]
+              : model.openRouterModelId === "minimax/minimax-m2.5"
+                ? ["xhigh", "high", "medium", "low", "minimal"]
+                : undefined,
     onDelta: args.onDelta,
   });
 }
