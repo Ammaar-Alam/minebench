@@ -7,6 +7,7 @@
  *   pnpm batch:generate --upload            # Upload existing builds to prod
  *   pnpm batch:generate --generate          # Generate missing builds
  *   pnpm batch:generate --generate --upload # Generate missing and upload all
+ *   pnpm batch:generate --generate --openrouter # Force OpenRouter routing where available
  *   pnpm batch:generate --generate --notools # Generate missing builds without voxel.exec tool usage
  *   pnpm batch:generate --prompt "castle"   # Filter by prompt
  *   pnpm batch:generate --model gemini      # Filter by single model
@@ -66,6 +67,7 @@ function parseArgs() {
   return {
     generate: args.includes("--generate"),
     upload: args.includes("--upload"),
+    openrouter: args.includes("--openrouter"),
     overwrite: args.includes("--overwrite"),
     notools: args.includes("--notools"),
     attempts,
@@ -118,6 +120,10 @@ function buildJobList(
 ): Job[] {
   const jobs: Job[] = [];
   const models = getCandidateModels(modelFilters);
+  const missingModelSlugs = models.filter((k) => !MODEL_SLUG[k]);
+  if (missingModelSlugs.length > 0) {
+    throw new Error(`Missing MODEL_SLUG entries for model keys: ${missingModelSlugs.join(", ")}`);
+  }
 
   const normalizedModelFilters = modelFilters.map((f) => f.trim().toLowerCase()).filter(Boolean);
   const knownModelSlugs = new Set(models.map((k) => MODEL_SLUG[k].toLowerCase()));
@@ -168,6 +174,7 @@ async function generateAndSave(
   job: Job,
   attempts: number,
   enableTools: boolean,
+  preferOpenRouter: boolean,
 ): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
   console.log(`  Generating ${job.promptSlug} × ${job.modelSlug}...`);
 
@@ -182,6 +189,7 @@ async function generateAndSave(
     palette: "simple",
     maxAttempts: attempts,
     enableTools,
+    preferOpenRouter,
     onRetry: (attempt, reason) => {
       const msg = (reason ?? "").trim();
       if (!msg) return;
@@ -338,6 +346,7 @@ Usage:
   pnpm batch:generate --upload            # Upload existing builds to prod
   pnpm batch:generate --generate          # Generate missing builds
   pnpm batch:generate --generate --upload # Generate missing and upload all
+  pnpm batch:generate --generate --openrouter # Force OpenRouter routing where available
   pnpm batch:generate --generate --overwrite # Regenerate even if JSON exists
   pnpm batch:generate --prompt castle     # Filter by prompt
   pnpm batch:generate --model gemini      # Filter by single model
@@ -348,6 +357,7 @@ Usage:
 Options:
   --generate        Generate missing builds (off by default)
   --upload          Upload builds to production
+  --openrouter      Prefer OpenRouter over native provider when both are available
   --overwrite       When generating, overwrite existing JSON files
   --notools         Disable voxel.exec tool usage (tools are on by default)
   --attempts <n>    Max attempts per build (default 6)
@@ -391,11 +401,38 @@ Options:
   }
 
   const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilter, opts.modelFilters);
-  const modelCountForSummary = getCandidateModels(opts.modelFilters).length;
+  const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
+
+  if (opts.openrouter && opts.generate) {
+    if (!process.env.OPENROUTER_API_KEY) {
+      console.error("\nError: --openrouter requires OPENROUTER_API_KEY.\n");
+      process.exit(1);
+    }
+
+    const missingOpenRouter: string[] = [];
+    for (const modelKey of selectedModelKeys) {
+      const entry = MODEL_CATALOG.find((m) => m.key === modelKey);
+      if (entry && !entry.openRouterModelId) {
+        missingOpenRouter.push(`${entry.key} (${entry.displayName})`);
+      }
+    }
+
+    if (missingOpenRouter.length > 0) {
+      console.error(
+        "\nError: --openrouter was requested, but these models are not integrated via OpenRouter:\n" +
+          missingOpenRouter.map((m) => `  - ${m}`).join("\n") +
+          "\n\nAdd openRouterModelId in lib/ai/modelCatalog.ts or remove these models from the selection.\n"
+      );
+      process.exit(1);
+    }
+  }
+
+  const modelCountForSummary = selectedModelKeys.length;
   console.log(`📋 Total jobs: ${allJobs.length} (${promptSlugs.length} prompts × ${modelCountForSummary} models)`);
 
   if (opts.promptFilter) console.log(`   Filtered by prompt: "${opts.promptFilter}"`);
   if (opts.modelFilters.length > 0) console.log(`   Filtered by model(s): ${opts.modelFilters.join(", ")}`);
+  if (opts.openrouter) console.log("   Provider override: OpenRouter");
 
   printStatus(allJobs);
 
@@ -433,7 +470,7 @@ Options:
           const job = queue.shift()!;
           inFlight += 1;
           void (async () => {
-            const result = await generateAndSave(job, opts.attempts, !opts.notools);
+            const result = await generateAndSave(job, opts.attempts, !opts.notools, opts.openrouter);
             if (result.ok) {
               console.log(`    ✅ Saved (${result.blockCount} blocks)`);
               success++;

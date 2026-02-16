@@ -32,16 +32,41 @@ function tokenFallbacks(requested: number): number[] {
   return uniq;
 }
 
-function reasoningEffortFallbacks(requested: string[] | undefined): (string | undefined)[] {
-  if (!requested || requested.length === 0) return [undefined];
-  const normalized = requested
+type ReasoningConfigAttempt =
+  | { kind: "effort"; effort: string }
+  | { kind: "max_tokens"; maxTokens: number }
+  | "__default__"
+  | undefined;
+
+function reasoningConfigFallbacks(opts: {
+  efforts?: string[];
+  maxTokens?: number;
+}): ReasoningConfigAttempt[] {
+  const requested = opts.efforts;
+  const normalized = (requested ?? [])
     .map((v) => v.trim())
     .filter((v) => v.length > 0);
-  const uniq: string[] = [];
-  for (const v of normalized) if (!uniq.includes(v)) uniq.push(v);
-  // Final no-reasoning attempt keeps requests resilient when a routed provider
-  // rejects reasoning controls for a specific backend.
-  return [...uniq, undefined];
+  const efforts: ReasoningConfigAttempt[] = [];
+  for (const v of normalized) {
+    if (!efforts.some((e) => typeof e === "object" && e.kind === "effort" && e.effort === v)) {
+      efforts.push({ kind: "effort", effort: v });
+    }
+  }
+
+  const rawMaxTokens = Number(opts.maxTokens);
+  if (Number.isFinite(rawMaxTokens) && rawMaxTokens > 0) {
+    efforts.push({ kind: "max_tokens", maxTokens: Math.floor(rawMaxTokens) });
+  }
+
+  if (efforts.length === 0) return [undefined];
+  // Fallback to plain reasoning mode when effort enums are not supported,
+  // then disable reasoning only as a final recovery path.
+  return [...efforts, "__default__", undefined];
+}
+
+function clampReasoningBudget(maxTokens: number, completionBudget: number): number {
+  const cap = Math.max(1, Math.floor(completionBudget) - 1);
+  return Math.max(1, Math.min(Math.floor(maxTokens), cap));
 }
 
 function looksLikeTokenLimitError(body: string): boolean {
@@ -59,7 +84,12 @@ function looksLikeTokenLimitError(body: string): boolean {
 function looksLikeReasoningConfigError(body: string): boolean {
   const b = body.toLowerCase();
   return (
-    (b.includes("reasoning") && b.includes("effort") && (b.includes("invalid") || b.includes("unsupported") || b.includes("enum"))) ||
+    (b.includes("reasoning") &&
+      b.includes("effort") &&
+      (b.includes("invalid") || b.includes("unsupported") || b.includes("enum") || b.includes("unknown"))) ||
+    (b.includes("reasoning") &&
+      b.includes("max_tokens") &&
+      (b.includes("invalid") || b.includes("unsupported") || b.includes("unknown"))) ||
     (b.includes("reasoning") && b.includes("unsupported")) ||
     (b.includes("reasoning") && b.includes("unknown")) ||
     b.includes("only one of \"reasoning.effort\" and \"reasoning.max_tokens\"")
@@ -98,6 +128,7 @@ export async function openrouterGenerateText(params: {
   system: string;
   user: string;
   maxOutputTokens?: number;
+  reasoningMaxTokens?: number;
   temperature?: number;
   reasoningEffortAttempts?: string[];
   onDelta?: (delta: string) => void;
@@ -107,7 +138,10 @@ export async function openrouterGenerateText(params: {
 
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
   const maxTokens = params.maxOutputTokens ?? 8192;
-  const effortAttempts = reasoningEffortFallbacks(params.reasoningEffortAttempts);
+  const reasoningAttempts = reasoningConfigFallbacks({
+    efforts: params.reasoningEffortAttempts,
+    maxTokens: params.reasoningMaxTokens,
+  });
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
@@ -117,7 +151,16 @@ export async function openrouterGenerateText(params: {
     let lastBody = "";
     for (const tok of tokenFallbacks(maxTokens)) {
       let tryLowerTokenBudget = false;
-      for (const [effortIdx, effort] of effortAttempts.entries()) {
+      for (const [cfgIdx, cfg] of reasoningAttempts.entries()) {
+        const reasoningConfig =
+          cfg === "__default__"
+            ? {}
+            : cfg && typeof cfg === "object" && cfg.kind === "effort"
+              ? { effort: cfg.effort }
+              : cfg && typeof cfg === "object" && cfg.kind === "max_tokens"
+                ? { max_tokens: clampReasoningBudget(cfg.maxTokens, tok) }
+              : undefined;
+
         res = await fetchWithRetry(
           `${baseUrl}/v1/chat/completions`,
           {
@@ -139,7 +182,7 @@ export async function openrouterGenerateText(params: {
               stream: Boolean(params.onDelta),
               temperature: params.temperature ?? 0.2,
               max_tokens: tok,
-              reasoning: effort ? { effort } : undefined,
+              reasoning: reasoningConfig,
             }),
           },
           { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
@@ -151,7 +194,7 @@ export async function openrouterGenerateText(params: {
           tryLowerTokenBudget = true;
           break;
         }
-        if (res.status === 400 && effortIdx < effortAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+        if (res.status === 400 && cfgIdx < reasoningAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
           continue;
         }
         break;

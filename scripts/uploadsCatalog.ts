@@ -40,6 +40,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   openai_gpt_5_nano: "gpt-5-nano",
   openai_gpt_4_1: "gpt-4-1",
   openai_gpt_4o: "gpt-4o",
+  openai_gpt_oss_120b: "gpt-oss-120b",
   anthropic_claude_4_5_sonnet: "sonnet",
   anthropic_claude_4_5_opus: "opus",
   anthropic_claude_4_6_opus: "opus-4-6",
@@ -54,6 +55,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   zai_glm_4_7: "glm-4-7",
   qwen_qwen3_max_thinking: "qwen3-max-thinking",
   qwen_qwen3_5_397b_a17b: "qwen3-5-397b-a17b",
+  minimax_m2_5: "minimax-m2-5",
   meta_llama_4_maverick: "llama-4-maverick",
 };
 

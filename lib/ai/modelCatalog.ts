@@ -7,6 +7,7 @@ export type Provider =
   | "xai"
   | "zai"
   | "qwen"
+  | "minimax"
   | "meta";
 
 export type ModelKey =
@@ -17,6 +18,7 @@ export type ModelKey =
   | "openai_gpt_5_nano"
   | "openai_gpt_4_1"
   | "openai_gpt_4o"
+  | "openai_gpt_oss_120b"
   | "anthropic_claude_4_5_sonnet"
   | "anthropic_claude_4_5_opus"
   | "anthropic_claude_4_6_opus"
@@ -31,6 +33,7 @@ export type ModelKey =
   | "zai_glm_4_7"
   | "qwen_qwen3_max_thinking"
   | "qwen_qwen3_5_397b_a17b"
+  | "minimax_m2_5"
   | "meta_llama_4_maverick";
 
 export type ModelCatalogEntry = {
@@ -101,6 +104,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "GPT 4o",
     enabled: true,
     openRouterModelId: "openai/gpt-4o",
+  },
+  {
+    key: "openai_gpt_oss_120b",
+    provider: "openai",
+    modelId: "gpt-oss-120b",
+    displayName: "GPT OSS 120B",
+    enabled: true,
+    openRouterModelId: "openai/gpt-oss-120b",
   },
   {
     key: "anthropic_claude_4_5_sonnet",
@@ -217,6 +228,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Qwen 3.5 397B A17B",
     enabled: true,
     openRouterModelId: "qwen/qwen3.5-397b-a17b",
+    forceOpenRouter: true,
+  },
+  {
+    key: "minimax_m2_5",
+    provider: "minimax",
+    modelId: "minimax-m2.5",
+    displayName: "MiniMax M2.5",
+    enabled: true,
+    openRouterModelId: "minimax/minimax-m2.5",
     forceOpenRouter: true,
   },
   {

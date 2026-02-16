@@ -230,6 +230,40 @@ function tokenFallbacks(requested: number): number[] {
   return uniq;
 }
 
+type ReasoningConfigAttempt =
+  | { kind: "effort"; effort: string }
+  | { kind: "max_tokens"; maxTokens: number }
+  | undefined;
+
+function reasoningConfigFallbacks(opts: {
+  efforts?: string[];
+  maxTokens?: number;
+}): ReasoningConfigAttempt[] {
+  const out: ReasoningConfigAttempt[] = [];
+
+  const normalizedEfforts = (opts.efforts ?? [])
+    .map((v) => v.trim())
+    .filter((v) => v.length > 0);
+  const uniqueEfforts: string[] = [];
+  for (const effort of normalizedEfforts) {
+    if (!uniqueEfforts.includes(effort)) uniqueEfforts.push(effort);
+  }
+  for (const effort of uniqueEfforts) out.push({ kind: "effort", effort });
+
+  const maxTokens = Number(opts.maxTokens);
+  if (Number.isFinite(maxTokens) && maxTokens > 0) {
+    out.push({ kind: "max_tokens", maxTokens: Math.floor(maxTokens) });
+  }
+
+  out.push(undefined);
+  return out;
+}
+
+function clampReasoningBudget(maxTokens: number, completionBudget: number): number {
+  const cap = Math.max(1, Math.floor(completionBudget) - 1);
+  return Math.max(1, Math.min(Math.floor(maxTokens), cap));
+}
+
 function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
   return (
@@ -241,10 +275,17 @@ function looksLikeTokenLimitError(body: string): boolean {
   );
 }
 
-function looksLikeReasoningEffortError(body: string): boolean {
+function looksLikeReasoningConfigError(body: string): boolean {
   const b = body.toLowerCase();
-  // Handle both OpenAI-style JSON error responses and plain-text messages.
-  return b.includes("reason") && b.includes("effort") && (b.includes("invalid") || b.includes("unsupported") || b.includes("enum"));
+  return (
+    (b.includes("reasoning") &&
+      b.includes("effort") &&
+      (b.includes("invalid") || b.includes("unsupported") || b.includes("enum") || b.includes("unknown"))) ||
+    (b.includes("reasoning") &&
+      b.includes("max_tokens") &&
+      (b.includes("invalid") || b.includes("unsupported") || b.includes("unknown"))) ||
+    b.includes("only one of \"reasoning.effort\" and \"reasoning.max_tokens\"")
+  );
 }
 
 export async function openaiGenerateText(params: {
@@ -253,6 +294,7 @@ export async function openaiGenerateText(params: {
   system: string;
   user: string;
   maxOutputTokens?: number;
+  reasoningMaxTokens?: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   onDelta?: (delta: string) => void;
@@ -263,6 +305,7 @@ export async function openaiGenerateText(params: {
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for OpenAI structured output");
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
+  const isGptOssFamily = params.modelId.startsWith("gpt-oss-");
   // Some models are Responses-only (or otherwise not supported in chat/completions).
   // For these, don't fall back to chat/completions because it hides the real failure cause.
   const isResponsesOnlyModel = params.modelId === "gpt-5.2-pro" || params.modelId === "gpt-5.2-codex";
@@ -270,8 +313,13 @@ export async function openaiGenerateText(params: {
     ? params.modelId === "gpt-5.2-codex"
       ? ["xhigh", "high"]
       : ["high"]
-    : [];
-  const reasoningEffort = reasoningEffortAttempts[0];
+    : isGptOssFamily
+      ? ["xhigh", "high", "medium", "low"]
+      : [];
+  const reasoningConfigAttempts = reasoningConfigFallbacks({
+    efforts: reasoningEffortAttempts,
+    maxTokens: params.reasoningMaxTokens,
+  });
   // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
   // so we omit the parameter entirely and let the API use the default.
   const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
@@ -293,8 +341,13 @@ export async function openaiGenerateText(params: {
     let res: Response | null = null;
     let lastBody = "";
     for (const tok of tokenFallbacks(maxOutputTokens)) {
-      const effortAttempts = reasoningEffortAttempts.length > 0 ? reasoningEffortAttempts : [undefined];
-      for (const [effortIdx, effort] of effortAttempts.entries()) {
+      for (const [cfgIdx, cfg] of reasoningConfigAttempts.entries()) {
+        const reasoning =
+          cfg?.kind === "effort"
+            ? { effort: cfg.effort }
+            : cfg?.kind === "max_tokens"
+              ? { max_tokens: clampReasoningBudget(cfg.maxTokens, tok) }
+              : undefined;
         res = await fetchWithRetry(
           "https://api.openai.com/v1/responses",
           {
@@ -317,7 +370,7 @@ export async function openaiGenerateText(params: {
                   content: [{ type: "input_text", text: params.user }],
                 },
               ],
-              reasoning: effort ? { effort } : undefined,
+              reasoning,
               background: useBackgroundMode || undefined,
               store: useBackgroundMode || undefined,
               text: {
@@ -339,7 +392,7 @@ export async function openaiGenerateText(params: {
         if (res.ok) break;
         lastBody = await res.text().catch(() => "");
         if (res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
-        if (res.status === 400 && effort && effortIdx < effortAttempts.length - 1 && looksLikeReasoningEffortError(lastBody)) {
+        if (res.status === 400 && cfgIdx < reasoningConfigAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
           continue;
         }
         break;
@@ -437,40 +490,54 @@ export async function openaiGenerateText(params: {
   let res: Response | null = null;
   let lastBody = "";
   for (const tok of tokenFallbacks(maxOutputTokens)) {
-    res = await fetchWithRetry(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          ...(streamResponses ? { Accept: "text/event-stream" } : {}),
-        },
-        body: JSON.stringify({
-          model: params.modelId,
-          temperature,
-          max_completion_tokens: tok,
-          reasoning_effort: reasoningEffort,
-          stream: streamResponses,
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-              strict: true,
-              schema: params.jsonSchema,
-            },
+    let tryLowerTokenBudget = false;
+    const effortAttempts = reasoningEffortAttempts.length > 0 ? [...reasoningEffortAttempts, undefined] : [undefined];
+    for (const [effortIdx, effort] of effortAttempts.entries()) {
+      res = await fetchWithRetry(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+            ...(streamResponses ? { Accept: "text/event-stream" } : {}),
           },
-          messages: [
-            { role: "system", content: params.system },
-            { role: "user", content: params.user },
-          ],
-        }),
-      },
-      { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-    );
-    if (res.ok) break;
-    lastBody = await res.text().catch(() => "");
-    if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
+          body: JSON.stringify({
+            model: params.modelId,
+            temperature,
+            max_completion_tokens: tok,
+            reasoning_effort: effort,
+            stream: streamResponses,
+            response_format: {
+              type: "json_schema",
+              json_schema: {
+                name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+                strict: true,
+                schema: params.jsonSchema,
+              },
+            },
+            messages: [
+              { role: "system", content: params.system },
+              { role: "user", content: params.user },
+            ],
+          }),
+        },
+        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+      );
+      if (res.ok) break;
+      lastBody = await res.text().catch(() => "");
+      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
+        tryLowerTokenBudget = true;
+        break;
+      }
+      if (res.status === 400 && effortIdx < effortAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+        continue;
+      }
+      break;
+    }
+
+    if (res?.ok) break;
+    if (tryLowerTokenBudget) continue;
     break;
   }
 

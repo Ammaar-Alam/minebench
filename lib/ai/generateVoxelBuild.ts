@@ -24,10 +24,19 @@ import {
 function defaultMaxOutputTokens(gridSize: 64 | 256 | 512, modelId: string): number {
   if (modelId.startsWith("claude-opus-4-6")) return 131072;
   if (modelId === "glm-5") return 131072;
+  if (modelId === "gpt-oss-120b") return 131072;
+  if (modelId === "minimax-m2.5") return 131072;
   if (modelId === "qwen3-max-thinking" || modelId === "qwen3.5-397b-a17b") return 32768;
   // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
   if (gridSize === 64) return 65536;
   return 65536;
+}
+
+function defaultMaxReasoningTokens(modelId: string, maxOutputTokens: number): number | undefined {
+  // For GPT OSS, max_output_tokens is a combined completion/reasoning budget.
+  // Use the model's full output budget as the requested reasoning budget.
+  if (modelId === "gpt-oss-120b") return maxOutputTokens;
+  return undefined;
 }
 
 function approxMaxBlocksForTokenBudget(opts: {
@@ -92,7 +101,7 @@ function effectiveApiKey(opts: {
   allowServerKeys: boolean;
 }): string | null {
   const provider = opts.provider;
-  if (provider === "xai" || provider === "zai" || provider === "qwen" || provider === "meta") return null; // only supported via OpenRouter fallback
+  if (provider === "xai" || provider === "zai" || provider === "qwen" || provider === "minimax" || provider === "meta") return null; // only supported via OpenRouter fallback
 
   const directKey = normalizeApiKey(
     provider === "openrouter"
@@ -132,6 +141,7 @@ export type GenerateVoxelBuildParams = {
   enableTools?: boolean;
   providerKeys?: ProviderApiKeys;
   allowServerKeys?: boolean;
+  preferOpenRouter?: boolean;
   onRetry?: (attempt: number, reason: string) => void;
   onDelta?: (delta: string) => void;
 };
@@ -149,13 +159,14 @@ export type GenerateVoxelBuildResult =
 
 // call the direct provider (OpenAI, Anthropic, etc.)
 async function callDirectProvider(args: {
-  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai" | "qwen" | "meta";
+  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai" | "qwen" | "minimax" | "meta";
   modelId: string;
   apiKey?: string;
   system: string;
   user: string;
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
+  reasoningMaxTokens?: number;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   if (args.provider === "openai") {
@@ -165,6 +176,7 @@ async function callDirectProvider(args: {
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
+      reasoningMaxTokens: args.reasoningMaxTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       onDelta: args.onDelta,
@@ -234,6 +246,11 @@ async function callDirectProvider(args: {
     throw new Error("Qwen direct API not supported; use OpenRouter fallback");
   }
 
+  // MiniMax models are currently OpenRouter-only in MineBench
+  if (args.provider === "minimax") {
+    throw new Error("MiniMax direct API not supported; use OpenRouter fallback");
+  }
+
   // Meta models are currently OpenRouter-only in MineBench
   throw new Error("Meta direct API not supported; use OpenRouter fallback");
 }
@@ -245,12 +262,15 @@ async function providerGenerateText(args: {
   user: string;
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
+  reasoningMaxTokens?: number;
   providerKeys?: ProviderApiKeys;
   allowServerKeys: boolean;
+  preferOpenRouter?: boolean;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
+  const preferOpenRouter = Boolean(args.preferOpenRouter);
   const directKey = forceOpenRouter
     ? null
     : effectiveApiKey({
@@ -265,6 +285,17 @@ async function providerGenerateText(args: {
   });
   const hasDirect = Boolean(directKey);
   const hasOpenRouter = Boolean(openRouterKey);
+
+  if (preferOpenRouter && !model.openRouterModelId) {
+    throw new Error(
+      `${model.displayName} is not integrated with OpenRouter in MineBench (missing openRouterModelId).`,
+    );
+  }
+  if (preferOpenRouter && !hasOpenRouter) {
+    throw new Error(
+      `OpenRouter routing requested for ${model.displayName}, but no OpenRouter API key is available.`,
+    );
+  }
 
   // if we have neither key and there's an openrouter model id, error out
   if (!hasDirect && !hasOpenRouter) {
@@ -297,7 +328,7 @@ async function providerGenerateText(args: {
   }
 
   // try direct provider first if we have the key
-  if (!forceOpenRouter && hasDirect) {
+  if (!forceOpenRouter && !preferOpenRouter && hasDirect) {
     try {
       return await callDirectProvider({
         provider: model.provider,
@@ -307,6 +338,7 @@ async function providerGenerateText(args: {
         user: args.user,
         jsonSchema: args.jsonSchema,
         maxOutputTokens: args.maxOutputTokens,
+        reasoningMaxTokens: args.reasoningMaxTokens,
         onDelta: args.onDelta,
       });
     } catch (directErr) {
@@ -326,14 +358,19 @@ async function providerGenerateText(args: {
     system: args.system,
     user: args.user,
     maxOutputTokens: args.maxOutputTokens,
+    reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
     reasoningEffortAttempts:
       model.openRouterModelId === "z-ai/glm-5"
         ? ["xhigh", "high", "medium", "low"]
-        : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
+      : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
             model.openRouterModelId === "qwen/qwen3.5-397b-a17b"
           ? ["xhigh", "high", "medium", "low"]
-        : undefined,
+          : model.openRouterModelId === "openai/gpt-oss-120b"
+            ? ["xhigh", "high", "medium", "low"]
+          : model.openRouterModelId === "minimax/minimax-m2.5"
+            ? ["xhigh", "high", "medium", "low", "minimal"]
+          : undefined,
     onDelta: args.onDelta,
   });
 }
@@ -381,6 +418,7 @@ export async function generateVoxelBuild(
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
   const maxOutputTokens = defaultMaxOutputTokens(params.gridSize, model.modelId);
+  const reasoningMaxTokens = defaultMaxReasoningTokens(model.modelId, maxOutputTokens);
   const schemaMaxBlocks = approxMaxBlocksForTokenBudget({
     maxOutputTokens,
     minBlocks,
@@ -442,8 +480,10 @@ export async function generateVoxelBuild(
         user,
         jsonSchema,
         maxOutputTokens,
+        reasoningMaxTokens,
         providerKeys: params.providerKeys,
         allowServerKeys,
+        preferOpenRouter: params.preferOpenRouter,
         onDelta: params.onDelta,
       });
       previousText = text;
