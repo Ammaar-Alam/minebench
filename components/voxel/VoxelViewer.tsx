@@ -172,8 +172,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   type DragMode = "orbit" | "pan";
   const [dragMode, setDragMode] = useState<DragMode>("orbit");
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const dragModeBeforeSpaceRef = useRef<DragMode>("orbit");
-  const spaceHeldRef = useRef(false);
+  const dragModeBeforeCtrlRef = useRef<DragMode>("orbit");
+  const ctrlHeldRef = useRef(false);
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
 
@@ -524,16 +524,15 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         containerRef.current?.focus();
       }}
       onBlur={() => {
-        if (spaceHeldRef.current) {
-          spaceHeldRef.current = false;
-          setDragMode(dragModeBeforeSpaceRef.current);
+        if (ctrlHeldRef.current) {
+          ctrlHeldRef.current = false;
+          setDragMode(dragModeBeforeCtrlRef.current);
         }
       }}
       onKeyDown={(e) => {
-        if (e.code === "Space" && !e.repeat) {
-          e.preventDefault();
-          spaceHeldRef.current = true;
-          dragModeBeforeSpaceRef.current = dragMode;
+        if ((e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") && !e.repeat) {
+          ctrlHeldRef.current = true;
+          dragModeBeforeCtrlRef.current = dragMode;
           setDragMode("pan");
         }
         if ((e.key === "r" || e.key === "R") && !e.repeat) {
@@ -546,10 +545,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         }
       }}
       onKeyUp={(e) => {
-        if (e.code === "Space") {
-          if (!spaceHeldRef.current) return;
-          spaceHeldRef.current = false;
-          setDragMode(dragModeBeforeSpaceRef.current);
+        if (e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") {
+          if (!ctrlHeldRef.current) return;
+          ctrlHeldRef.current = false;
+          setDragMode(dragModeBeforeCtrlRef.current);
         }
       }}
     >
@@ -561,7 +560,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           className={`mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs ${dragMode === "pan" ? "mb-btn-primary" : "mb-btn-ghost"}`}
           onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
         >
-          Pan <span className="hidden sm:inline"><span className="mb-kbd">Space</span></span>
+          Pan <span className="hidden sm:inline"><span className="mb-kbd">Ctrl</span></span>
         </button>
         <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={fitView}>
           Fit <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>

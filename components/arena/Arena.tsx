@@ -58,11 +58,6 @@ function isTypingTarget(target: EventTarget | null) {
   return target.isContentEditable;
 }
 
-function isInsideViewer(target: EventTarget | null) {
-  if (!(target instanceof HTMLElement)) return false;
-  return Boolean(target.closest("[data-mb-voxel-viewer='true']"));
-}
-
 function isInteractiveTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   return Boolean(target.closest("button,a,[role='button'],[role='link'],summary"));
@@ -310,7 +305,7 @@ export function Arena() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (window.innerWidth < 768) return;
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isTypingTarget(e.target) || isInsideViewer(e.target) || isInteractiveTarget(e.target)) return;
+      if (isTypingTarget(e.target) || isInteractiveTarget(e.target)) return;
       if (stateRef.current.kind !== "ready") return;
 
       const isSubmitting = submittingRef.current;
@@ -328,6 +323,13 @@ export function Arena() {
         return;
       }
 
+      if (e.code === "KeyA" || e.code === "ArrowLeft") {
+        if (isSubmitting || isTransitioning || isRevealingCurrent) return;
+        e.preventDefault();
+        void handleVoteRef.current("A");
+        return;
+      }
+
       if (e.code === "Digit2") {
         if (isSubmitting || isTransitioning || isRevealingCurrent) return;
         e.preventDefault();
@@ -335,7 +337,21 @@ export function Arena() {
         return;
       }
 
-      if (e.code !== "Space") return;
+      if (e.code === "KeyB" || e.code === "ArrowRight") {
+        if (isSubmitting || isTransitioning || isRevealingCurrent) return;
+        e.preventDefault();
+        void handleVoteRef.current("B");
+        return;
+      }
+
+      if (e.code === "ArrowDown") {
+        if (isSubmitting || isTransitioning || isRevealingCurrent) return;
+        e.preventDefault();
+        void handleVoteRef.current("BOTH_BAD");
+        return;
+      }
+
+      if (e.code !== "Space" && e.code !== "ArrowUp") return;
 
       if (isRevealingCurrent) {
         e.preventDefault();

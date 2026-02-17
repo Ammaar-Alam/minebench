@@ -30,6 +30,11 @@ export type LeaderboardResponse = {
     lossCount: number;
     drawCount: number;
     bothBadCount: number;
+    meanScore: number | null;
+    scoreVariance: number | null;
+    scoreSpread: number | null;
+    consistency: number | null;
+    sampledPrompts: number;
+    sampledVotes: number;
   }[];
 };
-
