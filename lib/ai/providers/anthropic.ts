@@ -67,10 +67,14 @@ function parseThinkingBudget(): number | null {
   return budget;
 }
 
-function parseOpus46Effort(): AnthropicEffort {
-  const raw = (process.env.ANTHROPIC_OPUS_4_6_EFFORT ?? "").trim().toLowerCase();
-  if (raw === "low" || raw === "medium" || raw === "high" || raw === "max") return raw;
-  return "max";
+function parseEffortEnv(
+  envVar: string,
+  opts: { defaultEffort: AnthropicEffort; allowMax: boolean },
+): AnthropicEffort {
+  const raw = (process.env[envVar] ?? "").trim().toLowerCase();
+  if (raw === "low" || raw === "medium" || raw === "high") return raw;
+  if (raw === "max") return opts.allowMax ? "max" : "high";
+  return opts.defaultEffort;
 }
 
 function isLegacyManualThinkingModel(modelId: string): boolean {
@@ -79,6 +83,30 @@ function isLegacyManualThinkingModel(modelId: string): boolean {
 
 function isOpus46(modelId: string): boolean {
   return modelId.startsWith("claude-opus-4-6");
+}
+
+function isSonnet46(modelId: string): boolean {
+  return modelId.startsWith("claude-sonnet-4-6");
+}
+
+function isAdaptiveThinkingModel(modelId: string): boolean {
+  return isOpus46(modelId) || isSonnet46(modelId);
+}
+
+function parseAdaptiveEffort(modelId: string): AnthropicEffort {
+  if (isOpus46(modelId)) {
+    return parseEffortEnv("ANTHROPIC_OPUS_4_6_EFFORT", {
+      defaultEffort: "max",
+      allowMax: true,
+    });
+  }
+  if (isSonnet46(modelId)) {
+    return parseEffortEnv("ANTHROPIC_SONNET_4_6_EFFORT", {
+      defaultEffort: "high",
+      allowMax: false,
+    });
+  }
+  return "high";
 }
 
 function supportsContext1mBeta(modelId: string): boolean {
@@ -105,7 +133,7 @@ export async function anthropicGenerateText(params: {
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
-  const usesAdaptiveThinking = isOpus46(params.modelId);
+  const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
   const streamResponses =
     Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true);
   const thinkingBudget = usesAdaptiveThinking
@@ -113,7 +141,9 @@ export async function anthropicGenerateText(params: {
     : isLegacyManualThinkingModel(params.modelId)
       ? Math.max(1024, maxTokens - 1)
       : parseThinkingBudget();
-  const outputConfig = usesAdaptiveThinking ? { effort: parseOpus46Effort() } : undefined;
+  const outputConfig = usesAdaptiveThinking
+    ? { effort: parseAdaptiveEffort(params.modelId) }
+    : undefined;
   const betaHeaders: (string | null)[] =
     supportsContext1mBeta(params.modelId) &&
     parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)

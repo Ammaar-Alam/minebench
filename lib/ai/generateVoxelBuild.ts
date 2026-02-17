@@ -36,6 +36,7 @@ function defaultMaxReasoningTokens(modelId: string, maxOutputTokens: number): nu
   // For GPT OSS, max_output_tokens is a combined completion/reasoning budget.
   // Use the model's full output budget as the requested reasoning budget.
   if (modelId === "gpt-oss-120b") return maxOutputTokens;
+  if (modelId === "claude-sonnet-4-6") return Math.max(1024, maxOutputTokens - 1);
   return undefined;
 }
 
@@ -363,6 +364,8 @@ async function providerGenerateText(args: {
     reasoningEffortAttempts:
       model.openRouterModelId.startsWith("openai/gpt-5")
         ? ["xhigh", "high"]
+        : model.openRouterModelId === "anthropic/claude-sonnet-4.6"
+          ? ["xhigh", "high", "medium", "low"]
         : model.openRouterModelId === "z-ai/glm-5"
           ? ["xhigh", "high", "medium", "low"]
           : model.openRouterModelId === "qwen/qwen3-max-thinking" ||

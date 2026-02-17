@@ -20,6 +20,7 @@ export type ModelKey =
   | "openai_gpt_4o"
   | "openai_gpt_oss_120b"
   | "anthropic_claude_4_5_sonnet"
+  | "anthropic_claude_4_6_sonnet"
   | "anthropic_claude_4_5_opus"
   | "anthropic_claude_4_6_opus"
   | "gemini_3_0_pro"
@@ -120,6 +121,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Claude 4.5 Sonnet",
     enabled: true,
     openRouterModelId: "anthropic/claude-sonnet-4.5",
+  },
+  {
+    key: "anthropic_claude_4_6_sonnet",
+    provider: "anthropic",
+    modelId: "claude-sonnet-4-6",
+    displayName: "Claude 4.6 Sonnet",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-sonnet-4.6",
   },
   {
     key: "anthropic_claude_4_5_opus",
