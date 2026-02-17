@@ -14,6 +14,9 @@ importers:
       gifenc:
         specifier: ^1.0.3
         version: 1.0.3
+      gifsicle-wasm-browser:
+        specifier: ^1.5.19
+        version: 1.5.19
       next:
         specifier: ^15.0.0
         version: 15.5.9(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -1388,6 +1391,9 @@ packages:
 
   gifenc@1.0.3:
     resolution: {integrity: sha512-xdr6AdrfGBcfzncONUOlXMBuc5wJDtOueE3c5rdG0oNgtINLD+f2iFZltrBRZYzACRbKr+mSVU/x98zv2u3jmw==}
+
+  gifsicle-wasm-browser@1.5.19:
+    resolution: {integrity: sha512-f2j2QXvryrxake2DdeAaI96LfZ8adb62UUs9C2eNuQiTDiysh9aBPmyw1Q8fHe+x+is+RHXDEXvVQSELONwmhw==}
 
   giget@2.0.0:
     resolution: {integrity: sha512-L5bGsVkxJbJgdnwyuheIunkGatUF/zssUoxxjACCseZYAVbaqdh9Tsmmlkl8vYan09H7sbvKt4pS8GqKLBrEzA==}
@@ -3584,6 +3590,8 @@ snapshots:
       resolve-pkg-maps: 1.0.0
 
   gifenc@1.0.3: {}
+
+  gifsicle-wasm-browser@1.5.19: {}
 
   giget@2.0.0:
     dependencies:

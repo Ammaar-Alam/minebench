@@ -29,6 +29,10 @@ const YIELD_EVERY_FRAMES = 50; // keep UI responsive without adding ~16ms per fr
 const CAPTURE_SUPERSAMPLE = 1.35;
 const EXPORT_SIZE_SINGLE = { width: 1920, height: 1080 };
 const EXPORT_SIZE_COMPARE = { width: 1920, height: 1080 };
+const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * 1024 * 1024;
+const LOSSLESS_OPT_ALWAYS_KEEP_BYTES = 15 * 1024 * 1024;
+const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
+const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
@@ -123,6 +127,36 @@ function roundedRectPath(
   ctx.arcTo(x, y + height, x, y, r);
   ctx.arcTo(x, y, x + width, y, r);
   ctx.closePath();
+}
+
+async function optimizeGifBlobLossless(input: Blob): Promise<Blob> {
+  if (input.size < LOSSLESS_OPT_MIN_INPUT_BYTES) return input;
+
+  try {
+    const [{ default: gifsicle }, inputBytes] = await Promise.all([
+      import("gifsicle-wasm-browser"),
+      input.arrayBuffer(),
+    ]);
+
+    const outputs = await gifsicle.run({
+      input: [{ file: inputBytes, name: "in.gif" }],
+      command: ["-O3 in.gif -o /out/out.gif"],
+      isStrict: true,
+    });
+    const optimized = outputs.find((file) => file.name.toLowerCase().endsWith(".gif"));
+    if (!optimized) return input;
+    if (input.size >= LOSSLESS_OPT_ALWAYS_KEEP_BYTES) return optimized;
+
+    const savings = input.size - optimized.size;
+    const relativeSavings = savings / Math.max(1, input.size);
+    const meaningful =
+      savings >= LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES &&
+      relativeSavings >= LOSSLESS_OPT_MIN_RELATIVE_SAVINGS;
+    return meaningful ? optimized : input;
+  } catch (err) {
+    console.warn("[gif-export] lossless optimize skipped", err);
+    return input;
+  }
 }
 
 function drawBaseBackdrop(
@@ -429,6 +463,7 @@ function triggerDownload(blob: Blob, fileName: string) {
 
 export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className }: Props) {
   const [exporting, setExporting] = useState(false);
+  const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
@@ -442,6 +477,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       return;
     }
     setExporting(true);
+    setOptimizing(false);
     setError(null);
     setProgress({ done: 0, total: FRAME_COUNT });
     await waitForNextPaint();
@@ -449,26 +485,32 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       const blob = await buildGifBlob(targets, promptText ?? "", (done, total) => {
         if (done === total || done % 2 === 0) setProgress({ done, total });
       });
+      setOptimizing(true);
+      setProgress(null);
+      const finalBlob = await optimizeGifBlobLossless(blob);
       const modelToken = targets.map((t) => sanitizeFilePart(t.modelName) || "model").join("-vs-");
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const typeToken = targets.length === 2 ? "compare" : "build";
       const fileName = `minebench-${typeToken}-${modelToken}-${promptToken}-${stamp}.gif`;
-      triggerDownload(blob, fileName);
+      triggerDownload(finalBlob, fileName);
     } catch (err) {
       const message = err instanceof Error ? err.message : "GIF export failed";
       setError(message);
       console.error("[gif-export]", err);
     } finally {
+      setOptimizing(false);
       setExporting(false);
       setProgress(null);
     }
   }
 
   const displayLabel = exporting
-    ? progress
-      ? `Rendering ${Math.max(0, progress.done)}/${progress.total}`
-      : "Rendering..."
+    ? optimizing
+      ? "Optimizing..."
+      : progress
+        ? `Rendering ${Math.max(0, progress.done)}/${progress.total}`
+        : "Rendering..."
     : (label ?? (targets.length === 2 ? "Export comparison GIF" : "Export GIF"));
   const buttonTitle = error ?? displayLabel;
 
