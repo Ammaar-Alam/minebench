@@ -79,3 +79,61 @@ export const softwareApplicationJsonLd = {
     "Leaderboard with live model rankings",
   ],
 };
+
+export function modelDetailJsonLd(params: {
+  key: string;
+  displayName: string;
+  provider: string;
+  eloRating: number;
+  winCount: number;
+  lossCount: number;
+  drawCount: number;
+  bothBadCount: number;
+}) {
+  const decisiveVotes = params.winCount + params.lossCount + params.drawCount;
+  const totalVotes = decisiveVotes + params.bothBadCount;
+  const winRate = decisiveVotes > 0 ? params.winCount / decisiveVotes : null;
+
+  return {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    name: `${params.displayName} stats | ${SITE_NAME}`,
+    url: absoluteUrl(`/leaderboard/${params.key}`),
+    isPartOf: {
+      "@type": "WebSite",
+      name: SITE_NAME,
+      url: SITE_URL,
+    },
+    about: {
+      "@type": "SoftwareApplication",
+      name: params.displayName,
+      applicationCategory: "DeveloperApplication",
+      provider: {
+        "@type": "Organization",
+        name: params.provider,
+      },
+      additionalProperty: [
+        {
+          "@type": "PropertyValue",
+          name: "Elo rating",
+          value: Math.round(params.eloRating),
+        },
+        {
+          "@type": "PropertyValue",
+          name: "Win rate",
+          value: winRate != null ? `${(winRate * 100).toFixed(1)}%` : "N/A",
+        },
+        {
+          "@type": "PropertyValue",
+          name: "Decisive votes",
+          value: decisiveVotes,
+        },
+        {
+          "@type": "PropertyValue",
+          name: "Total votes",
+          value: totalVotes,
+        },
+      ],
+    },
+  };
+}
