@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { LeaderboardResponse } from "@/lib/arena/types";
+import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 
 function formatPercent(value: number | null, digits = 0): string {
   if (value == null) return "—";
@@ -29,19 +30,16 @@ export function Leaderboard() {
   const router = useRouter();
   const activeModelCount = data?.models.length ?? 0;
   const topModel = data?.models[0] ?? null;
-  const topDecisiveVotes = topModel
-    ? topModel.winCount + topModel.lossCount + topModel.drawCount
-    : 0;
-  const topWinRate = topModel && topDecisiveVotes > 0 ? topModel.winCount / topDecisiveVotes : null;
+  const topVoteSummary = topModel ? summarizeArenaVotes(topModel) : null;
+  const topWinRate =
+    topModel && topVoteSummary && topVoteSummary.decisiveVotes > 0
+      ? topModel.winCount / topVoteSummary.decisiveVotes
+      : null;
   const topRecord = topModel
-    ? `${topModel.winCount.toLocaleString()}-${topModel.lossCount.toLocaleString()}-${topModel.drawCount.toLocaleString()}`
+    ? `${topModel.winCount.toLocaleString()}-${(topVoteSummary?.decisiveLossCount ?? 0).toLocaleString()}-${topModel.drawCount.toLocaleString()}`
     : null;
   const renderedVotes =
-    data?.models.reduce(
-      (sum, model) =>
-        sum + model.winCount + model.lossCount + model.drawCount + model.bothBadCount,
-      0
-    ) ?? 0;
+    data?.models.reduce((sum, model) => sum + summarizeArenaVotes(model).totalVotes, 0) ?? 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -185,8 +183,7 @@ export function Leaderboard() {
             </thead>
             <tbody>
               {data?.models.map((m, index) => {
-                const decisiveVotes = m.winCount + m.lossCount + m.drawCount;
-                const totalVotes = decisiveVotes + m.bothBadCount;
+                const voteSummary = summarizeArenaVotes(m);
                 const tierClass = index === 0 ? "mb-tier-glow-top" : index < 3 ? "mb-tier-glow" : "";
                 const tier = index === 0 ? "champion" : index < 3 ? "top" : "base";
                 return (
@@ -258,7 +255,7 @@ export function Leaderboard() {
                           W {m.winCount}
                         </span>
                         <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-danger">
-                          L {m.lossCount}
+                          L {voteSummary.decisiveLossCount}
                         </span>
                         <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-muted">
                           D {m.drawCount}
@@ -267,7 +264,9 @@ export function Leaderboard() {
                     </td>
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
                       <div className="space-y-1.5">
-                        <div className="font-mono text-xs font-semibold text-fg">{totalVotes.toLocaleString()}</div>
+                        <div className="font-mono text-xs font-semibold text-fg">
+                          {voteSummary.totalVotes.toLocaleString()}
+                        </div>
                         <div className="mb-leaderboard-votes-meta text-xs tracking-tight text-muted2">
                           {m.bothBadCount.toLocaleString()} both bad
                         </div>

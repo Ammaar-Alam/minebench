@@ -7,6 +7,7 @@ import type {
   ModelOpponentBreakdown,
   ModelPromptBreakdown,
 } from "@/lib/arena/stats";
+import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -297,8 +298,9 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
   const bestPromptScore = strongest[0]?.averageScore ?? null;
   const weakPromptScore = weakest[0]?.averageScore ?? null;
-  const recordText = `${data.model.winCount}-${data.model.lossCount}-${data.model.drawCount}`;
-  const decisiveVotes = data.model.winCount + data.model.lossCount + data.model.drawCount;
+  const voteSummary = summarizeArenaVotes(data.model);
+  const recordText = `${data.model.winCount}-${voteSummary.decisiveLossCount}-${data.model.drawCount}`;
+  const decisiveVotes = voteSummary.decisiveVotes;
 
   const promptBreakdown = data.prompts.slice(0, 24);
   const maxPromptVotes = Math.max(1, ...promptBreakdown.map((prompt) => prompt.votes));

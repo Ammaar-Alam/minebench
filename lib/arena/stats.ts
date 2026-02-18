@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 
 const MIN_PROMPTS_FOR_SPREAD = 3;
 const MAX_SPREAD = 0.5;
@@ -351,8 +352,7 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
   const recentForm = average(recentScores);
   const priorForm = average(priorScores);
 
-  const decisiveVotes = model.winCount + model.lossCount + model.drawCount;
-  const totalVotes = decisiveVotes + model.bothBadCount;
+  const { decisiveVotes, totalVotes } = summarizeArenaVotes(model);
 
   return {
     model: {
