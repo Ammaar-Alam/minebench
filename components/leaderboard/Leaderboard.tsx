@@ -133,7 +133,7 @@ export function Leaderboard() {
         ) : null}
         <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto overscroll-contain [-webkit-overflow-scrolling:touch]">
+        <div className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
           <div className="relative z-[2] space-y-2.5 p-2.5 sm:hidden">
             {data?.models.map((m, index) => {
               const voteSummary = summarizeArenaVotes(m);
@@ -219,7 +219,7 @@ export function Leaderboard() {
 
           <table
             aria-label="Model rankings"
-            className="relative z-[2] hidden min-w-[44rem] table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table md:min-w-[56rem] lg:min-w-full"
+            className="relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table"
           >
             <colgroup>
               <col className="w-[32%] md:w-[23%]" />

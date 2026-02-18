@@ -389,7 +389,6 @@
   }
 
   .mb-col-help {
-    position: relative;
     cursor: help;
   }
 
@@ -926,6 +925,18 @@
 
   .mb-x-scroll::-webkit-scrollbar {
     display: none;
+  }
+
+  @media (min-width: 640px) {
+    .mb-leaderboard-scroll {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    .mb-leaderboard-scroll::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
   }
 
   .mb-carousel-track {
