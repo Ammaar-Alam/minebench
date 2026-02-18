@@ -54,6 +54,19 @@ function looksLikeContextBetaUnavailableError(body: string): boolean {
   );
 }
 
+function looksLikeStructuredFormatUnsupportedError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    b.includes("output_config") ||
+    b.includes("output format") ||
+    b.includes("output_format") ||
+    b.includes("json_schema") ||
+    b.includes("structured output") ||
+    b.includes("unknown field") ||
+    b.includes("invalid field")
+  );
+}
+
 function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name];
   if (!raw) return defaultValue;
@@ -145,14 +158,15 @@ export async function anthropicGenerateText(params: {
   const streamResponses =
     !useStructuredOutputs &&
     (Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true));
+  const allowForcedToolStructuredFallback = parseBooleanEnv(
+    "ANTHROPIC_ALLOW_FORCED_TOOL_STRUCTURED_FALLBACK",
+    false,
+  );
   const thinkingBudget = usesAdaptiveThinking
     ? null
     : isLegacyManualThinkingModel(params.modelId)
       ? Math.max(1024, maxTokens - 1)
       : parseThinkingBudget();
-  const outputConfig = usesAdaptiveThinking
-    ? { effort: parseAdaptiveEffort(params.modelId) }
-    : undefined;
   const betaHeaders: (string | null)[] =
     supportsContext1mBeta(params.modelId) &&
     parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
@@ -170,17 +184,37 @@ export async function anthropicGenerateText(params: {
 
   let res: Response | null = null;
   let lastBody = "";
+  let structuredMode: "native_format" | "forced_tool" = "native_format";
   try {
     requestLoop: for (const tok of tokenFallbacks(maxTokens)) {
       for (const betaHeader of betaHeaders) {
+        const useForcedToolStructuredOutput =
+          useStructuredOutputs && structuredMode === "forced_tool";
         const budget =
           typeof thinkingBudget === "number" ? Math.min(thinkingBudget, tok - 1) : null;
-        const thinking = usesAdaptiveThinking
-          ? { type: "adaptive" as const }
-          : typeof budget === "number" && budget >= 1024
-            ? { type: "enabled" as const, budget_tokens: budget }
-            : undefined;
+        const thinking = useForcedToolStructuredOutput
+          ? undefined
+          : usesAdaptiveThinking
+            ? { type: "adaptive" as const }
+            : typeof budget === "number" && budget >= 1024
+              ? { type: "enabled" as const, budget_tokens: budget }
+              : undefined;
         const temperature = thinking ? 1 : (params.temperature ?? 0.2);
+        const outputConfig = useStructuredOutputs
+          ? useForcedToolStructuredOutput
+            ? undefined
+            : {
+                ...(usesAdaptiveThinking
+                  ? { effort: parseAdaptiveEffort(params.modelId) }
+                  : {}),
+                format: {
+                  type: "json_schema",
+                  schema: params.jsonSchema as Record<string, unknown>,
+                },
+              }
+          : usesAdaptiveThinking
+            ? { effort: parseAdaptiveEffort(params.modelId) }
+            : undefined;
 
         res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
@@ -201,7 +235,7 @@ export async function anthropicGenerateText(params: {
             stream: streamResponses,
             ...(thinking ? { thinking } : {}),
             ...(outputConfig ? { output_config: outputConfig } : {}),
-            ...(tools
+            ...(useForcedToolStructuredOutput && tools
               ? {
                   tools,
                   tool_choice: {
@@ -218,6 +252,16 @@ export async function anthropicGenerateText(params: {
         lastBody = await res.text().catch(() => "");
         if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue requestLoop;
         if (betaHeader && looksLikeContextBetaUnavailableError(lastBody)) continue;
+        if (
+          useStructuredOutputs &&
+          allowForcedToolStructuredFallback &&
+          structuredMode === "native_format" &&
+          res.status === 400 &&
+          looksLikeStructuredFormatUnsupportedError(lastBody)
+        ) {
+          structuredMode = "forced_tool";
+          continue;
+        }
         break requestLoop;
       }
 
@@ -265,7 +309,7 @@ export async function anthropicGenerateText(params: {
   }
 
   const data = (await res.json()) as AnthropicMessageResponse;
-  if (useStructuredOutputs) {
+  if (useStructuredOutputs && structuredMode === "forced_tool") {
     const toolUse = data.content?.find(
       (block) => block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME,
     );
