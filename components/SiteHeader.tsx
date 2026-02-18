@@ -9,6 +9,7 @@ import faviconIcon from "@/app/icon.png";
 type Theme = "light" | "dark";
 
 const THEME_KEY = "mb-theme";
+const BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/ammaaralam";
 
 function getInitialTheme(): Theme {
   if (typeof document !== "undefined") {
@@ -118,6 +119,35 @@ function NavLink({ href, label }: { href: string; label: string }) {
   );
 }
 
+function SupportLink() {
+  return (
+    <a
+      href={BUY_ME_A_COFFEE_URL}
+      target="_blank"
+      rel="noreferrer"
+      title="Support MineBench on Buy Me a Coffee"
+      aria-label="Support MineBench on Buy Me a Coffee"
+      className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-full border border-success/45 bg-gradient-to-b from-success/20 via-success/12 to-accent/18 px-4 text-[13px] font-semibold text-success transition hover:border-success/60 hover:from-success/30 hover:via-success/18 hover:to-accent/24 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success/40 sm:h-10 sm:px-4 sm:text-sm"
+    >
+      <svg
+        aria-hidden="true"
+        className="h-3.5 w-3.5"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M4 7h12v9a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V7Z" />
+        <path d="M16 9h2a3 3 0 0 1 0 6h-2" />
+        <path d="M8 3v2M12 3v2" />
+      </svg>
+      <span>Support</span>
+    </a>
+  );
+}
+
 function SocialIconLink({
   href,
   label,
@@ -220,6 +250,7 @@ export function SiteHeader() {
             <NavLink href="/sandbox" label="Sandbox" />
             <NavLink href="/local" label="Local" />
             <NavLink href="/leaderboard" label="Leaderboard" />
+            <SupportLink />
           </div>
           <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
           <ThemeToggle />

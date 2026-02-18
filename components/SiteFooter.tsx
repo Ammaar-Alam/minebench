@@ -1,4 +1,6 @@
 export function SiteFooter() {
+  const buyMeACoffeeUrl = "https://buymeacoffee.com/ammaaralam";
+
   return (
     <footer
       id="mb-footer"
@@ -32,6 +34,19 @@ export function SiteFooter() {
               rel="noreferrer"
             >
               MC-Bench
+            </a>
+          </span>
+          <span className="text-border">·</span>
+          <span>
+            Support{" "}
+            <a
+              className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"
+              href={buyMeACoffeeUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Help fund MineBench benchmark runs"
+            >
+              Buy Me a Coffee
             </a>
           </span>
         </span>
