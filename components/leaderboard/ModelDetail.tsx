@@ -8,6 +8,8 @@ import type {
   ModelPromptBreakdown,
 } from "@/lib/arena/stats";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+import { VoxelViewer } from "@/components/voxel/VoxelViewer";
+import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -169,32 +171,32 @@ function MetricTile({
 
 function ConsistencyGauge({ value, label }: { value: number | null; label: string }) {
   const safe = Math.max(0, Math.min(100, value ?? 0));
-  const radius = 58;
+  const radius = 62;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - safe / 100);
 
   return (
-    <div className="relative h-[138px] w-[138px] shrink-0">
-      <svg viewBox="0 0 148 148" className="h-full w-full">
+    <div className="relative h-[148px] w-[148px] shrink-0">
+      <svg viewBox="0 0 160 160" className="h-full w-full">
         <circle
-          cx="74"
-          cy="74"
+          cx="80"
+          cy="80"
           r={radius}
           fill="none"
           stroke="hsl(var(--border) / 0.45)"
-          strokeWidth="10"
+          strokeWidth="9"
         />
         <circle
-          cx="74"
-          cy="74"
+          cx="80"
+          cy="80"
           r={radius}
           fill="none"
           stroke="url(#mb-consistency-ring)"
-          strokeWidth="10"
+          strokeWidth="9"
           strokeLinecap="round"
           strokeDasharray={`${circumference.toFixed(2)} ${circumference.toFixed(2)}`}
           strokeDashoffset={offset.toFixed(2)}
-          transform="rotate(-90 74 74)"
+          transform="rotate(-90 80 80)"
         />
         <defs>
           <linearGradient id="mb-consistency-ring" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -203,11 +205,11 @@ function ConsistencyGauge({ value, label }: { value: number | null; label: strin
           </linearGradient>
         </defs>
       </svg>
-      <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-        <div className={`text-[1.9rem] font-semibold ${consistencyTone(value)}`}>
+      <div className="pointer-events-none absolute inset-[14px] flex flex-col items-center justify-center gap-1">
+        <div className={`text-[1.65rem] font-semibold leading-none ${consistencyTone(value)}`}>
           {value != null ? `${value}` : "-"}
         </div>
-        <div className="text-[8px] uppercase tracking-[0.16em] text-muted">{label}</div>
+        <div className="mt-0.5 text-[7px] uppercase tracking-[0.19em] text-muted">{label}</div>
       </div>
     </div>
   );
@@ -248,6 +250,82 @@ function HeadToHeadCard({ opponent }: { opponent: ModelOpponentBreakdown }) {
   );
 }
 
+function PromptBuildPreview({ prompt }: { prompt: ModelPromptBreakdown }) {
+  const parsedBuild = useMemo(() => {
+    const buildData = prompt.build;
+    if (!buildData) return null;
+    const parsed = parseVoxelBuildSpec(buildData.voxelBuild);
+    return parsed.ok ? parsed.value : null;
+  }, [prompt.build]);
+
+  if (!parsedBuild || !prompt.build) {
+    return (
+      <div className="relative flex h-44 w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65">
+        <div className="text-xs text-muted">Build unavailable</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative h-44 w-full overflow-hidden rounded-xl bg-bg/32 ring-1 ring-border/65">
+      <VoxelViewer
+        voxelBuild={parsedBuild}
+        palette={prompt.build.palette}
+        autoRotate
+        showControls={false}
+      />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
+        <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
+          {prompt.build.blockCount.toLocaleString()} blocks
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function PromptEdgeRow({
+  prompt,
+  rank,
+  tone,
+  delayMs,
+}: {
+  prompt: ModelPromptBreakdown;
+  rank: number;
+  tone: "strong" | "weak";
+  delayMs?: number;
+}) {
+  const scorePct = Math.max(0, Math.min(100, prompt.averageScore * 100));
+  const toneTextClass = tone === "strong" ? "text-success" : "text-danger";
+  const toneBarClass =
+    tone === "strong" ? "from-success/85 via-accent/72 to-accent2/55" : "from-danger/88 via-warn/72 to-accent2/55";
+
+  return (
+    <article
+      className="mb-card-enter py-3 first:pt-1.5 last:pb-1.5"
+      style={delayMs != null ? { animationDelay: `${delayMs}ms` } : undefined}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="inline-flex items-center rounded-full bg-bg/58 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/65">
+            #{rank}
+          </div>
+          <div className="mt-2 mb-clamp-prompt-tight text-sm text-fg/92">{prompt.promptText}</div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div className={`font-mono text-base ${toneTextClass}`}>{formatPercent(prompt.averageScore)}</div>
+          <div className="mt-0.5 text-xs text-muted">{prompt.votes} votes</div>
+        </div>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border/35">
+        <div
+          className={`h-full rounded-full bg-gradient-to-r ${toneBarClass}`}
+          style={{ width: `${scorePct.toFixed(1)}%` }}
+        />
+      </div>
+    </article>
+  );
+}
+
 function SectionHeader({
   eyebrow,
   title,
@@ -272,6 +350,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const [hoveredCurveIndex, setHoveredCurveIndex] = useState<number | null>(null);
   const [showAllOpponents, setShowAllOpponents] = useState(false);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
+  const [expandedPromptId, setExpandedPromptId] = useState<string | null>(null);
 
   const strongest = topStrongest(data.prompts);
   const weakest = topWeakest(data.prompts);
@@ -302,7 +381,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const recordText = `${data.model.winCount}-${voteSummary.decisiveLossCount}-${data.model.drawCount}`;
   const decisiveVotes = voteSummary.decisiveVotes;
 
-  const promptBreakdown = data.prompts.slice(0, 24);
+  const promptBreakdown = data.prompts;
+  const promptBuildCount = promptBreakdown.filter((prompt) => prompt.build != null).length;
   const maxPromptVotes = Math.max(1, ...promptBreakdown.map((prompt) => prompt.votes));
   const visibleOpponents = showAllOpponents
     ? opponents
@@ -310,6 +390,10 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const visiblePromptBreakdown = showAllPrompts
     ? promptBreakdown
     : promptBreakdown.slice(0, INITIAL_VISIBLE_PROMPTS);
+  const resolvedExpandedPromptId =
+    expandedPromptId && visiblePromptBreakdown.some((prompt) => prompt.promptId === expandedPromptId)
+      ? expandedPromptId
+      : visiblePromptBreakdown[0]?.promptId ?? null;
   const hasHiddenOpponents = opponents.length > INITIAL_VISIBLE_OPPONENTS;
   const hasHiddenPrompts = promptBreakdown.length > INITIAL_VISIBLE_PROMPTS;
   const hoveredPoint = hoveredCurveIndex != null ? curve.points[hoveredCurveIndex] : null;
@@ -389,8 +473,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             </div>
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.18fr)_minmax(20rem,0.92fr)] xl:gap-3">
-            <div className="space-y-2.5">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.9fr)] xl:items-stretch xl:gap-3">
+            <div className="space-y-3">
               <h1 className="max-w-[20ch] font-display text-[2.3rem] font-semibold leading-[0.94] tracking-[-0.02em] text-fg sm:text-[3.7rem]">
                 {data.model.displayName}
               </h1>
@@ -415,71 +499,73 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   </span>
                 </div>
               </div>
+
+              <div className="rounded-[1.2rem] bg-gradient-to-br from-accent/[0.09] via-transparent to-accent2/[0.12] p-px">
+                <div className="rounded-[1.12rem] bg-bg/45 p-1.5 ring-1 ring-border/70">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    <MetricTile label="Rating" value={`${Math.round(data.model.eloRating)}`} />
+                    <MetricTile label="Win rate" value={formatPercent(data.summary.winRate)} />
+                    <MetricTile label="Spread" value={formatPercent(data.summary.scoreSpread)} />
+                    <MetricTile label="Votes" value={data.summary.totalVotes.toLocaleString()} />
+                    <MetricTile
+                      label="Spread votes"
+                      value={data.summary.sampledVotes.toLocaleString()}
+                    />
+                    <MetricTile
+                      label="Stability"
+                      value={consistencyLabel(data.summary.consistency)}
+                      tone={consistencyTone(data.summary.consistency)}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <div className="mb-profile-snapshot rounded-2xl bg-gradient-to-b from-card/82 to-card/50 p-3 ring-1 ring-white/12 shadow-[0_36px_52px_-52px_hsl(220_40%_2%_/_1)] backdrop-blur-sm sm:p-3.5">
+            <div className="mb-profile-snapshot self-stretch h-full rounded-2xl bg-gradient-to-b from-card/82 to-card/50 p-3 ring-1 ring-white/12 shadow-[0_36px_52px_-52px_hsl(220_40%_2%_/_1)] backdrop-blur-sm sm:p-3.5 flex flex-col justify-between gap-4">
               <div className="text-[10px] uppercase tracking-[0.16em] text-muted">
                 Signal snapshot
               </div>
-              <div className="mt-2.5 grid items-stretch gap-3 sm:grid-cols-[auto_1fr] sm:gap-3">
-                <ConsistencyGauge value={data.summary.consistency} label="Consistency" />
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="min-h-[74px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                    <div className="text-[11px] text-muted">Best prompt</div>
-                    <div className="font-mono text-base text-success">
-                      {formatPercent(bestPromptScore)}
+              <div className="mt-2.5 flex-1">
+                <div className="grid auto-rows-min items-start gap-3 sm:grid-cols-[auto_1fr] sm:gap-3">
+                  <ConsistencyGauge value={data.summary.consistency} label="Consistency" />
+                  <div className="grid auto-rows-min grid-cols-2 gap-2">
+                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
+                      <div className="text-[11px] text-muted">Best prompt</div>
+                      <div className="font-mono text-base text-success">
+                        {formatPercent(bestPromptScore)}
+                      </div>
                     </div>
-                  </div>
-                  <div className="min-h-[74px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                    <div className="text-[11px] text-muted">Weakest prompt</div>
-                    <div className="font-mono text-base text-danger">
-                      {formatPercent(weakPromptScore)}
+                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
+                      <div className="text-[11px] text-muted">Weakest prompt</div>
+                      <div className="font-mono text-base text-danger">
+                        {formatPercent(weakPromptScore)}
+                      </div>
                     </div>
-                  </div>
-                  <div className="min-h-[74px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                    <div className="text-[11px] text-muted">Recent form</div>
-                    <div className="font-mono text-base text-fg">
-                      {formatPercent(data.summary.recentForm)}
+                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
+                      <div className="text-[11px] text-muted">Recent form</div>
+                      <div className="font-mono text-base text-fg">
+                        {formatPercent(data.summary.recentForm)}
+                      </div>
                     </div>
-                  </div>
-                  <div className="min-h-[74px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                    <div className="text-[11px] text-muted">Momentum</div>
-                    <div
-                      className={`font-mono text-base ${
-                        data.summary.recentDelta == null
-                          ? "text-muted"
-                          : data.summary.recentDelta >= 0
-                            ? "text-success"
-                            : "text-danger"
-                      }`}
-                    >
-                      {formatSignedPercent(data.summary.recentDelta)}
+                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
+                      <div className="text-[11px] text-muted">Momentum</div>
+                      <div
+                        className={`font-mono text-base ${
+                          data.summary.recentDelta == null
+                            ? "text-muted"
+                            : data.summary.recentDelta >= 0
+                              ? "text-success"
+                              : "text-danger"
+                        }`}
+                      >
+                        {formatSignedPercent(data.summary.recentDelta)}
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-              <div className="mt-2.5 text-xs text-muted">
+              <div className="text-xs text-muted">
                 {consistencyLabel(data.summary.consistency)}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-[1.3rem] bg-gradient-to-br from-accent/[0.08] via-transparent to-accent2/[0.10] p-px">
-            <div className="rounded-[1.2rem] bg-bg/42 p-1.5 ring-1 ring-border/70">
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-                <MetricTile label="Rating" value={`${Math.round(data.model.eloRating)}`} />
-                <MetricTile label="Win rate" value={formatPercent(data.summary.winRate)} />
-                <MetricTile label="Spread" value={formatPercent(data.summary.scoreSpread)} />
-                <MetricTile label="Votes" value={data.summary.totalVotes.toLocaleString()} />
-                <MetricTile
-                  label="Spread votes"
-                  value={data.summary.sampledVotes.toLocaleString()}
-                />
-                <MetricTile
-                  label="Stability"
-                  value={consistencyLabel(data.summary.consistency)}
-                  tone={consistencyTone(data.summary.consistency)}
-                />
               </div>
             </div>
           </div>
@@ -692,49 +778,45 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
         >
           <div className="mb-panel-inner space-y-3">
             <SectionHeader eyebrow="Signal edges" title="Prompt highs and lows" />
-            <div className="text-xs text-muted">Strengths and weak spots.</div>
-
-            <div className="grid gap-3.5 lg:grid-cols-2">
-              <div className="space-y-2">
-                <div className="text-xs uppercase tracking-wide text-muted">Strongest</div>
-                {strongest.slice(0, 3).map((prompt, index) => (
-                  <div
-                    key={prompt.promptId}
-                    className="mb-card-enter rounded-2xl bg-gradient-to-b from-bg/56 to-bg/40 p-3.5 ring-1 ring-border/70"
-                    style={{ animationDelay: `${140 + index * 35}ms` }}
-                  >
-                    <div className="mb-clamp-prompt-tight text-sm text-fg/92">
-                      {prompt.promptText}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-xs">
-                      <span className="font-mono text-success">
-                        {formatPercent(prompt.averageScore)}
-                      </span>
-                      <span className="text-muted">{prompt.votes} votes</span>
-                    </div>
-                  </div>
-                ))}
+            <div className="grid gap-5 lg:grid-cols-2">
+              <div>
+                <div className="flex items-center justify-between border-b border-border/40 pb-2">
+                  <span className="text-xs uppercase tracking-[0.12em] text-muted">Strongest</span>
+                  <span className="font-mono text-xs text-success">
+                    {formatPercent(bestPromptScore)}
+                  </span>
+                </div>
+                <div className="divide-y divide-border/30">
+                  {strongest.slice(0, 3).map((prompt, index) => (
+                    <PromptEdgeRow
+                      key={prompt.promptId}
+                      prompt={prompt}
+                      rank={index + 1}
+                      tone="strong"
+                      delayMs={140 + index * 35}
+                    />
+                  ))}
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="text-xs uppercase tracking-wide text-muted">Weakest</div>
-                {weakest.slice(0, 3).map((prompt, index) => (
-                  <div
-                    key={prompt.promptId}
-                    className="mb-card-enter rounded-2xl bg-gradient-to-b from-bg/56 to-bg/40 p-3.5 ring-1 ring-border/70"
-                    style={{ animationDelay: `${240 + index * 35}ms` }}
-                  >
-                    <div className="mb-clamp-prompt-tight text-sm text-fg/92">
-                      {prompt.promptText}
-                    </div>
-                    <div className="mt-2 flex items-center justify-between text-xs">
-                      <span className="font-mono text-danger">
-                        {formatPercent(prompt.averageScore)}
-                      </span>
-                      <span className="text-muted">{prompt.votes} votes</span>
-                    </div>
-                  </div>
-                ))}
+              <div>
+                <div className="flex items-center justify-between border-b border-border/40 pb-2">
+                  <span className="text-xs uppercase tracking-[0.12em] text-muted">Weakest</span>
+                  <span className="font-mono text-xs text-danger">
+                    {formatPercent(weakPromptScore)}
+                  </span>
+                </div>
+                <div className="divide-y divide-border/30">
+                  {weakest.slice(0, 3).map((prompt, index) => (
+                    <PromptEdgeRow
+                      key={prompt.promptId}
+                      prompt={prompt}
+                      rank={index + 1}
+                      tone="weak"
+                      delayMs={240 + index * 35}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -794,7 +876,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           <SectionHeader
             eyebrow="Per prompt"
             title="Prompt breakdown"
-            meta="Top prompts by vote count"
+            meta="Ranked by vote count"
           />
 
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
@@ -807,7 +889,6 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   <div className="text-[10px] uppercase tracking-[0.15em] text-muted">
                     At a glance
                   </div>
-                  <div className="font-mono text-xs text-muted2">Signal distribution</div>
                 </div>
                 <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
                   <div className="mb-breakdown-summary-tile">
@@ -834,69 +915,116 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   </div>
                   <div className="mb-breakdown-summary-tile">
                     <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
-                      Samples
+                      Builds
                     </div>
-                    <div className="font-mono text-sm text-fg">{promptBreakdown.length}</div>
+                    <div className="font-mono text-sm text-fg">{promptBuildCount}</div>
                   </div>
                 </div>
               </article>
             ) : null}
             {visiblePromptBreakdown.map((prompt, index) => {
               const voteDensity = prompt.votes / maxPromptVotes;
+              const isExpanded = resolvedExpandedPromptId === prompt.promptId;
               return (
                 <article
                   key={prompt.promptId}
                   className="mb-card-enter h-full rounded-2xl bg-gradient-to-b from-bg/56 to-bg/40 p-3.5 ring-1 ring-border/70 sm:p-4"
                   style={{ animationDelay: `${240 + index * 18}ms` }}
                 >
-                  <div className="mb-2 inline-flex items-center rounded-full bg-bg/60 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/65">
-                    #{index + 1}
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-start">
-                    <p className="mb-clamp-prompt-tight text-sm text-fg/92">{prompt.promptText}</p>
-                    <div className="text-left sm:text-right">
-                      <div className="font-mono text-sm text-fg">
-                        {formatPercent(prompt.averageScore)}
+                  <button
+                    type="button"
+                    className="w-full text-left"
+                    aria-expanded={isExpanded}
+                    onClick={() =>
+                      setExpandedPromptId((current) =>
+                        current === prompt.promptId ? null : prompt.promptId,
+                      )
+                    }
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="inline-flex items-center rounded-full bg-bg/60 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/65">
+                          #{index + 1}
+                        </div>
+                        <p className="mt-2 mb-clamp-prompt-tight text-sm text-fg/92">{prompt.promptText}</p>
                       </div>
-                      <div className="text-xs text-muted">{prompt.votes} votes</div>
-                    </div>
-                  </div>
-
-                  <div className="mt-2.5 space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
-                        <div
-                          className={`h-full rounded-full bg-gradient-to-r ${scoreBarClass(prompt.averageScore)}`}
-                          style={{
-                            width: `${Math.max(0, Math.min(100, prompt.averageScore * 100)).toFixed(1)}%`,
-                          }}
-                        />
+                      <div className="flex items-center gap-3">
+                        <div className="text-right">
+                          <div className="font-mono text-sm text-fg">
+                            {formatPercent(prompt.averageScore)}
+                          </div>
+                          <div className="text-xs text-muted">{prompt.votes} votes</div>
+                        </div>
+                        <span
+                          className={`inline-flex h-6 w-6 items-center justify-center rounded-full bg-bg/52 text-muted transition-transform duration-200 ${
+                            isExpanded ? "rotate-180" : ""
+                          }`}
+                        >
+                          <svg
+                            viewBox="0 0 16 16"
+                            className="h-3.5 w-3.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M3.5 6.5L8 11L12.5 6.5" />
+                          </svg>
+                        </span>
                       </div>
-                      <span className="w-10 text-right text-[11px] text-muted">score</span>
                     </div>
+                  </button>
 
-                    <div className="flex items-center gap-2">
-                      <div className="h-1 flex-1 overflow-hidden rounded-full bg-border/30">
-                        <div
-                          className="h-full rounded-full bg-fg/35"
-                          style={{ width: `${(clamp01(voteDensity) * 100).toFixed(1)}%` }}
-                        />
+                  {isExpanded ? (
+                    <>
+                      <div className="mt-2.5">
+                        <PromptBuildPreview prompt={prompt} />
                       </div>
-                      <span className="w-10 text-right text-[11px] text-muted">volume</span>
-                    </div>
-                  </div>
 
-                  <div className="mt-2.5 inline-flex items-center gap-1 font-mono text-[11px]">
-                    <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-success">
-                      W {prompt.wins}
-                    </span>
-                    <span className="rounded-full bg-danger/12 px-1.5 py-0.5 text-danger">
-                      L {prompt.losses}
-                    </span>
-                    <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
-                      D {prompt.draws}
-                    </span>
-                  </div>
+                      <div className="mt-2.5 space-y-1.5">
+                        <div className="flex items-center gap-2">
+                          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
+                            <div
+                              className={`h-full rounded-full bg-gradient-to-r ${scoreBarClass(prompt.averageScore)}`}
+                              style={{
+                                width: `${Math.max(0, Math.min(100, prompt.averageScore * 100)).toFixed(1)}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="w-10 text-right text-[11px] text-muted">score</span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <div className="h-1 flex-1 overflow-hidden rounded-full bg-border/30">
+                            <div
+                              className="h-full rounded-full bg-fg/35"
+                              style={{ width: `${(clamp01(voteDensity) * 100).toFixed(1)}%` }}
+                            />
+                          </div>
+                          <span className="w-10 text-right text-[11px] text-muted">volume</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-2.5 inline-flex items-center gap-1 font-mono text-[11px]">
+                        <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-success">
+                          W {prompt.wins}
+                        </span>
+                        <span className="rounded-full bg-danger/12 px-1.5 py-0.5 text-danger">
+                          L {prompt.losses}
+                        </span>
+                        <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
+                          D {prompt.draws}
+                        </span>
+                        {prompt.bothBad > 0 ? (
+                          <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-danger/85">
+                            B {prompt.bothBad}
+                          </span>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : null}
                 </article>
               );
             })}

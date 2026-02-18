@@ -13,6 +13,7 @@ type ViewerProps = {
   palette: "simple" | "advanced";
   autoRotate?: boolean;
   animateIn?: boolean;
+  showControls?: boolean;
 };
 
 export type VoxelViewerHandle = {
@@ -151,7 +152,7 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
 }
 
 export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function VoxelViewer(
-  { voxelBuild, palette, autoRotate, animateIn },
+  { voxelBuild, palette, autoRotate, animateIn, showControls = true },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -554,22 +555,24 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     >
       <div ref={mountRef} className="h-full w-full" />
 
-      <div className="absolute right-2.5 top-2.5 flex items-center gap-1.5 sm:right-3 sm:top-3 sm:gap-2">
-        <button
-          aria-pressed={dragMode === "pan"}
-          className={`mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs ${dragMode === "pan" ? "mb-btn-primary" : "mb-btn-ghost"}`}
-          onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
-        >
-          Pan <span className="hidden sm:inline"><span className="mb-kbd">Ctrl</span></span>
-        </button>
-        <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={fitView}>
-          Fit <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
-        </button>
-        <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={() => void toggleFullscreen()}>
-          {isFullscreen ? "Exit" : "Full"}{" "}
-          <span className="hidden sm:inline"><span className="mb-kbd">F</span></span>
-        </button>
-      </div>
+      {showControls ? (
+        <div className="absolute right-2.5 top-2.5 flex items-center gap-1.5 sm:right-3 sm:top-3 sm:gap-2">
+          <button
+            aria-pressed={dragMode === "pan"}
+            className={`mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs ${dragMode === "pan" ? "mb-btn-primary" : "mb-btn-ghost"}`}
+            onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
+          >
+            Pan <span className="hidden sm:inline"><span className="mb-kbd">Ctrl</span></span>
+          </button>
+          <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={fitView}>
+            Fit <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
+          </button>
+          <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={() => void toggleFullscreen()}>
+            {isFullscreen ? "Exit" : "Full"}{" "}
+            <span className="hidden sm:inline"><span className="mb-kbd">F</span></span>
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 });

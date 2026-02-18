@@ -4,6 +4,9 @@ import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 const MIN_PROMPTS_FOR_SPREAD = 3;
 const MAX_SPREAD = 0.5;
 const RECENT_FORM_WINDOW = 30;
+const ARENA_BUILD_GRID_SIZE = 256;
+const ARENA_BUILD_PALETTE = "simple";
+const ARENA_BUILD_MODE = "precise";
 
 type NormalizedChoice = "A" | "B" | "TIE" | "BOTH_BAD";
 
@@ -46,6 +49,14 @@ export type ModelPromptBreakdown = {
   losses: number;
   draws: number;
   bothBad: number;
+  build: {
+    buildId: string;
+    voxelBuild: unknown;
+    gridSize: number;
+    palette: "simple" | "advanced";
+    mode: string;
+    blockCount: number;
+  } | null;
 };
 
 export type ModelOpponentBreakdown = {
@@ -256,36 +267,58 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
 
   if (!model) return null;
 
-  const votes = await prisma.vote.findMany({
-    where: {
-      matchup: {
-        is: {
-          OR: [{ modelAId: model.id }, { modelBId: model.id }],
-        },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-    select: {
-      choice: true,
-      createdAt: true,
-      matchup: {
-        select: {
-          promptId: true,
-          prompt: {
-            select: { text: true },
-          },
-          modelAId: true,
-          modelBId: true,
-          modelA: {
-            select: { key: true, displayName: true },
-          },
-          modelB: {
-            select: { key: true, displayName: true },
+  const [votes, builds] = await Promise.all([
+    prisma.vote.findMany({
+      where: {
+        matchup: {
+          is: {
+            OR: [{ modelAId: model.id }, { modelBId: model.id }],
           },
         },
       },
-    },
-  });
+      orderBy: { createdAt: "desc" },
+      select: {
+        choice: true,
+        createdAt: true,
+        matchup: {
+          select: {
+            promptId: true,
+            prompt: {
+              select: { text: true },
+            },
+            modelAId: true,
+            modelBId: true,
+            modelA: {
+              select: { key: true, displayName: true },
+            },
+            modelB: {
+              select: { key: true, displayName: true },
+            },
+          },
+        },
+      },
+    }),
+    prisma.build.findMany({
+      where: {
+        modelId: model.id,
+        gridSize: ARENA_BUILD_GRID_SIZE,
+        palette: ARENA_BUILD_PALETTE,
+        mode: ARENA_BUILD_MODE,
+      },
+      select: {
+        id: true,
+        promptId: true,
+        gridSize: true,
+        palette: true,
+        mode: true,
+        blockCount: true,
+        voxelData: true,
+        prompt: {
+          select: { text: true },
+        },
+      },
+    }),
+  ]);
 
   const promptMap = new Map<string, PromptAccumulator>();
   const opponentMap = new Map<string, OpponentAccumulator>();
@@ -321,17 +354,50 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
 
   const dispersion = summarizeDispersion(promptMap.values());
 
-  const prompts: ModelPromptBreakdown[] = Array.from(promptMap.entries())
-    .map(([promptId, acc]) => ({
-      promptId,
-      promptText: acc.promptText ?? "Untitled prompt",
-      votes: acc.voteCount,
-      averageScore: acc.voteCount > 0 ? acc.scoreSum / acc.voteCount : 0,
-      wins: acc.winCount,
-      losses: acc.lossCount,
-      draws: acc.drawCount,
-      bothBad: acc.bothBadCount,
-    }))
+  const buildByPromptId = new Map<
+    string,
+    {
+      promptText: string;
+      build: ModelPromptBreakdown["build"];
+    }
+  >();
+
+  for (const build of builds) {
+    buildByPromptId.set(build.promptId, {
+      promptText: build.prompt.text,
+      build: {
+        buildId: build.id,
+        voxelBuild: build.voxelData,
+        gridSize: build.gridSize,
+        palette: build.palette === "advanced" ? "advanced" : "simple",
+        mode: build.mode,
+        blockCount: build.blockCount,
+      },
+    });
+  }
+
+  const allPromptIds = new Set<string>([
+    ...promptMap.keys(),
+    ...buildByPromptId.keys(),
+  ]);
+
+  const prompts: ModelPromptBreakdown[] = Array.from(allPromptIds)
+    .map((promptId) => {
+      const acc = promptMap.get(promptId);
+      const buildEntry = buildByPromptId.get(promptId);
+      const votesForPrompt = acc?.voteCount ?? 0;
+      return {
+        promptId,
+        promptText: acc?.promptText ?? buildEntry?.promptText ?? "Untitled prompt",
+        votes: votesForPrompt,
+        averageScore: votesForPrompt > 0 && acc ? acc.scoreSum / votesForPrompt : 0,
+        wins: acc?.winCount ?? 0,
+        losses: acc?.lossCount ?? 0,
+        draws: acc?.drawCount ?? 0,
+        bothBad: acc?.bothBadCount ?? 0,
+        build: buildEntry?.build ?? null,
+      };
+    })
     .sort((a, b) => b.votes - a.votes || b.averageScore - a.averageScore);
 
   const opponents: ModelOpponentBreakdown[] = Array.from(opponentMap.values())
