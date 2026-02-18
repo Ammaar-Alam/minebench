@@ -1,6 +1,10 @@
-# MineBench
+<p align="center">
+  <img src="public/readme/minebench-banner.png" alt="MineBench banner" width="760" />
+</p>
 
-**A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
+<p align="center">
+  <a href="docs/"><strong>[ Read the Docs ]</strong></a>
+</p>
 
 <p align="center">
   <a href="https://minebench.ai">
@@ -13,6 +17,12 @@
     <img alt="Support" src="https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=000000" />
   </a>
 </p>
+
+---
+
+# MineBench
+
+**A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
 
 Models are given a natural-language prompt and must produce raw 3D coordinates as JSON. They are provided no images or 3D tools, only a custom voxelBuilder function which allows them to make a JSON past their token output limit and gives primitive tools such as lines, rectangles, and cubes. MineBench visualizes the output and ranks models via head-to-head ELO voting.
 
