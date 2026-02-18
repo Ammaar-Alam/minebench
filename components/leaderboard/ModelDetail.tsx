@@ -1045,7 +1045,16 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
               return (
                 <article
                   key={prompt.promptId}
-                  className="mb-card-enter h-full rounded-2xl bg-gradient-to-b from-bg/56 to-bg/40 p-3.5 ring-1 ring-border/70 sm:p-4"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open prompt details for ${prompt.promptText}`}
+                  onClick={() => setActivePrompt(prompt)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    setActivePrompt(prompt);
+                  }}
+                  className="relative mb-card-enter h-full cursor-pointer rounded-2xl bg-gradient-to-b from-bg/56 to-bg/40 p-3.5 ring-1 ring-border/70 transition-all duration-200 hover:-translate-y-0.5 hover:ring-accent/45 hover:from-bg/62 hover:to-bg/44 hover:shadow-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:p-4"
                   style={{ animationDelay: `${240 + index * 18}ms` }}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1111,14 +1120,6 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         </span>
                       ) : null}
                     </div>
-
-                    <button
-                      type="button"
-                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs"
-                      onClick={() => setActivePrompt(prompt)}
-                    >
-                      {prompt.build ? "View build" : "Details"}
-                    </button>
                   </div>
                 </article>
               );
@@ -1146,7 +1147,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
       </section>
 
       {activePrompt ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <button
             type="button"
             aria-label="Close"

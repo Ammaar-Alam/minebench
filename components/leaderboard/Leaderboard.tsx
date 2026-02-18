@@ -115,24 +115,111 @@ export function Leaderboard() {
           {error}
         </div>
       ) : null}
-      {navigatingModelKey ? (
-        <div className="mb-subpanel shrink-0 p-2.5 text-xs text-muted">
-          Loading model profile...
-        </div>
-      ) : null}
-
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-28 bg-gradient-to-b from-accent/10 via-accent2/6 to-transparent"
         />
-        <div className="pointer-events-none absolute inset-y-0 right-0 z-20 w-8 bg-gradient-to-l from-bg/70 to-transparent md:hidden" />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 h-8 bg-gradient-to-t from-bg/55 to-transparent sm:hidden" />
+        {navigatingModelKey ? (
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-2 sm:inset-x-auto sm:right-3 sm:bottom-3 sm:px-0">
+            <div
+              role="status"
+              aria-live="polite"
+              className="mb-subpanel rounded-full px-3 py-1.5 font-mono text-[11px] tracking-[0.08em] text-muted"
+            >
+              Loading model profile...
+            </div>
+          </div>
+        ) : null}
+        <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto overscroll-contain [-webkit-overflow-scrolling:touch]">
+          <div className="relative z-[2] space-y-2.5 p-2.5 sm:hidden">
+            {data?.models.map((m, index) => {
+              const voteSummary = summarizeArenaVotes(m);
+              const consistency = m.consistency ?? 0;
+              return (
+                <button
+                  key={m.key}
+                  type="button"
+                  className={`w-full rounded-2xl bg-gradient-to-b from-bg/62 to-bg/44 p-3 text-left ring-1 ring-border/70 transition ${
+                    navigatingModelKey === m.key
+                      ? "opacity-75"
+                      : "active:ring-accent/45 active:from-bg/72"
+                  }`}
+                  onMouseEnter={() => prefetchModel(m.key)}
+                  onFocus={() => prefetchModel(m.key)}
+                  onClick={() => navigateToModel(m.key)}
+                  aria-label={`Open ${m.displayName} profile`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/65 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
+                        {index + 1}
+                      </span>
+                      <div className="mt-1.5 truncate text-[1rem] font-semibold tracking-tight text-fg">
+                        {m.displayName}
+                      </div>
+                      <div className="truncate text-xs tracking-wide text-muted2">
+                        {m.provider}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
+                        Rating
+                      </div>
+                      <div className="font-mono text-[1.15rem] font-semibold text-fg">
+                        {Math.round(m.eloRating).toLocaleString()}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <span className="w-9 shrink-0 text-right font-mono text-xs text-fg/95">
+                      {m.consistency != null ? `${m.consistency}` : "—"}
+                    </span>
+                    <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-accent to-accent2 transition-[width] duration-500"
+                        style={{
+                          width: `${Math.max(0, Math.min(100, consistency)).toFixed(1)}%`,
+                        }}
+                      />
+                    </div>
+                    <span className="shrink-0 text-[11px] uppercase tracking-[0.12em] text-muted2">
+                      Consistency
+                    </span>
+                  </div>
+
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                    <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-success h-6 min-w-[2.75rem] px-2">
+                      W {m.winCount}
+                    </span>
+                    <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-danger h-6 min-w-[2.75rem] px-2">
+                      L {voteSummary.decisiveLossCount}
+                    </span>
+                    <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-muted h-6 min-w-[2.75rem] px-2">
+                      D {m.drawCount}
+                    </span>
+                  </div>
+
+                  <div className="mt-2.5 flex items-center justify-between text-xs text-muted2">
+                    <span>{voteSummary.totalVotes.toLocaleString()} votes</span>
+                    <span>{m.bothBadCount.toLocaleString()} both bad</span>
+                  </div>
+                </button>
+              );
+            })}
+            {!data ? (
+              <div className="mx-auto w-fit animate-pulse rounded-full bg-border/22 px-4 py-1.5 font-mono text-xs text-muted">
+                Loading…
+              </div>
+            ) : null}
+          </div>
+
           <table
             aria-label="Model rankings"
-            className="relative z-[2] w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums]"
+            className="relative z-[2] hidden min-w-[44rem] table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table md:min-w-[56rem] lg:min-w-full"
           >
             <colgroup>
               <col className="w-[32%] md:w-[23%]" />
@@ -145,53 +232,62 @@ export function Leaderboard() {
             </colgroup>
             <thead className="text-xs uppercase text-muted2">
               <tr>
-                <th className="mb-leaderboard-header mb-leaderboard-header-model text-left">
-                  <span
-                    className="mb-col-help-label"
-                    title="Model name and provider."
-                  >
+                <th scope="col" className="mb-leaderboard-header mb-leaderboard-header-model text-left">
+                  <span className="mb-col-help-label">
                     Model
                   </span>
                 </th>
                 <th
+                  scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
                   data-help="Overall rank score from matchups. Beating stronger models raises this faster."
-                  title="Overall rank score from matchups. Beating stronger models raises this faster."
+                  aria-label="Rating. Overall rank score from matchups. Beating stronger models raises this faster."
+                  tabIndex={0}
                 >
                   <span className="mb-col-help-label">Rating</span>
                 </th>
                 <th
+                  scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
                   data-help="How steady performance is across prompts. Higher means fewer swings."
-                  title="How steady performance is across prompts. Higher means fewer swings."
+                  aria-label="Consistency. How steady performance is across prompts. Higher means fewer swings."
+                  tabIndex={0}
                 >
                   <span className="mb-col-help-label">Consistency</span>
                 </th>
                 <th
+                  scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center md:table-cell"
                   data-help="Prompt-to-prompt variability. Lower spread means more stable output."
-                  title="Prompt-to-prompt variability. Lower spread means more stable output."
+                  aria-label="Spread. Prompt-to-prompt variability. Lower spread means more stable output."
+                  tabIndex={0}
                 >
                   <span className="mb-col-help-label">Spread</span>
                 </th>
                 <th
+                  scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center md:table-cell"
                   data-help="Average prompt score in decisive comparisons. Higher means stronger typical output."
-                  title="Average prompt score in decisive comparisons. Higher means stronger typical output."
+                  aria-label="Average score. Average prompt score in decisive comparisons. Higher means stronger typical output."
+                  tabIndex={0}
                 >
                   <span className="mb-col-help-label">Avg score</span>
                 </th>
                 <th
+                  scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
                   data-help="Win-loss-draw totals from decisive votes."
-                  title="Win-loss-draw totals from decisive votes."
+                  aria-label="Record. Win-loss-draw totals from decisive votes."
+                  tabIndex={0}
                 >
                   <span className="mb-col-help-label">Record</span>
                 </th>
                 <th
+                  scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
                   data-help="Total comparisons seen, including both-bad votes."
-                  title="Total comparisons seen, including both-bad votes."
+                  aria-label="Votes. Total comparisons seen, including both-bad votes."
+                  tabIndex={0}
                 >
                   <span className="mb-col-help-label">Votes</span>
                 </th>

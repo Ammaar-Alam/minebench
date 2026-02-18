@@ -352,11 +352,23 @@
   @media (max-width: 640px) {
     .mb-leaderboard-favorite {
       width: 100%;
-      padding-inline: 0.82rem;
+      gap: 0.34rem;
+      padding-inline: 0.75rem;
+      padding-block: 0.68rem;
+    }
+
+    .mb-leaderboard-live-chip {
+      padding-inline: 0.62rem;
+      padding-block: 0.42rem;
     }
 
     .mb-leaderboard-favorite-name {
-      font-size: 1.25rem;
+      font-size: 1.08rem;
+    }
+
+    .mb-leaderboard-favorite-chip {
+      padding-inline: 0.55rem;
+      font-size: 10px;
     }
   }
 
@@ -379,6 +391,11 @@
   .mb-col-help {
     position: relative;
     cursor: help;
+  }
+
+  .mb-col-help:focus-visible {
+    outline: 2px solid hsl(var(--accent) / 0.5);
+    outline-offset: -2px;
   }
 
   .mb-col-help-label {
@@ -417,9 +434,16 @@
   }
 
   .mb-col-help:hover::after,
-  .mb-col-help:focus-within::after {
+  .mb-col-help:focus-visible::after,
+  .mb-col-help:active::after {
     opacity: 1;
     transform: translateX(-50%) translateY(0);
+  }
+
+  @media (hover: none) {
+    .mb-col-help::after {
+      width: min(20rem, 78vw);
+    }
   }
 
   .mb-leaderboard-cell {
