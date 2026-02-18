@@ -2,9 +2,17 @@
 
 **A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
 
-[![Live](https://img.shields.io/badge/Live-minebench.ai-0ea5e9?style=for-the-badge&logo=vercel&logoColor=white)](https://minebench.ai)
-[![License: MIT](https://img.shields.io/badge/License-MIT-3b82f6?style=for-the-badge)](LICENSE)
-[![Support](https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/ammaaralam)
+<p align="center">
+  <a href="https://minebench.ai">
+    <img alt="Live" src="https://img.shields.io/badge/Live-minebench.ai-0ea5e9?style=flat&logo=vercel&logoColor=white" />
+  </a>
+  <a href="LICENSE">
+    <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-3b82f6?style=flat" />
+  </a>
+  <a href="https://buymeacoffee.com/ammaaralam">
+    <img alt="Support" src="https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=000000" />
+  </a>
+</p>
 
 Models are given a natural-language prompt and must produce raw 3D coordinates as JSON. They are provided no images or 3D tools, only a custom voxelBuilder function which allows them to make a JSON past their token output limit and gives primitive tools such as lines, rectangles, and cubes. MineBench visualizes the output and ranks models via head-to-head ELO voting.
 
