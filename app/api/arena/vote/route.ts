@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { updateEloPair, updateEloVsBaseline } from "@/lib/arena/elo";
 import type { VoteChoice } from "@/lib/arena/types";
+import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 
 export const runtime = "nodejs";
 
@@ -116,6 +117,7 @@ export async function POST(req: Request) {
         });
       }
     });
+    invalidateArenaStatsCache();
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Vote failed";
     return NextResponse.json({ error: msg }, { status: 409 });
@@ -123,4 +125,3 @@ export async function POST(req: Request) {
 
   return res;
 }
-

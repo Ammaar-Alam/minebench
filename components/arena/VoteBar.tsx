@@ -109,6 +109,7 @@ export function VoteBar({
             <X className="h-3.5 w-3.5 opacity-70" />
             <span className="sm:hidden">Bad</span>
             <span className="hidden sm:inline">Both bad</span>
+            <span className="hidden md:inline-flex"><span className="mb-kbd">↓</span></span>
           </button>
 
           <button

@@ -23,7 +23,8 @@
     "batch:generate": "npx tsx scripts/batch-generate.ts",
     "batch:status": "npx tsx scripts/batch-generate.ts",
     "prompt": "npx tsx scripts/prompt.ts",
-    "elo:reset": "npx tsx scripts/reset-elo.ts"
+    "elo:reset": "npx tsx scripts/reset-elo.ts",
+    "elo:recompute": "npx tsx scripts/recompute-elo.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

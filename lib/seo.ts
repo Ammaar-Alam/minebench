@@ -1,3 +1,5 @@
+import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+
 export const SITE_NAME = "MineBench";
 export const SITE_URL = "https://minebench.ai";
 export const SITE_HOST = "minebench.ai";
@@ -90,8 +92,7 @@ export function modelDetailJsonLd(params: {
   drawCount: number;
   bothBadCount: number;
 }) {
-  const decisiveVotes = params.winCount + params.lossCount + params.drawCount;
-  const totalVotes = decisiveVotes + params.bothBadCount;
+  const { decisiveVotes, totalVotes } = summarizeArenaVotes(params);
   const winRate = decisiveVotes > 0 ? params.winCount / decisiveVotes : null;
 
   return {

@@ -344,7 +344,7 @@ export function Arena() {
         return;
       }
 
-      if (e.code === "ArrowDown") {
+      if (e.code === "ArrowDown" || e.code === "KeyX") {
         if (isSubmitting || isTransitioning || isRevealingCurrent) return;
         e.preventDefault();
         void handleVoteRef.current("BOTH_BAD");

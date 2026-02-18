@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type {
   ModelDetailStats,
@@ -250,7 +250,13 @@ function HeadToHeadCard({ opponent }: { opponent: ModelOpponentBreakdown }) {
   );
 }
 
-function PromptBuildPreview({ prompt }: { prompt: ModelPromptBreakdown }) {
+const PromptBuildPreview = memo(function PromptBuildPreview({
+  prompt,
+  heightClass = "h-44",
+}: {
+  prompt: ModelPromptBreakdown;
+  heightClass?: string;
+}) {
   const parsedBuild = useMemo(() => {
     const buildData = prompt.build;
     if (!buildData) return null;
@@ -260,14 +266,14 @@ function PromptBuildPreview({ prompt }: { prompt: ModelPromptBreakdown }) {
 
   if (!parsedBuild || !prompt.build) {
     return (
-      <div className="relative flex h-44 w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65">
+      <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
         <div className="text-xs text-muted">Build unavailable</div>
       </div>
     );
   }
 
   return (
-    <div className="relative h-44 w-full overflow-hidden rounded-xl bg-bg/32 ring-1 ring-border/65">
+    <div className={`relative w-full overflow-hidden rounded-xl bg-bg/32 ring-1 ring-border/65 ${heightClass}`}>
       <VoxelViewer
         voxelBuild={parsedBuild}
         palette={prompt.build.palette}
@@ -281,7 +287,7 @@ function PromptBuildPreview({ prompt }: { prompt: ModelPromptBreakdown }) {
       </div>
     </div>
   );
-}
+});
 
 function PromptEdgeRow({
   prompt,
@@ -350,7 +356,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const [hoveredCurveIndex, setHoveredCurveIndex] = useState<number | null>(null);
   const [showAllOpponents, setShowAllOpponents] = useState(false);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
-  const [expandedPromptId, setExpandedPromptId] = useState<string | null>(null);
+  const [activePrompt, setActivePrompt] = useState<ModelPromptBreakdown | null>(null);
 
   const strongest = topStrongest(data.prompts);
   const weakest = topWeakest(data.prompts);
@@ -390,10 +396,6 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const visiblePromptBreakdown = showAllPrompts
     ? promptBreakdown
     : promptBreakdown.slice(0, INITIAL_VISIBLE_PROMPTS);
-  const resolvedExpandedPromptId =
-    expandedPromptId && visiblePromptBreakdown.some((prompt) => prompt.promptId === expandedPromptId)
-      ? expandedPromptId
-      : visiblePromptBreakdown[0]?.promptId ?? null;
   const hasHiddenOpponents = opponents.length > INITIAL_VISIBLE_OPPONENTS;
   const hasHiddenPrompts = promptBreakdown.length > INITIAL_VISIBLE_PROMPTS;
   const hoveredPoint = hoveredCurveIndex != null ? curve.points[hoveredCurveIndex] : null;
@@ -406,6 +408,17 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
         : hoveredCurveIndex >= curve.points.length - 2
           ? "mb-curve-tooltip-right"
           : "mb-curve-tooltip-center";
+
+  useEffect(() => {
+    if (!activePrompt) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setActivePrompt(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activePrompt]);
 
   return (
     <div className="mx-auto w-full max-w-[90rem] space-y-3.5 pb-10 sm:space-y-4 sm:pb-14">
@@ -924,107 +937,88 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             ) : null}
             {visiblePromptBreakdown.map((prompt, index) => {
               const voteDensity = prompt.votes / maxPromptVotes;
-              const isExpanded = resolvedExpandedPromptId === prompt.promptId;
               return (
                 <article
                   key={prompt.promptId}
                   className="mb-card-enter h-full rounded-2xl bg-gradient-to-b from-bg/56 to-bg/40 p-3.5 ring-1 ring-border/70 sm:p-4"
                   style={{ animationDelay: `${240 + index * 18}ms` }}
                 >
-                  <button
-                    type="button"
-                    className="w-full text-left"
-                    aria-expanded={isExpanded}
-                    onClick={() =>
-                      setExpandedPromptId((current) =>
-                        current === prompt.promptId ? null : prompt.promptId,
-                      )
-                    }
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="inline-flex items-center rounded-full bg-bg/60 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/65">
-                          #{index + 1}
-                        </div>
-                        <p className="mt-2 mb-clamp-prompt-tight text-sm text-fg/92">{prompt.promptText}</p>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="inline-flex items-center rounded-full bg-bg/60 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/65">
+                        #{index + 1}
                       </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <div className="font-mono text-sm text-fg">
-                            {formatPercent(prompt.averageScore)}
-                          </div>
-                          <div className="text-xs text-muted">{prompt.votes} votes</div>
-                        </div>
-                        <span
-                          className={`inline-flex h-6 w-6 items-center justify-center rounded-full bg-bg/52 text-muted transition-transform duration-200 ${
-                            isExpanded ? "rotate-180" : ""
-                          }`}
-                        >
-                          <svg
-                            viewBox="0 0 16 16"
-                            className="h-3.5 w-3.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            aria-hidden="true"
-                          >
-                            <path d="M3.5 6.5L8 11L12.5 6.5" />
-                          </svg>
-                        </span>
-                      </div>
+                      <button
+                        type="button"
+                        className="mt-2 mb-clamp-prompt-tight text-left text-sm text-fg/92 transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+                        onClick={() => setActivePrompt(prompt)}
+                        title="View full prompt"
+                      >
+                        {prompt.promptText}
+                      </button>
                     </div>
-                  </button>
-
-                  {isExpanded ? (
-                    <>
-                      <div className="mt-2.5">
-                        <PromptBuildPreview prompt={prompt} />
+                    <div className="text-right">
+                      <div className="font-mono text-sm text-fg">
+                        {formatPercent(prompt.averageScore)}
                       </div>
+                      <div className="text-xs text-muted">{prompt.votes} votes</div>
+                    </div>
+                  </div>
 
-                      <div className="mt-2.5 space-y-1.5">
-                        <div className="flex items-center gap-2">
-                          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
-                            <div
-                              className={`h-full rounded-full bg-gradient-to-r ${scoreBarClass(prompt.averageScore)}`}
-                              style={{
-                                width: `${Math.max(0, Math.min(100, prompt.averageScore * 100)).toFixed(1)}%`,
-                              }}
-                            />
-                          </div>
-                          <span className="w-10 text-right text-[11px] text-muted">score</span>
-                        </div>
+                  <div className="mt-2.5">
+                    <PromptBuildPreview prompt={prompt} />
+                  </div>
 
-                        <div className="flex items-center gap-2">
-                          <div className="h-1 flex-1 overflow-hidden rounded-full bg-border/30">
-                            <div
-                              className="h-full rounded-full bg-fg/35"
-                              style={{ width: `${(clamp01(voteDensity) * 100).toFixed(1)}%` }}
-                            />
-                          </div>
-                          <span className="w-10 text-right text-[11px] text-muted">volume</span>
-                        </div>
+                  <div className="mt-2.5 space-y-1.5">
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
+                        <div
+                          className={`h-full rounded-full bg-gradient-to-r ${scoreBarClass(prompt.averageScore)}`}
+                          style={{
+                            width: `${Math.max(0, Math.min(100, prompt.averageScore * 100)).toFixed(1)}%`,
+                          }}
+                        />
                       </div>
+                      <span className="w-10 text-right text-[11px] text-muted">score</span>
+                    </div>
 
-                      <div className="mt-2.5 inline-flex items-center gap-1 font-mono text-[11px]">
-                        <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-success">
-                          W {prompt.wins}
-                        </span>
-                        <span className="rounded-full bg-danger/12 px-1.5 py-0.5 text-danger">
-                          L {prompt.losses}
-                        </span>
-                        <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
-                          D {prompt.draws}
-                        </span>
-                        {prompt.bothBad > 0 ? (
-                          <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-danger/85">
-                            B {prompt.bothBad}
-                          </span>
-                        ) : null}
+                    <div className="flex items-center gap-2">
+                      <div className="h-1 flex-1 overflow-hidden rounded-full bg-border/30">
+                        <div
+                          className="h-full rounded-full bg-fg/35"
+                          style={{ width: `${(clamp01(voteDensity) * 100).toFixed(1)}%` }}
+                        />
                       </div>
-                    </>
-                  ) : null}
+                      <span className="w-10 text-right text-[11px] text-muted">volume</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
+                    <div className="inline-flex items-center gap-1 font-mono text-[11px]">
+                      <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-success">
+                        W {prompt.wins}
+                      </span>
+                      <span className="rounded-full bg-danger/12 px-1.5 py-0.5 text-danger">
+                        L {prompt.losses}
+                      </span>
+                      <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
+                        D {prompt.draws}
+                      </span>
+                      {prompt.bothBad > 0 ? (
+                        <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-danger/85">
+                          B {prompt.bothBad}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <button
+                      type="button"
+                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs"
+                      onClick={() => setActivePrompt(prompt)}
+                    >
+                      Full prompt
+                    </button>
+                  </div>
                 </article>
               );
             })}
@@ -1049,6 +1043,49 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           ) : null}
         </div>
       </section>
+
+      {activePrompt ? (
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
+          <button
+            type="button"
+            aria-label="Close"
+            className="absolute inset-0 bg-bg/60 backdrop-blur-sm"
+            onClick={() => setActivePrompt(null)}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Full prompt details"
+            className="relative w-full max-w-3xl overflow-hidden rounded-3xl bg-card/92 shadow-soft ring-1 ring-border backdrop-blur-xl"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
+              <div className="mb-badge">
+                <span className="mb-dot" />
+                <span className="text-fg">Prompt</span>
+              </div>
+              <button
+                type="button"
+                className="mb-btn mb-btn-ghost h-9 rounded-full px-4 text-xs"
+                onClick={() => setActivePrompt(null)}
+              >
+                Close <span className="hidden sm:inline"><span className="mb-kbd">Esc</span></span>
+              </button>
+            </div>
+
+            <div className="max-h-[76vh] space-y-3 overflow-auto px-4 py-4">
+              <PromptBuildPreview prompt={activePrompt} heightClass="h-56 sm:h-64" />
+              <div className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted">
+                <span>{activePrompt.votes} votes</span>
+                <span>•</span>
+                <span>{formatPercent(activePrompt.averageScore)} score</span>
+              </div>
+              <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-fg/92">
+                {activePrompt.promptText}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

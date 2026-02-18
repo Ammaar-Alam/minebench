@@ -95,6 +95,8 @@ model Matchup {
   votes Vote[]
 
   @@index([promptId, createdAt])
+  @@index([modelAId])
+  @@index([modelBId])
 }
 
 model Vote {
@@ -109,4 +111,6 @@ model Vote {
 
   @@unique([matchupId, sessionId])
   @@index([sessionId])
+  @@index([createdAt])
+  @@index([matchupId, createdAt])
 }

@@ -7,29 +7,60 @@ const RECENT_FORM_WINDOW = 30;
 const ARENA_BUILD_GRID_SIZE = 256;
 const ARENA_BUILD_PALETTE = "simple";
 const ARENA_BUILD_MODE = "precise";
+const LEADERBOARD_CACHE_TTL_MS = 20_000;
+const MODEL_DETAIL_CACHE_TTL_MS = 20_000;
 
-type NormalizedChoice = "A" | "B" | "TIE" | "BOTH_BAD";
+type NumberLike = number | bigint | string | null;
 
-type PromptAccumulator = {
-  scoreSum: number;
-  voteCount: number;
-  winCount: number;
-  lossCount: number;
-  drawCount: number;
-  bothBadCount: number;
-  promptText?: string;
+type CachedValue<T> = {
+  expiresAt: number;
+  value: T;
 };
 
-type OpponentAccumulator = {
+type PromptScoreSample = {
+  averageScore: number;
+  votes: number;
+};
+
+type LeaderboardDispersionRow = {
+  modelId: string;
+  meanScore: NumberLike;
+  scoreVariance: NumberLike;
+  scoreSpread: NumberLike;
+  sampledPrompts: NumberLike;
+  sampledVotes: NumberLike;
+};
+
+type PromptBreakdownRow = {
+  promptId: string;
+  promptText: string;
+  votes: NumberLike;
+  averageScore: NumberLike;
+  wins: NumberLike;
+  losses: NumberLike;
+  draws: NumberLike;
+  bothBad: NumberLike;
+};
+
+type OpponentBreakdownRow = {
   key: string;
   displayName: string;
-  scoreSum: number;
-  voteCount: number;
-  winCount: number;
-  lossCount: number;
-  drawCount: number;
-  bothBadCount: number;
+  votes: NumberLike;
+  averageScore: NumberLike;
+  wins: NumberLike;
+  losses: NumberLike;
+  draws: NumberLike;
+  bothBad: NumberLike;
 };
+
+type RecentScoreRow = {
+  score: NumberLike;
+};
+
+let leaderboardCache: CachedValue<Map<string, ScoreDispersion>> | null = null;
+let leaderboardInFlight: Promise<Map<string, ScoreDispersion>> | null = null;
+const modelDetailCache = new Map<string, CachedValue<ModelDetailStats | null>>();
+const modelDetailInFlight = new Map<string, Promise<ModelDetailStats | null>>();
 
 export type ScoreDispersion = {
   meanScore: number | null;
@@ -93,69 +124,27 @@ export type ModelDetailStats = {
   opponents: ModelOpponentBreakdown[];
 };
 
-function normalizeChoice(choice: string): NormalizedChoice | null {
-  if (choice === "A" || choice === "B" || choice === "TIE" || choice === "BOTH_BAD") {
-    return choice;
-  }
-  return null;
+function toNumber(value: NumberLike, fallback = 0): number {
+  if (value == null) return fallback;
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  if (typeof value === "bigint") return Number(value);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function scoresForChoice(choice: NormalizedChoice): { a: number; b: number } {
-  if (choice === "A") return { a: 1, b: 0 };
-  if (choice === "B") return { a: 0, b: 1 };
-  if (choice === "TIE") return { a: 0.5, b: 0.5 };
-  return { a: 0, b: 0 };
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function createPromptAccumulator(promptText?: string): PromptAccumulator {
-  return {
-    scoreSum: 0,
-    voteCount: 0,
-    winCount: 0,
-    lossCount: 0,
-    drawCount: 0,
-    bothBadCount: 0,
-    promptText,
-  };
-}
-
-function createOpponentAccumulator(key: string, displayName: string): OpponentAccumulator {
-  return {
-    key,
-    displayName,
-    scoreSum: 0,
-    voteCount: 0,
-    winCount: 0,
-    lossCount: 0,
-    drawCount: 0,
-    bothBadCount: 0,
-  };
-}
-
-function applyRecordCount(acc: PromptAccumulator | OpponentAccumulator, modelScore: number, choice: NormalizedChoice) {
-  if (choice === "BOTH_BAD") {
-    acc.bothBadCount += 1;
-    return;
-  }
-  if (modelScore === 1) {
-    acc.winCount += 1;
-    return;
-  }
-  if (modelScore === 0) {
-    acc.lossCount += 1;
-    return;
-  }
-  acc.drawCount += 1;
-}
-
-function summarizeDispersion(promptAccumulators: Iterable<PromptAccumulator>): ScoreDispersion {
+function summarizeDispersion(samples: PromptScoreSample[]): ScoreDispersion {
   const promptAverages: number[] = [];
   let sampledVotes = 0;
 
-  for (const acc of promptAccumulators) {
-    if (acc.voteCount <= 0) continue;
-    promptAverages.push(acc.scoreSum / acc.voteCount);
-    sampledVotes += acc.voteCount;
+  for (const sample of samples) {
+    if (sample.votes <= 0) continue;
+    promptAverages.push(sample.averageScore);
+    sampledVotes += sample.votes;
   }
 
   const sampledPrompts = promptAverages.length;
@@ -183,72 +172,129 @@ function summarizeDispersion(promptAccumulators: Iterable<PromptAccumulator>): S
     };
   }
 
-  const variance =
+  const scoreVariance =
     promptAverages.reduce((sum, value) => sum + (value - meanScore) ** 2, 0) / sampledPrompts;
-  const spread = Math.sqrt(variance);
-  const consistency = Math.round((1 - Math.min(MAX_SPREAD, spread) / MAX_SPREAD) * 100);
+  const scoreSpread = Math.sqrt(scoreVariance);
+  const consistency = Math.round((1 - Math.min(MAX_SPREAD, scoreSpread) / MAX_SPREAD) * 100);
 
   return {
     meanScore,
-    scoreVariance: variance,
-    scoreSpread: spread,
+    scoreVariance,
+    scoreSpread,
     consistency,
     sampledPrompts,
     sampledVotes,
   };
 }
 
-function average(values: number[]): number | null {
-  if (values.length === 0) return null;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+export function invalidateArenaStatsCache() {
+  leaderboardCache = null;
+  modelDetailCache.clear();
 }
 
-export async function getLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
-  const votes = await prisma.vote.findMany({
-    select: {
-      choice: true,
-      matchup: {
-        select: {
-          promptId: true,
-          modelAId: true,
-          modelBId: true,
-        },
-      },
-    },
-  });
+async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
+  const rows = await prisma.$queryRaw<LeaderboardDispersionRow[]>`
+    WITH model_prompt_scores AS (
+      SELECT
+        matchup."modelAId" AS model_id,
+        matchup."promptId" AS prompt_id,
+        CASE vote.choice
+          WHEN 'A' THEN 1.0
+          WHEN 'B' THEN 0.0
+          WHEN 'TIE' THEN 0.5
+          ELSE NULL
+        END AS score
+      FROM "Vote" vote
+      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+      WHERE vote.choice IN ('A', 'B', 'TIE')
 
-  const byModel = new Map<string, Map<string, PromptAccumulator>>();
+      UNION ALL
 
-  for (const vote of votes) {
-    const choice = normalizeChoice(vote.choice);
-    if (!choice) continue;
-
-    const scores = scoresForChoice(choice);
-    const promptId = vote.matchup.promptId;
-
-    const modelAPrompts = byModel.get(vote.matchup.modelAId) ?? new Map<string, PromptAccumulator>();
-    const accA = modelAPrompts.get(promptId) ?? createPromptAccumulator();
-    accA.scoreSum += scores.a;
-    accA.voteCount += 1;
-    modelAPrompts.set(promptId, accA);
-    byModel.set(vote.matchup.modelAId, modelAPrompts);
-
-    const modelBPrompts = byModel.get(vote.matchup.modelBId) ?? new Map<string, PromptAccumulator>();
-    const accB = modelBPrompts.get(promptId) ?? createPromptAccumulator();
-    accB.scoreSum += scores.b;
-    accB.voteCount += 1;
-    modelBPrompts.set(promptId, accB);
-    byModel.set(vote.matchup.modelBId, modelBPrompts);
-  }
+      SELECT
+        matchup."modelBId" AS model_id,
+        matchup."promptId" AS prompt_id,
+        CASE vote.choice
+          WHEN 'A' THEN 0.0
+          WHEN 'B' THEN 1.0
+          WHEN 'TIE' THEN 0.5
+          ELSE NULL
+        END AS score
+      FROM "Vote" vote
+      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+      WHERE vote.choice IN ('A', 'B', 'TIE')
+    ),
+    per_prompt AS (
+      SELECT
+        model_prompt_scores.model_id AS "modelId",
+        model_prompt_scores.prompt_id AS "promptId",
+        AVG(model_prompt_scores.score)::double precision AS "promptAverage",
+        COUNT(*)::int AS "promptVotes"
+      FROM model_prompt_scores
+      GROUP BY model_prompt_scores.model_id, model_prompt_scores.prompt_id
+    )
+    SELECT
+      per_prompt."modelId" AS "modelId",
+      AVG(per_prompt."promptAverage")::double precision AS "meanScore",
+      CASE
+        WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
+        THEN VAR_POP(per_prompt."promptAverage")::double precision
+        ELSE NULL
+      END AS "scoreVariance",
+      CASE
+        WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
+        THEN SQRT(VAR_POP(per_prompt."promptAverage"))::double precision
+        ELSE NULL
+      END AS "scoreSpread",
+      COUNT(*)::int AS "sampledPrompts",
+      COALESCE(SUM(per_prompt."promptVotes"), 0)::int AS "sampledVotes"
+    FROM per_prompt
+    GROUP BY per_prompt."modelId"
+  `;
 
   const out = new Map<string, ScoreDispersion>();
-  for (const [modelId, promptMap] of byModel.entries()) {
-    out.set(modelId, summarizeDispersion(promptMap.values()));
+  for (const row of rows) {
+    const scoreSpreadRaw = row.scoreSpread == null ? null : toNumber(row.scoreSpread);
+    out.set(row.modelId, {
+      meanScore: row.meanScore == null ? null : toNumber(row.meanScore),
+      scoreVariance: row.scoreVariance == null ? null : toNumber(row.scoreVariance),
+      scoreSpread: scoreSpreadRaw,
+      consistency:
+        scoreSpreadRaw == null
+          ? null
+          : Math.round((1 - Math.min(MAX_SPREAD, scoreSpreadRaw) / MAX_SPREAD) * 100),
+      sampledPrompts: toNumber(row.sampledPrompts),
+      sampledVotes: toNumber(row.sampledVotes),
+    });
   }
+
   return out;
 }
 
-export async function getModelDetailStats(modelKey: string): Promise<ModelDetailStats | null> {
+export async function getLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
+  const now = Date.now();
+  if (leaderboardCache && leaderboardCache.expiresAt > now) {
+    return leaderboardCache.value;
+  }
+  if (leaderboardInFlight) {
+    return leaderboardInFlight;
+  }
+
+  leaderboardInFlight = queryLeaderboardDispersionByModelId()
+    .then((value) => {
+      leaderboardCache = {
+        value,
+        expiresAt: Date.now() + LEADERBOARD_CACHE_TTL_MS,
+      };
+      return value;
+    })
+    .finally(() => {
+      leaderboardInFlight = null;
+    });
+
+  return leaderboardInFlight;
+}
+
+async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats | null> {
   const model = await prisma.model.findFirst({
     where: { key: modelKey, enabled: true, isBaseline: false },
     select: {
@@ -267,37 +313,120 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
 
   if (!model) return null;
 
-  const [votes, builds] = await Promise.all([
-    prisma.vote.findMany({
-      where: {
-        matchup: {
-          is: {
-            OR: [{ modelAId: model.id }, { modelBId: model.id }],
-          },
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      select: {
-        choice: true,
-        createdAt: true,
-        matchup: {
-          select: {
-            promptId: true,
-            prompt: {
-              select: { text: true },
-            },
-            modelAId: true,
-            modelBId: true,
-            modelA: {
-              select: { key: true, displayName: true },
-            },
-            modelB: {
-              select: { key: true, displayName: true },
-            },
-          },
-        },
-      },
-    }),
+  const [promptRows, opponentRows, recentScoreRows, builds] = await Promise.all([
+    prisma.$queryRaw<PromptBreakdownRow[]>`
+      SELECT
+        matchup."promptId" AS "promptId",
+        prompt.text AS "promptText",
+        COUNT(*) FILTER (WHERE vote.choice IN ('A', 'B', 'TIE'))::int AS "votes",
+        COALESCE(
+          AVG(
+            CASE
+              WHEN matchup."modelAId" = ${model.id} THEN
+                CASE vote.choice
+                  WHEN 'A' THEN 1.0
+                  WHEN 'B' THEN 0.0
+                  WHEN 'TIE' THEN 0.5
+                  ELSE NULL
+                END
+              ELSE
+                CASE vote.choice
+                  WHEN 'A' THEN 0.0
+                  WHEN 'B' THEN 1.0
+                  WHEN 'TIE' THEN 0.5
+                  ELSE NULL
+                END
+            END
+          ),
+          0
+        )::double precision AS "averageScore",
+        COUNT(*) FILTER (
+          WHERE (matchup."modelAId" = ${model.id} AND vote.choice = 'A')
+             OR (matchup."modelBId" = ${model.id} AND vote.choice = 'B')
+        )::int AS "wins",
+        COUNT(*) FILTER (
+          WHERE (matchup."modelAId" = ${model.id} AND vote.choice = 'B')
+             OR (matchup."modelBId" = ${model.id} AND vote.choice = 'A')
+        )::int AS "losses",
+        COUNT(*) FILTER (WHERE vote.choice = 'TIE')::int AS "draws",
+        COUNT(*) FILTER (WHERE vote.choice = 'BOTH_BAD')::int AS "bothBad"
+      FROM "Vote" vote
+      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+      INNER JOIN "Prompt" prompt ON prompt.id = matchup."promptId"
+      WHERE matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id}
+      GROUP BY matchup."promptId", prompt.text
+    `,
+    prisma.$queryRaw<OpponentBreakdownRow[]>`
+      SELECT
+        opponent.key AS key,
+        opponent."displayName" AS "displayName",
+        COUNT(*) FILTER (WHERE vote.choice IN ('A', 'B', 'TIE'))::int AS "votes",
+        COALESCE(
+          AVG(
+            CASE
+              WHEN matchup."modelAId" = ${model.id} THEN
+                CASE vote.choice
+                  WHEN 'A' THEN 1.0
+                  WHEN 'B' THEN 0.0
+                  WHEN 'TIE' THEN 0.5
+                  ELSE NULL
+                END
+              ELSE
+                CASE vote.choice
+                  WHEN 'A' THEN 0.0
+                  WHEN 'B' THEN 1.0
+                  WHEN 'TIE' THEN 0.5
+                  ELSE NULL
+                END
+            END
+          ),
+          0
+        )::double precision AS "averageScore",
+        COUNT(*) FILTER (
+          WHERE (matchup."modelAId" = ${model.id} AND vote.choice = 'A')
+             OR (matchup."modelBId" = ${model.id} AND vote.choice = 'B')
+        )::int AS "wins",
+        COUNT(*) FILTER (
+          WHERE (matchup."modelAId" = ${model.id} AND vote.choice = 'B')
+             OR (matchup."modelBId" = ${model.id} AND vote.choice = 'A')
+        )::int AS "losses",
+        COUNT(*) FILTER (WHERE vote.choice = 'TIE')::int AS "draws",
+        COUNT(*) FILTER (WHERE vote.choice = 'BOTH_BAD')::int AS "bothBad"
+      FROM "Vote" vote
+      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+      INNER JOIN "Model" opponent
+        ON opponent.id = CASE
+          WHEN matchup."modelAId" = ${model.id} THEN matchup."modelBId"
+          ELSE matchup."modelAId"
+        END
+      WHERE matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id}
+      GROUP BY opponent.id, opponent.key, opponent."displayName"
+    `,
+    prisma.$queryRaw<RecentScoreRow[]>`
+      SELECT
+        CASE
+          WHEN matchup."modelAId" = ${model.id} THEN
+            CASE vote.choice
+              WHEN 'A' THEN 1.0
+              WHEN 'B' THEN 0.0
+              WHEN 'TIE' THEN 0.5
+              ELSE NULL
+            END
+          ELSE
+            CASE vote.choice
+              WHEN 'A' THEN 0.0
+              WHEN 'B' THEN 1.0
+              WHEN 'TIE' THEN 0.5
+              ELSE NULL
+            END
+        END::double precision AS score
+      FROM "Vote" vote
+      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+      WHERE (matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id})
+        AND vote.choice IN ('A', 'B', 'TIE')
+      ORDER BY vote."createdAt" DESC
+      LIMIT ${RECENT_FORM_WINDOW * 2}
+    `,
     prisma.build.findMany({
       where: {
         modelId: model.id,
@@ -320,39 +449,36 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
     }),
   ]);
 
-  const promptMap = new Map<string, PromptAccumulator>();
-  const opponentMap = new Map<string, OpponentAccumulator>();
-  const voteScores: number[] = [];
+  const promptSamples: PromptScoreSample[] = [];
+  const promptStatsById = new Map<
+    string,
+    {
+      promptText: string;
+      votes: number;
+      averageScore: number;
+      wins: number;
+      losses: number;
+      draws: number;
+      bothBad: number;
+    }
+  >();
 
-  for (const vote of votes) {
-    const choice = normalizeChoice(vote.choice);
-    if (!choice) continue;
-
-    const matchup = vote.matchup;
-    const isModelA = matchup.modelAId === model.id;
-    const scores = scoresForChoice(choice);
-    const modelScore = isModelA ? scores.a : scores.b;
-    const opponent = isModelA ? matchup.modelB : matchup.modelA;
-
-    voteScores.push(modelScore);
-
-    const promptAcc =
-      promptMap.get(matchup.promptId) ?? createPromptAccumulator(matchup.prompt.text);
-    promptAcc.scoreSum += modelScore;
-    promptAcc.voteCount += 1;
-    applyRecordCount(promptAcc, modelScore, choice);
-    promptMap.set(matchup.promptId, promptAcc);
-
-    const opponentAcc =
-      opponentMap.get(opponent.key) ??
-      createOpponentAccumulator(opponent.key, opponent.displayName);
-    opponentAcc.scoreSum += modelScore;
-    opponentAcc.voteCount += 1;
-    applyRecordCount(opponentAcc, modelScore, choice);
-    opponentMap.set(opponent.key, opponentAcc);
+  for (const row of promptRows) {
+    const votes = toNumber(row.votes);
+    const averageScore = toNumber(row.averageScore);
+    promptStatsById.set(row.promptId, {
+      promptText: row.promptText,
+      votes,
+      averageScore,
+      wins: toNumber(row.wins),
+      losses: toNumber(row.losses),
+      draws: toNumber(row.draws),
+      bothBad: toNumber(row.bothBad),
+    });
+    promptSamples.push({ averageScore, votes });
   }
 
-  const dispersion = summarizeDispersion(promptMap.values());
+  const dispersion = summarizeDispersion(promptSamples);
 
   const buildByPromptId = new Map<
     string,
@@ -377,42 +503,45 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
   }
 
   const allPromptIds = new Set<string>([
-    ...promptMap.keys(),
+    ...promptStatsById.keys(),
     ...buildByPromptId.keys(),
   ]);
 
   const prompts: ModelPromptBreakdown[] = Array.from(allPromptIds)
     .map((promptId) => {
-      const acc = promptMap.get(promptId);
+      const promptStats = promptStatsById.get(promptId);
       const buildEntry = buildByPromptId.get(promptId);
-      const votesForPrompt = acc?.voteCount ?? 0;
       return {
         promptId,
-        promptText: acc?.promptText ?? buildEntry?.promptText ?? "Untitled prompt",
-        votes: votesForPrompt,
-        averageScore: votesForPrompt > 0 && acc ? acc.scoreSum / votesForPrompt : 0,
-        wins: acc?.winCount ?? 0,
-        losses: acc?.lossCount ?? 0,
-        draws: acc?.drawCount ?? 0,
-        bothBad: acc?.bothBadCount ?? 0,
+        promptText:
+          promptStats?.promptText ?? buildEntry?.promptText ?? "Untitled prompt",
+        votes: promptStats?.votes ?? 0,
+        averageScore: promptStats?.averageScore ?? 0,
+        wins: promptStats?.wins ?? 0,
+        losses: promptStats?.losses ?? 0,
+        draws: promptStats?.draws ?? 0,
+        bothBad: promptStats?.bothBad ?? 0,
         build: buildEntry?.build ?? null,
       };
     })
     .sort((a, b) => b.votes - a.votes || b.averageScore - a.averageScore);
 
-  const opponents: ModelOpponentBreakdown[] = Array.from(opponentMap.values())
-    .map((acc) => ({
-      key: acc.key,
-      displayName: acc.displayName,
-      votes: acc.voteCount,
-      averageScore: acc.voteCount > 0 ? acc.scoreSum / acc.voteCount : 0,
-      wins: acc.winCount,
-      losses: acc.lossCount,
-      draws: acc.drawCount,
-      bothBad: acc.bothBadCount,
+  const opponents: ModelOpponentBreakdown[] = opponentRows
+    .map((row) => ({
+      key: row.key,
+      displayName: row.displayName,
+      votes: toNumber(row.votes),
+      averageScore: toNumber(row.averageScore),
+      wins: toNumber(row.wins),
+      losses: toNumber(row.losses),
+      draws: toNumber(row.draws),
+      bothBad: toNumber(row.bothBad),
     }))
     .sort((a, b) => b.votes - a.votes || b.averageScore - a.averageScore);
 
+  const voteScores = recentScoreRows
+    .map((row) => toNumber(row.score, Number.NaN))
+    .filter((score) => Number.isFinite(score));
   const recentScores = voteScores.slice(0, RECENT_FORM_WINDOW);
   const priorScores = voteScores.slice(RECENT_FORM_WINDOW, RECENT_FORM_WINDOW * 2);
   const recentForm = average(recentScores);
@@ -444,4 +573,32 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
     prompts,
     opponents,
   };
+}
+
+export async function getModelDetailStats(modelKey: string): Promise<ModelDetailStats | null> {
+  const now = Date.now();
+  const cached = modelDetailCache.get(modelKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const inFlight = modelDetailInFlight.get(modelKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const queryPromise = queryModelDetailStats(modelKey)
+    .then((value) => {
+      modelDetailCache.set(modelKey, {
+        value,
+        expiresAt: Date.now() + MODEL_DETAIL_CACHE_TTL_MS,
+      });
+      return value;
+    })
+    .finally(() => {
+      modelDetailInFlight.delete(modelKey);
+    });
+
+  modelDetailInFlight.set(modelKey, queryPromise);
+  return queryPromise;
 }

@@ -27,6 +27,7 @@ function spreadLabel(spread: number | null): string {
 export function Leaderboard() {
   const [data, setData] = useState<LeaderboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [navigatingModelKey, setNavigatingModelKey] = useState<string | null>(null);
   const router = useRouter();
   const activeModelCount = data?.models.length ?? 0;
   const topModel = data?.models[0] ?? null;
@@ -57,6 +58,16 @@ export function Leaderboard() {
       cancelled = true;
     };
   }, []);
+
+  const getModelPath = (modelKey: string) => `/leaderboard/${encodeURIComponent(modelKey)}`;
+  const navigateToModel = (modelKey: string) => {
+    if (navigatingModelKey === modelKey) return;
+    setNavigatingModelKey(modelKey);
+    router.push(getModelPath(modelKey));
+  };
+  const prefetchModel = (modelKey: string) => {
+    router.prefetch(getModelPath(modelKey));
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 sm:gap-5">
@@ -102,6 +113,11 @@ export function Leaderboard() {
       {error ? (
         <div className="mb-subpanel shrink-0 p-3 text-sm text-danger">
           {error}
+        </div>
+      ) : null}
+      {navigatingModelKey ? (
+        <div className="mb-subpanel shrink-0 p-2.5 text-xs text-muted">
+          Loading model profile...
         </div>
       ) : null}
 
@@ -193,13 +209,17 @@ export function Leaderboard() {
                     tabIndex={0}
                     data-tier={tier}
                     aria-label={`Open ${m.displayName} profile`}
-                    onClick={() => router.push(`/leaderboard/${encodeURIComponent(m.key)}`)}
+                    onMouseEnter={() => prefetchModel(m.key)}
+                    onFocus={() => prefetchModel(m.key)}
+                    onClick={() => navigateToModel(m.key)}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter" && e.key !== " ") return;
                       e.preventDefault();
-                      router.push(`/leaderboard/${encodeURIComponent(m.key)}`);
+                      navigateToModel(m.key);
                     }}
-                    className={`mb-leaderboard-row group mb-card-enter ${tierClass}`}
+                    className={`mb-leaderboard-row group mb-card-enter cursor-pointer ${tierClass} ${
+                      navigatingModelKey === m.key ? "opacity-75" : ""
+                    }`}
                     style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}
                   >
                     <td className="mb-leaderboard-model-cell px-3 py-3 sm:px-3.5 sm:py-3.5">
