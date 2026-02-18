@@ -1,8 +1,5 @@
 import { prisma } from "@/lib/prisma";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
-import { maxBlocksForGrid } from "@/lib/ai/limits";
-import { getPalette } from "@/lib/blocks/palettes";
-import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 const MIN_PROMPTS_FOR_SPREAD = 3;
 const MAX_SPREAD = 0.5;
@@ -85,7 +82,6 @@ export type ModelPromptBreakdown = {
   bothBad: number;
   build: {
     buildId: string;
-    voxelBuild: unknown;
     gridSize: number;
     palette: "simple" | "advanced";
     mode: string;
@@ -453,7 +449,6 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         palette: true,
         mode: true,
         blockCount: true,
-        voxelData: true,
         prompt: {
           select: { text: true },
         },
@@ -503,23 +498,15 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   for (const build of builds) {
     const gridSize = normalizeGridSize(build.gridSize);
     const palette = normalizePalette(build.palette);
-    const validated = validateVoxelBuild(build.voxelData, {
-      gridSize,
-      palette: getPalette(palette),
-      maxBlocks: maxBlocksForGrid(gridSize),
-    });
-    const voxelBuild = validated.ok ? validated.value.build : build.voxelData;
-    const blockCount = validated.ok ? validated.value.build.blocks.length : build.blockCount;
 
     buildByPromptId.set(build.promptId, {
       promptText: build.prompt.text,
       build: {
         buildId: build.id,
-        voxelBuild,
         gridSize,
         palette,
         mode: build.mode,
-        blockCount,
+        blockCount: build.blockCount,
       },
     });
   }

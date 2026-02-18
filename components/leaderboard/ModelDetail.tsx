@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { memo, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type {
@@ -8,7 +9,7 @@ import type {
   ModelPromptBreakdown,
 } from "@/lib/arena/stats";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
-import { VoxelViewer } from "@/components/voxel/VoxelViewer";
+import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 const CHART_WIDTH = 900;
@@ -23,6 +24,28 @@ const INITIAL_VISIBLE_OPPONENTS = 8;
 const INITIAL_VISIBLE_PROMPTS = 8;
 
 type CurvePoint = { x: number; y: number; value: number };
+type LoadedPromptBuild = {
+  buildId: string;
+  voxelBuild: VoxelBuild;
+  gridSize: number;
+  palette: "simple" | "advanced";
+  mode: string;
+  blockCount: number;
+};
+
+type PromptBuildResponse = {
+  buildId: string;
+  voxelBuild: unknown;
+  gridSize: number;
+  palette: "simple" | "advanced";
+  mode: string;
+  blockCount: number;
+};
+
+const LazyVoxelViewer = dynamic(
+  () => import("@/components/voxel/VoxelViewer").then((mod) => mod.VoxelViewer),
+  { ssr: false },
+);
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -251,38 +274,43 @@ function HeadToHeadCard({ opponent }: { opponent: ModelOpponentBreakdown }) {
 }
 
 const PromptBuildPreview = memo(function PromptBuildPreview({
-  prompt,
+  build,
+  loading = false,
+  error = null,
   heightClass = "h-44",
 }: {
-  prompt: ModelPromptBreakdown;
+  build: LoadedPromptBuild | null;
+  loading?: boolean;
+  error?: string | null;
   heightClass?: string;
 }) {
-  const parsedBuild = useMemo(() => {
-    const buildData = prompt.build;
-    if (!buildData) return null;
-    const parsed = parseVoxelBuildSpec(buildData.voxelBuild);
-    return parsed.ok ? parsed.value : null;
-  }, [prompt.build]);
-
-  if (!parsedBuild || !prompt.build) {
+  if (loading) {
     return (
       <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
-        <div className="text-xs text-muted">Build unavailable</div>
+        <div className="text-xs text-muted">Loading build</div>
+      </div>
+    );
+  }
+
+  if (!build) {
+    return (
+      <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
+        <div className="text-xs text-muted">{error ? "Build unavailable" : "No build yet"}</div>
       </div>
     );
   }
 
   return (
     <div className={`relative w-full overflow-hidden rounded-xl bg-bg/32 ring-1 ring-border/65 ${heightClass}`}>
-      <VoxelViewer
-        voxelBuild={parsedBuild}
-        palette={prompt.build.palette}
+      <LazyVoxelViewer
+        voxelBuild={build.voxelBuild}
+        palette={build.palette}
         autoRotate
         showControls={false}
       />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
         <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
-          {prompt.build.blockCount.toLocaleString()} blocks
+          {build.blockCount.toLocaleString()} blocks
         </span>
       </div>
     </div>
@@ -357,6 +385,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const [showAllOpponents, setShowAllOpponents] = useState(false);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
   const [activePrompt, setActivePrompt] = useState<ModelPromptBreakdown | null>(null);
+  const [buildCache, setBuildCache] = useState<Record<string, LoadedPromptBuild>>({});
+  const [activeBuildError, setActiveBuildError] = useState<string | null>(null);
 
   const strongest = topStrongest(data.prompts);
   const weakest = topWeakest(data.prompts);
@@ -400,6 +430,14 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const hasHiddenPrompts = promptBreakdown.length > INITIAL_VISIBLE_PROMPTS;
   const hoveredPoint = hoveredCurveIndex != null ? curve.points[hoveredCurveIndex] : null;
   const hoveredPrompt = hoveredCurveIndex != null ? promptCurveSource[hoveredCurveIndex] : null;
+  const activeBuildId = activePrompt?.build?.buildId ?? null;
+  const activeLoadedBuild = activeBuildId ? buildCache[activeBuildId] ?? null : null;
+  const isActiveBuildLoading = Boolean(
+    activePrompt?.build &&
+      activeBuildId &&
+      !activeLoadedBuild &&
+      activeBuildError == null,
+  );
   const tooltipAlignClass =
     hoveredCurveIndex == null
       ? "mb-curve-tooltip-center"
@@ -419,6 +457,73 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activePrompt]);
+
+  useEffect(() => {
+    if (!activeBuildId) {
+      setActiveBuildError(null);
+      return;
+    }
+
+    if (buildCache[activeBuildId]) {
+      setActiveBuildError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    setActiveBuildError(null);
+
+    fetch(`/api/leaderboard/builds/${encodeURIComponent(activeBuildId)}`, {
+      method: "GET",
+      signal: controller.signal,
+      cache: "force-cache",
+    })
+      .then(async (response) => {
+        const body = (await response.json()) as Partial<PromptBuildResponse> & {
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(body.error ?? "Build unavailable");
+        }
+        if (typeof body.buildId !== "string" || body.buildId.length === 0) {
+          throw new Error("Invalid build response");
+        }
+        if (body.palette !== "simple" && body.palette !== "advanced") {
+          throw new Error("Invalid build response");
+        }
+        const parsed = parseVoxelBuildSpec(body.voxelBuild);
+        if (!parsed.ok) {
+          throw new Error("Invalid build payload");
+        }
+
+        return {
+          buildId: body.buildId,
+          voxelBuild: parsed.value,
+          gridSize: typeof body.gridSize === "number" ? body.gridSize : 256,
+          palette: body.palette,
+          mode: typeof body.mode === "string" ? body.mode : "precise",
+          blockCount:
+            typeof body.blockCount === "number"
+              ? body.blockCount
+              : parsed.value.blocks.length,
+        } satisfies LoadedPromptBuild;
+      })
+      .then((loadedBuild) => {
+        setBuildCache((current) => {
+          if (current[loadedBuild.buildId]) return current;
+          return { ...current, [loadedBuild.buildId]: loadedBuild };
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof Error && error.name === "AbortError") return;
+        setActiveBuildError(
+          error instanceof Error ? error.message : "Failed to load build",
+        );
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [activeBuildId, buildCache]);
 
   return (
     <div className="mx-auto w-full max-w-[90rem] space-y-3.5 pb-10 sm:space-y-4 sm:pb-14">
@@ -948,14 +1053,9 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                       <div className="inline-flex items-center rounded-full bg-bg/60 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/65">
                         #{index + 1}
                       </div>
-                      <button
-                        type="button"
-                        className="mt-2 mb-clamp-prompt-tight text-left text-sm text-fg/92 transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-                        onClick={() => setActivePrompt(prompt)}
-                        title="View full prompt"
-                      >
+                      <div className="mt-2 mb-clamp-prompt-tight text-sm text-fg/92">
                         {prompt.promptText}
-                      </button>
+                      </div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-sm text-fg">
@@ -963,10 +1063,6 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                       </div>
                       <div className="text-xs text-muted">{prompt.votes} votes</div>
                     </div>
-                  </div>
-
-                  <div className="mt-2.5">
-                    <PromptBuildPreview prompt={prompt} />
                   </div>
 
                   <div className="mt-2.5 space-y-1.5">
@@ -994,7 +1090,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   </div>
 
                   <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2">
-                    <div className="inline-flex items-center gap-1 font-mono text-[11px]">
+                    <div className="inline-flex flex-wrap items-center gap-1 font-mono text-[11px]">
                       <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-success">
                         W {prompt.wins}
                       </span>
@@ -1009,6 +1105,11 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                           B {prompt.bothBad}
                         </span>
                       ) : null}
+                      {prompt.build ? (
+                        <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
+                          {prompt.build.blockCount.toLocaleString()} blocks
+                        </span>
+                      ) : null}
                     </div>
 
                     <button
@@ -1016,7 +1117,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                       className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs"
                       onClick={() => setActivePrompt(prompt)}
                     >
-                      Full prompt
+                      {prompt.build ? "View build" : "Details"}
                     </button>
                   </div>
                 </article>
@@ -1073,11 +1174,22 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             </div>
 
             <div className="max-h-[76vh] space-y-3 overflow-auto px-4 py-4">
-              <PromptBuildPreview prompt={activePrompt} heightClass="h-56 sm:h-64" />
+              <PromptBuildPreview
+                build={activeLoadedBuild}
+                loading={isActiveBuildLoading}
+                error={activeBuildError}
+                heightClass="h-56 sm:h-64"
+              />
               <div className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted">
                 <span>{activePrompt.votes} votes</span>
                 <span>•</span>
                 <span>{formatPercent(activePrompt.averageScore)} score</span>
+                {activePrompt.build ? (
+                  <>
+                    <span>•</span>
+                    <span>{activePrompt.build.blockCount.toLocaleString()} blocks</span>
+                  </>
+                ) : null}
               </div>
               <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-fg/92">
                 {activePrompt.promptText}
