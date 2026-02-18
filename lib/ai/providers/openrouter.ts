@@ -8,6 +8,8 @@ type OpenRouterStreamChunk = {
   choices?: { delta?: { content?: unknown } }[];
 };
 
+const VOXEL_BUILD_JSON_SCHEMA_NAME = "voxel_build_response";
+
 function extractTextFromChatCompletions(data: OpenRouterChatResponse): string {
   const content = data.choices?.[0]?.message?.content;
   if (typeof content === "string") return content;
@@ -130,6 +132,7 @@ export async function openrouterGenerateText(params: {
   maxOutputTokens?: number;
   reasoningMaxTokens?: number;
   temperature?: number;
+  jsonSchema?: Record<string, unknown>;
   reasoningEffortAttempts?: string[];
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
@@ -183,6 +186,18 @@ export async function openrouterGenerateText(params: {
               temperature: params.temperature ?? 0.2,
               max_tokens: tok,
               reasoning: reasoningConfig,
+              ...(params.jsonSchema
+                ? {
+                    response_format: {
+                      type: "json_schema",
+                      json_schema: {
+                        name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+                        strict: true,
+                        schema: params.jsonSchema,
+                      },
+                    },
+                  }
+                : {}),
             }),
           },
           { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
@@ -209,6 +224,40 @@ export async function openrouterGenerateText(params: {
 
     if (!res.ok) {
       const body = lastBody || (await res.text().catch(() => ""));
+      if (res.status === 400 && params.jsonSchema) {
+        const retry = await fetchWithRetry(
+          `${baseUrl}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": "https://minebench.dev",
+              "X-Title": "MineBench",
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: params.modelId,
+              messages: [
+                { role: "system", content: params.system },
+                { role: "user", content: params.user },
+              ],
+              stream: false,
+              temperature: params.temperature ?? 0.2,
+              max_tokens: maxTokens,
+            }),
+          },
+          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+        );
+
+        if (!retry.ok) {
+          const retryBody = await retry.text().catch(() => "");
+          throw new Error(`OpenRouter error ${retry.status}: ${retryBody || body}`);
+        }
+
+        const retryData = (await retry.json()) as OpenRouterChatResponse;
+        return { text: extractTextFromChatCompletions(retryData) };
+      }
       throw new Error(`OpenRouter error ${res.status}: ${body}`);
     }
 

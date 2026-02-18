@@ -1,7 +1,12 @@
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 
 type AnthropicMessageResponse = {
-  content?: { type?: string; text?: string }[];
+  content?: {
+    type?: string;
+    text?: string;
+    name?: string;
+    input?: unknown;
+  }[];
 };
 
 type AnthropicStreamEvent = {
@@ -12,6 +17,7 @@ type AnthropicStreamEvent = {
 type AnthropicEffort = "low" | "medium" | "high" | "max";
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
+const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 
@@ -124,6 +130,7 @@ export async function anthropicGenerateText(params: {
   user: string;
   maxTokens: number;
   temperature?: number;
+  jsonSchema?: Record<string, unknown>;
   onDelta?: (delta: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.ANTHROPIC_API_KEY;
@@ -133,9 +140,11 @@ export async function anthropicGenerateText(params: {
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
+  const useStructuredOutputs = Boolean(params.jsonSchema);
   const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
   const streamResponses =
-    Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true);
+    !useStructuredOutputs &&
+    (Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true));
   const thinkingBudget = usesAdaptiveThinking
     ? null
     : isLegacyManualThinkingModel(params.modelId)
@@ -149,6 +158,15 @@ export async function anthropicGenerateText(params: {
     parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
       ? [CONTEXT_1M_BETA, null]
       : [null];
+  const tools = useStructuredOutputs
+    ? [
+        {
+          name: STRUCTURED_OUTPUT_TOOL_NAME,
+          description: "Return the final result as JSON that matches the provided schema.",
+          input_schema: params.jsonSchema as Record<string, unknown>,
+        },
+      ]
+    : undefined;
 
   let res: Response | null = null;
   let lastBody = "";
@@ -183,6 +201,16 @@ export async function anthropicGenerateText(params: {
             stream: streamResponses,
             ...(thinking ? { thinking } : {}),
             ...(outputConfig ? { output_config: outputConfig } : {}),
+            ...(tools
+              ? {
+                  tools,
+                  tool_choice: {
+                    type: "tool",
+                    name: STRUCTURED_OUTPUT_TOOL_NAME,
+                    disable_parallel_tool_use: true,
+                  },
+                }
+              : {}),
           }),
         });
 
@@ -237,6 +265,14 @@ export async function anthropicGenerateText(params: {
   }
 
   const data = (await res.json()) as AnthropicMessageResponse;
+  if (useStructuredOutputs) {
+    const toolUse = data.content?.find(
+      (block) => block.type === "tool_use" && block.name === STRUCTURED_OUTPUT_TOOL_NAME,
+    );
+    if (toolUse && toolUse.input !== undefined) {
+      return { text: JSON.stringify(toolUse.input) };
+    }
+  }
   const text =
     data.content
       ?.filter((c) => c.type === "text")

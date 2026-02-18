@@ -192,6 +192,7 @@ async function callDirectProvider(args: {
       user: args.user,
       maxTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
       onDelta: args.onDelta,
     });
   }
@@ -361,6 +362,7 @@ async function providerGenerateText(args: {
     maxOutputTokens: args.maxOutputTokens,
     reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
+    jsonSchema: args.jsonSchema,
     reasoningEffortAttempts:
       model.openRouterModelId.startsWith("openai/gpt-5")
         ? ["xhigh", "high"]
