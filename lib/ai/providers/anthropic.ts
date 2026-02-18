@@ -76,6 +76,24 @@ function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
+function parseIntEnv(name: string, defaultValue: number): number {
+  const raw = process.env[name];
+  if (!raw) return defaultValue;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return defaultValue;
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : defaultValue;
+}
+
+function requestTimeoutMs(modelId: string): number {
+  const globalOverrideMs = parseIntEnv("ANTHROPIC_REQUEST_TIMEOUT_MS", 0);
+  if (globalOverrideMs > 0) return globalOverrideMs;
+  if (modelId.startsWith("claude-opus-4-6") || modelId.startsWith("claude-sonnet-4-6")) {
+    return 7_200_000; // 2 hours for high-effort 4.6 models
+  }
+  return 1_800_000; // 30 minutes default
+}
+
 function parseThinkingBudget(): number | null {
   const raw = process.env.ANTHROPIC_THINKING_BUDGET;
   if (!raw) return null;
@@ -150,14 +168,12 @@ export async function anthropicGenerateText(params: {
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1_800_000);
+  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs(params.modelId));
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
   const useStructuredOutputs = Boolean(params.jsonSchema);
   const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
-  const streamResponses =
-    !useStructuredOutputs &&
-    (Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true));
+  const preferStreaming = Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true);
   const allowForcedToolStructuredFallback = parseBooleanEnv(
     "ANTHROPIC_ALLOW_FORCED_TOOL_STRUCTURED_FALLBACK",
     false,
@@ -185,11 +201,13 @@ export async function anthropicGenerateText(params: {
   let res: Response | null = null;
   let lastBody = "";
   let structuredMode: "native_format" | "forced_tool" = "native_format";
+  let didUseStreaming = false;
   try {
     requestLoop: for (const tok of tokenFallbacks(maxTokens)) {
       for (const betaHeader of betaHeaders) {
         const useForcedToolStructuredOutput =
           useStructuredOutputs && structuredMode === "forced_tool";
+        const streamResponses = preferStreaming && !useForcedToolStructuredOutput;
         const budget =
           typeof thinkingBudget === "number" ? Math.min(thinkingBudget, tok - 1) : null;
         const thinking = useForcedToolStructuredOutput
@@ -247,6 +265,7 @@ export async function anthropicGenerateText(params: {
               : {}),
           }),
         });
+        didUseStreaming = streamResponses;
 
         if (res.ok) break requestLoop;
         lastBody = await res.text().catch(() => "");
@@ -285,7 +304,7 @@ export async function anthropicGenerateText(params: {
     throw new Error(`Anthropic error ${res.status}: ${body}`);
   }
 
-  if (streamResponses) {
+  if (didUseStreaming) {
     let text = "";
     await consumeSseStream(res, (evt) => {
       if (evt.data === "[DONE]") return;
