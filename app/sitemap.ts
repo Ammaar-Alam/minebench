@@ -16,17 +16,23 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: route.priority,
   }));
 
-  const modelPages = await prisma.model.findMany({
-    where: { enabled: true, isBaseline: false },
-    select: { key: true, updatedAt: true },
-  });
+  let modelRoutes: MetadataRoute.Sitemap | null = null;
 
-  const modelRoutes = modelPages.map((model) => ({
-    url: absoluteUrl(`/leaderboard/${model.key}`),
-    lastModified: model.updatedAt,
-    changeFrequency: "daily" as const,
-    priority: 0.7,
-  }));
+  try {
+    const modelPages = await prisma.model.findMany({
+      where: { enabled: true, isBaseline: false },
+      select: { key: true, updatedAt: true },
+    });
 
-  return [...staticRoutes, ...modelRoutes];
+    modelRoutes = modelPages.map((model) => ({
+      url: absoluteUrl(`/leaderboard/${model.key}`),
+      lastModified: model.updatedAt,
+      changeFrequency: "daily" as const,
+      priority: 0.7,
+    }));
+  } catch (error) {
+    console.error("Sitemap: unable to load model routes, falling back to static URLs", error);
+  }
+
+  return modelRoutes ? [...staticRoutes, ...modelRoutes] : staticRoutes;
 }

@@ -13,35 +13,49 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { modelKey } = await params;
-  const model = await prisma.model.findFirst({
-    where: {
-      key: modelKey,
-      enabled: true,
-      isBaseline: false,
-    },
-    select: {
-      displayName: true,
-    },
-  });
+  const canonicalPath = `/leaderboard/${modelKey}`;
+  const canonicalUrl = absoluteUrl(canonicalPath);
 
-  if (!model) {
+  let modelDisplayName: string | null = null;
+  try {
+    const model = await prisma.model.findFirst({
+      where: {
+        key: modelKey,
+        enabled: true,
+        isBaseline: false,
+      },
+      select: {
+        displayName: true,
+      },
+    });
+    modelDisplayName = model?.displayName ?? null;
+  } catch (error) {
+    console.error(`Model metadata: unable to load model "${modelKey}"`, error);
+  }
+
+  if (!modelDisplayName) {
     return {
       title: "Model profile",
       description: "Detailed model profile and leaderboard stats on MineBench.",
+      alternates: {
+        canonical: canonicalUrl,
+      },
+      robots: {
+        index: true,
+        follow: true,
+      },
     };
   }
 
-  const title = `${model.displayName} stats`;
-  const description = `Detailed MineBench profile for ${model.displayName}, including consistency, spread, and prompt-level performance.`;
-  const canonicalPath = `/leaderboard/${modelKey}`;
-  const canonicalUrl = absoluteUrl(canonicalPath);
+  const title = `${modelDisplayName} stats`;
+  const description = `Detailed MineBench profile for ${modelDisplayName}, including consistency, spread, and prompt-level performance.`;
 
   return {
     title,
     description,
     keywords: [
-      `${model.displayName} benchmark`,
-      `${model.displayName} leaderboard`,
+      `${modelDisplayName} benchmark`,
+      `${modelDisplayName} leaderboard`,
       "MineBench model profile",
       "AI voxel benchmark stats",
     ],
@@ -53,14 +67,14 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       canonical: canonicalUrl,
     },
     openGraph: {
-      title: `${model.displayName} | MineBench model profile`,
+      title: `${modelDisplayName} | MineBench model profile`,
       description,
       url: canonicalUrl,
-      images: [{ url: DEFAULT_OG_IMAGE, alt: `${model.displayName} MineBench model profile` }],
+      images: [{ url: DEFAULT_OG_IMAGE, alt: `${modelDisplayName} MineBench model profile` }],
     },
     twitter: {
       card: "summary_large_image",
-      title: `${model.displayName} | MineBench model profile`,
+      title: `${modelDisplayName} | MineBench model profile`,
       description,
       images: [DEFAULT_OG_IMAGE],
     },
