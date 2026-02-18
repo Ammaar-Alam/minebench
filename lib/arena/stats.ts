@@ -1,5 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+import { maxBlocksForGrid } from "@/lib/ai/limits";
+import { getPalette } from "@/lib/blocks/palettes";
+import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 const MIN_PROMPTS_FOR_SPREAD = 3;
 const MAX_SPREAD = 0.5;
@@ -135,6 +138,15 @@ function toNumber(value: NumberLike, fallback = 0): number {
 function average(values: number[]): number | null {
   if (values.length === 0) return null;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function normalizeGridSize(value: number): 64 | 256 | 512 {
+  if (value === 64 || value === 256 || value === 512) return value;
+  return ARENA_BUILD_GRID_SIZE;
+}
+
+function normalizePalette(value: string): "simple" | "advanced" {
+  return value === "advanced" ? "advanced" : "simple";
 }
 
 function summarizeDispersion(samples: PromptScoreSample[]): ScoreDispersion {
@@ -489,15 +501,25 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   >();
 
   for (const build of builds) {
+    const gridSize = normalizeGridSize(build.gridSize);
+    const palette = normalizePalette(build.palette);
+    const validated = validateVoxelBuild(build.voxelData, {
+      gridSize,
+      palette: getPalette(palette),
+      maxBlocks: maxBlocksForGrid(gridSize),
+    });
+    const voxelBuild = validated.ok ? validated.value.build : build.voxelData;
+    const blockCount = validated.ok ? validated.value.build.blocks.length : build.blockCount;
+
     buildByPromptId.set(build.promptId, {
       promptText: build.prompt.text,
       build: {
         buildId: build.id,
-        voxelBuild: build.voxelData,
-        gridSize: build.gridSize,
-        palette: build.palette === "advanced" ? "advanced" : "simple",
+        voxelBuild,
+        gridSize,
+        palette,
         mode: build.mode,
-        blockCount: build.blockCount,
+        blockCount,
       },
     });
   }
