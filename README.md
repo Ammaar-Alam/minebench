@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <a href="docs/"><strong>[ Read the Docs ]</strong></a>
+  <a href="docs/README.md"><strong>[ Read the Docs ]</strong></a>
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
 
 **A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
 
-Models are given a natural-language prompt and must produce raw 3D coordinates as JSON. They are provided no images or 3D tools, only a custom voxelBuilder function which allows them to make a JSON past their token output limit and gives primitive tools such as lines, rectangles, and cubes. MineBench visualizes the output and ranks models via head-to-head ELO voting.
+Models are given a natural-language prompt and must produce raw 3D coordinates as JSON. In tool mode, models call `voxel.exec` (minimal primitives: `block`, `box`, `line`) to generate large builds beyond token-only JSON limits. MineBench visualizes the output and ranks models via head-to-head voting with a confidence-aware Glicko-style system (public ordering by conservative score).
 
 **[Try it live](https://minebench.ai)**
 
@@ -38,16 +38,23 @@ Most LLM benchmarks test text and raw accuracy. MineBench instead tests whether 
 
 As it turns out, this kind of spatial reasoning correlates strongly with a model's raw general intelligence; the MineBench leaderboard tracks, anecdotally, the same hierarchy that most people observe in real-world usage: the smartest reasoning models are clearly visible when asked to produce visual builds.
 
-MineBench, unlike other benchmarks, gives an easy way to visually determine (at least one aspect of) a model's raw intelligence. The ELO system also ends up highlighting which models are clearly 'bench-maxed' (i.e. when a model has amazing benchmarks on paper, but clearly lacks in real world usage).
+MineBench, unlike other benchmarks, gives an easy way to visually determine (at least one aspect of) a model's raw intelligence. The ranking system also highlights which models are clearly 'bench-maxed' (i.e. when a model has amazing benchmarks on paper, but clearly lacks in real world usage).
 
 ![MineBench arena — two AI models building a medieval castle side-by-side](public/readme/arena-dark.gif)
 
 ## Features
 
-- **Arena** — blind head-to-head comparisons of pre-generated builds with ELO-rated voting
+- **Arena** — blind head-to-head comparisons of pre-generated builds with confidence-aware ranking
 - **Sandbox** — compare existing builds or generate new ones live with your own API keys
 - **Local Lab** — copy the benchmark prompt, run it in any model, paste the JSON back to render
 - **Leaderboard** — live rankings with win/loss/draw stats across all models
+
+## Documentation
+
+- Full docs index: [`docs/README.md`](docs/README.md)
+- Ranking math and matchmaking walkthrough: [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md)
+- Ranking policy: [`docs/arena-ranking-validity-policy-v2.md`](docs/arena-ranking-validity-policy-v2.md)
+- Voxel tool and raw-output pipeline: [`docs/voxel-exec-raw-output.md`](docs/voxel-exec-raw-output.md)
 
 ![MineBench leaderboard showing model rankings](public/readme/leaderboard-dark.png)
 
@@ -198,18 +205,42 @@ Copy `.env.example` to `.env` and set what you need:
 ### Matchup sampling and voting
 
 - Arena matchups are sampled from pre-seeded builds only.
-- Models are sampled with inverse weighting of `shownCount` to balance exposure.
+- Matchups are selected by lane scheduler:
+  - coverage `40%`
+  - contender `30%`
+  - uncertainty `20%`
+  - exploration `10%`
+- Prompt/model eligibility is based on arena-ready builds (`gridSize=256`, `palette=simple`, `mode=precise`) with at least two enabled models per prompt.
 - A session cookie (`mb_session`) is used so each session can vote once per matchup.
 - Vote options: `A`, `B`, `TIE`, `BOTH_BAD`.
-- ELO updates:
-  - `A/B/TIE`: standard pairwise update (`K=16`)
-  - `BOTH_BAD`: both models are penalized vs baseline
+- Rating updates:
+  - `A/B/TIE`: Glicko-style pair update (rating, RD, volatility)
+  - public leaderboard order uses conservative score: `rating - 2*RD`
+  - `BOTH_BAD`: updates `bothBadCount` only (quality-floor signal), does not mutate pairwise skill rating
+
+For formulas and worked examples, see [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md).
 
 ### Rate limiting
 
 Middleware rate limits non-admin API routes to `18 requests / 10 seconds` per `IP + path`.
 
 ## Voxel Task Format
+
+Default behavior: all runtime model generations use `voxel.exec` tool mode.
+
+- Models emit a tool-call envelope (`tool: voxel.exec` + JS code).
+- MineBench executes that code server-side and converts it into final voxel build JSON.
+- The artifact we render/store is always build JSON in `version/boxes/lines/blocks` format.
+
+Raw tool-call example:
+
+- [`model-raw-output-example.json`](model-raw-output-example.json)
+
+Full pipeline docs (raw output -> executed tool -> validated final build JSON):
+
+- [`docs/voxel-exec-raw-output.md`](docs/voxel-exec-raw-output.md)
+
+Note: non-tool generation exists only as an explicit fallback/dev path (for example `pnpm batch:generate --notools`).
 
 Models produce JSON in this schema:
 
@@ -339,7 +370,7 @@ Reference prompt template: `docs/chatgpt-web-voxel-prompt.md`
 - `pnpm atlas`: rebuild texture atlas
 - `pnpm prompt`: inspect/import prompt build files from `uploads/`
 - `pnpm batch:generate`: batch-generate and/or upload build files
-- `pnpm elo:reset --yes [--keep-history]`: reset leaderboard stats
+- `pnpm elo:reset --yes [--keep-history]`: reset arena rating/leaderboard stats (legacy script name)
 
 ## Batch Generation Examples
 
@@ -394,7 +425,7 @@ select count(*) from public."Prompt";
 app/                Next.js App Router pages and API routes
 components/         UI and voxel viewer components
 lib/ai/             generation pipeline and provider adapters
-lib/arena/          matchup sampling and ELO logic
+lib/arena/          matchup sampling and rating logic
 lib/blocks/         palette and texture atlas mapping
 lib/voxel/          voxel types, validation, mesh helpers
 prisma/             schema and migrations
