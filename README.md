@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="public/readme/minebench-banner.png" alt="MineBench banner" width="760" />
+  <a href="https://minebench.ai">
+    <img src="public/readme/minebench-banner.png" style="height: 10em" alt="MineBench banner"/>
+  </a>
 </p>
 
 <p align="center">
