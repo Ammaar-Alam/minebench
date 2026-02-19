@@ -522,16 +522,40 @@
 
   .mb-leaderboard-record-grid {
     display: inline-grid;
-    width: fit-content;
+    width: 100%;
     margin-inline: auto;
-    grid-template-columns: repeat(3, max-content);
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     align-items: center;
     justify-content: center;
-    column-gap: 0.32rem;
+    column-gap: 0.26rem;
+  }
+
+  .mb-leaderboard-record-chip {
+    min-width: 0;
+    width: 100%;
+    height: 1.42rem;
+    padding-inline: 0.38rem;
+    font-size: 10px;
+    letter-spacing: 0.01em;
+    line-height: 1;
   }
 
   .mb-leaderboard-votes-meta {
+    font-size: 0.67rem;
+    line-height: 1.15;
+    letter-spacing: 0.02em;
     transition: color 180ms ease-out;
+  }
+
+  .mb-leaderboard-votes-stack {
+    display: grid;
+    justify-items: center;
+    row-gap: 0.2rem;
+  }
+
+  .mb-leaderboard-votes-total {
+    font-size: 0.8rem;
+    line-height: 1.1;
   }
 
   .mb-leaderboard-outcome-chip-success {

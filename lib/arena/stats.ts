@@ -1,14 +1,18 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
+import {
+  ARENA_BUILD_GRID_SIZE,
+  ARENA_BUILD_MODE,
+  ARENA_BUILD_PALETTE,
+  getArenaEligiblePromptIds,
+} from "@/lib/arena/eligibility";
 
 const MIN_PROMPTS_FOR_SPREAD = 3;
 const PROMPT_COVERAGE_FLOOR = 2;
 const MAX_SPREAD = 0.5;
 const RECENT_FORM_WINDOW = 30;
-const ARENA_BUILD_GRID_SIZE = 256;
-const ARENA_BUILD_PALETTE = "simple";
-const ARENA_BUILD_MODE = "precise";
 const LEADERBOARD_CACHE_TTL_MS = 20_000;
 const MODEL_DETAIL_CACHE_TTL_MS = 20_000;
 
@@ -226,10 +230,18 @@ export function invalidateArenaStatsCache() {
   modelDetailCache.clear();
 }
 
+function promptFilterSql(promptIds: string[]): Prisma.Sql {
+  if (promptIds.length === 0) {
+    return Prisma.sql`FALSE`;
+  }
+  return Prisma.sql`matchup."promptId" IN (${Prisma.join(promptIds)})`;
+}
+
 async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
-  const [activePromptCount, rows] = await Promise.all([
-    prisma.prompt.count({ where: { active: true } }),
-    prisma.$queryRaw<LeaderboardDispersionRow[]>`
+  const eligiblePromptIds = await getArenaEligiblePromptIds();
+  const activePromptCount = eligiblePromptIds.length;
+  const filter = promptFilterSql(eligiblePromptIds);
+  const rows = await prisma.$queryRaw<LeaderboardDispersionRow[]>`
       WITH model_prompt_scores AS (
         SELECT
           matchup."modelAId" AS model_id,
@@ -243,6 +255,7 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
         FROM "Vote" vote
         INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
         WHERE vote.choice IN ('A', 'B', 'TIE')
+          AND ${filter}
 
         UNION ALL
 
@@ -258,6 +271,7 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
         FROM "Vote" vote
         INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
         WHERE vote.choice IN ('A', 'B', 'TIE')
+          AND ${filter}
       ),
       per_prompt AS (
         SELECT
@@ -286,8 +300,7 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
         COALESCE(SUM(per_prompt."promptVotes"), 0)::int AS "sampledVotes"
       FROM per_prompt
       GROUP BY per_prompt."modelId"
-    `,
-  ]);
+    `;
 
   const out = new Map<string, ScoreDispersion>();
   for (const row of rows) {
@@ -359,7 +372,11 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
 
   if (!model) return null;
 
-  const [promptRows, opponentRows, recentScoreRows, builds, activePromptCount] = await Promise.all([
+  const eligiblePromptIds = await getArenaEligiblePromptIds();
+  const activePromptCount = eligiblePromptIds.length;
+  const filter = promptFilterSql(eligiblePromptIds);
+
+  const [promptRows, opponentRows, recentScoreRows, builds] = await Promise.all([
     prisma.$queryRaw<PromptBreakdownRow[]>`
       SELECT
         matchup."promptId" AS "promptId",
@@ -399,7 +416,8 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       FROM "Vote" vote
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
       INNER JOIN "Prompt" prompt ON prompt.id = matchup."promptId"
-      WHERE matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id}
+      WHERE (matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id})
+        AND ${filter}
       GROUP BY matchup."promptId", prompt.text
     `,
     prisma.$queryRaw<OpponentBreakdownRow[]>`
@@ -445,7 +463,8 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
           WHEN matchup."modelAId" = ${model.id} THEN matchup."modelBId"
           ELSE matchup."modelAId"
         END
-      WHERE matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id}
+      WHERE (matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id})
+        AND ${filter}
       GROUP BY opponent.id, opponent.key, opponent."displayName"
     `,
     prisma.$queryRaw<RecentScoreRow[]>`
@@ -469,6 +488,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       FROM "Vote" vote
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
       WHERE (matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id})
+        AND ${filter}
         AND vote.choice IN ('A', 'B', 'TIE')
       ORDER BY vote."createdAt" DESC
       LIMIT ${RECENT_FORM_WINDOW * 2}
@@ -479,6 +499,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         gridSize: ARENA_BUILD_GRID_SIZE,
         palette: ARENA_BUILD_PALETTE,
         mode: ARENA_BUILD_MODE,
+        promptId: { in: eligiblePromptIds },
       },
       select: {
         id: true,
@@ -492,7 +513,6 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         },
       },
     }),
-    prisma.prompt.count({ where: { active: true } }),
   ]);
 
   const promptSamples: PromptScoreSample[] = [];

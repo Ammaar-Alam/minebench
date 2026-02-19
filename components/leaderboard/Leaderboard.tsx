@@ -263,15 +263,15 @@ export function Leaderboard() {
             className="relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table"
           >
             <colgroup>
-              <col className="w-[28%]" />
-              <col className="w-[13%]" />
-              <col className="w-[10%]" />
-              <col className="w-[10%]" />
-              <col className="w-[17%]" />
-              <col className="hidden lg:table-column lg:w-[7%]" />
-              <col className="hidden lg:table-column lg:w-[7%]" />
+              <col className="w-[21%]" />
+              <col className="w-[12%]" />
               <col className="w-[10%]" />
               <col className="w-[8%]" />
+              <col className="w-[13%]" />
+              <col className="hidden lg:table-column lg:w-[7%]" />
+              <col className="hidden lg:table-column lg:w-[7%]" />
+              <col className="w-[12%]" />
+              <col className="w-[10%]" />
             </colgroup>
             <thead className="text-xs uppercase text-muted2">
               <tr>
@@ -299,8 +299,8 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Share of active prompts with enough decisive votes for this model."
-                  aria-label="Coverage. Share of active prompts with enough decisive votes for this model."
+                  data-help="Share of arena-eligible prompts with enough decisive votes for this model."
+                  aria-label="Coverage. Share of arena-eligible prompts with enough decisive votes for this model."
                   tabIndex={0}
                 >
                   <span className="mb-col-help-label">Coverage</span>
@@ -449,26 +449,26 @@ export function Leaderboard() {
                         <span className="font-semibold text-fg/95">{formatPercent(m.meanScore)}</span>
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
+                    <td className="mb-leaderboard-cell px-2.5 py-3 text-center align-middle sm:px-3 sm:py-3.5">
                       <div className="mb-leaderboard-record-grid font-mono text-[11px]">
-                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-success">
+                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-record-chip mb-leaderboard-outcome-chip-success">
                           W {m.winCount}
                         </span>
-                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-danger">
+                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-record-chip mb-leaderboard-outcome-chip-danger">
                           L {voteSummary.decisiveLossCount}
                         </span>
-                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-muted">
+                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-record-chip mb-leaderboard-outcome-chip-muted">
                           D {m.drawCount}
                         </span>
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
-                      <div className="space-y-1.5">
-                        <div className="font-mono text-xs font-semibold text-fg">
+                    <td className="mb-leaderboard-cell px-2.5 py-3 text-center sm:px-3 sm:py-3.5">
+                      <div className="mb-leaderboard-votes-stack">
+                        <div className="mb-leaderboard-votes-total font-mono font-semibold text-fg">
                           {voteSummary.totalVotes.toLocaleString()}
                         </div>
-                        <div className="mb-leaderboard-votes-meta text-xs tracking-tight text-muted2">
-                          {m.bothBadCount.toLocaleString()} both bad
+                        <div className="mb-leaderboard-votes-meta text-muted2">
+                          both bad {m.bothBadCount.toLocaleString()}
                         </div>
                       </div>
                     </td>
@@ -491,4 +491,3 @@ export function Leaderboard() {
     </div>
   );
 }
-

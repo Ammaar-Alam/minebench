@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import type { PromptListResponse } from "@/lib/arena/types";
+import { listArenaEligiblePrompts } from "@/lib/arena/eligibility";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const prompts = await prisma.prompt.findMany({
-      where: { active: true },
-      orderBy: { createdAt: "asc" },
-      select: { id: true, text: true },
-    });
+    const prompts = await listArenaEligiblePrompts();
 
     const body: PromptListResponse = { prompts };
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });

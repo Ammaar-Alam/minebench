@@ -5,6 +5,7 @@ import type { LeaderboardResponse } from "@/lib/arena/types";
 import { getLeaderboardDispersionByModelId } from "@/lib/arena/stats";
 import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+import { getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
 
 export const runtime = "nodejs";
 
@@ -36,7 +37,7 @@ function pairCompletion(coverage: PairCoverage | null): number {
 }
 
 export async function GET() {
-  const [models, dispersionByModelId] = await Promise.all([
+  const [models, dispersionByModelId, eligiblePromptIds] = await Promise.all([
     prisma.model.findMany({
       where: { isBaseline: false, enabled: true },
       orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
@@ -56,7 +57,9 @@ export async function GET() {
       },
     }),
     getLeaderboardDispersionByModelId(),
+    getArenaEligiblePromptIds(),
   ]);
+  const eligiblePromptCount = eligiblePromptIds.length;
 
   const topBandIds = models.slice(0, CONTENDER_BAND_SIZE).map((m) => m.id);
   let pairCoverageByKey = new Map<string, PairCoverage>();
@@ -93,7 +96,7 @@ export async function GET() {
         scoreSpread: null,
         consistency: null,
         coveredPrompts: 0,
-        activePrompts: 0,
+        activePrompts: eligiblePromptCount,
         promptCoverage: 0,
         sampledPrompts: 0,
         sampledVotes: 0,
@@ -161,4 +164,3 @@ export async function GET() {
 
   return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
 }
-

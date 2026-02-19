@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { ArenaMatchup } from "@/lib/arena/types";
@@ -14,6 +15,8 @@ const ARENA_MODE = "precise";
 
 const PROMPT_COVERAGE_FLOOR = 2;
 const CONTENDER_BAND_SIZE = 8;
+const ADJ_PAIR_VOTES_FLOOR = 12;
+const ADJ_PAIR_PROMPTS_FLOOR = 6;
 type Lane = "coverage" | "contender" | "uncertainty" | "exploration";
 
 const LANE_WEIGHTS: Array<{ lane: Lane; weight: number }> = [
@@ -73,6 +76,7 @@ type PairPromptCoverageRow = {
 type CoverageState = {
   modelPromptDecisiveVotes: Map<string, number>;
   pairDecisiveVotes: Map<string, number>;
+  pairPromptCounts: Map<string, number>;
   pairPromptDecisiveVotes: Map<string, number>;
   promptCoverageByModelId: Map<string, number>;
   promptDecisiveTotals: Map<string, number>;
@@ -123,6 +127,10 @@ function getModelPromptVotes(coverage: CoverageState, modelId: string, promptId:
 
 function getPairVotes(coverage: CoverageState, modelIdA: string, modelIdB: string): number {
   return coverage.pairDecisiveVotes.get(pairKey(modelIdA, modelIdB)) ?? 0;
+}
+
+function getPairPromptCount(coverage: CoverageState, modelIdA: string, modelIdB: string): number {
+  return coverage.pairPromptCounts.get(pairKey(modelIdA, modelIdB)) ?? 0;
 }
 
 function getPairPromptVotes(
@@ -257,11 +265,17 @@ async function loadCoverageState(
     return {
       modelPromptDecisiveVotes: new Map(),
       pairDecisiveVotes: new Map(),
+      pairPromptCounts: new Map(),
       pairPromptDecisiveVotes: new Map(),
       promptCoverageByModelId: new Map(),
       promptDecisiveTotals: new Map(),
     };
   }
+
+  const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
+  const eligibleModelIds = models.map((model) => model.id);
+  const promptIdList = Prisma.join(eligiblePromptIds);
+  const modelIdList = Prisma.join(eligibleModelIds);
 
   const [modelPromptRows, pairRows, pairPromptRows] = await Promise.all([
     prisma.$queryRaw<ModelPromptCoverageRow[]>`
@@ -270,6 +284,9 @@ async function loadCoverageState(
         FROM "Vote" vote
         INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
         WHERE vote.choice IN ('A', 'B')
+          AND matchup."promptId" IN (${promptIdList})
+          AND matchup."modelAId" IN (${modelIdList})
+          AND matchup."modelBId" IN (${modelIdList})
 
         UNION ALL
 
@@ -277,6 +294,9 @@ async function loadCoverageState(
         FROM "Vote" vote
         INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
         WHERE vote.choice IN ('A', 'B')
+          AND matchup."promptId" IN (${promptIdList})
+          AND matchup."modelAId" IN (${modelIdList})
+          AND matchup."modelBId" IN (${modelIdList})
       )
       SELECT
         decisive_votes."modelId" AS "modelId",
@@ -294,6 +314,9 @@ async function loadCoverageState(
       FROM "Vote" vote
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
       WHERE vote.choice IN ('A', 'B')
+        AND matchup."promptId" IN (${promptIdList})
+        AND matchup."modelAId" IN (${modelIdList})
+        AND matchup."modelBId" IN (${modelIdList})
       GROUP BY LEAST(matchup."modelAId", matchup."modelBId"), GREATEST(matchup."modelAId", matchup."modelBId")
     `,
     prisma.$queryRaw<PairPromptCoverageRow[]>`
@@ -305,12 +328,16 @@ async function loadCoverageState(
       FROM "Vote" vote
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
       WHERE vote.choice IN ('A', 'B')
+        AND matchup."promptId" IN (${promptIdList})
+        AND matchup."modelAId" IN (${modelIdList})
+        AND matchup."modelBId" IN (${modelIdList})
       GROUP BY LEAST(matchup."modelAId", matchup."modelBId"), GREATEST(matchup."modelAId", matchup."modelBId"), matchup."promptId"
     `,
   ]);
 
   const modelPromptDecisiveVotes = new Map<string, number>();
   const pairDecisiveVotes = new Map<string, number>();
+  const pairPromptCounts = new Map<string, number>();
   const pairPromptDecisiveVotes = new Map<string, number>();
   const promptDecisiveTotals = new Map<string, number>();
 
@@ -324,7 +351,9 @@ async function loadCoverageState(
   }
 
   for (const row of pairRows) {
-    pairDecisiveVotes.set(pairKey(row.modelLowId, row.modelHighId), toNumber(row.decisiveVotes));
+    const key = pairKey(row.modelLowId, row.modelHighId);
+    pairDecisiveVotes.set(key, toNumber(row.decisiveVotes));
+    pairPromptCounts.set(key, toNumber(row.promptCount));
   }
 
   for (const row of pairPromptRows) {
@@ -348,6 +377,7 @@ async function loadCoverageState(
   return {
     modelPromptDecisiveVotes,
     pairDecisiveVotes,
+    pairPromptCounts,
     pairPromptDecisiveVotes,
     promptCoverageByModelId,
     promptDecisiveTotals,
@@ -403,7 +433,7 @@ function choosePromptForPair(params: {
       if (lane === "coverage") {
         score = votesA + votesB + pairPromptVotes * 6;
       } else if (lane === "contender") {
-        score = pairPromptVotes * 8 + votesA + votesB;
+        score = pairPromptVotes * 10 + Math.abs(votesA - votesB) * 0.25;
       } else if (lane === "uncertainty") {
         score = pairPromptVotes * 3 + Math.abs(votesA - votesB) + (votesA + votesB) / 2;
       } else if (lane === "exploration") {
@@ -509,6 +539,77 @@ function chooseContenderMatchup(params: {
   const contenders = ranked.slice(0, CONTENDER_BAND_SIZE);
   const challengers = ranked.slice(CONTENDER_BAND_SIZE, CONTENDER_BAND_SIZE + 8);
   if (contenders.length < 2) return null;
+
+  const adjacentDeficits = contenders
+    .slice(0, Math.max(0, contenders.length - 1))
+    .map((left, index) => {
+      const right = contenders[index + 1];
+      if (!right) return null;
+      const pairVotes = getPairVotes(coverage, left.id, right.id);
+      const pairPrompts = getPairPromptCount(coverage, left.id, right.id);
+      const voteDeficit = Math.max(0, ADJ_PAIR_VOTES_FLOOR - pairVotes);
+      const promptDeficit = Math.max(0, ADJ_PAIR_PROMPTS_FLOOR - pairPrompts);
+      if (voteDeficit <= 0 && promptDeficit <= 0) return null;
+      return {
+        left,
+        right,
+        pairVotes,
+        pairPrompts,
+        voteDeficit,
+        promptDeficit,
+      };
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        left: EligibleModel;
+        right: EligibleModel;
+        pairVotes: number;
+        pairPrompts: number;
+        voteDeficit: number;
+        promptDeficit: number;
+      } => entry != null,
+    )
+    .sort(
+      (a, b) =>
+        b.promptDeficit - a.promptDeficit ||
+        b.voteDeficit - a.voteDeficit ||
+        a.pairPrompts - b.pairPrompts ||
+        a.pairVotes - b.pairVotes,
+    );
+
+  const targetAdjacentPair = adjacentDeficits[0] ?? null;
+  if (targetAdjacentPair) {
+    const swap = Math.random() < 0.5;
+    const anchor = swap ? targetAdjacentPair.right : targetAdjacentPair.left;
+    const opponent = swap ? targetAdjacentPair.left : targetAdjacentPair.right;
+    const commonPromptIds = getCommonPromptIds(
+      promptIdsByModelId,
+      anchor.id,
+      opponent.id,
+      forcedPromptId,
+    );
+    if (commonPromptIds.length > 0) {
+      const prompt = choosePromptForPair({
+        promptById,
+        commonPromptIds,
+        coverage,
+        modelAId: anchor.id,
+        modelBId: opponent.id,
+        lane: "contender",
+      });
+      if (prompt) {
+        return {
+          lane: "contender",
+          reason: `adjacent-floor:${anchor.key}|${opponent.key}`,
+          prompt,
+          modelA: anchor,
+          modelB: opponent,
+        };
+      }
+    }
+  }
 
   const anchor = randomPick(contenders);
   if (!anchor) return null;
