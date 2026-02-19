@@ -9,8 +9,9 @@ import {
 } from "@/components/sandbox/SandboxGifExportButton";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import type { VoxelBuild } from "@/lib/voxel/types";
-import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
 
 type Palette = "simple" | "advanced";
@@ -253,16 +254,63 @@ function providerLabel(provider: string): string {
   return provider;
 }
 
+function sanitizeFilePart(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+function triggerDownload(blob: Blob, fileName: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function getRawBuildJsonForExport(args: {
+  voxelBuild?: unknown;
+  rawJsonText?: string;
+}): string | null {
+  if (args.voxelBuild != null) {
+    try {
+      return JSON.stringify(args.voxelBuild, null, 2);
+    } catch {
+      // ignore and try raw text extraction
+    }
+  }
+
+  const raw = typeof args.rawJsonText === "string" ? args.rawJsonText.trim() : "";
+  if (!raw) return null;
+  const extracted = extractBestVoxelBuildJson(raw);
+  if (!extracted) return null;
+  const parsed = parseVoxelBuildSpec(extracted);
+  if (!parsed.ok) return null;
+
+  try {
+    return JSON.stringify(parsed.value, null, 2);
+  } catch {
+    return null;
+  }
+}
+
 export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
   const [showKeys, setShowKeys] = useState(false);
-  const [modelPair, setModelPair] = useState<{ a: ModelKey; b: ModelKey }>({
+  const [modelPair, setModelPair] = useState<{ a: ModelKey; b: ModelKey | null }>({
     a: DEFAULT_MODEL_A,
-    b: DEFAULT_MODEL_B,
+    b: DEFAULT_MODEL_B !== DEFAULT_MODEL_A ? DEFAULT_MODEL_B : null,
   });
+  const [compareEnabled, setCompareEnabled] = useState(false);
   const [results, setResults] = useState<Map<ModelKey, ModelResult>>(
     () =>
       new Map(
@@ -293,7 +341,14 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([label, models]) => ({ label, models }));
   }, []);
-  const selectedModelKeys: ModelKey[] = [modelPair.a, modelPair.b];
+  const canCompare = ENABLED_MODELS.length > 1;
+  const selectedModelKeys = useMemo(() => {
+    const keys: ModelKey[] = [modelPair.a];
+    if (compareEnabled && modelPair.b && modelPair.b !== modelPair.a) {
+      keys.push(modelPair.b);
+    }
+    return keys;
+  }, [compareEnabled, modelPair.a, modelPair.b]);
 
   useEffect(() => {
     if (!running) return;
@@ -305,20 +360,52 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     saveProviderKeysToStorage(providerKeys);
   }, [providerKeys]);
 
+  useEffect(() => {
+    if (!compareEnabled) return;
+    setModelPair((prev) => {
+      if (prev.b && prev.b !== prev.a) return prev;
+      const fallback = ENABLED_MODELS.find((model) => model.key !== prev.a)?.key ?? null;
+      if (fallback === prev.b) return prev;
+      return { ...prev, b: fallback };
+    });
+  }, [compareEnabled]);
+
   function handleModelChange(slot: "a" | "b", modelKey: string) {
+    if (slot === "b" && !modelKey) {
+      setModelPair((prev) => ({ ...prev, b: null }));
+      return;
+    }
     const nextKey = modelKey as ModelKey;
     setModelPair((prev) => {
       if (slot === "a") {
-        if (nextKey === prev.b) return prev;
-        return { a: nextKey, b: prev.b };
+        if (nextKey === prev.a) return prev;
+        if (!compareEnabled || prev.b == null || nextKey !== prev.b) return { a: nextKey, b: prev.b };
+        const fallback = ENABLED_MODELS.find((model) => model.key !== nextKey)?.key ?? null;
+        return { a: nextKey, b: fallback };
       }
-      if (nextKey === prev.a) return prev;
+      if (nextKey === prev.a || nextKey === prev.b) {
+        return prev;
+      }
       return { a: prev.a, b: nextKey };
     });
   }
 
+  function exportModelJson(args: {
+    modelName: string;
+    modelKey: ModelKey;
+    rawBuildJson?: string;
+  }) {
+    const modelToken = sanitizeFilePart(args.modelName) || args.modelKey;
+    const promptToken = sanitizeFilePart(prompt) || "sandbox";
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const fileName = `minebench-build-${modelToken}-${promptToken}-${stamp}.json`;
+    const json = typeof args.rawBuildJson === "string" ? args.rawBuildJson.trim() : "";
+    if (!json) return;
+    triggerDownload(new Blob([json], { type: "application/json" }), fileName);
+  }
+
   async function runGenerate() {
-    if (!prompt.trim() || modelPair.a === modelPair.b) return;
+    if (!prompt.trim() || selectedModelKeys.length === 0) return;
 
     setRunning(true);
     setRequestError(null);
@@ -462,14 +549,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 retryReason: undefined,
                 metrics: evt.metrics,
                 startedAt: existing?.startedAt,
-                rawText: undefined,
+                rawText: existing?.rawText,
               });
               return next;
             });
           } else if (evt.type === "error") {
-            if (evt.rawText) {
-              console.warn(`[ai debug] ${evt.modelKey} rawText`, evt.rawText);
-            }
             setResults((prev) => {
               const next = new Map(prev);
               const existing = next.get(evt.modelKey);
@@ -542,10 +626,27 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const model = MODEL_CATALOG.find((m) => m.key === key);
     const r = results.get(key);
     const viewerRef = idx === 0 ? viewerARef : viewerBRef;
+    const modelName = model?.displayName ?? key;
+    const providerName = model ? providerLabel(model.provider) : "Model";
+    const rawBuildJsonForExport = getRawBuildJsonForExport({
+      voxelBuild: r?.voxelBuild ?? undefined,
+      rawJsonText: r?.rawText,
+    });
+    const hasJsonExport = Boolean(rawBuildJsonForExport);
+    const gifTargets: SandboxGifExportTarget[] =
+      r?.status === "success"
+        ? [
+            {
+              viewerRef,
+              modelName,
+              company: providerName,
+              blockCount: r.metrics?.blockCount ?? 0,
+            },
+          ]
+        : [];
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
-    const liveRawText =
-      r?.status === "loading" || r?.status === "error" ? r.rawText : undefined;
+    const liveRawText = r?.rawText;
     const previewBuild = r?.status === "loading" ? getPreviewBuild(key, r.rawText) : null;
     return (
       <VoxelViewerCard
@@ -562,24 +663,44 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         retryReason={r?.status === "loading" ? r.retryReason : undefined}
         elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
+        jsonText={r?.rawText}
         palette={palette}
         viewerRef={viewerRef}
+        enableBuildJsonToggle
         actions={
-          r?.status === "success" && model ? (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Export JSON"
+              title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
+              disabled={!hasJsonExport}
+              className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              onClick={() =>
+                exportModelJson({
+                  modelName,
+                  modelKey: key,
+                  rawBuildJson: rawBuildJsonForExport ?? undefined,
+                })
+              }
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                <path
+                  d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.8"
+                />
+              </svg>
+            </button>
             <SandboxGifExportButton
-              targets={[
-                {
-                  viewerRef,
-                  modelName: model.displayName,
-                  company: providerLabel(model.provider),
-                  blockCount: r.metrics?.blockCount ?? 0,
-                },
-              ]}
+              targets={gifTargets}
               promptText={prompt}
               iconOnly
               label="Export GIF"
             />
-          ) : null
+          </div>
         }
       />
     );
@@ -595,253 +716,200 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               <span className="text-fg">Sandbox</span>
             </div>
             <div className="font-display text-2xl font-semibold tracking-tight">
-              Generate + compare
+              Live generate
             </div>
             <div className="text-sm text-muted">
-              Write any prompt, pick settings, then watch models finish at different speeds.
+              Create one build or compare two.
             </div>
           </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <label className="flex flex-col gap-1 md:col-span-2">
-              <div className="text-xs font-medium text-muted">Prompt</div>
-              <textarea
-                className="mb-field min-h-24 resize-none py-2"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-              />
-            </label>
+          <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <section className="mb-subpanel p-4 sm:p-5">
+              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">Prompt</div>
+              <label className="mt-3 flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted">Describe your build</span>
+                <textarea
+                  className="mb-field min-h-44 resize-none py-3"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                />
+              </label>
+            </section>
 
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Grid</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-10 w-full appearance-none pr-10"
-                  value={gridSize}
-                  onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
-                >
-	                  <option value={64}>64</option>
-	                  <option value={256}>256</option>
-	                  <option value={512}>512</option>
-	                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
+            <div className="flex flex-col gap-4">
+              <section className="mb-subpanel p-4 sm:p-5">
+                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">
+                  Build Settings
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Size</div>
+                    <div className="relative">
+                      <select
+                        className="mb-field h-10 w-full appearance-none pr-10"
+                        value={gridSize}
+                        onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
+                      >
+                        <option value={64}>64</option>
+                        <option value={256}>256</option>
+                        <option value={512}>512</option>
+                      </select>
+                      <svg
+                        aria-hidden="true"
+                        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <path
+                          d="m7 10 5 5 5-5"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                      </svg>
+                    </div>
+                  </label>
 
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Palette</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-10 w-full appearance-none pr-10"
-                  value={palette}
-                  onChange={(e) => setPalette(e.target.value as Palette)}
-                >
-                  <option value="simple">Simple</option>
-                  <option value="advanced">Advanced</option>
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Model A</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={modelPair.a}
-                  onChange={(e) => handleModelChange("a", e.target.value)}
-                  disabled={running || ENABLED_MODELS.length < 2}
-                >
-                  {modelGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Palette</div>
+                    <div className="relative">
+                      <select
+                        className="mb-field h-10 w-full appearance-none pr-10"
+                        value={palette}
+                        onChange={(e) => setPalette(e.target.value as Palette)}
+                      >
+                        <option value="simple">Simple</option>
+                        <option value="advanced">Advanced</option>
+                      </select>
+                      <svg
+                        aria-hidden="true"
+                        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <path
+                          d="m7 10 5 5 5-5"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                      </svg>
+                    </div>
+                  </label>
+                </div>
+              </section>
 
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Model B</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={modelPair.b}
-                  onChange={(e) => handleModelChange("b", e.target.value)}
-                  disabled={running || ENABLED_MODELS.length < 2}
-                >
-                  {modelGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
+              <section className="mb-subpanel p-4 sm:p-5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">Models</div>
+                  <button
+                    type="button"
+                    aria-pressed={compareEnabled}
+                    onClick={() => setCompareEnabled((v) => !v)}
+                    disabled={running || !canCompare}
+                    className={`mb-btn h-8 px-3 text-xs ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
+                  >
+                    {compareEnabled ? "Compare on" : "Compare off"}
+                  </button>
+                </div>
+
+                <div className={`mt-3 grid grid-cols-1 gap-3 ${compareEnabled ? "sm:grid-cols-2" : ""}`}>
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">{compareEnabled ? "Model A" : "Model"}</div>
+                    <div className="relative">
+                      <select
+                        className="mb-field h-11 w-full appearance-none pr-10"
+                        value={modelPair.a}
+                        onChange={(e) => handleModelChange("a", e.target.value)}
+                        disabled={running || ENABLED_MODELS.length === 0}
+                      >
+                        {modelGroups.map((group) => (
+                          <optgroup key={group.label} label={group.label}>
+                            {group.models.map((model) => (
+                              <option
+                                key={model.key}
+                                value={model.key}
+                                disabled={compareEnabled && modelPair.b != null && model.key === modelPair.b}
+                              >
+                                {model.displayName}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                      <svg
+                        aria-hidden="true"
+                        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <path
+                          d="m7 10 5 5 5-5"
+                          stroke="currentColor"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth="1.8"
+                        />
+                      </svg>
+                    </div>
+                  </label>
+
+                  {compareEnabled ? (
+                    <label className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">Model B</div>
+                      <div className="relative">
+                        <select
+                          className="mb-field h-11 w-full appearance-none pr-10"
+                          value={modelPair.b ?? ""}
+                          onChange={(e) => handleModelChange("b", e.target.value)}
+                          disabled={running || !canCompare}
+                        >
+                          <option value="" disabled>
+                            Select model
+                          </option>
+                          {modelGroups.map((group) => (
+                            <optgroup key={group.label} label={group.label}>
+                              {group.models.map((model) => (
+                                <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
+                                  {model.displayName}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </select>
+                        <svg
+                          aria-hidden="true"
+                          className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                        >
+                          <path
+                            d="m7 10 5 5 5-5"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth="1.8"
+                          />
+                        </svg>
+                      </div>
+                    </label>
+                  ) : null}
+                </div>
+              </section>
+            </div>
           </div>
 
-          <div className="mt-5">
-            <div className="text-xs font-medium text-muted">API keys (bring your own)</div>
-            <div className="mt-2 mb-subpanel p-4">
-              <div className="text-xs text-muted">
-                Keys are stored in your browser (localStorage) and sent only for this request. They are never saved to the database.
-              </div>
-
-              {requestError ? (
-                <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-                  {requestError}
+          <div className="mt-4 mb-subpanel p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">
+                  API Keys
                 </div>
-              ) : null}
-
-              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                <label className="flex flex-col gap-1 md:col-span-2">
-                  <div className="text-xs font-medium text-muted">OpenRouter API key (recommended)</div>
-                  <input
-                    className="mb-field h-10 w-full"
-                    type={showKeys ? "text" : "password"}
-                    value={providerKeys.openrouter ?? ""}
-                    onChange={(e) => setProviderKeys((prev) => ({ ...prev, openrouter: e.target.value }))}
-                    autoComplete="off"
-                    spellCheck={false}
-                    placeholder="Paste your OpenRouter key"
-                  />
-                </label>
-
-                <details className="md:col-span-2">
-                  <summary className="cursor-pointer select-none text-xs font-medium text-muted">
-                    Provider keys (optional)
-                  </summary>
-                  <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <label className="flex flex-col gap-1">
-                      <div className="text-xs font-medium text-muted">OpenAI</div>
-                      <input
-                        className="mb-field h-10 w-full"
-                        type={showKeys ? "text" : "password"}
-                        value={providerKeys.openai ?? ""}
-                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, openai: e.target.value }))}
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="Paste your OpenAI key"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1">
-                      <div className="text-xs font-medium text-muted">Anthropic</div>
-                      <input
-                        className="mb-field h-10 w-full"
-                        type={showKeys ? "text" : "password"}
-                        value={providerKeys.anthropic ?? ""}
-                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, anthropic: e.target.value }))}
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="Paste your Anthropic key"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1">
-                      <div className="text-xs font-medium text-muted">Gemini (Google AI)</div>
-                      <input
-                        className="mb-field h-10 w-full"
-                        type={showKeys ? "text" : "password"}
-                        value={providerKeys.gemini ?? ""}
-                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, gemini: e.target.value }))}
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="Paste your Google AI key"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1">
-                      <div className="text-xs font-medium text-muted">Moonshot</div>
-                      <input
-                        className="mb-field h-10 w-full"
-                        type={showKeys ? "text" : "password"}
-                        value={providerKeys.moonshot ?? ""}
-                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, moonshot: e.target.value }))}
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="Paste your Moonshot key"
-                      />
-                    </label>
-
-                    <label className="flex flex-col gap-1">
-                      <div className="text-xs font-medium text-muted">DeepSeek</div>
-                      <input
-                        className="mb-field h-10 w-full"
-                        type={showKeys ? "text" : "password"}
-                        value={providerKeys.deepseek ?? ""}
-                        onChange={(e) => setProviderKeys((prev) => ({ ...prev, deepseek: e.target.value }))}
-                        autoComplete="off"
-                        spellCheck={false}
-                        placeholder="Paste your DeepSeek key"
-                      />
-                    </label>
-                  </div>
-                </details>
+                <div className="mt-1 text-xs text-muted">Stored in your browser only.</div>
               </div>
-
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   className="mb-btn h-9"
@@ -863,17 +931,110 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 </button>
               </div>
             </div>
+
+            {requestError ? (
+              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                {requestError}
+              </div>
+            ) : null}
+
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="flex flex-col gap-1 md:col-span-2">
+                <div className="text-xs font-medium text-muted">OpenRouter API key</div>
+                <input
+                  className="mb-field h-10 w-full"
+                  type={showKeys ? "text" : "password"}
+                  value={providerKeys.openrouter ?? ""}
+                  onChange={(e) => setProviderKeys((prev) => ({ ...prev, openrouter: e.target.value }))}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Paste your OpenRouter key"
+                />
+              </label>
+
+              <details className="md:col-span-2 rounded-xl border border-border/70 bg-bg/35 px-3 py-2">
+                <summary className="cursor-pointer select-none text-xs font-medium text-muted">
+                  Provider keys
+                </summary>
+                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">OpenAI</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.openai ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, openai: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your OpenAI key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Anthropic</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.anthropic ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, anthropic: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your Anthropic key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Gemini</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.gemini ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, gemini: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your Google AI key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Moonshot</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.moonshot ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, moonshot: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your Moonshot key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">DeepSeek</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.deepseek ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, deepseek: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your DeepSeek key"
+                    />
+                  </label>
+                </div>
+              </details>
+            </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-4">
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={prompt}
-              label="Export comparison GIF"
+              label={selectedModelKeys.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
             <button
-              className="mb-btn mb-btn-primary h-11 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={running || modelPair.a === modelPair.b || !prompt.trim()}
+              className="mb-btn mb-btn-primary h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={running || selectedModelKeys.length === 0 || !prompt.trim()}
               onClick={runGenerate}
             >
               {running ? "Generating…" : "Generate"}
@@ -882,7 +1043,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{resultCards}</div>
+      <div className={`grid grid-cols-1 gap-4 ${selectedModelKeys.length > 1 ? "md:grid-cols-2" : ""}`}>
+        {resultCards}
+      </div>
     </div>
   );
 }

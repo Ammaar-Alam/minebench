@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, ReactNode, RefObject } from "react";
+import { useMemo, useState, ReactNode, RefObject } from "react";
 import { VoxelViewer, type VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -25,9 +25,11 @@ export function VoxelViewerCard({
   elapsedMs,
   metrics,
   error,
+  jsonText,
   debugRawText,
   palette = "simple",
   viewerSize = "default",
+  enableBuildJsonToggle = false,
   actions,
   viewerRef,
 }: {
@@ -43,9 +45,11 @@ export function VoxelViewerCard({
   elapsedMs?: number;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
   error?: string;
+  jsonText?: string;
   debugRawText?: string;
   palette?: "simple" | "advanced";
   viewerSize?: "default" | "arena";
+  enableBuildJsonToggle?: boolean;
   actions?: ReactNode;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
 }) {
@@ -72,6 +76,38 @@ export function VoxelViewerCard({
   const blockCount = metrics?.blockCount ?? build?.blocks.length ?? 0;
   const isThinking = Boolean(isLoading && attempt && attempt > 0 && !debugRawText);
   const combinedError = error ?? rendered.error ?? undefined;
+  const [preferredView, setPreferredView] = useState<"build" | "json">("build");
+  const [showRawBuildJson, setShowRawBuildJson] = useState(false);
+
+  const modelOutputText = useMemo(() => {
+    const explicitText =
+      (typeof jsonText === "string" ? jsonText : undefined) ??
+      (typeof debugRawText === "string" ? debugRawText : undefined);
+    const trimmed = explicitText?.trim();
+    if (trimmed) return explicitText ?? "";
+    return "";
+  }, [jsonText, debugRawText]);
+
+  const buildJsonText = useMemo(() => {
+    if (!voxelBuild) return "";
+    try {
+      return JSON.stringify(voxelBuild, null, 2);
+    } catch {
+      return "";
+    }
+  }, [voxelBuild]);
+
+  const hasBuildView = Boolean(build);
+  const hasModelOutputJson = modelOutputText.trim().length > 0;
+  const hasRawBuildJson = buildJsonText.trim().length > 0;
+  const hasJsonView = hasModelOutputJson || hasRawBuildJson;
+  const showViewToggle = enableBuildJsonToggle;
+  const activeView: "build" | "json" = showViewToggle ? preferredView : "build";
+  const showBuildView = activeView === "build";
+  const showJsonView = activeView === "json";
+  const visibleJsonText = showRawBuildJson
+    ? buildJsonText || modelOutputText
+    : modelOutputText || buildJsonText;
 
   const timing = useMemo(() => {
     const ms = metrics?.generationTimeMs;
@@ -95,6 +131,14 @@ export function VoxelViewerCard({
     viewerSize === "arena"
       ? "relative w-full h-[38vh] min-h-[220px] max-h-[300px] sm:h-[44vh] sm:min-h-[260px] sm:max-h-[360px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
       : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
+  const loadingLabel =
+    attempt === 0
+      ? "Queued…"
+      : isThinking
+        ? "Thinking…"
+        : debugRawText
+          ? "Streaming…"
+          : "Generating…";
 
   return (
     <div className="mb-panel">
@@ -108,7 +152,39 @@ export function VoxelViewerCard({
               <div className="min-h-[1.1rem] text-[12px] sm:text-[13px]">{subtitle}</div>
             ) : null}
           </div>
-          <div className="shrink-0 flex items-center gap-2">
+          <div className="shrink-0 flex items-center gap-1.5 sm:gap-2">
+            {showViewToggle ? (
+              <div className="relative flex w-[182px] rounded-full bg-bg/55 p-1 ring-1 ring-border/80 sm:w-[210px]">
+                <div className="pointer-events-none absolute inset-1 rounded-full">
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-y-0 left-0 rounded-full border border-accent/55 bg-accent/24 shadow-[0_8px_20px_-14px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-out"
+                    style={{
+                      width: "50%",
+                      transform: activeView === "json" ? "translateX(100%)" : "translateX(0%)",
+                    }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPreferredView("build")}
+                  className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+                    activeView === "build" ? "text-fg" : "text-muted hover:text-fg"
+                  }`}
+                >
+                  Build
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreferredView("json")}
+                  className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+                    activeView === "json" ? "text-fg" : "text-muted hover:text-fg"
+                  }`}
+                >
+                  JSON
+                </button>
+              </div>
+            ) : null}
             {actions ? <div className="flex items-center">{actions}</div> : null}
             <div className="text-right text-[11px] text-muted sm:text-xs">
               {build ? (
@@ -137,7 +213,7 @@ export function VoxelViewerCard({
         </div>
 
         <div className={viewerHeightClass}>
-          {build ? (
+          {showBuildView && build ? (
             <VoxelViewer
               ref={viewerRef}
               voxelBuild={build}
@@ -147,72 +223,101 @@ export function VoxelViewerCard({
             />
           ) : null}
 
-          {build ? (
+          {showJsonView ? (
+            <div className="absolute inset-0 overflow-hidden bg-bg/30">
+              <div className="absolute right-5 top-3 z-20 flex items-center gap-2 rounded-full border border-border/70 bg-bg/65 px-2.5 py-1 text-[11px] text-muted backdrop-blur-sm">
+                <label className="inline-flex cursor-pointer select-none items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={showRawBuildJson}
+                    onChange={(e) => setShowRawBuildJson(e.target.checked)}
+                    disabled={!hasRawBuildJson}
+                    className="h-3.5 w-3.5 rounded border-border bg-bg text-accent disabled:cursor-not-allowed disabled:opacity-45"
+                  />
+                  <span className={hasRawBuildJson ? "text-fg/90" : "text-muted/70"}>Raw JSON</span>
+                </label>
+              </div>
+              <div className="absolute inset-0 overflow-auto px-3 py-3 sm:px-4 sm:py-4">
+                <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-fg/90">
+                  {visibleJsonText}
+                </pre>
+              </div>
+            </div>
+          ) : null}
+
+          {showBuildView && build ? (
             <div className="pointer-events-none absolute bottom-3 left-3 hidden gap-2 sm:flex">
               <span className="mb-badge">
                 Drag to rotate • <span className="mb-kbd">Ctrl</span>+drag to pan • Scroll to zoom
               </span>
             </div>
           ) : null}
+
+          {isLoading && showBuildView && !build ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-bg/60 text-sm text-muted backdrop-blur-sm">
+              <div className="flex max-w-[90%] flex-col items-center gap-1 text-center">
+                <div>{loadingLabel}</div>
+                {elapsed ? <div className="text-xs font-mono text-muted">{elapsed}</div> : null}
+                {attempt && attempt > 1 ? (
+                  <div className="text-xs font-mono text-muted">retry {attempt}</div>
+                ) : null}
+                {retryReason ? <div className="text-xs text-muted">{retryReason}</div> : null}
+                {hasJsonView && showViewToggle ? (
+                  <div className="text-xs text-muted">Open JSON to inspect live output.</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {isLoading && showBuildView && build ? (
+            <div className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1 rounded-md border border-border/70 bg-bg/60 px-3 py-2 text-xs text-muted backdrop-blur-sm">
+              <div className="pointer-events-none">{loadingLabel}</div>
+              <div className="font-mono">{blockCount.toLocaleString()} blocks</div>
+              {elapsed ? <div className="font-mono">{elapsed}</div> : null}
+              {attempt && attempt > 1 ? <div className="font-mono">retry {attempt}</div> : null}
+            </div>
+          ) : null}
+
+          {isLoading && showJsonView ? (
+            <div className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1 rounded-md border border-border/70 bg-bg/60 px-3 py-2 text-xs text-muted backdrop-blur-sm">
+              <div>{loadingLabel}</div>
+              {elapsed ? <div className="font-mono">{elapsed}</div> : null}
+              {visibleJsonText ? (
+                <div className="font-mono">{visibleJsonText.length.toLocaleString()} chars</div>
+              ) : null}
+              {attempt && attempt > 1 ? <div className="font-mono">retry {attempt}</div> : null}
+            </div>
+          ) : null}
+
+          {combinedError && showBuildView ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-bg/70 px-4 text-center text-sm text-danger">
+              <div className="flex w-full max-w-[92%] flex-col items-center gap-3">
+                <div>{combinedError}</div>
+                {hasJsonView && showViewToggle ? (
+                  <div className="text-xs text-muted">Open JSON to inspect raw model output.</div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {combinedError && showJsonView ? (
+            <div className="absolute left-3 right-3 top-14 rounded-md border border-danger/45 bg-danger/12 px-3 py-2 text-xs text-danger">
+              {combinedError}
+            </div>
+          ) : null}
+
+          {showBuildView && !build && !isLoading && !combinedError ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-bg/20 text-sm text-muted">
+              No build yet
+            </div>
+          ) : null}
+
+          {showJsonView && !hasJsonView && !isLoading ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-bg/20 text-sm text-muted">
+              No JSON yet
+            </div>
+          ) : null}
         </div>
-
-        {isLoading && !build ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-bg/60 text-sm text-muted backdrop-blur-sm">
-            <div className="flex max-w-[90%] flex-col items-center gap-1 text-center">
-              <div>{attempt === 0 ? "Connecting…" : isThinking ? "Thinking…" : "Streaming…"}</div>
-              {elapsed ? <div className="text-xs font-mono text-muted">{elapsed}</div> : null}
-              {attempt && attempt > 1 ? (
-                <div className="text-xs font-mono text-muted">retry {attempt}</div>
-              ) : null}
-              {retryReason ? <div className="text-xs text-muted">{retryReason}</div> : null}
-              {debugRawText ? (
-                <details className="mt-2 w-full rounded-md border border-border/70 bg-bg/30 p-2 text-left text-xs text-muted">
-                  <summary className="cursor-pointer select-none font-semibold text-fg">
-                    Live model output
-                  </summary>
-                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted">
-                    {debugRawText}
-                  </pre>
-                </details>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {isLoading && build ? (
-          <div className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1 rounded-md border border-border/70 bg-bg/60 px-3 py-2 text-xs text-muted backdrop-blur-sm">
-            <div className="pointer-events-none">
-              {isThinking ? "Thinking…" : debugRawText ? "Streaming…" : "Generating…"}
-            </div>
-            <div className="font-mono">{blockCount.toLocaleString()} blocks</div>
-            {elapsed ? <div className="font-mono">{elapsed}</div> : null}
-            {attempt && attempt > 1 ? <div className="font-mono">retry {attempt}</div> : null}
-          </div>
-        ) : null}
-
-        {combinedError ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-bg/70 px-4 text-center text-sm text-danger">
-            <div className="flex w-full max-w-[92%] flex-col items-center gap-3">
-              <div>{combinedError}</div>
-              {debugRawText ? (
-                <details className="w-full rounded-md border border-border/70 bg-bg/30 p-3 text-left text-xs text-muted">
-                  <summary className="cursor-pointer select-none font-semibold text-fg">
-                    Raw model output
-                  </summary>
-                  <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-snug text-muted">
-                    {debugRawText}
-                  </pre>
-                </details>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {!build && !isLoading && !combinedError ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-bg/20 text-sm text-muted">
-            No build yet
-          </div>
-        ) : null}
 
         {warnings.length ? (
           <details className="border-t border-border bg-bg/10 px-3 py-2.5 text-xs text-muted sm:px-4 sm:py-3">
@@ -226,8 +331,6 @@ export function VoxelViewerCard({
             </ul>
           </details>
         ) : null}
-
-        {/* debugRawText shown in error overlay so it stays visible */}
       </div>
     </div>
   );

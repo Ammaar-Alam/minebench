@@ -139,7 +139,7 @@ export async function POST(req: Request) {
                 type: "error",
                 modelKey,
                 message: r.error,
-                rawText: debugRaw && r.rawText ? r.rawText.slice(0, RAW_TEXT_MAX) : undefined,
+                rawText: r.rawText ? r.rawText.slice(0, RAW_TEXT_MAX) : undefined,
               });
             }
           })
