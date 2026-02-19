@@ -175,16 +175,18 @@ function MetricTile({
   value,
   sub,
   tone = "text-fg",
+  valueClassName = "text-[1.72rem] font-semibold leading-tight tracking-tight",
 }: {
   label: string;
   value: string;
   sub?: string;
   tone?: string;
+  valueClassName?: string;
 }) {
   return (
     <div className="mb-metric-tile">
       <div className="text-[10px] uppercase tracking-[0.11em] text-muted">{label}</div>
-      <div className={`mt-0.5 text-[1.72rem] font-semibold leading-tight tracking-tight ${tone}`}>
+      <div className={`mt-0.5 ${valueClassName} ${tone}`}>
         {value}
       </div>
       {sub ? <div className="mt-0.5 text-[11px] text-muted">{sub}</div> : null}
@@ -648,6 +650,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                     <MetricTile
                       label="Stability"
                       value={data.model.stability}
+                      valueClassName="text-[1.2rem] font-semibold leading-tight tracking-tight"
                       tone={
                         data.model.stability === "Stable"
                           ? "text-success"

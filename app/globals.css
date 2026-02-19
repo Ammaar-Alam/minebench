@@ -390,6 +390,8 @@
 
   .mb-col-help {
     cursor: help;
+    position: relative;
+    --mb-help-x: -50%;
   }
 
   .mb-col-help:focus-visible {
@@ -413,7 +415,7 @@
     left: 50%;
     top: calc(100% + 8px);
     width: min(24rem, 42vw);
-    transform: translateX(-50%) translateY(-4px);
+    transform: translateX(var(--mb-help-x)) translateY(-4px);
     opacity: 0;
     pointer-events: none;
     padding: 0.52rem 0.64rem;
@@ -436,7 +438,18 @@
   .mb-col-help:focus-visible::after,
   .mb-col-help:active::after {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(var(--mb-help-x)) translateY(0);
+  }
+
+  .mb-col-help[data-help-align="left"]::after {
+    left: 0;
+    --mb-help-x: 0;
+  }
+
+  .mb-col-help[data-help-align="right"]::after {
+    left: auto;
+    right: 0;
+    --mb-help-x: 0;
   }
 
   @media (hover: none) {

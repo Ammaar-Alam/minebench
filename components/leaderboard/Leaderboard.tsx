@@ -281,7 +281,7 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Confidence-adjusted rank score used for ordering. Secondary text shows raw rating."
+                  data-help="Primary rank score used for ordering. Gray subtext shows raw rating before uncertainty adjustment."
                   aria-label="Rating. Confidence-adjusted rank score used for ordering."
                   tabIndex={0}
                 >
@@ -290,7 +290,7 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="How certain this rating is. Higher confidence means lower uncertainty."
+                  data-help="Top percent is confidence. Gray RD is rating deviation (uncertainty): lower RD means more reliable."
                   aria-label="Confidence. Higher confidence means lower uncertainty."
                   tabIndex={0}
                 >
@@ -299,7 +299,7 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Share of arena-eligible prompts with enough decisive votes for this model."
+                  data-help="Top percent is prompt coverage. Gray x/y is covered prompts out of all arena-eligible prompts."
                   aria-label="Coverage. Share of arena-eligible prompts with enough decisive votes for this model."
                   tabIndex={0}
                 >
@@ -308,7 +308,7 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="How steady performance is across prompts. Higher means fewer swings."
+                  data-help="Number and bar show prompt-to-prompt steadiness. Higher means fewer swings."
                   aria-label="Consistency. How steady performance is across prompts. Higher means fewer swings."
                   tabIndex={0}
                 >
@@ -326,7 +326,7 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center lg:table-cell"
-                  data-help="Average prompt score in decisive comparisons. Higher means stronger typical output."
+                  data-help="Average prompt score from decisive comparisons. Higher means stronger typical output."
                   aria-label="Average score. Average prompt score in decisive comparisons. Higher means stronger typical output."
                   tabIndex={0}
                 >
@@ -335,7 +335,7 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Win-loss-draw totals from decisive votes."
+                  data-help="Win-loss-draw totals from decisive votes. Both-bad votes are excluded."
                   aria-label="Record. Win-loss-draw totals from decisive votes."
                   tabIndex={0}
                 >
@@ -344,7 +344,8 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Total comparisons seen, including both-bad votes."
+                  data-help="Top number is total votes seen. Gray line shows both-bad count included in that total."
+                  data-help-align="right"
                   aria-label="Votes. Total comparisons seen, including both-bad votes."
                   tabIndex={0}
                 >
