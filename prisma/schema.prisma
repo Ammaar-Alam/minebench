@@ -61,7 +61,13 @@ model Build {
   palette  String
   mode     String
 
-  voxelData         Json
+  voxelData         Json?
+  voxelStorageBucket String?
+  voxelStoragePath   String?
+  voxelStorageEncoding String?
+  voxelByteSize      Int?
+  voxelCompressedByteSize Int?
+  voxelSha256        String?
   blockCount        Int
   generationTimeMs  Int
 

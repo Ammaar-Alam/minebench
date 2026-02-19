@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { ArenaMatchup } from "@/lib/arena/types";
 import { weightedPick } from "@/lib/arena/sampling";
+import { resolveBuildSpec } from "@/lib/storage/buildPayload";
 
 export const runtime = "nodejs";
 
@@ -151,7 +152,13 @@ export async function GET(req: Request) {
         palette: ARENA_PALETTE,
         mode: ARENA_MODE,
       },
-      select: { id: true, voxelData: true },
+      select: {
+        id: true,
+        voxelData: true,
+        voxelStorageBucket: true,
+        voxelStoragePath: true,
+        voxelStorageEncoding: true,
+      },
     }),
     prisma.build.findFirst({
       where: {
@@ -161,12 +168,30 @@ export async function GET(req: Request) {
         palette: ARENA_PALETTE,
         mode: ARENA_MODE,
       },
-      select: { id: true, voxelData: true },
+      select: {
+        id: true,
+        voxelData: true,
+        voxelStorageBucket: true,
+        voxelStoragePath: true,
+        voxelStorageEncoding: true,
+      },
     }),
   ]);
 
   if (!buildA || !buildB) {
     return NextResponse.json({ error: "Missing seeded build" }, { status: 500 });
+  }
+
+  let buildSpecA: Awaited<ReturnType<typeof resolveBuildSpec>>;
+  let buildSpecB: Awaited<ReturnType<typeof resolveBuildSpec>>;
+  try {
+    [buildSpecA, buildSpecB] = await Promise.all([
+      resolveBuildSpec(buildA),
+      resolveBuildSpec(buildB),
+    ]);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Failed to load build payload";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   const created = await prisma.$transaction(async (tx) => {
@@ -204,7 +229,7 @@ export async function GET(req: Request) {
         displayName: modelA.displayName,
         eloRating: Number(modelA.eloRating),
       },
-      build: buildA.voxelData as ArenaMatchup["a"]["build"],
+      build: buildSpecA as ArenaMatchup["a"]["build"],
     },
     b: {
       model: {
@@ -213,7 +238,7 @@ export async function GET(req: Request) {
         displayName: modelB.displayName,
         eloRating: Number(modelB.eloRating),
       },
-      build: buildB.voxelData as ArenaMatchup["b"]["build"],
+      build: buildSpecB as ArenaMatchup["b"]["build"],
     },
   };
 

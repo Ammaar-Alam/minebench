@@ -17,10 +17,12 @@
  * Environment:
  *   Requires .env with API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.) or OPENROUTER_API_KEY
  *   For upload: requires ADMIN_TOKEN
+ *   For large upload path (recommended): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET (optional)
  */
 
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
 import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
@@ -32,6 +34,8 @@ import "dotenv/config";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 const PROD_URL = "https://minebench.ai";
+const DEFAULT_STORAGE_BUCKET = "builds";
+const DEFAULT_STORAGE_PREFIX = "imports";
 
 interface Job {
   promptSlug: string;
@@ -41,8 +45,55 @@ interface Job {
   filePath: string;
 }
 
+type StorageUploadConfig = {
+  url: string;
+  serviceRoleKey: string;
+  bucket: string;
+  prefix: string;
+};
+
+type BuildStorageReference = {
+  bucket: string;
+  path: string;
+  encoding: "gzip";
+  byteSize: number;
+  compressedByteSize: number;
+  sha256: string;
+};
+
 function getJsonPath(promptSlug: string, modelSlug: string): string {
   return path.join(UPLOADS_DIR, promptSlug, `${promptSlug}-${modelSlug}.json`);
+}
+
+function trimTrailingSlashes(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function encodeStoragePath(pathValue: string): string {
+  return pathValue
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+function getStorageUploadConfig(): StorageUploadConfig | null {
+  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  if (!url || !serviceRoleKey) return null;
+
+  const bucket = (process.env.SUPABASE_STORAGE_BUCKET ?? DEFAULT_STORAGE_BUCKET).trim() || DEFAULT_STORAGE_BUCKET;
+  const prefix = (process.env.SUPABASE_STORAGE_PREFIX ?? DEFAULT_STORAGE_PREFIX).trim() || DEFAULT_STORAGE_PREFIX;
+  return {
+    url: trimTrailingSlashes(url),
+    serviceRoleKey,
+    bucket,
+    prefix: prefix.replace(/^\/+|\/+$/g, ""),
+  };
+}
+
+function buildStoragePath(job: Job): string {
+  return `${job.promptSlug}/${job.modelSlug}-g256-simple-precise.json.gz`;
 }
 
 function parseArgs() {
@@ -228,25 +279,18 @@ function getUploadCommand(job: Job): string {
   if (!job.promptText) {
     return `# Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.`;
   }
-  const encPromptJs = `node -p 'encodeURIComponent(process.argv[1])' "${job.promptText.replace(/'/g, "'\\''")}"`;
-  return `cd /Users/alam/GitHub/minebench && set -a && source .env && set +a && PROMPT='${job.promptText.replace(/'/g, "'\\''")}' && ENC_PROMPT="$(${encPromptJs})" && gzip -c "${job.filePath}" | curl -sS -X POST "https://minebench.ai/api/admin/import-build?modelKey=${job.modelKey}&promptText=$ENC_PROMPT&overwrite=1" -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -H "Content-Encoding: gzip" --data-binary @-`;
+  return `pnpm batch:generate --upload --prompt ${job.promptSlug} --model ${job.modelSlug}`;
 }
 
-async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
-  if (!job.promptText) {
-    return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
-  }
-
-  const token = process.env.ADMIN_TOKEN;
-  if (!token) {
-    return { ok: false, error: "ADMIN_TOKEN not set" };
-  }
-
-  const jsonBytes = fs.readFileSync(job.filePath);
-  const gzipped = gzipSync(jsonBytes);
+async function uploadBuildLegacy(
+  job: Job,
+  token: string,
+  jsonBytes: Buffer<ArrayBufferLike>,
+  gzipped: Buffer<ArrayBufferLike>
+): Promise<{ ok: boolean; error?: string }> {
   const url = new URL(`${PROD_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
-  url.searchParams.set("promptText", job.promptText);
+  url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
 
   async function doUpload(opts: { body: Uint8Array<ArrayBufferLike>; headers: Record<string, string> }) {
@@ -295,6 +339,108 @@ async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
   }
 
   return { ok: false, error: `HTTP ${gzipAttempt.status}: ${gzipAttempt.text}` };
+}
+
+async function uploadToSupabaseStorage(
+  job: Job,
+  jsonBytes: Buffer<ArrayBufferLike>,
+  gzipped: Buffer<ArrayBufferLike>,
+): Promise<{ ok: true; ref: BuildStorageReference } | { ok: false; error: string }> {
+  const storageConfig = getStorageUploadConfig();
+  if (!storageConfig) {
+    return {
+      ok: false,
+      error:
+        "SUPABASE storage config missing. Set SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY, and optionally SUPABASE_STORAGE_BUCKET.",
+    };
+  }
+
+  const objectPath = `${storageConfig.prefix}/${buildStoragePath(job)}`;
+  const encodedPath = encodeStoragePath(objectPath);
+  const url = `${storageConfig.url}/storage/v1/object/${encodeURIComponent(storageConfig.bucket)}/${encodedPath}`;
+  const body = new Uint8Array(gzipped.buffer as ArrayBuffer, gzipped.byteOffset, gzipped.byteLength);
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${storageConfig.serviceRoleKey}`,
+      apikey: storageConfig.serviceRoleKey,
+      "x-upsert": "true",
+      "Content-Type": "application/gzip",
+    },
+    body,
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    return { ok: false, error: `Storage upload failed (HTTP ${resp.status}): ${text}` };
+  }
+
+  const sha256 = createHash("sha256").update(jsonBytes).digest("hex");
+  return {
+    ok: true,
+    ref: {
+      bucket: storageConfig.bucket,
+      path: objectPath,
+      encoding: "gzip",
+      byteSize: jsonBytes.byteLength,
+      compressedByteSize: gzipped.byteLength,
+      sha256,
+    },
+  };
+}
+
+async function finalizeStorageImport(
+  job: Job,
+  token: string,
+  ref: BuildStorageReference
+): Promise<{ ok: boolean; error?: string }> {
+  const url = new URL(`${PROD_URL}/api/admin/import-build`);
+  url.searchParams.set("modelKey", job.modelKey);
+  url.searchParams.set("promptText", job.promptText as string);
+  url.searchParams.set("overwrite", "1");
+
+  const resp = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ storage: ref }),
+  });
+
+  const text = await resp.text();
+  if (resp.ok) return { ok: true };
+  return { ok: false, error: `Finalize import failed (HTTP ${resp.status}): ${text}` };
+}
+
+async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
+  if (!job.promptText) {
+    return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
+  }
+
+  const token = process.env.ADMIN_TOKEN;
+  if (!token) {
+    return { ok: false, error: "ADMIN_TOKEN not set" };
+  }
+
+  const jsonBytes = fs.readFileSync(job.filePath);
+  const gzipped = gzipSync(jsonBytes);
+
+  const storageAttempt = await uploadToSupabaseStorage(job, jsonBytes, gzipped);
+  if (storageAttempt.ok) {
+    return finalizeStorageImport(job, token, storageAttempt.ref);
+  }
+
+  const legacy = await uploadBuildLegacy(job, token, jsonBytes, gzipped);
+  if (legacy.ok) return legacy;
+
+  return {
+    ok: false,
+    error:
+      `${storageAttempt.error}\n\n` +
+      `Legacy upload fallback also failed:\n${legacy.error}`,
+  };
 }
 
 function printStatus(jobs: Job[]) {
@@ -367,6 +513,11 @@ Options:
   --promptText <s>  Prompt text override (only when filtered to 1 prompt)
   --promptTextFile <path> Prompt text override read from file (only when filtered to 1 prompt)
   --help, -h        Show this help
+
+Upload notes:
+  - If SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are present, uploads go to Supabase Storage first
+    and /api/admin/import-build receives a tiny finalize payload.
+  - If they are missing, script falls back to direct /api/admin/import-build body upload.
     `);
     return;
   }

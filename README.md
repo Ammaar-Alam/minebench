@@ -158,6 +158,9 @@ Copy `.env.example` to `.env` and set what you need:
 - `DATABASE_URL` (required): pooled/runtime Postgres URL
 - `DIRECT_URL` (required): direct Postgres URL for Prisma migrations
 - `ADMIN_TOKEN` (required for `/api/admin/*`)
+- `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (required for large build upload/download via Supabase Storage)
+- `SUPABASE_STORAGE_BUCKET` (optional, default `builds`)
+- `SUPABASE_STORAGE_PREFIX` (optional, default `imports`)
 
 ### Provider keys (any subset)
 
@@ -291,6 +294,14 @@ curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_g
   --data-binary "@uploads/castle/castle-gpt-5-2-pro.json"
 ```
 
+For large payloads in production (50MB+), use the batch uploader with Supabase Storage enabled:
+
+```bash
+pnpm batch:generate --upload --prompt castle --model gpt-5-2-pro
+```
+
+The script uploads `*.json.gz` directly to Supabase Storage and then calls `/api/admin/import-build` with a small storage reference payload.
+
 Reference prompt template: `docs/chatgpt-web-voxel-prompt.md`
 
 ## API Reference
@@ -313,6 +324,9 @@ Reference prompt template: `docs/chatgpt-web-voxel-prompt.md`
 - `GET /api/admin/status`
 - `POST /api/admin/seed?dryRun=1&generateBuilds=0&batchSize=2`
 - `POST /api/admin/import-build?modelKey=...&promptId=...|promptText=...&gridSize=256&palette=simple&mode=precise&overwrite=1`
+  - body can be either:
+    - raw voxel JSON (legacy)
+    - storage envelope: `{ "storage": { "bucket": "...", "path": "...", "encoding": "gzip", ... } }`
 
 ## Useful Scripts
 
@@ -350,6 +364,8 @@ pnpm batch:generate --help
 ```
 
 Build files are written under `uploads/<prompt-slug>/`.
+
+When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are set, `--upload` uses direct Supabase Storage upload + finalize import, which is the recommended path for 100MB-scale builds.
 
 ## Quality Checks
 
@@ -394,6 +410,8 @@ uploads/            local build JSON files and prompt folders
   - Set `ADMIN_TOKEN` in `.env` and send `Authorization: Bearer $ADMIN_TOKEN`.
 - `/api/generate` returns no-key error in production:
   - send `providerKeys` from client or set `MINEBENCH_ALLOW_SERVER_KEYS=1`.
+- large upload fails and script falls back to direct API body upload:
+  - set `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and (optionally) `SUPABASE_STORAGE_BUCKET`.
 - DB connection errors:
   - ensure Docker is running, `DATABASE_URL`/`DIRECT_URL` are valid, then run `pnpm db:up`.
 - Missing/broken block textures:
@@ -405,6 +423,24 @@ uploads/            local build JSON files and prompt folders
 - Recommended:
   - `DATABASE_URL`: Supabase pooler URL (`pgbouncer=true`)
   - `DIRECT_URL`: Supabase direct URL (for Prisma migrations)
+  - `SUPABASE_URL`: your Supabase project URL
+  - `SUPABASE_SERVICE_ROLE_KEY`: server-only key (do not expose to client)
+  - `SUPABASE_STORAGE_BUCKET`: private bucket for build payload objects (default `builds`)
+
+### Supabase Storage setup for large build imports
+
+1. Create a private bucket (for example `builds`) in Supabase Storage.
+2. In Vercel project env vars, add:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `SUPABASE_STORAGE_BUCKET` (optional if `builds`)
+   - `SUPABASE_STORAGE_PREFIX` (optional if `imports`)
+3. Ensure `ADMIN_TOKEN` is set in Vercel (still required by `/api/admin/*`).
+4. Deploy the app, then run your existing upload command flow (`pnpm batch:generate --upload ...`).
+
+Notes:
+- `SUPABASE_SERVICE_ROLE_KEY` must stay server-side only.
+- Build APIs now support records stored as inline JSON or storage pointers.
 
 ## Attribution
 

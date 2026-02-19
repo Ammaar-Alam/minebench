@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { resolveBuildSpec } from "@/lib/storage/buildPayload";
 
 export const runtime = "nodejs";
 
@@ -157,6 +158,9 @@ export async function GET(req: Request) {
             },
             select: {
               voxelData: true,
+              voxelStorageBucket: true,
+              voxelStoragePath: true,
+              voxelStorageEncoding: true,
               blockCount: true,
               generationTimeMs: true,
               model: {
@@ -181,6 +185,9 @@ export async function GET(req: Request) {
             },
             select: {
               voxelData: true,
+              voxelStorageBucket: true,
+              voxelStoragePath: true,
+              voxelStorageEncoding: true,
               blockCount: true,
               generationTimeMs: true,
               model: {
@@ -194,6 +201,11 @@ export async function GET(req: Request) {
             },
           })
         : null,
+    ]);
+
+    const [buildSpecA, buildSpecB] = await Promise.all([
+      buildA ? resolveBuildSpec(buildA) : Promise.resolve(null),
+      buildB ? resolveBuildSpec(buildB) : Promise.resolve(null),
     ]);
 
     const body = {
@@ -218,7 +230,7 @@ export async function GET(req: Request) {
                 displayName: buildA.model.displayName,
                 eloRating: Number(buildA.model.eloRating),
               },
-              voxelBuild: buildA.voxelData,
+              voxelBuild: buildSpecA,
               metrics: {
                 blockCount: buildA.blockCount,
                 generationTimeMs: buildA.generationTimeMs,
@@ -233,7 +245,7 @@ export async function GET(req: Request) {
                 displayName: buildB.model.displayName,
                 eloRating: Number(buildB.model.eloRating),
               },
-              voxelBuild: buildB.voxelData,
+              voxelBuild: buildSpecB,
               metrics: {
                 blockCount: buildB.blockCount,
                 generationTimeMs: buildB.generationTimeMs,

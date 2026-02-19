@@ -6,6 +6,8 @@ import { getPalette } from "@/lib/blocks/palettes";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { maxBlocksForGrid } from "@/lib/ai/generateVoxelBuild";
 import { gunzipSync } from "node:zlib";
+import { BuildStorageRef, loadBuildJsonFromStorage } from "@/lib/storage/buildPayload";
+import { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -56,6 +58,50 @@ async function readRequestBodyText(req: Request): Promise<{ ok: true; text: stri
   }
 
   return { ok: false, error: `Unsupported Content-Encoding: ${encoding}`, status: 415 };
+}
+
+type StorageEnvelope = {
+  storage?: {
+    bucket?: unknown;
+    path?: unknown;
+    encoding?: unknown;
+    byteSize?: unknown;
+    compressedByteSize?: unknown;
+    sha256?: unknown;
+  };
+};
+
+function parseStorageEnvelope(value: unknown): { ok: true; ref: BuildStorageRef } | { ok: false } {
+  if (!value || typeof value !== "object") return { ok: false };
+
+  const candidate = value as StorageEnvelope;
+  const storage = candidate.storage;
+  if (!storage || typeof storage !== "object") return { ok: false };
+
+  const bucket = typeof storage.bucket === "string" ? storage.bucket.trim() : "";
+  const path = typeof storage.path === "string" ? storage.path.trim() : "";
+  if (!bucket || !path) return { ok: false };
+
+  const encoding = typeof storage.encoding === "string" ? storage.encoding : null;
+  const byteSize =
+    typeof storage.byteSize === "number" && Number.isFinite(storage.byteSize) ? Math.max(0, Math.floor(storage.byteSize)) : null;
+  const compressedByteSize =
+    typeof storage.compressedByteSize === "number" && Number.isFinite(storage.compressedByteSize)
+      ? Math.max(0, Math.floor(storage.compressedByteSize))
+      : null;
+  const sha256 = typeof storage.sha256 === "string" ? storage.sha256.trim() : null;
+
+  return {
+    ok: true,
+    ref: {
+      bucket,
+      path,
+      encoding,
+      byteSize,
+      compressedByteSize,
+      sha256,
+    },
+  };
 }
 
 export async function POST(req: Request) {
@@ -140,22 +186,47 @@ export async function POST(req: Request) {
   }
 
   const raw = rawBody.text;
-  if (!raw.trim()) return NextResponse.json({ error: "Request body is empty (expected voxel build JSON)" }, { status: 400 });
+  if (!raw.trim()) return NextResponse.json({ error: "Request body is empty (expected voxel build JSON or storage envelope)" }, { status: 400 });
 
   const json = extractBestVoxelBuildJson(raw);
   if (!json) {
     return NextResponse.json({ error: "Could not find a valid JSON object in the request body" }, { status: 400 });
   }
 
+  const storageEnvelope = parseStorageEnvelope(json);
+  const hasStorageKey = Boolean(json && typeof json === "object" && "storage" in json);
+  if (hasStorageKey && !storageEnvelope.ok) {
+    return NextResponse.json(
+      { error: "Invalid storage envelope. Expected { storage: { bucket, path, encoding?, byteSize?, compressedByteSize?, sha256? } }" },
+      { status: 400 }
+    );
+  }
+
+  const buildPayload = storageEnvelope.ok
+    ? await loadBuildJsonFromStorage(storageEnvelope.ref).catch((err) => {
+        const message = err instanceof Error ? err.message : "Failed to download build payload from storage";
+        return { __storageError: message } as const;
+      })
+    : json;
+
+  if (
+    buildPayload &&
+    typeof buildPayload === "object" &&
+    "__storageError" in buildPayload &&
+    typeof buildPayload.__storageError === "string"
+  ) {
+    return NextResponse.json({ error: buildPayload.__storageError }, { status: 400 });
+  }
+
   const paletteDefs = getPalette(palette);
-  const validated = validateVoxelBuild(json, {
+  const validated = validateVoxelBuild(buildPayload, {
     gridSize,
     palette: paletteDefs,
     maxBlocks: maxBlocksForGrid(gridSize),
   });
   if (!validated.ok) return NextResponse.json({ error: validated.error }, { status: 400 });
 
-  const spec = parseVoxelBuildSpec(json);
+  const spec = parseVoxelBuildSpec(buildPayload);
   if (!spec.ok) return NextResponse.json({ error: spec.error }, { status: 400 });
 
   const blockCount = validated.value.build.blocks.length;
@@ -172,7 +243,7 @@ export async function POST(req: Request) {
   }
 
   const saved = existing
-    ? await prisma.build.update({
+      ? await prisma.build.update({
         where: { id: existing.id },
         data: {
           promptId: prompt.id,
@@ -180,7 +251,13 @@ export async function POST(req: Request) {
           gridSize,
           palette,
           mode,
-          voxelData: spec.value,
+          voxelData: storageEnvelope.ok ? Prisma.DbNull : spec.value,
+          voxelStorageBucket: storageEnvelope.ok ? storageEnvelope.ref.bucket : null,
+          voxelStoragePath: storageEnvelope.ok ? storageEnvelope.ref.path : null,
+          voxelStorageEncoding: storageEnvelope.ok ? storageEnvelope.ref.encoding ?? null : null,
+          voxelByteSize: storageEnvelope.ok ? storageEnvelope.ref.byteSize ?? null : null,
+          voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
+          voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : null,
           blockCount,
           generationTimeMs: 0,
         },
@@ -192,7 +269,13 @@ export async function POST(req: Request) {
           gridSize,
           palette,
           mode,
-          voxelData: spec.value,
+          voxelData: storageEnvelope.ok ? Prisma.DbNull : spec.value,
+          voxelStorageBucket: storageEnvelope.ok ? storageEnvelope.ref.bucket : null,
+          voxelStoragePath: storageEnvelope.ok ? storageEnvelope.ref.path : null,
+          voxelStorageEncoding: storageEnvelope.ok ? storageEnvelope.ref.encoding ?? null : null,
+          voxelByteSize: storageEnvelope.ok ? storageEnvelope.ref.byteSize ?? null : null,
+          voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
+          voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : null,
           blockCount,
           generationTimeMs: 0,
         },
@@ -207,5 +290,15 @@ export async function POST(req: Request) {
     blockCount,
     warnings: validated.value.warnings,
     overwritten: Boolean(existing),
+    storage: storageEnvelope.ok
+      ? {
+          bucket: storageEnvelope.ref.bucket,
+          path: storageEnvelope.ref.path,
+          encoding: storageEnvelope.ref.encoding ?? null,
+          byteSize: storageEnvelope.ref.byteSize ?? null,
+          compressedByteSize: storageEnvelope.ref.compressedByteSize ?? null,
+          sha256: storageEnvelope.ref.sha256 ?? null,
+        }
+      : null,
   });
 }

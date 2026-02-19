@@ -3,6 +3,7 @@ import { maxBlocksForGrid } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import { prisma } from "@/lib/prisma";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
+import { resolveBuildPayload } from "@/lib/storage/buildPayload";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,9 @@ export async function GET(
     select: {
       id: true,
       voxelData: true,
+      voxelStorageBucket: true,
+      voxelStoragePath: true,
+      voxelStorageEncoding: true,
       gridSize: true,
       palette: true,
       mode: true,
@@ -39,8 +43,15 @@ export async function GET(
 
   const gridSize = normalizeGridSize(build.gridSize);
   const palette = normalizePalette(build.palette);
+  let payload: unknown;
+  try {
+    payload = await resolveBuildPayload(build);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Build payload is unavailable";
+    return NextResponse.json({ error: message }, { status: 422 });
+  }
 
-  const validated = validateVoxelBuild(build.voxelData, {
+  const validated = validateVoxelBuild(payload, {
     gridSize,
     palette: getPalette(palette),
     maxBlocks: maxBlocksForGrid(gridSize),
@@ -48,7 +59,7 @@ export async function GET(
 
   let voxelBuild = validated.ok ? validated.value.build : null;
   if (!voxelBuild) {
-    const parsed = parseVoxelBuildSpec(build.voxelData);
+    const parsed = parseVoxelBuildSpec(payload);
     if (!parsed.ok) {
       return NextResponse.json({ error: "Build payload is invalid" }, { status: 422 });
     }
