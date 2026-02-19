@@ -390,7 +390,6 @@
 
   .mb-col-help {
     cursor: help;
-    position: relative;
     --mb-help-x: -50%;
   }
 
