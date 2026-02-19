@@ -44,6 +44,11 @@ node_modules
 
 # Database
 prisma/dev.db
+backups/
+*.dump
+*.sql
+*.sql.gz
+*.backup
 
 # Python Specific
 __pycache__

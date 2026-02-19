@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
 
 const MIN_PROMPTS_FOR_SPREAD = 3;
+const PROMPT_COVERAGE_FLOOR = 2;
 const MAX_SPREAD = 0.5;
 const RECENT_FORM_WINDOW = 30;
 const ARENA_BUILD_GRID_SIZE = 256;
@@ -27,6 +29,7 @@ type LeaderboardDispersionRow = {
   meanScore: NumberLike;
   scoreVariance: NumberLike;
   scoreSpread: NumberLike;
+  coveredPrompts: NumberLike;
   sampledPrompts: NumberLike;
   sampledVotes: NumberLike;
 };
@@ -67,6 +70,9 @@ export type ScoreDispersion = {
   scoreVariance: number | null;
   scoreSpread: number | null;
   consistency: number | null;
+  coveredPrompts: number;
+  activePrompts: number;
+  promptCoverage: number;
   sampledPrompts: number;
   sampledVotes: number;
 };
@@ -106,6 +112,10 @@ export type ModelDetailStats = {
     provider: string;
     displayName: string;
     eloRating: number;
+    ratingDeviation: number;
+    rankScore: number;
+    confidence: number;
+    stability: "Provisional" | "Established" | "Stable";
     shownCount: number;
     winCount: number;
     lossCount: number;
@@ -118,6 +128,7 @@ export type ModelDetailStats = {
     winRate: number | null;
     recentForm: number | null;
     recentDelta: number | null;
+    qualityFloorScore: number | null;
   };
   prompts: ModelPromptBreakdown[];
   opponents: ModelOpponentBreakdown[];
@@ -145,23 +156,32 @@ function normalizePalette(value: string): "simple" | "advanced" {
   return value === "advanced" ? "advanced" : "simple";
 }
 
-function summarizeDispersion(samples: PromptScoreSample[]): ScoreDispersion {
+function summarizeDispersion(samples: PromptScoreSample[], activePromptCount: number): ScoreDispersion {
   const promptAverages: number[] = [];
   let sampledVotes = 0;
+  let coveredPrompts = 0;
 
   for (const sample of samples) {
     if (sample.votes <= 0) continue;
     promptAverages.push(sample.averageScore);
     sampledVotes += sample.votes;
+    if (sample.votes >= PROMPT_COVERAGE_FLOOR) {
+      coveredPrompts += 1;
+    }
   }
 
   const sampledPrompts = promptAverages.length;
+  const promptCoverage =
+    activePromptCount > 0 ? Math.min(1, coveredPrompts / activePromptCount) : 0;
   if (sampledPrompts === 0) {
     return {
       meanScore: null,
       scoreVariance: null,
       scoreSpread: null,
       consistency: null,
+      coveredPrompts,
+      activePrompts: activePromptCount,
+      promptCoverage,
       sampledPrompts: 0,
       sampledVotes: 0,
     };
@@ -175,6 +195,9 @@ function summarizeDispersion(samples: PromptScoreSample[]): ScoreDispersion {
       scoreVariance: null,
       scoreSpread: null,
       consistency: null,
+      coveredPrompts,
+      activePrompts: activePromptCount,
+      promptCoverage,
       sampledPrompts,
       sampledVotes,
     };
@@ -190,6 +213,9 @@ function summarizeDispersion(samples: PromptScoreSample[]): ScoreDispersion {
     scoreVariance,
     scoreSpread,
     consistency,
+    coveredPrompts,
+    activePrompts: activePromptCount,
+    promptCoverage,
     sampledPrompts,
     sampledVotes,
   };
@@ -201,67 +227,74 @@ export function invalidateArenaStatsCache() {
 }
 
 async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
-  const rows = await prisma.$queryRaw<LeaderboardDispersionRow[]>`
-    WITH model_prompt_scores AS (
-      SELECT
-        matchup."modelAId" AS model_id,
-        matchup."promptId" AS prompt_id,
-        CASE vote.choice
-          WHEN 'A' THEN 1.0
-          WHEN 'B' THEN 0.0
-          WHEN 'TIE' THEN 0.5
-          ELSE NULL
-        END AS score
-      FROM "Vote" vote
-      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-      WHERE vote.choice IN ('A', 'B', 'TIE')
+  const [activePromptCount, rows] = await Promise.all([
+    prisma.prompt.count({ where: { active: true } }),
+    prisma.$queryRaw<LeaderboardDispersionRow[]>`
+      WITH model_prompt_scores AS (
+        SELECT
+          matchup."modelAId" AS model_id,
+          matchup."promptId" AS prompt_id,
+          CASE vote.choice
+            WHEN 'A' THEN 1.0
+            WHEN 'B' THEN 0.0
+            WHEN 'TIE' THEN 0.5
+            ELSE NULL
+          END AS score
+        FROM "Vote" vote
+        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+        WHERE vote.choice IN ('A', 'B', 'TIE')
 
-      UNION ALL
+        UNION ALL
 
+        SELECT
+          matchup."modelBId" AS model_id,
+          matchup."promptId" AS prompt_id,
+          CASE vote.choice
+            WHEN 'A' THEN 0.0
+            WHEN 'B' THEN 1.0
+            WHEN 'TIE' THEN 0.5
+            ELSE NULL
+          END AS score
+        FROM "Vote" vote
+        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+        WHERE vote.choice IN ('A', 'B', 'TIE')
+      ),
+      per_prompt AS (
+        SELECT
+          model_prompt_scores.model_id AS "modelId",
+          model_prompt_scores.prompt_id AS "promptId",
+          AVG(model_prompt_scores.score)::double precision AS "promptAverage",
+          COUNT(*)::int AS "promptVotes"
+        FROM model_prompt_scores
+        GROUP BY model_prompt_scores.model_id, model_prompt_scores.prompt_id
+      )
       SELECT
-        matchup."modelBId" AS model_id,
-        matchup."promptId" AS prompt_id,
-        CASE vote.choice
-          WHEN 'A' THEN 0.0
-          WHEN 'B' THEN 1.0
-          WHEN 'TIE' THEN 0.5
+        per_prompt."modelId" AS "modelId",
+        AVG(per_prompt."promptAverage")::double precision AS "meanScore",
+        CASE
+          WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
+          THEN VAR_POP(per_prompt."promptAverage")::double precision
           ELSE NULL
-        END AS score
-      FROM "Vote" vote
-      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-      WHERE vote.choice IN ('A', 'B', 'TIE')
-    ),
-    per_prompt AS (
-      SELECT
-        model_prompt_scores.model_id AS "modelId",
-        model_prompt_scores.prompt_id AS "promptId",
-        AVG(model_prompt_scores.score)::double precision AS "promptAverage",
-        COUNT(*)::int AS "promptVotes"
-      FROM model_prompt_scores
-      GROUP BY model_prompt_scores.model_id, model_prompt_scores.prompt_id
-    )
-    SELECT
-      per_prompt."modelId" AS "modelId",
-      AVG(per_prompt."promptAverage")::double precision AS "meanScore",
-      CASE
-        WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
-        THEN VAR_POP(per_prompt."promptAverage")::double precision
-        ELSE NULL
-      END AS "scoreVariance",
-      CASE
-        WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
-        THEN SQRT(VAR_POP(per_prompt."promptAverage"))::double precision
-        ELSE NULL
-      END AS "scoreSpread",
-      COUNT(*)::int AS "sampledPrompts",
-      COALESCE(SUM(per_prompt."promptVotes"), 0)::int AS "sampledVotes"
-    FROM per_prompt
-    GROUP BY per_prompt."modelId"
-  `;
+        END AS "scoreVariance",
+        CASE
+          WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
+          THEN SQRT(VAR_POP(per_prompt."promptAverage"))::double precision
+          ELSE NULL
+        END AS "scoreSpread",
+        COUNT(*) FILTER (WHERE per_prompt."promptVotes" >= ${PROMPT_COVERAGE_FLOOR})::int AS "coveredPrompts",
+        COUNT(*)::int AS "sampledPrompts",
+        COALESCE(SUM(per_prompt."promptVotes"), 0)::int AS "sampledVotes"
+      FROM per_prompt
+      GROUP BY per_prompt."modelId"
+    `,
+  ]);
 
   const out = new Map<string, ScoreDispersion>();
   for (const row of rows) {
     const scoreSpreadRaw = row.scoreSpread == null ? null : toNumber(row.scoreSpread);
+    const coveredPrompts = toNumber(row.coveredPrompts);
+    const promptCoverage =
+      activePromptCount > 0 ? Math.min(1, coveredPrompts / activePromptCount) : 0;
     out.set(row.modelId, {
       meanScore: row.meanScore == null ? null : toNumber(row.meanScore),
       scoreVariance: row.scoreVariance == null ? null : toNumber(row.scoreVariance),
@@ -270,6 +303,9 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
         scoreSpreadRaw == null
           ? null
           : Math.round((1 - Math.min(MAX_SPREAD, scoreSpreadRaw) / MAX_SPREAD) * 100),
+      coveredPrompts,
+      activePrompts: activePromptCount,
+      promptCoverage,
       sampledPrompts: toNumber(row.sampledPrompts),
       sampledVotes: toNumber(row.sampledVotes),
     });
@@ -311,6 +347,8 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       provider: true,
       displayName: true,
       eloRating: true,
+      glickoRd: true,
+      conservativeRating: true,
       shownCount: true,
       winCount: true,
       lossCount: true,
@@ -321,7 +359,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
 
   if (!model) return null;
 
-  const [promptRows, opponentRows, recentScoreRows, builds] = await Promise.all([
+  const [promptRows, opponentRows, recentScoreRows, builds, activePromptCount] = await Promise.all([
     prisma.$queryRaw<PromptBreakdownRow[]>`
       SELECT
         matchup."promptId" AS "promptId",
@@ -454,6 +492,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         },
       },
     }),
+    prisma.prompt.count({ where: { active: true } }),
   ]);
 
   const promptSamples: PromptScoreSample[] = [];
@@ -485,7 +524,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
     promptSamples.push({ averageScore, votes });
   }
 
-  const dispersion = summarizeDispersion(promptSamples);
+  const dispersion = summarizeDispersion(promptSamples, activePromptCount);
 
   const buildByPromptId = new Map<
     string,
@@ -557,13 +596,28 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   const priorForm = average(priorScores);
 
   const { decisiveVotes, totalVotes } = summarizeArenaVotes(model);
+  const ratingDeviation = Number(model.glickoRd);
+  const rawRating = Number(model.eloRating);
+  const rankScore = Number(model.conservativeRating ?? conservativeScore(rawRating, ratingDeviation));
+  const confidence = confidenceFromRd(ratingDeviation);
+  const stability = stabilityTier({
+    decisiveVotes,
+    promptCoverage: dispersion.promptCoverage,
+    rd: ratingDeviation,
+  });
+  const qualityFloorScore =
+    totalVotes > 0 ? Math.max(0, 1 - model.bothBadCount / totalVotes) : null;
 
   return {
     model: {
       key: model.key,
       provider: model.provider,
       displayName: model.displayName,
-      eloRating: Number(model.eloRating),
+      eloRating: rawRating,
+      ratingDeviation,
+      rankScore,
+      confidence,
+      stability,
       shownCount: model.shownCount,
       winCount: model.winCount,
       lossCount: model.lossCount,
@@ -578,6 +632,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       recentForm,
       recentDelta:
         recentForm != null && priorForm != null ? recentForm - priorForm : null,
+      qualityFloorScore,
     },
     prompts,
     opponents,

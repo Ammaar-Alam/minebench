@@ -108,7 +108,7 @@ export async function GET(req: Request) {
           },
         },
       },
-      orderBy: [{ eloRating: "desc" }, { displayName: "asc" }],
+      orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
       select: {
         id: true,
         key: true,

@@ -416,6 +416,11 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const voteSummary = summarizeArenaVotes(data.model);
   const recordText = `${data.model.winCount}-${voteSummary.decisiveLossCount}-${data.model.drawCount}`;
   const decisiveVotes = voteSummary.decisiveVotes;
+  const coveragePercent = Math.round((data.summary.promptCoverage ?? 0) * 100);
+  const coverageLabel =
+    data.summary.activePrompts > 0
+      ? `${data.summary.coveredPrompts}/${data.summary.activePrompts}`
+      : "0/0";
 
   const promptBreakdown = data.prompts;
   const promptBuildCount = promptBreakdown.filter((prompt) => prompt.build != null).length;
@@ -597,6 +602,11 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                 {data.model.displayName}
               </h1>
               <div className="flex flex-wrap items-center gap-2">
+                <div className="mb-model-stat-pill mb-model-stat-pill-neutral mb-model-reveal mb-model-reveal-in">
+                  <span className="font-mono text-[13px] font-semibold">
+                    {data.model.stability}
+                  </span>
+                </div>
                 <div className="mb-model-stat-pill mb-model-stat-pill-success mb-model-reveal mb-model-reveal-in">
                   <span className="font-mono text-[13px] font-semibold">Record {recordText}</span>
                 </div>
@@ -620,19 +630,35 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
               <div className="rounded-[1.2rem] bg-gradient-to-br from-accent/[0.09] via-transparent to-accent2/[0.12] p-px">
                 <div className="rounded-[1.12rem] bg-bg/45 p-1.5 ring-1 ring-border/70">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    <MetricTile label="Rating" value={`${Math.round(data.model.eloRating)}`} />
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <MetricTile
+                      label="Rank score"
+                      value={`${Math.round(data.model.rankScore)}`}
+                      sub={`Raw ${Math.round(data.model.eloRating)}`}
+                    />
+                    <MetricTile
+                      label="Confidence"
+                      value={`${data.model.confidence}%`}
+                      sub={`RD ${Math.round(data.model.ratingDeviation)}`}
+                    />
+                    <MetricTile label="Coverage" value={`${coveragePercent}%`} sub={coverageLabel} />
                     <MetricTile label="Win rate" value={formatPercent(data.summary.winRate)} />
                     <MetricTile label="Spread" value={formatPercent(data.summary.scoreSpread)} />
                     <MetricTile label="Votes" value={data.summary.totalVotes.toLocaleString()} />
                     <MetricTile
-                      label="Spread votes"
-                      value={data.summary.sampledVotes.toLocaleString()}
+                      label="Stability"
+                      value={data.model.stability}
+                      tone={
+                        data.model.stability === "Stable"
+                          ? "text-success"
+                          : data.model.stability === "Established"
+                            ? "text-accent"
+                            : "text-warn"
+                      }
                     />
                     <MetricTile
-                      label="Stability"
-                      value={consistencyLabel(data.summary.consistency)}
-                      tone={consistencyTone(data.summary.consistency)}
+                      label="Quality floor"
+                      value={formatPercent(data.summary.qualityFloorScore)}
                     />
                   </div>
                 </div>

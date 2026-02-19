@@ -1,22 +1,28 @@
 #!/usr/bin/env npx tsx
 /**
- * Recompute Arena Elo + vote counters from stored vote history.
+ * Recompute Arena rating + vote counters from stored vote history.
  *
  * Usage:
- *   pnpm elo:recompute                       # dry run
- *   pnpm elo:recompute --yes                 # apply recomputed values
- *   pnpm elo:recompute --ignore-both-bad     # dry run, ignore BOTH_BAD for Elo/losses
- *   pnpm elo:recompute --yes --ignore-both-bad
+ *   pnpm elo:recompute         # dry run
+ *   pnpm elo:recompute --yes   # apply recomputed values
  */
 
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
-import { INITIAL_RATING, updateEloPair, updateEloVsBaseline } from "../lib/arena/elo";
+import {
+  INITIAL_RATING,
+  INITIAL_RD,
+  INITIAL_VOLATILITY,
+  conservativeScore,
+  updateRatingPair,
+} from "../lib/arena/rating";
 
 type Choice = "A" | "B" | "TIE" | "BOTH_BAD";
 
 type ModelState = {
   rating: number;
+  rd: number;
+  volatility: number;
   winCount: number;
   lossCount: number;
   drawCount: number;
@@ -27,7 +33,6 @@ function parseArgs(argv: string[]) {
   return {
     help: argv.includes("--help") || argv.includes("-h"),
     yes: argv.includes("--yes") || argv.includes("--apply"),
-    ignoreBothBad: argv.includes("--ignore-both-bad"),
   };
 }
 
@@ -44,13 +49,11 @@ async function main() {
 
   if (args.help) {
     console.log(`
-Recompute MineBench Arena Elo + counters from vote history.
+Recompute MineBench Arena rating + counters from vote history.
 
 Usage:
   pnpm elo:recompute
   pnpm elo:recompute --yes
-  pnpm elo:recompute --ignore-both-bad
-  pnpm elo:recompute --yes --ignore-both-bad
 `.trim());
     return;
   }
@@ -62,6 +65,9 @@ Usage:
         key: true,
         displayName: true,
         eloRating: true,
+        glickoRd: true,
+        glickoVolatility: true,
+        conservativeRating: true,
         winCount: true,
         lossCount: true,
         drawCount: true,
@@ -86,6 +92,8 @@ Usage:
   for (const model of models) {
     stateByModelId.set(model.id, {
       rating: INITIAL_RATING,
+      rd: INITIAL_RD,
+      volatility: INITIAL_VOLATILITY,
       winCount: 0,
       lossCount: 0,
       drawCount: 0,
@@ -102,24 +110,22 @@ Usage:
     if (vote.choice === "BOTH_BAD") {
       a.bothBadCount += 1;
       b.bothBadCount += 1;
-      if (args.ignoreBothBad) continue;
-
-      a.rating = updateEloVsBaseline(a.rating, 0);
-      b.rating = updateEloVsBaseline(b.rating, 0);
-      a.lossCount += 1;
-      b.lossCount += 1;
       continue;
     }
 
     const outcome = vote.choice === "A" ? "A_WIN" : vote.choice === "B" ? "B_WIN" : "DRAW";
-    const updated = updateEloPair({
-      ratingA: a.rating,
-      ratingB: b.rating,
+    const updated = updateRatingPair({
+      a: { rating: a.rating, rd: a.rd, volatility: a.volatility },
+      b: { rating: b.rating, rd: b.rd, volatility: b.volatility },
       outcome,
     });
 
-    a.rating = updated.newA;
-    b.rating = updated.newB;
+    a.rating = updated.a.rating;
+    a.rd = updated.a.rd;
+    a.volatility = updated.a.volatility;
+    b.rating = updated.b.rating;
+    b.rd = updated.b.rd;
+    b.volatility = updated.b.volatility;
 
     if (outcome === "A_WIN") {
       a.winCount += 1;
@@ -143,6 +149,12 @@ Usage:
         displayName: model.displayName,
         oldRating: Number(model.eloRating),
         newRating: recomputed.rating,
+        oldRd: Number(model.glickoRd),
+        newRd: recomputed.rd,
+        oldVolatility: Number(model.glickoVolatility),
+        newVolatility: recomputed.volatility,
+        oldConservative: Number(model.conservativeRating),
+        newConservative: conservativeScore(recomputed.rating, recomputed.rd),
         oldWinCount: model.winCount,
         newWinCount: recomputed.winCount,
         oldLossCount: model.lossCount,
@@ -156,16 +168,16 @@ Usage:
     .filter((entry): entry is NonNullable<typeof entry> => entry != null)
     .sort(
       (a, b) =>
-        Math.abs(b.newRating - b.oldRating) - Math.abs(a.newRating - a.oldRating),
+        Math.abs(b.newConservative - b.oldConservative) -
+        Math.abs(a.newConservative - a.oldConservative),
     );
 
   console.log(`models: ${models.length}`);
   console.log(`votes replayed: ${votes.length}`);
-  console.log(`mode: ${args.ignoreBothBad ? "ignore BOTH_BAD for Elo/losses" : "full replay"}`);
-  console.log("top rating deltas:");
+  console.log("top conservative-score deltas:");
   for (const diff of diffs.slice(0, 10)) {
     console.log(
-      `- ${diff.displayName} (${diff.key}): ${diff.oldRating.toFixed(2)} -> ${diff.newRating.toFixed(2)} (${formatDelta(diff.newRating - diff.oldRating)})`,
+      `- ${diff.displayName} (${diff.key}): ${diff.oldConservative.toFixed(2)} -> ${diff.newConservative.toFixed(2)} (${formatDelta(diff.newConservative - diff.oldConservative)})`,
     );
   }
 
@@ -180,6 +192,9 @@ Usage:
         where: { id: diff.id },
         data: {
           eloRating: diff.newRating,
+          glickoRd: diff.newRd,
+          glickoVolatility: diff.newVolatility,
+          conservativeRating: diff.newConservative,
           winCount: diff.newWinCount,
           lossCount: diff.newLossCount,
           drawCount: diff.newDrawCount,
@@ -199,3 +214,4 @@ main()
     process.exitCode = 1;
   })
   .finally(() => prisma.$disconnect().catch(() => undefined));
+

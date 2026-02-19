@@ -110,6 +110,9 @@ export async function POST(req: Request) {
         enabled: false,
         isBaseline: true,
         eloRating: 1500,
+        glickoRd: 350,
+        glickoVolatility: 0.06,
+        conservativeRating: 800,
       },
       update: {},
     });
@@ -125,6 +128,9 @@ export async function POST(req: Request) {
           enabled: m.enabled,
           isBaseline: false,
           eloRating: 1500,
+          glickoRd: 350,
+          glickoVolatility: 0.06,
+          conservativeRating: 800,
         },
         update: {
           provider: m.provider,
