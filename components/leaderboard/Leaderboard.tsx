@@ -24,6 +24,18 @@ function spreadLabel(spread: number | null): string {
   return "Swingy";
 }
 
+function stabilityChipClass(stability: "Provisional" | "Established" | "Stable"): string {
+  if (stability === "Stable") return "bg-success/15 text-success ring-success/35";
+  if (stability === "Established") return "bg-accent/15 text-accent ring-accent/35";
+  return "bg-warn/14 text-warn ring-warn/35";
+}
+
+function confidenceClass(confidence: number): string {
+  if (confidence >= 75) return "text-success";
+  if (confidence >= 50) return "text-accent";
+  return "text-warn";
+}
+
 export function Leaderboard() {
   const [data, setData] = useState<LeaderboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -89,6 +101,7 @@ export function Leaderboard() {
                 </div>
                 <div className="mb-leaderboard-favorite-meta">
                   <span className="mb-leaderboard-favorite-chip">{topRecord} record</span>
+                  <span className="mb-leaderboard-favorite-chip">{topModel.stability}</span>
                   {topWinRate != null ? (
                     <span className="mb-leaderboard-favorite-chip">
                       {formatPercent(topWinRate)} wins
@@ -138,6 +151,7 @@ export function Leaderboard() {
             {data?.models.map((m, index) => {
               const voteSummary = summarizeArenaVotes(m);
               const consistency = m.consistency ?? 0;
+              const coveragePercent = Math.round((m.promptCoverage ?? 0) * 100);
               return (
                 <button
                   key={m.key}
@@ -160,8 +174,15 @@ export function Leaderboard() {
                       <div className="mt-1.5 truncate text-[1rem] font-semibold tracking-tight text-fg">
                         {m.displayName}
                       </div>
-                      <div className="truncate text-xs tracking-wide text-muted2">
-                        {m.provider}
+                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                        <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-mono ring-1 ${stabilityChipClass(
+                            m.stability,
+                          )}`}
+                        >
+                          {m.stability}
+                        </span>
                       </div>
                     </div>
                     <div className="text-right">
@@ -169,9 +190,29 @@ export function Leaderboard() {
                         Rating
                       </div>
                       <div className="font-mono text-[1.15rem] font-semibold text-fg">
-                        {Math.round(m.eloRating).toLocaleString()}
+                        {Math.round(m.rankScore).toLocaleString()}
+                      </div>
+                      <div className="text-[11px] text-muted2">
+                        Raw {Math.round(m.eloRating).toLocaleString()}
                       </div>
                     </div>
+                  </div>
+
+                  <div className="mt-2.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                    <span
+                      className={`inline-flex h-6 items-center rounded-full px-2 ring-1 ${
+                        m.confidence >= 75
+                          ? "bg-success/14 text-success ring-success/30"
+                          : m.confidence >= 50
+                            ? "bg-accent/14 text-accent ring-accent/30"
+                            : "bg-warn/14 text-warn ring-warn/30"
+                      }`}
+                    >
+                      Confidence {m.confidence}%
+                    </span>
+                    <span className="inline-flex h-6 items-center rounded-full bg-bg/58 px-2 text-muted2 ring-1 ring-border/70">
+                      Coverage {coveragePercent}%
+                    </span>
                   </div>
 
                   <div className="mt-2.5 flex items-center gap-2">
@@ -222,26 +263,26 @@ export function Leaderboard() {
             className="relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table"
           >
             <colgroup>
-              <col className="w-[32%] md:w-[23%]" />
-              <col className="w-[14%] md:w-[11%]" />
-              <col className="w-[22%] md:w-[18%]" />
-              <col className="hidden md:table-column md:w-[10%]" />
-              <col className="hidden md:table-column md:w-[10%]" />
-              <col className="w-[18%] md:w-[17%]" />
-              <col className="w-[14%] md:w-[11%]" />
+              <col className="w-[21%]" />
+              <col className="w-[12%]" />
+              <col className="w-[10%]" />
+              <col className="w-[8%]" />
+              <col className="w-[13%]" />
+              <col className="hidden lg:table-column lg:w-[7%]" />
+              <col className="hidden lg:table-column lg:w-[7%]" />
+              <col className="w-[12%]" />
+              <col className="w-[10%]" />
             </colgroup>
             <thead className="text-xs uppercase text-muted2">
               <tr>
                 <th scope="col" className="mb-leaderboard-header mb-leaderboard-header-model text-left">
-                  <span className="mb-col-help-label">
-                    Model
-                  </span>
+                  <span className="mb-col-help-label">Model</span>
                 </th>
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Overall rank score from matchups. Beating stronger models raises this faster."
-                  aria-label="Rating. Overall rank score from matchups. Beating stronger models raises this faster."
+                  data-help="Primary rank score used for ordering. Gray subtext shows raw rating before uncertainty adjustment."
+                  aria-label="Rating. Confidence-adjusted rank score used for ordering."
                   tabIndex={0}
                 >
                   <span className="mb-col-help-label">Rating</span>
@@ -249,7 +290,25 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="How steady performance is across prompts. Higher means fewer swings."
+                  data-help="Top percent is confidence. Gray RD is rating deviation (uncertainty): lower RD means more reliable."
+                  aria-label="Confidence. Higher confidence means lower uncertainty."
+                  tabIndex={0}
+                >
+                  <span className="mb-col-help-label">Confidence</span>
+                </th>
+                <th
+                  scope="col"
+                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                  data-help="Top percent is prompt coverage. Gray x/y is covered prompts out of all arena-eligible prompts."
+                  aria-label="Coverage. Share of arena-eligible prompts with enough decisive votes for this model."
+                  tabIndex={0}
+                >
+                  <span className="mb-col-help-label">Coverage</span>
+                </th>
+                <th
+                  scope="col"
+                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                  data-help="Number and bar show prompt-to-prompt steadiness. Higher means fewer swings."
                   aria-label="Consistency. How steady performance is across prompts. Higher means fewer swings."
                   tabIndex={0}
                 >
@@ -257,7 +316,7 @@ export function Leaderboard() {
                 </th>
                 <th
                   scope="col"
-                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center md:table-cell"
+                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center lg:table-cell"
                   data-help="Prompt-to-prompt variability. Lower spread means more stable output."
                   aria-label="Spread. Prompt-to-prompt variability. Lower spread means more stable output."
                   tabIndex={0}
@@ -266,8 +325,8 @@ export function Leaderboard() {
                 </th>
                 <th
                   scope="col"
-                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center md:table-cell"
-                  data-help="Average prompt score in decisive comparisons. Higher means stronger typical output."
+                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center lg:table-cell"
+                  data-help="Average prompt score from decisive comparisons. Higher means stronger typical output."
                   aria-label="Average score. Average prompt score in decisive comparisons. Higher means stronger typical output."
                   tabIndex={0}
                 >
@@ -276,7 +335,7 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Win-loss-draw totals from decisive votes."
+                  data-help="Win-loss-draw totals from decisive votes. Both-bad votes are excluded."
                   aria-label="Record. Win-loss-draw totals from decisive votes."
                   tabIndex={0}
                 >
@@ -285,7 +344,8 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Total comparisons seen, including both-bad votes."
+                  data-help="Top number is total votes seen. Gray line shows both-bad count included in that total."
+                  data-help-align="right"
                   aria-label="Votes. Total comparisons seen, including both-bad votes."
                   tabIndex={0}
                 >
@@ -327,32 +387,57 @@ export function Leaderboard() {
                           <div className="truncate font-medium text-fg transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent">
                             {m.displayName}
                           </div>
-                          <div className="truncate text-xs tracking-wide text-muted2">{m.provider}</div>
+                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                            <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
+                            <span
+                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-mono ring-1 ${stabilityChipClass(
+                                m.stability,
+                              )}`}
+                            >
+                              {m.stability}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell px-3 py-3 text-center font-mono font-semibold tracking-tight text-fg/95 sm:px-4 sm:py-3.5">
-                      {Math.round(m.eloRating).toLocaleString()}
+                    <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
+                      <div className="font-mono font-semibold tracking-tight text-fg/95">
+                        {Math.round(m.rankScore).toLocaleString()}
+                      </div>
+                      <div className="text-[11px] text-muted2">
+                        Raw {Math.round(m.eloRating).toLocaleString()}
+                      </div>
+                    </td>
+                    <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
+                      <div className={`font-mono text-sm ${confidenceClass(m.confidence)}`}>
+                        {m.confidence}%
+                      </div>
+                      <div className="text-[11px] text-muted2">RD {Math.round(m.ratingDeviation)}</div>
+                    </td>
+                    <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
+                      <div className="font-mono text-sm text-fg">
+                        {Math.round((m.promptCoverage ?? 0) * 100)}%
+                      </div>
+                      <div className="text-[11px] text-muted2">
+                        {m.coveredPrompts}/{m.activePrompts}
+                      </div>
                     </td>
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
                       <div className="flex w-full items-center justify-center gap-1.5">
                         <span className="w-8 font-mono text-xs text-fg/95">
                           {m.consistency != null ? `${m.consistency}` : "—"}
                         </span>
-                        <div className="h-1.5 w-full max-w-[10rem] overflow-hidden rounded-full bg-border/40">
+                        <div className="h-1.5 w-full max-w-[8.5rem] overflow-hidden rounded-full bg-border/40">
                           <div
                             className="h-full rounded-full bg-gradient-to-r from-accent to-accent2 transition-[width] duration-500"
                             style={{
-                              width: `${Math.max(
-                                0,
-                                Math.min(100, m.consistency ?? 0)
-                              ).toFixed(1)}%`,
+                              width: `${Math.max(0, Math.min(100, m.consistency ?? 0)).toFixed(1)}%`,
                             }}
                           />
                         </div>
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell hidden px-3 py-3 text-center align-middle md:table-cell sm:px-4 sm:py-3.5">
+                    <td className="mb-leaderboard-cell hidden px-3 py-3 text-center align-middle lg:table-cell sm:px-4 sm:py-3.5">
                       <div className={`font-mono text-xs ${spreadTone(m.scoreSpread)}`}>
                         {formatPercent(m.scoreSpread)}
                       </div>
@@ -360,31 +445,31 @@ export function Leaderboard() {
                         {spreadLabel(m.scoreSpread)}
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell hidden px-3 py-3 text-center align-middle md:table-cell sm:px-4 sm:py-3.5">
+                    <td className="mb-leaderboard-cell hidden px-3 py-3 text-center align-middle lg:table-cell sm:px-4 sm:py-3.5">
                       <div className="flex flex-col items-center gap-1 font-mono">
                         <span className="font-semibold text-fg/95">{formatPercent(m.meanScore)}</span>
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
+                    <td className="mb-leaderboard-cell px-2.5 py-3 text-center align-middle sm:px-3 sm:py-3.5">
                       <div className="mb-leaderboard-record-grid font-mono text-[11px]">
-                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-success">
+                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-record-chip mb-leaderboard-outcome-chip-success">
                           W {m.winCount}
                         </span>
-                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-danger">
+                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-record-chip mb-leaderboard-outcome-chip-danger">
                           L {voteSummary.decisiveLossCount}
                         </span>
-                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-outcome-chip-muted">
+                        <span className="mb-leaderboard-outcome-chip mb-leaderboard-record-chip mb-leaderboard-outcome-chip-muted">
                           D {m.drawCount}
                         </span>
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
-                      <div className="space-y-1.5">
-                        <div className="font-mono text-xs font-semibold text-fg">
+                    <td className="mb-leaderboard-cell px-2.5 py-3 text-center sm:px-3 sm:py-3.5">
+                      <div className="mb-leaderboard-votes-stack">
+                        <div className="mb-leaderboard-votes-total font-mono font-semibold text-fg">
                           {voteSummary.totalVotes.toLocaleString()}
                         </div>
-                        <div className="mb-leaderboard-votes-meta text-xs tracking-tight text-muted2">
-                          {m.bothBadCount.toLocaleString()} both bad
+                        <div className="mb-leaderboard-votes-meta text-muted2">
+                          both bad {m.bothBadCount.toLocaleString()}
                         </div>
                       </div>
                     </td>
@@ -393,7 +478,7 @@ export function Leaderboard() {
               })}
               {!data ? (
                 <tr role="status" aria-live="polite">
-                  <td className="px-3 py-6 text-muted sm:px-4" colSpan={7}>
+                  <td className="px-3 py-6 text-muted sm:px-4" colSpan={9}>
                     <div className="mx-auto w-fit animate-pulse rounded-full bg-border/22 px-4 py-1.5 font-mono text-xs text-muted">
                       Loading…
                     </div>

@@ -86,6 +86,9 @@ Usage:
     const updatedModels = await tx.model.updateMany({
       data: {
         eloRating: 1500,
+        glickoRd: 350,
+        glickoVolatility: 0.06,
+        conservativeRating: 800,
         shownCount: 0,
         winCount: 0,
         lossCount: 0,
@@ -114,4 +117,3 @@ main()
     process.exitCode = 1;
   })
   .finally(() => prisma.$disconnect().catch(() => undefined));
-

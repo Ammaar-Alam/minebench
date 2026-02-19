@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { updateEloPair, updateEloVsBaseline } from "@/lib/arena/elo";
+import { conservativeScore, updateRatingPair } from "@/lib/arena/rating";
 import type { VoteChoice } from "@/lib/arena/types";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 
@@ -59,22 +59,16 @@ export async function POST(req: Request) {
       const b = matchup.modelB;
 
       if (choice === "BOTH_BAD") {
-        const newA = updateEloVsBaseline(Number(a.eloRating), 0);
-        const newB = updateEloVsBaseline(Number(b.eloRating), 0);
         await tx.model.update({
           where: { id: a.id },
           data: {
-            eloRating: newA,
             bothBadCount: { increment: 1 },
-            lossCount: { increment: 1 },
           },
         });
         await tx.model.update({
           where: { id: b.id },
           data: {
-            eloRating: newB,
             bothBadCount: { increment: 1 },
-            lossCount: { increment: 1 },
           },
         });
         return;
@@ -82,38 +76,59 @@ export async function POST(req: Request) {
 
       const outcome =
         choice === "A" ? "A_WIN" : choice === "B" ? "B_WIN" : "DRAW";
-      const updated = updateEloPair({
-        ratingA: Number(a.eloRating),
-        ratingB: Number(b.eloRating),
+      const updated = updateRatingPair({
+        a: {
+          rating: Number(a.eloRating),
+          rd: Number(a.glickoRd),
+          volatility: Number(a.glickoVolatility),
+        },
+        b: {
+          rating: Number(b.eloRating),
+          rd: Number(b.glickoRd),
+          volatility: Number(b.glickoVolatility),
+        },
         outcome,
       });
+
+      const updateModelA = {
+        eloRating: updated.a.rating,
+        glickoRd: updated.a.rd,
+        glickoVolatility: updated.a.volatility,
+        conservativeRating: conservativeScore(updated.a.rating, updated.a.rd),
+      };
+      const updateModelB = {
+        eloRating: updated.b.rating,
+        glickoRd: updated.b.rd,
+        glickoVolatility: updated.b.volatility,
+        conservativeRating: conservativeScore(updated.b.rating, updated.b.rd),
+      };
 
       if (outcome === "A_WIN") {
         await tx.model.update({
           where: { id: a.id },
-          data: { eloRating: updated.newA, winCount: { increment: 1 } },
+          data: { ...updateModelA, winCount: { increment: 1 } },
         });
         await tx.model.update({
           where: { id: b.id },
-          data: { eloRating: updated.newB, lossCount: { increment: 1 } },
+          data: { ...updateModelB, lossCount: { increment: 1 } },
         });
       } else if (outcome === "B_WIN") {
         await tx.model.update({
           where: { id: a.id },
-          data: { eloRating: updated.newA, lossCount: { increment: 1 } },
+          data: { ...updateModelA, lossCount: { increment: 1 } },
         });
         await tx.model.update({
           where: { id: b.id },
-          data: { eloRating: updated.newB, winCount: { increment: 1 } },
+          data: { ...updateModelB, winCount: { increment: 1 } },
         });
       } else {
         await tx.model.update({
           where: { id: a.id },
-          data: { eloRating: updated.newA, drawCount: { increment: 1 } },
+          data: { ...updateModelA, drawCount: { increment: 1 } },
         });
         await tx.model.update({
           where: { id: b.id },
-          data: { eloRating: updated.newB, drawCount: { increment: 1 } },
+          data: { ...updateModelB, drawCount: { increment: 1 } },
         });
       }
     });

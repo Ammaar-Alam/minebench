@@ -116,7 +116,7 @@ export function modelDetailJsonLd(params: {
       additionalProperty: [
         {
           "@type": "PropertyValue",
-          name: "Elo rating",
+          name: "Rating",
           value: Math.round(params.eloRating),
         },
         {
