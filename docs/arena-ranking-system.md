@@ -187,6 +187,25 @@ Goal: keep discovery and avoid overfitting top traffic.
 - Prompt weight: inverse of total decisive votes for that prompt.
 - Model weights: inverse `shownCount`.
 
+### 4.5 New model onboarding behavior
+
+When a new model is introduced, the system does prioritize calibration exposure, but it does not enforce equal total vote counts.
+
+How it is prioritized:
+
+- Coverage lane (40% of traffic) prefers the lowest prompt-coverage model first, then lower `shownCount`.
+- Uncertainty lane (20%) weights anchors by `RD * (1 + (1 - promptCoverage))`; new models typically start with high RD and low coverage, so they are heavily favored.
+- Exploration lane (10%) uses inverse `shownCount`, which also favors newly introduced models.
+
+What it does not guarantee:
+
+- No hard rule says a new model must exactly \"catch up\" to every other model’s total vote count.
+- The target is improved calibration quality (coverage + uncertainty reduction), not strict equalized vote totals.
+
+Important eligibility requirement:
+
+- A model cannot appear in arena sampling until it has eligible builds (arena settings) on prompts that have at least two enabled models with builds.
+
 ## 5) Prompt selection math (for a chosen pair)
 
 For a specific pair `(modelA, modelB)`, only shared prompt IDs are candidates.

@@ -211,6 +211,7 @@ Copy `.env.example` to `.env` and set what you need:
   - uncertainty `20%`
   - exploration `10%`
 - Prompt/model eligibility is based on arena-ready builds (`gridSize=256`, `palette=simple`, `mode=precise`) with at least two enabled models per prompt.
+- New models are prioritized for calibration exposure via low-coverage + high-uncertainty + low-shownCount weighting, but there is no hard equal-vote-count guarantee.
 - A session cookie (`mb_session`) is used so each session can vote once per matchup.
 - Vote options: `A`, `B`, `TIE`, `BOTH_BAD`.
 - Rating updates:
