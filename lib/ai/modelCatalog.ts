@@ -24,6 +24,7 @@ export type ModelKey =
   | "anthropic_claude_4_5_opus"
   | "anthropic_claude_4_6_opus"
   | "gemini_3_0_pro"
+  | "gemini_3_1_pro"
   | "gemini_3_0_flash"
   | "gemini_2_5_pro"
   | "moonshot_kimi_k2"
@@ -151,6 +152,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     provider: "gemini",
     modelId: "gemini-3-pro-preview",
     displayName: "Gemini 3.0 Pro",
+    enabled: false,
+    openRouterModelId: "google/gemini-3-pro-preview",
+  },
+  {
+    key: "gemini_3_1_pro",
+    provider: "gemini",
+    modelId: "gemini-3-pro-preview",
+    displayName: "Gemini 3.1 Pro",
     enabled: true,
     openRouterModelId: "google/gemini-3-pro-preview",
   },

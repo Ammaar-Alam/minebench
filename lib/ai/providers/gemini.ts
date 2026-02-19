@@ -6,6 +6,24 @@ type GeminiGenerateContentResponse = {
   candidates?: { content?: { parts?: { text?: string }[] } }[];
 };
 
+type GeminiThinkingConfig = {
+  thinkingLevel?: "low" | "high";
+  thinkingBudget?: number;
+};
+
+function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | undefined {
+  if (modelId.startsWith("gemini-3")) {
+    return { thinkingLevel: "high" };
+  }
+
+  if (modelId.startsWith("gemini-2.5-pro")) {
+    // Use adaptive/dynamic reasoning budget for 2.5 Pro.
+    return { thinkingBudget: -1 };
+  }
+
+  return undefined;
+}
+
 export async function geminiGenerateText(params: {
   modelId: string;
   apiKey?: string;
@@ -33,12 +51,14 @@ export async function geminiGenerateText(params: {
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
   let res: Response | null = null;
   try {
+    const thinkingConfig = bestThinkingConfigForModel(params.modelId);
     const basePayload = {
       systemInstruction: { parts: [{ text: params.system }] },
       contents: [{ role: "user", parts: [{ text: params.user }] }],
       generationConfig: {
         temperature: params.temperature ?? 0.2,
         maxOutputTokens: params.maxOutputTokens ?? 8192,
+        ...(thinkingConfig ? { thinkingConfig } : {}),
       },
     };
 

@@ -368,11 +368,13 @@ async function providerGenerateText(args: {
         ? ["xhigh", "high"]
         : model.openRouterModelId === "anthropic/claude-sonnet-4.6"
           ? ["xhigh", "high", "medium", "low"]
-        : model.openRouterModelId === "z-ai/glm-5"
-          ? ["xhigh", "high", "medium", "low"]
-          : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
-              model.openRouterModelId === "qwen/qwen3.5-397b-a17b"
-            ? ["xhigh", "high", "medium", "low"]
+            : model.openRouterModelId === "z-ai/glm-5"
+              ? ["xhigh", "high", "medium", "low"]
+              : model.openRouterModelId === "google/gemini-3-pro-preview"
+                ? ["high", "medium", "low"]
+              : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
+                  model.openRouterModelId === "qwen/qwen3.5-397b-a17b"
+                ? ["xhigh", "high", "medium", "low"]
             : model.openRouterModelId === "openai/gpt-oss-120b"
               ? ["xhigh", "high", "medium", "low"]
               : model.openRouterModelId === "minimax/minimax-m2.5"
