@@ -64,8 +64,9 @@ export async function GET() {
   const topBandIds = models.slice(0, CONTENDER_BAND_SIZE).map((m) => m.id);
   let pairCoverageByKey = new Map<string, PairCoverage>();
 
-  if (topBandIds.length >= 2) {
+  if (topBandIds.length >= 2 && eligiblePromptIds.length > 0) {
     const idList = Prisma.join(topBandIds);
+    const promptIdList = Prisma.join(eligiblePromptIds);
     const pairRows = await prisma.$queryRaw<PairCoverageRow[]>`
       SELECT
         LEAST(matchup."modelAId", matchup."modelBId") AS "modelLowId",
@@ -77,6 +78,7 @@ export async function GET() {
       WHERE vote.choice IN ('A', 'B')
         AND matchup."modelAId" IN (${idList})
         AND matchup."modelBId" IN (${idList})
+        AND matchup."promptId" IN (${promptIdList})
       GROUP BY LEAST(matchup."modelAId", matchup."modelBId"), GREATEST(matchup."modelAId", matchup."modelBId")
     `;
 
