@@ -158,10 +158,10 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     key: "gemini_3_1_pro",
     provider: "gemini",
-    modelId: "gemini-3-pro-preview",
+    modelId: "gemini-3.1-pro-preview",
     displayName: "Gemini 3.1 Pro",
     enabled: true,
-    openRouterModelId: "google/gemini-3-pro-preview",
+    openRouterModelId: "google/gemini-3.1-pro-preview",
   },
   {
     key: "gemini_3_0_flash",
