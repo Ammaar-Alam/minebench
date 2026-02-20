@@ -592,7 +592,12 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         build: buildEntry?.build ?? null,
       };
     })
-    .sort((a, b) => b.votes - a.votes || b.averageScore - a.averageScore);
+    .sort(
+      (a, b) =>
+        b.averageScore - a.averageScore ||
+        b.votes - a.votes ||
+        a.promptText.localeCompare(b.promptText),
+    );
 
   const opponents: ModelOpponentBreakdown[] = opponentRows
     .map((row) => ({

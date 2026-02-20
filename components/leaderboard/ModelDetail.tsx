@@ -424,7 +424,16 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
       ? `${data.summary.coveredPrompts}/${data.summary.activePrompts}`
       : "0/0";
 
-  const promptBreakdown = data.prompts;
+  const promptBreakdown = useMemo(
+    () =>
+      [...data.prompts].sort(
+        (a, b) =>
+          b.averageScore - a.averageScore ||
+          b.votes - a.votes ||
+          a.promptText.localeCompare(b.promptText),
+      ),
+    [data.prompts],
+  );
   const promptBuildCount = promptBreakdown.filter((prompt) => prompt.build != null).length;
   const maxPromptVotes = Math.max(1, ...promptBreakdown.map((prompt) => prompt.votes));
   const visibleOpponents = showAllOpponents
@@ -1023,7 +1032,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           <SectionHeader
             eyebrow="Per prompt"
             title="Prompt breakdown"
-            meta="Ranked by vote count"
+            meta="Ranked by score"
           />
 
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
