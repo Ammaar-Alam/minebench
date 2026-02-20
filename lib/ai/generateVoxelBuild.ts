@@ -367,7 +367,7 @@ async function providerGenerateText(args: {
       model.openRouterModelId.startsWith("openai/gpt-5")
         ? ["xhigh", "high"]
         : model.openRouterModelId === "anthropic/claude-sonnet-4.6"
-          ? ["xhigh", "high", "medium", "low"]
+          ? ["max", "xhigh", "high", "medium", "low"]
             : model.openRouterModelId === "z-ai/glm-5"
               ? ["xhigh", "high", "medium", "low"]
               : model.openRouterModelId === "google/gemini-3-pro-preview"

@@ -114,6 +114,32 @@ function parseEffortEnv(
   return opts.defaultEffort;
 }
 
+function effortFallbacks(initial: AnthropicEffort, opts: { allowMax: boolean }): AnthropicEffort[] {
+  const ordered: AnthropicEffort[] = opts.allowMax
+    ? ["max", "high", "medium", "low"]
+    : ["high", "medium", "low"];
+  const out: AnthropicEffort[] = [initial];
+  for (const effort of ordered) {
+    if (!out.includes(effort)) out.push(effort);
+  }
+  return out;
+}
+
+function looksLikeEffortConfigError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    (b.includes("effort") &&
+      (b.includes("invalid") ||
+        b.includes("unsupported") ||
+        b.includes("unknown") ||
+        b.includes("enum") ||
+        b.includes("must be one of"))) ||
+    (b.includes("output_config") &&
+      b.includes("effort") &&
+      (b.includes("invalid") || b.includes("unsupported") || b.includes("unknown")))
+  );
+}
+
 function isLegacyManualThinkingModel(modelId: string): boolean {
   return modelId.startsWith("claude-sonnet-4-5") || modelId.startsWith("claude-opus-4-5");
 }
@@ -130,20 +156,22 @@ function isAdaptiveThinkingModel(modelId: string): boolean {
   return isOpus46(modelId) || isSonnet46(modelId);
 }
 
-function parseAdaptiveEffort(modelId: string): AnthropicEffort {
+function parseAdaptiveEfforts(modelId: string): AnthropicEffort[] {
   if (isOpus46(modelId)) {
-    return parseEffortEnv("ANTHROPIC_OPUS_4_6_EFFORT", {
+    const preferred = parseEffortEnv("ANTHROPIC_OPUS_4_6_EFFORT", {
       defaultEffort: "max",
       allowMax: true,
     });
+    return effortFallbacks(preferred, { allowMax: true });
   }
   if (isSonnet46(modelId)) {
-    return parseEffortEnv("ANTHROPIC_SONNET_4_6_EFFORT", {
-      defaultEffort: "high",
-      allowMax: false,
+    const preferred = parseEffortEnv("ANTHROPIC_SONNET_4_6_EFFORT", {
+      defaultEffort: "max",
+      allowMax: true,
     });
+    return effortFallbacks(preferred, { allowMax: true });
   }
-  return "high";
+  return ["high"];
 }
 
 function supportsContext1mBeta(modelId: string): boolean {
@@ -173,6 +201,7 @@ export async function anthropicGenerateText(params: {
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
   const useStructuredOutputs = Boolean(params.jsonSchema);
   const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
+  const adaptiveEffortAttempts = usesAdaptiveThinking ? parseAdaptiveEfforts(params.modelId) : [];
   const preferStreaming = Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true);
   const allowForcedToolStructuredFallback = parseBooleanEnv(
     "ANTHROPIC_ALLOW_FORCED_TOOL_STRUCTURED_FALLBACK",
@@ -204,7 +233,7 @@ export async function anthropicGenerateText(params: {
   let didUseStreaming = false;
   try {
     requestLoop: for (const tok of tokenFallbacks(maxTokens)) {
-      for (const betaHeader of betaHeaders) {
+      betaLoop: for (const betaHeader of betaHeaders) {
         const useForcedToolStructuredOutput =
           useStructuredOutputs && structuredMode === "forced_tool";
         const streamResponses = preferStreaming && !useForcedToolStructuredOutput;
@@ -218,70 +247,80 @@ export async function anthropicGenerateText(params: {
               ? { type: "enabled" as const, budget_tokens: budget }
               : undefined;
         const temperature = thinking ? 1 : (params.temperature ?? 0.2);
-        const outputConfig = useStructuredOutputs
-          ? useForcedToolStructuredOutput
-            ? undefined
-            : {
-                ...(usesAdaptiveThinking
-                  ? { effort: parseAdaptiveEffort(params.modelId) }
-                  : {}),
-                format: {
-                  type: "json_schema",
-                  schema: params.jsonSchema as Record<string, unknown>,
-                },
-              }
-          : usesAdaptiveThinking
-            ? { effort: parseAdaptiveEffort(params.modelId) }
-            : undefined;
-
-        res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": "2023-06-01",
-            ...(streamResponses ? { Accept: "text/event-stream" } : {}),
-            ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-          },
-          signal: controller.signal,
-          body: JSON.stringify({
-            model: params.modelId,
-            max_tokens: tok,
-            temperature,
-            system: params.system,
-            messages: [{ role: "user", content: params.user }],
-            stream: streamResponses,
-            ...(thinking ? { thinking } : {}),
-            ...(outputConfig ? { output_config: outputConfig } : {}),
-            ...(useForcedToolStructuredOutput && tools
-              ? {
-                  tools,
-                  tool_choice: {
-                    type: "tool",
-                    name: STRUCTURED_OUTPUT_TOOL_NAME,
-                    disable_parallel_tool_use: true,
+        const efforts = usesAdaptiveThinking ? adaptiveEffortAttempts : [null];
+        effortLoop: for (let effortIdx = 0; effortIdx < efforts.length; effortIdx += 1) {
+          const effort = efforts[effortIdx];
+          const outputConfig = useStructuredOutputs
+            ? useForcedToolStructuredOutput
+              ? undefined
+              : {
+                  ...(usesAdaptiveThinking && effort ? { effort } : {}),
+                  format: {
+                    type: "json_schema",
+                    schema: params.jsonSchema as Record<string, unknown>,
                   },
                 }
-              : {}),
-          }),
-        });
-        didUseStreaming = streamResponses;
+            : usesAdaptiveThinking && effort
+              ? { effort }
+              : undefined;
 
-        if (res.ok) break requestLoop;
-        lastBody = await res.text().catch(() => "");
-        if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue requestLoop;
-        if (betaHeader && looksLikeContextBetaUnavailableError(lastBody)) continue;
-        if (
-          useStructuredOutputs &&
-          allowForcedToolStructuredFallback &&
-          structuredMode === "native_format" &&
-          res.status === 400 &&
-          looksLikeStructuredFormatUnsupportedError(lastBody)
-        ) {
-          structuredMode = "forced_tool";
-          continue;
+          res = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+              ...(streamResponses ? { Accept: "text/event-stream" } : {}),
+              ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
+            },
+            signal: controller.signal,
+            body: JSON.stringify({
+              model: params.modelId,
+              max_tokens: tok,
+              temperature,
+              system: params.system,
+              messages: [{ role: "user", content: params.user }],
+              stream: streamResponses,
+              ...(thinking ? { thinking } : {}),
+              ...(outputConfig ? { output_config: outputConfig } : {}),
+              ...(useForcedToolStructuredOutput && tools
+                ? {
+                    tools,
+                    tool_choice: {
+                      type: "tool",
+                      name: STRUCTURED_OUTPUT_TOOL_NAME,
+                      disable_parallel_tool_use: true,
+                    },
+                  }
+                : {}),
+            }),
+          });
+          didUseStreaming = streamResponses;
+
+          if (res.ok) break requestLoop;
+          lastBody = await res.text().catch(() => "");
+          if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue requestLoop;
+          if (betaHeader && looksLikeContextBetaUnavailableError(lastBody)) continue betaLoop;
+          if (
+            usesAdaptiveThinking &&
+            res.status === 400 &&
+            effortIdx < efforts.length - 1 &&
+            looksLikeEffortConfigError(lastBody)
+          ) {
+            continue effortLoop;
+          }
+          if (
+            useStructuredOutputs &&
+            allowForcedToolStructuredFallback &&
+            structuredMode === "native_format" &&
+            res.status === 400 &&
+            looksLikeStructuredFormatUnsupportedError(lastBody)
+          ) {
+            structuredMode = "forced_tool";
+            continue betaLoop;
+          }
+          break requestLoop;
         }
-        break requestLoop;
       }
 
       if (res && !res.ok) break;
