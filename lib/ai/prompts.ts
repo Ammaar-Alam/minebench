@@ -13,6 +13,7 @@ export function buildSystemPrompt(opts: {
   const targetLow = Math.max(opts.minBlocks, Math.floor(opts.minBlocks * 15));
   const targetHigh = Math.max(targetLow, Math.floor(opts.minBlocks * 60));
 
+  // CURRENT SYSTEM PROMPT | TOKENS = 2331
   return `You are a master 3D voxel architect. Your builds are famous for being immediately recognizable, structurally articulated, and rich with detail.
 
 ## OUTPUT FORMAT
@@ -173,7 +174,7 @@ Use appropriate blocks:
 - **Metal**: iron_block, gray_wool
 - **Fabric/sails/cloth**: wool colors
 - **Glass/screens**: glass, black_wool, blue_wool
-- **Glowing elements**: glowstone, sea_lantern
+- **Glowing elements**: glowstone
 - **Natural**: grass_block, dirt, oak_leaves, water
 
 ---
