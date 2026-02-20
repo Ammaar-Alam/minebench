@@ -4,7 +4,11 @@ import { prisma } from "@/lib/prisma";
 import type { ArenaMatchup } from "@/lib/arena/types";
 import { weightedPick } from "@/lib/arena/sampling";
 import { expectedScore } from "@/lib/arena/rating";
-import { pickInitialBuild, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
+import {
+  deriveArenaBuildLoadHints,
+  pickInitialBuild,
+  prepareArenaBuild,
+} from "@/lib/arena/buildArtifacts";
 
 export const runtime = "nodejs";
 
@@ -18,6 +22,12 @@ const CONTENDER_BAND_SIZE = 8;
 const ADJ_PAIR_VOTES_FLOOR = 12;
 const ADJ_PAIR_PROMPTS_FLOOR = 6;
 type Lane = "coverage" | "contender" | "uncertainty" | "exploration";
+type BuildPayloadMode = "inline" | "shell" | "adaptive";
+
+const INLINE_INITIAL_MAX_BYTES = Number.parseInt(
+  process.env.ARENA_INLINE_INITIAL_MAX_BYTES ?? "8000000",
+  10,
+);
 
 const LANE_WEIGHTS: Array<{ lane: Lane; weight: number }> = [
   { lane: "coverage", weight: 0.4 },
@@ -103,6 +113,21 @@ function getOrSetSessionId(res: NextResponse, req: Request) {
     maxAge: 60 * 60 * 24 * 365,
   });
   return id;
+}
+
+function parseBuildPayloadMode(value: string | null): BuildPayloadMode {
+  if (value === "shell") return "shell";
+  if (value === "adaptive") return "adaptive";
+  return "inline";
+}
+
+function shouldInlineInAdaptiveMode(fullEstimatedBytes: number | null, initialVariant: "preview" | "full"): boolean {
+  if (initialVariant !== "full") return false;
+  if (!Number.isFinite(INLINE_INITIAL_MAX_BYTES) || INLINE_INITIAL_MAX_BYTES <= 0) return false;
+  if (typeof fullEstimatedBytes !== "number" || !Number.isFinite(fullEstimatedBytes) || fullEstimatedBytes <= 0) {
+    return false;
+  }
+  return fullEstimatedBytes <= INLINE_INITIAL_MAX_BYTES;
 }
 
 function randomPick<T>(items: T[]): T | null {
@@ -832,6 +857,7 @@ function pickMatchup(params: {
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
+  const payloadMode = parseBuildPayloadMode(url.searchParams.get("payload"));
   const requestedPromptId = url.searchParams.get("promptId") ?? undefined;
 
   const { prompts, modelsById, promptIdsByModelId } = await getEligiblePromptsAndModels();
@@ -884,10 +910,6 @@ export async function GET(req: Request) {
         voxelByteSize: true,
         voxelCompressedByteSize: true,
         voxelSha256: true,
-        voxelData: true,
-        voxelStorageBucket: true,
-        voxelStoragePath: true,
-        voxelStorageEncoding: true,
       },
     }),
     prisma.build.findFirst({
@@ -906,10 +928,6 @@ export async function GET(req: Request) {
         voxelByteSize: true,
         voxelCompressedByteSize: true,
         voxelSha256: true,
-        voxelData: true,
-        voxelStorageBucket: true,
-        voxelStoragePath: true,
-        voxelStorageEncoding: true,
       },
     }),
   ]);
@@ -918,13 +936,74 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing seeded build" }, { status: 500 });
   }
 
-  let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>>;
-  let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>>;
-  try {
-    [preparedA, preparedB] = await Promise.all([prepareArenaBuild(buildA), prepareArenaBuild(buildB)]);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to load build payload";
-    return NextResponse.json({ error: message }, { status: 500 });
+  const checksumA = buildA.voxelSha256?.trim() || null;
+  const checksumB = buildB.voxelSha256?.trim() || null;
+  const shellHintsA = deriveArenaBuildLoadHints(buildA);
+  const shellHintsB = deriveArenaBuildLoadHints(buildB);
+  const shouldPrepareA =
+    payloadMode === "inline" ||
+    (payloadMode === "adaptive" &&
+      shouldInlineInAdaptiveMode(shellHintsA.fullEstimatedBytes, shellHintsA.initialVariant));
+  const shouldPrepareB =
+    payloadMode === "inline" ||
+    (payloadMode === "adaptive" &&
+      shouldInlineInAdaptiveMode(shellHintsB.fullEstimatedBytes, shellHintsB.initialVariant));
+
+  let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
+  let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
+  if (shouldPrepareA || shouldPrepareB) {
+    try {
+      const [buildAForPrepare, buildBForPrepare] = await Promise.all([
+        shouldPrepareA
+          ? prisma.build.findUnique({
+              where: { id: buildA.id },
+              select: {
+                id: true,
+                gridSize: true,
+                palette: true,
+                blockCount: true,
+                voxelByteSize: true,
+                voxelCompressedByteSize: true,
+                voxelSha256: true,
+                voxelData: true,
+                voxelStorageBucket: true,
+                voxelStoragePath: true,
+                voxelStorageEncoding: true,
+              },
+            })
+          : Promise.resolve(null),
+        shouldPrepareB
+          ? prisma.build.findUnique({
+              where: { id: buildB.id },
+              select: {
+                id: true,
+                gridSize: true,
+                palette: true,
+                blockCount: true,
+                voxelByteSize: true,
+                voxelCompressedByteSize: true,
+                voxelSha256: true,
+                voxelData: true,
+                voxelStorageBucket: true,
+                voxelStoragePath: true,
+                voxelStorageEncoding: true,
+              },
+            })
+          : Promise.resolve(null),
+      ]);
+
+      if ((shouldPrepareA && !buildAForPrepare) || (shouldPrepareB && !buildBForPrepare)) {
+        return NextResponse.json({ error: "Missing seeded build payload" }, { status: 500 });
+      }
+
+      [preparedA, preparedB] = await Promise.all([
+        buildAForPrepare ? prepareArenaBuild(buildAForPrepare) : Promise.resolve(null),
+        buildBForPrepare ? prepareArenaBuild(buildBForPrepare) : Promise.resolve(null),
+      ]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load build payload";
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
   const created = await prisma.$transaction(async (tx) => {
@@ -965,11 +1044,20 @@ export async function GET(req: Request) {
         displayName: leftModel.displayName,
         eloRating: leftModel.eloRating,
       },
-      build: pickInitialBuild(preparedA) as ArenaMatchup["a"]["build"],
-      buildRef: preparedA.buildRef,
-      previewRef: preparedA.previewRef,
-      serverValidated: true,
-      buildLoadHints: preparedA.hints,
+      build:
+        (preparedA ? pickInitialBuild(preparedA) : null) as ArenaMatchup["a"]["build"],
+      buildRef: preparedA?.buildRef ?? {
+        buildId: buildA.id,
+        variant: "full",
+        checksum: checksumA,
+      },
+      previewRef: preparedA?.previewRef ?? {
+        buildId: buildA.id,
+        variant: "preview",
+        checksum: checksumA,
+      },
+      serverValidated: Boolean(preparedA),
+      buildLoadHints: preparedA?.hints ?? shellHintsA,
     },
     b: {
       model: {
@@ -978,11 +1066,20 @@ export async function GET(req: Request) {
         displayName: rightModel.displayName,
         eloRating: rightModel.eloRating,
       },
-      build: pickInitialBuild(preparedB) as ArenaMatchup["b"]["build"],
-      buildRef: preparedB.buildRef,
-      previewRef: preparedB.previewRef,
-      serverValidated: true,
-      buildLoadHints: preparedB.hints,
+      build:
+        (preparedB ? pickInitialBuild(preparedB) : null) as ArenaMatchup["b"]["build"],
+      buildRef: preparedB?.buildRef ?? {
+        buildId: buildB.id,
+        variant: "full",
+        checksum: checksumB,
+      },
+      previewRef: preparedB?.previewRef ?? {
+        buildId: buildB.id,
+        variant: "preview",
+        checksum: checksumB,
+      },
+      serverValidated: Boolean(preparedB),
+      buildLoadHints: preparedB?.hints ?? shellHintsB,
     },
   };
 
@@ -990,9 +1087,10 @@ export async function GET(req: Request) {
   const res = NextResponse.json(body, {
     headers: {
       "Cache-Control": "no-store",
+      "x-build-payload-mode": payloadMode,
       "x-build-prepare-ms": String(prepareMs),
-      "x-build-initial-a": preparedA.hints.initialVariant,
-      "x-build-initial-b": preparedB.hints.initialVariant,
+      "x-build-initial-a": preparedA?.hints.initialVariant ?? shellHintsA.initialVariant,
+      "x-build-initial-b": preparedB?.hints.initialVariant ?? shellHintsB.initialVariant,
     },
   });
   getOrSetSessionId(res, req);

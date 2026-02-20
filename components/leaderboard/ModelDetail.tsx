@@ -1,16 +1,21 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type {
   ModelDetailStats,
   ModelOpponentBreakdown,
   ModelPromptBreakdown,
 } from "@/lib/arena/stats";
+import type {
+  ArenaBuildLoadHints,
+  ArenaBuildRef,
+  ArenaBuildStreamEvent,
+  ArenaBuildVariant,
+} from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import type { VoxelBuild } from "@/lib/voxel/types";
-import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -33,19 +38,190 @@ type LoadedPromptBuild = {
   blockCount: number;
 };
 
-type PromptBuildResponse = {
+type BuildVariantResponse = {
   buildId: string;
-  voxelBuild: unknown;
-  gridSize: number;
-  palette: "simple" | "advanced";
-  mode: string;
-  blockCount: number;
+  variant: ArenaBuildVariant;
+  checksum: string | null;
+  serverValidated: boolean;
+  buildLoadHints?: ArenaBuildLoadHints;
+  voxelBuild: VoxelBuild;
+};
+
+type BuildStreamProgress = {
+  receivedBlocks: number;
+  totalBlocks: number | null;
+  chunkIndex: number | null;
+  chunkCount: number | null;
+};
+
+type FetchBuildVariantStreamOptions = {
+  signal?: AbortSignal;
+  onProgress?: (
+    build: VoxelBuild,
+    progress: BuildStreamProgress,
+    meta: { serverValidated: boolean },
+  ) => void;
 };
 
 const LazyVoxelViewer = dynamic(
   () => import("@/components/voxel/VoxelViewer").then((mod) => mod.VoxelViewer),
   { ssr: false },
 );
+
+function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
+  if (!line.trim()) return null;
+  try {
+    return JSON.parse(line) as ArenaBuildStreamEvent;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBuildVariantSnapshot(
+  ref: ArenaBuildRef,
+  signal?: AbortSignal,
+): Promise<BuildVariantResponse> {
+  const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
+  url.searchParams.set("variant", ref.variant);
+  if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+  const res = await fetch(url, { method: "GET", signal });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as BuildVariantResponse;
+}
+
+async function fetchBuildVariantStream(
+  ref: ArenaBuildRef,
+  opts?: FetchBuildVariantStreamOptions,
+): Promise<BuildVariantResponse> {
+  const url = new URL(
+    `/api/arena/builds/${encodeURIComponent(ref.buildId)}/stream`,
+    window.location.origin,
+  );
+  url.searchParams.set("variant", ref.variant);
+  if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+
+  const res = await fetch(url, {
+    method: "GET",
+    signal: opts?.signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!res.body || !contentType.includes("application/x-ndjson")) {
+    return (await res.json()) as BuildVariantResponse;
+  }
+
+  try {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    let resolvedVariant: ArenaBuildVariant = ref.variant;
+    let checksum: string | null = ref.checksum ?? null;
+    let serverValidated = false;
+    let buildLoadHints: ArenaBuildLoadHints | undefined;
+    let totalBlocks: number | null = null;
+    let hasComplete = false;
+
+    const streamedBlocks: VoxelBuild["blocks"] = [];
+
+    const emitProgress = (progress: BuildStreamProgress) => {
+      if (!opts?.onProgress) return;
+      opts.onProgress(
+        {
+          version: "1.0",
+          blocks: streamedBlocks,
+        },
+        progress,
+        { serverValidated },
+      );
+    };
+
+    const processLine = (line: string) => {
+      const event = parseArenaBuildStreamLine(line);
+      if (!event) return;
+
+      if (event.type === "ping") return;
+      if (event.type === "error") {
+        throw new Error(event.message || "Build stream failed");
+      }
+      if (event.type === "hello") {
+        resolvedVariant = event.variant;
+        checksum = event.checksum ?? checksum;
+        serverValidated = serverValidated || event.serverValidated;
+        totalBlocks = event.totalBlocks || totalBlocks;
+        buildLoadHints = event.buildLoadHints ?? buildLoadHints;
+        if (streamedBlocks.length === 0) {
+          emitProgress({
+            receivedBlocks: 0,
+            totalBlocks,
+            chunkIndex: null,
+            chunkCount: event.chunkCount ?? null,
+          });
+        }
+        return;
+      }
+      if (event.type === "chunk") {
+        if (Array.isArray(event.blocks) && event.blocks.length > 0) {
+          streamedBlocks.push(...event.blocks);
+        }
+        totalBlocks = event.totalBlocks || totalBlocks;
+        emitProgress({
+          receivedBlocks: event.receivedBlocks,
+          totalBlocks,
+          chunkIndex: event.index,
+          chunkCount: event.chunkCount,
+        });
+        return;
+      }
+      if (event.type === "complete") {
+        hasComplete = true;
+        totalBlocks = event.totalBlocks || totalBlocks;
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        processLine(line);
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) processLine(buffer);
+
+    const announcedTotal =
+      typeof totalBlocks === "number" && Number.isFinite(totalBlocks) && totalBlocks >= 0
+        ? totalBlocks
+        : null;
+    const streamLooksComplete =
+      hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
+
+    if (!streamLooksComplete) {
+      return fetchBuildVariantSnapshot(ref, opts?.signal);
+    }
+
+    return {
+      buildId: ref.buildId,
+      variant: resolvedVariant,
+      checksum,
+      serverValidated,
+      buildLoadHints,
+      voxelBuild: {
+        version: "1.0",
+        blocks: streamedBlocks,
+      },
+    };
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    return fetchBuildVariantSnapshot(ref, opts?.signal);
+  }
+}
 
 function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
@@ -278,18 +454,20 @@ function HeadToHeadCard({ opponent }: { opponent: ModelOpponentBreakdown }) {
 const PromptBuildPreview = memo(function PromptBuildPreview({
   build,
   loading = false,
+  loadingLabel,
   error = null,
   heightClass = "h-44",
 }: {
   build: LoadedPromptBuild | null;
   loading?: boolean;
+  loadingLabel?: string;
   error?: string | null;
   heightClass?: string;
 }) {
-  if (loading) {
+  if (loading && !build) {
     return (
       <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
-        <div className="text-xs text-muted">Loading build</div>
+        <div className="text-xs text-muted">{loadingLabel ?? "Retrieving build..."}</div>
       </div>
     );
   }
@@ -310,6 +488,11 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
         autoRotate
         showControls={false}
       />
+      {loading ? (
+        <div className="pointer-events-none absolute left-2.5 top-2.5 rounded-md border border-border/70 bg-bg/72 px-2.5 py-1.5 text-[11px] text-muted backdrop-blur-sm">
+          {loadingLabel ?? "Retrieving build..."}
+        </div>
+      ) : null}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
         <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
           {build.blockCount.toLocaleString()} blocks
@@ -388,6 +571,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const [showAllPrompts, setShowAllPrompts] = useState(false);
   const [activePrompt, setActivePrompt] = useState<ModelPromptBreakdown | null>(null);
   const [buildCache, setBuildCache] = useState<Record<string, LoadedPromptBuild>>({});
+  const buildCacheRef = useRef<Record<string, LoadedPromptBuild>>({});
+  const activeRequestRef = useRef(0);
+  const [activeStreamingBuild, setActiveStreamingBuild] = useState<LoadedPromptBuild | null>(null);
+  const [activeBuildProgress, setActiveBuildProgress] = useState<{
+    receivedBlocks: number;
+    totalBlocks: number | null;
+  } | null>(null);
   const [activeBuildError, setActiveBuildError] = useState<string | null>(null);
 
   const strongest = topStrongest(data.prompts);
@@ -447,13 +637,28 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const hoveredPoint = hoveredCurveIndex != null ? curve.points[hoveredCurveIndex] : null;
   const hoveredPrompt = hoveredCurveIndex != null ? promptCurveSource[hoveredCurveIndex] : null;
   const activeBuildId = activePrompt?.build?.buildId ?? null;
-  const activeLoadedBuild = activeBuildId ? buildCache[activeBuildId] ?? null : null;
+  const activeBuildMeta = activePrompt?.build ?? null;
+  const activeCachedBuild = activeBuildId ? buildCache[activeBuildId] ?? null : null;
+  const activeLoadedBuild =
+    activeStreamingBuild && activeStreamingBuild.buildId === activeBuildId
+      ? activeStreamingBuild
+      : activeCachedBuild;
   const isActiveBuildLoading = Boolean(
     activePrompt?.build &&
       activeBuildId &&
-      !activeLoadedBuild &&
+      !activeCachedBuild &&
       activeBuildError == null,
   );
+  const activeBuildLoadingLabel = useMemo(() => {
+    const total = activeBuildProgress?.totalBlocks ?? null;
+    const received = activeBuildProgress?.receivedBlocks ?? 0;
+    if (!total || total <= 0) {
+      if (received > 0) return `Retrieving build ${received.toLocaleString()} blocks`;
+      return "Retrieving build...";
+    }
+    const pct = Math.max(1, Math.min(99, Math.round((received / total) * 100)));
+    return `Retrieving build ${pct}%`;
+  }, [activeBuildProgress]);
   const tooltipAlignClass =
     hoveredCurveIndex == null
       ? "mb-curve-tooltip-center"
@@ -475,71 +680,96 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   }, [activePrompt]);
 
   useEffect(() => {
-    if (!activeBuildId) {
+    buildCacheRef.current = buildCache;
+  }, [buildCache]);
+
+  useEffect(() => {
+    const requestId = ++activeRequestRef.current;
+
+    if (!activeBuildId || !activeBuildMeta) {
       setActiveBuildError(null);
+      setActiveBuildProgress(null);
+      setActiveStreamingBuild(null);
       return;
     }
 
-    if (buildCache[activeBuildId]) {
+    if (buildCacheRef.current[activeBuildId]) {
       setActiveBuildError(null);
+      setActiveBuildProgress({
+        receivedBlocks: activeBuildMeta.blockCount,
+        totalBlocks: activeBuildMeta.blockCount,
+      });
+      setActiveStreamingBuild(null);
       return;
     }
 
     const controller = new AbortController();
     setActiveBuildError(null);
+    setActiveBuildProgress({
+      receivedBlocks: 0,
+      totalBlocks: activeBuildMeta.blockCount || null,
+    });
+    setActiveStreamingBuild(null);
 
-    fetch(`/api/leaderboard/builds/${encodeURIComponent(activeBuildId)}`, {
-      method: "GET",
-      signal: controller.signal,
-      cache: "force-cache",
-    })
-      .then(async (response) => {
-        const body = (await response.json()) as Partial<PromptBuildResponse> & {
-          error?: string;
+    void fetchBuildVariantStream(
+      {
+        buildId: activeBuildId,
+        variant: "full",
+        checksum: null,
+      },
+      {
+        signal: controller.signal,
+        onProgress: (progressiveBuild, progress) => {
+          if (activeRequestRef.current !== requestId) return;
+          setActiveBuildProgress({
+            receivedBlocks: progress.receivedBlocks,
+            totalBlocks: progress.totalBlocks,
+          });
+
+          if (progress.receivedBlocks <= 0) return;
+          setActiveStreamingBuild({
+            buildId: activeBuildId,
+            voxelBuild: progressiveBuild,
+            gridSize: activeBuildMeta.gridSize,
+            palette: activeBuildMeta.palette,
+            mode: activeBuildMeta.mode,
+            blockCount: progress.receivedBlocks,
+          });
+        },
+      },
+    )
+      .then((payload) => {
+        if (activeRequestRef.current !== requestId) return;
+        const loadedBuild: LoadedPromptBuild = {
+          buildId: activeBuildId,
+          voxelBuild: payload.voxelBuild,
+          gridSize: activeBuildMeta.gridSize,
+          palette: activeBuildMeta.palette,
+          mode: activeBuildMeta.mode,
+          blockCount: Math.max(activeBuildMeta.blockCount, payload.voxelBuild.blocks.length),
         };
-        if (!response.ok) {
-          throw new Error(body.error ?? "Build unavailable");
-        }
-        if (typeof body.buildId !== "string" || body.buildId.length === 0) {
-          throw new Error("Invalid build response");
-        }
-        if (body.palette !== "simple" && body.palette !== "advanced") {
-          throw new Error("Invalid build response");
-        }
-        const parsed = parseVoxelBuildSpec(body.voxelBuild);
-        if (!parsed.ok) {
-          throw new Error("Invalid build payload");
-        }
 
-        return {
-          buildId: body.buildId,
-          voxelBuild: parsed.value,
-          gridSize: typeof body.gridSize === "number" ? body.gridSize : 256,
-          palette: body.palette,
-          mode: typeof body.mode === "string" ? body.mode : "precise",
-          blockCount:
-            typeof body.blockCount === "number"
-              ? body.blockCount
-              : parsed.value.blocks.length,
-        } satisfies LoadedPromptBuild;
-      })
-      .then((loadedBuild) => {
         setBuildCache((current) => {
           if (current[loadedBuild.buildId]) return current;
           return { ...current, [loadedBuild.buildId]: loadedBuild };
         });
+        setActiveStreamingBuild(null);
+        setActiveBuildProgress({
+          receivedBlocks: loadedBuild.blockCount,
+          totalBlocks: loadedBuild.blockCount,
+        });
       })
       .catch((error: unknown) => {
         if (error instanceof Error && error.name === "AbortError") return;
-        setActiveBuildError(
-          error instanceof Error ? error.message : "Failed to load build",
-        );
+        if (activeRequestRef.current !== requestId) return;
+        setActiveBuildError(error instanceof Error ? error.message : "Failed to load build");
+        setActiveStreamingBuild(null);
       });
 
     return () => {
       controller.abort();
     };
-  }, [activeBuildId, buildCache]);
+  }, [activeBuildId, activeBuildMeta]);
 
   return (
     <div className="mx-auto w-full max-w-[90rem] space-y-3.5 pb-10 sm:space-y-4 sm:pb-14">
@@ -1216,6 +1446,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
               <PromptBuildPreview
                 build={activeLoadedBuild}
                 loading={isActiveBuildLoading}
+                loadingLabel={activeBuildLoadingLabel}
                 error={activeBuildError}
                 heightClass="h-56 sm:h-64"
               />

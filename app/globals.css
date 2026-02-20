@@ -258,6 +258,15 @@
       box-shadow: 0 0 0 0 hsl(var(--accent2) / 0);
     }
   }
+
+  @keyframes mb-progress-wait-slide {
+    0% {
+      transform: translateX(-115%);
+    }
+    100% {
+      transform: translateX(130%);
+    }
+  }
 }
 
 @layer components {
@@ -1013,6 +1022,30 @@
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.28);
   }
 
+  .mb-progress-wait {
+    position: relative;
+    display: block;
+    overflow: hidden;
+    border-radius: inherit;
+  }
+
+  .mb-progress-wait::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 42%;
+    border-radius: inherit;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      hsl(var(--accent) / 0.45) 28%,
+      hsl(var(--accent2) / 0.6) 52%,
+      hsl(var(--accent) / 0.45) 72%,
+      transparent 100%
+    );
+    animation: mb-progress-wait-slide 1.2s linear infinite;
+  }
+
   .mb-fade-in {
     animation: mb-fade-in-up 220ms ease-out both;
   }
@@ -1083,6 +1116,10 @@
 
     .mb-reveal-highlight-a,
     .mb-reveal-highlight-b {
+      animation: none;
+    }
+
+    .mb-progress-wait::before {
       animation: none;
     }
 

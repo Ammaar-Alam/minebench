@@ -26,7 +26,8 @@
     "uploads:sync": "npx tsx scripts/sync-uploads-from-db.ts",
     "prompt": "npx tsx scripts/prompt.ts",
     "elo:reset": "npx tsx scripts/reset-elo.ts",
-    "elo:recompute": "npx tsx scripts/recompute-elo.ts"
+    "elo:recompute": "npx tsx scripts/recompute-elo.ts",
+    "arena:stream:precompute": "npx tsx scripts/precompute-arena-stream-artifacts.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

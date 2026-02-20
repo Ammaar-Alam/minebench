@@ -7,9 +7,17 @@ import {
 } from "@/components/sandbox/SandboxGifExportButton";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import type {
+  ArenaBuildLoadHints,
+  ArenaBuildRef,
+  ArenaBuildStreamEvent,
+  ArenaBuildVariant,
+} from "@/lib/arena/types";
+import type { VoxelBuild } from "@/lib/voxel/types";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
+type Slot = "a" | "b";
 
 type BenchmarkPromptOption = {
   id: string;
@@ -25,8 +33,14 @@ type BenchmarkModelOption = {
 };
 
 type BenchmarkBuild = {
+  buildId: string;
+  checksum: string | null;
+  serverValidated: boolean;
+  buildRef: ArenaBuildRef;
+  previewRef: ArenaBuildRef;
+  buildLoadHints: ArenaBuildLoadHints;
+  voxelBuild: unknown | null;
   model: BenchmarkModelOption;
-  voxelBuild: unknown;
   metrics: {
     blockCount: number;
     generationTimeMs: number;
@@ -55,6 +69,48 @@ type BenchmarkResponse = {
   };
 };
 
+type BuildVariantResponse = {
+  buildId: string;
+  variant: ArenaBuildVariant;
+  checksum: string | null;
+  serverValidated: boolean;
+  buildLoadHints?: ArenaBuildLoadHints;
+  voxelBuild: VoxelBuild;
+};
+
+type BuildStreamProgress = {
+  receivedBlocks: number;
+  totalBlocks: number | null;
+  chunkIndex: number | null;
+  chunkCount: number | null;
+};
+
+type FetchBuildVariantStreamOptions = {
+  signal?: AbortSignal;
+  onProgress?: (
+    build: VoxelBuild,
+    progress: BuildStreamProgress,
+    meta: { serverValidated: boolean },
+  ) => void;
+};
+
+type SlotHydrationState = {
+  buildId: string | null;
+  build: unknown | null;
+  phase: "idle" | "loading" | "ready" | "error";
+  progress: {
+    receivedBlocks: number;
+    totalBlocks: number | null;
+  } | null;
+  error: string | null;
+  serverValidated: boolean;
+};
+
+type CachedBuild = {
+  build: unknown;
+  serverValidated: boolean;
+};
+
 const DEFAULT_MODEL_A = "openai_gpt_5_2";
 const DEFAULT_MODEL_B = "openai_gpt_5_mini";
 
@@ -78,6 +134,36 @@ function toGridSize(gridSize: number): GridSize {
 
 function toPalette(palette: string): Palette {
   return palette === "advanced" ? "advanced" : "simple";
+}
+
+function createEmptySlotState(): SlotHydrationState {
+  return {
+    buildId: null,
+    build: null,
+    phase: "idle",
+    progress: null,
+    error: null,
+    serverValidated: false,
+  };
+}
+
+function toSlotProgressTotal(build: BenchmarkBuild | null): number | null {
+  if (!build) return null;
+  if (build.metrics.blockCount > 0) return build.metrics.blockCount;
+  const hints = build.buildLoadHints;
+  if (hints && hints.fullBlockCount > 0) return hints.fullBlockCount;
+  return null;
+}
+
+function formatBuildLoadingMessage(progress: SlotHydrationState["progress"]): string {
+  const total = progress?.totalBlocks ?? null;
+  const received = progress?.receivedBlocks ?? 0;
+  if (!total || total <= 0) {
+    if (received > 0) return `Retrieving build ${received.toLocaleString()} blocks`;
+    return "Retrieving build...";
+  }
+  const pct = Math.max(1, Math.min(99, Math.round((received / total) * 100)));
+  return `Retrieving build ${pct}%`;
 }
 
 async function fetchBenchmarkResponse(args: {
@@ -114,6 +200,164 @@ async function fetchBenchmarkResponse(args: {
   return (await res.json()) as BenchmarkResponse;
 }
 
+async function fetchBuildVariantSnapshot(
+  ref: ArenaBuildRef,
+  signal?: AbortSignal,
+): Promise<BuildVariantResponse> {
+  const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
+  url.searchParams.set("variant", ref.variant);
+  if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+  const res = await fetch(url, {
+    method: "GET",
+    signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as BuildVariantResponse;
+}
+
+function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
+  if (!line.trim()) return null;
+  try {
+    return JSON.parse(line) as ArenaBuildStreamEvent;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBuildVariantStream(
+  ref: ArenaBuildRef,
+  opts?: FetchBuildVariantStreamOptions,
+): Promise<BuildVariantResponse> {
+  const url = new URL(
+    `/api/arena/builds/${encodeURIComponent(ref.buildId)}/stream`,
+    window.location.origin,
+  );
+  url.searchParams.set("variant", ref.variant);
+  if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+
+  const res = await fetch(url, {
+    method: "GET",
+    signal: opts?.signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!res.body || !contentType.includes("application/x-ndjson")) {
+    return (await res.json()) as BuildVariantResponse;
+  }
+
+  try {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    let resolvedVariant: ArenaBuildVariant = ref.variant;
+    let checksum: string | null = ref.checksum ?? null;
+    let serverValidated = false;
+    let buildLoadHints: ArenaBuildLoadHints | undefined;
+    let totalBlocks: number | null = null;
+    let hasComplete = false;
+
+    const streamedBlocks: VoxelBuild["blocks"] = [];
+
+    const emitProgress = (progress: BuildStreamProgress) => {
+      if (!opts?.onProgress) return;
+      opts.onProgress(
+        {
+          version: "1.0",
+          blocks: streamedBlocks,
+        },
+        progress,
+        { serverValidated },
+      );
+    };
+
+    const processLine = (line: string) => {
+      const event = parseArenaBuildStreamLine(line);
+      if (!event) return;
+
+      if (event.type === "ping") return;
+      if (event.type === "error") {
+        throw new Error(event.message || "Build stream failed");
+      }
+      if (event.type === "hello") {
+        resolvedVariant = event.variant;
+        checksum = event.checksum ?? checksum;
+        serverValidated = serverValidated || event.serverValidated;
+        totalBlocks = event.totalBlocks || totalBlocks;
+        buildLoadHints = event.buildLoadHints ?? buildLoadHints;
+        if (streamedBlocks.length === 0) {
+          emitProgress({
+            receivedBlocks: 0,
+            totalBlocks,
+            chunkIndex: null,
+            chunkCount: event.chunkCount ?? null,
+          });
+        }
+        return;
+      }
+      if (event.type === "chunk") {
+        if (Array.isArray(event.blocks) && event.blocks.length > 0) {
+          streamedBlocks.push(...event.blocks);
+        }
+        totalBlocks = event.totalBlocks || totalBlocks;
+        emitProgress({
+          receivedBlocks: event.receivedBlocks,
+          totalBlocks,
+          chunkIndex: event.index,
+          chunkCount: event.chunkCount,
+        });
+        return;
+      }
+      if (event.type === "complete") {
+        hasComplete = true;
+        totalBlocks = event.totalBlocks || totalBlocks;
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        processLine(line);
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) processLine(buffer);
+
+    const announcedTotal =
+      typeof totalBlocks === "number" && Number.isFinite(totalBlocks) && totalBlocks >= 0
+        ? totalBlocks
+        : null;
+    const streamLooksComplete =
+      hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
+
+    if (!streamLooksComplete) {
+      return fetchBuildVariantSnapshot(ref, opts?.signal);
+    }
+
+    return {
+      buildId: ref.buildId,
+      variant: resolvedVariant,
+      checksum,
+      serverValidated,
+      buildLoadHints,
+      voxelBuild: {
+        version: "1.0",
+        blocks: streamedBlocks,
+      },
+    };
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
+    return fetchBuildVariantSnapshot(ref, opts?.signal);
+  }
+}
+
 export function SandboxBenchmark() {
   const [promptId, setPromptId] = useState("");
   const [modelPair, setModelPair] = useState({ a: DEFAULT_MODEL_A, b: DEFAULT_MODEL_B });
@@ -121,9 +365,29 @@ export function SandboxBenchmark() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [slotState, setSlotState] = useState<Record<Slot, SlotHydrationState>>({
+    a: createEmptySlotState(),
+    b: createEmptySlotState(),
+  });
+
   const requestIdRef = useRef(0);
+  const hydrationRunIdRef = useRef(0);
+  const slotAbortRef = useRef<Record<Slot, AbortController | null>>({ a: null, b: null });
+  const buildCacheRef = useRef<Map<string, CachedBuild>>(new Map());
+
   const viewerARef = useRef<VoxelViewerHandle | null>(null);
   const viewerBRef = useRef<VoxelViewerHandle | null>(null);
+
+  const setCachedBuild = useCallback((buildId: string, value: CachedBuild) => {
+    const cache = buildCacheRef.current;
+    if (cache.has(buildId)) cache.delete(buildId);
+    cache.set(buildId, value);
+    while (cache.size > 8) {
+      const oldestKey = cache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      cache.delete(oldestKey);
+    }
+  }, []);
 
   const runLoad = useCallback(
     async (
@@ -171,6 +435,189 @@ export function SandboxBenchmark() {
       { initial: true },
     );
   }, [runLoad]);
+
+  useEffect(() => {
+    const runId = ++hydrationRunIdRef.current;
+    const effectControllers: Partial<Record<Slot, AbortController>> = {};
+    const abortRef = slotAbortRef.current;
+
+    for (const slot of ["a", "b"] as const) {
+      abortRef[slot]?.abort();
+      abortRef[slot] = null;
+    }
+
+    if (!data) {
+      setSlotState({
+        a: createEmptySlotState(),
+        b: createEmptySlotState(),
+      });
+      return;
+    }
+
+    const nextState: Record<Slot, SlotHydrationState> = {
+      a: createEmptySlotState(),
+      b: createEmptySlotState(),
+    };
+    const hydrateQueue: Array<{ slot: Slot; lane: BenchmarkBuild }> = [];
+
+    for (const slot of ["a", "b"] as const) {
+      const lane = data.builds[slot];
+      if (!lane) {
+        nextState[slot] = {
+          ...createEmptySlotState(),
+          phase: "error",
+          error: "No seeded build found for this model/prompt pair.",
+        };
+        continue;
+      }
+
+      const cached = buildCacheRef.current.get(lane.buildId);
+      if (lane.voxelBuild) {
+        const serverValidated = Boolean(lane.serverValidated);
+        setCachedBuild(lane.buildId, {
+          build: lane.voxelBuild,
+          serverValidated,
+        });
+        nextState[slot] = {
+          buildId: lane.buildId,
+          build: lane.voxelBuild,
+          phase: "ready",
+          progress: {
+            receivedBlocks: lane.metrics.blockCount,
+            totalBlocks: lane.metrics.blockCount,
+          },
+          error: null,
+          serverValidated,
+        };
+        continue;
+      }
+
+      if (cached) {
+        nextState[slot] = {
+          buildId: lane.buildId,
+          build: cached.build,
+          phase: "ready",
+          progress: {
+            receivedBlocks: lane.metrics.blockCount,
+            totalBlocks: lane.metrics.blockCount,
+          },
+          error: null,
+          serverValidated: cached.serverValidated,
+        };
+        continue;
+      }
+
+      nextState[slot] = {
+        buildId: lane.buildId,
+        build: null,
+        phase: "loading",
+        progress: {
+          receivedBlocks: 0,
+          totalBlocks: toSlotProgressTotal(lane),
+        },
+        error: null,
+        serverValidated: false,
+      };
+      hydrateQueue.push({ slot, lane });
+    }
+
+    setSlotState(nextState);
+
+    for (const { slot, lane } of hydrateQueue) {
+      const controller = new AbortController();
+      effectControllers[slot] = controller;
+      abortRef[slot] = controller;
+
+      void (async () => {
+        try {
+          const payload = await fetchBuildVariantStream(lane.buildRef, {
+            signal: controller.signal,
+            onProgress: (progressiveBuild, progress, meta) => {
+              if (hydrationRunIdRef.current !== runId) return;
+              setSlotState((prev) => {
+                const current = prev[slot];
+                if (!current || current.buildId !== lane.buildId) return prev;
+
+                const sameProgress =
+                  current.progress?.receivedBlocks === progress.receivedBlocks &&
+                  current.progress?.totalBlocks === progress.totalBlocks;
+                const sameValidation = current.serverValidated === meta.serverValidated;
+                if (sameProgress && sameValidation && current.build === progressiveBuild) {
+                  return prev;
+                }
+
+                return {
+                  ...prev,
+                  [slot]: {
+                    ...current,
+                    phase: "loading",
+                    build: progressiveBuild,
+                    progress: {
+                      receivedBlocks: progress.receivedBlocks,
+                      totalBlocks: progress.totalBlocks,
+                    },
+                    error: null,
+                    serverValidated: current.serverValidated || meta.serverValidated,
+                  },
+                };
+              });
+            },
+          });
+
+          if (hydrationRunIdRef.current !== runId) return;
+
+          setCachedBuild(lane.buildId, {
+            build: payload.voxelBuild,
+            serverValidated: payload.serverValidated,
+          });
+
+          setSlotState((prev) => {
+            const current = prev[slot];
+            if (!current || current.buildId !== lane.buildId) return prev;
+            return {
+              ...prev,
+              [slot]: {
+                ...current,
+                build: payload.voxelBuild,
+                phase: "ready",
+                progress: {
+                  receivedBlocks: lane.metrics.blockCount,
+                  totalBlocks: lane.metrics.blockCount,
+                },
+                error: null,
+                serverValidated: current.serverValidated || payload.serverValidated,
+              },
+            };
+          });
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return;
+          if (hydrationRunIdRef.current !== runId) return;
+          setSlotState((prev) => {
+            const current = prev[slot];
+            if (!current || current.buildId !== lane.buildId) return prev;
+            return {
+              ...prev,
+              [slot]: {
+                ...current,
+                phase: "error",
+                error: err instanceof Error ? err.message : "Failed to load build",
+              },
+            };
+          });
+        }
+      })();
+    }
+
+    return () => {
+      for (const slot of ["a", "b"] as const) {
+        const controller = effectControllers[slot];
+        controller?.abort();
+        if (abortRef[slot] === controller) {
+          abortRef[slot] = null;
+        }
+      }
+    };
+  }, [data, setCachedBuild]);
 
   const modelGroups = useMemo(() => {
     const groups = new Map<string, BenchmarkModelOption[]>();
@@ -225,11 +672,13 @@ export function SandboxBenchmark() {
   const selectedPromptText = data?.selectedPrompt?.text ?? "";
   const gridSize = toGridSize(data?.settings.gridSize ?? 256);
   const palette = toPalette(data?.settings.palette ?? "simple");
+
   const compareTargets: SandboxGifExportTarget[] = data
     ? (["a", "b"] as const)
         .map((slot) => {
           const build = data.builds[slot];
-          if (!build) return null;
+          const laneState = slotState[slot];
+          if (!build || laneState.phase !== "ready" || !laneState.build) return null;
           const viewerRef = slot === "a" ? viewerARef : viewerBRef;
           return {
             viewerRef,
@@ -244,35 +693,50 @@ export function SandboxBenchmark() {
   const cards = data
     ? (["a", "b"] as const).map((slot) => {
         const build = data.builds[slot];
+        const laneState = slotState[slot];
         const selectedModelKey = slot === "a" ? modelPair.a : modelPair.b;
         const fallbackModel = data.models.find((m) => m.key === selectedModelKey);
         const model = build?.model ?? fallbackModel;
         const viewerRef = slot === "a" ? viewerARef : viewerBRef;
         const title = model ? model.displayName : slot === "a" ? "Model A" : "Model B";
 
+        const hasRenderableBuild = Boolean(laneState.build);
+        const isHydrating = laneState.phase === "loading";
+        const loadingMessage = isHydrating
+          ? formatBuildLoadingMessage(laneState.progress)
+          : undefined;
+
+        const laneError =
+          laneState.phase === "error"
+            ? laneState.error ?? "Failed to load build"
+            : !build
+              ? "No seeded build found for this model/prompt pair."
+              : undefined;
+
         return (
           <VoxelViewerCard
-            key={`${slot}:${model?.key ?? selectedModelKey}`}
+            key={`${slot}:${build?.buildId ?? "none"}:${model?.key ?? selectedModelKey}`}
             title={title}
             subtitle={
               model ? (
                 <span className="inline-flex items-center gap-2 text-xs text-muted">
-                  <span className="uppercase tracking-[0.08em]">
-                    {providerLabel(model.provider)}
-                  </span>
+                  <span className="uppercase tracking-[0.08em]">{providerLabel(model.provider)}</span>
                   <span className="font-mono">Elo {Math.round(model.eloRating)}</span>
                 </span>
               ) : (
                 <span className="text-xs text-muted">Select a model</span>
               )
             }
-            voxelBuild={build?.voxelBuild ?? null}
+            voxelBuild={laneState.build}
+            skipValidation={laneState.serverValidated || Boolean(build?.serverValidated)}
             gridSize={gridSize}
             palette={palette}
             animateIn
+            isLoading={isHydrating}
+            loadingMessage={loadingMessage}
             viewerRef={viewerRef}
             actions={
-              build && model ? (
+              hasRenderableBuild && build && model ? (
                 <SandboxGifExportButton
                   targets={[
                     {
@@ -297,7 +761,7 @@ export function SandboxBenchmark() {
                   }
                 : undefined
             }
-            error={!build ? "No seeded build found for this model/prompt pair." : undefined}
+            error={laneError}
           />
         );
       })
@@ -371,11 +835,7 @@ export function SandboxBenchmark() {
                   {modelGroups.map((group) => (
                     <optgroup key={group.label} label={group.label}>
                       {group.models.map((model) => (
-                        <option
-                          key={model.key}
-                          value={model.key}
-                          disabled={model.key === modelPair.b}
-                        >
+                        <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
                           {model.displayName}
                         </option>
                       ))}
@@ -411,11 +871,7 @@ export function SandboxBenchmark() {
                   {modelGroups.map((group) => (
                     <optgroup key={group.label} label={group.label}>
                       {group.models.map((model) => (
-                        <option
-                          key={model.key}
-                          value={model.key}
-                          disabled={model.key === modelPair.a}
-                        >
+                        <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
                           {model.displayName}
                         </option>
                       ))}
@@ -447,7 +903,7 @@ export function SandboxBenchmark() {
                   <div className="text-xs font-medium text-muted">Selected prompt</div>
                   <div className="text-xs text-muted">
                     <span className="font-mono">
-                      {gridSize} grid • {palette} palette • {data?.settings.mode ?? "precise"} mode
+                      {gridSize} grid - {palette} palette - {data?.settings.mode ?? "precise"} mode
                     </span>
                   </div>
                 </div>
@@ -525,29 +981,23 @@ export function SandboxBenchmark() {
                           strokeWidth="1.7"
                         />
                       </svg>
-                      <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
+                      <span>{refreshing ? "Refreshing..." : "Refresh"}</span>
                     </span>
                   </button>
                 </div>
               </div>
 
-              <div className="text-sm leading-relaxed text-fg">
-                {selectedPromptText || "Loading benchmark prompt…"}
-              </div>
+              <div className="text-sm leading-relaxed text-fg">{selectedPromptText || "Loading benchmark prompt..."}</div>
             </div>
           </div>
         </div>
       </div>
 
       {loading && !data ? (
-        <div className="mb-panel p-10 text-center text-sm text-muted">
-          Loading benchmark builds…
-        </div>
+        <div className="mb-panel p-10 text-center text-sm text-muted">Loading benchmark builds...</div>
       ) : null}
 
-      {!loading && data ? (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{cards}</div>
-      ) : null}
+      {!loading && data ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{cards}</div> : null}
     </div>
   );
 }

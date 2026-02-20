@@ -479,7 +479,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
       if (geometries.length === 0) return;
 
-      const durationMs = 900;
+      const reduceMotion =
+        typeof window !== "undefined" &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const durationMs = reduceMotion ? 70 : 150;
       const start = performance.now();
 
       const tick = (now: number) => {

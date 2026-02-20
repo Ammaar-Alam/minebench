@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
+import {
+  deriveArenaBuildLoadHints,
+  pickInitialBuild,
+  prepareArenaBuild,
+} from "@/lib/arena/buildArtifacts";
+import type { ArenaBuildLoadHints, ArenaBuildRef } from "@/lib/arena/types";
 import { prisma } from "@/lib/prisma";
-import { resolveBuildSpec } from "@/lib/storage/buildPayload";
 
 export const runtime = "nodejs";
 
 const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
 const ARENA_MODE = "precise";
+
+const INLINE_INITIAL_MAX_BYTES = Number.parseInt(
+  process.env.ARENA_INLINE_INITIAL_MAX_BYTES ?? "8000000",
+  10,
+);
 
 type PromptOption = {
   id: string;
@@ -19,6 +29,43 @@ type ModelOption = {
   provider: string;
   displayName: string;
   eloRating: number;
+};
+
+type BenchmarkBuild = {
+  buildId: string;
+  checksum: string | null;
+  serverValidated: boolean;
+  buildRef: ArenaBuildRef;
+  previewRef: ArenaBuildRef;
+  buildLoadHints: ArenaBuildLoadHints;
+  voxelBuild: unknown | null;
+  model: ModelOption;
+  metrics: {
+    blockCount: number;
+    generationTimeMs: number;
+  };
+};
+
+type BenchmarkResponse = {
+  settings: {
+    gridSize: number;
+    palette: string;
+    mode: string;
+  };
+  prompts: PromptOption[];
+  selectedPrompt: {
+    id: string;
+    text: string;
+  } | null;
+  models: ModelOption[];
+  selectedModels: {
+    a: string | null;
+    b: string | null;
+  };
+  builds: {
+    a: BenchmarkBuild | null;
+    b: BenchmarkBuild | null;
+  };
 };
 
 function pickPair(models: ModelOption[], requestedA?: string, requestedB?: string) {
@@ -38,6 +85,22 @@ function pickPair(models: ModelOption[], requestedA?: string, requestedB?: strin
 
   if (!b) return { a: null, b: null };
   return { a, b };
+}
+
+function shouldInlineInAdaptiveMode(
+  fullEstimatedBytes: number | null,
+  initialVariant: "preview" | "full",
+): boolean {
+  if (initialVariant !== "full") return false;
+  if (!Number.isFinite(INLINE_INITIAL_MAX_BYTES) || INLINE_INITIAL_MAX_BYTES <= 0) return false;
+  if (
+    typeof fullEstimatedBytes !== "number" ||
+    !Number.isFinite(fullEstimatedBytes) ||
+    fullEstimatedBytes <= 0
+  ) {
+    return false;
+  }
+  return fullEstimatedBytes <= INLINE_INITIAL_MAX_BYTES;
 }
 
 export async function GET(req: Request) {
@@ -72,7 +135,7 @@ export async function GET(req: Request) {
     if (eligiblePromptIds.length === 0) {
       return NextResponse.json(
         { error: "No benchmark prompts with at least two seeded models were found." },
-        { status: 409, headers: { "Cache-Control": "no-store" } }
+        { status: 409, headers: { "Cache-Control": "no-store" } },
       );
     }
 
@@ -91,7 +154,7 @@ export async function GET(req: Request) {
     if (promptOptions.length === 0) {
       return NextResponse.json(
         { error: "No active benchmark prompts are available yet." },
-        { status: 409, headers: { "Cache-Control": "no-store" } }
+        { status: 409, headers: { "Cache-Control": "no-store" } },
       );
     }
 
@@ -157,12 +220,15 @@ export async function GET(req: Request) {
               model: { key: selection.a },
             },
             select: {
-              voxelData: true,
-              voxelStorageBucket: true,
-              voxelStoragePath: true,
-              voxelStorageEncoding: true,
+              id: true,
+              gridSize: true,
+              palette: true,
+              mode: true,
               blockCount: true,
               generationTimeMs: true,
+              voxelByteSize: true,
+              voxelCompressedByteSize: true,
+              voxelSha256: true,
               model: {
                 select: {
                   key: true,
@@ -184,12 +250,15 @@ export async function GET(req: Request) {
               model: { key: selection.b },
             },
             select: {
-              voxelData: true,
-              voxelStorageBucket: true,
-              voxelStoragePath: true,
-              voxelStorageEncoding: true,
+              id: true,
+              gridSize: true,
+              palette: true,
+              mode: true,
               blockCount: true,
               generationTimeMs: true,
+              voxelByteSize: true,
+              voxelCompressedByteSize: true,
+              voxelSha256: true,
               model: {
                 select: {
                   key: true,
@@ -203,12 +272,123 @@ export async function GET(req: Request) {
         : null,
     ]);
 
-    const [buildSpecA, buildSpecB] = await Promise.all([
-      buildA ? resolveBuildSpec(buildA) : Promise.resolve(null),
-      buildB ? resolveBuildSpec(buildB) : Promise.resolve(null),
-    ]);
+    const hintsA = buildA ? deriveArenaBuildLoadHints(buildA) : null;
+    const hintsB = buildB ? deriveArenaBuildLoadHints(buildB) : null;
+    const shouldPrepareA = hintsA
+      ? shouldInlineInAdaptiveMode(hintsA.fullEstimatedBytes, hintsA.initialVariant)
+      : false;
+    const shouldPrepareB = hintsB
+      ? shouldInlineInAdaptiveMode(hintsB.fullEstimatedBytes, hintsB.initialVariant)
+      : false;
 
-    const body = {
+    let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
+    let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
+
+    if (shouldPrepareA || shouldPrepareB) {
+      try {
+        const [buildAForPrepare, buildBForPrepare] = await Promise.all([
+          shouldPrepareA && buildA
+            ? prisma.build.findUnique({
+                where: { id: buildA.id },
+                select: {
+                  id: true,
+                  gridSize: true,
+                  palette: true,
+                  blockCount: true,
+                  voxelByteSize: true,
+                  voxelCompressedByteSize: true,
+                  voxelSha256: true,
+                  voxelData: true,
+                  voxelStorageBucket: true,
+                  voxelStoragePath: true,
+                  voxelStorageEncoding: true,
+                },
+              })
+            : Promise.resolve(null),
+          shouldPrepareB && buildB
+            ? prisma.build.findUnique({
+                where: { id: buildB.id },
+                select: {
+                  id: true,
+                  gridSize: true,
+                  palette: true,
+                  blockCount: true,
+                  voxelByteSize: true,
+                  voxelCompressedByteSize: true,
+                  voxelSha256: true,
+                  voxelData: true,
+                  voxelStorageBucket: true,
+                  voxelStoragePath: true,
+                  voxelStorageEncoding: true,
+                },
+              })
+            : Promise.resolve(null),
+        ]);
+
+        [preparedA, preparedB] = await Promise.all([
+          buildAForPrepare ? prepareArenaBuild(buildAForPrepare) : Promise.resolve(null),
+          buildBForPrepare ? prepareArenaBuild(buildBForPrepare) : Promise.resolve(null),
+        ]);
+      } catch (err) {
+        console.warn("sandbox benchmark inline prepare failed", err);
+      }
+    }
+
+    const toBenchmarkBuild = (
+      build:
+        | {
+            id: string;
+            mode: string;
+            blockCount: number;
+            generationTimeMs: number;
+            voxelSha256: string | null;
+            model: {
+              key: string;
+              provider: string;
+              displayName: string;
+              eloRating: number;
+            };
+          }
+        | null,
+      hints: ArenaBuildLoadHints | null,
+      prepared: Awaited<ReturnType<typeof prepareArenaBuild>> | null,
+    ): BenchmarkBuild | null => {
+      if (!build || !hints) return null;
+
+      const checksum = (prepared?.checksum ?? build.voxelSha256)?.trim() || null;
+      const buildRef: ArenaBuildRef = prepared?.buildRef ?? {
+        buildId: build.id,
+        variant: "full",
+        checksum,
+      };
+      const previewRef: ArenaBuildRef = prepared?.previewRef ?? {
+        buildId: build.id,
+        variant: "preview",
+        checksum,
+      };
+
+      return {
+        buildId: build.id,
+        checksum,
+        serverValidated: Boolean(prepared),
+        buildRef,
+        previewRef,
+        buildLoadHints: prepared?.hints ?? hints,
+        voxelBuild: prepared ? pickInitialBuild(prepared) : null,
+        model: {
+          key: build.model.key,
+          provider: build.model.provider,
+          displayName: build.model.displayName,
+          eloRating: Number(build.model.eloRating),
+        },
+        metrics: {
+          blockCount: build.blockCount,
+          generationTimeMs: build.generationTimeMs,
+        },
+      };
+    };
+
+    const body: BenchmarkResponse = {
       settings: {
         gridSize: ARENA_GRID_SIZE,
         palette: ARENA_PALETTE,
@@ -222,36 +402,8 @@ export async function GET(req: Request) {
       models,
       selectedModels: selection,
       builds: {
-        a: buildA
-          ? {
-              model: {
-                key: buildA.model.key,
-                provider: buildA.model.provider,
-                displayName: buildA.model.displayName,
-                eloRating: Number(buildA.model.eloRating),
-              },
-              voxelBuild: buildSpecA,
-              metrics: {
-                blockCount: buildA.blockCount,
-                generationTimeMs: buildA.generationTimeMs,
-              },
-            }
-          : null,
-        b: buildB
-          ? {
-              model: {
-                key: buildB.model.key,
-                provider: buildB.model.provider,
-                displayName: buildB.model.displayName,
-                eloRating: Number(buildB.model.eloRating),
-              },
-              voxelBuild: buildSpecB,
-              metrics: {
-                blockCount: buildB.blockCount,
-                generationTimeMs: buildB.generationTimeMs,
-              },
-            }
-          : null,
+        a: toBenchmarkBuild(buildA, hintsA, preparedA),
+        b: toBenchmarkBuild(buildB, hintsB, preparedB),
       },
     };
 
@@ -260,7 +412,7 @@ export async function GET(req: Request) {
     const message = err instanceof Error ? err.message : "Failed to load benchmark builds";
     return NextResponse.json(
       { error: message },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
+      { status: 500, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

@@ -45,13 +45,16 @@ function SkipForward({ className }: { className?: string }) {
 
 export function VoteBar({
   disabled,
+  disableVotes,
   onVote,
   onSkip,
 }: {
   disabled?: boolean;
+  disableVotes?: boolean;
   onVote: (choice: VoteChoice) => void;
   onSkip: () => void;
 }) {
+  const voteDisabled = Boolean(disabled || disableVotes);
   const base =
     "inline-flex touch-manipulation select-none items-center justify-center gap-1.5 rounded-2xl text-[13px] font-semibold transition-all duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40 sm:rounded-xl sm:text-sm";
 
@@ -67,7 +70,7 @@ export function VoteBar({
           <button
             aria-label="A is better"
             className={`${base} mb-vote-a h-12 flex-1 px-3 sm:h-11 sm:px-4`}
-            disabled={disabled}
+            disabled={voteDisabled}
             onClick={() => onVote("A")}
           >
             <ChevronLeft className="h-4 w-4 opacity-70" />
@@ -79,7 +82,7 @@ export function VoteBar({
           <button
             aria-label="Tie"
             className={`${base} mb-vote-tie h-12 px-3 sm:h-11 sm:px-4`}
-            disabled={disabled}
+            disabled={voteDisabled}
             onClick={() => onVote("TIE")}
           >
             <Equal className="h-3.5 w-3.5 opacity-70" />
@@ -89,7 +92,7 @@ export function VoteBar({
           <button
             aria-label="B is better"
             className={`${base} mb-vote-b h-12 flex-1 px-3 sm:h-11 sm:px-4`}
-            disabled={disabled}
+            disabled={voteDisabled}
             onClick={() => onVote("B")}
           >
             <span className="sm:hidden">B</span>
@@ -103,7 +106,7 @@ export function VoteBar({
           <button
             aria-label="Both bad"
             className={`${base} mb-vote-bad h-10 flex-1 px-3 sm:h-9 sm:min-w-[9.5rem] sm:flex-none sm:px-4`}
-            disabled={disabled}
+            disabled={voteDisabled}
             onClick={() => onVote("BOTH_BAD")}
           >
             <X className="h-3.5 w-3.5 opacity-70" />

@@ -25,6 +25,7 @@ export function VoxelViewerCard({
   elapsedMs,
   metrics,
   error,
+  loadingMessage,
   jsonText,
   debugRawText,
   palette = "simple",
@@ -46,6 +47,7 @@ export function VoxelViewerCard({
   elapsedMs?: number;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
   error?: string;
+  loadingMessage?: string;
   jsonText?: string;
   debugRawText?: string;
   palette?: "simple" | "advanced";
@@ -147,13 +149,14 @@ export function VoxelViewerCard({
       ? "relative w-full h-[38vh] min-h-[220px] max-h-[300px] sm:h-[44vh] sm:min-h-[260px] sm:max-h-[360px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
       : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
   const loadingLabel =
-    attempt === 0
+    loadingMessage?.trim() ||
+    (attempt === 0
       ? "Queued…"
       : isThinking
         ? "Thinking…"
         : debugRawText
           ? "Streaming…"
-          : "Generating…";
+          : "Generating…");
 
   return (
     <div className="mb-panel">
@@ -234,7 +237,8 @@ export function VoxelViewerCard({
               voxelBuild={build}
               palette={palette}
               autoRotate={autoRotate}
-              animateIn={animateIn}
+              // During progressive hydration, avoid restarting reveal animation on each chunk update.
+              animateIn={Boolean(animateIn && !isLoading)}
             />
           ) : null}
 
@@ -269,14 +273,34 @@ export function VoxelViewerCard({
           ) : null}
 
           {isLoading && showBuildView && !build ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-bg/60 text-sm text-muted backdrop-blur-sm">
-              <div className="flex max-w-[90%] flex-col items-center gap-1 text-center">
-                <div>{loadingLabel}</div>
-                {elapsed ? <div className="text-xs font-mono text-muted">{elapsed}</div> : null}
-                {attempt && attempt > 1 ? (
-                  <div className="text-xs font-mono text-muted">retry {attempt}</div>
-                ) : null}
+            <div className="absolute inset-0 bg-bg/60 text-sm text-muted backdrop-blur-sm">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,hsl(var(--accent)_/_0.18),transparent_55%)]"
+              />
+              <div className="relative flex h-full items-center justify-center px-4">
+                <div className="w-full max-w-sm rounded-2xl border border-border/65 bg-bg/72 px-5 py-4 text-center shadow-soft ring-1 ring-border/55">
+                  <div className="flex items-center justify-center gap-2 text-fg/90">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+                    <span className="font-medium">{loadingLabel}</span>
+                  </div>
+                  <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-border/40">
+                    <span className="mb-progress-wait block h-full w-full" />
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-xs text-muted">
+                    {elapsed ? <span className="font-mono text-muted">{elapsed}</span> : null}
+                    {attempt && attempt > 1 ? (
+                      <span className="font-mono text-muted">
+                        retry {attempt}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              <div className="pointer-events-none absolute bottom-3 left-0 right-0 flex justify-center px-4">
                 {retryReason ? <div className="text-xs text-muted">{retryReason}</div> : null}
+              </div>
+              <div className="pointer-events-none absolute bottom-3 right-3">
                 {hasJsonView && showViewToggle ? (
                   <div className="text-xs text-muted">Open JSON to inspect live output.</div>
                 ) : null}

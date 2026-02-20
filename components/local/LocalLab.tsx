@@ -25,6 +25,42 @@ const MIN_BLOCKS_BY_GRID: Record<GridSize, number> = {
   512: 800,
 };
 
+type LocalParseWorkerRequest =
+  | {
+      type: "parse";
+      requestId: number;
+      rawText: string;
+      gridSize: GridSize;
+      palette: Palette;
+      maxBlocks: number;
+    }
+  | {
+      type: "cancel";
+      requestId?: number;
+    };
+
+type LocalParseWorkerResponse =
+  | {
+      type: "progress";
+      requestId: number;
+      deltaBlocks: VoxelBuild["blocks"];
+      receivedBlocks: number;
+      totalBlocks: number | null;
+    }
+  | {
+      type: "complete";
+      requestId: number;
+      voxelBuild: VoxelBuild;
+      warnings: string[];
+      receivedBlocks: number;
+      totalBlocks: number | null;
+    }
+  | {
+      type: "error";
+      requestId: number;
+      message: string;
+    };
+
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
@@ -178,12 +214,86 @@ export function LocalLab() {
 
   const [modelOutput, setModelOutput] = useState("");
   const [rendered, setRendered] = useState<{
-    kind: "idle" | "ready" | "error";
+    kind: "idle" | "loading" | "ready" | "error";
     build: VoxelBuild | null;
     warnings: string[];
+    progress?: {
+      receivedBlocks: number;
+      totalBlocks: number | null;
+    };
     message?: string;
   }>({ kind: "idle", build: null, warnings: [] });
   const previewViewerRef = useRef<VoxelViewerHandle | null>(null);
+  const parseWorkerRef = useRef<Worker | null>(null);
+  const parseRequestIdRef = useRef(0);
+  const streamedBlocksRef = useRef<VoxelBuild["blocks"]>([]);
+
+  useEffect(() => {
+    const worker = new Worker(new URL("./localBuildParse.worker.ts", import.meta.url));
+    parseWorkerRef.current = worker;
+
+    const onMessage = (event: MessageEvent<LocalParseWorkerResponse>) => {
+      const message = event.data;
+      if (!message) return;
+
+      if (message.requestId !== parseRequestIdRef.current) return;
+
+      if (message.type === "progress") {
+        if (message.deltaBlocks.length > 0) {
+          streamedBlocksRef.current.push(...message.deltaBlocks);
+        }
+
+        setRendered({
+          kind: "loading",
+          build: {
+            version: "1.0",
+            blocks: streamedBlocksRef.current,
+          },
+          warnings: [],
+          progress: {
+            receivedBlocks: message.receivedBlocks,
+            totalBlocks: message.totalBlocks,
+          },
+        });
+        return;
+      }
+
+      if (message.type === "complete") {
+        setRendered({
+          kind: "ready",
+          build: message.voxelBuild,
+          warnings: message.warnings,
+          progress: {
+            receivedBlocks: message.receivedBlocks,
+            totalBlocks: message.totalBlocks,
+          },
+        });
+        return;
+      }
+
+      if (message.type === "error") {
+        setRendered({
+          kind: "error",
+          build: null,
+          warnings: [],
+          message: message.message,
+        });
+      }
+    };
+
+    worker.addEventListener("message", onMessage);
+
+    return () => {
+      worker.removeEventListener("message", onMessage);
+      try {
+        worker.postMessage({ type: "cancel" } satisfies LocalParseWorkerRequest);
+      } catch {
+        // ignore
+      }
+      worker.terminate();
+      if (parseWorkerRef.current === worker) parseWorkerRef.current = null;
+    };
+  }, []);
 
   const previewExportTargets: SandboxGifExportTarget[] = useMemo(() => {
     if (rendered.kind !== "ready" || !rendered.build) return [];
@@ -209,41 +319,89 @@ export function LocalLab() {
       return;
     }
 
-    let json: unknown = null;
-    try {
-      json = JSON.parse(trimmed) as unknown;
-    } catch {
-      json = extractBestVoxelBuildJson(trimmed);
-    }
+    const fallbackSync = () => {
+      let json: unknown = null;
+      try {
+        json = JSON.parse(trimmed) as unknown;
+      } catch {
+        json = extractBestVoxelBuildJson(trimmed);
+      }
 
-    if (!json) {
-      setRendered({
-        kind: "error",
-        build: null,
-        warnings: [],
-        message: "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
+      if (!json) {
+        setRendered({
+          kind: "error",
+          build: null,
+          warnings: [],
+          message: "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
+        });
+        return;
+      }
+
+      const paletteDefs = getPalette(palette);
+      const validated = validateVoxelBuild(json, {
+        gridSize,
+        palette: paletteDefs,
+        maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
       });
+
+      if (!validated.ok) {
+        setRendered({ kind: "error", build: null, warnings: [], message: validated.error });
+        return;
+      }
+
+      setRendered({
+        kind: "ready",
+        build: validated.value.build,
+        warnings: validated.value.warnings,
+        progress: {
+          receivedBlocks: validated.value.build.blocks.length,
+          totalBlocks: validated.value.build.blocks.length,
+        },
+      });
+    };
+
+    const worker = parseWorkerRef.current;
+    if (!worker) {
+      fallbackSync();
       return;
     }
 
-    const paletteDefs = getPalette(palette);
-    const validated = validateVoxelBuild(json, {
-      gridSize,
-      palette: paletteDefs,
-      maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
-    });
-
-    if (!validated.ok) {
-      setRendered({ kind: "error", build: null, warnings: [], message: validated.error });
-      return;
-    }
-
+    const requestId = ++parseRequestIdRef.current;
+    streamedBlocksRef.current = [];
     setRendered({
-      kind: "ready",
-      build: validated.value.build,
-      warnings: validated.value.warnings,
+      kind: "loading",
+      build: null,
+      warnings: [],
+      progress: { receivedBlocks: 0, totalBlocks: null },
     });
+
+    try {
+      worker.postMessage({
+        type: "parse",
+        requestId,
+        rawText: trimmed,
+        gridSize,
+        palette,
+        maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
+      } satisfies LocalParseWorkerRequest);
+    } catch {
+      fallbackSync();
+    }
   }
+
+  const loadingMessage =
+    rendered.kind === "loading"
+      ? (() => {
+          const total = rendered.progress?.totalBlocks ?? null;
+          const received = rendered.progress?.receivedBlocks ?? 0;
+          if (!total || total <= 0) {
+            if (received > 0) return `Retrieving build ${received.toLocaleString()} blocks`;
+            return "Retrieving build...";
+          }
+          const pct = Math.max(1, Math.min(99, Math.round((received / total) * 100)));
+          return `Retrieving build ${pct}%`;
+        })()
+      : undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -460,10 +618,15 @@ export function LocalLab() {
 
             <VoxelViewerCard
               title="Preview"
-              voxelBuild={rendered.kind === "ready" ? rendered.build : null}
+              voxelBuild={
+                rendered.kind === "ready" || rendered.kind === "loading" ? rendered.build : null
+              }
               gridSize={gridSize}
               palette={palette}
               autoRotate
+              isLoading={rendered.kind === "loading"}
+              loadingMessage={loadingMessage}
+              skipValidation={rendered.kind === "loading"}
               viewerRef={previewViewerRef}
               actions={
                 <SandboxGifExportButton
@@ -474,9 +637,10 @@ export function LocalLab() {
                 />
               }
               metrics={
-                rendered.kind === "ready"
+                rendered.kind === "ready" || rendered.kind === "loading"
                   ? {
-                      blockCount: rendered.build?.blocks.length ?? 0,
+                      blockCount:
+                        rendered.progress?.receivedBlocks ?? rendered.build?.blocks.length ?? 0,
                       warnings: rendered.warnings,
                       generationTimeMs: 0,
                     }

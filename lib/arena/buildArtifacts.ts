@@ -95,12 +95,16 @@ function buildCacheKey(source: ArenaBuildSource, checksum: string): string {
   return `${source.id}:${checksum}`;
 }
 
-function estimateJsonBytes(source: ArenaBuildSource, fullBlockCount: number): number | null {
-  const direct = source.voxelByteSize;
+function estimateJsonBytesFromStats(
+  voxelByteSize: number | null | undefined,
+  voxelCompressedByteSize: number | null | undefined,
+  fullBlockCount: number,
+): number | null {
+  const direct = voxelByteSize;
   if (typeof direct === "number" && Number.isFinite(direct) && direct > 0) {
     return Math.floor(direct);
   }
-  const compressed = source.voxelCompressedByteSize;
+  const compressed = voxelCompressedByteSize;
   if (typeof compressed === "number" && Number.isFinite(compressed) && compressed > 0) {
     return Math.floor(compressed * 3.4);
   }
@@ -109,6 +113,43 @@ function estimateJsonBytes(source: ArenaBuildSource, fullBlockCount: number): nu
     return Math.floor(fullBlockCount * 34);
   }
   return null;
+}
+
+function estimateJsonBytes(source: ArenaBuildSource, fullBlockCount: number): number | null {
+  return estimateJsonBytesFromStats(source.voxelByteSize, source.voxelCompressedByteSize, fullBlockCount);
+}
+
+function normalizeBlockCount(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
+
+function shouldPreferPreview(fullEstimatedBytes: number | null): boolean {
+  return (
+    ARENA_PREVIEW_STAGE_ENABLED &&
+    typeof fullEstimatedBytes === "number" &&
+    fullEstimatedBytes >= PREVIEW_TRIGGER_BYTES
+  );
+}
+
+export function deriveArenaBuildLoadHints(
+  source: Pick<ArenaBuildSource, "blockCount" | "voxelByteSize" | "voxelCompressedByteSize">,
+): ArenaBuildLoadHints {
+  const fullBlockCount = normalizeBlockCount(source.blockCount);
+  const previewBlockCount = Math.min(fullBlockCount, PREVIEW_TARGET_BLOCKS);
+  const fullEstimatedBytes = estimateJsonBytesFromStats(
+    source.voxelByteSize,
+    source.voxelCompressedByteSize,
+    fullBlockCount,
+  );
+  const initialVariant: ArenaBuildVariant = shouldPreferPreview(fullEstimatedBytes) ? "preview" : "full";
+  return {
+    initialVariant,
+    fullBlockCount,
+    previewBlockCount,
+    previewStride: 1,
+    fullEstimatedBytes,
+  };
 }
 
 const NEIGHBOR_DIRS: ReadonlyArray<readonly [number, number, number]> = [
@@ -216,15 +257,13 @@ function createPrepared(
   fullBuild: VoxelBuild,
   checksumOverride?: string | null,
 ): PreparedArenaBuild {
-  const fullEstimatedBytes = estimateJsonBytes(source, fullBuild.blocks.length);
-  const preferPreview =
-    ARENA_PREVIEW_STAGE_ENABLED &&
-    typeof fullEstimatedBytes === "number" &&
-    fullEstimatedBytes >= PREVIEW_TRIGGER_BYTES;
-
+  const metadataHints = deriveArenaBuildLoadHints({
+    blockCount: fullBuild.blocks.length,
+    voxelByteSize: source.voxelByteSize,
+    voxelCompressedByteSize: source.voxelCompressedByteSize,
+  });
   const preview = buildPreviewBuild(fullBuild, PREVIEW_TARGET_BLOCKS);
   const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(fullBuild);
-  const initialVariant: ArenaBuildVariant = preferPreview ? "preview" : "full";
 
   return {
     buildId: source.id,
@@ -232,11 +271,9 @@ function createPrepared(
     fullBuild,
     previewBuild: preview.build,
     hints: {
-      initialVariant,
-      fullBlockCount: fullBuild.blocks.length,
+      ...metadataHints,
       previewBlockCount: preview.build.blocks.length,
       previewStride: preview.stride,
-      fullEstimatedBytes,
     },
     buildRef: {
       buildId: source.id,
