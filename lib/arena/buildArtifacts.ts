@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
@@ -85,10 +86,13 @@ function normalizeGridSize(value: number): 64 | 256 | 512 {
   return 256;
 }
 
-function buildCacheKey(source: ArenaBuildSource): string {
-  const hash = source.voxelSha256?.trim() || "nohash";
-  const byteSize = source.voxelByteSize ?? source.voxelCompressedByteSize ?? source.blockCount;
-  return `${source.id}:${hash}:${byteSize}`;
+function normalizeStoredChecksum(source: ArenaBuildSource): string | null {
+  const value = source.voxelSha256?.trim();
+  return value ? value : null;
+}
+
+function buildCacheKey(source: ArenaBuildSource, checksum: string): string {
+  return `${source.id}:${checksum}`;
 }
 
 function estimateJsonBytes(source: ArenaBuildSource, fullBlockCount: number): number | null {
@@ -198,7 +202,20 @@ function buildPreviewBuild(fullBuild: VoxelBuild, targetBlockCount: number): { b
   };
 }
 
-function createPrepared(source: ArenaBuildSource, fullBuild: VoxelBuild): PreparedArenaBuild {
+function computeBuildChecksum(fullBuild: VoxelBuild): string {
+  const hash = createHash("sha256");
+  hash.update(`v=${fullBuild.version};n=${fullBuild.blocks.length};`);
+  for (const block of fullBuild.blocks) {
+    hash.update(`${block.x},${block.y},${block.z},${block.type};`);
+  }
+  return hash.digest("hex");
+}
+
+function createPrepared(
+  source: ArenaBuildSource,
+  fullBuild: VoxelBuild,
+  checksumOverride?: string | null,
+): PreparedArenaBuild {
   const fullEstimatedBytes = estimateJsonBytes(source, fullBuild.blocks.length);
   const preferPreview =
     ARENA_PREVIEW_STAGE_ENABLED &&
@@ -206,7 +223,7 @@ function createPrepared(source: ArenaBuildSource, fullBuild: VoxelBuild): Prepar
     fullEstimatedBytes >= PREVIEW_TRIGGER_BYTES;
 
   const preview = buildPreviewBuild(fullBuild, PREVIEW_TARGET_BLOCKS);
-  const checksum = source.voxelSha256 ?? null;
+  const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(fullBuild);
   const initialVariant: ArenaBuildVariant = preferPreview ? "preview" : "full";
 
   return {
@@ -300,14 +317,22 @@ async function parseAndValidateBuild(source: ArenaBuildSource): Promise<VoxelBui
 }
 
 export async function prepareArenaBuild(source: ArenaBuildSource): Promise<PreparedArenaBuild> {
+  const storedChecksum = normalizeStoredChecksum(source);
+
   if (!ARENA_ARTIFACTS_ENABLED) {
     const fullBuild = await parseAndValidateBuild(source);
-    const prepared = createPrepared(source, fullBuild);
+    const prepared = createPrepared(source, fullBuild, storedChecksum);
     prepared.hints.initialVariant = "full";
     return prepared;
   }
 
-  const cacheKey = buildCacheKey(source);
+  // Without a durable content checksum we skip cache reuse to avoid stale artifacts after in-place overwrites.
+  if (!storedChecksum) {
+    const fullBuild = await parseAndValidateBuild(source);
+    return createPrepared(source, fullBuild, null);
+  }
+
+  const cacheKey = buildCacheKey(source, storedChecksum);
   const cached = getCachedPrepared(cacheKey);
   if (cached) return cached;
 
@@ -316,7 +341,7 @@ export async function prepareArenaBuild(source: ArenaBuildSource): Promise<Prepa
 
   const promise = (async () => {
     const fullBuild = await parseAndValidateBuild(source);
-    const prepared = createPrepared(source, fullBuild);
+    const prepared = createPrepared(source, fullBuild, storedChecksum);
     setCachedPrepared(cacheKey, prepared);
     return prepared;
   })();

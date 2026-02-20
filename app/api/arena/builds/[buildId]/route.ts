@@ -16,6 +16,7 @@ export async function GET(
   const { buildId } = await params;
   const url = new URL(request.url);
   const variant = parseVariant(url.searchParams.get("variant"));
+  const expectedChecksum = url.searchParams.get("checksum")?.trim() || null;
 
   const build = await prisma.build.findUnique({
     where: { id: buildId },
@@ -44,6 +45,17 @@ export async function GET(
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load build payload";
     return NextResponse.json({ error: message }, { status: 422 });
+  }
+
+  if (expectedChecksum && expectedChecksum !== prepared.checksum) {
+    return NextResponse.json(
+      {
+        error: "Build checksum mismatch",
+        expectedChecksum,
+        actualChecksum: prepared.checksum,
+      },
+      { status: 409 },
+    );
   }
 
   const voxelBuild = pickBuildVariant(prepared, variant);
