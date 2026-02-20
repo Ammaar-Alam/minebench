@@ -32,6 +32,7 @@ export function VoxelViewerCard({
   enableBuildJsonToggle = false,
   actions,
   viewerRef,
+  skipValidation = false,
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -52,7 +53,14 @@ export function VoxelViewerCard({
   enableBuildJsonToggle?: boolean;
   actions?: ReactNode;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
+  skipValidation?: boolean;
 }) {
+  const isLikelyVoxelBuild = (value: unknown): value is VoxelBuild => {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value as Partial<VoxelBuild>;
+    return candidate.version === "1.0" && Array.isArray(candidate.blocks);
+  };
+
   const rendered = useMemo(() => {
     if (!voxelBuild)
       return {
@@ -60,6 +68,13 @@ export function VoxelViewerCard({
         warnings: [] as string[],
         error: null as string | null,
       };
+    if (skipValidation && isLikelyVoxelBuild(voxelBuild)) {
+      return {
+        build: voxelBuild,
+        warnings: [] as string[],
+        error: null as string | null,
+      };
+    }
     const paletteDefs = getPalette(palette);
     const maxBlocks = VIEWER_MAX_BLOCKS_BY_GRID[gridSize] ?? VIEWER_MAX_BLOCKS_BY_GRID[256];
     const validated = validateVoxelBuild(voxelBuild, {
@@ -69,7 +84,7 @@ export function VoxelViewerCard({
     });
     if (!validated.ok) return { build: null, warnings: [], error: validated.error };
     return { build: validated.value.build, warnings: validated.value.warnings, error: null };
-  }, [voxelBuild, gridSize, palette]);
+  }, [voxelBuild, gridSize, palette, skipValidation]);
 
   const build = rendered.build;
   const warnings = metrics?.warnings ?? rendered.warnings;

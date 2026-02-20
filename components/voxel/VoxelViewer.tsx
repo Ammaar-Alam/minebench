@@ -463,7 +463,6 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       voxelGroupRef.current = vg;
       three.scene.add(vg.group);
       fitView();
-      autoRotateRef.current = Boolean(autoRotate);
 
       if (!animateIn) return;
 
@@ -506,7 +505,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         revealRafRef.current = null;
       }
     };
-  }, [voxelBuild, paletteDefs, autoRotate, animateIn]);
+  }, [voxelBuild, paletteDefs, animateIn]);
 
   useEffect(() => {
     const three = threeRef.current;

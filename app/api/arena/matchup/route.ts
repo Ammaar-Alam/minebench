@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import type { ArenaMatchup } from "@/lib/arena/types";
 import { weightedPick } from "@/lib/arena/sampling";
 import { expectedScore } from "@/lib/arena/rating";
-import { resolveBuildSpec } from "@/lib/storage/buildPayload";
+import { pickInitialBuild, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
 
 export const runtime = "nodejs";
 
@@ -865,6 +865,7 @@ export async function GET(req: Request) {
   const swapSides = Math.random() < 0.5;
   const leftModel = swapSides ? picked.modelB : picked.modelA;
   const rightModel = swapSides ? picked.modelA : picked.modelB;
+  const startedAt = performance.now();
 
   const [buildA, buildB] = await Promise.all([
     prisma.build.findFirst({
@@ -877,6 +878,12 @@ export async function GET(req: Request) {
       },
       select: {
         id: true,
+        gridSize: true,
+        palette: true,
+        blockCount: true,
+        voxelByteSize: true,
+        voxelCompressedByteSize: true,
+        voxelSha256: true,
         voxelData: true,
         voxelStorageBucket: true,
         voxelStoragePath: true,
@@ -893,6 +900,12 @@ export async function GET(req: Request) {
       },
       select: {
         id: true,
+        gridSize: true,
+        palette: true,
+        blockCount: true,
+        voxelByteSize: true,
+        voxelCompressedByteSize: true,
+        voxelSha256: true,
         voxelData: true,
         voxelStorageBucket: true,
         voxelStoragePath: true,
@@ -905,10 +918,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Missing seeded build" }, { status: 500 });
   }
 
-  let buildSpecA: Awaited<ReturnType<typeof resolveBuildSpec>>;
-  let buildSpecB: Awaited<ReturnType<typeof resolveBuildSpec>>;
+  let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>>;
+  let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>>;
   try {
-    [buildSpecA, buildSpecB] = await Promise.all([resolveBuildSpec(buildA), resolveBuildSpec(buildB)]);
+    [preparedA, preparedB] = await Promise.all([prepareArenaBuild(buildA), prepareArenaBuild(buildB)]);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load build payload";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -952,7 +965,11 @@ export async function GET(req: Request) {
         displayName: leftModel.displayName,
         eloRating: leftModel.eloRating,
       },
-      build: buildSpecA as ArenaMatchup["a"]["build"],
+      build: pickInitialBuild(preparedA) as ArenaMatchup["a"]["build"],
+      buildRef: preparedA.buildRef,
+      previewRef: preparedA.previewRef,
+      serverValidated: true,
+      buildLoadHints: preparedA.hints,
     },
     b: {
       model: {
@@ -961,11 +978,23 @@ export async function GET(req: Request) {
         displayName: rightModel.displayName,
         eloRating: rightModel.eloRating,
       },
-      build: buildSpecB as ArenaMatchup["b"]["build"],
+      build: pickInitialBuild(preparedB) as ArenaMatchup["b"]["build"],
+      buildRef: preparedB.buildRef,
+      previewRef: preparedB.previewRef,
+      serverValidated: true,
+      buildLoadHints: preparedB.hints,
     },
   };
 
-  const res = NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
+  const prepareMs = Math.round(performance.now() - startedAt);
+  const res = NextResponse.json(body, {
+    headers: {
+      "Cache-Control": "no-store",
+      "x-build-prepare-ms": String(prepareMs),
+      "x-build-initial-a": preparedA.hints.initialVariant,
+      "x-build-initial-b": preparedB.hints.initialVariant,
+    },
+  });
   getOrSetSessionId(res, req);
   return res;
 }
