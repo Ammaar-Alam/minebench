@@ -49,6 +49,7 @@ backups/
 *.sql
 *.sql.gz
 *.backup
+!prisma/migrations/**/migration.sql
 
 # Python Specific
 __pycache__

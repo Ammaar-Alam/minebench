@@ -30,6 +30,10 @@ export type LeaderboardResponse = {
     ratingDeviation: number;
     rankScore: number;
     confidence: number;
+    rank: number;
+    rankDelta24h: number | null;
+    hasBaseline24h: boolean;
+    movementVisible: boolean;
     shownCount: number;
     winCount: number;
     lossCount: number;

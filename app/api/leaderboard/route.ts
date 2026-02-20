@@ -12,6 +12,8 @@ export const runtime = "nodejs";
 const CONTENDER_BAND_SIZE = 8;
 const ADJ_PAIR_VOTES_FLOOR = 12;
 const ADJ_PAIR_PROMPTS_FLOOR = 6;
+const MOVEMENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const MOVEMENT_CONFIDENCE_FLOOR = 50;
 
 type PairCoverageRow = {
   modelLowId: string;
@@ -37,7 +39,8 @@ function pairCompletion(coverage: PairCoverage | null): number {
 }
 
 export async function GET() {
-  const [models, dispersionByModelId, eligiblePromptIds] = await Promise.all([
+  const movementAnchorTime = new Date(Date.now() - MOVEMENT_LOOKBACK_MS);
+  const [models, dispersionByModelId, eligiblePromptIds, baselineAnchor] = await Promise.all([
     prisma.model.findMany({
       where: { isBaseline: false, enabled: true },
       orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
@@ -58,8 +61,23 @@ export async function GET() {
     }),
     getLeaderboardDispersionByModelId(),
     getArenaEligiblePromptIds(),
+    prisma.modelRankSnapshot.findFirst({
+      where: { capturedAt: { lte: movementAnchorTime } },
+      orderBy: { capturedAt: "desc" },
+      select: { capturedAt: true },
+    }),
   ]);
   const eligiblePromptCount = eligiblePromptIds.length;
+  const hasGlobalBaseline = Boolean(baselineAnchor);
+
+  let baselineRanksByModelId = new Map<string, number>();
+  if (baselineAnchor) {
+    const rows = await prisma.modelRankSnapshot.findMany({
+      where: { capturedAt: baselineAnchor.capturedAt },
+      select: { modelId: true, rank: true },
+    });
+    baselineRanksByModelId = new Map(rows.map((row) => [row.modelId, row.rank]));
+  }
 
   const topBandIds = models.slice(0, CONTENDER_BAND_SIZE).map((m) => m.id);
   let pairCoverageByKey = new Map<string, PairCoverage>();
@@ -108,6 +126,11 @@ export async function GET() {
       const ratingDeviation = Number(m.glickoRd);
       const rankScore = Number(m.conservativeRating ?? conservativeScore(rawRating, ratingDeviation));
       const confidence = confidenceFromRd(ratingDeviation);
+      const rank = index + 1;
+      const baselineRank = baselineRanksByModelId.get(m.id);
+      const hasBaseline24h = hasGlobalBaseline && baselineRank != null;
+      const rankDelta24h = hasBaseline24h ? baselineRank - rank : null;
+      const movementVisible = hasGlobalBaseline && confidence >= MOVEMENT_CONFIDENCE_FLOOR;
       const voteSummary = summarizeArenaVotes(m);
       const qualityFloorScore =
         voteSummary.totalVotes > 0
@@ -144,6 +167,10 @@ export async function GET() {
         ratingDeviation,
         rankScore,
         confidence,
+        rank,
+        rankDelta24h,
+        hasBaseline24h,
+        movementVisible,
         shownCount: m.shownCount,
         winCount: m.winCount,
         lossCount: m.lossCount,

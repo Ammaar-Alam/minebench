@@ -30,12 +30,29 @@ model Model {
   builds Build[]
   matchupsAsA Matchup[] @relation("MatchupModelA")
   matchupsAsB Matchup[] @relation("MatchupModelB")
+  rankSnapshots ModelRankSnapshot[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([enabled])
   @@index([conservativeRating])
+}
+
+model ModelRankSnapshot {
+  id         String   @id @default(cuid())
+  capturedAt DateTime
+  rank       Int
+  rankScore  Float
+  confidence Int
+
+  modelId String
+  model   Model @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  @@unique([capturedAt, modelId])
+  @@index([capturedAt])
+  @@index([capturedAt, rank])
+  @@index([modelId])
 }
 
 model Prompt {

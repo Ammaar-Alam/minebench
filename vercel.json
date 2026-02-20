@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/admin/rank-snapshots/capture",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

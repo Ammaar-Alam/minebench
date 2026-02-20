@@ -165,6 +165,7 @@ Copy `.env.example` to `.env` and set what you need:
 - `DATABASE_URL` (required): pooled/runtime Postgres URL
 - `DIRECT_URL` (required): direct Postgres URL for Prisma migrations
 - `ADMIN_TOKEN` (required for `/api/admin/*`)
+- `CRON_SECRET` (recommended if using Vercel Cron for `/api/admin/rank-snapshots/capture`)
 - `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (required for large build upload/download via Supabase Storage)
 - `SUPABASE_STORAGE_BUCKET` (optional, default `builds`)
 - `SUPABASE_STORAGE_PREFIX` (optional, default `imports`)
@@ -312,6 +313,10 @@ curl -sS -X POST "http://localhost:3000/api/admin/seed?dryRun=1" \
 # generate missing builds in batches (repeat until done=true)
 curl -sS -X POST "http://localhost:3000/api/admin/seed?batchSize=2" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# capture current leaderboard rank snapshot (hourly cadence recommended)
+curl -sS -X POST "http://localhost:3000/api/admin/rank-snapshots/capture" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 At least one provider key must be configured (`OPENROUTER_API_KEY` or a direct provider key) for generation to run.
@@ -355,6 +360,7 @@ Reference prompt template: `docs/chatgpt-web-voxel-prompt.md`
 
 - `GET /api/admin/status`
 - `POST /api/admin/seed?dryRun=1&generateBuilds=0&batchSize=2`
+- `GET|POST /api/admin/rank-snapshots/capture?at=<optional-iso-timestamp>`
 - `POST /api/admin/import-build?modelKey=...&promptId=...|promptText=...&gridSize=256&palette=simple&mode=precise&overwrite=1`
   - body can be either:
     - raw voxel JSON (legacy)
@@ -458,6 +464,9 @@ uploads/            local build JSON files and prompt folders
   - `SUPABASE_URL`: your Supabase project URL
   - `SUPABASE_SERVICE_ROLE_KEY`: server-only key (do not expose to client)
   - `SUPABASE_STORAGE_BUCKET`: private bucket for build payload objects (default `builds`)
+- Hourly rank snapshots for movement markers:
+  - `vercel.json` schedules `/api/admin/rank-snapshots/capture` every hour
+  - set `CRON_SECRET` in Vercel, and keep `ADMIN_TOKEN` for manual/admin calls
 
 ### Supabase Storage setup for large build imports
 

@@ -36,6 +36,39 @@ function confidenceClass(confidence: number): string {
   return "text-warn";
 }
 
+type MovementBadge = {
+  label: string;
+  toneClass: string;
+  ariaLabel: string;
+};
+
+function movementBadge(model: LeaderboardResponse["models"][number]): MovementBadge | null {
+  if (!model.movementVisible) return null;
+  if (!model.hasBaseline24h) {
+    return {
+      label: "NEW",
+      toneClass: "bg-accent/15 text-accent ring-accent/35",
+      ariaLabel: `${model.displayName} is new in the 24-hour movement window.`,
+    };
+  }
+
+  const delta = model.rankDelta24h ?? 0;
+  if (delta === 0) return null;
+  if (delta > 0) {
+    return {
+      label: `↑${delta}`,
+      toneClass: "bg-success/15 text-success ring-success/35",
+      ariaLabel: `${model.displayName} moved up ${delta} rank${delta === 1 ? "" : "s"} in 24 hours.`,
+    };
+  }
+  const down = Math.abs(delta);
+  return {
+    label: `↓${down}`,
+    toneClass: "bg-danger/18 text-danger ring-danger/35",
+    ariaLabel: `${model.displayName} moved down ${down} rank${down === 1 ? "" : "s"} in 24 hours.`,
+  };
+}
+
 export function Leaderboard() {
   const [data, setData] = useState<LeaderboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -152,6 +185,7 @@ export function Leaderboard() {
               const voteSummary = summarizeArenaVotes(m);
               const consistency = m.consistency ?? 0;
               const coveragePercent = Math.round((m.promptCoverage ?? 0) * 100);
+              const moveBadge = movementBadge(m);
               return (
                 <button
                   key={m.key}
@@ -171,8 +205,15 @@ export function Leaderboard() {
                       <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/65 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
                         {index + 1}
                       </span>
-                      <div className="mt-1.5 truncate text-[1rem] font-semibold tracking-tight text-fg">
-                        {m.displayName}
+                      <div className="mt-1.5 flex items-center gap-1.5">
+                        <div className="min-w-0 flex-1 truncate text-[1rem] font-semibold tracking-tight text-fg">
+                          {m.displayName}
+                        </div>
+                        {moveBadge ? (
+                          <span className={`mb-leaderboard-move-chip ${moveBadge.toneClass}`} aria-label={moveBadge.ariaLabel}>
+                            {moveBadge.label}
+                          </span>
+                        ) : null}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                         <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
@@ -275,7 +316,14 @@ export function Leaderboard() {
             </colgroup>
             <thead className="text-xs uppercase text-muted2">
               <tr>
-                <th scope="col" className="mb-leaderboard-header mb-leaderboard-header-model text-left">
+                <th
+                  scope="col"
+                  className="mb-leaderboard-header mb-leaderboard-header-model mb-col-help text-left"
+                  data-help="Model label. If shown, the small marker indicates rank movement vs 24h ago."
+                  data-help-align="left"
+                  aria-label="Model. Marker indicates rank movement versus 24 hours ago."
+                  tabIndex={0}
+                >
                   <span className="mb-col-help-label">Model</span>
                 </th>
                 <th
@@ -358,6 +406,7 @@ export function Leaderboard() {
                 const voteSummary = summarizeArenaVotes(m);
                 const tierClass = index === 0 ? "mb-tier-glow-top" : index < 3 ? "mb-tier-glow" : "";
                 const tier = index === 0 ? "champion" : index < 3 ? "top" : "base";
+                const moveBadge = movementBadge(m);
                 return (
                   <tr
                     key={m.key}
@@ -384,8 +433,18 @@ export function Leaderboard() {
                           {index + 1}
                         </span>
                         <div className="min-w-0">
-                          <div className="truncate font-medium text-fg transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent">
-                            {m.displayName}
+                          <div className="flex items-center gap-1.5">
+                            <div className="min-w-0 flex-1 truncate font-medium text-fg transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent">
+                              {m.displayName}
+                            </div>
+                            {moveBadge ? (
+                              <span
+                                className={`mb-leaderboard-move-chip ${moveBadge.toneClass}`}
+                                aria-label={moveBadge.ariaLabel}
+                              >
+                                {moveBadge.label}
+                              </span>
+                            ) : null}
                           </div>
                           <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                             <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
