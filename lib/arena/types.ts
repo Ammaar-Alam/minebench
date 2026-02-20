@@ -2,6 +2,22 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 
 export type VoteChoice = "A" | "B" | "TIE" | "BOTH_BAD";
 
+export type ArenaBuildVariant = "preview" | "full";
+
+export type ArenaBuildRef = {
+  buildId: string;
+  variant: ArenaBuildVariant;
+  checksum: string | null;
+};
+
+export type ArenaBuildLoadHints = {
+  initialVariant: ArenaBuildVariant;
+  fullBlockCount: number;
+  previewBlockCount: number;
+  previewStride: number;
+  fullEstimatedBytes: number | null;
+};
+
 export type ArenaMatchup = {
   id: string;
   samplingLane?: "coverage" | "contender" | "uncertainty" | "exploration";
@@ -9,10 +25,18 @@ export type ArenaMatchup = {
   a: {
     model: { key: string; provider: string; displayName: string; eloRating: number };
     build: VoxelBuild;
+    buildRef?: ArenaBuildRef;
+    previewRef?: ArenaBuildRef;
+    serverValidated?: boolean;
+    buildLoadHints?: ArenaBuildLoadHints;
   };
   b: {
     model: { key: string; provider: string; displayName: string; eloRating: number };
     build: VoxelBuild;
+    buildRef?: ArenaBuildRef;
+    previewRef?: ArenaBuildRef;
+    serverValidated?: boolean;
+    buildLoadHints?: ArenaBuildLoadHints;
   };
 };
 

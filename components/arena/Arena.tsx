@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArenaMatchup, VoteChoice } from "@/lib/arena/types";
+import {
+  ArenaBuildRef,
+  ArenaBuildVariant,
+  ArenaMatchup,
+  VoteChoice,
+} from "@/lib/arena/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { VoteBar } from "@/components/arena/VoteBar";
 import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
@@ -28,6 +33,73 @@ async function submitVote(matchupId: string, choice: VoteChoice) {
     body: JSON.stringify({ matchupId, choice }),
   });
   if (!res.ok) throw new Error(await res.text());
+}
+
+type BuildVariantResponse = {
+  buildId: string;
+  variant: ArenaBuildVariant;
+  checksum: string | null;
+  serverValidated: boolean;
+  voxelBuild: ArenaMatchup["a"]["build"];
+};
+
+const AUTOLOAD_FULL_MAX_BYTES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_AUTOFETCH_MAX_BYTES ?? "500000000",
+  10,
+);
+
+async function fetchBuildVariant(ref: ArenaBuildRef, signal?: AbortSignal): Promise<BuildVariantResponse> {
+  const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
+  url.searchParams.set("variant", ref.variant);
+  if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+  const res = await fetch(url, {
+    method: "GET",
+    credentials: "include",
+    signal,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return (await res.json()) as BuildVariantResponse;
+}
+
+function shouldAutoloadFull(matchup: ArenaMatchup, side: "a" | "b"): boolean {
+  const lane = matchup[side];
+  const hints = lane.buildLoadHints;
+  const ref = lane.buildRef;
+  if (!hints || !ref) return false;
+  if (hints.initialVariant !== "preview") return false;
+  if (ref.variant !== "full") return false;
+  if (!Number.isFinite(AUTOLOAD_FULL_MAX_BYTES) || AUTOLOAD_FULL_MAX_BYTES <= 0) return true;
+
+  const estimated = hints.fullEstimatedBytes;
+  if (typeof estimated !== "number" || !Number.isFinite(estimated) || estimated <= 0) {
+    return true;
+  }
+  return estimated <= AUTOLOAD_FULL_MAX_BYTES;
+}
+
+function withHydratedBuild(
+  matchup: ArenaMatchup,
+  side: "a" | "b",
+  build: ArenaMatchup["a"]["build"],
+  serverValidated: boolean,
+): ArenaMatchup {
+  const lane = matchup[side];
+  const updatedLane = {
+    ...lane,
+    build,
+    serverValidated: lane.serverValidated || serverValidated,
+    buildLoadHints: lane.buildLoadHints
+      ? {
+          ...lane.buildLoadHints,
+          initialVariant: "full" as ArenaBuildVariant,
+        }
+      : lane.buildLoadHints,
+  };
+
+  if (side === "a") {
+    return { ...matchup, a: updatedLane };
+  }
+  return { ...matchup, b: updatedLane };
 }
 
 type RevealAction = VoteChoice | "SKIP";
@@ -82,6 +154,7 @@ export function Arena() {
   const carouselDragRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number } | null>(null);
   const revealRef = useRef<RevealState>({ kind: "none" });
   const transitionRef = useRef(false);
+  const hydrateInFlightRef = useRef(new Set<string>());
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const handleVoteRef = useRef<(choice: VoteChoice) => Promise<void>>(
     async () => undefined
@@ -160,6 +233,40 @@ export function Arena() {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 
+  async function hydrateMatchupSide(
+    matchupValue: ArenaMatchup,
+    side: "a" | "b",
+    opts?: { signal?: AbortSignal; silent?: boolean },
+  ) {
+    const lane = matchupValue[side];
+    const ref = lane.buildRef;
+    if (!ref) return;
+    if (lane.buildLoadHints?.initialVariant === "full") return;
+
+    const key = `${matchupValue.id}:${side}:${ref.buildId}:${ref.checksum ?? "none"}`;
+    if (hydrateInFlightRef.current.has(key)) return;
+    hydrateInFlightRef.current.add(key);
+
+    try {
+      const payload = await fetchBuildVariant(ref, opts?.signal);
+      setState((prev) => {
+        if (prev.kind !== "ready") return prev;
+        if (prev.matchup.id !== matchupValue.id) return prev;
+        return {
+          kind: "ready",
+          matchup: withHydratedBuild(prev.matchup, side, payload.voxelBuild, payload.serverValidated),
+        };
+      });
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") return;
+      if (!opts?.silent) {
+        console.warn("arena full build hydration failed", err);
+      }
+    } finally {
+      hydrateInFlightRef.current.delete(key);
+    }
+  }
+
   useEffect(() => {
     if (reveal.kind !== "reveal") return;
     const id = window.setInterval(() => forceTick((t) => t + 1), 120);
@@ -189,6 +296,31 @@ export function Arena() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!matchup) return;
+
+    const current = matchup;
+    const hydrateSides = (["a", "b"] as const)
+      .filter((side) => shouldAutoloadFull(current, side))
+      .map((side) => {
+        const ref = current[side].buildRef;
+        return ref ? { side, ref } : null;
+      })
+      .filter((entry): entry is { side: "a" | "b"; ref: ArenaBuildRef } => entry != null);
+
+    if (hydrateSides.length === 0) return;
+
+    const controller = new AbortController();
+
+    for (const target of hydrateSides) {
+      void hydrateMatchupSide(current, target.side, { signal: controller.signal, silent: true });
+    }
+
+    return () => {
+      controller.abort();
+    };
+  }, [matchup]);
 
   const revealMeta = (() => {
     if (!matchup || reveal.kind !== "reveal" || reveal.matchupId !== matchup.id) {
@@ -475,8 +607,23 @@ export function Arena() {
                   />
                 }
                 voxelBuild={matchup?.a.build ?? null}
+                skipValidation={Boolean(matchup?.a.serverValidated)}
                 autoRotate
                 viewerSize="arena"
+                actions={
+                  matchup?.a.buildLoadHints?.initialVariant === "preview" ? (
+                    <button
+                      type="button"
+                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:h-9 sm:px-3.5 sm:text-xs"
+                      onClick={() => {
+                        if (!matchup) return;
+                        void hydrateMatchupSide(matchup, "a");
+                      }}
+                    >
+                      Full
+                    </button>
+                  ) : null
+                }
               />
             </div>
             <div
@@ -492,8 +639,23 @@ export function Arena() {
                   />
                 }
                 voxelBuild={matchup?.b.build ?? null}
+                skipValidation={Boolean(matchup?.b.serverValidated)}
                 autoRotate
                 viewerSize="arena"
+                actions={
+                  matchup?.b.buildLoadHints?.initialVariant === "preview" ? (
+                    <button
+                      type="button"
+                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:h-9 sm:px-3.5 sm:text-xs"
+                      onClick={() => {
+                        if (!matchup) return;
+                        void hydrateMatchupSide(matchup, "b");
+                      }}
+                    >
+                      Full
+                    </button>
+                  ) : null
+                }
               />
             </div>
           </div>
