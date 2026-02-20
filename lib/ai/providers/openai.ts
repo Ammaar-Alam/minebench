@@ -1,5 +1,6 @@
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
+import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
 type OpenAIChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -221,15 +222,6 @@ async function pollBackgroundResponse(opts: {
   return current;
 }
 
-function tokenFallbacks(requested: number): number[] {
-  const vals = [requested, 65536, 32768, 16384, 8192]
-    .filter((n) => Number.isFinite(n) && n > 0)
-    .map((n) => Math.floor(n));
-  const uniq: number[] = [];
-  for (const v of vals) if (!uniq.includes(v)) uniq.push(v);
-  return uniq;
-}
-
 type ReasoningConfigAttempt =
   | { kind: "effort"; effort: string }
   | { kind: "max_tokens"; maxTokens: number }
@@ -266,6 +258,12 @@ function describeReasoningConfigAttempt(
   if (!cfg) return "disabled";
   if (cfg.kind === "effort") return cfg.effort;
   return `max_tokens=${clampReasoningBudget(cfg.maxTokens, completionBudget)}`;
+}
+
+function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
+  const budget = Math.floor(maxOutputTokens);
+  const trimmed = message.trim().replace(/[.!?]$/, "");
+  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 function clampReasoningBudget(maxTokens: number, completionBudget: number): number {
@@ -349,7 +347,8 @@ export async function openaiGenerateText(params: {
     let res: Response | null = null;
     let lastBody = "";
     let selectedResponsesReasoningLabel: string | null = null;
-    for (const tok of tokenFallbacks(maxOutputTokens)) {
+    let selectedResponsesTokenBudget: number | null = null;
+    for (const tok of tokenBudgetCandidates(maxOutputTokens)) {
       for (const [cfgIdx, cfg] of reasoningConfigAttempts.entries()) {
         const reasoning =
           cfg?.kind === "effort"
@@ -401,6 +400,7 @@ export async function openaiGenerateText(params: {
 
         if (res.ok) {
           selectedResponsesReasoningLabel = currentReasoningLabel;
+          selectedResponsesTokenBudget = tok;
           break;
         }
         lastBody = await res.text().catch(() => "");
@@ -427,7 +427,13 @@ export async function openaiGenerateText(params: {
 
     if (res.ok) {
       if (selectedResponsesReasoningLabel) {
-        params.onTrace?.(`OpenAI Responses reasoning config in use: '${selectedResponsesReasoningLabel}'.`);
+        const budget = selectedResponsesTokenBudget ?? maxOutputTokens;
+        params.onTrace?.(
+          withMaxOutputTokens(
+            `OpenAI Responses reasoning config in use: '${selectedResponsesReasoningLabel}'.`,
+            budget,
+          ),
+        );
       }
       if (streamForRequest) {
         let text = "";
@@ -513,7 +519,8 @@ export async function openaiGenerateText(params: {
   let res: Response | null = null;
   let lastBody = "";
   let selectedChatEffortLabel: string | null = null;
-  for (const tok of tokenFallbacks(maxOutputTokens)) {
+  let selectedChatTokenBudget: number | null = null;
+  for (const tok of tokenBudgetCandidates(maxOutputTokens)) {
     let tryLowerTokenBudget = false;
     const effortAttempts = reasoningEffortAttempts.length > 0 ? [...reasoningEffortAttempts, undefined] : [undefined];
     for (const [effortIdx, effort] of effortAttempts.entries()) {
@@ -551,6 +558,7 @@ export async function openaiGenerateText(params: {
       );
       if (res.ok) {
         selectedChatEffortLabel = currentEffortLabel;
+        selectedChatTokenBudget = tok;
         break;
       }
       lastBody = await res.text().catch(() => "");
@@ -576,7 +584,13 @@ export async function openaiGenerateText(params: {
   if (!res) throw new Error("OpenAI request failed");
 
   if (res.ok && selectedChatEffortLabel) {
-    params.onTrace?.(`OpenAI Chat reasoning config in use: '${selectedChatEffortLabel}'.`);
+    const budget = selectedChatTokenBudget ?? maxOutputTokens;
+    params.onTrace?.(
+      withMaxOutputTokens(
+        `OpenAI Chat reasoning config in use: '${selectedChatEffortLabel}'.`,
+        budget,
+      ),
+    );
   }
 
   if (res.ok && streamResponses) {

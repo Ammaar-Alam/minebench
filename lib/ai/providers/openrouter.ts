@@ -1,4 +1,5 @@
 import { consumeSseStream } from "@/lib/ai/providers/sse";
+import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -23,15 +24,6 @@ function extractTextFromChatCompletions(data: OpenRouterChatResponse): string {
 
 function sleepMs(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-function tokenFallbacks(requested: number): number[] {
-  const vals = [requested, 65536, 32768, 16384, 8192, 4096, 2048]
-    .filter((n) => Number.isFinite(n) && n > 0)
-    .map((n) => Math.floor(n));
-  const uniq: number[] = [];
-  for (const v of vals) if (!uniq.includes(v)) uniq.push(v);
-  return uniq;
 }
 
 type ReasoningConfigAttempt =
@@ -98,6 +90,12 @@ function looksLikeReasoningConfigError(body: string): boolean {
   );
 }
 
+function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
+  const budget = Math.floor(maxOutputTokens);
+  const trimmed = message.trim().replace(/[.!?]$/, "");
+  return `${trimmed}; max_output_tokens=${budget}.`;
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -161,7 +159,8 @@ export async function openrouterGenerateText(params: {
     let res: Response | null = null;
     let lastBody = "";
     let selectedReasoningLabel: string | null = null;
-    for (const tok of tokenFallbacks(maxTokens)) {
+    let selectedReasoningTokenBudget: number | null = null;
+    for (const tok of tokenBudgetCandidates(maxTokens)) {
       let tryLowerTokenBudget = false;
       for (const [cfgIdx, cfg] of reasoningAttempts.entries()) {
         const reasoningConfig =
@@ -214,6 +213,7 @@ export async function openrouterGenerateText(params: {
 
         if (res.ok) {
           selectedReasoningLabel = describeReasoningAttempt(cfg);
+          selectedReasoningTokenBudget = tok;
           break;
         }
         lastBody = await res.text().catch(() => "");
@@ -279,7 +279,13 @@ export async function openrouterGenerateText(params: {
     }
 
     if (res.ok && selectedReasoningLabel) {
-      params.onTrace?.(`OpenRouter reasoning config in use: '${selectedReasoningLabel}'.`);
+      const budget = selectedReasoningTokenBudget ?? maxTokens;
+      params.onTrace?.(
+        withMaxOutputTokens(
+          `OpenRouter reasoning config in use: '${selectedReasoningLabel}'.`,
+          budget,
+        ),
+      );
     }
 
     if (params.onDelta) {

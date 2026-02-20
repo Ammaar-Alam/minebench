@@ -14,6 +14,7 @@ import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
+import { DEFAULT_MAX_OUTPUT_TOKENS } from "@/lib/ai/tokenBudgets";
 import {
   runVoxelExec,
   VOXEL_EXEC_TOOL_NAME,
@@ -21,15 +22,18 @@ import {
   voxelExecToolCallSchema,
 } from "@/lib/ai/tools/voxelExec";
 
-function defaultMaxOutputTokens(gridSize: 64 | 256 | 512, modelId: string): number {
-  if (modelId.startsWith("claude-opus-4-6")) return 131072;
-  if (modelId === "glm-5") return 131072;
-  if (modelId === "gpt-oss-120b") return 131072;
-  if (modelId === "minimax-m2.5") return 131072;
-  if (modelId === "qwen3-max-thinking" || modelId === "qwen3.5-397b-a17b") return 32768;
-  // these are optimistic targets; providers may cap lower and we retry down in the provider adapters
-  if (gridSize === 64) return 65536;
-  return 65536;
+const INT_ENV_MAX_OUTPUT_TOKENS = "MINEBENCH_MAX_OUTPUT_TOKENS";
+
+function parseIntEnvVar(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+function defaultMaxOutputTokens(_gridSize: 64 | 256 | 512, _modelId: string): number {
+  return parseIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS);
 }
 
 function defaultMaxReasoningTokens(modelId: string, maxOutputTokens: number): number | undefined {

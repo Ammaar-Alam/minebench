@@ -1,4 +1,5 @@
 import { consumeSseStream } from "@/lib/ai/providers/sse";
+import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
 type AnthropicMessageResponse = {
   content?: {
@@ -21,13 +22,10 @@ const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 
-function tokenFallbacks(requested: number): number[] {
-  const vals = [requested, 65536, 32768, 16384, 8192]
-    .filter((n) => Number.isFinite(n) && n > 0)
-    .map((n) => Math.floor(n));
-  const uniq: number[] = [];
-  for (const v of vals) if (!uniq.includes(v)) uniq.push(v);
-  return uniq;
+function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
+  const budget = Math.floor(maxOutputTokens);
+  const trimmed = message.trim().replace(/[.!?]$/, "");
+  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 function looksLikeTokenLimitError(body: string): boolean {
@@ -233,8 +231,9 @@ export async function anthropicGenerateText(params: {
   let structuredMode: "native_format" | "forced_tool" = "native_format";
   let didUseStreaming = false;
   let selectedAdaptiveEffort: AnthropicEffort | null = null;
+  let selectedAdaptiveTokenBudget: number | null = null;
   try {
-    requestLoop: for (const tok of tokenFallbacks(maxTokens)) {
+    requestLoop: for (const tok of tokenBudgetCandidates(maxTokens)) {
       betaLoop: for (const betaHeader of betaHeaders) {
         const useForcedToolStructuredOutput =
           useStructuredOutputs && structuredMode === "forced_tool";
@@ -301,6 +300,7 @@ export async function anthropicGenerateText(params: {
 
           if (res.ok) {
             if (usesAdaptiveThinking) selectedAdaptiveEffort = effort ?? null;
+            if (usesAdaptiveThinking) selectedAdaptiveTokenBudget = tok;
             break requestLoop;
           }
           lastBody = await res.text().catch(() => "");
@@ -355,7 +355,10 @@ export async function anthropicGenerateText(params: {
   }
 
   if (usesAdaptiveThinking && selectedAdaptiveEffort) {
-    params.onTrace?.(`Anthropic reasoning effort in use: '${selectedAdaptiveEffort}'.`);
+    const budget = selectedAdaptiveTokenBudget ?? maxTokens;
+    params.onTrace?.(
+      withMaxOutputTokens(`Anthropic reasoning effort in use: '${selectedAdaptiveEffort}'.`, budget),
+    );
   }
 
   if (didUseStreaming) {

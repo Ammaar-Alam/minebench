@@ -1,4 +1,5 @@
 import { consumeSseStream } from "@/lib/ai/providers/sse";
+import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -22,6 +23,22 @@ function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | und
   }
 
   return undefined;
+}
+
+function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
+  const budget = Math.floor(maxOutputTokens);
+  const trimmed = message.trim().replace(/[.!?]$/, "");
+  return `${trimmed}; max_output_tokens=${budget}.`;
+}
+
+function describeThinkingConfigLine(thinkingConfig?: GeminiThinkingConfig): string {
+  if (thinkingConfig?.thinkingLevel) {
+    return `Gemini thinking level in use: '${thinkingConfig.thinkingLevel}'.`;
+  }
+  if (typeof thinkingConfig?.thinkingBudget === "number") {
+    return `Gemini thinking budget in use: ${thinkingConfig.thinkingBudget}.`;
+  }
+  return "Gemini thinking config in use: default.";
 }
 
 export async function geminiGenerateText(params: {
@@ -53,13 +70,7 @@ export async function geminiGenerateText(params: {
   let res: Response | null = null;
   try {
     const thinkingConfig = bestThinkingConfigForModel(params.modelId);
-    if (thinkingConfig?.thinkingLevel) {
-      params.onTrace?.(`Gemini thinking level in use: '${thinkingConfig.thinkingLevel}'.`);
-    } else if (typeof thinkingConfig?.thinkingBudget === "number") {
-      params.onTrace?.(`Gemini thinking budget in use: ${thinkingConfig.thinkingBudget}.`);
-    } else {
-      params.onTrace?.("Gemini thinking config in use: default.");
-    }
+    const thinkingConfigLine = describeThinkingConfigLine(thinkingConfig);
     const basePayload = {
       systemInstruction: { parts: [{ text: params.system }] },
       contents: [{ role: "user", parts: [{ text: params.user }] }],
@@ -70,15 +81,11 @@ export async function geminiGenerateText(params: {
       },
     };
 
-    const tokenCandidates = [basePayload.generationConfig.maxOutputTokens, 65536, 32768, 16384, 8192]
-      .filter((n) => Number.isFinite(n) && (n as number) > 0)
-      .map((n) => Math.floor(n as number));
-    const uniqTokens: number[] = [];
-    for (const t of tokenCandidates) if (!uniqTokens.includes(t)) uniqTokens.push(t);
-
-    const payloads: object[] = [];
+    const uniqTokens = tokenBudgetCandidates(basePayload.generationConfig.maxOutputTokens);
+    let successBudget = basePayload.generationConfig.maxOutputTokens;
+    let lastBody = "";
     for (const tok of uniqTokens) {
-      payloads.push({
+      const payload = {
         ...basePayload,
         generationConfig: {
           ...(basePayload.generationConfig as object),
@@ -86,12 +93,7 @@ export async function geminiGenerateText(params: {
           responseMimeType: "application/json",
           responseJsonSchema: params.jsonSchema,
         },
-      });
-    }
-    payloads.push(basePayload);
-
-    let lastBody = "";
-    for (const payload of payloads) {
+      };
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (params.onDelta) headers.Accept = "text/event-stream";
       res = await fetch(url, {
@@ -100,12 +102,29 @@ export async function geminiGenerateText(params: {
         signal: controller.signal,
         body: JSON.stringify(payload),
       });
-      if (res.ok) break;
+      if (res.ok) {
+        successBudget = tok;
+        break;
+      }
       lastBody = await res.text().catch(() => "");
       // Retry with smaller token budget if that looks like the issue
       if (res.status === 400 && lastBody.toLowerCase().includes("maxoutputtokens")) continue;
-      // Retry once without responseMimeType if it was rejected.
-      if (payload === basePayload) break;
+    }
+
+    if (!res || !res.ok) {
+      const fallbackPayload = { ...basePayload };
+      const fallbackRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify(fallbackPayload),
+      });
+      if (fallbackRes.ok) {
+        res = fallbackRes;
+      } else {
+        lastBody = (await fallbackRes.text().catch(() => ""));
+        res = fallbackRes;
+      }
     }
 
     if (!res) throw new Error("Gemini request failed");
@@ -113,6 +132,9 @@ export async function geminiGenerateText(params: {
       const body = lastBody || (await res.text().catch(() => ""));
       throw new Error(`Gemini error ${res.status}: ${body}`);
     }
+
+    const budget = successBudget ?? basePayload.generationConfig.maxOutputTokens;
+    params.onTrace?.(withMaxOutputTokens(thinkingConfigLine, budget));
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Gemini request timed out");

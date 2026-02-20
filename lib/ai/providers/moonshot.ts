@@ -1,4 +1,5 @@
 import { consumeSseStream } from "@/lib/ai/providers/sse";
+import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
 type MoonshotChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -17,6 +18,22 @@ function extractTextFromChat(data: MoonshotChatResponse): string {
 
 function requestIdFromResponse(res: Response): string | null {
   return res.headers.get("x-request-id") ?? res.headers.get("request-id") ?? null;
+}
+
+function looksLikeTokenLimitError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    b.includes("max_tokens") ||
+    (b.includes("maximum") && b.includes("tokens")) ||
+    b.includes("too many tokens") ||
+    b.includes("token limit")
+  );
+}
+
+function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
+  const budget = Math.floor(maxOutputTokens);
+  const trimmed = message.trim().replace(/[.!?]$/, "");
+  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 export async function moonshotGenerateText(params: {
@@ -38,28 +55,40 @@ export async function moonshotGenerateText(params: {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
-  let res: Response;
+  let res: Response | null = null;
+  let lastBody = "";
+  const maxTokens = params.maxOutputTokens ?? 8192;
+  let selectedTokenBudget: number | null = null;
+
   try {
-    params.onTrace?.("Moonshot reasoning config in use: default.");
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model: params.modelId,
-        messages: [
-          { role: "system", content: params.system },
-          { role: "user", content: params.user },
-        ],
-        stream: Boolean(params.onDelta),
-        temperature: params.temperature ?? 0.2,
-        max_tokens: params.maxOutputTokens ?? 8192,
-      }),
-    });
+    for (const tok of tokenBudgetCandidates(maxTokens)) {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: params.modelId,
+          messages: [
+            { role: "system", content: params.system },
+            { role: "user", content: params.user },
+          ],
+          stream: Boolean(params.onDelta),
+          temperature: params.temperature ?? 0.2,
+          max_tokens: tok,
+        }),
+      });
+      if (res.ok) {
+        selectedTokenBudget = tok;
+        break;
+      }
+      lastBody = await res.text().catch(() => "");
+      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
+      break;
+    }
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Moonshot request timed out");
@@ -71,11 +100,18 @@ export async function moonshotGenerateText(params: {
     clearTimeout(timeout);
   }
 
+  if (!res) {
+    throw new Error("Moonshot request failed");
+  }
+
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = lastBody || (await res.text().catch(() => ""));
     const rid = requestIdFromResponse(res);
     throw new Error(`Moonshot error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
   }
+
+  const budget = selectedTokenBudget ?? maxTokens;
+  params.onTrace?.(withMaxOutputTokens("Moonshot reasoning config in use: default.", budget));
 
   if (params.onDelta) {
     let text = "";
