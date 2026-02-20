@@ -172,9 +172,9 @@ Choose appropriate block types for realism:
 
 - **Wood structures**: oak_planks, oak_log (lighter wood) or brown_wool
 - **Stone structures**: stone, cobblestone, stone_bricks, gray_wool
-- **Metal components**: iron_block, gray_concrete
+- **Metal components**: iron_block, gray_wool
 - **Fabric/sails/cloth**: white_wool, colored wool variants
-- **Glass/screens/windows**: glass, blue_concrete (for screens), black_concrete (for dark glass)
+- **Glass/screens/windows**: glass, blue_wool (for screens), black_wool (for dark glass)
 - **Glowing/lit elements**: glowstone, gold_block (for bright accent)
 - **Natural elements**: grass_block, dirt, oak_leaves, water
 - **Decorative accents**: bricks, colored wool, orange_wool (for warm lights)
