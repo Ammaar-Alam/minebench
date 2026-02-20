@@ -98,6 +98,22 @@ function toType(t: unknown): string {
   return s;
 }
 
+function toPoint(
+  value: unknown,
+  label: string,
+): { x: number; y: number; z: number } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid ${label} point argument`);
+  }
+
+  const point = value as Record<string, unknown>;
+  return {
+    x: toInt(point.x),
+    y: toInt(point.y),
+    z: toInt(point.z),
+  };
+}
+
 function makeRng(seed: number | undefined): () => number {
   if (typeof seed !== "number" || !Number.isFinite(seed)) return Math.random;
   // xorshift32
@@ -153,20 +169,31 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
       type: toType(type),
     });
   };
-  const line = (
-    x1: unknown,
-    y1: unknown,
-    z1: unknown,
-    x2: unknown,
-    y2: unknown,
-    z2: unknown,
-    type: unknown,
-  ) => {
+  const line = (...args: unknown[]) => {
     if (lines.length >= maxLines) throw new Error(`Too many lines (${lines.length})`);
+
+    let from: { x: number; y: number; z: number };
+    let to: { x: number; y: number; z: number };
+    let type: string;
+
+    if (args.length === 3) {
+      from = toPoint(args[0], "line from");
+      to = toPoint(args[1], "line to");
+      type = toType(args[2]);
+    } else if (args.length === 7) {
+      from = { x: toInt(args[0]), y: toInt(args[1]), z: toInt(args[2]) };
+      to = { x: toInt(args[3]), y: toInt(args[4]), z: toInt(args[5]) };
+      type = toType(args[6]);
+    } else {
+      throw new Error(
+        "line() expects line(x1, y1, z1, x2, y2, z2, type) or line({x,y,z}, {x,y,z}, type)",
+      );
+    }
+
     lines.push({
-      from: { x: toInt(x1), y: toInt(y1), z: toInt(z1) },
-      to: { x: toInt(x2), y: toInt(y2), z: toInt(z2) },
-      type: toType(type),
+      from,
+      to,
+      type,
     });
   };
 

@@ -22,6 +22,7 @@
     "atlas:audit": "node scripts/audit-texture-pack.mjs",
     "batch:generate": "npx tsx scripts/batch-generate.ts",
     "batch:status": "npx tsx scripts/batch-generate.ts",
+    "tool:convert": "npx tsx scripts/convert-voxel-tool-call.ts",
     "uploads:sync": "npx tsx scripts/sync-uploads-from-db.ts",
     "prompt": "npx tsx scripts/prompt.ts",
     "elo:reset": "npx tsx scripts/reset-elo.ts",
