@@ -27,6 +27,7 @@ export async function deepseekGenerateText(params: {
   maxOutputTokens?: number;
   temperature?: number;
   onDelta?: (delta: string) => void;
+  onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("Missing DEEPSEEK_API_KEY");
@@ -39,6 +40,7 @@ export async function deepseekGenerateText(params: {
 
   let res: Response;
   try {
+    params.onTrace?.("DeepSeek reasoning mode in use: enabled.");
     res = await fetch(url, {
       method: "POST",
       headers: {

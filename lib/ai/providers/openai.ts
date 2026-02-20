@@ -259,6 +259,15 @@ function reasoningConfigFallbacks(opts: {
   return out;
 }
 
+function describeReasoningConfigAttempt(
+  cfg: ReasoningConfigAttempt,
+  completionBudget: number,
+): string {
+  if (!cfg) return "disabled";
+  if (cfg.kind === "effort") return cfg.effort;
+  return `max_tokens=${clampReasoningBudget(cfg.maxTokens, completionBudget)}`;
+}
+
 function clampReasoningBudget(maxTokens: number, completionBudget: number): number {
   const cap = Math.max(1, Math.floor(completionBudget) - 1);
   return Math.max(1, Math.min(Math.floor(maxTokens), cap));
@@ -298,6 +307,7 @@ export async function openaiGenerateText(params: {
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   onDelta?: (delta: string) => void;
+  onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
@@ -338,6 +348,7 @@ export async function openaiGenerateText(params: {
     // Prefer the Responses API (works with modern OpenAI models).
     let res: Response | null = null;
     let lastBody = "";
+    let selectedResponsesReasoningLabel: string | null = null;
     for (const tok of tokenFallbacks(maxOutputTokens)) {
       for (const [cfgIdx, cfg] of reasoningConfigAttempts.entries()) {
         const reasoning =
@@ -346,6 +357,7 @@ export async function openaiGenerateText(params: {
             : cfg?.kind === "max_tokens"
               ? { max_tokens: clampReasoningBudget(cfg.maxTokens, tok) }
               : undefined;
+        const currentReasoningLabel = describeReasoningConfigAttempt(cfg, tok);
         res = await fetchWithRetry(
           "https://api.openai.com/v1/responses",
           {
@@ -387,10 +399,20 @@ export async function openaiGenerateText(params: {
           { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
         );
 
-        if (res.ok) break;
+        if (res.ok) {
+          selectedResponsesReasoningLabel = currentReasoningLabel;
+          break;
+        }
         lastBody = await res.text().catch(() => "");
         if (res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
         if (res.status === 400 && cfgIdx < reasoningConfigAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+          const nextReasoningLabel = describeReasoningConfigAttempt(
+            reasoningConfigAttempts[cfgIdx + 1],
+            tok,
+          );
+          params.onTrace?.(
+            `OpenAI Responses reasoning config '${currentReasoningLabel}' rejected (HTTP ${res.status}); falling back to '${nextReasoningLabel}'.`,
+          );
           continue;
         }
         break;
@@ -404,6 +426,9 @@ export async function openaiGenerateText(params: {
     if (!res) throw new Error("OpenAI request failed");
 
     if (res.ok) {
+      if (selectedResponsesReasoningLabel) {
+        params.onTrace?.(`OpenAI Responses reasoning config in use: '${selectedResponsesReasoningLabel}'.`);
+      }
       if (streamForRequest) {
         let text = "";
         await consumeSseStream(res, (evt) => {
@@ -487,10 +512,12 @@ export async function openaiGenerateText(params: {
 
   let res: Response | null = null;
   let lastBody = "";
+  let selectedChatEffortLabel: string | null = null;
   for (const tok of tokenFallbacks(maxOutputTokens)) {
     let tryLowerTokenBudget = false;
     const effortAttempts = reasoningEffortAttempts.length > 0 ? [...reasoningEffortAttempts, undefined] : [undefined];
     for (const [effortIdx, effort] of effortAttempts.entries()) {
+      const currentEffortLabel = effort ?? "disabled";
       res = await fetchWithRetry(
         "https://api.openai.com/v1/chat/completions",
         {
@@ -522,13 +549,20 @@ export async function openaiGenerateText(params: {
         },
         { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
       );
-      if (res.ok) break;
+      if (res.ok) {
+        selectedChatEffortLabel = currentEffortLabel;
+        break;
+      }
       lastBody = await res.text().catch(() => "");
       if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
         tryLowerTokenBudget = true;
         break;
       }
       if (res.status === 400 && effortIdx < effortAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+        const nextEffortLabel = effortAttempts[effortIdx + 1] ?? "disabled";
+        params.onTrace?.(
+          `OpenAI Chat reasoning config '${currentEffortLabel}' rejected (HTTP ${res.status}); falling back to '${nextEffortLabel}'.`,
+        );
         continue;
       }
       break;
@@ -540,6 +574,10 @@ export async function openaiGenerateText(params: {
   }
 
   if (!res) throw new Error("OpenAI request failed");
+
+  if (res.ok && selectedChatEffortLabel) {
+    params.onTrace?.(`OpenAI Chat reasoning config in use: '${selectedChatEffortLabel}'.`);
+  }
 
   if (res.ok && streamResponses) {
     let text = "";

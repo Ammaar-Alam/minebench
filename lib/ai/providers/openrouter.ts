@@ -135,6 +135,7 @@ export async function openrouterGenerateText(params: {
   jsonSchema?: Record<string, unknown>;
   reasoningEffortAttempts?: string[];
   onDelta?: (delta: string) => void;
+  onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
@@ -146,12 +147,20 @@ export async function openrouterGenerateText(params: {
     maxTokens: params.reasoningMaxTokens,
   });
 
+  const describeReasoningAttempt = (cfg: ReasoningConfigAttempt): string => {
+    if (cfg === "__default__") return "default";
+    if (cfg == null) return "disabled";
+    if (cfg.kind === "effort") return cfg.effort;
+    return `max_tokens=${cfg.maxTokens}`;
+  };
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 1_800_000);
 
   try {
     let res: Response | null = null;
     let lastBody = "";
+    let selectedReasoningLabel: string | null = null;
     for (const tok of tokenFallbacks(maxTokens)) {
       let tryLowerTokenBudget = false;
       for (const [cfgIdx, cfg] of reasoningAttempts.entries()) {
@@ -203,13 +212,21 @@ export async function openrouterGenerateText(params: {
           { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
         );
 
-        if (res.ok) break;
+        if (res.ok) {
+          selectedReasoningLabel = describeReasoningAttempt(cfg);
+          break;
+        }
         lastBody = await res.text().catch(() => "");
         if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
           tryLowerTokenBudget = true;
           break;
         }
         if (res.status === 400 && cfgIdx < reasoningAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+          const currentLabel = describeReasoningAttempt(cfg);
+          const nextLabel = describeReasoningAttempt(reasoningAttempts[cfgIdx + 1]);
+          params.onTrace?.(
+            `OpenRouter reasoning config '${currentLabel}' rejected (HTTP ${res.status}); falling back to '${nextLabel}'.`,
+          );
           continue;
         }
         break;
@@ -259,6 +276,10 @@ export async function openrouterGenerateText(params: {
         return { text: extractTextFromChatCompletions(retryData) };
       }
       throw new Error(`OpenRouter error ${res.status}: ${body}`);
+    }
+
+    if (res.ok && selectedReasoningLabel) {
+      params.onTrace?.(`OpenRouter reasoning config in use: '${selectedReasoningLabel}'.`);
     }
 
     if (params.onDelta) {

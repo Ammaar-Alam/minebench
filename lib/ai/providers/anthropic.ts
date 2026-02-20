@@ -191,6 +191,7 @@ export async function anthropicGenerateText(params: {
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   onDelta?: (delta: string) => void;
+  onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
@@ -231,6 +232,7 @@ export async function anthropicGenerateText(params: {
   let lastBody = "";
   let structuredMode: "native_format" | "forced_tool" = "native_format";
   let didUseStreaming = false;
+  let selectedAdaptiveEffort: AnthropicEffort | null = null;
   try {
     requestLoop: for (const tok of tokenFallbacks(maxTokens)) {
       betaLoop: for (const betaHeader of betaHeaders) {
@@ -297,7 +299,10 @@ export async function anthropicGenerateText(params: {
           });
           didUseStreaming = streamResponses;
 
-          if (res.ok) break requestLoop;
+          if (res.ok) {
+            if (usesAdaptiveThinking) selectedAdaptiveEffort = effort ?? null;
+            break requestLoop;
+          }
           lastBody = await res.text().catch(() => "");
           if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue requestLoop;
           if (betaHeader && looksLikeContextBetaUnavailableError(lastBody)) continue betaLoop;
@@ -307,6 +312,12 @@ export async function anthropicGenerateText(params: {
             effortIdx < efforts.length - 1 &&
             looksLikeEffortConfigError(lastBody)
           ) {
+            const nextEffort = efforts[effortIdx + 1];
+            const currentLabel = effort ?? "default";
+            const nextLabel = nextEffort ?? "default";
+            params.onTrace?.(
+              `Anthropic reasoning effort '${currentLabel}' rejected (HTTP ${res.status}); falling back to '${nextLabel}'.`,
+            );
             continue effortLoop;
           }
           if (
@@ -341,6 +352,10 @@ export async function anthropicGenerateText(params: {
   if (!res.ok) {
     const body = lastBody || (await res.text().catch(() => ""));
     throw new Error(`Anthropic error ${res.status}: ${body}`);
+  }
+
+  if (usesAdaptiveThinking && selectedAdaptiveEffort) {
+    params.onTrace?.(`Anthropic reasoning effort in use: '${selectedAdaptiveEffort}'.`);
   }
 
   if (didUseStreaming) {

@@ -145,6 +145,7 @@ export type GenerateVoxelBuildParams = {
   preferOpenRouter?: boolean;
   onRetry?: (attempt: number, reason: string) => void;
   onDelta?: (delta: string) => void;
+  onProviderTrace?: (message: string) => void;
 };
 
 export type GenerateVoxelBuildResult =
@@ -169,6 +170,7 @@ async function callDirectProvider(args: {
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
   onDelta?: (delta: string) => void;
+  onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
@@ -181,6 +183,7 @@ async function callDirectProvider(args: {
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       onDelta: args.onDelta,
+      onTrace: args.onTrace,
     });
   }
 
@@ -194,6 +197,7 @@ async function callDirectProvider(args: {
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       onDelta: args.onDelta,
+      onTrace: args.onTrace,
     });
   }
 
@@ -207,6 +211,7 @@ async function callDirectProvider(args: {
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       onDelta: args.onDelta,
+      onTrace: args.onTrace,
     });
   }
 
@@ -219,6 +224,7 @@ async function callDirectProvider(args: {
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       onDelta: args.onDelta,
+      onTrace: args.onTrace,
     });
   }
 
@@ -231,6 +237,7 @@ async function callDirectProvider(args: {
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       onDelta: args.onDelta,
+      onTrace: args.onTrace,
     });
   }
 
@@ -269,6 +276,7 @@ async function providerGenerateText(args: {
   allowServerKeys: boolean;
   preferOpenRouter?: boolean;
   onDelta?: (delta: string) => void;
+  onProviderTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
@@ -331,6 +339,9 @@ async function providerGenerateText(args: {
 
   // try direct provider first if we have the key
   if (!forceOpenRouter && !preferOpenRouter && hasDirect) {
+    args.onProviderTrace?.(
+      `Routing via direct ${model.provider} provider (${model.modelId}).`,
+    );
     try {
       return await callDirectProvider({
         provider: model.provider,
@@ -342,6 +353,7 @@ async function providerGenerateText(args: {
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
         onDelta: args.onDelta,
+        onTrace: args.onProviderTrace,
       });
     } catch (directErr) {
       // If a direct provider key is present, do not fall back to OpenRouter.
@@ -353,6 +365,10 @@ async function providerGenerateText(args: {
   if (!model.openRouterModelId) {
     throw new Error(`No OpenRouter model ID configured for ${model.key}`);
   }
+
+  args.onProviderTrace?.(
+    `Routing via OpenRouter (${model.openRouterModelId}).`,
+  );
 
   return openrouterGenerateText({
     modelId: model.openRouterModelId,
@@ -381,6 +397,7 @@ async function providerGenerateText(args: {
                 ? ["xhigh", "high", "medium", "low", "minimal"]
                 : undefined,
     onDelta: args.onDelta,
+    onTrace: args.onProviderTrace,
   });
 }
 
@@ -494,6 +511,7 @@ export async function generateVoxelBuild(
         allowServerKeys,
         preferOpenRouter: params.preferOpenRouter,
         onDelta: params.onDelta,
+        onProviderTrace: params.onProviderTrace,
       });
       previousText = text;
 

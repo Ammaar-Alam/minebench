@@ -33,6 +33,7 @@ export async function geminiGenerateText(params: {
   temperature?: number;
   jsonSchema?: JsonSchema;
   onDelta?: (delta: string) => void;
+  onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
@@ -52,6 +53,13 @@ export async function geminiGenerateText(params: {
   let res: Response | null = null;
   try {
     const thinkingConfig = bestThinkingConfigForModel(params.modelId);
+    if (thinkingConfig?.thinkingLevel) {
+      params.onTrace?.(`Gemini thinking level in use: '${thinkingConfig.thinkingLevel}'.`);
+    } else if (typeof thinkingConfig?.thinkingBudget === "number") {
+      params.onTrace?.(`Gemini thinking budget in use: ${thinkingConfig.thinkingBudget}.`);
+    } else {
+      params.onTrace?.("Gemini thinking config in use: default.");
+    }
     const basePayload = {
       systemInstruction: { parts: [{ text: params.system }] },
       contents: [{ role: "user", parts: [{ text: params.user }] }],

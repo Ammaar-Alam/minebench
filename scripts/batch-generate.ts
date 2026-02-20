@@ -45,6 +45,10 @@ interface Job {
   filePath: string;
 }
 
+function jobLabel(job: Job): string {
+  return `${job.promptSlug} × ${job.modelSlug}`;
+}
+
 type StorageUploadConfig = {
   url: string;
   serviceRoleKey: string;
@@ -226,13 +230,13 @@ async function generateAndSave(
   attempts: number,
   enableTools: boolean,
   preferOpenRouter: boolean,
-): Promise<{ ok: boolean; error?: string; blockCount?: number }> {
-  console.log(`  Generating ${job.promptSlug} × ${job.modelSlug}...`);
+): Promise<{ ok: boolean; error?: string; blockCount?: number; generationTimeMs?: number }> {
 
   if (!job.promptText) {
     return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
   }
 
+  const label = jobLabel(job);
   const result = await generateVoxelBuild({
     modelKey: job.modelKey,
     prompt: job.promptText,
@@ -244,7 +248,12 @@ async function generateAndSave(
     onRetry: (attempt, reason) => {
       const msg = (reason ?? "").trim();
       if (!msg) return;
-      console.log(`    ↻ retry ${attempt}: ${msg}`);
+      console.log(`    ↻ [${label}] retry ${attempt}: ${msg}`);
+    },
+    onProviderTrace: (message) => {
+      const msg = message.trim();
+      if (!msg) return;
+      console.log(`    ℹ️  [${label}] ${msg}`);
     },
   });
 
@@ -263,7 +272,7 @@ async function generateAndSave(
         fs.writeFileSync(failedJsonPath, JSON.stringify(extracted, null, 2));
       }
     }
-    return { ok: false, error: result.error };
+    return { ok: false, error: result.error, generationTimeMs: result.generationTimeMs };
   }
 
   // ensure prompt directory exists
@@ -272,7 +281,7 @@ async function generateAndSave(
   // write the build json
   fs.writeFileSync(job.filePath, JSON.stringify(result.build, null, 2));
 
-  return { ok: true, blockCount: result.blockCount };
+  return { ok: true, blockCount: result.blockCount, generationTimeMs: result.generationTimeMs };
 }
 
 function getUploadCommand(job: Job): string {
@@ -612,6 +621,9 @@ Upload notes:
 
     let success = 0;
     let failed = 0;
+    let started = 0;
+    let completed = 0;
+    const total = jobsToGenerate.length;
 
     const queue = [...jobsToGenerate];
     let inFlight = 0;
@@ -619,26 +631,45 @@ Upload notes:
       const launchNext = () => {
         while (inFlight < opts.concurrency && queue.length > 0) {
           const job = queue.shift()!;
+          started += 1;
+          const startOrdinal = started;
+          console.log(`  ▶ [${startOrdinal}/${total}] ${jobLabel(job)}`);
           inFlight += 1;
           void (async () => {
             const result = await generateAndSave(job, opts.attempts, !opts.notools, opts.openrouter);
+            const elapsed = result.generationTimeMs ? `${(result.generationTimeMs / 1000).toFixed(1)}s` : "-";
             if (result.ok) {
-              console.log(`    ✅ Saved (${result.blockCount} blocks)`);
+              const relativePath = path.relative(process.cwd(), job.filePath);
+              console.log(
+                `    ✅ [${jobLabel(job)}] Saved ${relativePath} (${result.blockCount} blocks, ${elapsed})`,
+              );
               success++;
 
               if (opts.upload) {
-                process.stdout.write(`    📤 Uploading...`);
+                console.log(`    📤 [${jobLabel(job)}] Uploading...`);
                 const uploadResult = await uploadBuild(job);
-                console.log(uploadResult.ok ? " ✅" : ` ❌ ${uploadResult.error}`);
+                console.log(
+                  uploadResult.ok
+                    ? `    ✅ [${jobLabel(job)}] Upload complete`
+                    : `    ❌ [${jobLabel(job)}] Upload failed: ${uploadResult.error}`,
+                );
               }
             } else {
-              console.log(`    ❌ Failed after ${opts.attempts} attempts: ${result.error}`);
+              console.log(
+                `    ❌ [${jobLabel(job)}] Failed after ${opts.attempts} attempts (${elapsed}): ${result.error}`,
+              );
               failed++;
             }
+            completed += 1;
+            console.log(`    • Progress: ${completed}/${total} complete (${inFlight - 1} still running)`);
           })()
             .catch((err) => {
               failed++;
-              console.log(`    ❌ Failed after ${opts.attempts} attempts: ${err instanceof Error ? err.message : err}`);
+              completed += 1;
+              console.log(
+                `    ❌ [${jobLabel(job)}] Failed after ${opts.attempts} attempts: ${err instanceof Error ? err.message : err}`,
+              );
+              console.log(`    • Progress: ${completed}/${total} complete (${inFlight - 1} still running)`);
             })
             .finally(() => {
               inFlight -= 1;

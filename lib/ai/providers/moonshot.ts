@@ -27,6 +27,7 @@ export async function moonshotGenerateText(params: {
   maxOutputTokens?: number;
   temperature?: number;
   onDelta?: (delta: string) => void;
+  onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.MOONSHOT_API_KEY;
   if (!apiKey) throw new Error("Missing MOONSHOT_API_KEY");
@@ -39,6 +40,7 @@ export async function moonshotGenerateText(params: {
 
   let res: Response;
   try {
+    params.onTrace?.("Moonshot reasoning config in use: default.");
     res = await fetch(url, {
       method: "POST",
       headers: {
