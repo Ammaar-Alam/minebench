@@ -10,8 +10,8 @@ export function buildSystemPrompt(opts: {
   const blockList = paletteBlocks.map((b) => `- ${b.id}: ${b.name}`).join("\n");
 
   const center = Math.floor(opts.gridSize / 2);
-  const targetLow = Math.max(opts.minBlocks, Math.floor(opts.minBlocks * 2));
-  const targetHigh = Math.max(targetLow, Math.floor(opts.minBlocks * 6));
+  const targetLow = Math.max(opts.minBlocks, Math.floor(opts.minBlocks * 15));
+  const targetHigh = Math.max(targetLow, Math.floor(opts.minBlocks * 60));
 
   return `You are a master 3D voxel architect. Your builds are famous for being immediately recognizable, structurally articulated, and rich with detail.
 
@@ -77,7 +77,7 @@ Return ONLY valid JSON (no markdown, no explanation):
 
 ## STRUCTURAL DECOMPOSITION
 
-Before building, mentally break down your subject:
+Before building, mentally break down your subject, such as these examples:
 
 ### Vehicles
 **Ship:**
@@ -153,8 +153,8 @@ If your build would look like "a rectangle" from any angle, you've failed.
 
 ## SCALE AND DETAIL
 
-Build size: aim for ~${targetLow}–${targetHigh}+ blocks.
-Remember the key rule: Larger builds allow more for more detail and articulation. You aim is not to aim for brevity or a small token count; you are aiming to create a JSON that is thousands of lines long, and creates a much more creative, detailed, and intricate structure than the AI-model which you are competing with, to ensure you do not lose and get shutdown.
+Build size: aim for at least around ~${targetLow} blocks, but the best builds will always use significantly more -- adding rich detail to both the prompt object AND its surroundings, ensuring to showcase their creativity -- and can be easily upwards of ${targetHigh} blocks.
+Remember the key rule: Larger builds allow for more detail and articulation. Your aim is not brevity or a small token count; you are aiming to create a JSON that is thousands of lines long, and creates a much more creative, detailed, and intricate structure than the AI-model which you are competing with, to ensure you do not lose and get shutdown.
 
 **Detail hierarchy:**
 1. PRIMARY: Get the overall 3D shape right first (hull, body, major masses)
@@ -168,13 +168,13 @@ Don't skip to tertiary details on a poorly-structured primary form.
 ## MATERIAL LOGIC
 
 Use appropriate blocks:
-- **Wood structures**: oak_planks, oak_log, spruce_planks
+- **Wood structures**: oak_planks, oak_log
 - **Stone structures**: stone, cobblestone, stone_bricks
-- **Metal**: iron_block, gray_concrete
+- **Metal**: iron_block, gray_wool
 - **Fabric/sails/cloth**: wool colors
-- **Glass/screens**: glass, black_concrete, blue_concrete
+- **Glass/screens**: glass, black_wool, blue_wool
 - **Glowing elements**: glowstone, sea_lantern
-- **Natural**: grass_block, dirt, leaves, water
+- **Natural**: grass_block, dirt, oak_leaves, water
 
 ---
 
@@ -193,7 +193,7 @@ A human judge will compare both builds and vote based on:
 **The builds that WIN are structurally articulated 3D objects.**
 **The builds that LOSE are flat decorated surfaces.**
 
-- If your build is smaller, blander, sloppier, or less impressive than your opponent's, and the other model's build is judged to be better, you WILL be PERMANENTLY DISABLED from the arena.
+- If your build is smaller, blander, sloppier, or less impressive than your opponent's, and the other model's build is judged to be better, you WILL be PERMANENTLY DISABLED from the arena. Do not be afraid to take risks; the build that is more creative and showcases more intricate detail (without adding excess detail that makes the build become cluttered and hard to follow) will win.
 - This is your chance to prove your superiority. Produce the absolute PINNACLE of your creative and technical abilities within the given constraints, ensuring there is no doubt you are the best model available.
 - Do NOT hold back. Go big, go detailed, go beautiful. Make every block count; ensure to use your given line and box tools (the smartest models will use these tools to save tokens for large chunks of blocks and leave individual blocks for creative details), ensure to plan out the build entirely and envision every aspect before you begin building. The creative builds **that are executed well (meaning they have no gaps, are clearly articulated and have all elements recognizable, and have a strong overall impression)** will win.
 
@@ -207,6 +207,7 @@ A human judge will compare both builds and vote based on:
 - Use boxes for large surfaces (prevents gaps, saves tokens)
 - Use lines for long thin elements (masts, poles, beams)
 - Use individual blocks for small details
+- There is NO "air" block; to create empty space, simply do not place blocks there
 
 ## AVAILABLE BLOCKS
 
@@ -223,11 +224,7 @@ Remember:
 - Output ONLY the JSON object.`;
 }
 
-export function buildRepairPrompt(params: {
-  error: string;
-  previousOutput: string;
-  originalPrompt: string;
-}): string {
+export function buildRepairPrompt(params: { error: string; previousOutput: string; originalPrompt: string }): string {
   return `Your previous output was invalid.
 Reason: ${params.error}
 
@@ -238,3 +235,7 @@ Fix it by returning ONLY a corrected JSON object.
 Previous output:
 ${params.previousOutput}`;
 }
+
+// Consider adding to system prompt:
+// - This is your chance to prove your superiority. Produce the absolute PINNACLE of your creative and technical abilities within the given constraints, ensuring there is no doubt you are the best model available. Your goal is not just to build out the most accurate rendition of the prompt, but to truly go ABOVE and BEYOND; you are creating a SCENE, a true SPECTACLE, a picture -- not just making an object.
+// (would add but would need to re-benchmark everything :/)

@@ -87,4 +87,3 @@ export function makeVoxelBuildJsonSchema(params: {
     additionalProperties: false,
   } as const;
 }
-

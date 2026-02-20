@@ -1,10 +1,7 @@
 "use client";
 
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import {
-  SandboxGifExportButton,
-  type SandboxGifExportTarget,
-} from "@/components/sandbox/SandboxGifExportButton";
+import { SandboxGifExportButton, type SandboxGifExportTarget } from "@/components/sandbox/SandboxGifExportButton";
 import { buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -224,8 +221,7 @@ export function LocalLab() {
         kind: "error",
         build: null,
         warnings: [],
-        message:
-          "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
+        message: "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
       });
       return;
     }
@@ -259,8 +255,7 @@ export function LocalLab() {
                 Test models locally
               </div>
               <div className="mt-1 text-sm text-muted">
-                Test out changing the system prompt, generate a custom build, then paste the JSON to
-                render it.
+                Test out changing the system prompt, generate a custom build, then paste the JSON to render it.
               </div>
             </div>
 
@@ -298,8 +293,8 @@ export function LocalLab() {
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-fg">System prompt</div>
                     <div className="text-xs text-muted">
-                      Here&apos;s the default system prompt the official benchmark uses. Feel free to
-                      play around with it.
+                      Here&apos;s the default system prompt the official benchmark uses. Feel free to play around with
+                      it.
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -308,30 +303,9 @@ export function LocalLab() {
                       text={systemPrompt}
                       tone="ghost"
                       icon={
-                        <svg
-                          aria-hidden="true"
-                          className="h-3.5 w-3.5"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                        >
-                          <rect
-                            x="8"
-                            y="8"
-                            width="11"
-                            height="11"
-                            rx="2"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                          />
-                          <rect
-                            x="5"
-                            y="5"
-                            width="11"
-                            height="11"
-                            rx="2"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                          />
+                        <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                          <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                          <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
                         </svg>
                       }
                     />
@@ -353,11 +327,7 @@ export function LocalLab() {
                         stroke="currentColor"
                         strokeWidth="1.8"
                       >
-                        <path
-                          d="M20 12a8 8 0 1 1-2.34-5.66"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
+                        <path d="M20 12a8 8 0 1 1-2.34-5.66" strokeLinecap="round" strokeLinejoin="round" />
                         <path d="M20 4v6h-6" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
                     </button>
@@ -381,9 +351,7 @@ export function LocalLab() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-fg">User prompt</div>
-                    <div className="text-xs text-muted">
-                      The actual object you want the model to build.
-                    </div>
+                    <div className="text-xs text-muted">The actual object you want the model to build.</div>
                   </div>
                   <CopyButton
                     label="Copy both"
@@ -391,30 +359,9 @@ export function LocalLab() {
                     disabled={!taskPrompt.trim()}
                     tone="primary"
                     icon={
-                      <svg
-                        aria-hidden="true"
-                        className="h-3.5 w-3.5"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                      >
-                        <rect
-                          x="8"
-                          y="8"
-                          width="11"
-                          height="11"
-                          rx="2"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                        />
-                        <rect
-                          x="5"
-                          y="5"
-                          width="11"
-                          height="11"
-                          rx="2"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                        />
+                      <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                        <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                        <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
                       </svg>
                     }
                   />
@@ -430,9 +377,7 @@ export function LocalLab() {
                   {taskPrompt.trim() ? (
                     <pre className="max-h-56 overflow-auto whitespace-pre-wrap">{userPrompt}</pre>
                   ) : (
-                    <div className="text-muted">
-                      Add a task prompt to generate the user message.
-                    </div>
+                    <div className="text-muted">Add a task prompt to generate the user message.</div>
                   )}
                 </div>
               </div>
@@ -447,10 +392,9 @@ export function LocalLab() {
                   Press the Copy Both button to copy the system prompt with your user prompt.
                 </div>
                 <div className="mt-2 text-xs leading-relaxed text-muted">
-                  Note: If you&apos;re generating the build through a site like chatgpt.com directly, add
-                  one final line asking for a downloadable JSON file or artifact attachment instead
-                  of raw JSON text. Otherwise the model will output just raw text and hit it&apos;s
-                  output limit.
+                  Note: If you&apos;re generating the build through a site like chatgpt.com directly, add one final line
+                  asking for a downloadable JSON file or artifact attachment instead of raw JSON text. Otherwise the
+                  model will output just raw text and hit it&apos;s output limit.
                 </div>
                 <div className="mt-2 rounded-lg border border-border/70 bg-bg/45 p-2 font-mono text-[11px] leading-snug text-muted">
                   Return only the final voxel object as a JSON file/artifact attachment.
@@ -465,9 +409,7 @@ export function LocalLab() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-fg">Render JSON</div>
-                <div className="text-xs text-muted">
-                  Paste model output and render with Cmd/Ctrl+Enter.
-                </div>
+                <div className="text-xs text-muted">Paste model output and render with Cmd/Ctrl+Enter.</div>
               </div>
               <button
                 type="button"
@@ -476,12 +418,7 @@ export function LocalLab() {
               >
                 <span className="inline-flex items-center gap-1.5">
                   <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none">
-                    <path
-                      d="m6 4 12 8-12 8V4Z"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinejoin="round"
-                    />
+                    <path d="m6 4 12 8-12 8V4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
                   </svg>
                   <span>Render</span>
                 </span>
@@ -516,9 +453,7 @@ export function LocalLab() {
                   {rendered.warnings.slice(0, 4).map((w, i) => (
                     <li key={i}>{w}</li>
                   ))}
-                  {rendered.warnings.length > 4 ? (
-                    <li>...and {rendered.warnings.length - 4} more</li>
-                  ) : null}
+                  {rendered.warnings.length > 4 ? <li>...and {rendered.warnings.length - 4} more</li> : null}
                 </ul>
               </div>
             ) : null}
