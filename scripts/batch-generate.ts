@@ -9,7 +9,8 @@
  *   pnpm batch:generate --generate --upload # Generate missing and upload all
  *   pnpm batch:generate --generate --openrouter # Force OpenRouter routing where available
  *   pnpm batch:generate --generate --notools # Generate missing builds without voxel.exec tool usage
- *   pnpm batch:generate --prompt "castle"   # Filter by prompt
+ *   pnpm batch:generate --prompt "castle"   # Filter by single prompt
+ *   pnpm batch:generate --prompt skyscraper castle fighter-jet --generate # Multiple prompts
  *   pnpm batch:generate --model gemini      # Filter by single model
  *   pnpm batch:generate --model gemini-pro gemini-flash --generate # Multiple models
  *   pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit" # Custom prompt text override
@@ -23,6 +24,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
 import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
@@ -100,6 +102,38 @@ function buildStoragePath(job: Job): string {
   return `${job.promptSlug}/${job.modelSlug}-g256-simple-precise.json.gz`;
 }
 
+function collectFlagValues(args: string[], flag: string): string[] {
+  const values: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== flag) continue;
+    let j = i + 1;
+    while (j < args.length && !args[j].startsWith("--")) {
+      values.push(args[j]);
+      j += 1;
+    }
+    i = j - 1;
+  }
+  return values;
+}
+
+function buildPromptFilterMatcher(promptSlugs: string[], promptFilters: string[]): (promptSlug: string) => boolean {
+  const normalizedPromptFilters = promptFilters.map((f) => f.trim().toLowerCase()).filter(Boolean);
+  if (normalizedPromptFilters.length === 0) {
+    return () => true;
+  }
+
+  const knownPromptSlugs = new Set(promptSlugs.map((slug) => slug.toLowerCase()));
+  const exactPromptFilters = new Set(normalizedPromptFilters.filter((f) => knownPromptSlugs.has(f)));
+
+  return (promptSlug: string) => {
+    const slugLower = promptSlug.toLowerCase();
+    return normalizedPromptFilters.some((f) => {
+      if (exactPromptFilters.has(f)) return f === slugLower;
+      return slugLower.includes(f);
+    });
+  };
+}
+
 function parseArgs() {
   const args = process.argv.slice(2);
   const attemptsRaw = args.find((a, i) => args[i - 1] === "--attempts") || null;
@@ -109,15 +143,9 @@ function parseArgs() {
   const concurrencyNum = concurrencyRaw ? Number(concurrencyRaw) : NaN;
   const concurrency = Number.isFinite(concurrencyNum) ? Math.max(1, Math.floor(concurrencyNum)) : 1;
 
-  // collect all values after --model until next flag
-  const modelFilters: string[] = [];
-  const modelIdx = args.indexOf("--model");
-  if (modelIdx !== -1) {
-    for (let i = modelIdx + 1; i < args.length; i++) {
-      if (args[i].startsWith("--")) break;
-      modelFilters.push(args[i]);
-    }
-  }
+  // collect all values after --prompt / --model until next flag; supports repeated flags
+  const promptFilters = collectFlagValues(args, "--prompt");
+  const modelFilters = collectFlagValues(args, "--model");
 
   return {
     generate: args.includes("--generate"),
@@ -127,8 +155,8 @@ function parseArgs() {
     notools: args.includes("--notools"),
     attempts,
     concurrency,
-    promptFilter: args.find((a, i) => args[i - 1] === "--prompt") || null,
-    modelFilters, // now an array
+    promptFilters,
+    modelFilters,
     promptText: args.find((a, i) => args[i - 1] === "--promptText") || null,
     promptTextFile: args.find((a, i) => args[i - 1] === "--promptTextFile") || null,
     help: args.includes("--help") || args.includes("-h"),
@@ -170,11 +198,12 @@ function resolvePromptText(promptSlug: string): string | null {
 function buildJobList(
   promptSlugs: string[],
   promptTextBySlug: Map<string, string | null>,
-  promptFilter: string | null,
+  promptFilters: string[],
   modelFilters: string[]
 ): Job[] {
   const jobs: Job[] = [];
   const models = getCandidateModels(modelFilters);
+  const promptMatches = buildPromptFilterMatcher(promptSlugs, promptFilters);
   const missingModelSlugs = models.filter((k) => !MODEL_SLUG[k]);
   if (missingModelSlugs.length > 0) {
     throw new Error(`Missing MODEL_SLUG entries for model keys: ${missingModelSlugs.join(", ")}`);
@@ -188,7 +217,7 @@ function buildJobList(
   );
 
   for (const promptSlug of promptSlugs) {
-    if (promptFilter && !promptSlug.includes(promptFilter.toLowerCase())) continue;
+    if (!promptMatches(promptSlug)) continue;
     const promptText = promptTextBySlug.get(promptSlug) ?? null;
 
     for (const modelKey of models) {
@@ -289,6 +318,25 @@ function getUploadCommand(job: Job): string {
     return `# Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.`;
   }
   return `pnpm batch:generate --upload --prompt ${job.promptSlug} --model ${job.modelSlug}`;
+}
+
+function supportsTerminalHyperlinks(): boolean {
+  if (!process.stdout.isTTY) return false;
+  if ((process.env.TERM ?? "").toLowerCase() === "dumb") return false;
+  if (process.env.CI) return false;
+  return true;
+}
+
+function formatFileLink(filePath: string): { displayPath: string; absoluteUrl: string } {
+  const displayPath = path.relative(process.cwd(), filePath);
+  const absoluteUrl = pathToFileURL(path.resolve(filePath)).toString();
+  if (!supportsTerminalHyperlinks()) {
+    return { displayPath, absoluteUrl };
+  }
+
+  // OSC 8 hyperlink: works in iTerm2, Terminal.app, VS Code terminal, and many others.
+  const hyperlink = `\u001B]8;;${absoluteUrl}\u0007${displayPath}\u001B]8;;\u0007`;
+  return { displayPath: hyperlink, absoluteUrl };
 }
 
 async function uploadBuildLegacy(
@@ -503,7 +551,8 @@ Usage:
   pnpm batch:generate --generate --upload # Generate missing and upload all
   pnpm batch:generate --generate --openrouter # Force OpenRouter routing where available
   pnpm batch:generate --generate --overwrite # Regenerate even if JSON exists
-  pnpm batch:generate --prompt castle     # Filter by prompt
+  pnpm batch:generate --prompt castle     # Filter by single prompt
+  pnpm batch:generate --prompt skyscraper castle fighter-jet --generate # Multiple prompts
   pnpm batch:generate --model gemini      # Filter by single model
   pnpm batch:generate --model gemini-pro gemini-flash --generate  # Multiple models
   pnpm batch:generate --prompt astronaut --promptText "An astronaut in a space suit"
@@ -517,7 +566,7 @@ Options:
   --notools         Disable voxel.exec tool usage (tools are on by default)
   --attempts <n>    Max attempts per build (default 6)
   --concurrency <n> Number of concurrent generations (default 1)
-  --prompt <str>    Filter prompts by slug
+  --prompt <str...> Filter prompts by slug (can specify multiple)
   --model <str...>  Filter models by slug (can specify multiple)
   --promptText <s>  Prompt text override (only when filtered to 1 prompt)
   --promptTextFile <path> Prompt text override read from file (only when filtered to 1 prompt)
@@ -540,9 +589,8 @@ Upload notes:
   const promptTextBySlug = new Map<string, string | null>();
   for (const slug of promptSlugs) promptTextBySlug.set(slug, resolvePromptText(slug));
 
-  const filteredPromptSlugs = promptSlugs.filter((slug) =>
-    opts.promptFilter ? slug.includes(opts.promptFilter.toLowerCase()) : true
-  );
+  const promptMatches = buildPromptFilterMatcher(promptSlugs, opts.promptFilters);
+  const filteredPromptSlugs = promptSlugs.filter((slug) => promptMatches(slug));
 
   const promptTextOverride = opts.promptTextFile
     ? (fs.existsSync(opts.promptTextFile) ? fs.readFileSync(opts.promptTextFile, "utf-8").trim() : "")
@@ -560,7 +608,7 @@ Upload notes:
     promptTextBySlug.set(filteredPromptSlugs[0], promptTextOverride);
   }
 
-  const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilter, opts.modelFilters);
+  const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilters, opts.modelFilters);
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
 
   if (opts.openrouter && opts.generate) {
@@ -590,7 +638,7 @@ Upload notes:
   const modelCountForSummary = selectedModelKeys.length;
   console.log(`📋 Total jobs: ${allJobs.length} (${promptSlugs.length} prompts × ${modelCountForSummary} models)`);
 
-  if (opts.promptFilter) console.log(`   Filtered by prompt: "${opts.promptFilter}"`);
+  if (opts.promptFilters.length > 0) console.log(`   Filtered by prompt(s): ${opts.promptFilters.join(", ")}`);
   if (opts.modelFilters.length > 0) console.log(`   Filtered by model(s): ${opts.modelFilters.join(", ")}`);
   if (opts.openrouter) console.log("   Provider override: OpenRouter");
 
@@ -639,10 +687,11 @@ Upload notes:
             const result = await generateAndSave(job, opts.attempts, !opts.notools, opts.openrouter);
             const elapsed = result.generationTimeMs ? `${(result.generationTimeMs / 1000).toFixed(1)}s` : "-";
             if (result.ok) {
-              const relativePath = path.relative(process.cwd(), job.filePath);
+              const fileLink = formatFileLink(job.filePath);
               console.log(
-                `    ✅ [${jobLabel(job)}] Saved ${relativePath} (${result.blockCount} blocks, ${elapsed})`,
+                `    ✅ [${jobLabel(job)}] Saved ${fileLink.displayPath} (${result.blockCount} blocks, ${elapsed})`,
               );
+              console.log(`    🔗 [${jobLabel(job)}] Open: ${fileLink.absoluteUrl}`);
               success++;
 
               if (opts.upload) {
