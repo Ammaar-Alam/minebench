@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
@@ -69,54 +69,40 @@ function loadAtlasTexture(): Promise<THREE.Texture> {
 
 type BuildBounds = { box: THREE.Box3; center: THREE.Vector3; radius: number };
 
-function computeBuildBounds(build: VoxelBuild, allowed: Set<string>): BuildBounds {
-  const blocks = build.blocks.filter((b) => allowed.has(b.type));
-
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
-  for (const b of blocks) {
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    minZ = Math.min(minZ, b.z);
-    maxX = Math.max(maxX, b.x);
-    maxY = Math.max(maxY, b.y);
-    maxZ = Math.max(maxZ, b.z);
+function computeGroupBounds(group: THREE.Object3D): BuildBounds {
+  group.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(group);
+  if (box.isEmpty()) {
+    const origin = new THREE.Vector3(0, 0, 0);
+    return {
+      box: new THREE.Box3(origin.clone(), origin.clone()),
+      center: origin,
+      radius: 0.001,
+    };
   }
-
-  if (!Number.isFinite(minX)) {
-    minX = minY = minZ = 0;
-    maxX = maxY = maxZ = 0;
-  }
-
-  const cx = (minX + maxX + 1) / 2;
-  const cy = minY;
-  const cz = (minZ + maxZ + 1) / 2;
-
-  const box = new THREE.Box3(
-    new THREE.Vector3(minX - cx, minY - cy, minZ - cz),
-    new THREE.Vector3(maxX - cx + 1, maxY - cy + 1, maxZ - cz + 1)
-  );
-
   const center = box.getCenter(new THREE.Vector3());
-
-  const corners = [
-    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
-    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
-    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
-    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
-    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
-    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
-    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
-    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
-  ];
-
-  let radius = 0.001;
-  for (const p of corners) {
-    radius = Math.max(radius, p.distanceTo(center));
-  }
-
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+  const radius = Number.isFinite(sphere.radius) && sphere.radius > 0 ? sphere.radius : 0.001;
   return { box, center, radius };
+}
+
+type BuildIdentity = {
+  palette: "simple" | "advanced";
+  blocksRef: VoxelBuild["blocks"] | null;
+};
+
+function sameIdentity(a: BuildIdentity | null, b: BuildIdentity | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.palette === b.palette && a.blocksRef === b.blocksRef;
+}
+
+function computeRebuildThreshold(lastBuilt: number): { minDelta: number; maxWaitMs: number } {
+  if (lastBuilt < 80_000) return { minDelta: 10_000, maxWaitMs: 750 };
+  if (lastBuilt < 250_000) return { minDelta: 25_000, maxWaitMs: 1200 };
+  if (lastBuilt < 900_000) return { minDelta: 80_000, maxWaitMs: 1850 };
+  return { minDelta: 150_000, maxWaitMs: 2600 };
 }
 
 function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, bounds: BuildBounds) {
@@ -179,12 +165,36 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const ctrlHeldRef = useRef(false);
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
+  const latestRef = useRef<{
+    voxelBuild: VoxelBuild | null;
+    palette: "simple" | "advanced";
+    paletteDefs: BlockDefinition[];
+    animateIn: boolean;
+  }>({ voxelBuild: null, palette, paletteDefs, animateIn: Boolean(animateIn) });
+  latestRef.current = {
+    voxelBuild,
+    palette,
+    paletteDefs,
+    animateIn: Boolean(animateIn),
+  };
+
+  const identityRef = useRef<BuildIdentity | null>(null);
+  const activeJobRef = useRef<{ controller: AbortController | null; identity: BuildIdentity | null }>({
+    controller: null,
+    identity: null,
+  });
+  const buildInProgressRef = useRef(false);
+  const buildPendingRef = useRef({ dirty: false, force: false });
+  const settleTimerRef = useRef<number | null>(null);
+  const kickScheduledRef = useRef(false);
+  const kickBuildRef = useRef<(() => void) | null>(null);
+  const lastBuiltRef = useRef<{ blockLimit: number; at: number }>({ blockLimit: 0, at: 0 });
 
   useEffect(() => {
     onBuildReadyChangeRef.current = onBuildReadyChange;
   }, [onBuildReadyChange]);
 
-  function fitView() {
+  const fitView = useCallback(() => {
     const three = threeRef.current;
     const vg = voxelGroupRef.current;
     const bounds = boundsRef.current;
@@ -193,7 +203,215 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     if (gridRef.current) {
       gridRef.current.position.y = bounds.box.min.y - 0.5;
     }
-  }
+  }, []);
+
+  const clearVoxelGroup = useCallback((three: NonNullable<typeof threeRef.current>) => {
+    if (revealRafRef.current) {
+      window.cancelAnimationFrame(revealRafRef.current);
+      revealRafRef.current = null;
+    }
+
+    if (voxelGroupRef.current) {
+      three.scene.remove(voxelGroupRef.current.group);
+      voxelGroupRef.current.dispose();
+      voxelGroupRef.current = null;
+    }
+    boundsRef.current = null;
+    lastBuiltRef.current = { blockLimit: 0, at: 0 };
+    onBuildReadyChangeRef.current?.(false);
+  }, []);
+
+  const scheduleKick = useCallback(() => {
+    if (kickScheduledRef.current) return;
+    kickScheduledRef.current = true;
+    queueMicrotask(() => {
+      kickScheduledRef.current = false;
+      kickBuildRef.current?.();
+    });
+  }, []);
+
+  const kickBuild = useCallback(async () => {
+    if (buildInProgressRef.current) return;
+    if (!buildPendingRef.current.dirty) return;
+    const three = threeRef.current;
+    if (!three) return;
+
+    const latest = latestRef.current;
+    const incomingIdentity: BuildIdentity | null = latest.voxelBuild
+      ? { palette: latest.palette, blocksRef: latest.voxelBuild.blocks }
+      : null;
+
+    if (!incomingIdentity) {
+      buildPendingRef.current.dirty = false;
+      buildPendingRef.current.force = false;
+      identityRef.current = null;
+      activeJobRef.current.controller?.abort();
+      activeJobRef.current.controller = null;
+      activeJobRef.current.identity = null;
+      clearVoxelGroup(three);
+      return;
+    }
+
+    const identityChanged = !sameIdentity(identityRef.current, incomingIdentity);
+    if (identityChanged) {
+      identityRef.current = incomingIdentity;
+      clearVoxelGroup(three);
+    }
+
+    const desiredBlocks = Math.max(0, latest.voxelBuild?.blocks.length ?? 0);
+    const lastBuiltBlocks = Math.max(0, lastBuiltRef.current.blockLimit);
+    const delta = desiredBlocks - lastBuiltBlocks;
+    const now = performance.now();
+    const elapsedSinceBuild = Math.max(0, now - lastBuiltRef.current.at);
+
+    const force = buildPendingRef.current.force;
+    const { minDelta, maxWaitMs } = computeRebuildThreshold(lastBuiltBlocks);
+    const shouldBuild =
+      !voxelGroupRef.current ||
+      (desiredBlocks > lastBuiltBlocks && (force || delta >= minDelta || elapsedSinceBuild >= maxWaitMs));
+
+    if (!shouldBuild) {
+      if (force && voxelGroupRef.current && boundsRef.current) {
+        fitView();
+      }
+      buildPendingRef.current.dirty = desiredBlocks > lastBuiltBlocks;
+      buildPendingRef.current.force = false;
+      return;
+    }
+
+    buildPendingRef.current.dirty = false;
+    buildPendingRef.current.force = false;
+
+    buildInProgressRef.current = true;
+    const controller = new AbortController();
+    activeJobRef.current.controller = controller;
+    activeJobRef.current.identity = incomingIdentity;
+
+    const blockLimit = desiredBlocks;
+    // When the stream settles (no new blocks for a bit), we do a final refit so the camera matches
+    // the default framing for the full build (instead of staying framed on an early partial chunk).
+    const shouldFit = identityChanged || !voxelGroupRef.current || force;
+    const previousRotationY = voxelGroupRef.current?.group.rotation.y ?? 0;
+    const startHadGroup = Boolean(voxelGroupRef.current);
+    const animate = Boolean(latest.animateIn && shouldFit);
+    const paletteSnapshot = latest.paletteDefs;
+    const buildSnapshot = latest.voxelBuild;
+
+    try {
+      const tex = await loadAtlasTexture();
+      if (controller.signal.aborted) return;
+      if (!sameIdentity(identityRef.current, incomingIdentity)) return;
+      if (!buildSnapshot) return;
+
+      const vg = await createVoxelGroupAsync(buildSnapshot, paletteSnapshot, tex, {
+        signal: controller.signal,
+        blockLimit,
+      });
+
+      if (controller.signal.aborted) {
+        vg.dispose();
+        return;
+      }
+      if (!sameIdentity(identityRef.current, incomingIdentity)) {
+        vg.dispose();
+        return;
+      }
+
+      if (revealRafRef.current) {
+        window.cancelAnimationFrame(revealRafRef.current);
+        revealRafRef.current = null;
+      }
+
+      const old = voxelGroupRef.current;
+      if (old) {
+        three.scene.remove(old.group);
+        old.dispose();
+      }
+
+      vg.group.rotation.y = previousRotationY;
+      voxelGroupRef.current = vg;
+      three.scene.add(vg.group);
+
+      boundsRef.current = computeGroupBounds(vg.group);
+      if (gridRef.current) {
+        gridRef.current.position.y = boundsRef.current.box.min.y - 0.5;
+      }
+      if (shouldFit) {
+        fitView();
+      }
+      onBuildReadyChangeRef.current?.(true);
+      lastBuiltRef.current = { blockLimit, at: performance.now() };
+
+      if (!animate) return;
+      if (startHadGroup) return;
+
+      const geometries: { geo: THREE.BufferGeometry; total: number }[] = [];
+      vg.group.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const geo = child.geometry;
+        if (!(geo instanceof THREE.BufferGeometry)) return;
+        const total = geo.getIndex()?.count ?? geo.getAttribute("position")?.count ?? 0;
+        if (total <= 0) return;
+        geo.setDrawRange(0, 0);
+        geometries.push({ geo, total });
+      });
+
+      if (geometries.length === 0) return;
+
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const durationMs = reduceMotion ? 70 : 150;
+      const start = performance.now();
+
+      const tick = (now: number) => {
+        const t = Math.min(1, (now - start) / durationMs);
+        const eased = 1 - Math.pow(1 - t, 3);
+        for (const g of geometries) {
+          const count = Math.floor((g.total * eased) / 3) * 3;
+          g.geo.setDrawRange(0, count);
+        }
+        if (t < 1) {
+          revealRafRef.current = window.requestAnimationFrame(tick);
+        } else {
+          revealRafRef.current = null;
+        }
+      };
+
+      revealRafRef.current = window.requestAnimationFrame(tick);
+    } catch (err: unknown) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.warn("VoxelViewer build failed", err);
+    } finally {
+      buildInProgressRef.current = false;
+      if (activeJobRef.current.controller === controller) {
+        activeJobRef.current.controller = null;
+        activeJobRef.current.identity = null;
+      }
+      if (buildPendingRef.current.dirty) scheduleKick();
+    }
+  }, [clearVoxelGroup, fitView, scheduleKick]);
+
+  kickBuildRef.current = () => {
+    void kickBuild();
+  };
+
+  const requestBuild = useCallback((opts?: { force?: boolean }) => {
+    buildPendingRef.current.dirty = true;
+    if (opts?.force) buildPendingRef.current.force = true;
+
+    if (settleTimerRef.current != null) {
+      window.clearTimeout(settleTimerRef.current);
+      settleTimerRef.current = null;
+    }
+
+    // After the stream goes quiet, force one final build so we land on the full payload.
+    settleTimerRef.current = window.setTimeout(() => {
+      buildPendingRef.current.dirty = true;
+      buildPendingRef.current.force = true;
+      scheduleKick();
+    }, 650);
+
+    scheduleKick();
+  }, [scheduleKick]);
 
   useImperativeHandle(
     ref,
@@ -443,95 +661,29 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       renderer.domElement.remove();
       gridRef.current = null;
     };
+  }, [fitView]);
+
+  useEffect(() => {
+    const job = activeJobRef.current;
+    return () => {
+      if (settleTimerRef.current != null) {
+        window.clearTimeout(settleTimerRef.current);
+        settleTimerRef.current = null;
+      }
+      job.controller?.abort();
+      job.controller = null;
+      job.identity = null;
+    };
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const buildController = new AbortController();
-    const three = threeRef.current;
-    if (!three) return;
-    void (async () => {
-      try {
-        const tex = await loadAtlasTexture();
-        if (cancelled) return;
-
-        if (revealRafRef.current) {
-          window.cancelAnimationFrame(revealRafRef.current);
-          revealRafRef.current = null;
-        }
-
-        if (voxelGroupRef.current) {
-          three.scene.remove(voxelGroupRef.current.group);
-          voxelGroupRef.current.dispose();
-          voxelGroupRef.current = null;
-        }
-        boundsRef.current = null;
-        onBuildReadyChangeRef.current?.(false);
-
-        if (!voxelBuild) return;
-
-        const allowed = new Set(paletteDefs.map((p) => p.id));
-        boundsRef.current = computeBuildBounds(voxelBuild, allowed);
-        const vg = await createVoxelGroupAsync(voxelBuild, paletteDefs, tex, { signal: buildController.signal });
-        if (cancelled) {
-          vg.dispose();
-          return;
-        }
-        voxelGroupRef.current = vg;
-        three.scene.add(vg.group);
-        fitView();
-        onBuildReadyChangeRef.current?.(true);
-
-        if (!animateIn) return;
-
-        const geometries: { geo: THREE.BufferGeometry; total: number }[] = [];
-        vg.group.traverse((child) => {
-          if (!(child instanceof THREE.Mesh)) return;
-          const geo = child.geometry;
-          if (!(geo instanceof THREE.BufferGeometry)) return;
-          const total = geo.getIndex()?.count ?? geo.getAttribute("position")?.count ?? 0;
-          if (total <= 0) return;
-          geo.setDrawRange(0, 0);
-          geometries.push({ geo, total });
-        });
-
-        if (geometries.length === 0) return;
-
-        const reduceMotion =
-          typeof window !== "undefined" &&
-          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        const durationMs = reduceMotion ? 70 : 150;
-        const start = performance.now();
-
-        const tick = (now: number) => {
-          const t = Math.min(1, (now - start) / durationMs);
-          const eased = 1 - Math.pow(1 - t, 3);
-          for (const g of geometries) {
-            const count = Math.floor((g.total * eased) / 3) * 3;
-            g.geo.setDrawRange(0, count);
-          }
-          if (t < 1) {
-            revealRafRef.current = window.requestAnimationFrame(tick);
-          } else {
-            revealRafRef.current = null;
-          }
-        };
-
-        revealRafRef.current = window.requestAnimationFrame(tick);
-      } catch (err: unknown) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.warn("VoxelViewer build failed", err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      buildController.abort();
-      if (revealRafRef.current) {
-        window.cancelAnimationFrame(revealRafRef.current);
-        revealRafRef.current = null;
-      }
-    };
-  }, [voxelBuild, paletteDefs, animateIn]);
+    const incomingIdentity: BuildIdentity | null = voxelBuild ? { palette, blocksRef: voxelBuild.blocks } : null;
+    const activeIdentity = activeJobRef.current.identity;
+    if (activeJobRef.current.controller && activeIdentity && !sameIdentity(activeIdentity, incomingIdentity)) {
+      activeJobRef.current.controller.abort();
+    }
+    requestBuild();
+  }, [voxelBuild, paletteDefs, animateIn, palette, requestBuild]);
 
   useEffect(() => {
     const three = threeRef.current;

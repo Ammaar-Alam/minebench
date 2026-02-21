@@ -66,9 +66,49 @@ function findNumericField(text: string, field: string): number | null {
 }
 
 function findArrayStart(text: string, field: string): number {
-  const idx = text.indexOf(`"${field}"`);
-  if (idx < 0) return -1;
-  return text.indexOf("[", idx);
+  const token = `"${field}"`;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i <= text.length - token.length; i += 1) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch !== '"') continue;
+
+    if (text.startsWith(token, i)) {
+      let j = i + token.length;
+      while (j < text.length && /\s/.test(text[j] ?? "")) j += 1;
+      if (text[j] !== ":") {
+        inString = true;
+        escaped = false;
+        continue;
+      }
+      j += 1;
+      while (j < text.length && /\s/.test(text[j] ?? "")) j += 1;
+      if (text[j] === "[") return j;
+      inString = true;
+      escaped = false;
+      continue;
+    }
+
+    inString = true;
+    escaped = false;
+  }
+
+  return -1;
 }
 
 function parseBlockSlice(slice: string): VoxelBlock | null {
@@ -87,11 +127,16 @@ function parseBlockSlice(slice: string): VoxelBlock | null {
   }
 }
 
+const PRIMITIVE_ARRAY_RE = /"lines"\s*:\s*\[|"boxes"\s*:\s*\[/i;
+
 function streamBlocksFromText(
   request: ParseRequest,
   postProgress: (msg: ProgressMessage) => void,
 ): { blocks: VoxelBlock[]; totalBlocks: number | null } | null {
   const text = request.rawText;
+  if (PRIMITIVE_ARRAY_RE.test(text)) {
+    return null;
+  }
   const blocksStart = findArrayStart(text, "blocks");
   if (blocksStart < 0) return null;
 
@@ -223,7 +268,9 @@ async function runParse(request: ParseRequest) {
     let totalBlocks: number | null = null;
 
     const streamed = streamBlocksFromText(request, postProgress);
-    if (streamed) {
+    // If we didn't manage to extract any blocks, fall back to full JSON extraction so we can
+    // handle builds that rely on `boxes`/`lines` primitives (or non-standard block encodings).
+    if (streamed && streamed.blocks.length > 0) {
       totalBlocks = streamed.totalBlocks;
       baseBuild = {
         version: "1.0",

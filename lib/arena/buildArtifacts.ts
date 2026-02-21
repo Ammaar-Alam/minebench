@@ -259,11 +259,12 @@ function createPrepared(
   });
   const fullEstimatedBytes = hintsFromMetadata.fullEstimatedBytes ?? payloadEstimatedBytes;
   const deliveryClass = classifyArenaBuildDelivery(fullEstimatedBytes);
-  const preview = buildPreviewBuild(fullBuild, PREVIEW_TARGET_BLOCKS);
+  const preferPreview = shouldPreferPreview(fullEstimatedBytes);
+  const preview = preferPreview
+    ? buildPreviewBuild(fullBuild, PREVIEW_TARGET_BLOCKS)
+    : { build: fullBuild, stride: 1 };
   const initialVariant: ArenaBuildVariant =
-    shouldPreferPreview(fullEstimatedBytes) && preview.build.blocks.length < fullBuild.blocks.length
-      ? "preview"
-      : "full";
+    preferPreview && preview.build.blocks.length < fullBuild.blocks.length ? "preview" : "full";
   const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(fullBuild);
 
   return {

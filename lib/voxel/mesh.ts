@@ -15,6 +15,8 @@ type CreateVoxelGroupAsyncOpts = {
   onProgress?: (progress: BuildProgress) => void;
   // Yield to the main thread when we've spent about this many ms in a tight loop.
   yieldAfterMs?: number;
+  // When set, only process the first N input blocks. Useful for progressive streaming without copying arrays.
+  blockLimit?: number;
 };
 
 type MeshBucket = {
@@ -374,8 +376,14 @@ export async function createVoxelGroupAsync(
     await nextFrame();
   };
 
+  const inputLimit =
+    typeof opts?.blockLimit === "number" && Number.isFinite(opts.blockLimit)
+      ? Math.max(0, Math.floor(opts.blockLimit))
+      : build.blocks.length;
+  const maxInputBlocks = Math.min(build.blocks.length, inputLimit);
+
   // Pass 1: filter, build occupancy map, and compute bounds in one go.
-  for (let i = 0; i < build.blocks.length; i += 1) {
+  for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
     blocks.push(b);
