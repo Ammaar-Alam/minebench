@@ -5,6 +5,54 @@ import { useEffect, useState } from "react";
 import type { LeaderboardResponse } from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 
+function ChevronUp({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 10l4-4 4 4" />
+    </svg>
+  );
+}
+
+function ChevronDown({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  );
+}
+
+function ChevronRight({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 4l4 4-4 4" />
+    </svg>
+  );
+}
+
 function formatPercent(value: number | null, digits = 0): string {
   if (value == null) return "—";
   return `${(value * 100).toFixed(digits)}%`;
@@ -37,7 +85,8 @@ function confidenceClass(confidence: number): string {
 }
 
 type MovementBadge = {
-  label: string;
+  kind: "new" | "up" | "down";
+  delta: number | null;
   toneClass: string;
   ariaLabel: string;
 };
@@ -46,8 +95,9 @@ function movementBadge(model: LeaderboardResponse["models"][number]): MovementBa
   if (!model.movementVisible) return null;
   if (!model.hasBaseline24h) {
     return {
-      label: "NEW",
-      toneClass: "bg-accent/15 text-accent ring-accent/35",
+      kind: "new",
+      delta: null,
+      toneClass: "text-accent",
       ariaLabel: `${model.displayName} is new in the 24-hour movement window.`,
     };
   }
@@ -56,17 +106,34 @@ function movementBadge(model: LeaderboardResponse["models"][number]): MovementBa
   if (delta === 0) return null;
   if (delta > 0) {
     return {
-      label: `↑${delta}`,
-      toneClass: "bg-success/15 text-success ring-success/35",
+      kind: "up",
+      delta,
+      toneClass: "text-success",
       ariaLabel: `${model.displayName} moved up ${delta} rank${delta === 1 ? "" : "s"} in 24 hours.`,
     };
   }
   const down = Math.abs(delta);
   return {
-    label: `↓${down}`,
-    toneClass: "bg-danger/18 text-danger ring-danger/35",
+    kind: "down",
+    delta: down,
+    toneClass: "text-danger",
     ariaLabel: `${model.displayName} moved down ${down} rank${down === 1 ? "" : "s"} in 24 hours.`,
   };
+}
+
+function MovementMark({ badge }: { badge: MovementBadge | null }) {
+  if (!badge) return null;
+  const Icon = badge.kind === "up" ? ChevronUp : badge.kind === "down" ? ChevronDown : ChevronRight;
+  const label = badge.kind === "new" ? "NEW" : String(badge.delta ?? "");
+  return (
+    <span
+      className={`inline-flex items-center justify-center gap-0.5 whitespace-nowrap font-mono text-[10px] font-semibold leading-none ${badge.toneClass}`}
+      aria-label={badge.ariaLabel}
+    >
+      <Icon className="h-3 w-3 opacity-90" />
+      <span className={badge.kind === "new" ? "tracking-[0.12em]" : "tracking-tight"}>{label}</span>
+    </span>
+  );
 }
 
 export function Leaderboard() {
@@ -181,12 +248,12 @@ export function Leaderboard() {
 
         <div className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
           <div className="relative z-[2] space-y-2.5 p-2.5 sm:hidden">
-            {data?.models.map((m, index) => {
-              const voteSummary = summarizeArenaVotes(m);
-              const consistency = m.consistency ?? 0;
-              const coveragePercent = Math.round((m.promptCoverage ?? 0) * 100);
-              const moveBadge = movementBadge(m);
-              return (
+	            {data?.models.map((m, index) => {
+	              const voteSummary = summarizeArenaVotes(m);
+	              const consistency = m.consistency ?? 0;
+	              const coveragePercent = Math.round((m.promptCoverage ?? 0) * 100);
+	              const moveBadge = movementBadge(m);
+	              return (
                 <button
                   key={m.key}
                   type="button"
@@ -200,35 +267,33 @@ export function Leaderboard() {
                   onClick={() => navigateToModel(m.key)}
                   aria-label={`Open ${m.displayName} profile`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/65 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
-                        {index + 1}
-                      </span>
-                      <div className="mt-1.5 flex items-center gap-1.5">
-                        <div className="min-w-0 flex-1 truncate text-[1rem] font-semibold tracking-tight text-fg">
-                          {m.displayName}
-                        </div>
-                        {moveBadge ? (
-                          <span className={`mb-leaderboard-move-chip ${moveBadge.toneClass}`} aria-label={moveBadge.ariaLabel}>
-                            {moveBadge.label}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                        <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
-                        <span
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-mono ring-1 ${stabilityChipClass(
-                            m.stability,
-                          )}`}
-                        >
-                          {m.stability}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
-                        Rating
+	                  <div className="flex items-start justify-between gap-3">
+	                    <div className="flex min-w-0 items-start gap-3">
+	                      <div className="flex w-9 flex-col items-center gap-0.5 pt-0.5">
+	                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/65 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
+	                          {index + 1}
+	                        </span>
+	                        <MovementMark badge={moveBadge} />
+	                      </div>
+	                      <div className="min-w-0">
+	                        <div className="mt-1.5 min-w-0 truncate text-[1rem] font-semibold tracking-tight text-fg">
+	                          {m.displayName}
+	                        </div>
+	                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+	                          <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
+	                          <span
+	                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-mono ring-1 ${stabilityChipClass(
+	                              m.stability,
+	                            )}`}
+	                          >
+	                            {m.stability}
+	                          </span>
+	                        </div>
+	                      </div>
+	                    </div>
+	                    <div className="text-right">
+	                      <div className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
+	                        Rating
                       </div>
                       <div className="font-mono text-[1.15rem] font-semibold text-fg">
                         {Math.round(m.rankScore).toLocaleString()}
@@ -402,12 +467,12 @@ export function Leaderboard() {
               </tr>
             </thead>
             <tbody>
-              {data?.models.map((m, index) => {
-                const voteSummary = summarizeArenaVotes(m);
-                const tierClass = index === 0 ? "mb-tier-glow-top" : index < 3 ? "mb-tier-glow" : "";
-                const tier = index === 0 ? "champion" : index < 3 ? "top" : "base";
-                const moveBadge = movementBadge(m);
-                return (
+	              {data?.models.map((m, index) => {
+	                const voteSummary = summarizeArenaVotes(m);
+	                const tierClass = index === 0 ? "mb-tier-glow-top" : index < 3 ? "mb-tier-glow" : "";
+	                const tier = index === 0 ? "champion" : index < 3 ? "top" : "base";
+	                const moveBadge = movementBadge(m);
+	                return (
                   <tr
                     key={m.key}
                     role="link"
@@ -427,38 +492,31 @@ export function Leaderboard() {
                     }`}
                     style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}
                   >
-                    <td className="mb-leaderboard-model-cell px-3 py-3 sm:px-3.5 sm:py-3.5">
-                      <div className="flex items-start gap-2.5">
-                        <span className="mt-0.5 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/62 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
-                          {index + 1}
-                        </span>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <div className="min-w-0 flex-1 truncate font-medium text-fg transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent">
-                              {m.displayName}
-                            </div>
-                            {moveBadge ? (
-                              <span
-                                className={`mb-leaderboard-move-chip ${moveBadge.toneClass}`}
-                                aria-label={moveBadge.ariaLabel}
-                              >
-                                {moveBadge.label}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                            <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
-                            <span
-                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-mono ring-1 ${stabilityChipClass(
-                                m.stability,
-                              )}`}
-                            >
-                              {m.stability}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    </td>
+	                    <td className="mb-leaderboard-model-cell px-3 py-3 sm:px-3.5 sm:py-3.5">
+	                      <div className="flex items-start gap-3">
+	                        <div className="mt-0.5 flex w-9 flex-col items-center gap-0.5">
+	                          <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/62 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
+	                            {index + 1}
+	                          </span>
+	                          <MovementMark badge={moveBadge} />
+	                        </div>
+	                        <div className="min-w-0">
+	                          <div className="min-w-0 truncate font-medium text-fg transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent">
+	                            {m.displayName}
+	                          </div>
+	                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+	                            <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
+	                            <span
+	                              className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-mono ring-1 ${stabilityChipClass(
+	                                m.stability,
+	                              )}`}
+	                            >
+	                              {m.stability}
+	                            </span>
+	                          </div>
+	                        </div>
+	                      </div>
+	                    </td>
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
                       <div className="font-mono font-semibold tracking-tight text-fg/95">
                         {Math.round(m.rankScore).toLocaleString()}

@@ -596,13 +596,6 @@
     color: hsl(var(--muted));
   }
 
-  .mb-leaderboard-move-chip {
-    @apply inline-flex items-center rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold ring-1;
-    line-height: 1;
-    letter-spacing: 0.01em;
-    white-space: nowrap;
-  }
-
   .mb-jump-chip {
     @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium text-muted ring-1 ring-border/70;
     position: relative;
