@@ -9,6 +9,7 @@ import {
   pickInitialBuild,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
+import type { ArenaBuildDeliveryClass } from "@/lib/arena/types";
 
 export const runtime = "nodejs";
 
@@ -23,11 +24,6 @@ const ADJ_PAIR_VOTES_FLOOR = 12;
 const ADJ_PAIR_PROMPTS_FLOOR = 6;
 type Lane = "coverage" | "contender" | "uncertainty" | "exploration";
 type BuildPayloadMode = "inline" | "shell" | "adaptive";
-
-const INLINE_INITIAL_MAX_BYTES = Number.parseInt(
-  process.env.ARENA_INLINE_INITIAL_MAX_BYTES ?? "8000000",
-  10,
-);
 
 const LANE_WEIGHTS: Array<{ lane: Lane; weight: number }> = [
   { lane: "coverage", weight: 0.4 },
@@ -121,13 +117,8 @@ function parseBuildPayloadMode(value: string | null): BuildPayloadMode {
   return "inline";
 }
 
-function shouldInlineInAdaptiveMode(fullEstimatedBytes: number | null, initialVariant: "preview" | "full"): boolean {
-  if (initialVariant !== "full") return false;
-  if (!Number.isFinite(INLINE_INITIAL_MAX_BYTES) || INLINE_INITIAL_MAX_BYTES <= 0) return false;
-  if (typeof fullEstimatedBytes !== "number" || !Number.isFinite(fullEstimatedBytes) || fullEstimatedBytes <= 0) {
-    return false;
-  }
-  return fullEstimatedBytes <= INLINE_INITIAL_MAX_BYTES;
+function shouldInlineInAdaptiveMode(deliveryClass: ArenaBuildDeliveryClass): boolean {
+  return deliveryClass === "inline";
 }
 
 function randomPick<T>(items: T[]): T | null {
@@ -940,14 +931,16 @@ export async function GET(req: Request) {
   const checksumB = buildB.voxelSha256?.trim() || null;
   const shellHintsA = deriveArenaBuildLoadHints(buildA);
   const shellHintsB = deriveArenaBuildLoadHints(buildB);
+  const shouldProbeA = payloadMode === "adaptive" && shellHintsA.fullEstimatedBytes == null;
+  const shouldProbeB = payloadMode === "adaptive" && shellHintsB.fullEstimatedBytes == null;
   const shouldPrepareA =
     payloadMode === "inline" ||
     (payloadMode === "adaptive" &&
-      shouldInlineInAdaptiveMode(shellHintsA.fullEstimatedBytes, shellHintsA.initialVariant));
+      (shouldInlineInAdaptiveMode(shellHintsA.deliveryClass) || shouldProbeA));
   const shouldPrepareB =
     payloadMode === "inline" ||
     (payloadMode === "adaptive" &&
-      shouldInlineInAdaptiveMode(shellHintsB.fullEstimatedBytes, shellHintsB.initialVariant));
+      (shouldInlineInAdaptiveMode(shellHintsB.deliveryClass) || shouldProbeB));
 
   let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
   let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
@@ -1005,6 +998,14 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }
+  const shouldInlineA =
+    payloadMode === "inline" ||
+    (payloadMode === "adaptive" &&
+      shouldInlineInAdaptiveMode((preparedA?.hints ?? shellHintsA).deliveryClass));
+  const shouldInlineB =
+    payloadMode === "inline" ||
+    (payloadMode === "adaptive" &&
+      shouldInlineInAdaptiveMode((preparedB?.hints ?? shellHintsB).deliveryClass));
 
   const created = await prisma.$transaction(async (tx) => {
     const matchup = await tx.matchup.create({
@@ -1045,7 +1046,7 @@ export async function GET(req: Request) {
         eloRating: leftModel.eloRating,
       },
       build:
-        (preparedA ? pickInitialBuild(preparedA) : null) as ArenaMatchup["a"]["build"],
+        (preparedA && shouldInlineA ? pickInitialBuild(preparedA) : null) as ArenaMatchup["a"]["build"],
       buildRef: preparedA?.buildRef ?? {
         buildId: buildA.id,
         variant: "full",
@@ -1067,7 +1068,7 @@ export async function GET(req: Request) {
         eloRating: rightModel.eloRating,
       },
       build:
-        (preparedB ? pickInitialBuild(preparedB) : null) as ArenaMatchup["b"]["build"],
+        (preparedB && shouldInlineB ? pickInitialBuild(preparedB) : null) as ArenaMatchup["b"]["build"],
       buildRef: preparedB?.buildRef ?? {
         buildId: buildB.id,
         variant: "full",

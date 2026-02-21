@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { CURATED_PROMPTS } from "@/lib/arena/curatedPrompts";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
+import { createHash } from "node:crypto";
+import { maybePrecomputeArenaStreamArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 
 export const runtime = "nodejs";
 
@@ -354,7 +356,8 @@ export async function POST(req: Request) {
       );
     }
 
-    await prisma.build.create({
+    const buildJson = JSON.stringify(r.build);
+    const saved = await prisma.build.create({
       data: {
         promptId: job.promptId,
         modelId: job.modelId,
@@ -362,10 +365,30 @@ export async function POST(req: Request) {
         palette: ARENA_SETTINGS.palette,
         mode: ARENA_SETTINGS.mode,
         voxelData: r.build,
+        voxelByteSize: Buffer.byteLength(buildJson),
+        voxelSha256: createHash("sha256").update(buildJson).digest("hex"),
         blockCount: r.blockCount,
         generationTimeMs: r.generationTimeMs,
       },
     });
+
+    try {
+      await maybePrecomputeArenaStreamArtifactsForBuild({
+        id: saved.id,
+        gridSize: saved.gridSize,
+        palette: saved.palette,
+        blockCount: saved.blockCount,
+        voxelByteSize: saved.voxelByteSize,
+        voxelCompressedByteSize: saved.voxelCompressedByteSize,
+        voxelSha256: saved.voxelSha256,
+        voxelData: saved.voxelData,
+        voxelStorageBucket: saved.voxelStorageBucket,
+        voxelStoragePath: saved.voxelStoragePath,
+        voxelStorageEncoding: saved.voxelStorageEncoding,
+      });
+    } catch (err) {
+      console.warn(`[seed:${runId}] artifact precompute skipped for build=${saved.id}`, err);
+    }
 
     seeded += 1;
     seededJobs.push({ promptId: job.promptId, modelKey: job.modelKey });

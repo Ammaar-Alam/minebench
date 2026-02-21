@@ -27,6 +27,95 @@ const HERO_MOTIF_WIDTH = 1100;
 const HERO_MOTIF_HEIGHT = 154;
 const INITIAL_VISIBLE_OPPONENTS = 8;
 const INITIAL_VISIBLE_PROMPTS = 8;
+const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_SNAPSHOT_TIMEOUT_MS ?? "12000",
+  10,
+);
+const STREAM_REQUEST_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_STREAM_REQUEST_TIMEOUT_MS ?? "12000",
+  10,
+);
+const STREAM_FIRST_EVENT_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_STREAM_FIRST_EVENT_TIMEOUT_MS ?? "6000",
+  10,
+);
+const STREAM_STALL_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_STREAM_STALL_TIMEOUT_MS ?? "10000",
+  10,
+);
+const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
+  10,
+);
+
+type TimeoutSignal = {
+  signal: AbortSignal;
+  cleanup: () => void;
+};
+
+function makeTimeoutSignal(
+  parentSignal: AbortSignal | undefined,
+  timeoutMs: number,
+): TimeoutSignal {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort();
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      controller.abort();
+    } else {
+      parentSignal.addEventListener("abort", abortFromParent, { once: true });
+    }
+  }
+
+  const timer =
+    Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? window.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      if (timer != null) window.clearTimeout(timer);
+      if (parentSignal) parentSignal.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+async function readWithTimeout<T>(
+  read: () => Promise<T>,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  return await new Promise<T>((resolve, reject) => {
+    const timer =
+      Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? window.setTimeout(() => {
+            cleanup();
+            reject(new Error("Build stream stalled"));
+          }, timeoutMs)
+        : null;
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const cleanup = () => {
+      if (timer != null) window.clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+    };
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+    read().then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (err) => {
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
 
 type CurvePoint = { x: number; y: number; value: number };
 type LoadedPromptBuild = {
@@ -80,17 +169,24 @@ function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
 async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
+  timeoutMs = SNAPSHOT_FETCH_TIMEOUT_MS,
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
-  const res = await fetch(url, { method: "GET", signal });
-  if (!res.ok) throw new Error(await res.text());
-  return (await res.json()) as BuildVariantResponse;
+  const timed = makeTimeoutSignal(signal, timeoutMs);
+  try {
+    const res = await fetch(url, { method: "GET", signal: timed.signal });
+    if (!res.ok) throw new Error(await res.text());
+    return (await res.json()) as BuildVariantResponse;
+  } finally {
+    timed.cleanup();
+  }
 }
 
-async function fetchBuildVariantStream(
+async function fetchBuildVariantStreamOnce(
   ref: ArenaBuildRef,
+  useArtifact: boolean,
   opts?: FetchBuildVariantStreamOptions,
 ): Promise<BuildVariantResponse> {
   const url = new URL(
@@ -99,11 +195,18 @@ async function fetchBuildVariantStream(
   );
   url.searchParams.set("variant", ref.variant);
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+  if (!useArtifact) url.searchParams.set("artifact", "0");
 
-  const res = await fetch(url, {
-    method: "GET",
-    signal: opts?.signal,
-  });
+  const requestTimed = makeTimeoutSignal(opts?.signal, STREAM_REQUEST_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      signal: requestTimed.signal,
+    });
+  } finally {
+    requestTimed.cleanup();
+  }
   if (!res.ok) throw new Error(await res.text());
 
   const contentType = res.headers.get("content-type") ?? "";
@@ -115,6 +218,7 @@ async function fetchBuildVariantStream(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    const startedAt = performance.now();
 
     let resolvedVariant: ArenaBuildVariant = ref.variant;
     let checksum: string | null = ref.checksum ?? null;
@@ -122,6 +226,7 @@ async function fetchBuildVariantStream(
     let buildLoadHints: ArenaBuildLoadHints | undefined;
     let totalBlocks: number | null = null;
     let hasComplete = false;
+    let sawFirstEvent = false;
 
     const streamedBlocks: VoxelBuild["blocks"] = [];
 
@@ -141,11 +246,15 @@ async function fetchBuildVariantStream(
       const event = parseArenaBuildStreamLine(line);
       if (!event) return;
 
-      if (event.type === "ping") return;
+      if (event.type === "ping") {
+        sawFirstEvent = true;
+        return;
+      }
       if (event.type === "error") {
         throw new Error(event.message || "Build stream failed");
       }
       if (event.type === "hello") {
+        sawFirstEvent = true;
         resolvedVariant = event.variant;
         checksum = event.checksum ?? checksum;
         serverValidated = serverValidated || event.serverValidated;
@@ -162,6 +271,7 @@ async function fetchBuildVariantStream(
         return;
       }
       if (event.type === "chunk") {
+        sawFirstEvent = true;
         if (Array.isArray(event.blocks) && event.blocks.length > 0) {
           streamedBlocks.push(...event.blocks);
         }
@@ -181,7 +291,15 @@ async function fetchBuildVariantStream(
     };
 
     while (true) {
-      const { done, value } = await reader.read();
+      if (performance.now() - startedAt > STREAM_HARD_TIMEOUT_MS) {
+        throw new Error("Build stream hard timeout");
+      }
+
+      const { done, value } = await readWithTimeout(
+        () => reader.read(),
+        sawFirstEvent ? STREAM_STALL_TIMEOUT_MS : STREAM_FIRST_EVENT_TIMEOUT_MS,
+        opts?.signal,
+      );
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
@@ -219,8 +337,34 @@ async function fetchBuildVariantStream(
     };
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") throw err;
-    return fetchBuildVariantSnapshot(ref, opts?.signal);
+    throw err;
   }
+}
+
+async function fetchBuildVariantStream(
+  ref: ArenaBuildRef,
+  opts?: FetchBuildVariantStreamOptions,
+): Promise<BuildVariantResponse> {
+  let lastError: unknown = null;
+  const attempts: Array<() => Promise<BuildVariantResponse>> = [
+    () => fetchBuildVariantStreamOnce(ref, true, opts),
+    () => fetchBuildVariantSnapshot(ref, opts?.signal),
+    () => fetchBuildVariantStreamOnce(ref, false, opts),
+    () => fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS * 2),
+  ];
+
+  for (const attempt of attempts) {
+    try {
+      return await attempt();
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError" && opts?.signal?.aborted) {
+        throw err;
+      }
+      lastError = err;
+    }
+  }
+
+  throw (lastError instanceof Error ? lastError : new Error("Failed to retrieve build"));
 }
 
 function clamp01(value: number) {

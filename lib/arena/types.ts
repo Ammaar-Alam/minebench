@@ -4,6 +4,12 @@ export type VoteChoice = "A" | "B" | "TIE" | "BOTH_BAD";
 
 export type ArenaBuildVariant = "preview" | "full";
 
+export type ArenaBuildDeliveryClass =
+  | "inline"
+  | "snapshot"
+  | "stream-live"
+  | "stream-artifact";
+
 export type ArenaBuildRef = {
   buildId: string;
   variant: ArenaBuildVariant;
@@ -12,6 +18,7 @@ export type ArenaBuildRef = {
 
 export type ArenaBuildLoadHints = {
   initialVariant: ArenaBuildVariant;
+  deliveryClass: ArenaBuildDeliveryClass;
   fullBlockCount: number;
   previewBlockCount: number;
   previewStride: number;

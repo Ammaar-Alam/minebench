@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "@/lib/arena/types";
+import { isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
 import {
   ARENA_BUILD_STREAM_HELLO_PAD,
   encodeArenaBuildStreamEvent,
@@ -12,8 +13,12 @@ import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-const PING_INTERVAL_MS = 15_000;
+const PING_INTERVAL_MS = 5_000;
 const YIELD_EVERY_MS = 12;
+const ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
+  process.env.ARENA_STREAM_ARTIFACT_FETCH_TIMEOUT_MS ?? "3500",
+  10,
+);
 
 function parseVariant(value: string | null): ArenaBuildVariant {
   return value === "preview" ? "preview" : "full";
@@ -24,8 +29,11 @@ function toErrorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
-function createStreamHeaders(source: "live" | "artifact"): Headers {
-  return new Headers({
+function createStreamHeaders(
+  source: "live" | "artifact",
+  opts?: { deliveryClass?: string; estimatedBytes?: number | null },
+): Headers {
+  const headers = new Headers({
     "Content-Type": "application/x-ndjson; charset=utf-8",
     "Cache-Control":
       source === "artifact"
@@ -35,6 +43,37 @@ function createStreamHeaders(source: "live" | "artifact"): Headers {
     "X-Accel-Buffering": "no",
     "x-build-stream-source": source,
   });
+  if (opts?.deliveryClass) headers.set("x-build-delivery-class", opts.deliveryClass);
+  if (typeof opts?.estimatedBytes === "number" && Number.isFinite(opts.estimatedBytes)) {
+    headers.set("x-build-est-bytes", String(Math.floor(opts.estimatedBytes)));
+  }
+  return headers;
+}
+
+async function withTimeout<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    const controller = new AbortController();
+    return fn(controller.signal);
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T>([
+      fn(controller.signal),
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function sendEvent(
@@ -87,10 +126,25 @@ export async function GET(
     );
   }
 
+  const shellHints = deriveArenaBuildLoadHints(meta);
+  const artifactFetchAllowed =
+    url.searchParams.get("artifact") !== "0" && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
+
   try {
-    const artifact = await fetchArenaBuildStreamArtifact(buildId, variant, storedChecksum);
-    if (artifact?.body) {
-      return new Response(artifact.body, { headers: createStreamHeaders("artifact") });
+    if (artifactFetchAllowed) {
+      const artifact = await withTimeout(
+        (signal) => fetchArenaBuildStreamArtifact(buildId, variant, storedChecksum, { signal }),
+        ARTIFACT_FETCH_TIMEOUT_MS,
+        "artifact fetch",
+      );
+      if (artifact?.body) {
+        return new Response(artifact.body, {
+          headers: createStreamHeaders("artifact", {
+            deliveryClass: shellHints.deliveryClass,
+            estimatedBytes: shellHints.fullEstimatedBytes,
+          }),
+        });
+      }
     }
   } catch (err) {
     console.warn("arena stream artifact fetch failed", err);
@@ -243,5 +297,10 @@ export async function GET(
     },
   });
 
-  return new Response(stream, { headers: createStreamHeaders("live") });
+  return new Response(stream, {
+    headers: createStreamHeaders("live", {
+      deliveryClass: initialHints.deliveryClass,
+      estimatedBytes: initialHints.fullEstimatedBytes,
+    }),
+  });
 }

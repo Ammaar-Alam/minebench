@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
 import { getPalette } from "@/lib/blocks/palettes";
+import {
+  classifyArenaBuildDelivery,
+  estimateArenaBuildBytes,
+  shouldPreferPreviewVariant,
+} from "@/lib/arena/buildDeliveryPolicy";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { resolveBuildPayload } from "@/lib/storage/buildPayload";
@@ -14,6 +19,7 @@ export type ArenaBuildRef = {
 
 export type ArenaBuildLoadHints = {
   initialVariant: ArenaBuildVariant;
+  deliveryClass: "inline" | "snapshot" | "stream-live" | "stream-artifact";
   fullBlockCount: number;
   previewBlockCount: number;
   previewStride: number;
@@ -50,10 +56,14 @@ type CachedArtifact = {
   touchedAt: number;
 };
 
+type ParsedArenaBuild = {
+  build: VoxelBuild;
+  payloadEstimatedBytes: number | null;
+};
+
 const ARENA_ARTIFACTS_ENABLED = readBoolEnv("ARENA_ARTIFACTS_ENABLED", true);
 const ARENA_PREVIEW_STAGE_ENABLED = readBoolEnv("ARENA_PREVIEW_STAGE_ENABLED", true);
 const PREVIEW_TARGET_BLOCKS = readIntEnv("ARENA_PREVIEW_TARGET_BLOCKS", 900_000);
-const PREVIEW_TRIGGER_BYTES = readIntEnv("ARENA_PREVIEW_TRIGGER_BYTES", 50 * 1024 * 1024);
 const MEMORY_CACHE_MAX_ENTRIES = readIntEnv("ARENA_ARTIFACT_CACHE_MAX_ENTRIES", 24);
 const MEMORY_CACHE_MAX_WEIGHT = readIntEnv("ARENA_ARTIFACT_CACHE_MAX_WEIGHT", 180_000_000);
 
@@ -95,41 +105,21 @@ function buildCacheKey(source: ArenaBuildSource, checksum: string): string {
   return `${source.id}:${checksum}`;
 }
 
-function estimateJsonBytesFromStats(
-  voxelByteSize: number | null | undefined,
-  voxelCompressedByteSize: number | null | undefined,
-  fullBlockCount: number,
-): number | null {
-  const direct = voxelByteSize;
-  if (typeof direct === "number" && Number.isFinite(direct) && direct > 0) {
-    return Math.floor(direct);
-  }
-  const compressed = voxelCompressedByteSize;
-  if (typeof compressed === "number" && Number.isFinite(compressed) && compressed > 0) {
-    return Math.floor(compressed * 3.4);
-  }
-  if (Number.isFinite(fullBlockCount) && fullBlockCount > 0) {
-    // Typical per-block JSON footprint with commas/keys in this schema.
-    return Math.floor(fullBlockCount * 34);
-  }
-  return null;
-}
-
-function estimateJsonBytes(source: ArenaBuildSource, fullBlockCount: number): number | null {
-  return estimateJsonBytesFromStats(source.voxelByteSize, source.voxelCompressedByteSize, fullBlockCount);
-}
-
 function normalizeBlockCount(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.floor(value);
 }
 
 function shouldPreferPreview(fullEstimatedBytes: number | null): boolean {
-  return (
-    ARENA_PREVIEW_STAGE_ENABLED &&
-    typeof fullEstimatedBytes === "number" &&
-    fullEstimatedBytes >= PREVIEW_TRIGGER_BYTES
-  );
+  return ARENA_PREVIEW_STAGE_ENABLED && shouldPreferPreviewVariant(fullEstimatedBytes);
+}
+
+function estimatePayloadBytes(payload: unknown): number | null {
+  try {
+    return Buffer.byteLength(JSON.stringify(payload));
+  } catch {
+    return null;
+  }
 }
 
 export function deriveArenaBuildLoadHints(
@@ -137,14 +127,15 @@ export function deriveArenaBuildLoadHints(
 ): ArenaBuildLoadHints {
   const fullBlockCount = normalizeBlockCount(source.blockCount);
   const previewBlockCount = Math.min(fullBlockCount, PREVIEW_TARGET_BLOCKS);
-  const fullEstimatedBytes = estimateJsonBytesFromStats(
-    source.voxelByteSize,
-    source.voxelCompressedByteSize,
-    fullBlockCount,
-  );
+  const fullEstimatedBytes = estimateArenaBuildBytes({
+    voxelByteSize: source.voxelByteSize,
+    voxelCompressedByteSize: source.voxelCompressedByteSize,
+  });
+  const deliveryClass = classifyArenaBuildDelivery(fullEstimatedBytes);
   const initialVariant: ArenaBuildVariant = shouldPreferPreview(fullEstimatedBytes) ? "preview" : "full";
   return {
     initialVariant,
+    deliveryClass,
     fullBlockCount,
     previewBlockCount,
     previewStride: 1,
@@ -255,13 +246,17 @@ function computeBuildChecksum(fullBuild: VoxelBuild): string {
 function createPrepared(
   source: ArenaBuildSource,
   fullBuild: VoxelBuild,
+  payloadEstimatedBytes: number | null,
   checksumOverride?: string | null,
 ): PreparedArenaBuild {
-  const metadataHints = deriveArenaBuildLoadHints({
+  const hintsFromMetadata = deriveArenaBuildLoadHints({
     blockCount: fullBuild.blocks.length,
     voxelByteSize: source.voxelByteSize,
     voxelCompressedByteSize: source.voxelCompressedByteSize,
   });
+  const fullEstimatedBytes = hintsFromMetadata.fullEstimatedBytes ?? payloadEstimatedBytes;
+  const deliveryClass = classifyArenaBuildDelivery(fullEstimatedBytes);
+  const initialVariant: ArenaBuildVariant = shouldPreferPreview(fullEstimatedBytes) ? "preview" : "full";
   const preview = buildPreviewBuild(fullBuild, PREVIEW_TARGET_BLOCKS);
   const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(fullBuild);
 
@@ -271,7 +266,10 @@ function createPrepared(
     fullBuild,
     previewBuild: preview.build,
     hints: {
-      ...metadataHints,
+      ...hintsFromMetadata,
+      fullEstimatedBytes,
+      deliveryClass,
+      initialVariant,
       previewBlockCount: preview.build.blocks.length,
       previewStride: preview.stride,
     },
@@ -332,8 +330,9 @@ function setCachedPrepared(cacheKey: string, prepared: PreparedArenaBuild): void
   pruneCache();
 }
 
-async function parseAndValidateBuild(source: ArenaBuildSource): Promise<VoxelBuild> {
+async function parseAndValidateBuild(source: ArenaBuildSource): Promise<ParsedArenaBuild> {
   const payload = await resolveBuildPayload(source);
+  const payloadEstimatedBytes = estimatePayloadBytes(payload);
 
   const validated = validateVoxelBuild(payload, {
     gridSize: normalizeGridSize(source.gridSize),
@@ -343,30 +342,30 @@ async function parseAndValidateBuild(source: ArenaBuildSource): Promise<VoxelBui
   });
 
   if (validated.ok) {
-    return validated.value.build;
+    return { build: validated.value.build, payloadEstimatedBytes };
   }
 
   const parsed = parseVoxelBuildSpec(payload);
   if (!parsed.ok) {
     throw new Error(`Build payload is invalid: ${parsed.error}`);
   }
-  return parsed.value;
+  return { build: parsed.value, payloadEstimatedBytes };
 }
 
 export async function prepareArenaBuild(source: ArenaBuildSource): Promise<PreparedArenaBuild> {
   const storedChecksum = normalizeStoredChecksum(source);
 
   if (!ARENA_ARTIFACTS_ENABLED) {
-    const fullBuild = await parseAndValidateBuild(source);
-    const prepared = createPrepared(source, fullBuild, storedChecksum);
+    const parsed = await parseAndValidateBuild(source);
+    const prepared = createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
     prepared.hints.initialVariant = "full";
     return prepared;
   }
 
   // Without a durable content checksum we skip cache reuse to avoid stale artifacts after in-place overwrites.
   if (!storedChecksum) {
-    const fullBuild = await parseAndValidateBuild(source);
-    return createPrepared(source, fullBuild, null);
+    const parsed = await parseAndValidateBuild(source);
+    return createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, null);
   }
 
   const cacheKey = buildCacheKey(source, storedChecksum);
@@ -377,8 +376,8 @@ export async function prepareArenaBuild(source: ArenaBuildSource): Promise<Prepa
   if (existing) return existing;
 
   const promise = (async () => {
-    const fullBuild = await parseAndValidateBuild(source);
-    const prepared = createPrepared(source, fullBuild, storedChecksum);
+    const parsed = await parseAndValidateBuild(source);
+    const prepared = createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
     setCachedPrepared(cacheKey, prepared);
     return prepared;
   })();

@@ -261,6 +261,7 @@ export async function fetchArenaBuildStreamArtifact(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
+  opts?: { signal?: AbortSignal },
 ): Promise<Response | null> {
   const ref = getArenaBuildStreamArtifactRef(buildId, variant, checksum);
   if (!ref) return null;
@@ -281,6 +282,7 @@ export async function fetchArenaBuildStreamArtifact(
       apikey: config.serviceRoleKey,
     },
     cache: "no-store",
+    signal: opts?.signal,
   });
 
   if (resp.status === 404) return null;

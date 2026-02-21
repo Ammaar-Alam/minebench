@@ -8,6 +8,8 @@ import { maxBlocksForGrid } from "@/lib/ai/generateVoxelBuild";
 import { gunzipSync } from "node:zlib";
 import { BuildStorageRef, loadBuildJsonFromStorage } from "@/lib/storage/buildPayload";
 import { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { maybePrecomputeArenaStreamArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 
 export const runtime = "nodejs";
 
@@ -230,6 +232,9 @@ export async function POST(req: Request) {
   if (!spec.ok) return NextResponse.json({ error: spec.error }, { status: 400 });
 
   const blockCount = validated.value.build.blocks.length;
+  const specJson = JSON.stringify(spec.value);
+  const inlineByteSize = Buffer.byteLength(specJson);
+  const inlineSha256 = createHash("sha256").update(specJson).digest("hex");
 
   const existing = await prisma.build.findFirst({
     where: { promptId: prompt.id, modelId: model.id, gridSize, palette, mode },
@@ -255,9 +260,9 @@ export async function POST(req: Request) {
           voxelStorageBucket: storageEnvelope.ok ? storageEnvelope.ref.bucket : null,
           voxelStoragePath: storageEnvelope.ok ? storageEnvelope.ref.path : null,
           voxelStorageEncoding: storageEnvelope.ok ? storageEnvelope.ref.encoding ?? null : null,
-          voxelByteSize: storageEnvelope.ok ? storageEnvelope.ref.byteSize ?? null : null,
+          voxelByteSize: storageEnvelope.ok ? storageEnvelope.ref.byteSize ?? null : inlineByteSize,
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
-          voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : null,
+          voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
           generationTimeMs: 0,
         },
@@ -273,13 +278,31 @@ export async function POST(req: Request) {
           voxelStorageBucket: storageEnvelope.ok ? storageEnvelope.ref.bucket : null,
           voxelStoragePath: storageEnvelope.ok ? storageEnvelope.ref.path : null,
           voxelStorageEncoding: storageEnvelope.ok ? storageEnvelope.ref.encoding ?? null : null,
-          voxelByteSize: storageEnvelope.ok ? storageEnvelope.ref.byteSize ?? null : null,
+          voxelByteSize: storageEnvelope.ok ? storageEnvelope.ref.byteSize ?? null : inlineByteSize,
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
-          voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : null,
+          voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
           generationTimeMs: 0,
         },
       });
+
+  try {
+    await maybePrecomputeArenaStreamArtifactsForBuild({
+      id: saved.id,
+      gridSize: saved.gridSize,
+      palette: saved.palette,
+      blockCount: saved.blockCount,
+      voxelByteSize: saved.voxelByteSize,
+      voxelCompressedByteSize: saved.voxelCompressedByteSize,
+      voxelSha256: saved.voxelSha256,
+      voxelData: saved.voxelData,
+      voxelStorageBucket: saved.voxelStorageBucket,
+      voxelStoragePath: saved.voxelStoragePath,
+      voxelStorageEncoding: saved.voxelStorageEncoding,
+    });
+  } catch (err) {
+    console.warn("import-build artifact precompute skipped", err);
+  }
 
   return NextResponse.json({
     ok: true,

@@ -4,7 +4,7 @@ import {
   pickInitialBuild,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
-import type { ArenaBuildLoadHints, ArenaBuildRef } from "@/lib/arena/types";
+import type { ArenaBuildDeliveryClass, ArenaBuildLoadHints, ArenaBuildRef } from "@/lib/arena/types";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -12,11 +12,6 @@ export const runtime = "nodejs";
 const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
 const ARENA_MODE = "precise";
-
-const INLINE_INITIAL_MAX_BYTES = Number.parseInt(
-  process.env.ARENA_INLINE_INITIAL_MAX_BYTES ?? "8000000",
-  10,
-);
 
 type PromptOption = {
   id: string;
@@ -87,20 +82,8 @@ function pickPair(models: ModelOption[], requestedA?: string, requestedB?: strin
   return { a, b };
 }
 
-function shouldInlineInAdaptiveMode(
-  fullEstimatedBytes: number | null,
-  initialVariant: "preview" | "full",
-): boolean {
-  if (initialVariant !== "full") return false;
-  if (!Number.isFinite(INLINE_INITIAL_MAX_BYTES) || INLINE_INITIAL_MAX_BYTES <= 0) return false;
-  if (
-    typeof fullEstimatedBytes !== "number" ||
-    !Number.isFinite(fullEstimatedBytes) ||
-    fullEstimatedBytes <= 0
-  ) {
-    return false;
-  }
-  return fullEstimatedBytes <= INLINE_INITIAL_MAX_BYTES;
+function shouldInlineInAdaptiveMode(deliveryClass: ArenaBuildDeliveryClass): boolean {
+  return deliveryClass === "inline";
 }
 
 export async function GET(req: Request) {
@@ -274,11 +257,13 @@ export async function GET(req: Request) {
 
     const hintsA = buildA ? deriveArenaBuildLoadHints(buildA) : null;
     const hintsB = buildB ? deriveArenaBuildLoadHints(buildB) : null;
+    const shouldProbeA = Boolean(hintsA && hintsA.fullEstimatedBytes == null);
+    const shouldProbeB = Boolean(hintsB && hintsB.fullEstimatedBytes == null);
     const shouldPrepareA = hintsA
-      ? shouldInlineInAdaptiveMode(hintsA.fullEstimatedBytes, hintsA.initialVariant)
+      ? shouldInlineInAdaptiveMode(hintsA.deliveryClass) || shouldProbeA
       : false;
     const shouldPrepareB = hintsB
-      ? shouldInlineInAdaptiveMode(hintsB.fullEstimatedBytes, hintsB.initialVariant)
+      ? shouldInlineInAdaptiveMode(hintsB.deliveryClass) || shouldProbeB
       : false;
 
     let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
@@ -356,6 +341,8 @@ export async function GET(req: Request) {
       if (!build || !hints) return null;
 
       const checksum = (prepared?.checksum ?? build.voxelSha256)?.trim() || null;
+      const effectiveHints = prepared?.hints ?? hints;
+      const shouldInline = shouldInlineInAdaptiveMode(effectiveHints.deliveryClass);
       const buildRef: ArenaBuildRef = prepared?.buildRef ?? {
         buildId: build.id,
         variant: "full",
@@ -373,8 +360,8 @@ export async function GET(req: Request) {
         serverValidated: Boolean(prepared),
         buildRef,
         previewRef,
-        buildLoadHints: prepared?.hints ?? hints,
-        voxelBuild: prepared ? pickInitialBuild(prepared) : null,
+        buildLoadHints: effectiveHints,
+        voxelBuild: prepared && shouldInline ? pickInitialBuild(prepared) : null,
         model: {
           key: build.model.key,
           provider: build.model.provider,

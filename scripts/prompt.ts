@@ -21,6 +21,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { createHash } from "node:crypto";
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
 import { getModelByKey, MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
@@ -537,6 +538,9 @@ async function main() {
       }
 
       const blockCount = validated.value.build.blocks.length;
+      const specJson = JSON.stringify(spec.value);
+      const voxelByteSize = Buffer.byteLength(specJson);
+      const voxelSha256 = createHash("sha256").update(specJson).digest("hex");
 
       const existing = await prisma.build.findFirst({
         where: {
@@ -559,6 +563,12 @@ async function main() {
           where: { id: existing.id },
           data: {
             voxelData: spec.value,
+            voxelStorageBucket: null,
+            voxelStoragePath: null,
+            voxelStorageEncoding: null,
+            voxelCompressedByteSize: null,
+            voxelByteSize,
+            voxelSha256,
             blockCount,
             generationTimeMs: 0,
           },
@@ -573,6 +583,12 @@ async function main() {
             palette: args.palette,
             mode: args.mode,
             voxelData: spec.value,
+            voxelStorageBucket: null,
+            voxelStoragePath: null,
+            voxelStorageEncoding: null,
+            voxelCompressedByteSize: null,
+            voxelByteSize,
+            voxelSha256,
             blockCount,
             generationTimeMs: 0,
           },

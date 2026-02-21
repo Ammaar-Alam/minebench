@@ -2,6 +2,7 @@
 
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
+import { estimateArenaBuildBytes } from "../lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
 import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts";
 import {
@@ -13,6 +14,8 @@ import {
 type Args = {
   dryRun: boolean;
   limit: number;
+  all: boolean;
+  minBytes: number;
   variants: ArenaBuildVariant[];
   buildIds: string[];
 };
@@ -34,10 +37,16 @@ type BuildRow = {
 function parseArgs(argv: string[]): Args {
   const args = argv.slice(2);
   const dryRun = args.includes("--dry-run");
+  const all = args.includes("--all");
 
   const limitIndex = args.indexOf("--limit");
   const parsedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1] ?? "", 10) : NaN;
   const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 250;
+  const minBytesIndex = args.indexOf("--min-bytes");
+  const parsedMinBytes =
+    minBytesIndex >= 0 ? Number.parseInt(args[minBytesIndex + 1] ?? "", 10) : NaN;
+  const minBytes =
+    Number.isFinite(parsedMinBytes) && parsedMinBytes > 0 ? parsedMinBytes : 50 * 1024 * 1024;
 
   const variantIndex = args.indexOf("--variant");
   const variantRaw = (variantIndex >= 0 ? args[variantIndex + 1] : "both")?.trim().toLowerCase() ?? "both";
@@ -58,6 +67,8 @@ function parseArgs(argv: string[]): Args {
   return {
     dryRun,
     limit,
+    all,
+    minBytes,
     variants,
     buildIds,
   };
@@ -87,7 +98,8 @@ async function main() {
   console.log("Precomputing arena stream artifacts");
   console.log(`- dry run: ${opts.dryRun ? "yes" : "no"}`);
   console.log(`- variants: ${opts.variants.join(", ")}`);
-  console.log(`- limit: ${opts.limit}`);
+  console.log(`- limit: ${opts.all ? "all" : opts.limit}`);
+  console.log(`- min bytes: ${opts.minBytes.toLocaleString()} (${(opts.minBytes / (1024 * 1024)).toFixed(2)} MB)`);
   if (opts.buildIds.length > 0) {
     console.log(`- build filter: ${opts.buildIds.join(", ")}`);
   }
@@ -108,7 +120,7 @@ async function main() {
     const rows = await prisma.build.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      take: opts.limit,
+      take: opts.all ? undefined : opts.limit,
       select: {
         id: true,
         gridSize: true,
@@ -130,17 +142,50 @@ async function main() {
     }
 
     let uploaded = 0;
-    let skipped = 0;
+    let skippedSmall = 0;
+    let skippedUnknown = 0;
+    let skippedChecksum = 0;
     let failed = 0;
+    let eligible = 0;
 
     for (const row of rows as BuildRow[]) {
       try {
-        const prepared = await prepareArenaBuild(row);
+        const estimatedBytes = estimateArenaBuildBytes({
+          voxelByteSize: row.voxelByteSize,
+          voxelCompressedByteSize: row.voxelCompressedByteSize,
+        });
+        let prepared: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
+        let effectiveBytes = estimatedBytes;
+        if (effectiveBytes == null) {
+          prepared = await prepareArenaBuild(row);
+          effectiveBytes = prepared.hints.fullEstimatedBytes;
+        }
+        if (effectiveBytes == null && row.voxelData != null) {
+          effectiveBytes = Buffer.byteLength(JSON.stringify(row.voxelData));
+        }
+        if (effectiveBytes == null) {
+          skippedUnknown += 1;
+          console.log(`- skip ${row.id}: unknown payload byte size`);
+          continue;
+        }
+
+        if (effectiveBytes < opts.minBytes) {
+          skippedSmall += 1;
+          console.log(
+            `- skip ${row.id}: estimated ${effectiveBytes.toLocaleString()} bytes (< ${opts.minBytes.toLocaleString()})`,
+          );
+          continue;
+        }
+
+        if (!prepared) {
+          prepared = await prepareArenaBuild(row);
+        }
         if (!prepared.checksum) {
-          skipped += 1;
+          skippedChecksum += 1;
           console.log(`- skip ${row.id}: missing checksum`);
           continue;
         }
+        eligible += 1;
 
         for (const variant of opts.variants) {
           const variantBuild = pickBuildVariant(prepared, variant);
@@ -160,7 +205,7 @@ async function main() {
 
           if (opts.dryRun) {
             console.log(
-              `- dry-run ${row.id} (${variant}): ${variantBuild.blocks.length.toLocaleString()} blocks, ${(bytes.length / (1024 * 1024)).toFixed(2)} MB`,
+              `- dry-run ${row.id} (${variant}): source ${(effectiveBytes / (1024 * 1024)).toFixed(2)} MB, stream ${(bytes.length / (1024 * 1024)).toFixed(2)} MB`,
             );
             continue;
           }
@@ -168,7 +213,7 @@ async function main() {
           await uploadArenaBuildStreamArtifact(row.id, variant, prepared.checksum, bytes);
           uploaded += 1;
           console.log(
-            `- uploaded ${row.id} (${variant}): ${variantBuild.blocks.length.toLocaleString()} blocks, ${(bytes.length / (1024 * 1024)).toFixed(2)} MB`,
+            `- uploaded ${row.id} (${variant}): source ${(effectiveBytes / (1024 * 1024)).toFixed(2)} MB, stream ${(bytes.length / (1024 * 1024)).toFixed(2)} MB`,
           );
         }
       } catch (err) {
@@ -179,7 +224,9 @@ async function main() {
     }
 
     console.log("");
-    console.log(`Done. uploaded=${uploaded} skipped=${skipped} failed=${failed}`);
+    console.log(
+      `Done. eligible=${eligible} uploaded=${uploaded} skippedSmall=${skippedSmall} skippedUnknown=${skippedUnknown} skippedChecksum=${skippedChecksum} failed=${failed}`,
+    );
   } finally {
     await prisma.$disconnect().catch(() => undefined);
   }
