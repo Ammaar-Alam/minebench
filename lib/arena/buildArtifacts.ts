@@ -132,7 +132,10 @@ export function deriveArenaBuildLoadHints(
     voxelCompressedByteSize: source.voxelCompressedByteSize,
   });
   const deliveryClass = classifyArenaBuildDelivery(fullEstimatedBytes);
-  const initialVariant: ArenaBuildVariant = shouldPreferPreview(fullEstimatedBytes) ? "preview" : "full";
+  // Only select "preview" when it would actually reduce payload. If the build is already smaller than the
+  // preview target, "preview" would be identical to "full" and would add UX friction (extra hydration pass).
+  const initialVariant: ArenaBuildVariant =
+    shouldPreferPreview(fullEstimatedBytes) && previewBlockCount < fullBlockCount ? "preview" : "full";
   return {
     initialVariant,
     deliveryClass,
@@ -256,8 +259,11 @@ function createPrepared(
   });
   const fullEstimatedBytes = hintsFromMetadata.fullEstimatedBytes ?? payloadEstimatedBytes;
   const deliveryClass = classifyArenaBuildDelivery(fullEstimatedBytes);
-  const initialVariant: ArenaBuildVariant = shouldPreferPreview(fullEstimatedBytes) ? "preview" : "full";
   const preview = buildPreviewBuild(fullBuild, PREVIEW_TARGET_BLOCKS);
+  const initialVariant: ArenaBuildVariant =
+    shouldPreferPreview(fullEstimatedBytes) && preview.build.blocks.length < fullBuild.blocks.length
+      ? "preview"
+      : "full";
   const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(fullBuild);
 
   return {

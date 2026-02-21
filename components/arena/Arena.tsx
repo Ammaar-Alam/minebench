@@ -467,16 +467,20 @@ type SideLoadState = {
   bProgress: SideLoadProgress | null;
 };
 
+function laneNeedsFullHydration(lane: ArenaMatchup["a"]): boolean {
+  if (!lane.buildLoadHints || lane.buildLoadHints.initialVariant !== "preview") return false;
+  // Before the preview payload is present, we're still doing the initial retrieval (not the "upgrade to full").
+  if (!lane.build) return false;
+  const full = lane.buildLoadHints.fullBlockCount ?? 0;
+  if (!Number.isFinite(full) || full <= 0) return false;
+  return lane.build.blocks.length < full;
+}
+
 function isMatchupBuildLoading(matchup: ArenaMatchup, sideState: SideLoadState | null): boolean {
-  // Treat preview-only lanes as still loading until full payload is hydrated.
-  if (
-    !matchup.a.build ||
-    !matchup.b.build ||
-    matchup.a.buildLoadHints?.initialVariant === "preview" ||
-    matchup.b.buildLoadHints?.initialVariant === "preview"
-  ) {
-    return true;
-  }
+  if (!matchup.a.build || !matchup.b.build) return true;
+  // Treat preview lanes as still loading until the full payload is hydrated.
+  // (If preview is identical to full, `laneNeedsFullHydration` returns false so we don't block the UI.)
+  if (laneNeedsFullHydration(matchup.a) || laneNeedsFullHydration(matchup.b)) return true;
   if (!sideState || sideState.matchupId !== matchup.id) return false;
   return sideState.a !== "idle" || sideState.b !== "idle";
 }
@@ -674,6 +678,13 @@ export function Arena() {
   }, [matchup?.id]);
 
   useEffect(() => {
+    const el = cardsScrollRef.current;
+    if (!el) return;
+    // New matchup should always start at Build A on mobile.
+    el.scrollTo({ left: 0, behavior: "auto" });
+  }, [matchup?.id]);
+
+  useEffect(() => {
     if (!matchup) {
       setSideLoadState((prev) => (prev === null ? prev : null));
       setViewerReady((prev) => (prev === null ? prev : null));
@@ -802,16 +813,16 @@ export function Arena() {
     (matchupValue: ArenaMatchup): ArenaMatchup => {
       let hydrated = matchupValue;
 
-      for (const side of ["a", "b"] as const) {
-        const lane = hydrated[side];
-        if (lane.build) {
-          const preferredRef =
-            lane.buildLoadHints?.initialVariant === "preview"
-              ? (lane.previewRef ?? lane.buildRef)
-              : (lane.buildRef ?? lane.previewRef);
-          if (preferredRef) {
-            cacheHydratedBuild(preferredRef, {
-              build: lane.build,
+	      for (const side of ["a", "b"] as const) {
+	        const lane = hydrated[side];
+	        if (lane.build) {
+	          const preferredRef =
+	            laneNeedsFullHydration(lane)
+	              ? (lane.previewRef ?? lane.buildRef)
+	              : (lane.buildRef ?? lane.previewRef);
+	          if (preferredRef) {
+	            cacheHydratedBuild(preferredRef, {
+	              build: lane.build,
               serverValidated: Boolean(lane.serverValidated),
               variant: preferredRef.variant,
               buildLoadHints: lane.buildLoadHints,
@@ -1072,22 +1083,25 @@ export function Arena() {
       stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
     if (!current) return;
 
-    const controller = new AbortController();
-
     for (const side of ["a", "b"] as const) {
       const lane = current[side];
       if (!lane.build) continue;
       if (lane.buildLoadHints?.initialVariant !== "preview") continue;
       if (!lane.buildRef) continue;
+
+      // If preview is effectively identical to full (e.g. full is under the preview cap),
+      // there's nothing to "upgrade" and we should not block the lane on full hydration.
+      const fullBlockCount = lane.buildLoadHints?.fullBlockCount ?? lane.build.blocks.length;
+      if (lane.build.blocks.length >= fullBlockCount) continue;
+
       // Wait until the preview lane is idle so we don't compete with initial hydration.
       const phase = side === "a" ? sideStatePhaseA : sideStatePhaseB;
       if (sideStateMatchupId === current.id && phase !== "idle") continue;
-      void hydrateMatchupSide(current, side, "full", { signal: controller.signal, silent: true });
-    }
 
-    return () => {
-      controller.abort();
-    };
+      // No AbortController here: this effect depends on the load phases that hydration mutates.
+      // Aborting in cleanup would immediately cancel the request, creating a retry loop + 429s.
+      void hydrateMatchupSide(current, side, "full", { silent: true });
+    }
   }, [
     hydrateMatchupSide,
     matchup?.id,
@@ -1381,6 +1395,10 @@ export function Arena() {
     matchup && viewerReady && viewerReady.matchupId === matchup.id ? viewerReady : null;
   const viewerReadyA = Boolean(viewerState?.a);
   const viewerReadyB = Boolean(viewerState?.b);
+  const laneNeedsFullA = Boolean(matchup && laneNeedsFullHydration(matchup.a));
+  const laneNeedsFullB = Boolean(matchup && laneNeedsFullHydration(matchup.b));
+  const buildAUpgradePending = Boolean(matchup && laneLoadA === "idle" && laneNeedsFullA);
+  const buildBUpgradePending = Boolean(matchup && laneLoadB === "idle" && laneNeedsFullB);
 
   const matchupBuildLoading = Boolean(
     matchup && (isMatchupBuildLoading(matchup, sideLoadState) || !viewerReadyA || !viewerReadyB),
@@ -1392,7 +1410,7 @@ export function Arena() {
       matchup &&
         (!matchup.a.build ||
           laneLoadA !== "idle" ||
-          matchup.a.buildLoadHints?.initialVariant === "preview"),
+          buildAUpgradePending),
     );
   const buildBRetrieving =
     state.kind === "loading" ||
@@ -1400,7 +1418,7 @@ export function Arena() {
       matchup &&
         (!matchup.b.build ||
           laneLoadB !== "idle" ||
-          matchup.b.buildLoadHints?.initialVariant === "preview"),
+          buildBUpgradePending),
     );
   const buildAPlacing = Boolean(matchup && matchup.a.build && laneLoadA === "idle" && !viewerReadyA);
   const buildBPlacing = Boolean(matchup && matchup.b.build && laneLoadB === "idle" && !viewerReadyB);
@@ -1411,7 +1429,7 @@ export function Arena() {
     state.kind !== "loading" &&
     !laneOverlayA &&
     !buildAPlacing &&
-    matchup?.a.buildLoadHints?.initialVariant !== "preview"
+    !laneNeedsFullA
       ? "silent"
       : "overlay";
   const buildBLoadingMode =
@@ -1419,7 +1437,7 @@ export function Arena() {
     state.kind !== "loading" &&
     !laneOverlayB &&
     !buildBPlacing &&
-    matchup?.b.buildLoadHints?.initialVariant !== "preview"
+    !laneNeedsFullB
       ? "silent"
       : "overlay";
   const buildAFullLoading = laneLoadA === "loading-full";
@@ -1428,7 +1446,7 @@ export function Arena() {
     ? buildAPlacing
       ? "Placing blocks…"
       : formatBuildLoadingMessage(
-          buildAFullLoading || matchup?.a.buildLoadHints?.initialVariant === "preview",
+          buildAFullLoading || buildAUpgradePending,
           laneProgressA,
         )
     : undefined;
@@ -1436,7 +1454,7 @@ export function Arena() {
     ? buildBPlacing
       ? "Placing blocks…"
       : formatBuildLoadingMessage(
-          buildBFullLoading || matchup?.b.buildLoadHints?.initialVariant === "preview",
+          buildBFullLoading || buildBUpgradePending,
           laneProgressB,
         )
     : undefined;
@@ -1525,12 +1543,11 @@ export function Arena() {
             </div>
           ) : null}
 
-          {/* builds grid */}
-          <div
-            ref={cardsScrollRef}
-            key={matchup?.id ?? "loading"}
-            className={`mb-x-scroll -mx-1 flex w-[calc(100%+0.5rem)] snap-x snap-proximity gap-2.5 overflow-x-auto px-1 pb-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
-          >
+	          {/* builds grid */}
+	          <div
+	            ref={cardsScrollRef}
+	            className={`mb-x-scroll -mx-1 flex w-[calc(100%+0.5rem)] snap-x snap-proximity gap-2.5 overflow-x-auto px-1 pb-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+	          >
             <div
               className={`mb-card-enter min-w-[91%] shrink-0 snap-center rounded-3xl transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
             >

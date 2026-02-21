@@ -433,6 +433,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       if (Array.isArray(grid.material)) grid.material.forEach((m) => m.dispose());
       else grid.material.dispose();
 
+      // Aggressively release the WebGL context when cycling through many viewers (mobile browsers are strict).
+      try {
+        renderer.forceContextLoss();
+      } catch {}
       renderer.dispose();
       renderer.domElement.removeEventListener("dblclick", onDblClick);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
