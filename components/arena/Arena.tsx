@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArenaBuildDeliveryClass,
   ArenaBuildRef,
   ArenaBuildVariant,
   ArenaMatchup,
@@ -18,14 +19,45 @@ type ArenaState =
   | { kind: "ready"; matchup: ArenaMatchup }
   | { kind: "error"; message: string };
 
-async function fetchMatchup(promptId?: string): Promise<ArenaMatchup> {
+const MATCHUP_REQUEST_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_MATCHUP_REQUEST_TIMEOUT_MS ?? "12000",
+  10,
+);
+const MATCHUP_REQUEST_RETRIES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_MATCHUP_REQUEST_RETRIES ?? "1",
+  10,
+);
+
+async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const url = new URL("/api/arena/matchup", window.location.origin);
   if (promptId) url.searchParams.set("promptId", promptId);
   // Adaptive mode keeps small builds instant while deferring large payloads.
   url.searchParams.set("payload", "adaptive");
-  const res = await fetch(url, { method: "GET", credentials: "include" });
+  const res = await fetch(url, { method: "GET", credentials: "include", signal });
   if (!res.ok) throw new Error(await res.text());
   return (await res.json()) as ArenaMatchup;
+}
+
+async function fetchMatchup(promptId?: string): Promise<ArenaMatchup> {
+  const maxAttempts = Math.max(1, MATCHUP_REQUEST_RETRIES + 1);
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const timed = makeTimeoutSignal(undefined, MATCHUP_REQUEST_TIMEOUT_MS);
+    try {
+      return await fetchMatchupOnce(promptId, timed.signal);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === "AbortError") {
+        lastError = new Error("Matchup request timed out");
+      } else {
+        lastError = err;
+      }
+    } finally {
+      timed.cleanup();
+    }
+  }
+
+  throw (lastError instanceof Error ? lastError : new Error("Failed to load matchup"));
 }
 
 async function submitVote(matchupId: string, choice: VoteChoice) {
@@ -59,10 +91,6 @@ type FetchBuildVariantStreamOptions = {
   onProgress?: (build: ArenaMatchup["a"]["build"], progress: BuildStreamProgress) => void;
 };
 
-const AUTOLOAD_FULL_MAX_BYTES = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_FULL_AUTOFETCH_MAX_BYTES ?? "24000000",
-  10,
-);
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_SNAPSHOT_TIMEOUT_MS ?? "12000",
   10,
@@ -83,6 +111,25 @@ const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
   10,
 );
+const INITIAL_RETRIEVAL_OVERLAY_DELAY_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_INITIAL_RETRIEVAL_OVERLAY_DELAY_MS ?? "420",
+  10,
+);
+const CLIENT_BUILD_CACHE_MAX_ENTRIES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_ENTRIES ?? "8",
+  10,
+);
+const CLIENT_BUILD_CACHE_MAX_EST_BYTES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_EST_BYTES ?? "60000000",
+  10,
+);
+
+type CachedHydratedBuild = {
+  build: NonNullable<ArenaMatchup["a"]["build"]>;
+  serverValidated: boolean;
+  variant: ArenaBuildVariant;
+  buildLoadHints?: ArenaMatchup["a"]["buildLoadHints"];
+};
 
 type TimeoutSignal = {
   signal: AbortSignal;
@@ -370,23 +417,6 @@ async function fetchBuildVariantStream(
   throw (lastError instanceof Error ? lastError : new Error("Failed to retrieve build"));
 }
 
-function shouldAutoloadFull(matchup: ArenaMatchup, side: "a" | "b"): boolean {
-  const lane = matchup[side];
-  const hints = lane.buildLoadHints;
-  const ref = lane.buildRef;
-  if (!hints || !ref) return false;
-  if (!lane.build) return false;
-  if (hints.initialVariant !== "preview") return false;
-  if (ref.variant !== "full") return false;
-  if (!Number.isFinite(AUTOLOAD_FULL_MAX_BYTES) || AUTOLOAD_FULL_MAX_BYTES <= 0) return true;
-
-  const estimated = hints.fullEstimatedBytes;
-  if (typeof estimated !== "number" || !Number.isFinite(estimated) || estimated <= 0) {
-    return true;
-  }
-  return estimated <= AUTOLOAD_FULL_MAX_BYTES;
-}
-
 function withHydratedBuild(
   matchup: ArenaMatchup,
   side: "a" | "b",
@@ -431,12 +461,22 @@ type SideLoadState = {
   matchupId: string;
   a: SideLoadPhase;
   b: SideLoadPhase;
+  aOverlayVisible: boolean;
+  bOverlayVisible: boolean;
   aProgress: SideLoadProgress | null;
   bProgress: SideLoadProgress | null;
 };
 
 function isMatchupBuildLoading(matchup: ArenaMatchup, sideState: SideLoadState | null): boolean {
-  if (!matchup.a.build || !matchup.b.build) return true;
+  // Treat preview-only lanes as still loading until full payload is hydrated.
+  if (
+    !matchup.a.build ||
+    !matchup.b.build ||
+    matchup.a.buildLoadHints?.initialVariant === "preview" ||
+    matchup.b.buildLoadHints?.initialVariant === "preview"
+  ) {
+    return true;
+  }
   if (!sideState || sideState.matchupId !== matchup.id) return false;
   return sideState.a !== "idle" || sideState.b !== "idle";
 }
@@ -444,7 +484,21 @@ function isMatchupBuildLoading(matchup: ArenaMatchup, sideState: SideLoadState |
 function getInitialHydrateRef(matchup: ArenaMatchup, side: "a" | "b"): ArenaBuildRef | null {
   const lane = matchup[side];
   if (lane.build) return null;
+  // Start with the server-selected initial variant (preview for huge builds),
+  // then hydrate full automatically in the background.
+  const initialVariant = lane.buildLoadHints?.initialVariant ?? "full";
+  if (initialVariant === "preview") return lane.previewRef ?? lane.buildRef ?? null;
   return lane.buildRef ?? lane.previewRef ?? null;
+}
+
+function getHydratedBuildCacheKey(ref: ArenaBuildRef): string {
+  return `${ref.buildId}:${ref.variant}:${ref.checksum ?? "none"}`;
+}
+
+function isHeavyRetrievalDeliveryClass(
+  deliveryClass: ArenaBuildDeliveryClass | undefined,
+): boolean {
+  return deliveryClass === "stream-live" || deliveryClass === "stream-artifact";
 }
 
 function formatBuildLoadingMessage(
@@ -501,6 +555,7 @@ export function Arena() {
   const [submitting, setSubmitting] = useState(false);
   const [reveal, setReveal] = useState<RevealState>({ kind: "none" });
   const [sideLoadState, setSideLoadState] = useState<SideLoadState | null>(null);
+  const [viewerReady, setViewerReady] = useState<{ matchupId: string; a: boolean; b: boolean } | null>(null);
   const [customPrompt, setCustomPrompt] = useState("");
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
@@ -517,9 +572,12 @@ export function Arena() {
   const revealRef = useRef<RevealState>({ kind: "none" });
   const transitionRef = useRef(false);
   const hydrateInFlightRef = useRef(new Set<string>());
+  const hydratedBuildCacheRef = useRef(new Map<string, CachedHydratedBuild>());
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
+  const viewerReadyRef = useRef<{ matchupId: string; a: boolean; b: boolean } | null>(null);
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
+  const advanceNowRequestedAtRef = useRef<number | null>(null);
   const handleVoteRef = useRef<(choice: VoteChoice) => Promise<void>>(
     async () => undefined
   );
@@ -527,21 +585,37 @@ export function Arena() {
   const advanceToNextRef = useRef<(matchupId: string, next: ArenaMatchup) => Promise<void>>(
     async () => undefined
   );
-  const advanceToLoadingRef = useRef<(matchupId: string) => Promise<void>>(async () => undefined);
 
-  const setLaneLoadPhase = useCallback((matchupId: string, side: "a" | "b", phase: SideLoadPhase) => {
-    setSideLoadState((prev) => {
-      if (!prev) return prev;
+	  const setLaneLoadPhase = useCallback((matchupId: string, side: "a" | "b", phase: SideLoadPhase) => {
+	    setSideLoadState((prev) => {
+	      if (!prev) return prev;
       if (prev.matchupId !== matchupId) return prev;
       if (prev[side] === phase) return prev;
       const progressKey = side === "a" ? "aProgress" : "bProgress";
+      const overlayKey = side === "a" ? "aOverlayVisible" : "bOverlayVisible";
       return {
         ...prev,
         [side]: phase,
+        [overlayKey]: phase === "idle" ? false : prev[overlayKey],
         [progressKey]: phase === "idle" ? null : prev[progressKey],
-      };
-    });
-  }, []);
+	      };
+	    });
+	  }, []);
+
+  const setLaneOverlayVisible = useCallback(
+    (matchupId: string, side: "a" | "b", visible: boolean) => {
+      setSideLoadState((prev) => {
+        if (!prev || prev.matchupId !== matchupId) return prev;
+        const overlayKey = side === "a" ? "aOverlayVisible" : "bOverlayVisible";
+        if (prev[overlayKey] === visible) return prev;
+        return {
+          ...prev,
+          [overlayKey]: visible,
+        };
+      });
+    },
+    [],
+  );
 
   const setLaneLoadProgress = useCallback(
     (matchupId: string, side: "a" | "b", progress: SideLoadProgress | null) => {
@@ -565,6 +639,11 @@ export function Arena() {
   const matchup = state.kind === "ready" ? state.matchup : null;
   const revealModels = Boolean(matchup && reveal.kind === "reveal" && reveal.matchupId === matchup.id);
   const revealAction: RevealAction | null = reveal.kind === "reveal" ? reveal.action : null;
+  const matchupHasBuildA = Boolean(matchup?.a.build);
+  const matchupHasBuildB = Boolean(matchup?.b.build);
+  const sideStateMatchupId = sideLoadState?.matchupId ?? null;
+  const sideStatePhaseA = sideLoadState?.a ?? "idle";
+  const sideStatePhaseB = sideLoadState?.b ?? "idle";
 
   useEffect(() => {
     stateRef.current = state;
@@ -587,12 +666,17 @@ export function Arena() {
   }, [sideLoadState]);
 
   useEffect(() => {
+    viewerReadyRef.current = viewerReady;
+  }, [viewerReady]);
+
+  useEffect(() => {
     setPromptDialogOpen(false);
   }, [matchup?.id]);
 
   useEffect(() => {
     if (!matchup) {
       setSideLoadState((prev) => (prev === null ? prev : null));
+      setViewerReady((prev) => (prev === null ? prev : null));
       return;
     }
     setSideLoadState((prev) => {
@@ -601,9 +685,16 @@ export function Arena() {
         matchupId: matchup.id,
         a: matchup.a.build ? "idle" : "loading-initial",
         b: matchup.b.build ? "idle" : "loading-initial",
+        aOverlayVisible: false,
+        bOverlayVisible: false,
         aProgress: null,
         bProgress: null,
       };
+    });
+
+    setViewerReady((prev) => {
+      if (prev?.matchupId === matchup.id) return prev;
+      return { matchupId: matchup.id, a: false, b: false };
     });
   }, [matchup]);
 
@@ -659,6 +750,95 @@ export function Arena() {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 
+  const cacheHydratedBuild = useCallback((ref: ArenaBuildRef, entry: CachedHydratedBuild) => {
+    const estimated = entry.buildLoadHints?.fullEstimatedBytes ?? null;
+    if (
+      typeof estimated === "number" &&
+      Number.isFinite(estimated) &&
+      estimated > CLIENT_BUILD_CACHE_MAX_EST_BYTES
+    ) {
+      return;
+    }
+
+    const cache = hydratedBuildCacheRef.current;
+    const key = getHydratedBuildCacheKey(ref);
+    if (cache.has(key)) cache.delete(key);
+    cache.set(key, entry);
+
+    const maxEntries =
+      Number.isFinite(CLIENT_BUILD_CACHE_MAX_ENTRIES) && CLIENT_BUILD_CACHE_MAX_ENTRIES > 0
+        ? CLIENT_BUILD_CACHE_MAX_ENTRIES
+        : 8;
+    while (cache.size > maxEntries) {
+      const oldest = cache.keys().next().value as string | undefined;
+      if (!oldest) break;
+      cache.delete(oldest);
+    }
+  }, []);
+
+  const readHydratedBuildFromCache = useCallback((ref: ArenaBuildRef): CachedHydratedBuild | null => {
+    const cache = hydratedBuildCacheRef.current;
+    const touch = (key: string) => {
+      const hit = cache.get(key) ?? null;
+      if (!hit) return null;
+      cache.delete(key);
+      cache.set(key, hit);
+      return hit;
+    };
+
+    const exactKey = getHydratedBuildCacheKey(ref);
+    const exact = touch(exactKey);
+    if (exact) return exact;
+
+    if (ref.variant === "preview") {
+      const fullKey = getHydratedBuildCacheKey({ ...ref, variant: "full" });
+      return touch(fullKey);
+    }
+
+    return null;
+  }, []);
+
+  const applyCachedBuildsToMatchup = useCallback(
+    (matchupValue: ArenaMatchup): ArenaMatchup => {
+      let hydrated = matchupValue;
+
+      for (const side of ["a", "b"] as const) {
+        const lane = hydrated[side];
+        if (lane.build) {
+          const preferredRef =
+            lane.buildLoadHints?.initialVariant === "preview"
+              ? (lane.previewRef ?? lane.buildRef)
+              : (lane.buildRef ?? lane.previewRef);
+          if (preferredRef) {
+            cacheHydratedBuild(preferredRef, {
+              build: lane.build,
+              serverValidated: Boolean(lane.serverValidated),
+              variant: preferredRef.variant,
+              buildLoadHints: lane.buildLoadHints,
+            });
+          }
+          continue;
+        }
+
+        const ref = getInitialHydrateRef(hydrated, side);
+        if (!ref) continue;
+        const cached = readHydratedBuildFromCache(ref);
+        if (!cached) continue;
+        hydrated = withHydratedBuild(
+          hydrated,
+          side,
+          cached.build,
+          cached.serverValidated,
+          cached.variant,
+          cached.buildLoadHints,
+        );
+      }
+
+      return hydrated;
+    },
+    [cacheHydratedBuild, readHydratedBuildFromCache],
+  );
+
   const hydrateMatchupSide = useCallback(async (
     matchupValue: ArenaMatchup,
     side: "a" | "b",
@@ -671,11 +851,52 @@ export function Arena() {
     if (target === "initial" && lane.build) return;
     if (target === "full" && lane.buildLoadHints?.initialVariant === "full" && lane.build) return;
 
+    const cached = readHydratedBuildFromCache(ref);
+    if (cached) {
+      setState((prev) => {
+        if (prev.kind !== "ready") return prev;
+        if (prev.matchup.id !== matchupValue.id) return prev;
+        return {
+          kind: "ready",
+          matchup: withHydratedBuild(
+            prev.matchup,
+            side,
+            cached.build,
+            cached.serverValidated,
+            cached.variant,
+            cached.buildLoadHints,
+          ),
+        };
+      });
+      setLaneLoadProgress(matchupValue.id, side, {
+        receivedBlocks: cached.build.blocks.length,
+        totalBlocks: cached.build.blocks.length,
+      });
+      setLaneLoadPhase(matchupValue.id, side, "idle");
+      setLaneOverlayVisible(matchupValue.id, side, false);
+      return;
+    }
+
     const key = `${matchupValue.id}:${side}:${target}:${ref.variant}:${ref.buildId}:${ref.checksum ?? "none"}`;
     if (hydrateInFlightRef.current.has(key)) return;
     hydrateInFlightRef.current.add(key);
     setLaneLoadPhase(matchupValue.id, side, target === "full" ? "loading-full" : "loading-initial");
     setLaneLoadProgress(matchupValue.id, side, { receivedBlocks: 0, totalBlocks: null });
+
+    let overlayTimer: number | null = null;
+    const showOverlayImmediately =
+      target === "full" ||
+      isHeavyRetrievalDeliveryClass(lane.buildLoadHints?.deliveryClass) ||
+      !Number.isFinite(INITIAL_RETRIEVAL_OVERLAY_DELAY_MS) ||
+      INITIAL_RETRIEVAL_OVERLAY_DELAY_MS <= 0;
+    if (showOverlayImmediately) {
+      setLaneOverlayVisible(matchupValue.id, side, true);
+    } else {
+      setLaneOverlayVisible(matchupValue.id, side, false);
+      overlayTimer = window.setTimeout(() => {
+        setLaneOverlayVisible(matchupValue.id, side, true);
+      }, INITIAL_RETRIEVAL_OVERLAY_DELAY_MS);
+    }
 
     const APPLY_PROGRESS_MIN_MS = 90;
     const APPLY_PROGRESS_MIN_BLOCKS = 12_000;
@@ -729,6 +950,11 @@ export function Arena() {
               onProgress: applyProgressiveBuild,
             });
       const payload = await fetchWithDelivery;
+      const resolvedRef: ArenaBuildRef = {
+        buildId: payload.buildId || ref.buildId,
+        variant: payload.variant ?? ref.variant,
+        checksum: payload.checksum ?? ref.checksum ?? null,
+      };
       setState((prev) => {
         if (prev.kind !== "ready") return prev;
         if (prev.matchup.id !== matchupValue.id) return prev;
@@ -745,6 +971,12 @@ export function Arena() {
         };
       });
       if (payload.voxelBuild) {
+        cacheHydratedBuild(resolvedRef, {
+          build: payload.voxelBuild,
+          serverValidated: payload.serverValidated,
+          variant: resolvedRef.variant,
+          buildLoadHints: payload.buildLoadHints,
+        });
         setLaneLoadProgress(matchupValue.id, side, {
           receivedBlocks: payload.voxelBuild.blocks.length,
           totalBlocks: payload.voxelBuild.blocks.length,
@@ -756,11 +988,28 @@ export function Arena() {
         console.warn("arena full build hydration failed", err);
       }
     } finally {
+      if (overlayTimer != null) window.clearTimeout(overlayTimer);
       hydrateInFlightRef.current.delete(key);
+      setLaneOverlayVisible(matchupValue.id, side, false);
       setLaneLoadProgress(matchupValue.id, side, null);
       setLaneLoadPhase(matchupValue.id, side, "idle");
     }
-  }, [setLaneLoadPhase, setLaneLoadProgress]);
+  }, [
+    cacheHydratedBuild,
+    readHydratedBuildFromCache,
+    setLaneLoadPhase,
+    setLaneLoadProgress,
+    setLaneOverlayVisible,
+  ]);
+
+  const prefetchMatchupBuilds = useCallback(
+    (matchupValue: ArenaMatchup) => {
+      for (const side of ["a", "b"] as const) {
+        void hydrateMatchupSide(matchupValue, side, "initial", { silent: true });
+      }
+    },
+    [hydrateMatchupSide],
+  );
 
   useEffect(() => {
     if (reveal.kind !== "reveal") return;
@@ -781,7 +1030,7 @@ export function Arena() {
     fetchMatchup(undefined)
       .then((m) => {
         if (cancelled) return;
-        setState({ kind: "ready", matchup: m });
+        setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(m) });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -793,7 +1042,7 @@ export function Arena() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyCachedBuildsToMatchup]);
 
   useEffect(() => {
     const current =
@@ -816,6 +1065,41 @@ export function Arena() {
     };
   }, [hydrateMatchupSide, matchup?.id]);
 
+  // If the initial variant is a preview (huge builds), start hydrating full as soon as
+  // the preview is in place so users always end up with full fidelity automatically.
+  useEffect(() => {
+    const current =
+      stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
+    if (!current) return;
+
+    const controller = new AbortController();
+
+    for (const side of ["a", "b"] as const) {
+      const lane = current[side];
+      if (!lane.build) continue;
+      if (lane.buildLoadHints?.initialVariant !== "preview") continue;
+      if (!lane.buildRef) continue;
+      // Wait until the preview lane is idle so we don't compete with initial hydration.
+      const phase = side === "a" ? sideStatePhaseA : sideStatePhaseB;
+      if (sideStateMatchupId === current.id && phase !== "idle") continue;
+      void hydrateMatchupSide(current, side, "full", { signal: controller.signal, silent: true });
+    }
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    hydrateMatchupSide,
+    matchup?.id,
+    sideStateMatchupId,
+    sideStatePhaseA,
+    sideStatePhaseB,
+    matchupHasBuildA,
+    matchupHasBuildB,
+    matchup?.a.buildLoadHints?.initialVariant,
+    matchup?.b.buildLoadHints?.initialVariant,
+  ]);
+
   useEffect(() => {
     clearStuckAutoSkip();
     if (!matchup) return;
@@ -836,31 +1120,6 @@ export function Arena() {
       clearStuckAutoSkip();
     };
   }, [matchup, sideLoadState]);
-
-  useEffect(() => {
-    const current =
-      stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
-    if (!current) return;
-    const hydrateSides = (["a", "b"] as const)
-      .filter((side) => shouldAutoloadFull(current, side))
-      .map((side) => {
-        const ref = current[side].buildRef;
-        return ref ? { side, ref } : null;
-      })
-      .filter((entry): entry is { side: "a" | "b"; ref: ArenaBuildRef } => entry != null);
-
-    if (hydrateSides.length === 0) return;
-
-    const controller = new AbortController();
-
-    for (const target of hydrateSides) {
-      void hydrateMatchupSide(current, target.side, "full", { signal: controller.signal, silent: true });
-    }
-
-    return () => {
-      controller.abort();
-    };
-  }, [hydrateMatchupSide, matchup?.id]);
 
   const revealMeta = (() => {
     if (!matchup || reveal.kind !== "reveal" || reveal.matchupId !== matchup.id) {
@@ -891,6 +1150,7 @@ export function Arena() {
     transitionRef.current = true;
     setTransitioning(true);
     clearAutoAdvance();
+    advanceNowRequestedAtRef.current = null;
 
     await sleepMs(TRANSITION_OUT_MS);
 
@@ -901,7 +1161,7 @@ export function Arena() {
       return;
     }
 
-    setState({ kind: "ready", matchup: next });
+    setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(next) });
     setReveal({ kind: "none" });
     setSubmitting(false);
 
@@ -912,33 +1172,20 @@ export function Arena() {
     });
   }
 
-  async function advanceToLoading(matchupId: string) {
+  const requestAdvanceNow = useCallback((matchupId: string) => {
     const current = revealRef.current;
     if (current.kind !== "reveal" || current.matchupId !== matchupId) return;
-    if (transitionRef.current) return;
-
-    transitionRef.current = true;
-    setTransitioning(true);
-    clearAutoAdvance();
-
-    await sleepMs(TRANSITION_OUT_MS);
-
-    const still = revealRef.current;
-    if (still.kind !== "reveal" || still.matchupId !== matchupId) {
-      transitionRef.current = false;
-      setTransitioning(false);
-      return;
-    }
-
-    setReveal({ kind: "none" });
-    setState({ kind: "loading" });
-    setSubmitting(false);
-
-    requestAnimationFrame(() => {
-      transitionRef.current = false;
-      setTransitioning(false);
+    const now = Date.now();
+    advanceNowRequestedAtRef.current = now;
+    setReveal((prev) => {
+      if (prev.kind !== "reveal" || prev.matchupId !== matchupId) return prev;
+      // Clamp so the timer UI switches to "Loading next…" immediately.
+      return { ...prev, advanceAt: Math.min(prev.advanceAt, now) };
     });
-  }
+    if (current.next) {
+      void advanceToNextRef.current(matchupId, current.next);
+    }
+  }, []);
 
   function scheduleAutoAdvance(matchupId: string, advanceAt: number, next: ArenaMatchup) {
     clearAutoAdvance();
@@ -952,22 +1199,30 @@ export function Arena() {
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     if (isMatchupBuildLoading(matchup, sideLoadStateRef.current)) return;
+    const viewer = viewerReadyRef.current;
+    if (!viewer || viewer.matchupId !== matchup.id || !viewer.a || !viewer.b) return;
     setSubmitting(true);
     clearAutoAdvance();
+    advanceNowRequestedAtRef.current = null;
     const startedAt = Date.now();
     const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
     setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
     try {
+      const nextPromise = fetchMatchup(undefined).then(applyCachedBuildsToMatchup);
       await submitVote(matchup.id, choice);
-      const next = await fetchMatchup(undefined);
+      const next = await nextPromise;
+      prefetchMatchupBuilds(next);
       const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
       if (stillRevealing) {
+        const requestedAt = advanceNowRequestedAtRef.current;
+        const effectiveAdvanceAt =
+          typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
         setReveal((prev) =>
           prev.kind === "reveal" && prev.matchupId === matchup.id
-            ? { ...prev, next }
-            : prev
+            ? { ...prev, next, advanceAt: effectiveAdvanceAt }
+            : prev,
         );
-        scheduleAutoAdvance(matchup.id, advanceAt, next);
+        scheduleAutoAdvance(matchup.id, effectiveAdvanceAt, next);
       } else {
         setState((prev) => {
           if (prev.kind === "ready" && prev.matchup.id !== matchup.id) return prev;
@@ -994,18 +1249,23 @@ export function Arena() {
     setSubmitting(true);
     try {
       clearAutoAdvance();
+      advanceNowRequestedAtRef.current = null;
       const startedAt = Date.now();
       const advanceAt = startedAt + REVEAL_MS_AFTER_SKIP;
       setReveal({ kind: "reveal", matchupId: matchup.id, action: "SKIP", startedAt, advanceAt, next: null });
-      const next = await fetchMatchup(undefined);
+      const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
+      prefetchMatchupBuilds(next);
       const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
       if (stillRevealing) {
+        const requestedAt = advanceNowRequestedAtRef.current;
+        const effectiveAdvanceAt =
+          typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
         setReveal((prev) =>
           prev.kind === "reveal" && prev.matchupId === matchup.id
-            ? { ...prev, next }
-            : prev
+            ? { ...prev, next, advanceAt: effectiveAdvanceAt }
+            : prev,
         );
-        scheduleAutoAdvance(matchup.id, advanceAt, next);
+        scheduleAutoAdvance(matchup.id, effectiveAdvanceAt, next);
       } else {
         setState((prev) => {
           if (prev.kind === "ready" && prev.matchup.id !== matchup.id) return prev;
@@ -1030,7 +1290,6 @@ export function Arena() {
   handleVoteRef.current = handleVote;
   handleSkipRef.current = handleSkip;
   advanceToNextRef.current = advanceToNext;
-  advanceToLoadingRef.current = advanceToLoading;
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1042,7 +1301,11 @@ export function Arena() {
       const isSubmitting = submittingRef.current;
       const isTransitioning = transitioningStateRef.current || transitionRef.current;
       const currentMatchup = stateRef.current.matchup;
-      const votesLocked = isMatchupBuildLoading(currentMatchup, sideLoadStateRef.current);
+      const viewer = viewerReadyRef.current;
+      const viewersReady =
+        Boolean(viewer && viewer.matchupId === currentMatchup.id && viewer.a && viewer.b);
+      const votesLocked =
+        !viewersReady || isMatchupBuildLoading(currentMatchup, sideLoadStateRef.current);
 
       const current = revealRef.current;
       const isRevealingCurrent =
@@ -1089,7 +1352,7 @@ export function Arena() {
         e.preventDefault();
         if (isTransitioning) return;
         if (!current.next) {
-          void advanceToLoadingRef.current(current.matchupId);
+          requestAdvanceNow(current.matchupId);
           return;
         }
         void advanceToNextRef.current(current.matchupId, current.next);
@@ -1103,25 +1366,79 @@ export function Arena() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [requestAdvanceNow]);
 
   const promptText = matchup?.prompt.text ?? "";
   const isLongPrompt = promptText.length > 120;
   const isSideLoadActive = Boolean(sideLoadState && matchup && sideLoadState.matchupId === matchup.id);
   const laneLoadA = isSideLoadActive && sideLoadState ? sideLoadState.a : "idle";
   const laneLoadB = isSideLoadActive && sideLoadState ? sideLoadState.b : "idle";
+  const laneOverlayA = isSideLoadActive && sideLoadState ? sideLoadState.aOverlayVisible : true;
+  const laneOverlayB = isSideLoadActive && sideLoadState ? sideLoadState.bOverlayVisible : true;
   const laneProgressA = isSideLoadActive && sideLoadState ? sideLoadState.aProgress : null;
   const laneProgressB = isSideLoadActive && sideLoadState ? sideLoadState.bProgress : null;
-  const matchupBuildLoading = Boolean(matchup && isMatchupBuildLoading(matchup, sideLoadState));
-  const buildALoading = state.kind === "loading" || Boolean(matchup && (!matchup.a.build || laneLoadA !== "idle"));
-  const buildBLoading = state.kind === "loading" || Boolean(matchup && (!matchup.b.build || laneLoadB !== "idle"));
+  const viewerState =
+    matchup && viewerReady && viewerReady.matchupId === matchup.id ? viewerReady : null;
+  const viewerReadyA = Boolean(viewerState?.a);
+  const viewerReadyB = Boolean(viewerState?.b);
+
+  const matchupBuildLoading = Boolean(
+    matchup && (isMatchupBuildLoading(matchup, sideLoadState) || !viewerReadyA || !viewerReadyB),
+  );
+
+  const buildARetrieving =
+    state.kind === "loading" ||
+    Boolean(
+      matchup &&
+        (!matchup.a.build ||
+          laneLoadA !== "idle" ||
+          matchup.a.buildLoadHints?.initialVariant === "preview"),
+    );
+  const buildBRetrieving =
+    state.kind === "loading" ||
+    Boolean(
+      matchup &&
+        (!matchup.b.build ||
+          laneLoadB !== "idle" ||
+          matchup.b.buildLoadHints?.initialVariant === "preview"),
+    );
+  const buildAPlacing = Boolean(matchup && matchup.a.build && laneLoadA === "idle" && !viewerReadyA);
+  const buildBPlacing = Boolean(matchup && matchup.b.build && laneLoadB === "idle" && !viewerReadyB);
+  const buildALoading = buildARetrieving || buildAPlacing;
+  const buildBLoading = buildBRetrieving || buildBPlacing;
+  const buildALoadingMode =
+    buildALoading &&
+    state.kind !== "loading" &&
+    !laneOverlayA &&
+    !buildAPlacing &&
+    matchup?.a.buildLoadHints?.initialVariant !== "preview"
+      ? "silent"
+      : "overlay";
+  const buildBLoadingMode =
+    buildBLoading &&
+    state.kind !== "loading" &&
+    !laneOverlayB &&
+    !buildBPlacing &&
+    matchup?.b.buildLoadHints?.initialVariant !== "preview"
+      ? "silent"
+      : "overlay";
   const buildAFullLoading = laneLoadA === "loading-full";
   const buildBFullLoading = laneLoadB === "loading-full";
   const buildALoadingMessage = buildALoading
-    ? formatBuildLoadingMessage(buildAFullLoading, laneProgressA)
+    ? buildAPlacing
+      ? "Placing blocks…"
+      : formatBuildLoadingMessage(
+          buildAFullLoading || matchup?.a.buildLoadHints?.initialVariant === "preview",
+          laneProgressA,
+        )
     : undefined;
   const buildBLoadingMessage = buildBLoading
-    ? formatBuildLoadingMessage(buildBFullLoading, laneProgressB)
+    ? buildBPlacing
+      ? "Placing blocks…"
+      : formatBuildLoadingMessage(
+          buildBFullLoading || matchup?.b.buildLoadHints?.initialVariant === "preview",
+          laneProgressB,
+        )
     : undefined;
   const carouselThumbLeftRatio =
     carouselScrollMax > 0
@@ -1228,26 +1545,22 @@ export function Arena() {
                 }
                 voxelBuild={matchup?.a.build ?? null}
                 skipValidation={Boolean(matchup?.a.serverValidated)}
+                onBuildReadyChange={(ready) => {
+                  const id = matchup?.id;
+                  if (!id) return;
+                  setViewerReady((prev) => {
+                    if (!prev || prev.matchupId !== id) return prev;
+                    if (prev.a === ready) return prev;
+                    return { ...prev, a: ready };
+                  });
+                }}
                 isLoading={buildALoading}
+                loadingMode={buildALoadingMode}
                 loadingMessage={buildALoadingMessage}
+                loadingProgress={laneProgressA ?? undefined}
                 autoRotate
-                animateIn
                 viewerSize="arena"
-                actions={
-                  matchup?.a.buildLoadHints?.initialVariant === "preview" ? (
-                    <button
-                      type="button"
-                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:h-9 sm:px-3.5 sm:text-xs"
-                      disabled={buildAFullLoading || laneLoadA === "loading-initial"}
-                      onClick={() => {
-                        if (!matchup) return;
-                        void hydrateMatchupSide(matchup, "a", "full");
-                      }}
-                    >
-                      {buildAFullLoading ? "Loading…" : "Load full"}
-                    </button>
-                  ) : null
-                }
+                actions={null}
               />
             </div>
             <div
@@ -1264,26 +1577,22 @@ export function Arena() {
                 }
                 voxelBuild={matchup?.b.build ?? null}
                 skipValidation={Boolean(matchup?.b.serverValidated)}
+                onBuildReadyChange={(ready) => {
+                  const id = matchup?.id;
+                  if (!id) return;
+                  setViewerReady((prev) => {
+                    if (!prev || prev.matchupId !== id) return prev;
+                    if (prev.b === ready) return prev;
+                    return { ...prev, b: ready };
+                  });
+                }}
                 isLoading={buildBLoading}
+                loadingMode={buildBLoadingMode}
                 loadingMessage={buildBLoadingMessage}
+                loadingProgress={laneProgressB ?? undefined}
                 autoRotate
-                animateIn
                 viewerSize="arena"
-                actions={
-                  matchup?.b.buildLoadHints?.initialVariant === "preview" ? (
-                    <button
-                      type="button"
-                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:h-9 sm:px-3.5 sm:text-xs"
-                      disabled={buildBFullLoading || laneLoadB === "loading-initial"}
-                      onClick={() => {
-                        if (!matchup) return;
-                        void hydrateMatchupSide(matchup, "b", "full");
-                      }}
-                    >
-                      {buildBFullLoading ? "Loading…" : "Load full"}
-                    </button>
-                  ) : null
-                }
+                actions={null}
               />
             </div>
           </div>
@@ -1455,7 +1764,7 @@ export function Arena() {
                               onClick={() => {
                                 if (reveal.kind !== "reveal" || reveal.matchupId !== matchup?.id) return;
                                 if (!reveal.next) {
-                                  void advanceToLoading(reveal.matchupId);
+                                  requestAdvanceNow(reveal.matchupId);
                                   return;
                                 }
                                 void advanceToNext(reveal.matchupId, reveal.next);

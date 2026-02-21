@@ -5,7 +5,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
-import { createVoxelGroup, VoxelGroup } from "@/lib/voxel/mesh";
+import { createVoxelGroupAsync, VoxelGroup } from "@/lib/voxel/mesh";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 type ViewerProps = {
@@ -14,6 +14,7 @@ type ViewerProps = {
   autoRotate?: boolean;
   animateIn?: boolean;
   showControls?: boolean;
+  onBuildReadyChange?: (ready: boolean) => void;
 };
 
 export type VoxelViewerHandle = {
@@ -152,7 +153,7 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
 }
 
 export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function VoxelViewer(
-  { voxelBuild, palette, autoRotate, animateIn, showControls = true },
+  { voxelBuild, palette, autoRotate, animateIn, showControls = true, onBuildReadyChange },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -163,6 +164,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const boundsRef = useRef<BuildBounds | null>(null);
   const autoRotateRef = useRef(false);
   const userInteractingRef = useRef(false);
+  const onBuildReadyChangeRef = useRef<((ready: boolean) => void) | undefined>(undefined);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -177,6 +179,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const ctrlHeldRef = useRef(false);
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
+
+  useEffect(() => {
+    onBuildReadyChangeRef.current = onBuildReadyChange;
+  }, [onBuildReadyChange]);
 
   function fitView() {
     const three = threeRef.current;
@@ -437,72 +443,85 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
   useEffect(() => {
     let cancelled = false;
+    const buildController = new AbortController();
     const three = threeRef.current;
     if (!three) return;
     void (async () => {
-      const tex = await loadAtlasTexture();
-      if (cancelled) return;
+      try {
+        const tex = await loadAtlasTexture();
+        if (cancelled) return;
 
-      if (revealRafRef.current) {
-        window.cancelAnimationFrame(revealRafRef.current);
-        revealRafRef.current = null;
-      }
-
-      if (voxelGroupRef.current) {
-        three.scene.remove(voxelGroupRef.current.group);
-        voxelGroupRef.current.dispose();
-        voxelGroupRef.current = null;
-      }
-      boundsRef.current = null;
-
-      if (!voxelBuild) return;
-
-      const allowed = new Set(paletteDefs.map((p) => p.id));
-      boundsRef.current = computeBuildBounds(voxelBuild, allowed);
-      const vg = createVoxelGroup(voxelBuild, paletteDefs, tex);
-      voxelGroupRef.current = vg;
-      three.scene.add(vg.group);
-      fitView();
-
-      if (!animateIn) return;
-
-      const geometries: { geo: THREE.BufferGeometry; total: number }[] = [];
-      vg.group.traverse((child) => {
-        if (!(child instanceof THREE.Mesh)) return;
-        const geo = child.geometry;
-        if (!(geo instanceof THREE.BufferGeometry)) return;
-        const total = geo.getIndex()?.count ?? geo.getAttribute("position")?.count ?? 0;
-        if (total <= 0) return;
-        geo.setDrawRange(0, 0);
-        geometries.push({ geo, total });
-      });
-
-      if (geometries.length === 0) return;
-
-      const reduceMotion =
-        typeof window !== "undefined" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const durationMs = reduceMotion ? 70 : 150;
-      const start = performance.now();
-
-      const tick = (now: number) => {
-        const t = Math.min(1, (now - start) / durationMs);
-        const eased = 1 - Math.pow(1 - t, 3);
-        for (const g of geometries) {
-          const count = Math.floor((g.total * eased) / 3) * 3;
-          g.geo.setDrawRange(0, count);
-        }
-        if (t < 1) {
-          revealRafRef.current = window.requestAnimationFrame(tick);
-        } else {
+        if (revealRafRef.current) {
+          window.cancelAnimationFrame(revealRafRef.current);
           revealRafRef.current = null;
         }
-      };
 
-      revealRafRef.current = window.requestAnimationFrame(tick);
+        if (voxelGroupRef.current) {
+          three.scene.remove(voxelGroupRef.current.group);
+          voxelGroupRef.current.dispose();
+          voxelGroupRef.current = null;
+        }
+        boundsRef.current = null;
+        onBuildReadyChangeRef.current?.(false);
+
+        if (!voxelBuild) return;
+
+        const allowed = new Set(paletteDefs.map((p) => p.id));
+        boundsRef.current = computeBuildBounds(voxelBuild, allowed);
+        const vg = await createVoxelGroupAsync(voxelBuild, paletteDefs, tex, { signal: buildController.signal });
+        if (cancelled) {
+          vg.dispose();
+          return;
+        }
+        voxelGroupRef.current = vg;
+        three.scene.add(vg.group);
+        fitView();
+        onBuildReadyChangeRef.current?.(true);
+
+        if (!animateIn) return;
+
+        const geometries: { geo: THREE.BufferGeometry; total: number }[] = [];
+        vg.group.traverse((child) => {
+          if (!(child instanceof THREE.Mesh)) return;
+          const geo = child.geometry;
+          if (!(geo instanceof THREE.BufferGeometry)) return;
+          const total = geo.getIndex()?.count ?? geo.getAttribute("position")?.count ?? 0;
+          if (total <= 0) return;
+          geo.setDrawRange(0, 0);
+          geometries.push({ geo, total });
+        });
+
+        if (geometries.length === 0) return;
+
+        const reduceMotion =
+          typeof window !== "undefined" &&
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const durationMs = reduceMotion ? 70 : 150;
+        const start = performance.now();
+
+        const tick = (now: number) => {
+          const t = Math.min(1, (now - start) / durationMs);
+          const eased = 1 - Math.pow(1 - t, 3);
+          for (const g of geometries) {
+            const count = Math.floor((g.total * eased) / 3) * 3;
+            g.geo.setDrawRange(0, count);
+          }
+          if (t < 1) {
+            revealRafRef.current = window.requestAnimationFrame(tick);
+          } else {
+            revealRafRef.current = null;
+          }
+        };
+
+        revealRafRef.current = window.requestAnimationFrame(tick);
+      } catch (err: unknown) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.warn("VoxelViewer build failed", err);
+      }
     })();
     return () => {
       cancelled = true;
+      buildController.abort();
       if (revealRafRef.current) {
         window.cancelAnimationFrame(revealRafRef.current);
         revealRafRef.current = null;

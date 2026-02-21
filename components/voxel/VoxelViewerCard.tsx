@@ -19,7 +19,10 @@ export function VoxelViewerCard({
   gridSize = 256,
   autoRotate = true,
   animateIn,
+  onBuildReadyChange,
   isLoading,
+  loadingMode = "overlay",
+  loadingProgress,
   attempt,
   retryReason,
   elapsedMs,
@@ -41,7 +44,10 @@ export function VoxelViewerCard({
   gridSize?: 64 | 256 | 512;
   autoRotate?: boolean;
   animateIn?: boolean;
+  onBuildReadyChange?: (ready: boolean) => void;
   isLoading?: boolean;
+  loadingMode?: "overlay" | "silent";
+  loadingProgress?: { receivedBlocks: number; totalBlocks: number | null };
   attempt?: number;
   retryReason?: string;
   elapsedMs?: number;
@@ -157,6 +163,14 @@ export function VoxelViewerCard({
         : debugRawText
           ? "Streaming…"
           : "Generating…");
+  const showLoadingOverlay = loadingMode !== "silent";
+  const showLoadingHud = Boolean(isLoading && showBuildView && showLoadingOverlay);
+  const hudReceived = loadingProgress?.receivedBlocks ?? (build ? build.blocks.length : 0);
+  const hudTotal = loadingProgress?.totalBlocks ?? null;
+  const hudPct =
+    typeof hudTotal === "number" && Number.isFinite(hudTotal) && hudTotal > 0
+      ? Math.max(0, Math.min(1, hudReceived / hudTotal))
+      : null;
 
   return (
     <div className="mb-panel">
@@ -231,7 +245,7 @@ export function VoxelViewerCard({
         </div>
 
         <div className={viewerHeightClass}>
-          {showBuildView && build ? (
+          {showBuildView ? (
             <VoxelViewer
               ref={viewerRef}
               voxelBuild={build}
@@ -239,6 +253,7 @@ export function VoxelViewerCard({
               autoRotate={autoRotate}
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
               animateIn={Boolean(animateIn && !isLoading)}
+              onBuildReadyChange={onBuildReadyChange}
             />
           ) : null}
 
@@ -272,52 +287,45 @@ export function VoxelViewerCard({
             </div>
           ) : null}
 
-          {isLoading && showBuildView && !build ? (
-            <div className="absolute inset-0 bg-bg/60 text-sm text-muted backdrop-blur-sm">
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_20%,hsl(var(--accent)_/_0.18),transparent_55%)]"
-              />
-              <div className="relative flex h-full items-center justify-center px-4">
-                <div className="w-full max-w-sm rounded-2xl border border-border/65 bg-bg/72 px-5 py-4 text-center shadow-soft ring-1 ring-border/55">
-                  <div className="flex items-center justify-center gap-2 text-fg/90">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
-                    <span className="font-medium">{loadingLabel}</span>
-                  </div>
-                  <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-border/40">
-                    <span className="mb-progress-wait block h-full w-full" />
-                  </div>
-                  <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-xs text-muted">
-                    {elapsed ? <span className="font-mono text-muted">{elapsed}</span> : null}
-                    {attempt && attempt > 1 ? (
-                      <span className="font-mono text-muted">
-                        retry {attempt}
-                      </span>
-                    ) : null}
-                  </div>
+          {showLoadingHud ? (
+            <div className="pointer-events-none absolute left-3 top-3 z-30">
+              <div className="flex max-w-[92vw] flex-col gap-2 rounded-xl border border-border/70 bg-bg/55 px-3 py-2 text-xs text-muted shadow-soft backdrop-blur-sm sm:max-w-xs">
+                <div className="flex items-center gap-2 text-fg/90">
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+                  <span className="font-medium">{loadingLabel}</span>
                 </div>
-              </div>
-              <div className="pointer-events-none absolute bottom-3 left-0 right-0 flex justify-center px-4">
-                {retryReason ? <div className="text-xs text-muted">{retryReason}</div> : null}
-              </div>
-              <div className="pointer-events-none absolute bottom-3 right-3">
-                {hasJsonView && showViewToggle ? (
-                  <div className="text-xs text-muted">Open JSON to inspect live output.</div>
+                {hudPct != null ? (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-border/35">
+                      <span
+                        className="block h-full rounded-full bg-gradient-to-r from-accent/75 via-accent2/75 to-accent/75"
+                        style={{ width: `${Math.max(1, Math.min(99, Math.round(hudPct * 100)))}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-3 font-mono text-[11px] text-muted/90">
+                      <span>{hudReceived.toLocaleString()}</span>
+                      <span>{hudTotal ? hudTotal.toLocaleString() : ""}</span>
+                    </div>
+                  </div>
+                ) : build ? (
+                  <div className="font-mono text-[11px] text-muted/90">
+                    {blockCount.toLocaleString()} blocks
+                  </div>
+                ) : null}
+                {(elapsed || (attempt && attempt > 1)) ? (
+                  <div className="flex items-center gap-3 font-mono text-[11px] text-muted/80">
+                    {elapsed ? <span>{elapsed}</span> : null}
+                    {attempt && attempt > 1 ? <span>retry {attempt}</span> : null}
+                  </div>
+                ) : null}
+                {retryReason ? (
+                  <div className="text-[11px] text-muted/75">{retryReason}</div>
                 ) : null}
               </div>
             </div>
           ) : null}
 
-          {isLoading && showBuildView && build ? (
-            <div className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1 rounded-md border border-border/70 bg-bg/60 px-3 py-2 text-xs text-muted backdrop-blur-sm">
-              <div className="pointer-events-none">{loadingLabel}</div>
-              <div className="font-mono">{blockCount.toLocaleString()} blocks</div>
-              {elapsed ? <div className="font-mono">{elapsed}</div> : null}
-              {attempt && attempt > 1 ? <div className="font-mono">retry {attempt}</div> : null}
-            </div>
-          ) : null}
-
-          {isLoading && showJsonView ? (
+          {isLoading && showJsonView && showLoadingOverlay ? (
             <div className="pointer-events-none absolute left-3 top-3 flex flex-col gap-1 rounded-md border border-border/70 bg-bg/60 px-3 py-2 text-xs text-muted backdrop-blur-sm">
               <div>{loadingLabel}</div>
               {elapsed ? <div className="font-mono">{elapsed}</div> : null}
