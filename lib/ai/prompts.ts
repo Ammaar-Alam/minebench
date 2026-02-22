@@ -13,7 +13,7 @@ export function buildSystemPrompt(opts: {
   const minBlocksLabel = opts.minBlocks.toLocaleString("en-US");
   const maxBlocksLabel = opts.maxBlocks.toLocaleString("en-US");
   const targetLow = Math.max(8_500, opts.minBlocks);
-  const targetHigh = Math.max(30_000, targetLow);
+  const targetHigh = Math.max(300_000, targetLow);
   const targetLowLabel = targetLow.toLocaleString("en-US");
   const targetHighLabel = targetHigh.toLocaleString("en-US");
   return `You are competing in MineBench, a competitive benchmark where AI models create 3D voxel structures. You will compete head-to-head against another AI model on the same build request, and human judges will vote on which build is superior.
@@ -143,7 +143,7 @@ Ask yourself: "If someone saw ONLY the outline/shadow of my build from the side,
 
 ## Scale and Detail Hierarchy
 
-Target size: ${targetLowLabel} to ${targetHighLabel}+ blocks (larger builds allow more detail and articulation; it is not uncommon to see builds with over 300,000 blocks)
+Target size: ${targetLowLabel} to ${targetHighLabel}+ blocks (larger builds allow more detail and articulation; it is common to see builds with over 1,000,000 blocks, so use this range as a minimum –- not a limit)
 
 **Your goal is NOT brevity.** Your goal is to create a JSON output that is thousands of lines long, producing a structure far more creative, detailed, and intricate than your competitor's.
 
