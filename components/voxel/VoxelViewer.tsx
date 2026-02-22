@@ -11,6 +11,7 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 type ViewerProps = {
   voxelBuild: VoxelBuild | null;
   palette: "simple" | "advanced";
+  expectedBlockCount?: number;
   autoRotate?: boolean;
   animateIn?: boolean;
   showControls?: boolean;
@@ -69,10 +70,24 @@ function loadAtlasTexture(): Promise<THREE.Texture> {
 
 type BuildBounds = { box: THREE.Box3; center: THREE.Vector3; radius: number };
 
-function computeGroupBounds(group: THREE.Object3D): BuildBounds {
-  group.updateWorldMatrix(true, true);
-  const box = new THREE.Box3().setFromObject(group);
-  if (box.isEmpty()) {
+function computeBuildBounds(build: VoxelBuild, allowed: Set<string>, blockLimit: number): BuildBounds {
+  const limit = Math.max(0, Math.min(build.blocks.length, Math.floor(blockLimit)));
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
+  for (let i = 0; i < limit; i += 1) {
+    const b = build.blocks[i];
+    if (!b || !allowed.has(b.type)) continue;
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    minZ = Math.min(minZ, b.z);
+    maxX = Math.max(maxX, b.x);
+    maxY = Math.max(maxY, b.y);
+    maxZ = Math.max(maxZ, b.z);
+  }
+
+  if (!Number.isFinite(minX)) {
     const origin = new THREE.Vector3(0, 0, 0);
     return {
       box: new THREE.Box3(origin.clone(), origin.clone()),
@@ -80,6 +95,16 @@ function computeGroupBounds(group: THREE.Object3D): BuildBounds {
       radius: 0.001,
     };
   }
+
+  const cx = (minX + maxX + 1) / 2;
+  const cy = minY;
+  const cz = (minZ + maxZ + 1) / 2;
+
+  const box = new THREE.Box3(
+    new THREE.Vector3(minX - cx, minY - cy, minZ - cz),
+    new THREE.Vector3(maxX - cx + 1, maxY - cy + 1, maxZ - cz + 1),
+  );
+
   const center = box.getCenter(new THREE.Vector3());
   const sphere = new THREE.Sphere();
   box.getBoundingSphere(sphere);
@@ -96,6 +121,11 @@ function sameIdentity(a: BuildIdentity | null, b: BuildIdentity | null): boolean
   if (a === b) return true;
   if (!a || !b) return false;
   return a.palette === b.palette && a.blocksRef === b.blocksRef;
+}
+
+function normalizeExpectedBlockCount(value: number | null | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+  return Math.floor(value);
 }
 
 function computeRebuildThreshold(lastBuilt: number): { minDelta: number; maxWaitMs: number } {
@@ -139,7 +169,7 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
 }
 
 export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function VoxelViewer(
-  { voxelBuild, palette, autoRotate, animateIn, showControls = true, onBuildReadyChange },
+  { voxelBuild, palette, expectedBlockCount, autoRotate, animateIn, showControls = true, onBuildReadyChange },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -170,12 +200,20 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     palette: "simple" | "advanced";
     paletteDefs: BlockDefinition[];
     animateIn: boolean;
-  }>({ voxelBuild: null, palette, paletteDefs, animateIn: Boolean(animateIn) });
+    expectedBlockCount: number | null;
+  }>({
+    voxelBuild: null,
+    palette,
+    paletteDefs,
+    animateIn: Boolean(animateIn),
+    expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
+  });
   latestRef.current = {
     voxelBuild,
     palette,
     paletteDefs,
     animateIn: Boolean(animateIn),
+    expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
   };
 
   const identityRef = useRef<BuildIdentity | null>(null);
@@ -189,6 +227,13 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const kickScheduledRef = useRef(false);
   const kickBuildRef = useRef<(() => void) | null>(null);
   const lastBuiltRef = useRef<{ blockLimit: number; at: number }>({ blockLimit: 0, at: 0 });
+  const readyRef = useRef(false);
+
+  const reportReady = useCallback((ready: boolean) => {
+    if (readyRef.current === ready) return;
+    readyRef.current = ready;
+    onBuildReadyChangeRef.current?.(ready);
+  }, []);
 
   useEffect(() => {
     onBuildReadyChangeRef.current = onBuildReadyChange;
@@ -218,8 +263,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     }
     boundsRef.current = null;
     lastBuiltRef.current = { blockLimit: 0, at: 0 };
-    onBuildReadyChangeRef.current?.(false);
-  }, []);
+    reportReady(false);
+  }, [reportReady]);
 
   const scheduleKick = useCallback(() => {
     if (kickScheduledRef.current) return;
@@ -264,16 +309,25 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const now = performance.now();
     const elapsedSinceBuild = Math.max(0, now - lastBuiltRef.current.at);
 
+    const expectedBlocks = normalizeExpectedBlockCount(latest.expectedBlockCount);
+    const requiredBlocks = expectedBlocks ?? desiredBlocks;
+    const hasAllRequiredBlocks =
+      expectedBlocks != null && desiredBlocks >= expectedBlocks;
+
     const force = buildPendingRef.current.force;
     const { minDelta, maxWaitMs } = computeRebuildThreshold(lastBuiltBlocks);
     const shouldBuild =
       !voxelGroupRef.current ||
-      (desiredBlocks > lastBuiltBlocks && (force || delta >= minDelta || elapsedSinceBuild >= maxWaitMs));
+      (desiredBlocks > lastBuiltBlocks &&
+        (force || delta >= minDelta || elapsedSinceBuild >= maxWaitMs || hasAllRequiredBlocks));
 
     if (!shouldBuild) {
       if (force && voxelGroupRef.current && boundsRef.current) {
         fitView();
       }
+      // Even if we don't rebuild, ensure our "ready" signal stays false while we haven't reached
+      // the expected block count (e.g. during stream hydration).
+      reportReady(Boolean(voxelGroupRef.current && lastBuiltBlocks >= requiredBlocks));
       buildPendingRef.current.dirty = desiredBlocks > lastBuiltBlocks;
       buildPendingRef.current.force = false;
       return;
@@ -283,6 +337,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     buildPendingRef.current.force = false;
 
     buildInProgressRef.current = true;
+    reportReady(false);
     const controller = new AbortController();
     activeJobRef.current.controller = controller;
     activeJobRef.current.identity = incomingIdentity;
@@ -290,12 +345,19 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const blockLimit = desiredBlocks;
     // When the stream settles (no new blocks for a bit), we do a final refit so the camera matches
     // the default framing for the full build (instead of staying framed on an early partial chunk).
-    const shouldFit = identityChanged || !voxelGroupRef.current || force;
+    const hadReachedRequired = requiredBlocks > 0 && lastBuiltBlocks >= requiredBlocks;
+    const willReachRequired = requiredBlocks > 0 && blockLimit >= requiredBlocks;
+    const shouldFit =
+      identityChanged ||
+      !voxelGroupRef.current ||
+      force ||
+      (willReachRequired && !hadReachedRequired);
     const previousRotationY = voxelGroupRef.current?.group.rotation.y ?? 0;
     const startHadGroup = Boolean(voxelGroupRef.current);
     const animate = Boolean(latest.animateIn && shouldFit);
     const paletteSnapshot = latest.paletteDefs;
     const buildSnapshot = latest.voxelBuild;
+    const expectedSnapshot = latest.expectedBlockCount;
 
     try {
       const tex = await loadAtlasTexture();
@@ -332,15 +394,19 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       voxelGroupRef.current = vg;
       three.scene.add(vg.group);
 
-      boundsRef.current = computeGroupBounds(vg.group);
+      const allowed = new Set(paletteSnapshot.map((p) => p.id));
+      boundsRef.current = computeBuildBounds(buildSnapshot, allowed, blockLimit);
       if (gridRef.current) {
         gridRef.current.position.y = boundsRef.current.box.min.y - 0.5;
       }
       if (shouldFit) {
         fitView();
       }
-      onBuildReadyChangeRef.current?.(true);
       lastBuiltRef.current = { blockLimit, at: performance.now() };
+      const expectedNow = normalizeExpectedBlockCount(expectedSnapshot);
+      const desiredNow = Math.max(0, latestRef.current.voxelBuild?.blocks.length ?? 0);
+      const requiredNow = expectedNow ?? desiredNow;
+      reportReady(Boolean(requiredNow <= 0 || (blockLimit >= requiredNow && desiredNow >= requiredNow)));
 
       if (!animate) return;
       if (startHadGroup) return;
@@ -388,7 +454,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
       if (buildPendingRef.current.dirty) scheduleKick();
     }
-  }, [clearVoxelGroup, fitView, scheduleKick]);
+  }, [clearVoxelGroup, fitView, reportReady, scheduleKick]);
 
   kickBuildRef.current = () => {
     void kickBuild();
@@ -683,7 +749,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       activeJobRef.current.controller.abort();
     }
     requestBuild();
-  }, [voxelBuild, paletteDefs, animateIn, palette, requestBuild]);
+  }, [voxelBuild, paletteDefs, animateIn, palette, expectedBlockCount, requestBuild]);
 
   useEffect(() => {
     const three = threeRef.current;

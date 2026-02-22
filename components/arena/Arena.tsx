@@ -505,6 +505,15 @@ function isHeavyRetrievalDeliveryClass(
   return deliveryClass === "stream-live" || deliveryClass === "stream-artifact";
 }
 
+function getExpectedBlocksForLane(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): number | undefined {
+  const hints = lane.buildLoadHints;
+  if (!hints) return undefined;
+  const expected =
+    hints.initialVariant === "preview" ? hints.previewBlockCount : hints.fullBlockCount;
+  if (typeof expected !== "number" || !Number.isFinite(expected) || expected <= 0) return undefined;
+  return Math.floor(expected);
+}
+
 function formatBuildLoadingMessage(
   fullLoading: boolean,
   progress: SideLoadProgress | null,
@@ -1561,12 +1570,20 @@ export function Arena() {
                   />
                 }
                 voxelBuild={matchup?.a.build ?? null}
+                expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.a) : undefined}
                 skipValidation={Boolean(matchup?.a.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
                   if (!id) return;
+                  // VoxelViewer may signal readiness before `viewerReady` is initialized for a new matchup
+                  // (or after a transition). Guard against stale callbacks from older matchups by checking
+                  // the latest state ref, then allow the update to create/refresh the viewerReady entry.
+                  const current = stateRef.current;
+                  if (current.kind !== "ready" || current.matchup.id !== id) return;
                   setViewerReady((prev) => {
-                    if (!prev || prev.matchupId !== id) return prev;
+                    if (!prev || prev.matchupId !== id) {
+                      return { matchupId: id, a: ready, b: false };
+                    }
                     if (prev.a === ready) return prev;
                     return { ...prev, a: ready };
                   });
@@ -1593,12 +1610,17 @@ export function Arena() {
                   />
                 }
                 voxelBuild={matchup?.b.build ?? null}
+                expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.b) : undefined}
                 skipValidation={Boolean(matchup?.b.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
                   if (!id) return;
+                  const current = stateRef.current;
+                  if (current.kind !== "ready" || current.matchup.id !== id) return;
                   setViewerReady((prev) => {
-                    if (!prev || prev.matchupId !== id) return prev;
+                    if (!prev || prev.matchupId !== id) {
+                      return { matchupId: id, a: false, b: ready };
+                    }
                     if (prev.b === ready) return prev;
                     return { ...prev, b: ready };
                   });

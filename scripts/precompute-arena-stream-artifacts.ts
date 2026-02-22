@@ -45,8 +45,11 @@ function parseArgs(argv: string[]): Args {
   const minBytesIndex = args.indexOf("--min-bytes");
   const parsedMinBytes =
     minBytesIndex >= 0 ? Number.parseInt(args[minBytesIndex + 1] ?? "", 10) : NaN;
+  const envMinBytes = Number.parseInt(process.env.ARENA_ARTIFACT_MIN_BYTES ?? "", 10);
+  const defaultMinBytes =
+    Number.isFinite(envMinBytes) && envMinBytes > 0 ? envMinBytes : 50 * 1024 * 1024;
   const minBytes =
-    Number.isFinite(parsedMinBytes) && parsedMinBytes > 0 ? parsedMinBytes : 50 * 1024 * 1024;
+    Number.isFinite(parsedMinBytes) && parsedMinBytes > 0 ? parsedMinBytes : defaultMinBytes;
 
   const variantIndex = args.indexOf("--variant");
   const variantRaw = (variantIndex >= 0 ? args[variantIndex + 1] : "both")?.trim().toLowerCase() ?? "both";
