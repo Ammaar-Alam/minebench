@@ -191,8 +191,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   type DragMode = "orbit" | "pan";
   const [dragMode, setDragMode] = useState<DragMode>("orbit");
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const dragModeBeforeCtrlRef = useRef<DragMode>("orbit");
-  const ctrlHeldRef = useRef(false);
+  const [ctrlHeld, setCtrlHeld] = useState(false);
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
   const latestRef = useRef<{
@@ -762,23 +761,18 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     <div
       ref={containerRef}
       data-mb-voxel-viewer="true"
-      className={`relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${dragMode === "pan" ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
+      className={`relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
       tabIndex={0}
       onPointerDown={(e) => {
         containerRef.current?.focus();
       }}
       onBlur={() => {
-        if (ctrlHeldRef.current) {
-          ctrlHeldRef.current = false;
-          setDragMode(dragModeBeforeCtrlRef.current);
-        }
+        setCtrlHeld(false);
       }}
       onKeyDown={(e) => {
-        if ((e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") && !e.repeat) {
-          ctrlHeldRef.current = true;
-          dragModeBeforeCtrlRef.current = dragMode;
-          setDragMode("pan");
-        }
+        // OrbitControls already maps Ctrl+left-drag to pan when LEFT is ROTATE.
+        // Flipping dragMode here inverts back to rotate due its modifier behavior.
+        if ((e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") && !e.repeat) setCtrlHeld(true);
         if ((e.key === "r" || e.key === "R") && !e.repeat) {
           e.preventDefault();
           fitView();
@@ -789,11 +783,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         }
       }}
       onKeyUp={(e) => {
-        if (e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") {
-          if (!ctrlHeldRef.current) return;
-          ctrlHeldRef.current = false;
-          setDragMode(dragModeBeforeCtrlRef.current);
-        }
+        if (e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") setCtrlHeld(false);
       }}
     >
       <div ref={mountRef} className="h-full w-full" />
@@ -801,8 +791,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       {showControls ? (
         <div className="absolute right-2.5 top-2.5 flex items-center gap-1.5 sm:right-3 sm:top-3 sm:gap-2">
           <button
-            aria-pressed={dragMode === "pan"}
-            className={`mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs ${dragMode === "pan" ? "mb-btn-primary" : "mb-btn-ghost"}`}
+            aria-pressed={dragMode === "pan" || (dragMode === "orbit" && ctrlHeld)}
+            className={`mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs ${dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "mb-btn-primary" : "mb-btn-ghost"}`}
             onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
           >
             Pan <span className="hidden sm:inline"><span className="mb-kbd">Ctrl</span></span>
