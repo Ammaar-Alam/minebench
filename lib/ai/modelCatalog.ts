@@ -11,6 +11,7 @@ export type Provider =
   | "meta";
 
 export type ModelKey =
+  | "openai_gpt_5_3_codex"
   | "openai_gpt_5_2"
   | "openai_gpt_5_2_pro"
   | "openai_gpt_5_2_codex"
@@ -51,6 +52,14 @@ export type ModelCatalogEntry = {
 };
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
+  {
+    key: "openai_gpt_5_3_codex",
+    provider: "openai",
+    modelId: "gpt-5.3-codex",
+    displayName: "GPT 5.3 Codex",
+    enabled: true,
+    openRouterModelId: "openai/gpt-5.3-codex",
+  },
   {
     key: "openai_gpt_5_2",
     provider: "openai",
