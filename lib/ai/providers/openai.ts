@@ -29,6 +29,8 @@ type OpenAIResponsesBackgroundResponse = OpenAIResponsesResponse & {
 type OpenAIResponsesStreamEvent = {
   type?: unknown;
   delta?: unknown;
+  text?: unknown;
+  response?: unknown;
 };
 
 type OpenAIChatCompletionsStreamChunk = {
@@ -316,7 +318,10 @@ export async function openaiGenerateText(params: {
   const isGptOssFamily = params.modelId.startsWith("gpt-oss-");
   // Some models are Responses-only (or otherwise not supported in chat/completions).
   // For these, don't fall back to chat/completions because it hides the real failure cause.
-  const isResponsesOnlyModel = params.modelId === "gpt-5.2-pro" || params.modelId === "gpt-5.2-codex";
+  const isResponsesOnlyModel =
+    params.modelId === "gpt-5.2-pro" ||
+    params.modelId === "gpt-5.2-codex" ||
+    params.modelId === "gpt-5.3-codex";
   const reasoningEffortAttempts: string[] = isGpt5Family
     ? ["xhigh", "high"]
     : isGptOssFamily
@@ -330,12 +335,14 @@ export async function openaiGenerateText(params: {
   // so we omit the parameter entirely and let the API use the default.
   const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
   const maxOutputTokens = params.maxOutputTokens ?? 32768;
+  // Streaming is only useful when we have a live delta consumer.
+  // For non-interactive callers (e.g. batch generation), use non-streaming
+  // Responses JSON to avoid SSE event-shape drift causing empty text payloads.
   const streamResponses =
-    Boolean(params.onDelta) || parseBooleanEnv("OPENAI_STREAM_RESPONSES", true);
+    Boolean(params.onDelta) && parseBooleanEnv("OPENAI_STREAM_RESPONSES", true);
   const useBackgroundMode =
-    isResponsesOnlyModel &&
     !params.onDelta &&
-    parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", params.modelId === "gpt-5.2-pro");
+    parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", isGpt5Family);
   const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 2_000);
   const streamForRequest = useBackgroundMode ? false : streamResponses;
 
@@ -437,6 +444,7 @@ export async function openaiGenerateText(params: {
       }
       if (streamForRequest) {
         let text = "";
+        let completedResponse: OpenAIResponsesResponse | null = null;
         await consumeSseStream(res, (evt) => {
           if (evt.data === "[DONE]") return;
           let parsed: OpenAIResponsesStreamEvent | null = null;
@@ -452,8 +460,20 @@ export async function openaiGenerateText(params: {
               params.onDelta?.(delta);
             }
           }
+          if (parsed?.type === "response.output_text.done" && typeof parsed.text === "string") {
+            const doneText = parsed.text;
+            if (doneText && text.length === 0) text = doneText;
+          }
+          if (parsed?.type === "response.completed" && parsed.response && typeof parsed.response === "object") {
+            completedResponse = parsed.response as OpenAIResponsesResponse;
+          }
         });
-        if (text) return { text };
+        if (!text && completedResponse) {
+          text = extractTextFromResponses(completedResponse);
+        }
+        // The response body has been fully consumed by the SSE reader above;
+        // never call res.json() after this point.
+        return { text };
       }
 
       let data = (await res.json()) as OpenAIResponsesBackgroundResponse;

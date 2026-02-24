@@ -185,8 +185,8 @@ Copy `.env.example` to `.env` and set what you need:
 - `ANTHROPIC_OPUS_4_6_EFFORT=low|medium|high|max`
 - `ANTHROPIC_SONNET_4_6_EFFORT=low|medium|high|max` (runtime falls back automatically if provider rejects `max`)
 - `ANTHROPIC_STREAM_RESPONSES=1`
-- `OPENAI_STREAM_RESPONSES=1`
-- `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs, especially GPT-5.2 Pro)
+- `OPENAI_STREAM_RESPONSES=1` (applies to live-delta callers; batch generation uses non-streamed Responses JSON)
+- `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs; defaults on for `gpt-5*` when not streaming deltas)
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
 - `OPENAI_GPT5_PRO_TIMEOUT_MS=7200000` and `OPENAI_REQUEST_TIMEOUT_MS` (optional timeout overrides)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
