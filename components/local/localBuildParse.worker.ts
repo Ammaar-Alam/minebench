@@ -5,6 +5,12 @@ import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 type GridSize = 64 | 256 | 512;
 type Palette = "simple" | "advanced";
+type ParseSource = "build-json" | "tool-call";
+
+type ResolvedSettings = {
+  gridSize: GridSize;
+  palette: Palette;
+};
 
 type ParseRequest = {
   type: "parse";
@@ -12,7 +18,7 @@ type ParseRequest = {
   rawText: string;
   gridSize: GridSize;
   palette: Palette;
-  maxBlocks: number;
+  maxBlocksByGrid: Record<GridSize, number>;
 };
 
 type CancelRequest = {
@@ -37,6 +43,8 @@ type CompleteMessage = {
   warnings: string[];
   receivedBlocks: number;
   totalBlocks: number | null;
+  source: ParseSource;
+  resolved: ResolvedSettings;
 };
 
 type ErrorMessage = {
@@ -128,6 +136,138 @@ function parseBlockSlice(slice: string): VoxelBlock | null {
 }
 
 const PRIMITIVE_ARRAY_RE = /"lines"\s*:\s*\[|"boxes"\s*:\s*\[/i;
+
+type ToolCallInput = {
+  code: string;
+  gridSize: GridSize;
+  palette: Palette;
+  seed?: number;
+};
+
+function trimOuterWhitespace(text: string): string {
+  if (!text) return "";
+  let start = 0;
+  let end = text.length;
+  while (start < end && /\s/.test(text[start] ?? "")) start += 1;
+  while (end > start && /\s/.test(text[end - 1] ?? "")) end -= 1;
+  if (start === 0 && end === text.length) return text;
+  return text.slice(start, end);
+}
+
+function parseToolCallInput(value: unknown): ToolCallInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const obj = value as { tool?: unknown; input?: unknown };
+  if (obj.tool !== "voxel.exec") return null;
+  if (!obj.input || typeof obj.input !== "object" || Array.isArray(obj.input)) return null;
+
+  const input = obj.input as { code?: unknown; gridSize?: unknown; palette?: unknown; seed?: unknown };
+  if (typeof input.code !== "string" || input.code.trim().length === 0) return null;
+  if (input.gridSize !== 64 && input.gridSize !== 256 && input.gridSize !== 512) return null;
+  if (input.palette !== "simple" && input.palette !== "advanced") return null;
+  if (input.seed != null && (!Number.isInteger(input.seed) || !Number.isFinite(input.seed))) return null;
+
+  return {
+    code: input.code,
+    gridSize: input.gridSize,
+    palette: input.palette,
+    seed: typeof input.seed === "number" ? input.seed : undefined,
+  };
+}
+
+function parseTopLevelJsonObjects(text: string, limit = 4): unknown[] {
+  const parsed: unknown[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+      continue;
+    }
+
+    if (ch === "}") {
+      if (depth === 0) continue;
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        try {
+          parsed.push(JSON.parse(text.slice(start, i + 1)) as unknown);
+        } catch {
+          // ignore malformed top-level object and continue scanning.
+        }
+        start = -1;
+        if (parsed.length >= limit) break;
+      }
+    }
+  }
+
+  return parsed;
+}
+
+async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: unknown; warnings: string[] }> {
+  const response = await fetch("/api/local/voxel-exec", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(input),
+  });
+
+  const bodyText = await response.text();
+  let parsed: unknown = null;
+  try {
+    parsed = bodyText ? (JSON.parse(bodyText) as unknown) : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!response.ok) {
+    const message =
+      parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string"
+        ? ((parsed as { error: string }).error ?? "Tool execution failed")
+        : `Tool execution failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Tool execution returned an invalid response");
+  }
+
+  const build = (parsed as { build?: unknown }).build;
+  if (!build) {
+    throw new Error("Tool execution returned no build");
+  }
+
+  const rawWarnings = (parsed as { warnings?: unknown }).warnings;
+  const warnings =
+    Array.isArray(rawWarnings) && rawWarnings.every((w) => typeof w === "string")
+      ? (rawWarnings as string[])
+      : [];
+
+  return { build, warnings };
+}
 
 function streamBlocksFromText(
   request: ParseRequest,
@@ -247,7 +387,7 @@ function streamBlocksFromText(
 async function runParse(request: ParseRequest) {
   activeRequestId = request.requestId;
 
-  const raw = request.rawText.trim();
+  const raw = trimOuterWhitespace(request.rawText);
   if (!raw) {
     const message: ErrorMessage = {
       type: "error",
@@ -266,6 +406,10 @@ async function runParse(request: ParseRequest) {
   try {
     let baseBuild: VoxelBuild | null = null;
     let totalBlocks: number | null = null;
+    let source: ParseSource = "build-json";
+    let resolvedGridSize: GridSize = request.gridSize;
+    let resolvedPalette: Palette = request.palette;
+    const sourceWarnings: string[] = [];
 
     const streamed = streamBlocksFromText(request, postProgress);
     // If we didn't manage to extract any blocks, fall back to full JSON extraction so we can
@@ -277,15 +421,63 @@ async function runParse(request: ParseRequest) {
         blocks: streamed.blocks,
       };
     } else {
-      const extracted = extractBestVoxelBuildJson(raw);
+      const topLevelObjects = parseTopLevelJsonObjects(raw, 4);
+      const toolCall =
+        topLevelObjects.map(parseToolCallInput).find((candidate): candidate is ToolCallInput => candidate != null) ??
+        null;
+
+      const extracted: unknown | null = toolCall
+        ? null
+        : topLevelObjects.length === 1
+          ? topLevelObjects[0]
+          : extractBestVoxelBuildJson(raw);
+
+      if (toolCall) {
+        const executed = await executeVoxelExecToolCall(toolCall);
+        if (isCancelled(request.requestId)) {
+          throw new Error(CANCELLED_ERROR);
+        }
+
+        source = "tool-call";
+        resolvedGridSize = toolCall.gridSize;
+        resolvedPalette = toolCall.palette;
+        sourceWarnings.push(...executed.warnings);
+
+        const validatedTool = validateVoxelBuild(executed.build, {
+          gridSize: resolvedGridSize,
+          palette: getPalette(resolvedPalette),
+          maxBlocks: request.maxBlocksByGrid[resolvedGridSize],
+        });
+
+        if (!validatedTool.ok) {
+          throw new Error(validatedTool.error);
+        }
+
+        const complete: CompleteMessage = {
+          type: "complete",
+          requestId: request.requestId,
+          voxelBuild: validatedTool.value.build,
+          warnings: sourceWarnings.concat(validatedTool.value.warnings),
+          receivedBlocks: validatedTool.value.build.blocks.length,
+          totalBlocks: validatedTool.value.build.blocks.length,
+          source,
+          resolved: {
+            gridSize: resolvedGridSize,
+            palette: resolvedPalette,
+          },
+        };
+        postMessage(complete satisfies WorkerResponse);
+        return;
+      }
+
       if (!extracted) {
         throw new Error("Could not find a valid JSON object. Paste the raw JSON if possible.");
       }
 
       const validatedDirect = validateVoxelBuild(extracted, {
-        gridSize: request.gridSize,
-        palette: getPalette(request.palette),
-        maxBlocks: request.maxBlocks,
+        gridSize: resolvedGridSize,
+        palette: getPalette(resolvedPalette),
+        maxBlocks: request.maxBlocksByGrid[resolvedGridSize],
       });
 
       if (!validatedDirect.ok) {
@@ -303,15 +495,20 @@ async function runParse(request: ParseRequest) {
         warnings: validatedDirect.value.warnings,
         receivedBlocks: validatedDirect.value.build.blocks.length,
         totalBlocks: validatedDirect.value.build.blocks.length,
+        source,
+        resolved: {
+          gridSize: resolvedGridSize,
+          palette: resolvedPalette,
+        },
       };
       postMessage(complete satisfies WorkerResponse);
       return;
     }
 
     const validated = validateVoxelBuild(baseBuild, {
-      gridSize: request.gridSize,
-      palette: getPalette(request.palette),
-      maxBlocks: request.maxBlocks,
+      gridSize: resolvedGridSize,
+      palette: getPalette(resolvedPalette),
+      maxBlocks: request.maxBlocksByGrid[resolvedGridSize],
     });
 
     if (!validated.ok) {
@@ -329,6 +526,11 @@ async function runParse(request: ParseRequest) {
       warnings: validated.value.warnings,
       receivedBlocks: validated.value.build.blocks.length,
       totalBlocks: totalBlocks ?? validated.value.build.blocks.length,
+      source,
+      resolved: {
+        gridSize: resolvedGridSize,
+        palette: resolvedPalette,
+      },
     };
     postMessage(complete satisfies WorkerResponse);
   } catch (err) {
