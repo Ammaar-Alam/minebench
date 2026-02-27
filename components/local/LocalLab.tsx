@@ -32,7 +32,7 @@ type LocalParseWorkerRequest =
       rawText: string;
       gridSize: GridSize;
       palette: Palette;
-      maxBlocks: number;
+      maxBlocksByGrid: Record<GridSize, number>;
     }
   | {
       type: "cancel";
@@ -54,6 +54,11 @@ type LocalParseWorkerResponse =
       warnings: string[];
       receivedBlocks: number;
       totalBlocks: number | null;
+      source: "build-json" | "tool-call";
+      resolved: {
+        gridSize: GridSize;
+        palette: Palette;
+      };
     }
   | {
       type: "error";
@@ -63,6 +68,29 @@ type LocalParseWorkerResponse =
 
 function cx(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
+}
+
+const LARGE_PASTE_CHAR_THRESHOLD = 2_500_000;
+
+function formatCompactCount(value: number): string {
+  return value.toLocaleString();
+}
+
+function formatApproxMbFromChars(chars: number): string {
+  const mb = chars / 1_000_000;
+  if (mb >= 100) return `${Math.round(mb)}MB`;
+  if (mb >= 10) return `${mb.toFixed(1)}MB`;
+  return `${mb.toFixed(2)}MB`;
+}
+
+function trimOuterWhitespace(text: string): string {
+  if (!text) return "";
+  let start = 0;
+  let end = text.length;
+  while (start < end && /\s/.test(text[start] ?? "")) start += 1;
+  while (end > start && /\s/.test(text[end - 1] ?? "")) end -= 1;
+  if (start === 0 && end === text.length) return text;
+  return text.slice(start, end);
 }
 
 function CopyButton({
@@ -212,7 +240,13 @@ export function LocalLab() {
     return `SYSTEM:\n${systemPrompt}\n\nUSER:\n${userPrompt}`;
   }, [systemPrompt, userPrompt]);
 
-  const [modelOutput, setModelOutput] = useState("");
+  const modelOutputRef = useRef<HTMLTextAreaElement | null>(null);
+  const bufferedOutputRef = useRef<string | null>(null);
+  const [inputStats, setInputStats] = useState<{ mode: "empty" | "editor" | "buffered"; chars: number }>({
+    mode: "empty",
+    chars: 0,
+  });
+  const [statusNote, setStatusNote] = useState<string | null>(null);
   const [rendered, setRendered] = useState<{
     kind: "idle" | "loading" | "ready" | "error";
     build: VoxelBuild | null;
@@ -227,6 +261,16 @@ export function LocalLab() {
   const parseWorkerRef = useRef<Worker | null>(null);
   const parseRequestIdRef = useRef(0);
   const streamedBlocksRef = useRef<VoxelBuild["blocks"]>([]);
+  const gridSizeRef = useRef<GridSize>(gridSize);
+  const paletteRef = useRef<Palette>(palette);
+
+  useEffect(() => {
+    gridSizeRef.current = gridSize;
+  }, [gridSize]);
+
+  useEffect(() => {
+    paletteRef.current = palette;
+  }, [palette]);
 
   useEffect(() => {
     const worker = new Worker(new URL("./localBuildParse.worker.ts", import.meta.url));
@@ -259,6 +303,24 @@ export function LocalLab() {
       }
 
       if (message.type === "complete") {
+        if (message.resolved.gridSize !== gridSizeRef.current) {
+          setGridSize(message.resolved.gridSize);
+        }
+        if (message.resolved.palette !== paletteRef.current) {
+          setPalette(message.resolved.palette);
+        }
+        if (message.source === "tool-call") {
+          const switchedSettings =
+            message.resolved.gridSize !== gridSizeRef.current || message.resolved.palette !== paletteRef.current;
+          setStatusNote(
+            switchedSettings
+              ? `Converted tool output and matched settings to ${message.resolved.gridSize} / ${message.resolved.palette}.`
+              : "Converted tool output and rendered.",
+          );
+        } else {
+          setStatusNote(null);
+        }
+
         setRendered({
           kind: "ready",
           build: message.voxelBuild,
@@ -272,6 +334,7 @@ export function LocalLab() {
       }
 
       if (message.type === "error") {
+        setStatusNote(null);
         setRendered({
           kind: "error",
           build: null,
@@ -307,9 +370,24 @@ export function LocalLab() {
     ];
   }, [rendered]);
 
+  const hasInput = inputStats.mode === "buffered" || inputStats.chars > 0;
+
+  function readActiveInputText() {
+    if (typeof bufferedOutputRef.current === "string") return bufferedOutputRef.current;
+    return modelOutputRef.current?.value ?? "";
+  }
+
+  function clearModelInput() {
+    bufferedOutputRef.current = null;
+    if (modelOutputRef.current) modelOutputRef.current.value = "";
+    setInputStats({ mode: "empty", chars: 0 });
+    setStatusNote(null);
+  }
+
   function renderFromText(text: string) {
-    const trimmed = text.trim();
+    const trimmed = trimOuterWhitespace(text);
     if (!trimmed) {
+      setStatusNote(null);
       setRendered({
         kind: "error",
         build: null,
@@ -328,6 +406,7 @@ export function LocalLab() {
       }
 
       if (!json) {
+        setStatusNote(null);
         setRendered({
           kind: "error",
           build: null,
@@ -345,10 +424,12 @@ export function LocalLab() {
       });
 
       if (!validated.ok) {
+        setStatusNote(null);
         setRendered({ kind: "error", build: null, warnings: [], message: validated.error });
         return;
       }
 
+      setStatusNote(null);
       setRendered({
         kind: "ready",
         build: validated.value.build,
@@ -364,6 +445,16 @@ export function LocalLab() {
     if (!worker) {
       fallbackSync();
       return;
+    }
+
+    setStatusNote(null);
+    const currentRequestId = parseRequestIdRef.current;
+    if (currentRequestId > 0) {
+      try {
+        worker.postMessage({ type: "cancel", requestId: currentRequestId } satisfies LocalParseWorkerRequest);
+      } catch {
+        // ignore
+      }
     }
 
     const requestId = ++parseRequestIdRef.current;
@@ -382,11 +473,15 @@ export function LocalLab() {
         rawText: trimmed,
         gridSize,
         palette,
-        maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
+        maxBlocksByGrid: MAX_BLOCKS_BY_GRID,
       } satisfies LocalParseWorkerRequest);
     } catch {
       fallbackSync();
     }
+  }
+
+  function renderFromInput() {
+    renderFromText(readActiveInputText());
   }
 
   const loadingMessage =
@@ -569,33 +664,72 @@ export function LocalLab() {
                 <div className="text-sm font-semibold text-fg">Render JSON</div>
                 <div className="text-xs text-muted">Paste model output and render with Cmd/Ctrl+Enter.</div>
               </div>
-              <button
-                type="button"
-                className="mb-btn mb-btn-primary h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
-                onClick={() => renderFromText(modelOutput)}
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none">
-                    <path d="m6 4 12 8-12 8V4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  </svg>
-                  <span>Render</span>
-                </span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
+                  onClick={clearModelInput}
+                  disabled={!hasInput}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  className="mb-btn mb-btn-primary h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
+                  onClick={renderFromInput}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none">
+                      <path d="m6 4 12 8-12 8V4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                    </svg>
+                    <span>Render</span>
+                  </span>
+                </button>
+              </div>
             </div>
 
             <textarea
+              ref={modelOutputRef}
               className="mb-field min-h-[150px] font-mono text-[12px] leading-snug"
               placeholder='{"version":"1.0","boxes":[],"lines":[],"blocks":[{"x":0,"y":0,"z":0,"type":"stone"}]}'
-              value={modelOutput}
               spellCheck={false}
-              onChange={(e) => setModelOutput(e.target.value)}
+              onPaste={(e) => {
+                const pasted = e.clipboardData?.getData("text") ?? "";
+                if (!pasted || pasted.length < LARGE_PASTE_CHAR_THRESHOLD) return;
+
+                e.preventDefault();
+                bufferedOutputRef.current = pasted;
+                if (modelOutputRef.current) modelOutputRef.current.value = "";
+                setInputStats({ mode: "buffered", chars: pasted.length });
+                setStatusNote(
+                  `Large paste buffered (${formatCompactCount(pasted.length)} chars, ~${formatApproxMbFromChars(
+                    pasted.length,
+                  )}).`,
+                );
+              }}
+              onChange={(e) => {
+                if (bufferedOutputRef.current != null) {
+                  bufferedOutputRef.current = null;
+                }
+                const chars = e.target.value.length;
+                setInputStats({ mode: chars > 0 ? "editor" : "empty", chars });
+              }}
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
-                  renderFromText(modelOutput);
+                  renderFromInput();
                 }
               }}
             />
+
+            {inputStats.mode !== "empty" ? (
+              <div className="text-[11px] text-muted">
+                {inputStats.mode === "buffered" ? "Buffered paste" : "Editor input"}:{" "}
+                {formatCompactCount(inputStats.chars)} chars (~{formatApproxMbFromChars(inputStats.chars)})
+              </div>
+            ) : null}
+
+            {statusNote ? <div className="mb-subpanel p-3 text-xs text-muted">{statusNote}</div> : null}
 
             {rendered.kind === "error" && rendered.message ? (
               <div className="mb-subpanel p-3 text-sm text-danger">{rendered.message}</div>
