@@ -3,6 +3,7 @@ import { LEGACY_HOSTS, SITE_HOST } from "@/lib/seo";
 
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
+const MAX_PER_WINDOW_LOCAL_EXEC = 6;
 
 type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
@@ -34,6 +35,7 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
+  const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
 
   const ip = getIp(req);
   const key = `${ip}:${pathname}`;
@@ -46,7 +48,7 @@ export function middleware(req: NextRequest) {
   }
 
   bucket.count += 1;
-  if (bucket.count > MAX_PER_WINDOW) {
+  if (bucket.count > maxPerWindow) {
     return new NextResponse("Too Many Requests", {
       status: 429,
       headers: {

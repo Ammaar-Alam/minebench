@@ -14,13 +14,61 @@ const bodySchema = z.object({
   seed: z.number().int().optional(),
 });
 
+const MAX_CODE_CHARS = 600_000;
+
+function isEndpointEnabledForEnv() {
+  if (process.env.NODE_ENV !== "production") return true;
+  return process.env.MINEBENCH_ENABLE_LOCAL_EXEC_API === "1";
+}
+
+function isSameOriginRequest(req: Request) {
+  const candidate = req.headers.get("origin") ?? req.headers.get("referer");
+  if (!candidate) return false;
+
+  try {
+    const originUrl = new URL(candidate);
+    const reqUrl = new URL(req.url);
+    return originUrl.protocol === reqUrl.protocol && originUrl.host === reqUrl.host;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: Request) {
+  if (!isEndpointEnabledForEnv()) {
+    return NextResponse.json(
+      {
+        error:
+          "Local voxel.exec endpoint is disabled in production. Set MINEBENCH_ENABLE_LOCAL_EXEC_API=1 to enable.",
+      },
+      { status: 403 },
+    );
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    if (!isSameOriginRequest(req)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const fetchSite = req.headers.get("sec-fetch-site");
+    if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "same-site") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
+
   let body: z.infer<typeof bodySchema>;
   try {
     const raw = (await req.json()) as unknown;
     body = bodySchema.parse(raw);
   } catch {
     return NextResponse.json({ error: "Invalid voxel.exec payload" }, { status: 400 });
+  }
+
+  if (body.code.length > MAX_CODE_CHARS) {
+    return NextResponse.json(
+      { error: `Code payload too large (${body.code.length} chars > ${MAX_CODE_CHARS})` },
+      { status: 413 },
+    );
   }
 
   try {

@@ -244,9 +244,32 @@ async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: 
   }
 
   if (!response.ok) {
-    const message =
+    const serverError =
       parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string"
-        ? ((parsed as { error: string }).error ?? "Tool execution failed")
+        ? ((parsed as { error: string }).error ?? "")
+        : "";
+
+    if (response.status === 429) {
+      const retryAfterRaw = response.headers.get("retry-after") ?? "";
+      const retryAfter = Number.parseInt(retryAfterRaw, 10);
+      const waitHint =
+        Number.isFinite(retryAfter) && retryAfter > 0
+          ? `Wait ${retryAfter}s and try again.`
+          : "Wait a moment and try again.";
+      throw new Error(`Too many render requests. ${waitHint}`);
+    }
+
+    if (response.status === 403) {
+      throw new Error(serverError || "Local renderer is unavailable right now.");
+    }
+
+    if (response.status === 413) {
+      throw new Error(serverError || "Code payload is too large for local execution.");
+    }
+
+    const message =
+      serverError
+        ? serverError
         : `Tool execution failed (${response.status})`;
     throw new Error(message);
   }
