@@ -41,6 +41,7 @@ node_modules
 /coverage
 /test-results
 .turbo
+voxel-build.json
 
 # Database
 prisma/dev.db
