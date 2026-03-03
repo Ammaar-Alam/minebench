@@ -10,7 +10,9 @@ export function tokenBudgetCandidates(requested: number): number[] {
     Number.isFinite(requested) && requested > 0 ? Math.floor(requested) : DEFAULT_MAX_OUTPUT_TOKENS;
 
   const uniq: number[] = [];
-  for (const tokenBudget of [requestedTokens, ...TOKEN_BUDGET_FALLBACKS]) {
+  // Do not probe above the requested budget; retries should only step down.
+  const fallbackBudgets = TOKEN_BUDGET_FALLBACKS.filter((tokenBudget) => tokenBudget <= requestedTokens);
+  for (const tokenBudget of [requestedTokens, ...fallbackBudgets]) {
     const normalized = Math.floor(tokenBudget);
     if (normalized <= 0 || !Number.isFinite(normalized) || uniq.includes(normalized)) continue;
     uniq.push(normalized);
