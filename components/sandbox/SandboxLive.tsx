@@ -41,6 +41,9 @@ const DEFAULT_MODEL_A: ModelKey =
   ENABLED_MODELS.find((model) => model.key === "openai_gpt_5_mini")?.key ?? FALLBACK_MODEL_A;
 const DEFAULT_MODEL_B: ModelKey =
   ENABLED_MODELS.find(
+    (model) => model.key === "gemini_3_1_flash_lite" && model.key !== DEFAULT_MODEL_A
+  )?.key ??
+  ENABLED_MODELS.find(
     (model) => model.key === "gemini_3_0_flash" && model.key !== DEFAULT_MODEL_A
   )?.key ??
   ENABLED_MODELS.find((model) => model.key !== DEFAULT_MODEL_A)?.key ??

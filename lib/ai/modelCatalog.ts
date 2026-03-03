@@ -27,6 +27,7 @@ export type ModelKey =
   | "gemini_3_0_pro"
   | "gemini_3_1_pro"
   | "gemini_3_0_flash"
+  | "gemini_3_1_flash_lite"
   | "gemini_2_5_pro"
   | "moonshot_kimi_k2"
   | "moonshot_kimi_k2_5"
@@ -179,6 +180,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Gemini 3.0 Flash",
     enabled: true,
     openRouterModelId: "google/gemini-3-flash-preview",
+  },
+  {
+    key: "gemini_3_1_flash_lite",
+    provider: "gemini",
+    modelId: "gemini-3.1-flash-lite-preview",
+    displayName: "Gemini 3.1 Flash-Lite",
+    enabled: true,
+    openRouterModelId: "google/gemini-3.1-flash-lite-preview",
   },
   {
     key: "gemini_2_5_pro",
