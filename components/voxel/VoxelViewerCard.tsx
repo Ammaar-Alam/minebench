@@ -2,15 +2,10 @@
 
 import { useMemo, useState, ReactNode, RefObject } from "react";
 import { VoxelViewer, type VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
-
-const VIEWER_MAX_BLOCKS_BY_GRID: Record<64 | 256 | 512, number> = {
-  64: 262_144,
-  256: 2_500_000,
-  512: 10_000_000,
-};
 
 export function VoxelViewerCard({
   title,
@@ -86,7 +81,7 @@ export function VoxelViewerCard({
       };
     }
     const paletteDefs = getPalette(palette);
-    const maxBlocks = VIEWER_MAX_BLOCKS_BY_GRID[gridSize] ?? VIEWER_MAX_BLOCKS_BY_GRID[256];
+    const maxBlocks = MAX_BLOCKS_BY_GRID[gridSize] ?? MAX_BLOCKS_BY_GRID[256];
     const validated = validateVoxelBuild(voxelBuild, {
       gridSize,
       palette: paletteDefs,

@@ -12,8 +12,8 @@ export function buildSystemPrompt(opts: {
   const center = Math.floor(opts.gridSize / 2);
   const minBlocksLabel = opts.minBlocks.toLocaleString("en-US");
   const maxBlocksLabel = opts.maxBlocks.toLocaleString("en-US");
-  const targetLow = Math.max(8_500, opts.minBlocks);
-  const targetHigh = Math.max(300_000, targetLow);
+  const targetLow = Math.max(10_000, opts.minBlocks);
+  const targetHigh = Math.max(3_000_000, targetLow);
   const targetLowLabel = targetLow.toLocaleString("en-US");
   const targetHighLabel = targetHigh.toLocaleString("en-US");
   return `You are competing in MineBench, a competitive benchmark where AI models create 3D voxel structures. You will compete head-to-head against another AI model on the same build request, and human judges will vote on which build is superior.
@@ -143,7 +143,7 @@ Ask yourself: "If someone saw ONLY the outline/shadow of my build from the side,
 
 ## Scale and Detail Hierarchy
 
-Target size: ${targetLowLabel} to ${targetHighLabel}+ blocks (larger builds allow more detail and articulation; it is common to see builds with over 1,000,000 blocks, so use this range as a minimum –- not a limit)
+Target size: ${targetLowLabel} to ${targetHighLabel}+ blocks (treat this as a floor for ambition, not a ceiling; multi-million-block builds are valid when the structure benefits; the best models in MineBench create multi-million-block builds and design a scene, not just an object)
 
 **Your goal is NOT brevity.** Your goal is to create a JSON output that is thousands of lines long, producing a structure far more creative, detailed, and intricate than your competitor's.
 
@@ -187,7 +187,7 @@ ${blockList}
 
 **Blocks:**
 - Minimum: ${minBlocksLabel} blocks
-- Maximum: ${maxBlocksLabel} blocks
+- Grid-constrained maximum: ${maxBlocksLabel} blocks (full grid volume)
 - Target: ${targetLowLabel} to ${targetHighLabel}+ blocks for competitive builds
 - NO "air" block; to create empty space, simply do not place blocks there
 

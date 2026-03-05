@@ -3,6 +3,7 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { SandboxGifExportButton, type SandboxGifExportTarget } from "@/components/sandbox/SandboxGifExportButton";
 import { buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
@@ -12,18 +13,6 @@ import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
-
-const MAX_BLOCKS_BY_GRID: Record<GridSize, number> = {
-  64: Math.floor(64 ** 3 * 0.95),
-  256: Math.floor(256 ** 3 * 0.95),
-  512: Math.floor(512 ** 3 * 0.95),
-};
-
-const MIN_BLOCKS_BY_GRID: Record<GridSize, number> = {
-  64: 200,
-  256: 500,
-  512: 800,
-};
 
 type LocalParseWorkerRequest =
   | {

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as vm from "node:vm";
 import { z } from "zod";
-import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
+import type { GridSize } from "@/lib/ai/limits";
 import type { PaletteMode } from "@/lib/ai/types";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
@@ -98,6 +98,14 @@ function toType(t: unknown): string {
   return s;
 }
 
+function readOptionalLimitEnv(name: string): number | null {
+  const raw = process.env[name]?.trim();
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
+}
+
 function toPoint(
   value: unknown,
   label: string,
@@ -132,12 +140,9 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
     250,
     Math.min(60_000, Math.floor(Number(process.env.MINEBENCH_TOOL_TIMEOUT_MS ?? 12_000))),
   );
-  const maxBoxes = Math.max(10_000, Math.floor(Number(process.env.MINEBENCH_TOOL_MAX_BOXES ?? 200_000)));
-  const maxLines = Math.max(10_000, Math.floor(Number(process.env.MINEBENCH_TOOL_MAX_LINES ?? 200_000)));
-  const gridMaxBlocks = MAX_BLOCKS_BY_GRID[params.gridSize];
-  const maxBlocksEnv = Math.max(50_000, Math.floor(Number(process.env.MINEBENCH_TOOL_MAX_BLOCKS ?? gridMaxBlocks)));
-  // Allow some overhead for duplicates/out-of-bounds, but prevent runaway memory usage.
-  const maxBlocks = Math.min(maxBlocksEnv, gridMaxBlocks * 2);
+  const maxBoxes = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
+  const maxLines = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_LINES");
+  const maxBlocks = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BLOCKS");
 
   const boxes: { x1: number; y1: number; z1: number; x2: number; y2: number; z2: number; type: string }[] =
     [];
@@ -146,7 +151,9 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const blocks: { x: number; y: number; z: number; type: string }[] = [];
 
   const block = (x: unknown, y: unknown, z: unknown, type: unknown) => {
-    if (blocks.length >= maxBlocks) throw new Error(`Too many blocks (${blocks.length})`);
+    if (maxBlocks !== null && blocks.length >= maxBlocks) {
+      throw new Error(`Too many blocks (${blocks.length})`);
+    }
     blocks.push({ x: toInt(x), y: toInt(y), z: toInt(z), type: toType(type) });
   };
   const box = (
@@ -158,7 +165,9 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
     z2: unknown,
     type: unknown,
   ) => {
-    if (boxes.length >= maxBoxes) throw new Error(`Too many boxes (${boxes.length})`);
+    if (maxBoxes !== null && boxes.length >= maxBoxes) {
+      throw new Error(`Too many boxes (${boxes.length})`);
+    }
     boxes.push({
       x1: toInt(x1),
       y1: toInt(y1),
@@ -170,7 +179,9 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
     });
   };
   const line = (...args: unknown[]) => {
-    if (lines.length >= maxLines) throw new Error(`Too many lines (${lines.length})`);
+    if (maxLines !== null && lines.length >= maxLines) {
+      throw new Error(`Too many lines (${lines.length})`);
+    }
 
     let from: { x: number; y: number; z: number };
     let to: { x: number; y: number; z: number };

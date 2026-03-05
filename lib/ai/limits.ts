@@ -1,13 +1,13 @@
 // Shared generation limits (used by both raw JSON and tool-assisted paths).
+// Use the full grid volume as the ceiling for final builds: after validation and
+// dedupe, there can be at most one block per occupied cell.
 
 export type GridSize = 64 | 256 | 512;
 
-// 75% of grid volume — with primitives (boxes/lines) we can handle much larger builds efficiently
 export const MAX_BLOCKS_BY_GRID: Record<GridSize, number> = {
-  64: Math.floor(64 ** 3 * 0.75), // 196,608
-  // Cap higher grids to keep validation/rendering practical.
-  256: 2_000_000,
-  512: 4_000_000,
+  64: 64 ** 3,
+  256: 256 ** 3,
+  512: 512 ** 3,
 };
 
 export const MIN_BLOCKS_BY_GRID: Record<GridSize, number> = {
@@ -23,4 +23,3 @@ export function maxBlocksForGrid(gridSize: GridSize) {
 export function minBlocksForGrid(gridSize: GridSize) {
   return MIN_BLOCKS_BY_GRID[gridSize];
 }
-
