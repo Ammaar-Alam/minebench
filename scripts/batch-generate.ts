@@ -664,6 +664,13 @@ Upload notes:
 
   // generate missing builds only if --generate flag is set
   const jobsToGenerate = opts.generate ? (opts.overwrite ? allJobs : missing) : [];
+  if (opts.generate && jobsToGenerate.length > 0 && opts.concurrency > jobsToGenerate.length) {
+    console.error(
+      `\nError: --concurrency ${opts.concurrency} exceeds the number of selected build jobs (${jobsToGenerate.length}).\n` +
+        `Lower --concurrency or broaden the prompt/model selection.\n`
+    );
+    process.exit(1);
+  }
   if (opts.generate && jobsToGenerate.length > 0) {
     console.log(`\n🚀 Starting generation (concurrency ${opts.concurrency})...\n`);
 
