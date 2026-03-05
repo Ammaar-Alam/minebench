@@ -53,7 +53,7 @@ export async function deepseekGenerateText(params: {
   const url = `${baseUrl}/v1/chat/completions`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1_800_000);
+  const timeout: ReturnType<typeof setTimeout> | null = null;
 
   let res: Response | null = null;
   let lastBody = "";
@@ -98,7 +98,7 @@ export async function deepseekGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`DeepSeek request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 
   if (!res) {

@@ -153,7 +153,7 @@ export async function openrouterGenerateText(params: {
   };
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1_800_000);
+  const timeout: ReturnType<typeof setTimeout> | null = null;
 
   try {
     let res: Response | null = null;
@@ -317,6 +317,6 @@ export async function openrouterGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`OpenRouter request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 }

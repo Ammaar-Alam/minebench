@@ -144,17 +144,6 @@ function isTransportTimeoutError(err: unknown): boolean {
   );
 }
 
-function requestTimeoutMs(modelId: string): number {
-  const globalOverrideMs = parseIntEnv("OPENAI_REQUEST_TIMEOUT_MS", 0);
-  if (globalOverrideMs > 0) return globalOverrideMs;
-  if (modelId === "gpt-5.2-pro") {
-    const proOverrideMs = parseIntEnv("OPENAI_GPT5_PRO_TIMEOUT_MS", 0);
-    if (proOverrideMs > 0) return proOverrideMs;
-    return 7_200_000;
-  }
-  return 1_800_000;
-}
-
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -297,6 +286,15 @@ function looksLikeReasoningConfigError(body: string): boolean {
   );
 }
 
+function looksLikeStructuredOutputUnsupportedError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    ((b.includes("structured output") || b.includes("json_schema") || b.includes("response_format") || b.includes("text.format")) &&
+      (b.includes("not supported") || b.includes("unsupported") || b.includes("invalid") || b.includes("unknown"))) ||
+    (b.includes("strict") && b.includes("schema") && b.includes("unsupported"))
+  );
+}
+
 export async function openaiGenerateText(params: {
   modelId: string;
   apiKey?: string;
@@ -320,10 +318,16 @@ export async function openaiGenerateText(params: {
   // For these, don't fall back to chat/completions because it hides the real failure cause.
   const isResponsesOnlyModel =
     params.modelId === "gpt-5.2-pro" ||
+    params.modelId.startsWith("gpt-5.4-pro") ||
+    params.modelId === "gpt-5-pro" ||
     params.modelId === "gpt-5.2-codex" ||
     params.modelId === "gpt-5.3-codex";
   const reasoningEffortAttempts: string[] = isGpt5Family
-    ? ["xhigh", "high"]
+    ? params.modelId.startsWith("gpt-5.4-pro")
+      ? ["xhigh", "high", "medium"]
+      : params.modelId === "gpt-5-pro"
+        ? ["high"]
+        : ["xhigh", "high"]
     : isGptOssFamily
       ? ["xhigh", "high", "medium", "low"]
       : [];
@@ -331,8 +335,8 @@ export async function openaiGenerateText(params: {
     efforts: reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
   });
-  // gpt-5* currently only supports the default temperature (1). Passing a custom value errors,
-  // so we omit the parameter entirely and let the API use the default.
+  // For GPT-5 family requests in MineBench we use reasoning mode, where sampling knobs
+  // are not broadly compatible. Omit temperature and let API defaults apply.
   const temperature = isGpt5Family ? undefined : (params.temperature ?? 0.2);
   const maxOutputTokens = params.maxOutputTokens ?? 32768;
   // Streaming is only useful when we have a live delta consumer.
@@ -347,7 +351,7 @@ export async function openaiGenerateText(params: {
   const streamForRequest = useBackgroundMode ? false : streamResponses;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs(params.modelId));
+  const timeout: ReturnType<typeof setTimeout> | null = null;
 
   try {
     // Prefer the Responses API (works with modern OpenAI models).
@@ -355,6 +359,7 @@ export async function openaiGenerateText(params: {
     let lastBody = "";
     let selectedResponsesReasoningLabel: string | null = null;
     let selectedResponsesTokenBudget: number | null = null;
+    let useStructuredOutput = true;
     for (const tok of tokenBudgetCandidates(maxOutputTokens)) {
       for (const [cfgIdx, cfg] of reasoningConfigAttempts.entries()) {
         const reasoning =
@@ -364,6 +369,35 @@ export async function openaiGenerateText(params: {
               ? { max_tokens: clampReasoningBudget(cfg.maxTokens, tok) }
               : undefined;
         const currentReasoningLabel = describeReasoningConfigAttempt(cfg, tok);
+        const payload: Record<string, unknown> = {
+          model: params.modelId,
+          input: [
+            {
+              role: "system",
+              content: [{ type: "input_text", text: params.system }],
+            },
+            {
+              role: "user",
+              content: [{ type: "input_text", text: params.user }],
+            },
+          ],
+          reasoning,
+          background: useBackgroundMode || undefined,
+          store: useBackgroundMode || undefined,
+          temperature,
+          max_output_tokens: tok,
+          stream: streamForRequest,
+        };
+        if (useStructuredOutput) {
+          payload.text = {
+            format: {
+              type: "json_schema",
+              name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+              strict: true,
+              schema: params.jsonSchema,
+            },
+          };
+        }
         res = await fetchWithRetry(
           "https://api.openai.com/v1/responses",
           {
@@ -374,33 +408,7 @@ export async function openaiGenerateText(params: {
               ...(streamForRequest ? { Accept: "text/event-stream" } : {}),
             },
             signal: controller.signal,
-            body: JSON.stringify({
-              model: params.modelId,
-              input: [
-                {
-                  role: "system",
-                  content: [{ type: "input_text", text: params.system }],
-                },
-                {
-                  role: "user",
-                  content: [{ type: "input_text", text: params.user }],
-                },
-              ],
-              reasoning,
-              background: useBackgroundMode || undefined,
-              store: useBackgroundMode || undefined,
-              text: {
-                format: {
-                  type: "json_schema",
-                  name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-                  strict: true,
-                  schema: params.jsonSchema,
-                },
-              },
-              temperature,
-              max_output_tokens: tok,
-              stream: streamForRequest,
-            }),
+            body: JSON.stringify(payload),
           },
           { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
         );
@@ -412,6 +420,13 @@ export async function openaiGenerateText(params: {
         }
         lastBody = await res.text().catch(() => "");
         if (res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
+        if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
+          useStructuredOutput = false;
+          params.onTrace?.(
+            "OpenAI Responses structured output rejected; falling back to plain text output for this request.",
+          );
+          continue;
+        }
         if (res.status === 400 && cfgIdx < reasoningConfigAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
           const nextReasoningLabel = describeReasoningConfigAttempt(
             reasoningConfigAttempts[cfgIdx + 1],
@@ -529,7 +544,7 @@ export async function openaiGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`OpenAI request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 
   if (isResponsesOnlyModel) {

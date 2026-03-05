@@ -89,6 +89,12 @@ function describeRequestedThinkingMode(opts: {
   if (opts.provider === "moonshot") return "default";
 
   if (opts.provider === "openai") {
+    if (opts.modelId.startsWith("gpt-5.4-pro")) {
+      return "reasoning_effort_fallback=xhigh->high->medium->disabled";
+    }
+    if (opts.modelId === "gpt-5-pro") {
+      return "reasoning_effort=high";
+    }
     if (opts.modelId.startsWith("gpt-5")) return "reasoning_effort_fallback=xhigh->high->disabled";
     if (opts.modelId.startsWith("gpt-oss")) return "reasoning_effort_fallback=xhigh->high->medium->low->disabled";
     if (typeof opts.reasoningMaxTokens === "number") {
@@ -445,7 +451,11 @@ async function providerGenerateText(args: {
   }
 
   const openRouterReasoningEffortAttempts =
-    model.openRouterModelId.startsWith("openai/gpt-5")
+    model.openRouterModelId === "openai/gpt-5.4-pro"
+      ? ["xhigh", "high", "medium"]
+      : model.openRouterModelId === "openai/gpt-5-pro"
+      ? ["high"]
+      : model.openRouterModelId.startsWith("openai/gpt-5")
       ? ["xhigh", "high"]
       : model.openRouterModelId === "anthropic/claude-sonnet-4.6"
         ? ["max", "xhigh", "high", "medium", "low"]

@@ -66,7 +66,7 @@ export async function geminiGenerateText(params: {
   if (params.onDelta) url.searchParams.set("alt", "sse");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 1_800_000);
+  const timeout: ReturnType<typeof setTimeout> | null = null;
   let res: Response | null = null;
   try {
     const thinkingConfig = bestThinkingConfigForModel(params.modelId);
@@ -143,7 +143,7 @@ export async function geminiGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`Gemini request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 
   if (!res) throw new Error("Gemini request failed");

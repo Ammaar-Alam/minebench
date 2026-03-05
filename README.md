@@ -188,7 +188,6 @@ Copy `.env.example` to `.env` and set what you need:
 - `OPENAI_STREAM_RESPONSES=1` (applies to live-delta callers; batch generation uses non-streamed Responses JSON)
 - `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs; defaults on for `gpt-5*` when not streaming deltas)
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
-- `OPENAI_GPT5_PRO_TIMEOUT_MS=7200000` and `OPENAI_REQUEST_TIMEOUT_MS` (optional timeout overrides)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
 - `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`

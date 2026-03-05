@@ -111,8 +111,8 @@ type CachedBuild = {
   serverValidated: boolean;
 };
 
-const DEFAULT_MODEL_A = "openai_gpt_5_2";
-const DEFAULT_MODEL_B = "openai_gpt_5_mini";
+const DEFAULT_MODEL_A = "openai_gpt_5_4";
+const DEFAULT_MODEL_B = "openai_gpt_5_4_pro";
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_SNAPSHOT_TIMEOUT_MS ?? "12000",
   10,

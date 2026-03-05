@@ -74,24 +74,6 @@ function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
   return defaultValue;
 }
 
-function parseIntEnv(name: string, defaultValue: number): number {
-  const raw = process.env[name];
-  if (!raw) return defaultValue;
-  const value = Number(raw);
-  if (!Number.isFinite(value)) return defaultValue;
-  const normalized = Math.floor(value);
-  return normalized > 0 ? normalized : defaultValue;
-}
-
-function requestTimeoutMs(modelId: string): number {
-  const globalOverrideMs = parseIntEnv("ANTHROPIC_REQUEST_TIMEOUT_MS", 0);
-  if (globalOverrideMs > 0) return globalOverrideMs;
-  if (modelId.startsWith("claude-opus-4-6") || modelId.startsWith("claude-sonnet-4-6")) {
-    return 7_200_000; // 2 hours for high-effort 4.6 models
-  }
-  return 1_800_000; // 30 minutes default
-}
-
 function parseThinkingBudget(): number | null {
   const raw = process.env.ANTHROPIC_THINKING_BUDGET;
   if (!raw) return null;
@@ -195,7 +177,7 @@ export async function anthropicGenerateText(params: {
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), requestTimeoutMs(params.modelId));
+  const timeout: ReturnType<typeof setTimeout> | null = null;
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
   const useStructuredOutputs = Boolean(params.jsonSchema);
@@ -344,7 +326,7 @@ export async function anthropicGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`Anthropic request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 
   if (!res) throw new Error("Anthropic request failed");
