@@ -293,6 +293,19 @@ function createPrepared(
   };
 }
 
+export function prepareArenaBuildFromBuild(
+  source: ArenaBuildSource,
+  fullBuild: VoxelBuild,
+  opts?: { payloadEstimatedBytes?: number | null; checksum?: string | null },
+): PreparedArenaBuild {
+  return createPrepared(
+    source,
+    fullBuild,
+    opts?.payloadEstimatedBytes ?? null,
+    opts?.checksum ?? normalizeStoredChecksum(source),
+  );
+}
+
 function pruneCache() {
   if (artifactCache.size === 0) return;
 

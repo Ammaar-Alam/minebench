@@ -193,6 +193,31 @@ export function isArenaBuildStreamArtifactEnabled(): boolean {
   return Boolean(ARENA_STREAM_ARTIFACTS_ENABLED && ARENA_STREAM_ARTIFACT_PREFIX && ARENA_STREAM_ARTIFACT_BUCKET);
 }
 
+function getArenaBuildStreamArtifactRefByChecksum(
+  _buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string,
+): ArenaBuildStreamArtifactRef | null {
+  if (!isArenaBuildStreamArtifactEnabled()) return null;
+  return {
+    bucket: ARENA_STREAM_ARTIFACT_BUCKET,
+    path: `${ARENA_STREAM_ARTIFACT_PREFIX}/checksum/${checksum}/${variant}.ndjson`,
+  };
+}
+
+function getLegacyArenaBuildStreamArtifactRef(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string,
+): ArenaBuildStreamArtifactRef | null {
+  if (!isArenaBuildStreamArtifactEnabled()) return null;
+  const path = `${ARENA_STREAM_ARTIFACT_PREFIX}/${buildId}/${variant}-${checksum}.ndjson`;
+  return {
+    bucket: ARENA_STREAM_ARTIFACT_BUCKET,
+    path,
+  };
+}
+
 export function getArenaBuildStreamArtifactRef(
   buildId: string,
   variant: ArenaBuildVariant,
@@ -200,12 +225,27 @@ export function getArenaBuildStreamArtifactRef(
 ): ArenaBuildStreamArtifactRef | null {
   const normalizedChecksum = checksum?.trim();
   if (!normalizedChecksum) return null;
-  if (!isArenaBuildStreamArtifactEnabled()) return null;
-  const path = `${ARENA_STREAM_ARTIFACT_PREFIX}/${buildId}/${variant}-${normalizedChecksum}.ndjson`;
-  return {
-    bucket: ARENA_STREAM_ARTIFACT_BUCKET,
-    path,
-  };
+  return getArenaBuildStreamArtifactRefByChecksum(buildId, variant, normalizedChecksum);
+}
+
+function getArenaBuildStreamArtifactFetchRefs(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string | null,
+): ArenaBuildStreamArtifactRef[] {
+  const normalizedChecksum = checksum?.trim();
+  if (!normalizedChecksum || !isArenaBuildStreamArtifactEnabled()) return [];
+
+  const refs: ArenaBuildStreamArtifactRef[] = [];
+  const preferred = getArenaBuildStreamArtifactRefByChecksum(buildId, variant, normalizedChecksum);
+  if (preferred) refs.push(preferred);
+
+  const legacy = getLegacyArenaBuildStreamArtifactRef(buildId, variant, normalizedChecksum);
+  if (legacy && (!preferred || legacy.path !== preferred.path || legacy.bucket !== preferred.bucket)) {
+    refs.push(legacy);
+  }
+
+  return refs;
 }
 
 export type ArenaBuildStreamEventSequenceInput = {
@@ -263,9 +303,6 @@ export async function fetchArenaBuildStreamArtifact(
   checksum: string | null,
   opts?: { signal?: AbortSignal },
 ): Promise<Response | null> {
-  const ref = getArenaBuildStreamArtifactRef(buildId, variant, checksum);
-  if (!ref) return null;
-
   let config: ReturnType<typeof getSupabaseStorageConfig>;
   try {
     config = getSupabaseStorageConfig();
@@ -273,31 +310,35 @@ export async function fetchArenaBuildStreamArtifact(
     return null;
   }
 
-  const encodedPath = encodeStoragePath(ref.path);
-  const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      apikey: config.serviceRoleKey,
-    },
-    cache: "no-store",
-    signal: opts?.signal,
-  });
+  for (const ref of getArenaBuildStreamArtifactFetchRefs(buildId, variant, checksum)) {
+    const encodedPath = encodeStoragePath(ref.path);
+    const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+        apikey: config.serviceRoleKey,
+      },
+      cache: "no-store",
+      signal: opts?.signal,
+    });
 
-  if (resp.status === 404) return null;
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    const normalized = text.toLowerCase();
-    const objectMissing =
-      resp.status === 400 &&
-      (normalized.includes("not_found") ||
-        normalized.includes("object not found") ||
-        normalized.includes("\"error\":\"not_found\""));
-    if (objectMissing) return null;
-    throw new Error(`Stream artifact fetch failed (${resp.status}): ${text || "empty response"}`);
+    if (resp.status === 404) continue;
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      const normalized = text.toLowerCase();
+      const objectMissing =
+        resp.status === 400 &&
+        (normalized.includes("not_found") ||
+          normalized.includes("object not found") ||
+          normalized.includes("\"error\":\"not_found\""));
+      if (objectMissing) continue;
+      throw new Error(`Stream artifact fetch failed (${resp.status}): ${text || "empty response"}`);
+    }
+    return resp;
   }
-  return resp;
+
+  return null;
 }
 
 export async function uploadArenaBuildStreamArtifact(

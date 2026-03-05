@@ -11,6 +11,7 @@ export type BuildStorageRef = {
   byteSize?: number | null;
   compressedByteSize?: number | null;
   sha256?: string | null;
+  blockCount?: number | null;
 };
 
 export type BuildPayloadSource = {

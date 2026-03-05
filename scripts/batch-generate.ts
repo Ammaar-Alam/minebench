@@ -27,9 +27,17 @@ import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
+import { maxBlocksForGrid } from "../lib/ai/limits";
 import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
 import { MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
+import { getPalette } from "../lib/blocks/palettes";
+import { prepareArenaBuildFromBuild, type ArenaBuildSource } from "../lib/arena/buildArtifacts";
+import { isArtifactEligibleBuild } from "../lib/arena/buildDeliveryPolicy";
+import { iterateArenaBuildStreamEvents, uploadArenaBuildStreamArtifact, encodeArenaBuildStreamEvent } from "../lib/arena/buildStream";
+import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
 import { MODEL_SLUG, PROMPT_MAP, listUploadPromptSlugs, readUploadPromptText } from "./uploadsCatalog";
+import type { VoxelBuild } from "../lib/voxel/types";
+import { validateVoxelBuild } from "../lib/voxel/validate";
 
 // load env
 import "dotenv/config";
@@ -65,10 +73,36 @@ type BuildStorageReference = {
   byteSize: number;
   compressedByteSize: number;
   sha256: string;
+  blockCount: number;
+};
+
+type PreparedUploadPayload = {
+  jsonBytes: Buffer<ArrayBufferLike>;
+  gzipped: Buffer<ArrayBufferLike>;
+  sha256: string;
+  blockCount: number;
+  build: VoxelBuild;
 };
 
 function getJsonPath(promptSlug: string, modelSlug: string): string {
   return path.join(UPLOADS_DIR, promptSlug, `${promptSlug}-${modelSlug}.json`);
+}
+
+function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
+  const encoded: Uint8Array[] = [];
+  let total = 0;
+  for (const event of events) {
+    const bytes = encodeArenaBuildStreamEvent(event);
+    encoded.push(bytes);
+    total += bytes.length;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of encoded) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
 }
 
 function trimTrailingSlashes(value: string): string {
@@ -100,6 +134,44 @@ function getStorageUploadConfig(): StorageUploadConfig | null {
 
 function buildStoragePath(job: Job): string {
   return `${job.promptSlug}/${job.modelSlug}-g256-simple-precise.json.gz`;
+}
+
+function parseLocalBuildJson(jsonBytes: Buffer<ArrayBufferLike>): unknown | null {
+  const text = jsonBytes.toString("utf-8");
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return extractBestVoxelBuildJson(text);
+  }
+}
+
+function prepareUploadPayload(job: Job): { ok: true; prepared: PreparedUploadPayload } | { ok: false; error: string } {
+  const jsonBytes = fs.readFileSync(job.filePath);
+  const payload = parseLocalBuildJson(jsonBytes);
+  if (!payload) {
+    return { ok: false, error: "Build file does not contain a valid JSON object" };
+  }
+
+  const validated = validateVoxelBuild(payload, {
+    gridSize: 256,
+    palette: getPalette("simple"),
+    maxBlocks: maxBlocksForGrid(256),
+  });
+  if (!validated.ok) {
+    return { ok: false, error: validated.error };
+  }
+
+  const gzipped = gzipSync(jsonBytes);
+  return {
+    ok: true,
+    prepared: {
+      jsonBytes,
+      gzipped,
+      sha256: createHash("sha256").update(jsonBytes).digest("hex"),
+      blockCount: validated.value.build.blocks.length,
+      build: validated.value.build,
+    },
+  };
 }
 
 function collectFlagValues(args: string[], flag: string): string[] {
@@ -398,10 +470,69 @@ async function uploadBuildLegacy(
   return { ok: false, error: `HTTP ${gzipAttempt.status}: ${gzipAttempt.text}` };
 }
 
+async function uploadArenaStreamArtifacts(
+  job: Job,
+  prepared: PreparedUploadPayload,
+): Promise<{ ok: true; uploaded: number; skipped: boolean; reason?: string } | { ok: false; error: string }> {
+  const source: ArenaBuildSource = {
+    id: `upload:${job.promptSlug}:${job.modelSlug}`,
+    gridSize: 256,
+    palette: "simple",
+    blockCount: prepared.blockCount,
+    voxelByteSize: prepared.jsonBytes.byteLength,
+    voxelCompressedByteSize: prepared.gzipped.byteLength,
+    voxelSha256: prepared.sha256,
+    voxelData: prepared.build,
+    voxelStorageBucket: null,
+    voxelStoragePath: null,
+    voxelStorageEncoding: null,
+  };
+  const preparedArenaBuild = prepareArenaBuildFromBuild(source, prepared.build, {
+    payloadEstimatedBytes: prepared.jsonBytes.byteLength,
+    checksum: prepared.sha256,
+  });
+
+  if (!isArtifactEligibleBuild(preparedArenaBuild.hints.fullEstimatedBytes)) {
+    return { ok: true, uploaded: 0, skipped: true, reason: "below_threshold" };
+  }
+  if (!preparedArenaBuild.checksum) {
+    return { ok: false, error: "Stream artifact upload requires a durable checksum" };
+  }
+
+  let uploaded = 0;
+  for (const variant of ["full", "preview"] as const satisfies ArenaBuildVariant[]) {
+    const build = variant === "preview" ? preparedArenaBuild.previewBuild : preparedArenaBuild.fullBuild;
+    const bytes = chunkBytes(
+      iterateArenaBuildStreamEvents({
+        buildId: source.id,
+        variant,
+        checksum: preparedArenaBuild.checksum,
+        build,
+        buildLoadHints: preparedArenaBuild.hints,
+        source: "artifact",
+        serverValidated: true,
+        includePad: true,
+        durationMs: 0,
+      }),
+    );
+
+    try {
+      await uploadArenaBuildStreamArtifact(source.id, variant, preparedArenaBuild.checksum, bytes);
+      uploaded += 1;
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Stream artifact upload failed",
+      };
+    }
+  }
+
+  return { ok: true, uploaded, skipped: false };
+}
+
 async function uploadToSupabaseStorage(
   job: Job,
-  jsonBytes: Buffer<ArrayBufferLike>,
-  gzipped: Buffer<ArrayBufferLike>,
+  prepared: PreparedUploadPayload,
 ): Promise<{ ok: true; ref: BuildStorageReference } | { ok: false; error: string }> {
   const storageConfig = getStorageUploadConfig();
   if (!storageConfig) {
@@ -415,7 +546,7 @@ async function uploadToSupabaseStorage(
   const objectPath = `${storageConfig.prefix}/${buildStoragePath(job)}`;
   const encodedPath = encodeStoragePath(objectPath);
   const url = `${storageConfig.url}/storage/v1/object/${encodeURIComponent(storageConfig.bucket)}/${encodedPath}`;
-  const body = new Uint8Array(gzipped.buffer as ArrayBuffer, gzipped.byteOffset, gzipped.byteLength);
+  const body = new Uint8Array(prepared.gzipped.buffer as ArrayBuffer, prepared.gzipped.byteOffset, prepared.gzipped.byteLength);
 
   const resp = await fetch(url, {
     method: "POST",
@@ -433,16 +564,16 @@ async function uploadToSupabaseStorage(
     return { ok: false, error: `Storage upload failed (HTTP ${resp.status}): ${text}` };
   }
 
-  const sha256 = createHash("sha256").update(jsonBytes).digest("hex");
   return {
     ok: true,
     ref: {
       bucket: storageConfig.bucket,
       path: objectPath,
       encoding: "gzip",
-      byteSize: jsonBytes.byteLength,
-      compressedByteSize: gzipped.byteLength,
-      sha256,
+      byteSize: prepared.jsonBytes.byteLength,
+      compressedByteSize: prepared.gzipped.byteLength,
+      sha256: prepared.sha256,
+      blockCount: prepared.blockCount,
     },
   };
 }
@@ -481,15 +612,23 @@ async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
     return { ok: false, error: "ADMIN_TOKEN not set" };
   }
 
-  const jsonBytes = fs.readFileSync(job.filePath);
-  const gzipped = gzipSync(jsonBytes);
+  const preparedUpload = prepareUploadPayload(job);
+  if (!preparedUpload.ok) {
+    return { ok: false, error: `Upload validation failed: ${preparedUpload.error}` };
+  }
 
-  const storageAttempt = await uploadToSupabaseStorage(job, jsonBytes, gzipped);
+  const prepared = preparedUpload.prepared;
+
+  const storageAttempt = await uploadToSupabaseStorage(job, prepared);
   if (storageAttempt.ok) {
+    const artifactAttempt = await uploadArenaStreamArtifacts(job, prepared);
+    if (!artifactAttempt.ok) {
+      return { ok: false, error: `Stream artifact upload failed: ${artifactAttempt.error}` };
+    }
     return finalizeStorageImport(job, token, storageAttempt.ref);
   }
 
-  const legacy = await uploadBuildLegacy(job, token, jsonBytes, gzipped);
+  const legacy = await uploadBuildLegacy(job, token, prepared.jsonBytes, prepared.gzipped);
   if (legacy.ok) return legacy;
 
   return {

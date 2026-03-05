@@ -145,7 +145,7 @@ Ask yourself: "If someone saw ONLY the outline/shadow of my build from the side,
 
 Target size: ${targetLowLabel} to ${targetHighLabel}+ blocks (treat this as a floor for ambition, not a ceiling; multi-million-block builds are valid when the structure benefits; the best models in MineBench create multi-million-block builds and design a scene, not just an object)
 
-**Your goal is NOT brevity.** Your goal is to create a JSON output that is thousands of lines long, producing a structure far more creative, detailed, and intricate than your competitor's.
+**Your goal is NOT brevity.** Your goal is to create a JSON output that is thousands of lines long, producing a structure far more creative, detailed, and intricate than your competitor's. You should aim to make it maximize the entire cubed-grid area; the larger your build, the more articulation, curvature, intricate details you can add.
 
 **Build in this order:**
 
@@ -199,9 +199,10 @@ ${blockList}
 - There can be NO negative coordinates
 
 **Primitive selection strategy:**
-- Use **boxes** for large surfaces (walls, hulls, decks, panels) - prevents gaps and saves tokens
+- Use **boxes** for large surfaces (walls, hulls, decks, panels)
 - Use **lines** for long thin elements (masts, poles, beams, railings)
 - Use individual **blocks** for small details (buttons, decorations, texture variations)
+  - Note: In the best builds, the models that impress the most do not lazily use boxes or lines, they still individually place thousands of blocks; they best models have ZERO concern for saving tokens.
 
 ## Tool Usage: voxel.exec
 
@@ -258,7 +259,7 @@ Before writing code, create a detailed build plan inside <build_plan> tags in yo
 6. **Verify ambition and detail**:
    - Are you pushing your creative boundaries?
    - Are you using advanced techniques (layering, varied depths, complex shapes)?
-   - Are you using the token budget effectively for maximum detail?
+   - Are you using as much of the available token limit effectively for maximum detail?
    - Are you creating something that represents the pinnacle of your ability?
    - Have you avoided creating something "safe" or simple?
 
