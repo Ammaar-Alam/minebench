@@ -181,6 +181,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const autoRotateRef = useRef(false);
   const userInteractingRef = useRef(false);
   const onBuildReadyChangeRef = useRef<((ready: boolean) => void) | undefined>(undefined);
+  const requestRenderRef = useRef<(() => void) | null>(null);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -247,6 +248,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     if (gridRef.current) {
       gridRef.current.position.y = bounds.box.min.y - 0.5;
     }
+    requestRenderRef.current?.();
   }, []);
 
   const clearVoxelGroup = useCallback((three: NonNullable<typeof threeRef.current>) => {
@@ -263,6 +265,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     boundsRef.current = null;
     lastBuiltRef.current = { blockLimit: 0, at: 0 };
     reportReady(false);
+    requestRenderRef.current?.();
   }, [reportReady]);
 
   const scheduleKick = useCallback(() => {
@@ -406,6 +409,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       const desiredNow = Math.max(0, latestRef.current.voxelBuild?.blocks.length ?? 0);
       const requiredNow = expectedNow ?? desiredNow;
       reportReady(Boolean(requiredNow <= 0 || (blockLimit >= requiredNow && desiredNow >= requiredNow)));
+      requestRenderRef.current?.();
 
       if (!animate) return;
       if (startHadGroup) return;
@@ -434,6 +438,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           const count = Math.floor((g.total * eased) / 3) * 3;
           g.geo.setDrawRange(0, count);
         }
+        requestRenderRef.current?.();
         if (t < 1) {
           revealRafRef.current = window.requestAnimationFrame(tick);
         } else {
@@ -591,6 +596,18 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     mount.appendChild(renderer.domElement);
 
+    const syncRendererSize = () => {
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      const w = mount.clientWidth;
+      const h = mount.clientHeight;
+      if (w > 0 && h > 0) {
+        renderer.setSize(w, h, true);
+        camera.aspect = w / h;
+        camera.updateProjectionMatrix();
+      }
+    };
+    syncRendererSize();
+
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
@@ -650,6 +667,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const mo = new MutationObserver(() => {
       if (!gridRef.current) return;
       applyGridTheme(gridRef.current, getViewerTheme());
+      requestRenderRef.current?.();
     });
     mo.observe(root, { attributes: true, attributeFilter: ["data-theme"] });
 
@@ -658,27 +676,35 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     let raf = 0;
     let last = performance.now();
     const render = (now: number) => {
-      raf = window.requestAnimationFrame(render);
+      raf = 0;
       const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
       last = now;
-      controls.update();
+      const controlsChanged = (controls.update() as boolean | void) === true;
 
       const vg = voxelGroupRef.current;
+      const shouldAutoRotate = Boolean(vg && autoRotateRef.current && !userInteractingRef.current);
       if (vg && autoRotateRef.current && !userInteractingRef.current) {
         vg.group.rotation.y += dt * 0.25;
       }
       renderer.render(scene, camera);
+      if (controlsChanged || shouldAutoRotate) {
+        raf = window.requestAnimationFrame(render);
+      }
     };
-    raf = window.requestAnimationFrame(render);
+    const requestRender = () => {
+      if (raf !== 0) return;
+      raf = window.requestAnimationFrame(render);
+    };
+    requestRenderRef.current = requestRender;
+    requestRender();
 
     const onResize = () => {
       const w = mount.clientWidth;
       const h = mount.clientHeight;
       if (w === 0 || h === 0) return;
-      renderer.setSize(w, h, true);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
+      syncRendererSize();
       fitView();
+      requestRender();
     };
     const ro = new ResizeObserver(onResize);
     ro.observe(mount);
@@ -687,10 +713,12 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const onContextMenu = (e: Event) => e.preventDefault();
     renderer.domElement.addEventListener("dblclick", onDblClick);
     renderer.domElement.addEventListener("contextmenu", onContextMenu);
+    controls.addEventListener("change", requestRender);
 
     const onFullscreenChange = () => {
       const el = containerRef.current;
       setIsFullscreen(Boolean(el && document.fullscreenElement === el));
+      requestRender();
     };
     document.addEventListener("fullscreenchange", onFullscreenChange);
 
@@ -699,9 +727,11 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       mo.disconnect();
       ro.disconnect();
       window.cancelAnimationFrame(raf);
+      requestRenderRef.current = null;
       document.removeEventListener("fullscreenchange", onFullscreenChange);
       controls.removeEventListener("start", onStart);
       controls.removeEventListener("end", onEnd);
+      controls.removeEventListener("change", requestRender);
       controls.dispose();
 
       if (voxelGroupRef.current) {
@@ -755,6 +785,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     if (!three) return;
     autoRotateRef.current = Boolean(autoRotate);
     three.controls.autoRotate = false;
+    if (autoRotate) requestRenderRef.current?.();
   }, [autoRotate]);
 
   return (

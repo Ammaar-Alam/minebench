@@ -128,6 +128,7 @@ export function deriveArenaBuildLoadHints(
   const fullBlockCount = normalizeBlockCount(source.blockCount);
   const previewBlockCount = Math.min(fullBlockCount, PREVIEW_TARGET_BLOCKS);
   const fullEstimatedBytes = estimateArenaBuildBytes({
+    blockCount: fullBlockCount,
     voxelByteSize: source.voxelByteSize,
     voxelCompressedByteSize: source.voxelCompressedByteSize,
   });

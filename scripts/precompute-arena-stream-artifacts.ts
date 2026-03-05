@@ -154,6 +154,7 @@ async function main() {
     for (const row of rows as BuildRow[]) {
       try {
         const estimatedBytes = estimateArenaBuildBytes({
+          blockCount: row.blockCount,
           voxelByteSize: row.voxelByteSize,
           voxelCompressedByteSize: row.voxelCompressedByteSize,
         });

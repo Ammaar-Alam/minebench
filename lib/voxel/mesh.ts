@@ -312,7 +312,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
     alphaTest: 0.45,
     vertexColors: true,
   });
-  const matTransparent = new THREE.MeshStandardMaterial({
+  const matTransparent = new THREE.MeshLambertMaterial({
     map: atlasTexture,
     transparent: true,
     opacity: 0.85,
@@ -517,7 +517,7 @@ export async function createVoxelGroupAsync(
     alphaTest: 0.45,
     vertexColors: true,
   });
-  const matTransparent = new THREE.MeshStandardMaterial({
+  const matTransparent = new THREE.MeshLambertMaterial({
     map: atlasTexture,
     transparent: true,
     opacity: 0.85,

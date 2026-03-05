@@ -27,6 +27,7 @@ function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
 
 function resolveSourceBytes(source: ArenaBuildSource): number | null {
   const fromMetadata = estimateArenaBuildBytes({
+    blockCount: source.blockCount,
     voxelByteSize: source.voxelByteSize,
     voxelCompressedByteSize: source.voxelCompressedByteSize,
   });
@@ -76,4 +77,3 @@ export async function maybePrecomputeArenaStreamArtifactsForBuild(
 
   return { uploaded, skipped: false };
 }
-

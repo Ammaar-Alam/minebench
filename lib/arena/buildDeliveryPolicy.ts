@@ -17,6 +17,7 @@ const ARENA_ARTIFACT_MIN_BYTES = readIntEnv("ARENA_ARTIFACT_MIN_BYTES", DEFAULT_
 type ByteMeta = {
   voxelByteSize?: number | null;
   voxelCompressedByteSize?: number | null;
+  blockCount?: number | null;
 };
 
 function readIntEnv(name: string, fallback: number): number {
@@ -34,12 +35,17 @@ function normalizeEstimatedBytes(value: number | null | undefined): number | nul
 
 export function estimateArenaBuildBytes(meta: ByteMeta): number | null {
   const direct = normalizeEstimatedBytes(meta.voxelByteSize);
-  if (direct) return direct;
-
   const compressed = normalizeEstimatedBytes(meta.voxelCompressedByteSize);
-  if (compressed) return Math.floor(compressed * 3.4);
+  const fromCompressed = compressed ? Math.floor(compressed * 3.4) : null;
+  const blockCount =
+    typeof meta.blockCount === "number" && Number.isFinite(meta.blockCount) && meta.blockCount > 0
+      ? Math.floor(meta.blockCount)
+      : null;
+  // A block-count-derived floor avoids badly underestimating primitive-heavy builds where
+  // a compact source JSON expands into a huge hydrated scene.
+  const fromBlockCount = blockCount ? Math.floor(blockCount * 34) : null;
 
-  return null;
+  return Math.max(direct ?? 0, fromCompressed ?? 0, fromBlockCount ?? 0) || null;
 }
 
 export function classifyArenaBuildDelivery(estimatedBytes: number | null): ArenaBuildDeliveryClass {
