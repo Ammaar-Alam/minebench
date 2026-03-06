@@ -12,7 +12,6 @@ Use this index to find implementation-accurate docs for Arena ranking, generatio
 
 - [ChatGPT Web Voxel Prompt Template](./chatgpt-web-voxel-prompt.md)
 - [Tool Runner Spec (cross-provider)](./tool-runner-spec.md)
-- [Codex Benchmark Builder Guide](./codex-benchmark-builder.md)
 
 ## Related Repo Files
 
