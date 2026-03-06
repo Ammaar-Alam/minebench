@@ -82,7 +82,7 @@ export async function openAiCompatibleGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
-  const apiKey = params.apiKey ?? process.env.CUSTOM_API_KEY ?? process.env.NVIDIA_API_KEY;
+  const apiKey = params.apiKey ?? process.env.CUSTOM_API_KEY;
   if (!apiKey) throw new Error("Missing custom API key");
 
   const url = buildChatCompletionsUrl(params.baseUrl);
@@ -196,5 +196,3 @@ export async function openAiCompatibleGenerateText(params: {
   const text = extractTextFromChat(data);
   return { text };
 }
-
-export const nvidiaGenerateText = openAiCompatibleGenerateText;

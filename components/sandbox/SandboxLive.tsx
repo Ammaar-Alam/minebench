@@ -16,7 +16,6 @@ import { getPalette } from "@/lib/blocks/palettes";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
-type SlotName = "a" | "b";
 type SelectedModelValue = ModelKey | typeof CUSTOM_MODEL_VALUE;
 
 type CustomSandboxModel = {
@@ -60,9 +59,13 @@ const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
 const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
-const CUSTOM_MODEL_STORAGE_KEY = "mb_custom_models_v1";
 const CUSTOM_MODEL_VALUE = "__custom_api__";
 const DEFAULT_CUSTOM_API_URL = "https://inference-api.nvidia.com/v1/chat/completions";
+const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
+  displayName: "Custom API model",
+  modelId: "",
+  baseUrl: DEFAULT_CUSTOM_API_URL,
+};
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_mini";
 const DEFAULT_MODEL_A: ModelKey =
@@ -118,53 +121,6 @@ function saveProviderKeysToStorage(keys: ProviderApiKeys) {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(keys));
-  } catch {
-    // ignore
-  }
-}
-
-function defaultCustomModel(slot: SlotName): CustomSandboxModel {
-  return {
-    displayName: slot === "a" ? "Custom API A" : "Custom API B",
-    modelId: "",
-    baseUrl: DEFAULT_CUSTOM_API_URL,
-  };
-}
-
-function loadCustomModelsFromStorage(): Record<SlotName, CustomSandboxModel> {
-  if (typeof window === "undefined") {
-    return { a: defaultCustomModel("a"), b: defaultCustomModel("b") };
-  }
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_MODEL_STORAGE_KEY);
-    const obj = raw ? safeJsonParseObject(raw) : null;
-    const readSlot = (slot: SlotName): CustomSandboxModel => {
-      const fallback = defaultCustomModel(slot);
-      const slotValue = obj?.[slot];
-      if (!slotValue || typeof slotValue !== "object") return fallback;
-      const entry = slotValue as Record<string, unknown>;
-      return {
-        displayName:
-          typeof entry.displayName === "string" && entry.displayName.trim()
-            ? entry.displayName
-            : fallback.displayName,
-        modelId: typeof entry.modelId === "string" ? entry.modelId : "",
-        baseUrl:
-          typeof entry.baseUrl === "string" && entry.baseUrl.trim()
-            ? entry.baseUrl
-            : fallback.baseUrl,
-      };
-    };
-    return { a: readSlot("a"), b: readSlot("b") };
-  } catch {
-    return { a: defaultCustomModel("a"), b: defaultCustomModel("b") };
-  }
-}
-
-function saveCustomModelsToStorage(models: Record<SlotName, CustomSandboxModel>) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(CUSTOM_MODEL_STORAGE_KEY, JSON.stringify(models));
   } catch {
     // ignore
   }
@@ -389,9 +345,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
-  const [customModels, setCustomModels] = useState<Record<SlotName, CustomSandboxModel>>(() =>
-    loadCustomModelsFromStorage()
-  );
+  const [customModel, setCustomModel] = useState<CustomSandboxModel>(DEFAULT_CUSTOM_MODEL);
   const [showKeys, setShowKeys] = useState(false);
   const [modelPair, setModelPair] = useState<{ a: SelectedModelValue; b: SelectedModelValue | null }>({
     a: DEFAULT_MODEL_A,
@@ -429,19 +383,20 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       .map(([label, models]) => ({ label, models }));
   }, []);
   const canCompare = true;
+  const usesCustomModel =
+    isCustomModelValue(modelPair.a) || (compareEnabled && isCustomModelValue(modelPair.b));
   const selectedModels = useMemo(() => {
     const picked: SelectedLiveModel[] = [];
-    const pushSlot = (slot: SlotName, value: SelectedModelValue | null) => {
+    const pushValue = (value: SelectedModelValue | null) => {
       if (!value) return;
       if (isCustomModelValue(value)) {
-        const custom = customModels[slot];
         picked.push({
-          id: `custom-${slot}`,
+          id: "custom",
           kind: "custom",
-          displayName: custom.displayName.trim() || `Custom API ${slot.toUpperCase()}`,
+          displayName: customModel.displayName.trim() || "Custom API model",
           providerLabel: "Custom API",
-          modelId: custom.modelId.trim(),
-          baseUrl: custom.baseUrl.trim() || undefined,
+          modelId: customModel.modelId.trim(),
+          baseUrl: customModel.baseUrl.trim() || undefined,
         });
         return;
       }
@@ -455,10 +410,12 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         providerLabel: providerLabel(model.provider),
       });
     };
-    pushSlot("a", modelPair.a);
-    if (compareEnabled && modelPair.b) pushSlot("b", modelPair.b);
+    pushValue(modelPair.a);
+    if (compareEnabled && modelPair.b && (!isCustomModelValue(modelPair.b) || !isCustomModelValue(modelPair.a))) {
+      pushValue(modelPair.b);
+    }
     return picked;
-  }, [compareEnabled, customModels, modelPair.a, modelPair.b]);
+  }, [compareEnabled, customModel, modelPair.a, modelPair.b]);
 
   useEffect(() => {
     if (!running) return;
@@ -471,18 +428,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }, [providerKeys]);
 
   useEffect(() => {
-    saveCustomModelsToStorage(customModels);
-  }, [customModels]);
-
-  useEffect(() => {
     if (!compareEnabled) return;
     setModelPair((prev) => {
-      if (
-        prev.b &&
-        (isCustomModelValue(prev.b) ||
-          isCustomModelValue(prev.a) ||
-          prev.b !== prev.a)
-      ) {
+      if (prev.b && prev.b !== prev.a && !(isCustomModelValue(prev.a) && isCustomModelValue(prev.b))) {
         return prev;
       }
       const fallback = ENABLED_MODELS.find((model) => model.key !== prev.a)?.key ?? null;
@@ -492,7 +440,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     });
   }, [compareEnabled]);
 
-  function handleModelChange(slot: SlotName, value: string) {
+  function handleModelChange(slot: "a" | "b", value: string) {
     if (slot === "b" && !value) {
       setModelPair((prev) => ({ ...prev, b: null }));
       return;
@@ -513,6 +461,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         const fallback = ENABLED_MODELS.find((model) => model.key !== nextValue)?.key ?? null;
         return { a: nextValue, b: fallback ?? CUSTOM_MODEL_VALUE };
       }
+      if (isCustomModelValue(nextValue) && isCustomModelValue(prev.a)) {
+        return prev;
+      }
       if (
         !isCustomModelValue(nextValue) &&
         !isCustomModelValue(prev.a) &&
@@ -524,11 +475,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     });
   }
 
-  function updateCustomModel(slot: SlotName, patch: Partial<CustomSandboxModel>) {
-    setCustomModels((prev) => ({
-      ...prev,
-      [slot]: { ...prev[slot], ...patch },
-    }));
+  function updateCustomModel(patch: Partial<CustomSandboxModel>) {
+    setCustomModel((prev) => ({ ...prev, ...patch }));
   }
 
   function exportModelJson(args: {
@@ -1007,7 +955,12 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                           </optgroup>
                         ))}
                         <optgroup label="Custom">
-                          <option value={CUSTOM_MODEL_VALUE}>Custom API model</option>
+                          <option
+                            value={CUSTOM_MODEL_VALUE}
+                            disabled={compareEnabled && isCustomModelValue(modelPair.b)}
+                          >
+                            Custom API model
+                          </option>
                         </optgroup>
                       </select>
                       <svg
@@ -1054,7 +1007,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                             </optgroup>
                           ))}
                           <optgroup label="Custom">
-                            <option value={CUSTOM_MODEL_VALUE}>Custom API model</option>
+                            <option value={CUSTOM_MODEL_VALUE} disabled={isCustomModelValue(modelPair.a)}>
+                              Custom API model
+                            </option>
                           </optgroup>
                         </select>
                         <svg
@@ -1076,16 +1031,16 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                   ) : null}
                 </div>
 
-                {isCustomModelValue(modelPair.a) ? (
+                {usesCustomModel ? (
                   <div className="mt-3 rounded-xl border border-border/70 bg-bg/35 p-3">
-                    <div className="text-xs font-medium text-muted">Custom model A</div>
+                    <div className="text-xs font-medium text-muted">Custom API model</div>
                     <div className="mt-3 grid grid-cols-1 gap-3">
                       <label className="flex flex-col gap-1">
                         <div className="text-xs font-medium text-muted">Display name</div>
                         <input
                           className="mb-field h-10 w-full"
-                          value={customModels.a.displayName}
-                          onChange={(e) => updateCustomModel("a", { displayName: e.target.value })}
+                          value={customModel.displayName}
+                          onChange={(e) => updateCustomModel({ displayName: e.target.value })}
                           disabled={running}
                           placeholder="My custom model"
                         />
@@ -1094,8 +1049,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                         <div className="text-xs font-medium text-muted">Model ID</div>
                         <input
                           className="mb-field h-10 w-full"
-                          value={customModels.a.modelId}
-                          onChange={(e) => updateCustomModel("a", { modelId: e.target.value })}
+                          value={customModel.modelId}
+                          onChange={(e) => updateCustomModel({ modelId: e.target.value })}
                           disabled={running}
                           placeholder="aws/anthropic/bedrock-claude-opus-4-6"
                         />
@@ -1104,46 +1059,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                         <div className="text-xs font-medium text-muted">API server URL</div>
                         <input
                           className="mb-field h-10 w-full"
-                          value={customModels.a.baseUrl}
-                          onChange={(e) => updateCustomModel("a", { baseUrl: e.target.value })}
-                          disabled={running}
-                          placeholder={DEFAULT_CUSTOM_API_URL}
-                        />
-                      </label>
-                    </div>
-                  </div>
-                ) : null}
-
-                {compareEnabled && isCustomModelValue(modelPair.b) ? (
-                  <div className="mt-3 rounded-xl border border-border/70 bg-bg/35 p-3">
-                    <div className="text-xs font-medium text-muted">Custom model B</div>
-                    <div className="mt-3 grid grid-cols-1 gap-3">
-                      <label className="flex flex-col gap-1">
-                        <div className="text-xs font-medium text-muted">Display name</div>
-                        <input
-                          className="mb-field h-10 w-full"
-                          value={customModels.b.displayName}
-                          onChange={(e) => updateCustomModel("b", { displayName: e.target.value })}
-                          disabled={running}
-                          placeholder="Claude Opus 4.6 via custom API"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <div className="text-xs font-medium text-muted">Model ID</div>
-                        <input
-                          className="mb-field h-10 w-full"
-                          value={customModels.b.modelId}
-                          onChange={(e) => updateCustomModel("b", { modelId: e.target.value })}
-                          disabled={running}
-                          placeholder="aws/anthropic/bedrock-claude-opus-4-6"
-                        />
-                      </label>
-                      <label className="flex flex-col gap-1">
-                        <div className="text-xs font-medium text-muted">API server URL</div>
-                        <input
-                          className="mb-field h-10 w-full"
-                          value={customModels.b.baseUrl}
-                          onChange={(e) => updateCustomModel("b", { baseUrl: e.target.value })}
+                          value={customModel.baseUrl}
+                          onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
                           disabled={running}
                           placeholder={DEFAULT_CUSTOM_API_URL}
                         />
