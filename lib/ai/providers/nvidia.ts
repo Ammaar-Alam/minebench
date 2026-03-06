@@ -1,7 +1,9 @@
 import dns from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
+import type { ClientRequest, IncomingHttpHeaders, RequestOptions } from "node:http";
 import net from "node:net";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
-import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
 type NvidiaChatResponse = {
@@ -10,6 +12,19 @@ type NvidiaChatResponse = {
 
 type NvidiaChatStreamChunk = {
   choices?: { delta?: { content?: unknown } }[];
+};
+
+type ResolvedCustomApiTarget = {
+  url: URL;
+  hostname: string;
+  address: string;
+  family: 4 | 6;
+};
+
+type NodeHttpResponse = {
+  status: number;
+  headers: Headers;
+  body: AsyncIterable<string | Buffer | Uint8Array>;
 };
 
 const VOXEL_BUILD_JSON_SCHEMA_NAME = "voxel_build_response";
@@ -21,11 +36,11 @@ function extractTextFromChat(data: NvidiaChatResponse): string {
   return "";
 }
 
-function requestIdFromResponse(res: Response): string | null {
+function requestIdFromHeaders(headers: Headers): string | null {
   return (
-    res.headers.get("x-request-id") ??
-    res.headers.get("request-id") ??
-    res.headers.get("NVCF-REQID") ??
+    headers.get("x-request-id") ??
+    headers.get("request-id") ??
+    headers.get("NVCF-REQID") ??
     null
   );
 }
@@ -44,15 +59,25 @@ function normalizeBaseUrl(raw?: string): string {
   return base;
 }
 
-function buildChatCompletionsUrl(raw?: string): string {
+function buildChatCompletionsUrl(raw?: string): URL {
   const base = normalizeBaseUrl(raw);
-  return base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
+  return new URL(base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`);
+}
+
+function normalizeIpAddress(address: string): string {
+  const normalized = address.trim().replace(/^\[(.*)\]$/, "$1");
+  if (normalized.toLowerCase().startsWith("::ffff:")) {
+    const mapped = normalized.slice("::ffff:".length);
+    if (net.isIP(mapped) === 4) return mapped;
+  }
+  return normalized;
 }
 
 function isDisallowedIpAddress(address: string): boolean {
-  const family = net.isIP(address);
+  const normalizedAddress = normalizeIpAddress(address);
+  const family = net.isIP(normalizedAddress);
   if (family === 4) {
-    const parts = address.split(".").map((part) => Number.parseInt(part, 10));
+    const parts = normalizedAddress.split(".").map((part) => Number.parseInt(part, 10));
     if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
       return true;
     }
@@ -66,11 +91,14 @@ function isDisallowedIpAddress(address: string): boolean {
       (a === 172 && b >= 16 && b <= 31) ||
       (a === 192 && b === 0) ||
       (a === 192 && b === 168) ||
-      (a === 198 && (b === 18 || b === 19))
+      (a === 198 && (b === 18 || b === 19)) ||
+      (a === 198 && b === 51 && parts[2] === 100) ||
+      (a === 203 && b === 0 && parts[2] === 113) ||
+      a >= 224
     );
   }
   if (family === 6) {
-    const normalized = address.toLowerCase();
+    const normalized = normalizedAddress.toLowerCase();
     return (
       normalized === "::" ||
       normalized === "::1" ||
@@ -79,64 +107,48 @@ function isDisallowedIpAddress(address: string): boolean {
       normalized.startsWith("fe8") ||
       normalized.startsWith("fe9") ||
       normalized.startsWith("fea") ||
-      normalized.startsWith("feb")
+      normalized.startsWith("feb") ||
+      normalized.startsWith("ff") ||
+      normalized.startsWith("2001:db8")
     );
   }
   return true;
 }
 
-const DEFAULT_TRUSTED_HOSTS = new Set([
-  "inference-api.nvidia.com",
-  "integrate.api.nvidia.com",
-  "api.openai.com",
-  "api.anthropic.com",
-  "generativelanguage.googleapis.com",
-  "api.deepseek.com",
-  "api.moonshot.cn",
-  "openrouter.ai",
-]);
-
-function getTrustedHosts(): Set<string> {
-  const extra = (process.env.CUSTOM_API_TRUSTED_HOSTS ?? "").trim();
-  if (!extra) return DEFAULT_TRUSTED_HOSTS;
-  const merged = new Set(DEFAULT_TRUSTED_HOSTS);
-  for (const host of extra.split(",")) {
-    const h = host.trim().toLowerCase();
-    if (h) merged.add(h);
-  }
-  return merged;
+function isDnsLookupError(error: unknown): error is NodeJS.ErrnoException {
+  if (!(error instanceof Error)) return false;
+  return (
+    "code" in error &&
+    (error.code === "ENOTFOUND" ||
+      error.code === "EAI_AGAIN" ||
+      error.code === "ENODATA" ||
+      error.code === "ESERVFAIL")
+  );
 }
 
-function isHostTrusted(hostname: string): boolean {
-  const trusted = getTrustedHosts();
-  const h = hostname.trim().toLowerCase();
-  if (trusted.has(h)) return true;
-  for (const t of trusted) {
-    if (t.startsWith(".") && h.endsWith(t)) return true;
-    if (h.endsWith(`.${t}`)) return true;
+async function resolveCustomApiTarget(rawUrl: string): Promise<ResolvedCustomApiTarget> {
+  if (!rawUrl.trim()) {
+    throw new Error("Missing custom API server URL");
   }
-  return false;
-}
 
-export async function assertSafeCustomApiUrl(rawUrl: string): Promise<void> {
-  let parsed: URL;
+  let url: URL;
   try {
-    parsed = new URL(rawUrl);
+    url = buildChatCompletionsUrl(rawUrl);
   } catch {
     throw new Error("Invalid custom API server URL");
   }
 
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new Error("Custom API server URL must use http or https");
   }
-  if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {
+  if (process.env.NODE_ENV === "production" && url.protocol !== "https:") {
     throw new Error("Custom API server URL must use https in production");
   }
-  if (parsed.username || parsed.password) {
+  if (url.username || url.password) {
     throw new Error("Custom API server URL must not include embedded credentials");
   }
 
-  const hostname = parsed.hostname.trim().toLowerCase();
+  const hostname = normalizeIpAddress(url.hostname.trim().toLowerCase());
   if (!hostname) {
     throw new Error("Custom API server URL is missing a hostname");
   }
@@ -151,24 +163,214 @@ export async function assertSafeCustomApiUrl(rawUrl: string): Promise<void> {
   if (!hostname.includes(".") && net.isIP(hostname) === 0) {
     throw new Error("Custom API server URL must use a public hostname");
   }
-  if (net.isIP(hostname) !== 0 && isDisallowedIpAddress(hostname)) {
-    throw new Error("Custom API server URL must not target private or loopback IPs");
-  }
 
-  if (isHostTrusted(hostname)) return;
+  const hostFamily = net.isIP(hostname);
+  if (hostFamily !== 0) {
+    const normalizedAddress = normalizeIpAddress(hostname);
+    if (isDisallowedIpAddress(normalizedAddress)) {
+      throw new Error("Custom API server URL must not target private or loopback IPs");
+    }
+    return {
+      url,
+      hostname,
+      address: normalizedAddress,
+      family: net.isIP(normalizedAddress) as 4 | 6,
+    };
+  }
 
   try {
     const records = await dns.lookup(hostname, { all: true, verbatim: true });
     if (records.length === 0) {
       throw new Error("Custom API server URL hostname did not resolve");
     }
-    if (records.some((record) => isDisallowedIpAddress(record.address))) {
+
+    const normalizedRecords = records.map((record) => ({
+      address: normalizeIpAddress(record.address),
+      family: net.isIP(normalizeIpAddress(record.address)),
+    }));
+    if (normalizedRecords.some((record) => record.family === 0 || isDisallowedIpAddress(record.address))) {
       throw new Error("Custom API server URL resolved to a private or loopback address");
     }
+
+    const selected = normalizedRecords[0];
+    if (!selected) {
+      throw new Error("Custom API server URL hostname did not resolve");
+    }
+
+    return {
+      url,
+      hostname,
+      address: selected.address,
+      family: selected.family as 4 | 6,
+    };
   } catch (error) {
+    if (isDnsLookupError(error)) {
+      throw new Error("Custom API server URL hostname did not resolve");
+    }
     if (error instanceof Error) throw error;
     throw new Error("Failed to validate custom API server URL");
   }
+}
+
+function headersFromNodeResponse(headers: IncomingHttpHeaders): Headers {
+  const result = new Headers();
+  for (const [name, value] of Object.entries(headers)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        result.append(name, item);
+      }
+      continue;
+    }
+    if (typeof value === "string") {
+      result.set(name, value);
+    }
+  }
+  return result;
+}
+
+function chunkToUtf8(chunk: string | Buffer | Uint8Array): string {
+  return typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+}
+
+async function readResponseText(body: AsyncIterable<string | Buffer | Uint8Array>): Promise<string> {
+  let text = "";
+  for await (const chunk of body) {
+    text += chunkToUtf8(chunk);
+  }
+  return text;
+}
+
+async function consumeNodeSseStream(
+  body: AsyncIterable<string | Buffer | Uint8Array>,
+  onEvent: (evt: { event?: string; data: string }) => void,
+): Promise<void> {
+  let buffer = "";
+
+  const emitFrame = (frame: string) => {
+    const lines = frame.split(/\r?\n/);
+    let event: string | undefined;
+    const dataLines: string[] = [];
+
+    for (const rawLine of lines) {
+      const line = rawLine.trimEnd();
+      if (!line) continue;
+      if (line.startsWith("event:")) {
+        event = line.slice("event:".length).trim();
+        continue;
+      }
+      if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trimStart());
+      }
+    }
+
+    const data = dataLines.join("\n");
+    if (!data) return;
+    onEvent({ event, data });
+  };
+
+  for await (const chunk of body) {
+    buffer += chunkToUtf8(chunk);
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      emitFrame(frame);
+    }
+  }
+
+  if (buffer.trim()) {
+    const frames = buffer.split(/\r?\n\r?\n/);
+    for (const frame of frames) {
+      if (!frame.trim()) continue;
+      emitFrame(frame);
+    }
+  }
+}
+
+async function postToResolvedApi(params: {
+  target: ResolvedCustomApiTarget;
+  apiKey: string;
+  body: string;
+  signal: AbortSignal;
+  stream: boolean;
+}): Promise<NodeHttpResponse> {
+  return await new Promise<NodeHttpResponse>((resolve, reject) => {
+    if (params.signal.aborted) {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      reject(error);
+      return;
+    }
+
+    const isHttps = params.target.url.protocol === "https:";
+    const port = params.target.url.port
+      ? Number.parseInt(params.target.url.port, 10)
+      : isHttps
+        ? 443
+        : 80;
+    const options: RequestOptions = {
+      method: "POST",
+      hostname: params.target.address,
+      family: params.target.family,
+      port,
+      path: `${params.target.url.pathname}${params.target.url.search}`,
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        "Content-Type": "application/json",
+        Accept: params.stream ? "text/event-stream" : "application/json",
+        Host: params.target.url.host,
+        "Content-Length": Buffer.byteLength(params.body).toString(),
+      },
+    };
+
+    const cleanup = (abort: () => void) => {
+      params.signal.removeEventListener("abort", abort);
+    };
+
+    const abort = () => {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      req.destroy(error);
+    };
+
+    const req = (isHttps
+      ? https.request(
+          {
+            ...options,
+            servername: net.isIP(params.target.hostname) === 0 ? params.target.hostname : undefined,
+          },
+          (res) => {
+            res.once("end", () => cleanup(abort));
+            res.once("close", () => cleanup(abort));
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: headersFromNodeResponse(res.headers),
+              body: res,
+            });
+          },
+        )
+      : http.request(options, (res) => {
+          res.once("end", () => cleanup(abort));
+          res.once("close", () => cleanup(abort));
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: headersFromNodeResponse(res.headers),
+            body: res,
+          });
+        })) as ClientRequest;
+
+    req.once("error", (error) => {
+      cleanup(abort);
+      reject(error);
+    });
+    params.signal.addEventListener("abort", abort, { once: true });
+    req.write(params.body);
+    req.end();
+  });
+}
+
+export async function assertSafeCustomApiUrl(rawUrl: string): Promise<void> {
+  await resolveCustomApiTarget(rawUrl);
 }
 
 function looksLikeTokenLimitError(body: string): boolean {
@@ -215,12 +417,14 @@ export async function openAiCompatibleGenerateText(params: {
   const apiKey = params.apiKey ?? process.env.CUSTOM_API_KEY;
   if (!apiKey) throw new Error("Missing custom API key");
 
-  const url = buildChatCompletionsUrl(params.baseUrl);
+  const rawBaseUrl = params.baseUrl ?? process.env.CUSTOM_API_BASE_URL;
+  if (!rawBaseUrl) throw new Error("Missing custom API server URL");
+  const target = await resolveCustomApiTarget(rawBaseUrl);
   const controller = new AbortController();
   const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
 
-  let res: Response | null = null;
+  let res: NodeHttpResponse | null = null;
   let lastBody = "";
   const maxTokens = params.maxOutputTokens ?? 65_536;
   let selectedTokenBudget: number | null = null;
@@ -228,14 +432,11 @@ export async function openAiCompatibleGenerateText(params: {
 
   try {
     for (const tok of tokenBudgetCandidates(maxTokens)) {
-      res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
-        },
+      res = await postToResolvedApi({
+        target,
+        apiKey,
         signal: controller.signal,
+        stream: Boolean(params.onDelta),
         body: JSON.stringify({
           model: params.modelId,
           messages: [
@@ -259,12 +460,12 @@ export async function openAiCompatibleGenerateText(params: {
             : {}),
         }),
       });
-      if (res.ok) {
+      if (res.status >= 200 && res.status < 300) {
         selectedTokenBudget = tok;
         break;
       }
       selectedTokenBudget = tok;
-      lastBody = await res.text().catch(() => "");
+      lastBody = await readResponseText(res.body).catch(() => "");
       if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
         useStructuredOutput = false;
         params.onTrace?.("Custom API structured output rejected; falling back to plain text output for this request.");
@@ -289,9 +490,9 @@ export async function openAiCompatibleGenerateText(params: {
     throw new Error("Custom API request failed");
   }
 
-  if (!res.ok) {
-    const body = lastBody || (await res.text().catch(() => ""));
-    const rid = requestIdFromResponse(res);
+  if (res.status < 200 || res.status >= 300) {
+    const body = lastBody || (await readResponseText(res.body).catch(() => ""));
+    const rid = requestIdFromHeaders(res.headers);
     throw new Error(`Custom API error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
   }
 
@@ -307,7 +508,7 @@ export async function openAiCompatibleGenerateText(params: {
 
   if (params.onDelta) {
     let text = "";
-    await consumeSseStream(res, (evt) => {
+    await consumeNodeSseStream(res.body, (evt) => {
       if (evt.data === "[DONE]") return;
       let parsed: NvidiaChatStreamChunk | null = null;
       try {
@@ -324,7 +525,7 @@ export async function openAiCompatibleGenerateText(params: {
     return { text };
   }
 
-  const data = (await res.json()) as NvidiaChatResponse;
+  const data = JSON.parse(await readResponseText(res.body)) as NvidiaChatResponse;
   const text = extractTextFromChat(data);
   return { text };
 }

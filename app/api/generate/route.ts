@@ -83,6 +83,13 @@ export async function POST(req: Request) {
           kind: "catalog" as const,
           modelKey,
         }));
+  const seenModelIds = new Set<string>();
+  for (const model of requestedModels) {
+    if (seenModelIds.has(model.id)) {
+      return NextResponse.json({ error: "Model ids must be unique" }, { status: 400 });
+    }
+    seenModelIds.add(model.id);
+  }
   const models = requestedModels.flatMap((model): GenerateModelRequest[] => {
     if (model.kind !== "catalog") return [model];
     return isModelKey(model.modelKey) ? [model] : [];

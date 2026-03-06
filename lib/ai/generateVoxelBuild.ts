@@ -134,11 +134,13 @@ function providerRequestTraceLine(opts: {
 
 type DirectProvider = ModelCatalogEntry["provider"] | "custom";
 
-type ResolvedModel = Pick<
-  ModelCatalogEntry,
-  "key" | "provider" | "modelId" | "displayName" | "openRouterModelId" | "forceOpenRouter"
-> & {
+type ResolvedModel = {
+  key: string;
   provider: DirectProvider;
+  modelId: string;
+  displayName: string;
+  openRouterModelId?: string;
+  forceOpenRouter?: boolean;
   baseUrl?: string;
 };
 
@@ -186,6 +188,25 @@ function envVarForProviderKey(provider: ProviderKeyName): string {
       return "OPENROUTER_API_KEY";
     case "custom":
       return "CUSTOM_API_KEY";
+  }
+}
+
+function envVarForDirectProvider(provider: DirectProvider): string | null {
+  switch (provider) {
+    case "openai":
+      return envVarForProviderKey("openai");
+    case "anthropic":
+      return envVarForProviderKey("anthropic");
+    case "gemini":
+      return envVarForProviderKey("gemini");
+    case "moonshot":
+      return envVarForProviderKey("moonshot");
+    case "deepseek":
+      return envVarForProviderKey("deepseek");
+    case "custom":
+      return envVarForProviderKey("custom");
+    default:
+      return null;
   }
 }
 
@@ -452,6 +473,14 @@ async function providerGenerateText(args: {
       `OpenRouter routing requested for ${model.displayName}, but no OpenRouter API key is available.`,
     );
   }
+  if (model.provider === "custom" && preferOpenRouter) {
+    throw new Error("OpenRouter routing is unavailable for custom API models.");
+  }
+  if (model.provider === "custom" && !hasDirect) {
+    throw new Error(
+      `Missing custom API key. Provide your own ${envVarForProviderKey("custom")} key.`,
+    );
+  }
 
   // if we have neither key and there's an openrouter model id, error out
   if (!hasDirect && !hasOpenRouter) {
@@ -461,20 +490,7 @@ async function providerGenerateText(args: {
       );
     }
 
-    const directEnvVar =
-      model.provider === "openai"
-        ? envVarForProviderKey("openai")
-        : model.provider === "anthropic"
-          ? envVarForProviderKey("anthropic")
-          : model.provider === "gemini"
-            ? envVarForProviderKey("gemini")
-            : model.provider === "moonshot"
-              ? envVarForProviderKey("moonshot")
-              : model.provider === "deepseek"
-                ? envVarForProviderKey("deepseek")
-                : model.provider === "custom"
-                  ? envVarForProviderKey("custom")
-                : null;
+    const directEnvVar = envVarForDirectProvider(model.provider);
 
     if (model.openRouterModelId) {
       throw new Error(
@@ -612,7 +628,15 @@ export async function generateVoxelBuild(
     params.model ??
     (() => {
       if (!params.modelKey) throw new Error("Missing modelKey");
-      return getModelByKey(params.modelKey);
+      const catalogModel = getModelByKey(params.modelKey);
+      return {
+        key: catalogModel.key,
+        provider: catalogModel.provider,
+        modelId: catalogModel.modelId,
+        displayName: catalogModel.displayName,
+        openRouterModelId: catalogModel.openRouterModelId,
+        forceOpenRouter: catalogModel.forceOpenRouter,
+      };
     })();
   const paletteDefs = getPalette(params.palette);
   const enableTools = params.enableTools ?? true;
