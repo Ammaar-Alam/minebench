@@ -154,7 +154,7 @@ function SegmentedControl({
 }: {
   value: string;
   onChange: (value: string) => void;
-  options: Array<{ value: string; label: string }>;
+  options: Array<{ value: string; label: ReactNode }>;
   className?: string;
 }) {
   const safeCount = Math.max(1, options.length);
@@ -162,15 +162,20 @@ function SegmentedControl({
     0,
     options.findIndex((option) => option.value === value),
   );
-  const segmentWidth = `calc((100% - 0.5rem) / ${safeCount})`;
+  const segmentWidth = `${100 / safeCount}%`;
   const segmentTranslate = `${activeIndex * 100}%`;
 
   return (
-    <div className={cx("relative flex rounded-full bg-bg/55 p-1 ring-1 ring-border/80", className)}>
-      <div className="pointer-events-none absolute inset-1 rounded-full">
+    <div
+      className={cx(
+        "relative flex rounded-[1.5rem] bg-[linear-gradient(180deg,rgba(4,8,21,0.96),rgba(4,8,21,0.78))] p-1.5 ring-1 ring-white/8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_40px_-34px_rgba(3,10,28,0.96)] backdrop-blur-sm",
+        className,
+      )}
+    >
+      <div className="pointer-events-none absolute inset-1.5 rounded-[1rem]">
         <span
           aria-hidden="true"
-          className="absolute inset-y-0 left-0 rounded-full border border-accent/55 bg-accent/24 shadow-[0_8px_20px_-14px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-out"
+          className="absolute inset-y-0 left-0 rounded-[1rem] border border-accent/45 bg-[radial-gradient(circle_at_20%_20%,rgba(118,255,232,0.2),rgba(61,229,204,0.1)_55%,rgba(61,229,204,0.04))] shadow-[0_0_0_1px_rgba(61,229,204,0.14),0_14px_28px_-20px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
           style={{
             width: segmentWidth,
             transform: `translateX(${segmentTranslate})`,
@@ -185,8 +190,8 @@ function SegmentedControl({
             type="button"
             aria-pressed={active}
             className={cx(
-              "relative z-10 h-7 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:h-8",
-              active ? "text-fg" : "text-muted hover:text-fg",
+              "relative z-10 flex h-10 min-w-0 flex-1 items-center justify-center rounded-[1rem] px-4 text-sm font-semibold tracking-[-0.015em] transition-colors duration-200 sm:h-11",
+              active ? "text-fg" : "text-muted/90 hover:text-fg",
             )}
             onClick={() => onChange(option.value)}
           >
@@ -194,6 +199,58 @@ function SegmentedControl({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+function SegmentedField({
+  label,
+  tooltipTitle,
+  tooltipBody,
+  tooltipAlign = "right",
+  className,
+  children,
+}: {
+  label: string;
+  tooltipTitle: string;
+  tooltipBody: string;
+  tooltipAlign?: "left" | "right";
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={cx(
+        "group/field relative flex min-w-0 flex-col gap-2.5",
+        className,
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <div className="text-[0.64rem] font-semibold uppercase tracking-[0.32em] text-muted/72">{label}</div>
+        <div className="group/tooltip relative ml-auto flex">
+          <button
+            type="button"
+            aria-label={`${label} info`}
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/[0.035] text-[11px] font-semibold text-muted/85 ring-1 ring-white/8 transition-colors duration-200 hover:bg-white/[0.06] hover:text-fg focus-visible:bg-white/[0.06] focus-visible:text-fg focus-visible:outline-none"
+          >
+            ?
+          </button>
+
+          <div
+            className={cx(
+              "pointer-events-none absolute top-[calc(100%+0.65rem)] z-[80] w-[min(22rem,calc(100vw-2rem))] translate-y-1 opacity-0 transition duration-200 group-hover/tooltip:translate-y-0 group-hover/tooltip:opacity-100 group-focus-within/tooltip:translate-y-0 group-focus-within/tooltip:opacity-100",
+              tooltipAlign === "right" ? "right-0 origin-top-right" : "left-0 origin-top-left",
+            )}
+          >
+            <div className="rounded-[1.15rem] border border-white/10 bg-[linear-gradient(180deg,rgba(8,13,30,0.98),rgba(5,9,22,0.96))] p-4 shadow-[0_24px_60px_-28px_rgba(4,11,31,0.95)] backdrop-blur-md">
+              <div className="text-sm font-semibold tracking-[-0.01em] text-fg">{tooltipTitle}</div>
+              <p className="mt-1.5 text-xs leading-relaxed text-muted">{tooltipBody}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {children}
     </div>
   );
 }
@@ -489,9 +546,9 @@ export function LocalLab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="mb-panel p-4 sm:p-5">
+      <div className="mb-panel z-30 overflow-visible p-4 sm:p-5">
         <div className="mb-panel-inner flex flex-col gap-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
               <div className="font-display text-[1.85rem] font-semibold tracking-tight text-fg sm:text-[2.1rem]">
                 Test models locally
@@ -501,26 +558,63 @@ export function LocalLab() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <SegmentedControl
-                value={String(gridSize)}
-                onChange={(value) => setGridSize(Number(value) as GridSize)}
-                options={[
-                  { value: "64", label: "64^3" },
-                  { value: "256", label: "256^3" },
-                  { value: "512", label: "512^3" },
-                ]}
-                className="min-w-[220px]"
-              />
-              <SegmentedControl
-                value={palette}
-                onChange={(value) => setPalette(value as Palette)}
-                options={[
-                  { value: "simple", label: "Simple" },
-                  { value: "advanced", label: "Advanced" },
-                ]}
-                className="min-w-[190px]"
-              />
+            <div className="flex flex-wrap items-start gap-x-5 gap-y-3 lg:justify-end">
+              <SegmentedField
+                label="Grid size"
+                tooltipTitle="Grid size"
+                tooltipBody="Sets the build volume. Larger grids give the model more room for detail and variation, which broadens the output range and helps keep the benchmark from getting saturated."
+                className="min-w-[220px] flex-1 sm:min-w-[240px]"
+              >
+                <SegmentedControl
+                  value={String(gridSize)}
+                  onChange={(value) => setGridSize(Number(value) as GridSize)}
+                  options={[
+                    {
+                      value: "64",
+                      label: (
+                        <span className="inline-flex items-start">
+                          <span>64</span>
+                          <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                        </span>
+                      ),
+                    },
+                    {
+                      value: "256",
+                      label: (
+                        <span className="inline-flex items-start">
+                          <span>256</span>
+                          <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                        </span>
+                      ),
+                    },
+                    {
+                      value: "512",
+                      label: (
+                        <span className="inline-flex items-start">
+                          <span>512</span>
+                          <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
+              </SegmentedField>
+              <SegmentedField
+                label="Block palette"
+                tooltipTitle="Block palette"
+                tooltipBody="Sets the selection of blocks available to the model. Simple keeps the block set tight. Advanced unlocks a wider palette for richer, more varied builds."
+                tooltipAlign="right"
+                className="min-w-[210px] flex-1 sm:min-w-[230px]"
+              >
+                <SegmentedControl
+                  value={palette}
+                  onChange={(value) => setPalette(value as Palette)}
+                  options={[
+                    { value: "simple", label: "Simple" },
+                    { value: "advanced", label: "Advanced" },
+                  ]}
+                />
+              </SegmentedField>
             </div>
           </div>
         </div>
