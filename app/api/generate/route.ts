@@ -2,6 +2,7 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
+import { assertSafeCustomApiUrl } from "@/lib/ai/providers/nvidia";
 import type { GenerateEvent, GenerateModelRequest, GenerateRequest } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
@@ -30,7 +31,7 @@ const modelRequestSchema = z.union([
     provider: z.literal("custom"),
     displayName: z.string().trim().min(1).max(120),
     modelId: z.string().trim().min(1).max(240),
-    baseUrl: z.string().trim().url().max(4000).optional(),
+    baseUrl: z.string().trim().url().max(4000),
   }),
 ]);
 
@@ -88,6 +89,16 @@ export async function POST(req: Request) {
   });
   if (models.length === 0) {
     return NextResponse.json({ error: "No valid modelKeys" }, { status: 400 });
+  }
+
+  for (const model of models) {
+    if (model.kind !== "custom") continue;
+    try {
+      await assertSafeCustomApiUrl(model.baseUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid custom API server URL";
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
   }
 
   const providerKeys = body.providerKeys;

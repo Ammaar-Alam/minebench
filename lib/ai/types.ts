@@ -25,7 +25,7 @@ export type GenerateModelRequest =
       provider: "custom";
       displayName: string;
       modelId: string;
-      baseUrl?: string;
+      baseUrl: string;
     };
 
 export type GenerateRequest = {

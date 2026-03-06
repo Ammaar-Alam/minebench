@@ -38,7 +38,7 @@ type SelectedLiveModel =
       displayName: string;
       providerLabel: string;
       modelId: string;
-      baseUrl?: string;
+      baseUrl: string;
     };
 
 type ModelResult = {
@@ -396,7 +396,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           displayName: customModel.displayName.trim() || "Custom API model",
           providerLabel: "Custom API",
           modelId: customModel.modelId.trim(),
-          baseUrl: customModel.baseUrl.trim() || undefined,
+          baseUrl: customModel.baseUrl.trim() || DEFAULT_CUSTOM_API_URL,
         });
         return;
       }

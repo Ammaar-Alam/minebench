@@ -1,3 +1,5 @@
+import dns from "node:dns/promises";
+import net from "node:net";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
@@ -28,7 +30,11 @@ function requestIdFromResponse(res: Response): string | null {
 }
 
 function normalizeBaseUrl(raw?: string): string {
-  const base = (raw ?? process.env.NVIDIA_BASE_URL ?? "https://inference-api.nvidia.com/v1")
+  const candidate = raw ?? process.env.CUSTOM_API_BASE_URL;
+  if (!candidate) {
+    throw new Error("Missing custom API server URL");
+  }
+  const base = candidate
     .trim()
     .replace(/\/+$/, "");
   if (base.endsWith("/chat/completions")) {
@@ -40,6 +46,93 @@ function normalizeBaseUrl(raw?: string): string {
 function buildChatCompletionsUrl(raw?: string): string {
   const base = normalizeBaseUrl(raw);
   return base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
+}
+
+function isDisallowedIpAddress(address: string): boolean {
+  const family = net.isIP(address);
+  if (family === 4) {
+    const parts = address.split(".").map((part) => Number.parseInt(part, 10));
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+      return true;
+    }
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 0) ||
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19))
+    );
+  }
+  if (family === 6) {
+    const normalized = address.toLowerCase();
+    return (
+      normalized === "::" ||
+      normalized === "::1" ||
+      normalized.startsWith("fc") ||
+      normalized.startsWith("fd") ||
+      normalized.startsWith("fe8") ||
+      normalized.startsWith("fe9") ||
+      normalized.startsWith("fea") ||
+      normalized.startsWith("feb")
+    );
+  }
+  return true;
+}
+
+export async function assertSafeCustomApiUrl(rawUrl: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid custom API server URL");
+  }
+
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new Error("Custom API server URL must use http or https");
+  }
+  if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {
+    throw new Error("Custom API server URL must use https in production");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Custom API server URL must not include embedded credentials");
+  }
+
+  const hostname = parsed.hostname.trim().toLowerCase();
+  if (!hostname) {
+    throw new Error("Custom API server URL is missing a hostname");
+  }
+  if (
+    hostname === "localhost" ||
+    hostname === "localhost.localdomain" ||
+    hostname.endsWith(".localhost") ||
+    hostname.endsWith(".local")
+  ) {
+    throw new Error("Custom API server URL must not target localhost or local network hosts");
+  }
+  if (!hostname.includes(".") && net.isIP(hostname) === 0) {
+    throw new Error("Custom API server URL must use a public hostname");
+  }
+  if (net.isIP(hostname) !== 0 && isDisallowedIpAddress(hostname)) {
+    throw new Error("Custom API server URL must not target private or loopback IPs");
+  }
+
+  try {
+    const records = await dns.lookup(hostname, { all: true, verbatim: true });
+    if (records.length === 0) {
+      throw new Error("Custom API server URL hostname did not resolve");
+    }
+    if (records.some((record) => isDisallowedIpAddress(record.address))) {
+      throw new Error("Custom API server URL resolved to a private or loopback address");
+    }
+  } catch (error) {
+    if (error instanceof Error) throw error;
+    throw new Error("Failed to validate custom API server URL");
+  }
 }
 
 function looksLikeTokenLimitError(body: string): boolean {
