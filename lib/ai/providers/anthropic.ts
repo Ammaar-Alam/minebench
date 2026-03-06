@@ -1,3 +1,4 @@
+import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
@@ -170,6 +171,7 @@ export async function anthropicGenerateText(params: {
   maxTokens: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
+  signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
@@ -177,6 +179,7 @@ export async function anthropicGenerateText(params: {
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
   const controller = new AbortController();
+  const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
@@ -326,6 +329,7 @@ export async function anthropicGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`Anthropic request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
+    detachAbort();
     if (timeout) clearTimeout(timeout);
   }
 

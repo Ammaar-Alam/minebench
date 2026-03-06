@@ -1,3 +1,4 @@
+import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -304,6 +305,7 @@ export async function openaiGenerateText(params: {
   reasoningMaxTokens?: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
+  signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
@@ -351,6 +353,7 @@ export async function openaiGenerateText(params: {
   const streamForRequest = useBackgroundMode ? false : streamResponses;
 
   const controller = new AbortController();
+  const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
 
   try {
@@ -544,6 +547,7 @@ export async function openaiGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`OpenAI request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
+    detachAbort();
     if (timeout) clearTimeout(timeout);
   }
 

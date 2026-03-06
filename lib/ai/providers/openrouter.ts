@@ -1,3 +1,4 @@
+import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
@@ -132,6 +133,7 @@ export async function openrouterGenerateText(params: {
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   reasoningEffortAttempts?: string[];
+  signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
@@ -153,6 +155,7 @@ export async function openrouterGenerateText(params: {
   };
 
   const controller = new AbortController();
+  const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
 
   try {
@@ -317,6 +320,7 @@ export async function openrouterGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`OpenRouter request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
+    detachAbort();
     if (timeout) clearTimeout(timeout);
   }
 }
