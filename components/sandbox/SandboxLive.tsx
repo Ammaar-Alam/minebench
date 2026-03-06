@@ -16,9 +16,34 @@ import { getPalette } from "@/lib/blocks/palettes";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
+type SlotName = "a" | "b";
+type SelectedModelValue = ModelKey | typeof CUSTOM_MODEL_VALUE;
+
+type CustomSandboxModel = {
+  displayName: string;
+  modelId: string;
+  baseUrl: string;
+};
+
+type SelectedLiveModel =
+  | {
+      id: string;
+      kind: "catalog";
+      modelKey: ModelKey;
+      displayName: string;
+      providerLabel: string;
+    }
+  | {
+      id: string;
+      kind: "custom";
+      displayName: string;
+      providerLabel: string;
+      modelId: string;
+      baseUrl?: string;
+    };
 
 type ModelResult = {
-  modelKey: ModelKey;
+  modelKey: string;
   status: "idle" | "loading" | "success" | "error";
   voxelBuild: unknown | null;
   error?: string;
@@ -35,6 +60,9 @@ const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
 const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
+const CUSTOM_MODEL_STORAGE_KEY = "mb_custom_models_v1";
+const CUSTOM_MODEL_VALUE = "__custom_api__";
+const DEFAULT_CUSTOM_API_URL = "https://inference-api.nvidia.com/v1/chat/completions";
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_mini";
 const DEFAULT_MODEL_A: ModelKey =
@@ -79,6 +107,7 @@ function loadProviderKeysFromStorage(): ProviderApiKeys {
     set("gemini");
     set("moonshot");
     set("deepseek");
+    set("custom");
     return keys;
   } catch {
     return {};
@@ -92,6 +121,57 @@ function saveProviderKeysToStorage(keys: ProviderApiKeys) {
   } catch {
     // ignore
   }
+}
+
+function defaultCustomModel(slot: SlotName): CustomSandboxModel {
+  return {
+    displayName: slot === "a" ? "Custom API A" : "Custom API B",
+    modelId: "",
+    baseUrl: DEFAULT_CUSTOM_API_URL,
+  };
+}
+
+function loadCustomModelsFromStorage(): Record<SlotName, CustomSandboxModel> {
+  if (typeof window === "undefined") {
+    return { a: defaultCustomModel("a"), b: defaultCustomModel("b") };
+  }
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_MODEL_STORAGE_KEY);
+    const obj = raw ? safeJsonParseObject(raw) : null;
+    const readSlot = (slot: SlotName): CustomSandboxModel => {
+      const fallback = defaultCustomModel(slot);
+      const slotValue = obj?.[slot];
+      if (!slotValue || typeof slotValue !== "object") return fallback;
+      const entry = slotValue as Record<string, unknown>;
+      return {
+        displayName:
+          typeof entry.displayName === "string" && entry.displayName.trim()
+            ? entry.displayName
+            : fallback.displayName,
+        modelId: typeof entry.modelId === "string" ? entry.modelId : "",
+        baseUrl:
+          typeof entry.baseUrl === "string" && entry.baseUrl.trim()
+            ? entry.baseUrl
+            : fallback.baseUrl,
+      };
+    };
+    return { a: readSlot("a"), b: readSlot("b") };
+  } catch {
+    return { a: defaultCustomModel("a"), b: defaultCustomModel("b") };
+  }
+}
+
+function saveCustomModelsToStorage(models: Record<SlotName, CustomSandboxModel>) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CUSTOM_MODEL_STORAGE_KEY, JSON.stringify(models));
+  } catch {
+    // ignore
+  }
+}
+
+function isCustomModelValue(value: string | null | undefined): value is typeof CUSTOM_MODEL_VALUE {
+  return value === CUSTOM_MODEL_VALUE;
 }
 
 function findArrayStart(text: string, field: string): number {
@@ -250,6 +330,7 @@ function providerLabel(provider: string): string {
   if (provider === "gemini") return "Google";
   if (provider === "moonshot") return "Moonshot";
   if (provider === "deepseek") return "DeepSeek";
+  if (provider === "custom") return "Custom API";
   if (provider === "xai") return "xAI";
   if (provider === "zai") return "Z.AI";
   if (provider === "qwen") return "Qwen";
@@ -308,13 +389,16 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
+  const [customModels, setCustomModels] = useState<Record<SlotName, CustomSandboxModel>>(() =>
+    loadCustomModelsFromStorage()
+  );
   const [showKeys, setShowKeys] = useState(false);
-  const [modelPair, setModelPair] = useState<{ a: ModelKey; b: ModelKey | null }>({
+  const [modelPair, setModelPair] = useState<{ a: SelectedModelValue; b: SelectedModelValue | null }>({
     a: DEFAULT_MODEL_A,
     b: DEFAULT_MODEL_B !== DEFAULT_MODEL_A ? DEFAULT_MODEL_B : null,
   });
   const [compareEnabled, setCompareEnabled] = useState(false);
-  const [results, setResults] = useState<Map<ModelKey, ModelResult>>(
+  const [results, setResults] = useState<Map<string, ModelResult>>(
     () =>
       new Map(
         MODEL_CATALOG.map((m) => [
@@ -327,7 +411,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [, forceRender] = useState(0);
   const previewCacheRef = useRef(
-    new Map<ModelKey, { at: number; textLen: number; build: VoxelBuild | null }>()
+    new Map<string, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
   const viewerARef = useRef<VoxelViewerHandle | null>(null);
   const viewerBRef = useRef<VoxelViewerHandle | null>(null);
@@ -344,14 +428,37 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([label, models]) => ({ label, models }));
   }, []);
-  const canCompare = ENABLED_MODELS.length > 1;
-  const selectedModelKeys = useMemo(() => {
-    const keys: ModelKey[] = [modelPair.a];
-    if (compareEnabled && modelPair.b && modelPair.b !== modelPair.a) {
-      keys.push(modelPair.b);
-    }
-    return keys;
-  }, [compareEnabled, modelPair.a, modelPair.b]);
+  const canCompare = true;
+  const selectedModels = useMemo(() => {
+    const picked: SelectedLiveModel[] = [];
+    const pushSlot = (slot: SlotName, value: SelectedModelValue | null) => {
+      if (!value) return;
+      if (isCustomModelValue(value)) {
+        const custom = customModels[slot];
+        picked.push({
+          id: `custom-${slot}`,
+          kind: "custom",
+          displayName: custom.displayName.trim() || `Custom API ${slot.toUpperCase()}`,
+          providerLabel: "Custom API",
+          modelId: custom.modelId.trim(),
+          baseUrl: custom.baseUrl.trim() || undefined,
+        });
+        return;
+      }
+      const model = MODEL_CATALOG.find((entry) => entry.key === value);
+      if (!model) return;
+      picked.push({
+        id: model.key,
+        kind: "catalog",
+        modelKey: model.key,
+        displayName: model.displayName,
+        providerLabel: providerLabel(model.provider),
+      });
+    };
+    pushSlot("a", modelPair.a);
+    if (compareEnabled && modelPair.b) pushSlot("b", modelPair.b);
+    return picked;
+  }, [compareEnabled, customModels, modelPair.a, modelPair.b]);
 
   useEffect(() => {
     if (!running) return;
@@ -364,38 +471,69 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }, [providerKeys]);
 
   useEffect(() => {
+    saveCustomModelsToStorage(customModels);
+  }, [customModels]);
+
+  useEffect(() => {
     if (!compareEnabled) return;
     setModelPair((prev) => {
-      if (prev.b && prev.b !== prev.a) return prev;
+      if (
+        prev.b &&
+        (isCustomModelValue(prev.b) ||
+          isCustomModelValue(prev.a) ||
+          prev.b !== prev.a)
+      ) {
+        return prev;
+      }
       const fallback = ENABLED_MODELS.find((model) => model.key !== prev.a)?.key ?? null;
-      if (fallback === prev.b) return prev;
-      return { ...prev, b: fallback };
+      const nextB = fallback ?? CUSTOM_MODEL_VALUE;
+      if (nextB === prev.b) return prev;
+      return { ...prev, b: nextB };
     });
   }, [compareEnabled]);
 
-  function handleModelChange(slot: "a" | "b", modelKey: string) {
-    if (slot === "b" && !modelKey) {
+  function handleModelChange(slot: SlotName, value: string) {
+    if (slot === "b" && !value) {
       setModelPair((prev) => ({ ...prev, b: null }));
       return;
     }
-    const nextKey = modelKey as ModelKey;
+    const nextValue = value as SelectedModelValue;
     setModelPair((prev) => {
       if (slot === "a") {
-        if (nextKey === prev.a) return prev;
-        if (!compareEnabled || prev.b == null || nextKey !== prev.b) return { a: nextKey, b: prev.b };
-        const fallback = ENABLED_MODELS.find((model) => model.key !== nextKey)?.key ?? null;
-        return { a: nextKey, b: fallback };
+        if (nextValue === prev.a) return prev;
+        if (
+          !compareEnabled ||
+          prev.b == null ||
+          isCustomModelValue(nextValue) ||
+          isCustomModelValue(prev.b) ||
+          nextValue !== prev.b
+        ) {
+          return { a: nextValue, b: prev.b };
+        }
+        const fallback = ENABLED_MODELS.find((model) => model.key !== nextValue)?.key ?? null;
+        return { a: nextValue, b: fallback ?? CUSTOM_MODEL_VALUE };
       }
-      if (nextKey === prev.a || nextKey === prev.b) {
+      if (
+        !isCustomModelValue(nextValue) &&
+        !isCustomModelValue(prev.a) &&
+        (nextValue === prev.a || nextValue === prev.b)
+      ) {
         return prev;
       }
-      return { a: prev.a, b: nextKey };
+      return { a: prev.a, b: nextValue };
     });
+  }
+
+  function updateCustomModel(slot: SlotName, patch: Partial<CustomSandboxModel>) {
+    setCustomModels((prev) => ({
+      ...prev,
+      [slot]: { ...prev[slot], ...patch },
+    }));
   }
 
   function exportModelJson(args: {
     modelName: string;
-    modelKey: ModelKey;
+    modelKey: string;
     rawBuildJson?: string;
   }) {
     const modelToken = sanitizeFilePart(args.modelName) || args.modelKey;
@@ -408,7 +546,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }
 
   async function runGenerate() {
-    if (!prompt.trim() || selectedModelKeys.length === 0) return;
+    if (!prompt.trim() || selectedModels.length === 0) return;
+
+    const invalidCustomModel = selectedModels.find(
+      (model) => model.kind === "custom" && !model.modelId.trim()
+    );
+    if (invalidCustomModel) {
+      setRequestError(`Enter a model ID for ${invalidCustomModel.displayName}.`);
+      return;
+    }
 
     setRunning(true);
     setRequestError(null);
@@ -416,9 +562,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     setResults((prev) => {
       const next = new Map(prev);
       const now = Date.now();
-      for (const key of selectedModelKeys) {
-        next.set(key, {
-          modelKey: key,
+      for (const model of selectedModels) {
+        next.set(model.id, {
+          modelKey: model.id,
           status: "loading",
           voxelBuild: null,
           attempt: 0,
@@ -443,6 +589,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       setKey("gemini", providerKeys.gemini);
       setKey("moonshot", providerKeys.moonshot);
       setKey("deepseek", providerKeys.deepseek);
+      setKey("custom", providerKeys.custom);
 
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -451,7 +598,22 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           prompt,
           gridSize,
           palette,
-          modelKeys: selectedModelKeys,
+          models: selectedModels.map((model) =>
+            model.kind === "catalog"
+              ? {
+                  id: model.id,
+                  kind: "catalog" as const,
+                  modelKey: model.modelKey,
+                }
+              : {
+                  id: model.id,
+                  kind: "custom" as const,
+                  provider: "custom" as const,
+                  displayName: model.displayName,
+                  modelId: model.modelId,
+                  baseUrl: model.baseUrl,
+                }
+          ),
           providerKeys: sanitizedKeys,
         }),
       });
@@ -576,11 +738,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
       setResults((prev) => {
         const next = new Map(prev);
-        for (const key of selectedModelKeys) {
-          const r = next.get(key);
+        for (const model of selectedModels) {
+          const r = next.get(model.id);
           if (!r) continue;
           if (r.status === "loading") {
-            next.set(key, {
+            next.set(model.id, {
               ...r,
               status: "error",
               voxelBuild: null,
@@ -597,7 +759,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     }
   }
 
-  function getPreviewBuild(modelKey: ModelKey, rawText: string | undefined): VoxelBuild | null {
+  function getPreviewBuild(modelKey: string, rawText: string | undefined): VoxelBuild | null {
     if (!rawText) return null;
     const now = Date.now();
     const cached = previewCacheRef.current.get(modelKey);
@@ -610,27 +772,25 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     return build;
   }
 
-  const compareTargets: SandboxGifExportTarget[] = selectedModelKeys
-    .map((key, idx) => {
-      const model = MODEL_CATALOG.find((m) => m.key === key);
-      const result = results.get(key);
-      if (!model || result?.status !== "success") return null;
+  const compareTargets: SandboxGifExportTarget[] = selectedModels
+    .map((model, idx) => {
+      const result = results.get(model.id);
+      if (result?.status !== "success") return null;
       const viewerRef = idx === 0 ? viewerARef : viewerBRef;
       return {
         viewerRef,
         modelName: model.displayName,
-        company: providerLabel(model.provider),
+        company: model.providerLabel,
         blockCount: result.metrics?.blockCount ?? 0,
       };
     })
     .filter((target): target is SandboxGifExportTarget => Boolean(target));
 
-  const resultCards = selectedModelKeys.map((key, idx) => {
-    const model = MODEL_CATALOG.find((m) => m.key === key);
-    const r = results.get(key);
+  const resultCards = selectedModels.map((model, idx) => {
+    const r = results.get(model.id);
     const viewerRef = idx === 0 ? viewerARef : viewerBRef;
-    const modelName = model?.displayName ?? key;
-    const providerName = model ? providerLabel(model.provider) : "Model";
+    const modelName = model.displayName;
+    const providerName = model.providerLabel;
     const rawBuildJsonForExport = getRawBuildJsonForExport({
       voxelBuild: r?.voxelBuild ?? undefined,
       rawJsonText: r?.rawText,
@@ -650,12 +810,12 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     const liveRawText = r?.rawText;
-    const previewBuild = r?.status === "loading" ? getPreviewBuild(key, r.rawText) : null;
+    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText) : null;
     return (
       <VoxelViewerCard
-        key={key}
-        title={model?.displayName ?? key}
-        subtitle={model ? providerLabel(model.provider) : undefined}
+        key={model.id}
+        title={model.displayName}
+        subtitle={providerName}
         voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
         gridSize={gridSize}
         animateIn={r?.status === "success"}
@@ -681,7 +841,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               onClick={() =>
                 exportModelJson({
                   modelName,
-                  modelKey: key,
+                  modelKey: model.id,
                   rawBuildJson: rawBuildJsonForExport ?? undefined,
                 })
               }
@@ -826,7 +986,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                         className="mb-field h-11 w-full appearance-none pr-10"
                         value={modelPair.a}
                         onChange={(e) => handleModelChange("a", e.target.value)}
-                        disabled={running || ENABLED_MODELS.length === 0}
+                        disabled={running}
                       >
                         {modelGroups.map((group) => (
                           <optgroup key={group.label} label={group.label}>
@@ -834,13 +994,21 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                               <option
                                 key={model.key}
                                 value={model.key}
-                                disabled={compareEnabled && modelPair.b != null && model.key === modelPair.b}
+                                disabled={
+                                  compareEnabled &&
+                                  modelPair.b != null &&
+                                  !isCustomModelValue(modelPair.b) &&
+                                  model.key === modelPair.b
+                                }
                               >
                                 {model.displayName}
                               </option>
                             ))}
                           </optgroup>
                         ))}
+                        <optgroup label="Custom">
+                          <option value={CUSTOM_MODEL_VALUE}>Custom API model</option>
+                        </optgroup>
                       </select>
                       <svg
                         aria-hidden="true"
@@ -875,12 +1043,19 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                           {modelGroups.map((group) => (
                             <optgroup key={group.label} label={group.label}>
                               {group.models.map((model) => (
-                                <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
+                                <option
+                                  key={model.key}
+                                  value={model.key}
+                                  disabled={!isCustomModelValue(modelPair.a) && model.key === modelPair.a}
+                                >
                                   {model.displayName}
                                 </option>
                               ))}
                             </optgroup>
                           ))}
+                          <optgroup label="Custom">
+                            <option value={CUSTOM_MODEL_VALUE}>Custom API model</option>
+                          </optgroup>
                         </select>
                         <svg
                           aria-hidden="true"
@@ -900,6 +1075,82 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                     </label>
                   ) : null}
                 </div>
+
+                {isCustomModelValue(modelPair.a) ? (
+                  <div className="mt-3 rounded-xl border border-border/70 bg-bg/35 p-3">
+                    <div className="text-xs font-medium text-muted">Custom model A</div>
+                    <div className="mt-3 grid grid-cols-1 gap-3">
+                      <label className="flex flex-col gap-1">
+                        <div className="text-xs font-medium text-muted">Display name</div>
+                        <input
+                          className="mb-field h-10 w-full"
+                          value={customModels.a.displayName}
+                          onChange={(e) => updateCustomModel("a", { displayName: e.target.value })}
+                          disabled={running}
+                          placeholder="My custom model"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <div className="text-xs font-medium text-muted">Model ID</div>
+                        <input
+                          className="mb-field h-10 w-full"
+                          value={customModels.a.modelId}
+                          onChange={(e) => updateCustomModel("a", { modelId: e.target.value })}
+                          disabled={running}
+                          placeholder="aws/anthropic/bedrock-claude-opus-4-6"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <div className="text-xs font-medium text-muted">API server URL</div>
+                        <input
+                          className="mb-field h-10 w-full"
+                          value={customModels.a.baseUrl}
+                          onChange={(e) => updateCustomModel("a", { baseUrl: e.target.value })}
+                          disabled={running}
+                          placeholder={DEFAULT_CUSTOM_API_URL}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
+
+                {compareEnabled && isCustomModelValue(modelPair.b) ? (
+                  <div className="mt-3 rounded-xl border border-border/70 bg-bg/35 p-3">
+                    <div className="text-xs font-medium text-muted">Custom model B</div>
+                    <div className="mt-3 grid grid-cols-1 gap-3">
+                      <label className="flex flex-col gap-1">
+                        <div className="text-xs font-medium text-muted">Display name</div>
+                        <input
+                          className="mb-field h-10 w-full"
+                          value={customModels.b.displayName}
+                          onChange={(e) => updateCustomModel("b", { displayName: e.target.value })}
+                          disabled={running}
+                          placeholder="Claude Opus 4.6 via custom API"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <div className="text-xs font-medium text-muted">Model ID</div>
+                        <input
+                          className="mb-field h-10 w-full"
+                          value={customModels.b.modelId}
+                          onChange={(e) => updateCustomModel("b", { modelId: e.target.value })}
+                          disabled={running}
+                          placeholder="aws/anthropic/bedrock-claude-opus-4-6"
+                        />
+                      </label>
+                      <label className="flex flex-col gap-1">
+                        <div className="text-xs font-medium text-muted">API server URL</div>
+                        <input
+                          className="mb-field h-10 w-full"
+                          value={customModels.b.baseUrl}
+                          onChange={(e) => updateCustomModel("b", { baseUrl: e.target.value })}
+                          disabled={running}
+                          placeholder={DEFAULT_CUSTOM_API_URL}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
               </section>
             </div>
           </div>
@@ -960,6 +1211,19 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                   Provider keys
                 </summary>
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Custom API key</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.custom ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, custom: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste the key for your custom API server"
+                    />
+                  </label>
+
                   <label className="flex flex-col gap-1">
                     <div className="text-xs font-medium text-muted">OpenAI</div>
                     <input
@@ -1033,11 +1297,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={prompt}
-              label={selectedModelKeys.length > 1 ? "Export comparison GIF" : "Export GIF"}
+              label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
             <button
               className="mb-btn mb-btn-primary h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={running || selectedModelKeys.length === 0 || !prompt.trim()}
+              disabled={running || selectedModels.length === 0 || !prompt.trim()}
               onClick={runGenerate}
             >
               {running ? "Generating…" : "Generate"}
@@ -1046,7 +1310,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         </div>
       </div>
 
-      <div className={`grid grid-cols-1 gap-4 ${selectedModelKeys.length > 1 ? "md:grid-cols-2" : ""}`}>
+      <div className={`grid grid-cols-1 gap-4 ${selectedModels.length > 1 ? "md:grid-cols-2" : ""}`}>
         {resultCards}
       </div>
     </div>

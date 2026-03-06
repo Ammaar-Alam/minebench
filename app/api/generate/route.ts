@@ -2,7 +2,7 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
-import type { GenerateEvent, GenerateRequest } from "@/lib/ai/types";
+import type { GenerateEvent, GenerateModelRequest, GenerateRequest } from "@/lib/ai/types";
 
 export const runtime = "nodejs";
 
@@ -14,15 +14,41 @@ const providerKeysSchema = z
     moonshot: z.string().trim().min(1).max(4000).optional(),
     deepseek: z.string().trim().min(1).max(4000).optional(),
     openrouter: z.string().trim().min(1).max(4000).optional(),
+    custom: z.string().trim().min(1).max(4000).optional(),
   })
   .optional();
+
+const modelRequestSchema = z.union([
+  z.object({
+    id: z.string().trim().min(1).max(200),
+    kind: z.literal("catalog"),
+    modelKey: z.string().trim().min(1).max(200),
+  }),
+  z.object({
+    id: z.string().trim().min(1).max(200),
+    kind: z.literal("custom"),
+    provider: z.literal("custom"),
+    displayName: z.string().trim().min(1).max(120),
+    modelId: z.string().trim().min(1).max(240),
+    baseUrl: z.string().trim().url().max(4000).optional(),
+  }),
+]);
 
 const reqSchema = z.object({
   prompt: z.string().min(1).max(800),
   gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
-  modelKeys: z.array(z.string()).min(1).max(8),
+  modelKeys: z.array(z.string()).min(1).max(8).optional(),
+  models: z.array(modelRequestSchema).min(1).max(8).optional(),
   providerKeys: providerKeysSchema,
+}).superRefine((value, ctx) => {
+  if ((!value.models || value.models.length === 0) && (!value.modelKeys || value.modelKeys.length === 0)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Provide at least one model.",
+      path: ["models"],
+    });
+  }
 });
 
 const STREAM_PAD = " ".repeat(2048);
@@ -48,8 +74,19 @@ export async function POST(req: Request) {
   }
 
   const body = parsed.data as GenerateRequest;
-  const modelKeys = body.modelKeys.filter(isModelKey);
-  if (modelKeys.length === 0) {
+  const requestedModels: GenerateModelRequest[] =
+    body.models && body.models.length > 0
+      ? body.models
+      : (body.modelKeys ?? []).map((modelKey) => ({
+          id: modelKey,
+          kind: "catalog" as const,
+          modelKey,
+        }));
+  const models = requestedModels.flatMap((model): GenerateModelRequest[] => {
+    if (model.kind !== "catalog") return [model];
+    return isModelKey(model.modelKey) ? [model] : [];
+  });
+  if (models.length === 0) {
     return NextResponse.json({ error: "No valid modelKeys" }, { status: 400 });
   }
 
@@ -108,25 +145,47 @@ export async function POST(req: Request) {
       // A larger first chunk helps avoid proxy buffering so the client receives events immediately.
       send({ type: "hello", ts: Date.now(), pad: STREAM_PAD });
 
-      let pending = modelKeys.length;
-      for (const modelKey of modelKeys) {
-        send({ type: "start", modelKey });
+      let pending = models.length;
+      for (const model of models) {
+        const requestModelKey = model.id;
+        send({ type: "start", modelKey: requestModelKey });
 
-        void generateVoxelBuild({
-          modelKey,
-          prompt: body.prompt,
-          gridSize: body.gridSize,
-          palette: body.palette,
-          providerKeys,
-          allowServerKeys,
-          onRetry: (attempt, reason) => send({ type: "retry", modelKey, attempt, reason }),
-          onDelta: (delta) => send({ type: "delta", modelKey, delta }),
-        })
+        void generateVoxelBuild(
+          model.kind === "catalog"
+            ? {
+                modelKey: model.modelKey,
+                prompt: body.prompt,
+                gridSize: body.gridSize,
+                palette: body.palette,
+                providerKeys,
+                allowServerKeys,
+                onRetry: (attempt, reason) =>
+                  send({ type: "retry", modelKey: requestModelKey, attempt, reason }),
+                onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
+              }
+            : {
+                model: {
+                  key: model.id,
+                  provider: "custom",
+                  modelId: model.modelId,
+                  displayName: model.displayName,
+                  baseUrl: model.baseUrl,
+                },
+                prompt: body.prompt,
+                gridSize: body.gridSize,
+                palette: body.palette,
+                providerKeys,
+                allowServerKeys,
+                onRetry: (attempt, reason) =>
+                  send({ type: "retry", modelKey: requestModelKey, attempt, reason }),
+                onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
+              },
+        )
           .then((r) => {
             if (r.ok) {
               send({
                 type: "result",
-                modelKey,
+                modelKey: requestModelKey,
                 voxelBuild: r.build,
                 metrics: {
                   blockCount: r.blockCount,
@@ -137,7 +196,7 @@ export async function POST(req: Request) {
             } else {
               send({
                 type: "error",
-                modelKey,
+                modelKey: requestModelKey,
                 message: r.error,
                 rawText: r.rawText ? r.rawText.slice(0, RAW_TEXT_MAX) : undefined,
               });
@@ -146,7 +205,7 @@ export async function POST(req: Request) {
           .catch((err: unknown) => {
             send({
               type: "error",
-              modelKey,
+              modelKey: requestModelKey,
               message: err instanceof Error ? err.message : "Generation failed",
             });
           })

@@ -8,6 +8,7 @@ import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
 import { deepseekGenerateText } from "@/lib/ai/providers/deepseek";
 import { geminiGenerateText } from "@/lib/ai/providers/gemini";
 import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
+import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
@@ -64,7 +65,7 @@ function formatOptionalInteger(value: number | undefined): string {
 
 function describeRequestedThinkingMode(opts: {
   route: "direct" | "openrouter";
-  provider: ModelCatalogEntry["provider"] | "openrouter";
+  provider: DirectProvider | "openrouter";
   modelId: string;
   reasoningMaxTokens?: number;
   reasoningEffortAttempts?: string[];
@@ -87,6 +88,7 @@ function describeRequestedThinkingMode(opts: {
 
   if (opts.provider === "deepseek") return "thinking=enabled";
   if (opts.provider === "moonshot") return "default";
+  if (opts.provider === "custom") return "default";
 
   if (opts.provider === "openai") {
     if (opts.modelId.startsWith("gpt-5.4-pro")) {
@@ -120,7 +122,7 @@ function describeRequestedThinkingMode(opts: {
 
 function providerRequestTraceLine(opts: {
   route: "direct" | "openrouter";
-  provider: ModelCatalogEntry["provider"] | "openrouter";
+  provider: DirectProvider | "openrouter";
   modelId: string;
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
@@ -129,6 +131,16 @@ function providerRequestTraceLine(opts: {
   const thinkingMode = describeRequestedThinkingMode(opts);
   return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${DEFAULT_TEMPERATURE}.`;
 }
+
+type DirectProvider = ModelCatalogEntry["provider"] | "custom";
+
+type ResolvedModel = Pick<
+  ModelCatalogEntry,
+  "key" | "provider" | "modelId" | "displayName" | "openRouterModelId" | "forceOpenRouter"
+> & {
+  provider: DirectProvider;
+  baseUrl?: string;
+};
 
 function isBilledTimeoutStyleProviderError(message: string): boolean {
   const m = message.toLowerCase();
@@ -149,7 +161,14 @@ function normalizeApiKey(raw: string | undefined): string | null {
   return v ? v : null;
 }
 
-type ProviderKeyName = "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "openrouter";
+type ProviderKeyName =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "moonshot"
+  | "deepseek"
+  | "openrouter"
+  | "custom";
 
 function envVarForProviderKey(provider: ProviderKeyName): string {
   switch (provider) {
@@ -165,6 +184,8 @@ function envVarForProviderKey(provider: ProviderKeyName): string {
       return "DEEPSEEK_API_KEY";
     case "openrouter":
       return "OPENROUTER_API_KEY";
+    case "custom":
+      return "CUSTOM_API_KEY";
   }
 }
 
@@ -174,7 +195,7 @@ function serverApiKey(provider: ProviderKeyName): string | null {
 }
 
 function effectiveApiKey(opts: {
-  provider: ModelCatalogEntry["provider"] | "openrouter";
+  provider: DirectProvider | "openrouter";
   providerKeys?: ProviderApiKeys;
   allowServerKeys: boolean;
 }): string | null {
@@ -194,6 +215,8 @@ function effectiveApiKey(opts: {
               ? opts.providerKeys?.moonshot
               : provider === "deepseek"
                 ? opts.providerKeys?.deepseek
+                : provider === "custom"
+                  ? opts.providerKeys?.custom
                 : undefined,
   );
   if (directKey) return directKey;
@@ -206,12 +229,22 @@ function effectiveApiKey(opts: {
   if (provider === "gemini") return serverApiKey("gemini");
   if (provider === "moonshot") return serverApiKey("moonshot");
   if (provider === "deepseek") return serverApiKey("deepseek");
+  if (provider === "custom") return serverApiKey("custom");
 
   return null;
 }
 
 export type GenerateVoxelBuildParams = {
-  modelKey: ModelKey;
+  modelKey?: ModelKey;
+  model?: {
+    key: string;
+    provider: DirectProvider;
+    modelId: string;
+    displayName: string;
+    openRouterModelId?: string;
+    forceOpenRouter?: boolean;
+    baseUrl?: string;
+  };
   prompt: string;
   gridSize: 64 | 256 | 512;
   palette: "simple" | "advanced";
@@ -238,9 +271,21 @@ export type GenerateVoxelBuildResult =
 
 // call the direct provider (OpenAI, Anthropic, etc.)
 async function callDirectProvider(args: {
-  provider: "openai" | "anthropic" | "gemini" | "moonshot" | "deepseek" | "xai" | "zai" | "qwen" | "minimax" | "meta";
+  provider:
+    | "openai"
+    | "anthropic"
+    | "gemini"
+    | "moonshot"
+    | "deepseek"
+    | "custom"
+    | "xai"
+    | "zai"
+    | "qwen"
+    | "minimax"
+    | "meta";
   modelId: string;
   apiKey?: string;
+  baseUrl?: string;
   system: string;
   user: string;
   jsonSchema: Record<string, unknown>;
@@ -318,6 +363,21 @@ async function callDirectProvider(args: {
     });
   }
 
+  if (args.provider === "custom") {
+    return openAiCompatibleGenerateText({
+      modelId: args.modelId,
+      apiKey: args.apiKey,
+      baseUrl: args.baseUrl,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
+      onDelta: args.onDelta,
+      onTrace: args.onTrace,
+    });
+  }
+
   if (args.provider === "xai") {
     throw new Error("xAI direct API not supported; use OpenRouter fallback");
   }
@@ -343,7 +403,7 @@ async function callDirectProvider(args: {
 
 // unified provider call with OpenRouter fallback
 async function providerGenerateText(args: {
-  model: ModelCatalogEntry;
+  model: ResolvedModel;
   system: string;
   user: string;
   jsonSchema: Record<string, unknown>;
@@ -403,6 +463,8 @@ async function providerGenerateText(args: {
               ? envVarForProviderKey("moonshot")
               : model.provider === "deepseek"
                 ? envVarForProviderKey("deepseek")
+                : model.provider === "custom"
+                  ? envVarForProviderKey("custom")
                 : null;
 
     if (model.openRouterModelId) {
@@ -431,6 +493,7 @@ async function providerGenerateText(args: {
         provider: model.provider,
         modelId: model.modelId,
         apiKey: directKey ?? undefined,
+        baseUrl: model.baseUrl,
         system: args.system,
         user: args.user,
         jsonSchema: args.jsonSchema,
@@ -534,7 +597,12 @@ function buildBounds(build: VoxelBuild) {
 export async function generateVoxelBuild(
   params: GenerateVoxelBuildParams,
 ): Promise<GenerateVoxelBuildResult> {
-  const model = getModelByKey(params.modelKey);
+  const model: ResolvedModel =
+    params.model ??
+    (() => {
+      if (!params.modelKey) throw new Error("Missing modelKey");
+      return getModelByKey(params.modelKey);
+    })();
   const paletteDefs = getPalette(params.palette);
   const enableTools = params.enableTools ?? true;
   const maxAttempts = params.maxAttempts ?? (enableTools ? 8 : 3);
