@@ -128,8 +128,36 @@ function summarizeBackgroundError(data: OpenAIResponsesBackgroundResponse): stri
   return null;
 }
 
-function sleepMs(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+function abortError(): Error {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function sleepMs(ms: number, signal?: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      settled = true;
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function isTransportTimeoutError(err: unknown): boolean {
@@ -148,7 +176,7 @@ function isTransportTimeoutError(err: unknown): boolean {
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
-  opts: { tries: number; minDelayMs: number; maxDelayMs: number },
+  opts: { tries: number; minDelayMs: number; maxDelayMs: number; retryOnHeadersTimeout?: boolean },
 ): Promise<Response> {
   let lastErr: unknown = null;
   for (let i = 0; i < opts.tries; i++) {
@@ -157,7 +185,7 @@ async function fetchWithRetry(
       if (res.status >= 500 || res.status === 429) {
         if (i === opts.tries - 1) return res;
         const delay = Math.min(opts.maxDelayMs, opts.minDelayMs * Math.pow(2, i));
-        await sleepMs(delay);
+        await sleepMs(delay, init.signal ?? undefined);
         continue;
       }
       return res;
@@ -165,13 +193,18 @@ async function fetchWithRetry(
       lastErr = e;
       // A headers-timeout can still represent a billed upstream run; avoid
       // duplicating spend by retrying the same request automatically.
-      if (isTransportTimeoutError(e)) throw e;
+      if (isTransportTimeoutError(e) && !opts.retryOnHeadersTimeout) throw e;
       if (i === opts.tries - 1) throw e;
       const delay = Math.min(opts.maxDelayMs, opts.minDelayMs * Math.pow(2, i));
-      await sleepMs(delay);
+      await sleepMs(delay, init.signal ?? undefined);
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("OpenAI request failed");
+}
+
+function summarizeTransientError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.trim() || "unknown error";
 }
 
 async function pollBackgroundResponse(opts: {
@@ -179,29 +212,58 @@ async function pollBackgroundResponse(opts: {
   responseId: string;
   signal: AbortSignal;
   pollIntervalMs: number;
+  onTrace?: (message: string) => void;
 }): Promise<OpenAIResponsesBackgroundResponse> {
   let current: OpenAIResponsesBackgroundResponse = { id: opts.responseId, status: "queued" };
   let status = backgroundStatusOf(current.status);
+  let consecutivePollFailures = 0;
 
   while (isBackgroundPending(status)) {
-    if (opts.pollIntervalMs > 0) await sleepMs(opts.pollIntervalMs);
+    if (opts.pollIntervalMs > 0) await sleepMs(opts.pollIntervalMs, opts.signal);
 
-    const res = await fetchWithRetry(
-      `https://api.openai.com/v1/responses/${encodeURIComponent(opts.responseId)}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${opts.apiKey}`,
-          "Content-Type": "application/json",
+    let res: Response;
+    try {
+      res = await fetchWithRetry(
+        `https://api.openai.com/v1/responses/${encodeURIComponent(opts.responseId)}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${opts.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          signal: opts.signal,
         },
-        signal: opts.signal,
-      },
-      { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-    );
+        { tries: 5, minDelayMs: 1_000, maxDelayMs: 8_000, retryOnHeadersTimeout: true },
+      );
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      consecutivePollFailures += 1;
+      const retryDelayMs = Math.min(
+        60_000,
+        Math.max(opts.pollIntervalMs, 5_000) * Math.min(8, consecutivePollFailures),
+      );
+      opts.onTrace?.(
+        `OpenAI background poll stalled (${summarizeTransientError(err)}); retrying the same response in ${Math.round(retryDelayMs / 1000)}s.`,
+      );
+      await sleepMs(retryDelayMs, opts.signal);
+      continue;
+    }
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       const rid = requestIdFromResponse(res);
+      if (res.status === 429 || res.status >= 500) {
+        consecutivePollFailures += 1;
+        const retryDelayMs = Math.min(
+          60_000,
+          Math.max(opts.pollIntervalMs, 5_000) * Math.min(8, consecutivePollFailures),
+        );
+        opts.onTrace?.(
+          `OpenAI background poll returned HTTP ${res.status}${rid ? ` (request ${rid})` : ""}; retrying the same response in ${Math.round(retryDelayMs / 1000)}s.`,
+        );
+        await sleepMs(retryDelayMs, opts.signal);
+        continue;
+      }
       throw new Error(
         `OpenAI background poll error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`,
       );
@@ -209,6 +271,7 @@ async function pollBackgroundResponse(opts: {
 
     current = (await res.json()) as OpenAIResponsesBackgroundResponse;
     status = backgroundStatusOf(current.status);
+    consecutivePollFailures = 0;
   }
 
   return current;
@@ -349,7 +412,7 @@ export async function openaiGenerateText(params: {
   const useBackgroundMode =
     !params.onDelta &&
     parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", isGpt5Family);
-  const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 2_000);
+  const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 15_000);
   const streamForRequest = useBackgroundMode ? false : streamResponses;
 
   const controller = new AbortController();
@@ -505,6 +568,7 @@ export async function openaiGenerateText(params: {
             responseId,
             signal: controller.signal,
             pollIntervalMs: backgroundPollIntervalMs,
+            onTrace: params.onTrace,
           });
         }
 
@@ -543,7 +607,6 @@ export async function openaiGenerateText(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("OpenAI request timed out");
     }
-    console.error("OpenAI network error:", err);
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`OpenAI request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
