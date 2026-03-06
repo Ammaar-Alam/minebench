@@ -364,6 +364,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [running, setRunning] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [, forceRender] = useState(0);
+  const generateAbortRef = useRef<AbortController | null>(null);
   const previewCacheRef = useRef(
     new Map<string, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
@@ -479,6 +480,26 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     setCustomModel((prev) => ({ ...prev, ...patch }));
   }
 
+  function stopGenerate() {
+    generateAbortRef.current?.abort();
+    generateAbortRef.current = null;
+    setRunning(false);
+    setResults((prev) => {
+      const next = new Map(prev);
+      for (const model of selectedModels) {
+        const existing = next.get(model.id);
+        if (!existing || existing.status !== "loading") continue;
+        next.set(model.id, {
+          ...existing,
+          status: "error",
+          voxelBuild: null,
+          error: "Generation stopped",
+        });
+      }
+      return next;
+    });
+  }
+
   function exportModelJson(args: {
     modelName: string;
     modelKey: string;
@@ -525,6 +546,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     });
 
     try {
+      const abortController = new AbortController();
+      generateAbortRef.current = abortController;
       const sanitizedKeys: ProviderApiKeys = {};
       const setKey = (k: keyof ProviderApiKeys, v: unknown) => {
         if (typeof v !== "string") return;
@@ -542,6 +565,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: abortController.signal,
         body: JSON.stringify({
           prompt,
           gridSize,
@@ -701,8 +725,12 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         return next;
       });
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        return;
+      }
       setRequestError(err instanceof Error ? err.message : "Request failed");
     } finally {
+      generateAbortRef.current = null;
       setRunning(false);
     }
   }
@@ -1216,13 +1244,23 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               promptText={prompt}
               label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
-            <button
-              className="mb-btn mb-btn-primary h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={running || selectedModels.length === 0 || !prompt.trim()}
-              onClick={runGenerate}
-            >
-              {running ? "Generating…" : "Generate"}
-            </button>
+            <div className="flex items-center gap-2">
+              {running ? (
+                <button
+                  className="mb-btn h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={stopGenerate}
+                >
+                  Stop generating
+                </button>
+              ) : null}
+              <button
+                className="mb-btn mb-btn-primary h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={running || selectedModels.length === 0 || !prompt.trim()}
+                onClick={runGenerate}
+              >
+                {running ? "Generating…" : "Generate"}
+              </button>
+            </div>
           </div>
         </div>
       </div>

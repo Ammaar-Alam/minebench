@@ -253,6 +253,7 @@ export type GenerateVoxelBuildParams = {
   providerKeys?: ProviderApiKeys;
   allowServerKeys?: boolean;
   preferOpenRouter?: boolean;
+  abortSignal?: AbortSignal;
   onRetry?: (attempt: number, reason: string) => void;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
@@ -291,6 +292,7 @@ async function callDirectProvider(args: {
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
+  signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
@@ -304,6 +306,7 @@ async function callDirectProvider(args: {
       reasoningMaxTokens: args.reasoningMaxTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
+      signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
     });
@@ -318,6 +321,7 @@ async function callDirectProvider(args: {
       maxTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
+      signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
     });
@@ -332,6 +336,7 @@ async function callDirectProvider(args: {
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
+      signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
     });
@@ -345,6 +350,7 @@ async function callDirectProvider(args: {
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
+      signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
     });
@@ -358,6 +364,7 @@ async function callDirectProvider(args: {
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
+      signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
     });
@@ -373,6 +380,7 @@ async function callDirectProvider(args: {
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
+      signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
     });
@@ -412,6 +420,7 @@ async function providerGenerateText(args: {
   providerKeys?: ProviderApiKeys;
   allowServerKeys: boolean;
   preferOpenRouter?: boolean;
+  signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
@@ -499,6 +508,7 @@ async function providerGenerateText(args: {
         jsonSchema: args.jsonSchema,
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
+        signal: args.signal,
         onDelta: args.onDelta,
         onTrace: args.onProviderTrace,
       });
@@ -557,6 +567,7 @@ async function providerGenerateText(args: {
     temperature: DEFAULT_TEMPERATURE,
     jsonSchema: args.jsonSchema,
     reasoningEffortAttempts: openRouterReasoningEffortAttempts,
+    signal: args.signal,
     onDelta: args.onDelta,
     onTrace: args.onProviderTrace,
   });
@@ -680,6 +691,7 @@ export async function generateVoxelBuild(
         providerKeys: params.providerKeys,
         allowServerKeys,
         preferOpenRouter: params.preferOpenRouter,
+        signal: params.abortSignal,
         onDelta: params.onDelta,
         onProviderTrace: params.onProviderTrace,
       });

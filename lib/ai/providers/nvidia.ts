@@ -1,5 +1,6 @@
 import dns from "node:dns/promises";
 import net from "node:net";
+import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
@@ -84,6 +85,39 @@ function isDisallowedIpAddress(address: string): boolean {
   return true;
 }
 
+const DEFAULT_TRUSTED_HOSTS = new Set([
+  "inference-api.nvidia.com",
+  "integrate.api.nvidia.com",
+  "api.openai.com",
+  "api.anthropic.com",
+  "generativelanguage.googleapis.com",
+  "api.deepseek.com",
+  "api.moonshot.cn",
+  "openrouter.ai",
+]);
+
+function getTrustedHosts(): Set<string> {
+  const extra = (process.env.CUSTOM_API_TRUSTED_HOSTS ?? "").trim();
+  if (!extra) return DEFAULT_TRUSTED_HOSTS;
+  const merged = new Set(DEFAULT_TRUSTED_HOSTS);
+  for (const host of extra.split(",")) {
+    const h = host.trim().toLowerCase();
+    if (h) merged.add(h);
+  }
+  return merged;
+}
+
+function isHostTrusted(hostname: string): boolean {
+  const trusted = getTrustedHosts();
+  const h = hostname.trim().toLowerCase();
+  if (trusted.has(h)) return true;
+  for (const t of trusted) {
+    if (t.startsWith(".") && h.endsWith(t)) return true;
+    if (h.endsWith(`.${t}`)) return true;
+  }
+  return false;
+}
+
 export async function assertSafeCustomApiUrl(rawUrl: string): Promise<void> {
   let parsed: URL;
   try {
@@ -120,6 +154,8 @@ export async function assertSafeCustomApiUrl(rawUrl: string): Promise<void> {
   if (net.isIP(hostname) !== 0 && isDisallowedIpAddress(hostname)) {
     throw new Error("Custom API server URL must not target private or loopback IPs");
   }
+
+  if (isHostTrusted(hostname)) return;
 
   try {
     const records = await dns.lookup(hostname, { all: true, verbatim: true });
@@ -172,6 +208,7 @@ export async function openAiCompatibleGenerateText(params: {
   maxOutputTokens?: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
+  signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
@@ -180,6 +217,7 @@ export async function openAiCompatibleGenerateText(params: {
 
   const url = buildChatCompletionsUrl(params.baseUrl);
   const controller = new AbortController();
+  const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
 
   let res: Response | null = null;
@@ -243,6 +281,7 @@ export async function openAiCompatibleGenerateText(params: {
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
     throw new Error(`Custom API request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
+    detachAbort();
     if (timeout) clearTimeout(timeout);
   }
 

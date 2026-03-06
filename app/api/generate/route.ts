@@ -123,6 +123,20 @@ export async function POST(req: Request) {
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      req.signal.addEventListener(
+        "abort",
+        () => {
+          closed = true;
+          if (ping) clearInterval(ping);
+          try {
+            controller.close();
+          } catch {
+            // already closed
+          }
+        },
+        { once: true }
+      );
+
       const send = (evt: GenerateEvent) => {
         if (closed) return;
         if (debugRaw && evt.type === "error" && evt.rawText) {
@@ -170,6 +184,7 @@ export async function POST(req: Request) {
                 palette: body.palette,
                 providerKeys,
                 allowServerKeys,
+                abortSignal: req.signal,
                 onRetry: (attempt, reason) =>
                   send({ type: "retry", modelKey: requestModelKey, attempt, reason }),
                 onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
@@ -187,6 +202,7 @@ export async function POST(req: Request) {
                 palette: body.palette,
                 providerKeys,
                 allowServerKeys,
+                abortSignal: req.signal,
                 onRetry: (attempt, reason) =>
                   send({ type: "retry", modelKey: requestModelKey, attempt, reason }),
                 onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
