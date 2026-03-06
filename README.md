@@ -31,6 +31,7 @@ Models are given a natural-language prompt and must produce raw 3D coordinates a
 **[Try it live](https://minebench.ai)**
 
 ![MineBench arena — Opus 4.5 versus Opus 4.6](public/readme/benchmark-split.gif)
+![MineBench default Arena landing page](public/readme/arena-landing-page.png)
 
 ## Why MineBench?
 

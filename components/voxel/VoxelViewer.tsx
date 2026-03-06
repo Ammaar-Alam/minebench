@@ -584,7 +584,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     camera.position.set(10, 8, 10);
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: true,
+      antialias: false,
       alpha: true,
       powerPreference: "high-performance",
     });
@@ -674,25 +674,31 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     threeRef.current = { scene, camera, renderer, controls };
 
     let raf = 0;
+    let rendering = false;
     let last = performance.now();
     const render = (now: number) => {
+      rendering = true;
       raf = 0;
-      const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
-      last = now;
-      const controlsChanged = (controls.update() as boolean | void) === true;
+      let needsFollowupFrame = false;
+      try {
+        const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+        last = now;
+        const controlsChanged = (controls.update() as boolean | void) === true;
 
-      const vg = voxelGroupRef.current;
-      const shouldAutoRotate = Boolean(vg && autoRotateRef.current && !userInteractingRef.current);
-      if (vg && autoRotateRef.current && !userInteractingRef.current) {
-        vg.group.rotation.y += dt * 0.25;
+        const vg = voxelGroupRef.current;
+        const shouldAutoRotate = Boolean(vg && autoRotateRef.current && !userInteractingRef.current);
+        if (vg && autoRotateRef.current && !userInteractingRef.current) {
+          vg.group.rotation.y += dt * 0.25;
+        }
+        renderer.render(scene, camera);
+        needsFollowupFrame = Boolean(controlsChanged || shouldAutoRotate);
+      } finally {
+        rendering = false;
       }
-      renderer.render(scene, camera);
-      if (controlsChanged || shouldAutoRotate) {
-        raf = window.requestAnimationFrame(render);
-      }
+      if (needsFollowupFrame) requestRender();
     };
     const requestRender = () => {
-      if (raf !== 0) return;
+      if (raf !== 0 || rendering) return;
       raf = window.requestAnimationFrame(render);
     };
     requestRenderRef.current = requestRender;
