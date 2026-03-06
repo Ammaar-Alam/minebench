@@ -66,11 +66,72 @@ function buildChatCompletionsUrl(raw?: string): URL {
 
 function normalizeIpAddress(address: string): string {
   const normalized = address.trim().replace(/^\[(.*)\]$/, "$1");
-  if (normalized.toLowerCase().startsWith("::ffff:")) {
-    const mapped = normalized.slice("::ffff:".length);
-    if (net.isIP(mapped) === 4) return mapped;
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+  if (embeddedIpv4) {
+    return embeddedIpv4;
   }
   return normalized;
+}
+
+function expandIpv6Hextets(address: string): string[] | null {
+  const normalized = address.trim().replace(/^\[(.*)\]$/, "$1").toLowerCase();
+  if (net.isIP(normalized) !== 6) return null;
+
+  let candidate = normalized;
+  if (candidate.includes(".")) {
+    const lastColon = candidate.lastIndexOf(":");
+    if (lastColon < 0) return null;
+    const ipv4Part = candidate.slice(lastColon + 1);
+    if (net.isIP(ipv4Part) !== 4) return null;
+    const octets = ipv4Part.split(".").map((part) => Number.parseInt(part, 10));
+    if (octets.length !== 4 || octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+      return null;
+    }
+    const high = ((octets[0] << 8) | octets[1]).toString(16);
+    const low = ((octets[2] << 8) | octets[3]).toString(16);
+    candidate = `${candidate.slice(0, lastColon)}:${high}:${low}`;
+  }
+
+  const hasCompression = candidate.includes("::");
+  if (hasCompression && candidate.indexOf("::") !== candidate.lastIndexOf("::")) {
+    return null;
+  }
+
+  const [leftRaw = "", rightRaw = ""] = candidate.split("::");
+  const left = leftRaw ? leftRaw.split(":").filter(Boolean) : [];
+  const right = rightRaw ? rightRaw.split(":").filter(Boolean) : [];
+  const isHex = (part: string) => /^[0-9a-f]{1,4}$/.test(part);
+  if (left.some((part) => !isHex(part)) || right.some((part) => !isHex(part))) {
+    return null;
+  }
+
+  if (!hasCompression) {
+    if (left.length !== 8) return null;
+    return left.map((part) => part.padStart(4, "0"));
+  }
+
+  const missing = 8 - (left.length + right.length);
+  if (missing < 1) return null;
+  return [
+    ...left.map((part) => part.padStart(4, "0")),
+    ...Array.from({ length: missing }, () => "0000"),
+    ...right.map((part) => part.padStart(4, "0")),
+  ];
+}
+
+function extractEmbeddedIpv4FromIpv6(address: string): string | null {
+  const hextets = expandIpv6Hextets(address);
+  if (!hextets) return null;
+
+  const isCompatible =
+    hextets.slice(0, 6).every((part) => part === "0000");
+  const isMapped =
+    hextets.slice(0, 5).every((part) => part === "0000") && hextets[5] === "ffff";
+  if (!isCompatible && !isMapped) return null;
+
+  const high = Number.parseInt(hextets[6], 16);
+  const low = Number.parseInt(hextets[7], 16);
+  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
 }
 
 function isDisallowedIpAddress(address: string): boolean {
