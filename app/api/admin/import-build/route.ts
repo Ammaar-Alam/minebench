@@ -35,6 +35,14 @@ function truthy(v: string | undefined): boolean {
   return s === "1" || s === "true" || s === "yes";
 }
 
+function parseGenerationTimeMs(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  const normalized = Math.floor(parsed);
+  return normalized > 0 ? normalized : null;
+}
+
 async function readRequestBodyText(req: Request): Promise<{ ok: true; text: string } | { ok: false; error: string; status: number }> {
   const encoding = (req.headers.get("content-encoding") ?? "").split(",")[0]?.trim().toLowerCase();
   const bytes = Buffer.from(await req.arrayBuffer());
@@ -137,6 +145,7 @@ export async function POST(req: Request) {
   }
 
   const overwrite = truthy(url.searchParams.get("overwrite") ?? undefined);
+  const generationTimeMs = parseGenerationTimeMs(url.searchParams.get("generationTimeMs"));
 
   const gridSizeRaw = url.searchParams.get("gridSize");
   const gridSize = gridSizeRaw ? Number(gridSizeRaw) : 256;
@@ -293,7 +302,7 @@ export async function POST(req: Request) {
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
           voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
-          generationTimeMs: 0,
+          generationTimeMs: generationTimeMs ?? existing.generationTimeMs,
         },
       })
     : await prisma.build.create({
@@ -311,7 +320,7 @@ export async function POST(req: Request) {
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
           voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
-          generationTimeMs: 0,
+          generationTimeMs: generationTimeMs ?? 0,
         },
       });
 
@@ -342,6 +351,7 @@ export async function POST(req: Request) {
     model: { id: model.id, key: model.key, provider: model.provider, displayName: model.displayName },
     settings: { gridSize, palette, mode },
     blockCount,
+    generationTimeMs: saved.generationTimeMs > 0 ? saved.generationTimeMs : null,
     warnings,
     overwritten: Boolean(existing),
     storage: storageEnvelope.ok

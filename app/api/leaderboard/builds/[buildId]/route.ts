@@ -34,6 +34,7 @@ export async function GET(
       palette: true,
       mode: true,
       blockCount: true,
+      generationTimeMs: true,
     },
   });
 
@@ -74,6 +75,7 @@ export async function GET(
       palette,
       mode: build.mode,
       blockCount: validated.ok ? validated.value.build.blocks.length : build.blockCount,
+      generationTimeMs: build.generationTimeMs > 0 ? build.generationTimeMs : null,
     },
     {
       headers: {

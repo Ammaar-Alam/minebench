@@ -125,6 +125,7 @@ type LoadedPromptBuild = {
   palette: "simple" | "advanced";
   mode: string;
   blockCount: number;
+  generationTimeMs: number | null;
 };
 
 type BuildVariantResponse = {
@@ -380,6 +381,37 @@ function formatSignedPercent(value: number | null, digits = 1): string {
   if (value == null) return "-";
   const pct = (value * 100).toFixed(digits);
   return `${value > 0 ? "+" : ""}${pct}%`;
+}
+
+type PromptBuildWithTiming = NonNullable<ModelPromptBreakdown["build"]> & {
+  generationTimeMs?: unknown;
+};
+
+function getPromptBuildGenerationTimeMs(
+  build: ModelPromptBreakdown["build"] | null | undefined,
+): number | null {
+  if (!build) return null;
+  const candidate = build as PromptBuildWithTiming;
+  if (
+    typeof candidate.generationTimeMs !== "number" ||
+    !Number.isFinite(candidate.generationTimeMs) ||
+    candidate.generationTimeMs < 0
+  ) {
+    return null;
+  }
+  return candidate.generationTimeMs;
+}
+
+function formatDurationCompact(durationMs: number | null): string {
+  if (durationMs == null) return "-";
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  if (totalSeconds <= 0) return "<1s";
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
 }
 
 function consistencyLabel(consistency: number | null): string {
@@ -638,9 +670,16 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
         </div>
       ) : null}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
-        <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
-          {build.blockCount.toLocaleString()} blocks
-        </span>
+        <div className="inline-flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
+            {build.blockCount.toLocaleString()} blocks
+          </span>
+          {build.generationTimeMs != null ? (
+            <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
+              {formatDurationCompact(build.generationTimeMs)}
+            </span>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -769,6 +808,20 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     [data.prompts],
   );
   const promptBuildCount = promptBreakdown.filter((prompt) => prompt.build != null).length;
+  const timedBuildDurations = useMemo(
+    () =>
+      promptBreakdown
+        .map((prompt) => getPromptBuildGenerationTimeMs(prompt.build))
+        .filter((duration): duration is number => duration != null),
+    [promptBreakdown],
+  );
+  const averageGenerationTimeMs =
+    timedBuildDurations.length > 0
+      ? Math.round(
+          timedBuildDurations.reduce((sum, duration) => sum + duration, 0) /
+            timedBuildDurations.length,
+        )
+      : null;
   const maxPromptVotes = Math.max(1, ...promptBreakdown.map((prompt) => prompt.votes));
   const visibleOpponents = showAllOpponents
     ? opponents
@@ -782,6 +835,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const hoveredPrompt = hoveredCurveIndex != null ? promptCurveSource[hoveredCurveIndex] : null;
   const activeBuildId = activePrompt?.build?.buildId ?? null;
   const activeBuildMeta = activePrompt?.build ?? null;
+  const activeBuildGenerationTimeMs = getPromptBuildGenerationTimeMs(activeBuildMeta);
   const activeCachedBuild = activeBuildId ? buildCache[activeBuildId] ?? null : null;
   const activeLoadedBuild =
     activeStreamingBuild && activeStreamingBuild.buildId === activeBuildId
@@ -878,6 +932,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             palette: activeBuildMeta.palette,
             mode: activeBuildMeta.mode,
             blockCount: progress.receivedBlocks,
+            generationTimeMs: activeBuildGenerationTimeMs,
           });
         },
       },
@@ -891,6 +946,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           palette: activeBuildMeta.palette,
           mode: activeBuildMeta.mode,
           blockCount: Math.max(activeBuildMeta.blockCount, payload.voxelBuild.blocks.length),
+          generationTimeMs: activeBuildGenerationTimeMs,
         };
 
         setBuildCache((current) => {
@@ -913,7 +969,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     return () => {
       controller.abort();
     };
-  }, [activeBuildId, activeBuildMeta]);
+  }, [activeBuildId, activeBuildMeta, activeBuildGenerationTimeMs]);
 
   return (
     <div className="mx-auto w-full max-w-[90rem] space-y-3.5 pb-10 sm:space-y-4 sm:pb-14">
@@ -1013,49 +1069,47 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                 </div>
               </div>
 
-              <div className="rounded-[1.2rem] bg-gradient-to-br from-accent/[0.09] via-transparent to-accent2/[0.12] p-px">
-                <div className="rounded-[1.12rem] bg-bg/45 p-1.5 ring-1 ring-border/70">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    <MetricTile
-                      label="Rank score"
-                      value={`${Math.round(data.model.rankScore)}`}
-                      sub={`Raw ${Math.round(data.model.eloRating)}`}
-                    />
-                    <MetricTile
-                      label="Confidence"
-                      value={`${data.model.confidence}%`}
-                      sub={`RD ${Math.round(data.model.ratingDeviation)}`}
-                    />
-                    <MetricTile label="Coverage" value={`${coveragePercent}%`} sub={coverageLabel} />
-                    <MetricTile label="Win rate" value={formatPercent(data.summary.winRate)} />
-                    <MetricTile label="Spread" value={formatPercent(data.summary.scoreSpread)} />
-                    <MetricTile label="Votes" value={data.summary.totalVotes.toLocaleString()} />
-                    <MetricTile
-                      label="Stability"
-                      value={data.model.stability}
-                      valueClassName="text-[1.2rem] font-semibold leading-tight tracking-tight"
-                      tone={
-                        data.model.stability === "Stable"
-                          ? "text-success"
-                          : data.model.stability === "Established"
-                            ? "text-accent"
-                            : "text-warn"
-                      }
-                    />
-                    <MetricTile
-                      label="Quality floor"
-                      value={formatPercent(data.summary.qualityFloorScore)}
-                    />
-                  </div>
+              <div className="rounded-[1.12rem] bg-bg/45 p-1.5 ring-1 ring-border/70">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <MetricTile
+                    label="Rank score"
+                    value={`${Math.round(data.model.rankScore)}`}
+                    sub={`Raw ${Math.round(data.model.eloRating)}`}
+                  />
+                  <MetricTile
+                    label="Confidence"
+                    value={`${data.model.confidence}%`}
+                    sub={`RD ${Math.round(data.model.ratingDeviation)}`}
+                  />
+                  <MetricTile label="Coverage" value={`${coveragePercent}%`} sub={coverageLabel} />
+                  <MetricTile label="Win rate" value={formatPercent(data.summary.winRate)} />
+                  <MetricTile label="Spread" value={formatPercent(data.summary.scoreSpread)} />
+                  <MetricTile label="Votes" value={data.summary.totalVotes.toLocaleString()} />
+                  <MetricTile
+                    label="Stability"
+                    value={data.model.stability}
+                    valueClassName="text-[1.2rem] font-semibold leading-tight tracking-tight"
+                    tone={
+                      data.model.stability === "Stable"
+                        ? "text-success"
+                        : data.model.stability === "Established"
+                          ? "text-accent"
+                          : "text-warn"
+                    }
+                  />
+                  <MetricTile
+                    label="Quality floor"
+                    value={formatPercent(data.summary.qualityFloorScore)}
+                  />
                 </div>
               </div>
             </div>
 
-            <div className="mb-profile-snapshot self-stretch h-full rounded-2xl bg-gradient-to-b from-card/82 to-card/50 p-3 ring-1 ring-white/12 shadow-[0_36px_52px_-52px_hsl(220_40%_2%_/_1)] backdrop-blur-sm sm:p-3.5 flex flex-col justify-between gap-4">
+            <div className="mb-profile-snapshot self-start rounded-2xl bg-gradient-to-b from-card/82 to-card/50 p-3 ring-1 ring-white/12 shadow-[0_36px_52px_-52px_hsl(220_40%_2%_/_1)] backdrop-blur-sm sm:p-3.5 flex flex-col gap-4">
               <div className="text-[10px] uppercase tracking-[0.16em] text-muted">
                 Signal snapshot
               </div>
-              <div className="mt-2.5 flex-1">
+              <div className="mt-2.5">
                 <div className="grid auto-rows-min items-start gap-3 sm:grid-cols-[auto_1fr] sm:gap-3">
                   <ConsistencyGauge value={data.summary.consistency} label="Consistency" />
                   <div className="grid auto-rows-min grid-cols-2 gap-2">
@@ -1094,8 +1148,25 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   </div>
                 </div>
               </div>
-              <div className="text-xs text-muted">
-                {consistencyLabel(data.summary.consistency)}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-3">
+                <div className={`text-xs ${consistencyTone(data.summary.consistency)}`}>
+                  {consistencyLabel(data.summary.consistency)}
+                </div>
+                <div className="text-[11px] text-muted/88">
+                  {averageGenerationTimeMs != null ? (
+                    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="uppercase tracking-[0.14em] text-muted/68">
+                        Average build time
+                      </span>
+                      <span className="font-mono text-fg">
+                        {formatDurationCompact(averageGenerationTimeMs)}
+                      </span>
+                      <span>{timedBuildDurations.length.toLocaleString()} timed</span>
+                    </span>
+                  ) : (
+                    <span>Timing appears once timed imports land.</span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1454,6 +1525,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             ) : null}
             {visiblePromptBreakdown.map((prompt, index) => {
               const voteDensity = prompt.votes / maxPromptVotes;
+              const generationTimeMs = getPromptBuildGenerationTimeMs(prompt.build);
               return (
                 <article
                   key={prompt.promptId}
@@ -1531,6 +1603,11 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                           {prompt.build.blockCount.toLocaleString()} blocks
                         </span>
                       ) : null}
+                      {generationTimeMs != null ? (
+                        <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
+                          {formatDurationCompact(generationTimeMs)}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 </article>
@@ -1602,6 +1679,12 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   <>
                     <span>•</span>
                     <span>{activePrompt.build.blockCount.toLocaleString()} blocks</span>
+                  </>
+                ) : null}
+                {activeBuildGenerationTimeMs != null ? (
+                  <>
+                    <span>•</span>
+                    <span>{formatDurationCompact(activeBuildGenerationTimeMs)} generate</span>
                   </>
                 ) : null}
               </div>

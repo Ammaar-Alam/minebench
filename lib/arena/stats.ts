@@ -96,6 +96,7 @@ export type ModelPromptBreakdown = {
     palette: "simple" | "advanced";
     mode: string;
     blockCount: number;
+    generationTimeMs: number | null;
   } | null;
 };
 
@@ -133,6 +134,7 @@ export type ModelDetailStats = {
     recentForm: number | null;
     recentDelta: number | null;
     qualityFloorScore: number | null;
+    averageGenerationTimeMs: number | null;
   };
   prompts: ModelPromptBreakdown[];
   opponents: ModelOpponentBreakdown[];
@@ -158,6 +160,11 @@ function normalizeGridSize(value: number): 64 | 256 | 512 {
 
 function normalizePalette(value: string): "simple" | "advanced" {
   return value === "advanced" ? "advanced" : "simple";
+}
+
+function normalizeGenerationTimeMs(value: number): number | null {
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : null;
 }
 
 function summarizeDispersion(samples: PromptScoreSample[], activePromptCount: number): ScoreDispersion {
@@ -508,6 +515,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         palette: true,
         mode: true,
         blockCount: true,
+        generationTimeMs: true,
         prompt: {
           select: { text: true },
         },
@@ -566,9 +574,15 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         palette,
         mode: build.mode,
         blockCount: build.blockCount,
+        generationTimeMs: normalizeGenerationTimeMs(build.generationTimeMs),
       },
     });
   }
+
+  const generationTimeSamples = builds
+    .map((build) => normalizeGenerationTimeMs(build.generationTimeMs))
+    .filter((value): value is number => value != null);
+  const averageGenerationTimeMs = average(generationTimeSamples);
 
   const allPromptIds = new Set<string>([
     ...promptStatsById.keys(),
@@ -658,6 +672,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       recentDelta:
         recentForm != null && priorForm != null ? recentForm - priorForm : null,
       qualityFloorScore,
+      averageGenerationTimeMs,
     },
     prompts,
     opponents,

@@ -55,6 +55,10 @@ interface Job {
   filePath: string;
 }
 
+type BuildMeta = {
+  generationTimeMs?: number;
+};
+
 function jobLabel(job: Job): string {
   return `${job.promptSlug} × ${job.modelSlug}`;
 }
@@ -86,6 +90,37 @@ type PreparedUploadPayload = {
 
 function getJsonPath(promptSlug: string, modelSlug: string): string {
   return path.join(UPLOADS_DIR, promptSlug, `${promptSlug}-${modelSlug}.json`);
+}
+
+function getBuildMetaPath(job: Job): string {
+  return job.filePath.endsWith(".json")
+    ? job.filePath.replace(/\.json$/, ".meta.json")
+    : `${job.filePath}.meta.json`;
+}
+
+function normalizeGenerationTimeMs(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : null;
+}
+
+function writeBuildMeta(job: Job, meta: BuildMeta): void {
+  fs.writeFileSync(getBuildMetaPath(job), JSON.stringify(meta, null, 2));
+}
+
+function readBuildMeta(job: Job): BuildMeta | null {
+  const metaPath = getBuildMetaPath(job);
+  if (!fs.existsSync(metaPath)) return null;
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(metaPath, "utf-8")) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const record = parsed as Record<string, unknown>;
+    const generationTimeMs = normalizeGenerationTimeMs(record.generationTimeMs);
+    return generationTimeMs == null ? null : { generationTimeMs };
+  } catch {
+    return null;
+  }
 }
 
 function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
@@ -381,6 +416,9 @@ async function generateAndSave(
 
   // write the build json
   fs.writeFileSync(job.filePath, JSON.stringify(result.build, null, 2));
+  if (normalizeGenerationTimeMs(result.generationTimeMs) != null) {
+    writeBuildMeta(job, { generationTimeMs: result.generationTimeMs });
+  }
 
   return { ok: true, blockCount: result.blockCount, generationTimeMs: result.generationTimeMs };
 }
@@ -415,12 +453,17 @@ async function uploadBuildLegacy(
   job: Job,
   token: string,
   jsonBytes: Buffer<ArrayBufferLike>,
-  gzipped: Buffer<ArrayBufferLike>
+  gzipped: Buffer<ArrayBufferLike>,
+  generationTimeMs?: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const url = new URL(`${PROD_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
+  const normalizedGenerationTimeMs = normalizeGenerationTimeMs(generationTimeMs);
+  if (normalizedGenerationTimeMs != null) {
+    url.searchParams.set("generationTimeMs", String(normalizedGenerationTimeMs));
+  }
 
   async function doUpload(opts: { body: Uint8Array<ArrayBufferLike>; headers: Record<string, string> }) {
     // Next's `fetch` typings only accept non-shared `ArrayBuffer` views, so coerce the buffer type
@@ -581,12 +624,17 @@ async function uploadToSupabaseStorage(
 async function finalizeStorageImport(
   job: Job,
   token: string,
-  ref: BuildStorageReference
+  ref: BuildStorageReference,
+  generationTimeMs?: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const url = new URL(`${PROD_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
+  const normalizedGenerationTimeMs = normalizeGenerationTimeMs(generationTimeMs);
+  if (normalizedGenerationTimeMs != null) {
+    url.searchParams.set("generationTimeMs", String(normalizedGenerationTimeMs));
+  }
 
   const resp = await fetch(url.toString(), {
     method: "POST",
@@ -602,7 +650,7 @@ async function finalizeStorageImport(
   return { ok: false, error: `Finalize import failed (HTTP ${resp.status}): ${text}` };
 }
 
-async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
+async function uploadBuild(job: Job, generationTimeMs?: number): Promise<{ ok: boolean; error?: string }> {
   if (!job.promptText) {
     return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
   }
@@ -618,6 +666,8 @@ async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
   }
 
   const prepared = preparedUpload.prepared;
+  const effectiveGenerationTimeMs =
+    normalizeGenerationTimeMs(generationTimeMs) ?? normalizeGenerationTimeMs(readBuildMeta(job)?.generationTimeMs ?? null) ?? undefined;
 
   const storageAttempt = await uploadToSupabaseStorage(job, prepared);
   if (storageAttempt.ok) {
@@ -625,10 +675,10 @@ async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
     if (!artifactAttempt.ok) {
       return { ok: false, error: `Stream artifact upload failed: ${artifactAttempt.error}` };
     }
-    return finalizeStorageImport(job, token, storageAttempt.ref);
+    return finalizeStorageImport(job, token, storageAttempt.ref, effectiveGenerationTimeMs);
   }
 
-  const legacy = await uploadBuildLegacy(job, token, prepared.jsonBytes, prepared.gzipped);
+  const legacy = await uploadBuildLegacy(job, token, prepared.jsonBytes, prepared.gzipped, effectiveGenerationTimeMs);
   if (legacy.ok) return legacy;
 
   return {
@@ -842,7 +892,7 @@ Upload notes:
 
               if (opts.upload) {
                 console.log(`    📤 [${jobLabel(job)}] Uploading...`);
-                const uploadResult = await uploadBuild(job);
+                const uploadResult = await uploadBuild(job, result.generationTimeMs);
                 console.log(
                   uploadResult.ok
                     ? `    ✅ [${jobLabel(job)}] Upload complete`
