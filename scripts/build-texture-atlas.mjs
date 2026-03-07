@@ -15,7 +15,6 @@ const srcDir = path.join(
 const palettesPath = path.join(repoRoot, "lib", "blocks", "palettes.json");
 const publicOutDir = path.join(repoRoot, "public", "textures");
 const outPng = path.join(publicOutDir, "atlas.png");
-const outMapPublic = path.join(publicOutDir, "atlas-map.json");
 const outMapLib = path.join(repoRoot, "lib", "blocks", "atlas-map.json");
 
 const TILE_SIZE = 32;
@@ -155,7 +154,6 @@ async function main() {
     keys: keyToUv
   };
 
-  await fs.writeFile(outMapPublic, JSON.stringify(out, null, 2) + "\n", "utf8");
   await fs.writeFile(outMapLib, JSON.stringify(out, null, 2) + "\n", "utf8");
 
   console.log(
