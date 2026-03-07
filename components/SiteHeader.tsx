@@ -173,7 +173,7 @@ function SocialIconLink({
 
 export function SiteHeader() {
   return (
-    <header className="relative sticky top-0 z-20 border-b border-border bg-bg/75 backdrop-blur">
+    <header className="relative sticky top-0 z-40 border-b border-border bg-bg/75 backdrop-blur">
       <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 sm:py-4 lg:px-8">
         <a
           href="#main"

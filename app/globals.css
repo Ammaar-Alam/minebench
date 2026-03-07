@@ -278,6 +278,7 @@
     content: "";
     position: absolute;
     inset: -1px;
+    border-radius: inherit;
     pointer-events: none;
     background:
       radial-gradient(520px 260px at 0% 0%, hsl(var(--accent) / 0.18), transparent 62%),
