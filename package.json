@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
+    "@vercel/analytics": "^1.6.1",
     "gifenc": "^1.0.3",
     "gifsicle-wasm-browser": "^1.5.19",
     "next": "^15.0.0",
