@@ -65,7 +65,7 @@ MineBench currently benchmarks models from OpenAI, Anthropic, Google, Moonshot, 
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add new models, submit benchmark prompts, improve the UI, or fix bugs.
+Contributions are welcome! See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for how to add new models, submit benchmark prompts, improve the UI, or fix bugs.
 
 ## Support MineBench
 

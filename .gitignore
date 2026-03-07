@@ -26,6 +26,7 @@ PLAN.md
 
 # Dependencies
 node_modules
+package-lock.json
 /.pnp
 .pnp.*
 .yarn/*
