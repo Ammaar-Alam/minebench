@@ -1,7 +1,7 @@
 "use client";
 
 import type { RefObject } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 
 export type SandboxGifExportTarget = {
@@ -19,20 +19,23 @@ type Props = {
   className?: string;
 };
 
-// GIFs are a compromise: higher FPS + small rotation steps look smoother, but cost encode time + file size.
-// These defaults favor high-quality output.
 const TARGET_FPS = 60;
-const FRAME_DELAY_MS = Math.round(1000 / TARGET_FPS); // quantized to 10ms in GIF, effectively ~50fps in playback
-const FRAME_COUNT = 160; // ~3.2s total at encoded delay, last frame matches first for a seamless loop
-const MAX_IN_FLIGHT_FRAMES = 6; // pipeline main-thread capture with worker encoding
-const YIELD_EVERY_FRAMES = 50; // keep UI responsive without adding ~16ms per frame
-const CAPTURE_SUPERSAMPLE = 1.35;
+const FRAME_DELAY_MS = Math.round(1000 / TARGET_FPS);
+const FRAME_COUNT = 160;
+const GIF_DELAY_TICK_MS = 10;
+const ROTATION_SLOWDOWN_FACTOR = 1.25;
+const MAX_IN_FLIGHT_FRAMES = 6;
+const YIELD_EVERY_FRAMES = 50;
+const PALETTE_SAMPLE_COUNT = 8;
+const PALETTE_SAMPLE_SIZE = { width: 480, height: 270 };
 const EXPORT_SIZE_SINGLE = { width: 1920, height: 1080 };
 const EXPORT_SIZE_COMPARE = { width: 1920, height: 1080 };
 const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * 1024 * 1024;
+const LOSSLESS_OPT_LARGE_INPUT_BYTES = 10 * 1024 * 1024;
 const LOSSLESS_OPT_ALWAYS_KEEP_BYTES = 15 * 1024 * 1024;
 const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
 const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
+const LOSSLESS_OPT_TARGET_MAX_BYTES = 30 * 1024 * 1024;
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
@@ -41,6 +44,38 @@ const PANEL_PAD = 12;
 const PANEL_META_HEIGHT = 62;
 const PANEL_RADIUS = 18;
 const CAPTURE_RADIUS = 14;
+
+type ExportLayout = {
+  width: number;
+  height: number;
+  panelWidth: number;
+  panelHeight: number;
+  panelGap: number;
+  panelTop: number;
+  header: {
+    title: string;
+    promptLines: string[];
+    urlText: string;
+  };
+};
+
+function buildFrameDelaySchedule(frameCount: number, slowdownFactor: number): number[] {
+  const baseDelayTicks = Math.max(1, Math.round(FRAME_DELAY_MS / GIF_DELAY_TICK_MS));
+  const totalDelayTicks = Math.max(1, Math.round(frameCount * baseDelayTicks * slowdownFactor));
+  const delays: number[] = [];
+  let assignedTicks = 0;
+
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const nextAssignedTicks = Math.round(((frame + 1) * totalDelayTicks) / frameCount);
+    const frameDelayTicks = Math.max(1, nextAssignedTicks - assignedTicks);
+    delays.push(frameDelayTicks * GIF_DELAY_TICK_MS);
+    assignedTicks = nextAssignedTicks;
+  }
+
+  return delays;
+}
+
+const FRAME_DELAYS_MS = buildFrameDelaySchedule(FRAME_COUNT, ROTATION_SLOWDOWN_FACTOR);
 
 function sanitizeFilePart(value: string) {
   return value
@@ -129,6 +164,52 @@ function roundedRectPath(
   ctx.closePath();
 }
 
+function buildExportLayout(
+  ctx: CanvasRenderingContext2D,
+  count: number,
+  width: number,
+  height: number,
+  promptText: string,
+): ExportLayout {
+  const panelGap = count === 1 ? 0 : PANEL_GAP;
+  const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
+  ctx.font = '500 13px "IBM Plex Sans", "Segoe UI", sans-serif';
+  const normalizedPrompt = promptText.replace(/\s+/g, " ").trim();
+  const promptLines = wrapTextLines(
+    ctx,
+    `Prompt: ${normalizedPrompt || "sandbox prompt"}`,
+    width - 56,
+    2,
+  );
+  const panelTop = Math.max(86, 54 + promptLines.length * 16 + 22);
+  const panelHeight = height - panelTop - EXPORT_MARGIN_BOTTOM;
+
+  return {
+    width,
+    height,
+    panelWidth,
+    panelHeight,
+    panelGap,
+    panelTop,
+    header: {
+      title: count === 2 ? "MineBench Comparison" : "MineBench Build",
+      promptLines,
+      urlText: "minebench.ai",
+    },
+  };
+}
+
+function buildPaletteSampleFrames(frameCount: number, sampleCount: number): number[] {
+  const uniqueFrames = Math.max(1, frameCount - 1);
+  const count = Math.min(sampleCount, uniqueFrames);
+  const frames = new Set<number>();
+  for (let i = 0; i < count; i += 1) {
+    const frame = Math.min(uniqueFrames - 1, Math.floor((i * uniqueFrames) / count));
+    frames.add(frame);
+  }
+  return Array.from(frames).sort((a, b) => a - b);
+}
+
 async function optimizeGifBlobLossless(input: Blob): Promise<Blob> {
   if (input.size < LOSSLESS_OPT_MIN_INPUT_BYTES) return input;
 
@@ -138,14 +219,32 @@ async function optimizeGifBlobLossless(input: Blob): Promise<Blob> {
       input.arrayBuffer(),
     ]);
 
-    const outputs = await gifsicle.run({
-      input: [{ file: inputBytes, name: "in.gif" }],
-      command: ["-O3 in.gif -o /out/out.gif"],
-      isStrict: true,
-    });
-    const optimized = outputs.find((file) => file.name.toLowerCase().endsWith(".gif"));
+    const runOptimize = async (level: "-O2" | "-O3") => {
+      const outputs = await gifsicle.run({
+        input: [{ file: inputBytes.slice(0), name: "in.gif" }],
+        command: [`${level} in.gif -o /out/out.gif`],
+        isStrict: true,
+      });
+      return outputs.find((file) => file.name.toLowerCase().endsWith(".gif")) ?? null;
+    };
+
+    const primaryLevel = input.size >= LOSSLESS_OPT_LARGE_INPUT_BYTES ? "-O2" : "-O3";
+    let optimized = await runOptimize(primaryLevel);
+
+    if (
+      primaryLevel === "-O2" &&
+      optimized &&
+      optimized.size > LOSSLESS_OPT_TARGET_MAX_BYTES &&
+      optimized.size < input.size
+    ) {
+      const tighter = await runOptimize("-O3");
+      if (tighter && tighter.size < optimized.size) optimized = tighter;
+    }
+
     if (!optimized) return input;
-    if (input.size >= LOSSLESS_OPT_ALWAYS_KEEP_BYTES) return optimized;
+    if (input.size >= LOSSLESS_OPT_ALWAYS_KEEP_BYTES) {
+      return optimized.size < input.size ? optimized : input;
+    }
 
     const savings = input.size - optimized.size;
     const relativeSavings = savings / Math.max(1, input.size);
@@ -169,7 +268,6 @@ function drawBaseBackdrop(
     urlText: string;
   },
 ) {
-  // Keep the background smooth and low-detail so the 256-color GIF palette is spent on the builds (less "static").
   ctx.fillStyle = "#0b1220";
   ctx.fillRect(0, 0, width, height);
 
@@ -276,6 +374,71 @@ function drawPanel(
   ctx.stroke();
 }
 
+function renderCompositeFrame(
+  ctx: CanvasRenderingContext2D,
+  layout: ExportLayout,
+  targets: SandboxGifExportTarget[],
+  angle: number,
+) {
+  drawBaseBackdrop(ctx, layout.width, layout.height, layout.header);
+
+  for (let idx = 0; idx < targets.length; idx += 1) {
+    const target = targets[idx];
+    const panelX = EXPORT_MARGIN_X + idx * (layout.panelWidth + layout.panelGap);
+    const panelY = layout.panelTop;
+    const captureWidth = Math.max(1, Math.round(layout.panelWidth - PANEL_PAD * 2));
+    const captureHeight = Math.max(1, Math.round(layout.panelHeight - PANEL_PAD * 2 - PANEL_META_HEIGHT));
+    const capture = target.viewerRef.current?.captureFrame({
+      rotationY: angle,
+      width: captureWidth,
+      height: captureHeight,
+    });
+    if (!capture) {
+      throw new Error("One of the viewers is not ready for export");
+    }
+
+    drawPanel(ctx, {
+      x: panelX,
+      y: panelY,
+      width: layout.panelWidth,
+      height: layout.panelHeight,
+      target,
+      capture,
+    });
+  }
+}
+
+async function buildPaletteSamples(targets: SandboxGifExportTarget[], promptText: string) {
+  const sampleCanvas = document.createElement("canvas");
+  sampleCanvas.width = PALETTE_SAMPLE_SIZE.width;
+  sampleCanvas.height = PALETTE_SAMPLE_SIZE.height;
+  const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
+  if (!sampleCtx) throw new Error("Unable to initialize palette sampler");
+  sampleCtx.imageSmoothingEnabled = true;
+  sampleCtx.imageSmoothingQuality = "high";
+
+  const layout = buildExportLayout(
+    sampleCtx,
+    targets.length,
+    sampleCanvas.width,
+    sampleCanvas.height,
+    promptText,
+  );
+  const samples: ArrayBuffer[] = [];
+  const sampleFrames = buildPaletteSampleFrames(FRAME_COUNT, PALETTE_SAMPLE_COUNT);
+
+  for (let idx = 0; idx < sampleFrames.length; idx += 1) {
+    const frame = sampleFrames[idx];
+    const t = FRAME_COUNT > 1 ? frame / (FRAME_COUNT - 1) : 0;
+    renderCompositeFrame(sampleCtx, layout, targets, t * Math.PI * 2);
+    const pixels = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
+    samples.push(pixels.buffer);
+    if (idx > 0 && idx % 4 === 0) await waitForNextPaint();
+  }
+
+  return samples;
+}
+
 async function buildGifBlob(
   targets: SandboxGifExportTarget[],
   promptText: string,
@@ -284,14 +447,11 @@ async function buildGifBlob(
   const count = targets.length;
   const width = count === 1 ? EXPORT_SIZE_SINGLE.width : EXPORT_SIZE_COMPARE.width;
   const height = count === 1 ? EXPORT_SIZE_SINGLE.height : EXPORT_SIZE_COMPARE.height;
-  const panelBottom = EXPORT_MARGIN_BOTTOM;
-  const panelGap = count === 1 ? 0 : PANEL_GAP;
-  const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
 
   const frameCanvas = document.createElement("canvas");
   frameCanvas.width = width;
   frameCanvas.height = height;
-  const frameCtx = frameCanvas.getContext("2d");
+  const frameCtx = frameCanvas.getContext("2d", { willReadFrequently: true });
   if (!frameCtx) throw new Error("Unable to initialize export canvas");
   frameCtx.imageSmoothingEnabled = true;
   frameCtx.imageSmoothingQuality = "high";
@@ -360,19 +520,12 @@ async function buildGifBlob(
   worker.postMessage({ type: "start" });
   await readyPromise;
 
-  const title = count === 2 ? "MineBench Comparison" : "MineBench Build";
-  const urlText = "minebench.ai";
-  const normalizedPrompt = promptText.replace(/\s+/g, " ").trim();
-  frameCtx.font = '500 13px "IBM Plex Sans", "Segoe UI", sans-serif';
-  const promptLines = wrapTextLines(
-    frameCtx,
-    `Prompt: ${normalizedPrompt || "sandbox prompt"}`,
-    width - 56,
-    2,
-  );
-  const panelTop = Math.max(86, 54 + promptLines.length * 16 + 22);
-  const panelHeight = height - panelTop - panelBottom;
-  const header = { title, promptLines, urlText };
+  const paletteSamples = await buildPaletteSamples(targets, promptText);
+  if (paletteSamples.length > 0) {
+    worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
+  }
+
+  const layout = buildExportLayout(frameCtx, count, width, height, promptText);
 
   try {
     const inFlight: Promise<void>[] = [];
@@ -380,33 +533,7 @@ async function buildGifBlob(
 
     for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
       const t = FRAME_COUNT > 1 ? frame / (FRAME_COUNT - 1) : 0;
-      const angle = t * Math.PI * 2;
-      drawBaseBackdrop(frameCtx, width, height, header);
-
-      for (let idx = 0; idx < targets.length; idx += 1) {
-        const target = targets[idx];
-        const panelX = EXPORT_MARGIN_X + idx * (panelWidth + panelGap);
-        const panelY = panelTop;
-        const captureWidth = Math.floor(panelWidth - PANEL_PAD * 2);
-        const captureHeight = Math.floor(panelHeight - PANEL_PAD * 2 - PANEL_META_HEIGHT);
-        const capture = target.viewerRef.current?.captureFrame({
-          rotationY: angle,
-          width: Math.max(1, Math.round(captureWidth * CAPTURE_SUPERSAMPLE)),
-          height: Math.max(1, Math.round(captureHeight * CAPTURE_SUPERSAMPLE)),
-        });
-        if (!capture) {
-          throw new Error("One of the viewers is not ready for export");
-        }
-
-        drawPanel(frameCtx, {
-          x: panelX,
-          y: panelY,
-          width: panelWidth,
-          height: panelHeight,
-          target,
-          capture,
-        });
-      }
+      renderCompositeFrame(frameCtx, layout, targets, t * Math.PI * 2);
 
       const pixels = frameCtx.getImageData(0, 0, width, height).data;
       const buffer = pixels.buffer;
@@ -419,7 +546,7 @@ async function buildGifBlob(
           frameIndex: frame,
           width,
           height,
-          delay: FRAME_DELAY_MS,
+          delay: FRAME_DELAYS_MS[frame] ?? FRAME_DELAY_MS,
           pixels: buffer,
         },
         [buffer],
@@ -435,7 +562,7 @@ async function buildGifBlob(
         inFlight.shift();
       }
 
-      if (frame % YIELD_EVERY_FRAMES === 0) {
+      if (frame > 0 && frame % YIELD_EVERY_FRAMES === 0) {
         await waitForNextPaint();
       }
     }
@@ -462,6 +589,7 @@ function triggerDownload(blob: Blob, fileName: string) {
 }
 
 export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className }: Props) {
+  const tooltipId = useId();
   const [exporting, setExporting] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -513,15 +641,21 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
         : "Rendering..."
     : (label ?? (targets.length === 2 ? "Export comparison GIF" : "Export GIF"));
   const buttonTitle = error ?? displayLabel;
+  const busy = exporting || optimizing;
+  const isUnavailable = !hasTargets;
+  const shouldKeepTooltipVisible = Boolean(iconOnly && (busy || error));
 
-  return (
+  const button = (
     <button
       type="button"
-      aria-label={displayLabel}
-      title={buttonTitle}
+      aria-label={buttonTitle}
+      aria-describedby={iconOnly ? tooltipId : undefined}
+      aria-busy={busy || undefined}
+      aria-disabled={isUnavailable || busy}
+      title={iconOnly ? undefined : buttonTitle}
       onClick={() => void handleExport()}
-      disabled={!hasTargets || exporting}
-      className={`${iconOnly ? "mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg" : "mb-btn mb-btn-ghost h-9 rounded-full border border-border/70 bg-bg/55 px-3 text-xs tracking-[0.01em] backdrop-blur-sm sm:text-sm"} disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
+      disabled={isUnavailable}
+      className={`${iconOnly ? "mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg" : "mb-btn mb-btn-ghost h-9 rounded-full border border-border/70 bg-bg/55 px-3 text-xs tracking-[0.01em] backdrop-blur-sm sm:text-sm"} ${busy ? "cursor-progress opacity-75" : ""} disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
     >
       <span className={`inline-flex items-center ${iconOnly ? "justify-center" : "gap-1.5"}`}>
         <svg
@@ -540,5 +674,21 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
         {iconOnly ? null : <span>{displayLabel}</span>}
       </span>
     </button>
+  );
+
+  if (!iconOnly) return button;
+
+  return (
+    <div className="group/gif-export relative inline-flex items-center">
+      <div
+        id={tooltipId}
+        role="status"
+        aria-live={busy ? "polite" : undefined}
+        className={`pointer-events-none absolute right-[calc(100%+0.55rem)] top-1/2 z-[40] w-max max-w-[min(16rem,calc(100vw-8rem))] -translate-y-1/2 rounded-full border border-border/80 bg-[linear-gradient(180deg,rgba(8,13,30,0.98),rgba(5,9,22,0.96))] px-3 py-1.5 text-right text-[11px] text-fg shadow-[0_18px_44px_-24px_rgba(4,11,31,0.9)] backdrop-blur-md transition duration-150 ${shouldKeepTooltipVisible ? "translate-x-0 opacity-100" : "translate-x-1 opacity-0 group-hover/gif-export:translate-x-0 group-hover/gif-export:opacity-100 group-focus-within/gif-export:translate-x-0 group-focus-within/gif-export:opacity-100"}`}
+      >
+        <span className="block truncate">{buttonTitle}</span>
+      </div>
+      {button}
+    </div>
   );
 }

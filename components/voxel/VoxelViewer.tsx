@@ -24,6 +24,7 @@ export type VoxelViewerHandle = {
 };
 
 let atlasPromise: Promise<THREE.Texture> | null = null;
+const EXPORT_RENDER_OVERSCAN = 1;
 
 type ViewerTheme = "light" | "dark";
 
@@ -182,6 +183,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const userInteractingRef = useRef(false);
   const onBuildReadyChangeRef = useRef<((ready: boolean) => void) | undefined>(undefined);
   const requestRenderRef = useRef<(() => void) | null>(null);
+  const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const exportCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -233,6 +237,32 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     if (readyRef.current === ready) return;
     readyRef.current = ready;
     onBuildReadyChangeRef.current?.(ready);
+  }, []);
+
+  const getCaptureCanvas = useCallback((width: number, height: number) => {
+    const canvas = captureCanvasRef.current ?? document.createElement("canvas");
+    captureCanvasRef.current = canvas;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    return canvas;
+  }, []);
+
+  const getExportRenderer = useCallback(() => {
+    const existing = exportRendererRef.current;
+    if (existing) return existing;
+
+    const canvas = document.createElement("canvas");
+    const renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: false,
+      alpha: true,
+      powerPreference: "high-performance",
+    });
+    renderer.setPixelRatio(1);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    exportCanvasRef.current = canvas;
+    exportRendererRef.current = renderer;
+    return renderer;
   }, []);
 
   useEffect(() => {
@@ -501,12 +531,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         }
 
         controls.update();
-        renderer.render(scene, camera);
-
         const source = renderer.domElement;
         const width = Math.max(1, Math.floor(opts?.width ?? source.width));
         const height = Math.max(1, Math.floor(opts?.height ?? source.height));
-        const frame = document.createElement("canvas");
+        const frame = getCaptureCanvas(width, height);
         frame.width = width;
         frame.height = height;
         const ctx = frame.getContext("2d");
@@ -520,27 +548,60 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         }
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = "high";
-        // Preserve aspect ratio (avoid stretching) by cropping the source canvas to the target ratio.
+
         const srcW = source.width;
         const srcH = source.height;
         const dstW = width;
         const dstH = height;
+        const srcAspect = srcW > 0 && srcH > 0 ? srcW / srcH : camera.aspect || 1;
+        const dstAspect = dstW > 0 && dstH > 0 ? dstW / dstH : 1;
+
+        let cropWidth = srcW;
+        let cropHeight = srcH;
+        if (srcAspect > dstAspect) {
+          cropWidth = Math.max(1, Math.round(srcH * dstAspect));
+        } else if (srcAspect < dstAspect) {
+          cropHeight = Math.max(1, Math.round(srcW / dstAspect));
+        }
+
+        const needsHighResSource = cropWidth < dstW || cropHeight < dstH;
+        let sourceCanvas: HTMLCanvasElement = source;
+        if (needsHighResSource) {
+          const exportRenderer = getExportRenderer();
+          let renderWidth = dstW;
+          let renderHeight = dstH;
+          if (srcAspect > dstAspect) {
+            renderHeight = Math.max(1, Math.round(dstH * EXPORT_RENDER_OVERSCAN));
+            renderWidth = Math.max(dstW, Math.ceil(renderHeight * srcAspect));
+          } else {
+            renderWidth = Math.max(1, Math.round(dstW * EXPORT_RENDER_OVERSCAN));
+            renderHeight = Math.max(dstH, Math.ceil(renderWidth / srcAspect));
+          }
+          exportRenderer.setSize(renderWidth, renderHeight, false);
+          exportRenderer.render(scene, camera);
+          sourceCanvas = exportRenderer.domElement;
+        } else {
+          renderer.render(scene, camera);
+        }
+
+        const exportSrcW = sourceCanvas.width;
+        const exportSrcH = sourceCanvas.height;
         let sx = 0;
         let sy = 0;
-        let sw = srcW;
-        let sh = srcH;
-        const srcAspect = srcW > 0 && srcH > 0 ? srcW / srcH : 1;
-        const dstAspect = dstW > 0 && dstH > 0 ? dstW / dstH : 1;
-        if (srcAspect > dstAspect) {
+        let sw = exportSrcW;
+        let sh = exportSrcH;
+        const exportAspect = exportSrcW > 0 && exportSrcH > 0 ? exportSrcW / exportSrcH : srcAspect;
+        if (exportAspect > dstAspect) {
           // Too wide: crop left/right.
-          sw = Math.max(1, Math.round(srcH * dstAspect));
-          sx = Math.round((srcW - sw) / 2);
-        } else if (srcAspect < dstAspect) {
+          sw = Math.max(1, Math.round(exportSrcH * dstAspect));
+          sx = Math.round((exportSrcW - sw) / 2);
+        } else if (exportAspect < dstAspect) {
           // Too tall: crop top/bottom.
-          sh = Math.max(1, Math.round(srcW / dstAspect));
-          sy = Math.round((srcH - sh) / 2);
+          sh = Math.max(1, Math.round(exportSrcW / dstAspect));
+          sy = Math.round((exportSrcH - sh) / 2);
         }
-        ctx.drawImage(source, sx, sy, sw, sh, 0, 0, dstW, dstH);
+        ctx.clearRect(0, 0, dstW, dstH);
+        ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, dstW, dstH);
 
         if (typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY)) {
           vg.group.rotation.y = previousY;
@@ -551,7 +612,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         return frame;
       },
     }),
-    []
+    [getCaptureCanvas, getExportRenderer]
   );
 
   async function toggleFullscreen() {
@@ -757,6 +818,15 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         renderer.forceContextLoss();
       } catch {}
       renderer.dispose();
+      if (exportRendererRef.current) {
+        try {
+          exportRendererRef.current.forceContextLoss();
+        } catch {}
+        exportRendererRef.current.dispose();
+        exportRendererRef.current = null;
+      }
+      exportCanvasRef.current = null;
+      captureCanvasRef.current = null;
       renderer.domElement.removeEventListener("dblclick", onDblClick);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       renderer.domElement.remove();
