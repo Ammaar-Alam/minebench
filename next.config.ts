@@ -13,7 +13,7 @@ const nextConfig: NextConfig = {
           "**/.next/**",
           "**/node_modules/**",
           "**/uploads/**",
-          "**/faithful-32x-1.21.11/**",
+          "**/assets/texture-pack/**",
         ],
       };
     }

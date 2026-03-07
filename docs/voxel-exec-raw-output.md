@@ -1,8 +1,8 @@
-# Voxel Exec and Raw Output Pipeline
+# Voxel Exec Runtime, Conversion, and Import Workflows
 
-This document explains what the `voxel.exec` tool is, what primitives models get, what raw model output looks like, and how that becomes a final build JSON in MineBench.
+This document explains what `voxel.exec` is in MineBench today, what models can do with it, and the practical commands for converting, running, and importing tool-call output.
 
-Default runtime behavior in MineBench: model generations run in `voxel.exec` tool mode. The persisted/rendered artifact is always final voxel build JSON (`version/boxes/lines/blocks`).
+Default runtime behavior in MineBench: model generations run in `voxel.exec` tool mode. The persisted and rendered artifact is always final voxel build JSON in `version/boxes/lines/blocks` format.
 
 ## 1) What `voxel.exec` is
 
@@ -19,6 +19,8 @@ Implementation:
 
 - Tool schema and runtime: `lib/ai/tools/voxelExec.ts`
 - Generation integration: `lib/ai/generateVoxelBuild.ts`
+- Local execution API: `app/api/local/voxel-exec/route.ts`
+- Conversion utility: `scripts/convert-voxel-tool-call.ts`
 
 ## 2) Primitives available to model code
 
@@ -31,13 +33,13 @@ Inside tool-mode code, models can use:
 - `Math`
 - constants: `GRID_SIZE`, `PALETTE`
 
-That is intentionally minimal: the model must do planning/design itself.
+That surface is intentionally minimal. The model has to do its own planning, geometry, and decomposition.
 
-## 3) Raw model output example
+## 3) Raw tool-call shape
 
 MineBench includes a real tool-call payload example:
 
-- File: [`model-raw-output-example.json`](../model-raw-output-example.json)
+- File: [`examples/voxel-exec-tool-call-example.json`](./examples/voxel-exec-tool-call-example.json)
 
 Example shape:
 
@@ -53,26 +55,95 @@ Example shape:
 }
 ```
 
-This is the raw model output in tool mode. It is not yet the final expanded voxel build.
+This is raw model output in tool mode. It is not yet the final expanded voxel build.
 
-## 4) How raw output becomes a build JSON
+## 4) Conversion and local run examples
+
+### Convert raw provider output into MineBench build JSON
+
+Use the CLI utility when you have raw OpenAI, Anthropic, or direct tool-envelope JSON:
+
+```bash
+pnpm tool:convert --in docs/examples/voxel-exec-tool-call-example.json
+pnpm tool:convert --in openai-response.json --out uploads/castle/castle-gpt-5-2-pro.json
+cat anthropic-response.json | pnpm tool:convert --out /tmp/build.json
+pnpm tool:convert --in raw.json --expanded
+```
+
+Accepted inputs include:
+
+- direct tool envelopes
+- raw function arguments
+- OpenAI Chat/Responses tool-call payloads
+- Anthropic `tool_use` blocks
+
+### Execute tool code locally through the dev API
+
+This is useful for testing a small tool payload against the same runtime used by the app:
+
+```bash
+curl -sS -X POST "http://localhost:3000/api/local/voxel-exec" \
+  -H "Content-Type: application/json" \
+  --data '{"code":"box(20,0,20,44,8,44,\"stone\");","gridSize":64,"palette":"simple","seed":123}'
+```
+
+In development this endpoint is enabled by default. In production it is disabled unless `MINEBENCH_ENABLE_LOCAL_EXEC_API=1`.
+
+### Generate benchmark files with or without tool mode
+
+```bash
+pnpm batch:generate --generate
+pnpm batch:generate --generate --notools
+pnpm batch:generate --generate --prompt castle --model sonnet
+```
+
+Tool mode is the default. `--notools` is a fallback path for debugging or direct-output comparisons.
+
+### Import a converted build into the local database
+
+```bash
+curl -sS -X POST "http://localhost:3000/api/admin/import-build?modelKey=openai_gpt_5_2_pro&promptText=$(node -p 'encodeURIComponent(process.argv[1])' 'A medieval stone castle')&overwrite=1" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  --data-binary "@uploads/castle/castle-gpt-5-2-pro.json"
+```
+
+For larger production payloads, the recommended path is `pnpm batch:generate --upload ...` with Supabase Storage enabled.
+
+## 5) Runtime behavior and output files
+
+`runVoxelExec(...)` executes model JavaScript in a Node `vm` sandbox with time and primitive-count limits.
+
+By default the runtime writes a build artifact to one of these locations:
+
+1. `MINEBENCH_TOOL_OUTPUT_DIR` if set
+2. `uploads/tool-runs/`
+3. the system temp directory fallback
+
+Relevant runtime controls:
+
+- `MINEBENCH_TOOL_TIMEOUT_MS`
+- `MINEBENCH_TOOL_MAX_BOXES`
+- `MINEBENCH_TOOL_MAX_LINES`
+- `MINEBENCH_TOOL_MAX_BLOCKS`
+
+## 6) How raw output becomes a final build
 
 ### Step A: extract the JSON object from model text
 
 - `extractFirstJsonObject` / `extractBestVoxelBuildJson`
 - File: `lib/ai/jsonExtract.ts`
 
-### Step B: validate tool-call envelope
+### Step B: validate the tool-call envelope
 
 - `voxelExecToolCallSchema.safeParse(...)`
 - File: `lib/ai/tools/voxelExec.ts`
 
-### Step C: execute model JS in sandbox
+### Step C: execute model JavaScript in the sandbox
 
 - `runVoxelExec(...)`
 - File: `lib/ai/tools/voxelExec.ts`
 
-The runtime collects raw primitives into build spec format:
+The runtime collects primitives into build spec format:
 
 ```json
 {
@@ -83,7 +154,7 @@ The runtime collects raw primitives into build spec format:
 }
 ```
 
-### Step D: validate/expand/deduplicate
+### Step D: validate, expand, and deduplicate
 
 - `validateVoxelBuild(...)`
 - File: `lib/voxel/validate.ts`
@@ -91,11 +162,11 @@ The runtime collects raw primitives into build spec format:
 Validation does all of this:
 
 - expands `boxes` and `lines` to discrete blocks
-- normalizes block IDs (including common aliases)
-- drops negatives / out-of-bounds
+- normalizes block IDs, including common aliases
+- drops negatives and out-of-bounds coordinates
 - drops unknown block types
 - deduplicates final coordinates
-- enforces max block count
+- enforces block-count and structure limits
 
 ### Step E: parse final spec
 
@@ -104,27 +175,25 @@ Validation does all of this:
 
 ### Step F: persist and render
 
-- Persisted in `Build` table (`prisma/schema.prisma`)
-- Loaded by arena/sandbox APIs
-- Rendered via voxel mesh pipeline:
+- Persisted in the `Build` table (`prisma/schema.prisma`)
+- Loaded by arena, leaderboard, and sandbox APIs
+- Rendered via:
   - `lib/voxel/mesh.ts`
   - `components/voxel/VoxelViewer.tsx`
 
-## 5) What users should understand
+## 7) What to keep straight
 
 There are two different JSON artifacts:
 
-1. Tool-call JSON (raw model output in tool mode)
-   - contains JS code and tool metadata.
-2. Voxel build JSON (post-exec build spec)
-   - contains `version/boxes/lines/blocks`.
+1. Tool-call JSON
+   - contains JavaScript code plus tool metadata
+2. Voxel build JSON
+   - contains `version/boxes/lines/blocks`
 
-The app executes (1), validates it, and produces (2) for storage/rendering.
+MineBench executes the first and stores the second.
 
-Note: direct (non-tool) generation exists as an explicit fallback/dev path, not the default arena/sandbox generation flow.
-
-## 6) Related docs
+## 8) Related docs
 
 - Ranking system: `docs/arena-ranking-system.md`
 - Policy layer: `docs/arena-ranking-validity-policy-v2.md`
-- Tool spec background: `docs/tool-runner-spec.md`
+- Prompt template: `docs/chatgpt-web-voxel-prompt.md`

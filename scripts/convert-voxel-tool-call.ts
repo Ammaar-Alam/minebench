@@ -10,7 +10,7 @@
  * - Any wrapper object that contains one of the above shapes
  *
  * Usage:
- *   pnpm tool:convert --in model-raw-output-example.json
+ *   pnpm tool:convert --in docs/examples/voxel-exec-tool-call-example.json
  *   pnpm tool:convert --in openai-response.json --out uploads/castle/castle-gpt-5-2.json
  *   cat anthropic-response.json | pnpm tool:convert --out /tmp/build.json
  *   pnpm tool:convert --in raw.json --expanded

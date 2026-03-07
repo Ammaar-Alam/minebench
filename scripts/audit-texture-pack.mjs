@@ -2,14 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const repoRoot = process.cwd();
-const srcDir = path.join(
-  repoRoot,
-  "faithful-32x-1.21.11",
-  "assets",
-  "minecraft",
-  "textures",
-  "block"
-);
+const srcDir = path.join(repoRoot, "assets", "texture-pack", "assets", "minecraft", "textures", "block");
 
 const palettesPath = path.join(repoRoot, "lib", "blocks", "palettes.json");
 
@@ -97,4 +90,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

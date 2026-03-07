@@ -3,14 +3,7 @@ import path from "node:path";
 import sharp from "sharp";
 
 const repoRoot = process.cwd();
-const srcDir = path.join(
-  repoRoot,
-  "faithful-32x-1.21.11",
-  "assets",
-  "minecraft",
-  "textures",
-  "block"
-);
+const srcDir = path.join(repoRoot, "assets", "texture-pack", "assets", "minecraft", "textures", "block");
 
 const palettesPath = path.join(repoRoot, "lib", "blocks", "palettes.json");
 const publicOutDir = path.join(repoRoot, "public", "textures");

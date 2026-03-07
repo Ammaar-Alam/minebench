@@ -6,16 +6,17 @@ Use this index to find implementation-accurate docs for Arena ranking, generatio
 
 - [Arena Ranking System (Math + Matchmaking)](./arena-ranking-system.md)
 - [Arena Ranking Validity Policy v2](./arena-ranking-validity-policy-v2.md)
-- [Voxel Exec and Raw Output Pipeline](./voxel-exec-raw-output.md)
+- [Voxel Exec Runtime, Conversion, and Import Workflows](./voxel-exec-raw-output.md)
 
-## Prompting and Tooling
+## Prompting
 
 - [ChatGPT Web Voxel Prompt Template](./chatgpt-web-voxel-prompt.md)
-- [Tool Runner Spec (cross-provider)](./tool-runner-spec.md)
 
 ## Related Repo Files
 
-- Raw tool-call example: [`model-raw-output-example.json`](../model-raw-output-example.json)
+- Raw tool-call example: [`examples/voxel-exec-tool-call-example.json`](./examples/voxel-exec-tool-call-example.json)
+- Tool-call conversion script: [`scripts/convert-voxel-tool-call.ts`](../scripts/convert-voxel-tool-call.ts)
+- Local execution API: [`app/api/local/voxel-exec/route.ts`](../app/api/local/voxel-exec/route.ts)
 - Arena matchmaking route: [`app/api/arena/matchup/route.ts`](../app/api/arena/matchup/route.ts)
 - Arena vote/rating updates: [`app/api/arena/vote/route.ts`](../app/api/arena/vote/route.ts)
 - Rating math implementation: [`lib/arena/rating.ts`](../lib/arena/rating.ts)

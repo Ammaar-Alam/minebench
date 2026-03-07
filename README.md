@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://minebench.ai">
-    <img src="public/readme/minebench-banner.png" style="height: 10em" alt="MineBench banner"/>
+    <img src=".github/assets/readme/minebench-banner.png" style="height: 10em" alt="MineBench banner"/>
   </a>
 </p>
 
@@ -30,8 +30,8 @@ Models are given a natural-language prompt and must produce raw 3D coordinates a
 
 **[Try it live](https://minebench.ai)**
 
-![MineBench arena — Opus 4.5 versus Opus 4.6](public/readme/benchmark-split.gif)
-![MineBench default Arena landing page](public/readme/arena-landing-page.png)
+![MineBench arena — Opus 4.5 versus Opus 4.6](.github/assets/readme/benchmark-split.gif)
+![MineBench default Arena landing page](.github/assets/readme/arena-landing-page.png)
 
 ## Why MineBench?
 
@@ -41,7 +41,7 @@ As it turns out, this kind of spatial reasoning correlates strongly with a model
 
 MineBench, unlike other benchmarks, gives an easy way to visually determine (at least one aspect of) a model's raw intelligence. The ranking system also highlights which models are clearly 'bench-maxed' (i.e. when a model has amazing benchmarks on paper, but clearly lacks in real world usage).
 
-![MineBench arena — two AI models building a medieval castle side-by-side](public/readme/arena-dark.gif)
+![MineBench arena — two AI models building a medieval castle side-by-side](.github/assets/readme/arena-dark.gif)
 
 ## Features
 
@@ -55,9 +55,9 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 - Full docs index: [`docs/README.md`](docs/README.md)
 - Ranking math and matchmaking walkthrough: [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md)
 - Ranking policy: [`docs/arena-ranking-validity-policy-v2.md`](docs/arena-ranking-validity-policy-v2.md)
-- Voxel tool and raw-output pipeline: [`docs/voxel-exec-raw-output.md`](docs/voxel-exec-raw-output.md)
+- Voxel tool runtime, conversion, and import workflows: [`docs/voxel-exec-raw-output.md`](docs/voxel-exec-raw-output.md)
 
-![MineBench leaderboard showing model rankings](public/readme/leaderboard-dark.png)
+![MineBench leaderboard showing model rankings](.github/assets/readme/leaderboard-dark.png)
 
 ## Supported Models
 
@@ -78,7 +78,7 @@ If MineBench is useful to you and you want to help keep updates and new model ru
 
 [MIT](LICENSE)
 
-Texture pack: [Faithful](https://faithfulpack.net/) (see `faithful-32x-1.21.11/LICENSE.txt`)
+Texture pack: [Faithful](https://faithfulpack.net/) (see `assets/texture-pack/LICENSE.txt`)
 
 Inspired by [MC-Bench](https://mcbench.ai/) ([GitHub](https://github.com/mc-bench))
 
@@ -236,7 +236,7 @@ Default behavior: all runtime model generations use `voxel.exec` tool mode.
 
 Raw tool-call example:
 
-- [`model-raw-output-example.json`](model-raw-output-example.json)
+- [`docs/examples/voxel-exec-tool-call-example.json`](docs/examples/voxel-exec-tool-call-example.json)
 
 Full pipeline docs (raw output -> executed tool -> validated final build JSON):
 
@@ -429,6 +429,7 @@ select count(*) from public."Prompt";
 ## Project Structure
 
 ```text
+assets/             source texture pack and other build inputs
 app/                Next.js App Router pages and API routes
 components/         UI and voxel viewer components
 lib/ai/             generation pipeline and provider adapters
@@ -453,7 +454,7 @@ uploads/            local build JSON files and prompt folders
 - DB connection errors:
   - ensure Docker is running, `DATABASE_URL`/`DIRECT_URL` are valid, then run `pnpm db:up`.
 - Missing/broken block textures:
-  - run `pnpm atlas` to rebuild `public/textures/atlas.png`.
+  - run `pnpm atlas` to rebuild `public/textures/atlas.png` from `assets/texture-pack/`.
 
 ## Deployment Notes
 
@@ -485,7 +486,7 @@ Notes:
 
 ## Attribution
 
-- Textures: Faithful pack (`faithful-32x-1.21.11/`)
-- License: see `faithful-32x-1.21.11/LICENSE.txt`
+- Textures: Faithful pack (`assets/texture-pack/`)
+- License: see `assets/texture-pack/LICENSE.txt`
 
 _[Disclaimer: all documentation (including README) and frontend is almost entirely AI-created]_
