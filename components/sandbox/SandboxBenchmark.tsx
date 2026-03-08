@@ -876,7 +876,7 @@ export function SandboxBenchmark() {
             animateIn
             isLoading={isHydrating}
             loadingMessage={loadingMessage}
-            loadingProgress={isHydrating ? laneState.progress : undefined}
+            loadingProgress={isHydrating ? laneState.progress ?? undefined : undefined}
             viewerRef={viewerRef}
             actions={
               hasRenderableBuild && build && model ? (
