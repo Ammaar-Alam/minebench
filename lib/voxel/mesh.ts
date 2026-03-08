@@ -20,6 +20,31 @@ type CreateVoxelGroupAsyncOpts = {
   blockLimit?: number;
 };
 
+export type SerializedMeshBucket = {
+  positions: Float32Array;
+  normals: Float32Array;
+  uvs: Float32Array;
+  colors: Float32Array;
+  indices: Uint32Array;
+};
+
+export type SerializedBuildBounds = {
+  min: [number, number, number];
+  max: [number, number, number];
+  center: [number, number, number];
+  radius: number;
+};
+
+export type VoxelMeshPayload = {
+  opaque: SerializedMeshBucket | null;
+  cutout: SerializedMeshBucket | null;
+  transparent: SerializedMeshBucket | null;
+  water: SerializedMeshBucket | null;
+  emissive: SerializedMeshBucket | null;
+  bounds: SerializedBuildBounds;
+  filteredBlockCount: number;
+};
+
 type MeshBucket = {
   positions: number[];
   normals: number[];
@@ -156,6 +181,22 @@ function buildGeometry(
   return geo;
 }
 
+function buildGeometryFromSerialized(
+  bucket: SerializedMeshBucket | null,
+  bounds: { box: THREE.Box3; center: THREE.Vector3; radius: number },
+): THREE.BufferGeometry | null {
+  if (!bucket || bucket.indices.length === 0) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(bucket.positions, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(bucket.normals, 3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(bucket.uvs, 2));
+  geo.setAttribute("color", new THREE.BufferAttribute(bucket.colors, 3));
+  geo.setIndex(new THREE.BufferAttribute(bucket.indices, 1));
+  geo.boundingBox = bounds.box.clone();
+  geo.boundingSphere = new THREE.Sphere(bounds.center.clone(), bounds.radius);
+  return geo;
+}
+
 function disposeObject(obj: THREE.Object3D) {
   obj.traverse((child) => {
     if (child instanceof THREE.Mesh) {
@@ -171,12 +212,15 @@ function nowMs(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
 }
 
-async function nextFrame(): Promise<void> {
+async function yieldToMainThread(): Promise<void> {
+  const schedulerApi = (globalThis as typeof globalThis & {
+    scheduler?: { yield?: () => Promise<void> };
+  }).scheduler;
+  if (typeof schedulerApi?.yield === "function") {
+    await schedulerApi.yield();
+    return;
+  }
   await new Promise<void>((resolve) => {
-    if (typeof requestAnimationFrame === "function") {
-      requestAnimationFrame(() => resolve());
-      return;
-    }
     setTimeout(() => resolve(), 0);
   });
 }
@@ -383,6 +427,57 @@ function buildBoundsFromPrepared(prepared: PreparedMeshData) {
   box.getBoundingSphere(sphere);
   const radius = Number.isFinite(sphere.radius) && sphere.radius > 0 ? sphere.radius : 0.001;
   return { box, center, radius };
+}
+
+function serializeBounds(bounds: { box: THREE.Box3; center: THREE.Vector3; radius: number }): SerializedBuildBounds {
+  return {
+    min: [bounds.box.min.x, bounds.box.min.y, bounds.box.min.z],
+    max: [bounds.box.max.x, bounds.box.max.y, bounds.box.max.z],
+    center: [bounds.center.x, bounds.center.y, bounds.center.z],
+    radius: bounds.radius,
+  };
+}
+
+function deserializeBounds(bounds: SerializedBuildBounds) {
+  const box = new THREE.Box3(
+    new THREE.Vector3(bounds.min[0], bounds.min[1], bounds.min[2]),
+    new THREE.Vector3(bounds.max[0], bounds.max[1], bounds.max[2]),
+  );
+  const center = new THREE.Vector3(bounds.center[0], bounds.center[1], bounds.center[2]);
+  const radius = Number.isFinite(bounds.radius) && bounds.radius > 0 ? bounds.radius : 0.001;
+  return { box, center, radius };
+}
+
+function serializeBucket(bucket: MeshBucket): SerializedMeshBucket | null {
+  if (bucket.indices.length === 0) return null;
+  return {
+    positions: Float32Array.from(bucket.positions),
+    normals: Float32Array.from(bucket.normals),
+    uvs: Float32Array.from(bucket.uvs),
+    colors: Float32Array.from(bucket.colors),
+    indices: Uint32Array.from(bucket.indices),
+  };
+}
+
+function collectPayloadTransferables(payload: VoxelMeshPayload): Transferable[] {
+  const transferables: Transferable[] = [];
+  for (const bucket of [
+    payload.opaque,
+    payload.cutout,
+    payload.transparent,
+    payload.water,
+    payload.emissive,
+  ]) {
+    if (!bucket) continue;
+    transferables.push(
+      bucket.positions.buffer,
+      bucket.normals.buffer,
+      bucket.uvs.buffer,
+      bucket.colors.buffer,
+      bucket.indices.buffer,
+    );
+  }
+  return transferables;
 }
 
 function prepareMeshData(
@@ -898,8 +993,159 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   };
 }
 
+type MeshWorkerRequest = {
+  type: "build";
+  build: VoxelBuild;
+  allowedBlockIds: string[];
+  blockLimit?: number;
+};
+
+type MeshWorkerResponse =
+  | { type: "progress"; progress: BuildProgress }
+  | { type: "complete"; payload: VoxelMeshPayload }
+  | { type: "error"; message: string };
+
+function createVoxelGroupFromMeshPayload(
+  payload: VoxelMeshPayload,
+  atlasTexture: THREE.Texture,
+): VoxelGroup {
+  const bounds = deserializeBounds(payload.bounds);
+  configureAtlasTexture(atlasTexture);
+  const waterTexture = getWaterSurfaceTexture(atlasTexture);
+
+  const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
+  const matCutout = new THREE.MeshLambertMaterial({
+    map: atlasTexture,
+    alphaTest: 0.45,
+    vertexColors: true,
+  });
+  const matTransparent = new THREE.MeshLambertMaterial({
+    map: atlasTexture,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+    vertexColors: true,
+  });
+  const matWater = new THREE.MeshLambertMaterial({
+    map: waterTexture ?? undefined,
+    color: 0xffffff,
+    transparent: true,
+    opacity: 0.82,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    emissive: new THREE.Color(0x0b214f),
+    emissiveIntensity: 0.18,
+    vertexColors: true,
+  });
+  const matEmissive = new THREE.MeshBasicMaterial({
+    map: atlasTexture,
+    vertexColors: true,
+  });
+
+  const group = new THREE.Group();
+  group.name = "VoxelGroup";
+
+  const geoOpaque = buildGeometryFromSerialized(payload.opaque, bounds);
+  const geoCutout = buildGeometryFromSerialized(payload.cutout, bounds);
+  const geoTransparent = buildGeometryFromSerialized(payload.transparent, bounds);
+  const geoWater = buildGeometryFromSerialized(payload.water, bounds);
+  const geoEmissive = buildGeometryFromSerialized(payload.emissive, bounds);
+
+  if (geoOpaque) group.add(new THREE.Mesh(geoOpaque, matOpaque));
+  if (geoCutout) group.add(new THREE.Mesh(geoCutout, matCutout));
+  if (geoTransparent) group.add(new THREE.Mesh(geoTransparent, matTransparent));
+  if (geoWater) {
+    const mesh = new THREE.Mesh(geoWater, matWater);
+    mesh.renderOrder = 1;
+    group.add(mesh);
+  }
+  if (geoEmissive) group.add(new THREE.Mesh(geoEmissive, matEmissive));
+
+  return {
+    group,
+    dispose: () => disposeObject(group),
+    bounds,
+    stats: { blockCount: payload.filteredBlockCount },
+  };
+}
+
+async function createVoxelMeshPayloadInWorker(
+  build: VoxelBuild,
+  palette: BlockDefinition[],
+  opts?: CreateVoxelGroupAsyncOpts,
+): Promise<VoxelMeshPayload> {
+  if (typeof Worker === "undefined") {
+    throw new Error("Web Workers are unavailable in this environment");
+  }
+
+  const worker = new Worker(new URL("./mesh.worker.ts", import.meta.url), { type: "module" });
+  const abort = () => {
+    worker.terminate();
+  };
+
+  return await new Promise<VoxelMeshPayload>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      if (opts?.signal) {
+        opts.signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const finishResolve = (payload: VoxelMeshPayload) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      worker.terminate();
+      resolve(payload);
+    };
+    const finishReject = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      worker.terminate();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    const onAbort = () => {
+      abort();
+      finishReject(new DOMException("Aborted", "AbortError"));
+    };
+
+    worker.onmessage = (event: MessageEvent<MeshWorkerResponse>) => {
+      const message = event.data;
+      if (!message) return;
+      if (message.type === "progress") {
+        opts?.onProgress?.(message.progress);
+        return;
+      }
+      if (message.type === "error") {
+        finishReject(new Error(message.message || "Mesh worker failed"));
+        return;
+      }
+      if (message.type === "complete") {
+        finishResolve(message.payload);
+      }
+    };
+    worker.onerror = (event) => {
+      finishReject(new Error(event.message || "Mesh worker crashed"));
+    };
+
+    if (opts?.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
+    const request: MeshWorkerRequest = {
+      type: "build",
+      build,
+      allowedBlockIds: palette.map((entry) => entry.id),
+      blockLimit: opts?.blockLimit,
+    };
+    worker.postMessage(request);
+  });
+}
+
 // Async variant that periodically yields to keep the main thread responsive during huge builds.
-export async function createVoxelGroupAsync(
+async function createVoxelGroupAsyncLocal(
   build: VoxelBuild,
   palette: BlockDefinition[],
   atlasTexture: THREE.Texture,
@@ -914,13 +1160,13 @@ export async function createVoxelGroupAsync(
     if (now - lastYieldAt < yieldAfterMs) return;
     lastYieldAt = now;
     if (emitProgress) opts?.onProgress?.(emitProgress);
-    await nextFrame();
+    await yieldToMainThread();
   };
   const yieldNow = async (emitProgress?: BuildProgress) => {
     throwIfAborted(opts?.signal);
     if (emitProgress) opts?.onProgress?.(emitProgress);
     lastYieldAt = nowMs();
-    await nextFrame();
+    await yieldToMainThread();
   };
 
   const prepared = await prepareMeshDataAsync(build, palette, opts?.blockLimit, maybeYield);
@@ -1034,4 +1280,21 @@ export async function createVoxelGroupAsync(
     bounds,
     stats: { blockCount: prepared.filteredBlockCount },
   };
+}
+
+export async function createVoxelGroupAsync(
+  build: VoxelBuild,
+  palette: BlockDefinition[],
+  atlasTexture: THREE.Texture,
+  opts?: CreateVoxelGroupAsyncOpts,
+): Promise<VoxelGroup> {
+  try {
+    const payload = await createVoxelMeshPayloadInWorker(build, palette, opts);
+    throwIfAborted(opts?.signal);
+    return createVoxelGroupFromMeshPayload(payload, atlasTexture);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err;
+    console.warn("Voxel mesh worker failed, falling back to main-thread meshing", err);
+    return createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts);
+  }
 }

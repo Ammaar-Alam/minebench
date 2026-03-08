@@ -144,6 +144,14 @@ function computeRebuildThreshold(lastBuilt: number): { minDelta: number; maxWait
   return { minDelta: 150_000, maxWaitMs: 2600 };
 }
 
+function computeBuildYieldAfterMs(blockCount: number): number {
+  if (blockCount >= 4_000_000) return 16;
+  if (blockCount >= 2_000_000) return 14;
+  if (blockCount >= 900_000) return 12;
+  if (blockCount >= 250_000) return 10;
+  return 8;
+}
+
 function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, bounds: BuildBounds) {
   const center = bounds.center;
   const radius = Math.max(0.001, bounds.radius);
@@ -452,7 +460,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       const vg = await createVoxelGroupAsync(buildSnapshot, paletteSnapshot, tex, {
         signal: controller.signal,
         blockLimit,
-        yieldAfterMs: 8,
+        yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
         onProgress(progress) {
           onBuildProgressChangeRef.current?.({
             processedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
