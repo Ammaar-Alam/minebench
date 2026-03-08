@@ -38,6 +38,8 @@ type OpenAIChatCompletionsStreamChunk = {
   choices?: { delta?: { content?: unknown } }[];
 };
 
+type TextVerbosity = "low" | "medium" | "high";
+
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 
@@ -359,6 +361,22 @@ function looksLikeStructuredOutputUnsupportedError(body: string): boolean {
   );
 }
 
+function looksLikeVerbosityConfigError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    (b.includes("verbosity") &&
+      (b.includes("invalid") ||
+        b.includes("unsupported") ||
+        b.includes("unknown") ||
+        b.includes("not supported"))) ||
+    (b.includes("text.verbosity") && (b.includes("extra") || b.includes("additional") || b.includes("unexpected")))
+  );
+}
+
+function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
+  return modelId.startsWith("gpt-5") ? "high" : undefined;
+}
+
 export async function openaiGenerateText(params: {
   modelId: string;
   apiKey?: string;
@@ -414,6 +432,7 @@ export async function openaiGenerateText(params: {
     parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", isGpt5Family);
   const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 15_000);
   const streamForRequest = useBackgroundMode ? false : streamResponses;
+  let useDefaultVerbosity = Boolean(defaultTextVerbosity(params.modelId));
 
   const controller = new AbortController();
   const detachAbort = attachAbortSignal(controller, params.signal);
@@ -435,75 +454,88 @@ export async function openaiGenerateText(params: {
               ? { max_tokens: clampReasoningBudget(cfg.maxTokens, tok) }
               : undefined;
         const currentReasoningLabel = describeReasoningConfigAttempt(cfg, tok);
-        const payload: Record<string, unknown> = {
-          model: params.modelId,
-          input: [
-            {
-              role: "system",
-              content: [{ type: "input_text", text: params.system }],
-            },
-            {
-              role: "user",
-              content: [{ type: "input_text", text: params.user }],
-            },
-          ],
-          reasoning,
-          background: useBackgroundMode || undefined,
-          store: useBackgroundMode || undefined,
-          temperature,
-          max_output_tokens: tok,
-          stream: streamForRequest,
-        };
-        if (useStructuredOutput) {
-          payload.text = {
-            format: {
+        while (true) {
+          const textVerbosity = useDefaultVerbosity ? defaultTextVerbosity(params.modelId) : undefined;
+          const payload: Record<string, unknown> = {
+            model: params.modelId,
+            input: [
+              {
+                role: "system",
+                content: [{ type: "input_text", text: params.system }],
+              },
+              {
+                role: "user",
+                content: [{ type: "input_text", text: params.user }],
+              },
+            ],
+            reasoning,
+            background: useBackgroundMode || undefined,
+            store: useBackgroundMode || undefined,
+            temperature,
+            max_output_tokens: tok,
+            stream: streamForRequest,
+          };
+          const textConfig: Record<string, unknown> = {};
+          if (textVerbosity) textConfig.verbosity = textVerbosity;
+          if (useStructuredOutput) {
+            textConfig.format = {
               type: "json_schema",
               name: VOXEL_BUILD_JSON_SCHEMA_NAME,
               strict: true,
               schema: params.jsonSchema,
+            };
+          }
+          if (Object.keys(textConfig).length > 0) payload.text = textConfig;
+          res = await fetchWithRetry(
+            "https://api.openai.com/v1/responses",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+                ...(streamForRequest ? { Accept: "text/event-stream" } : {}),
+              },
+              signal: controller.signal,
+              body: JSON.stringify(payload),
             },
-          };
-        }
-        res = await fetchWithRetry(
-          "https://api.openai.com/v1/responses",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-              ...(streamForRequest ? { Accept: "text/event-stream" } : {}),
-            },
-            signal: controller.signal,
-            body: JSON.stringify(payload),
-          },
-          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-        );
+            { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+          );
 
-        if (res.ok) {
-          selectedResponsesReasoningLabel = currentReasoningLabel;
-          selectedResponsesTokenBudget = tok;
+          if (res.ok) {
+            selectedResponsesReasoningLabel = currentReasoningLabel;
+            selectedResponsesTokenBudget = tok;
+            break;
+          }
+          lastBody = await res.text().catch(() => "");
+          if (res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
+          if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
+            useStructuredOutput = false;
+            params.onTrace?.(
+              "OpenAI Responses structured output rejected; falling back to plain text output for this request.",
+            );
+            continue;
+          }
+          if (res.status === 400 && textVerbosity && looksLikeVerbosityConfigError(lastBody)) {
+            useDefaultVerbosity = false;
+            params.onTrace?.(
+              `OpenAI Responses verbosity '${textVerbosity}' rejected (HTTP ${res.status}); falling back to provider default verbosity.`,
+            );
+            continue;
+          }
+          if (res.status === 400 && cfgIdx < reasoningConfigAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+            const nextReasoningLabel = describeReasoningConfigAttempt(
+              reasoningConfigAttempts[cfgIdx + 1],
+              tok,
+            );
+            params.onTrace?.(
+              `OpenAI Responses reasoning config '${currentReasoningLabel}' rejected (HTTP ${res.status}); falling back to '${nextReasoningLabel}'.`,
+            );
+            break;
+          }
           break;
         }
-        lastBody = await res.text().catch(() => "");
-        if (res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
-        if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
-          useStructuredOutput = false;
-          params.onTrace?.(
-            "OpenAI Responses structured output rejected; falling back to plain text output for this request.",
-          );
-          continue;
-        }
-        if (res.status === 400 && cfgIdx < reasoningConfigAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
-          const nextReasoningLabel = describeReasoningConfigAttempt(
-            reasoningConfigAttempts[cfgIdx + 1],
-            tok,
-          );
-          params.onTrace?.(
-            `OpenAI Responses reasoning config '${currentReasoningLabel}' rejected (HTTP ${res.status}); falling back to '${nextReasoningLabel}'.`,
-          );
-          continue;
-        }
-        break;
+        if (res?.ok) break;
+        if (res && res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
       }
 
       if (res?.ok) break;
@@ -522,6 +554,12 @@ export async function openaiGenerateText(params: {
             budget,
           ),
         );
+      }
+      if (useDefaultVerbosity) {
+        const textVerbosity = defaultTextVerbosity(params.modelId);
+        if (textVerbosity) {
+          params.onTrace?.(`OpenAI Responses text verbosity in use: '${textVerbosity}'.`);
+        }
       }
       if (streamForRequest) {
         let text = "";
@@ -627,55 +665,68 @@ export async function openaiGenerateText(params: {
     const effortAttempts = reasoningEffortAttempts.length > 0 ? [...reasoningEffortAttempts, undefined] : [undefined];
     for (const [effortIdx, effort] of effortAttempts.entries()) {
       const currentEffortLabel = effort ?? "disabled";
-      res = await fetchWithRetry(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-            ...(streamResponses ? { Accept: "text/event-stream" } : {}),
-          },
-          body: JSON.stringify({
-            model: params.modelId,
-            temperature,
-            max_completion_tokens: tok,
-            reasoning_effort: effort,
-            stream: streamResponses,
-            response_format: {
-              type: "json_schema",
-              json_schema: {
-                name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-                strict: true,
-                schema: params.jsonSchema,
-              },
+      while (true) {
+        const textVerbosity = useDefaultVerbosity ? defaultTextVerbosity(params.modelId) : undefined;
+        res = await fetchWithRetry(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+              ...(streamResponses ? { Accept: "text/event-stream" } : {}),
             },
-            messages: [
-              { role: "system", content: params.system },
-              { role: "user", content: params.user },
-            ],
-          }),
-        },
-        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-      );
-      if (res.ok) {
-        selectedChatEffortLabel = currentEffortLabel;
-        selectedChatTokenBudget = tok;
-        break;
-      }
-      lastBody = await res.text().catch(() => "");
-      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
-        tryLowerTokenBudget = true;
-        break;
-      }
-      if (res.status === 400 && effortIdx < effortAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
-        const nextEffortLabel = effortAttempts[effortIdx + 1] ?? "disabled";
-        params.onTrace?.(
-          `OpenAI Chat reasoning config '${currentEffortLabel}' rejected (HTTP ${res.status}); falling back to '${nextEffortLabel}'.`,
+            body: JSON.stringify({
+              model: params.modelId,
+              temperature,
+              max_completion_tokens: tok,
+              reasoning_effort: effort,
+              stream: streamResponses,
+              ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),
+              response_format: {
+                type: "json_schema",
+                json_schema: {
+                  name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+                  strict: true,
+                  schema: params.jsonSchema,
+                },
+              },
+              messages: [
+                { role: "system", content: params.system },
+                { role: "user", content: params.user },
+              ],
+            }),
+          },
+          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
         );
-        continue;
+        if (res.ok) {
+          selectedChatEffortLabel = currentEffortLabel;
+          selectedChatTokenBudget = tok;
+          break;
+        }
+        lastBody = await res.text().catch(() => "");
+        if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
+          tryLowerTokenBudget = true;
+          break;
+        }
+        if (res.status === 400 && textVerbosity && looksLikeVerbosityConfigError(lastBody)) {
+          useDefaultVerbosity = false;
+          params.onTrace?.(
+            `OpenAI Chat verbosity '${textVerbosity}' rejected (HTTP ${res.status}); falling back to provider default verbosity.`,
+          );
+          continue;
+        }
+        if (res.status === 400 && effortIdx < effortAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+          const nextEffortLabel = effortAttempts[effortIdx + 1] ?? "disabled";
+          params.onTrace?.(
+            `OpenAI Chat reasoning config '${currentEffortLabel}' rejected (HTTP ${res.status}); falling back to '${nextEffortLabel}'.`,
+          );
+          break;
+        }
+        break;
       }
-      break;
+      if (res?.ok) break;
+      if (tryLowerTokenBudget) break;
     }
 
     if (res?.ok) break;
@@ -693,6 +744,12 @@ export async function openaiGenerateText(params: {
         budget,
       ),
     );
+  }
+  if (res.ok && useDefaultVerbosity) {
+    const textVerbosity = defaultTextVerbosity(params.modelId);
+    if (textVerbosity) {
+      params.onTrace?.(`OpenAI Chat text verbosity in use: '${textVerbosity}'.`);
+    }
   }
 
   if (res.ok && streamResponses) {
@@ -731,6 +788,9 @@ export async function openaiGenerateText(params: {
             temperature,
             max_completion_tokens: maxOutputTokens,
             stream: false,
+            ...(useDefaultVerbosity && defaultTextVerbosity(params.modelId)
+              ? { text: { verbosity: defaultTextVerbosity(params.modelId) } }
+              : {}),
             messages: [
               { role: "system", content: params.system },
               { role: "user", content: params.user },

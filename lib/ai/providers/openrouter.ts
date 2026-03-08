@@ -10,6 +10,8 @@ type OpenRouterStreamChunk = {
   choices?: { delta?: { content?: unknown } }[];
 };
 
+type TextVerbosity = "low" | "medium" | "high";
+
 const VOXEL_BUILD_JSON_SCHEMA_NAME = "voxel_build_response";
 
 function extractTextFromChatCompletions(data: OpenRouterChatResponse): string {
@@ -91,6 +93,28 @@ function looksLikeReasoningConfigError(body: string): boolean {
   );
 }
 
+function looksLikeVerbosityConfigError(body: string): boolean {
+  const b = body.toLowerCase();
+  return (
+    (b.includes("verbosity") &&
+      (b.includes("invalid") ||
+        b.includes("unsupported") ||
+        b.includes("unknown") ||
+        b.includes("not supported"))) ||
+    (b.includes("text.verbosity") && (b.includes("extra") || b.includes("additional") || b.includes("unexpected"))) ||
+    (b.includes("text") &&
+      (b.includes("extra") ||
+        b.includes("additional") ||
+        b.includes("unexpected") ||
+        b.includes("unknown parameter") ||
+        b.includes("not allowed")))
+  );
+}
+
+function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
+  return modelId.startsWith("openai/gpt-5") ? "high" : undefined;
+}
+
 function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
   const budget = Math.floor(maxOutputTokens);
   const trimmed = message.trim().replace(/[.!?]$/, "");
@@ -146,6 +170,7 @@ export async function openrouterGenerateText(params: {
     efforts: params.reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
   });
+  let useDefaultVerbosity = Boolean(defaultTextVerbosity(params.modelId));
 
   const describeReasoningAttempt = (cfg: ReasoningConfigAttempt): string => {
     if (cfg === "__default__") return "default";
@@ -174,65 +199,78 @@ export async function openrouterGenerateText(params: {
               : cfg && typeof cfg === "object" && cfg.kind === "max_tokens"
                 ? { max_tokens: clampReasoningBudget(cfg.maxTokens, tok) }
               : undefined;
+        while (true) {
+          const textVerbosity = useDefaultVerbosity ? defaultTextVerbosity(params.modelId) : undefined;
 
-        res = await fetchWithRetry(
-          `${baseUrl}/v1/chat/completions`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-              "HTTP-Referer": "https://minebench.dev",
-              "X-Title": "MineBench",
-              ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
-            },
-            signal: controller.signal,
-            body: JSON.stringify({
-              model: params.modelId,
-              messages: [
-                { role: "system", content: params.system },
-                { role: "user", content: params.user },
-              ],
-              stream: Boolean(params.onDelta),
-              temperature: params.temperature ?? 0.2,
-              max_tokens: tok,
-              reasoning: reasoningConfig,
-              ...(params.jsonSchema
-                ? {
-                    response_format: {
-                      type: "json_schema",
-                      json_schema: {
-                        name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-                        strict: true,
-                        schema: params.jsonSchema,
+          res = await fetchWithRetry(
+            `${baseUrl}/v1/chat/completions`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://minebench.dev",
+                "X-Title": "MineBench",
+                ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+              },
+              signal: controller.signal,
+              body: JSON.stringify({
+                model: params.modelId,
+                messages: [
+                  { role: "system", content: params.system },
+                  { role: "user", content: params.user },
+                ],
+                stream: Boolean(params.onDelta),
+                temperature: params.temperature ?? 0.2,
+                max_tokens: tok,
+                reasoning: reasoningConfig,
+                ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),
+                ...(params.jsonSchema
+                  ? {
+                      response_format: {
+                        type: "json_schema",
+                        json_schema: {
+                          name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+                          strict: true,
+                          schema: params.jsonSchema,
+                        },
                       },
-                    },
-                  }
-                : {}),
-            }),
-          },
-          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-        );
-
-        if (res.ok) {
-          selectedReasoningLabel = describeReasoningAttempt(cfg);
-          selectedReasoningTokenBudget = tok;
-          break;
-        }
-        lastBody = await res.text().catch(() => "");
-        if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
-          tryLowerTokenBudget = true;
-          break;
-        }
-        if (res.status === 400 && cfgIdx < reasoningAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
-          const currentLabel = describeReasoningAttempt(cfg);
-          const nextLabel = describeReasoningAttempt(reasoningAttempts[cfgIdx + 1]);
-          params.onTrace?.(
-            `OpenRouter reasoning config '${currentLabel}' rejected (HTTP ${res.status}); falling back to '${nextLabel}'.`,
+                    }
+                  : {}),
+              }),
+            },
+            { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
           );
-          continue;
+
+          if (res.ok) {
+            selectedReasoningLabel = describeReasoningAttempt(cfg);
+            selectedReasoningTokenBudget = tok;
+            break;
+          }
+          lastBody = await res.text().catch(() => "");
+          if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
+            tryLowerTokenBudget = true;
+            break;
+          }
+          if (res.status === 400 && textVerbosity && looksLikeVerbosityConfigError(lastBody)) {
+            useDefaultVerbosity = false;
+            params.onTrace?.(
+              `OpenRouter verbosity '${textVerbosity}' rejected (HTTP ${res.status}); falling back to provider default verbosity.`,
+            );
+            continue;
+          }
+          if (res.status === 400 && cfgIdx < reasoningAttempts.length - 1 && looksLikeReasoningConfigError(lastBody)) {
+            const currentLabel = describeReasoningAttempt(cfg);
+            const nextLabel = describeReasoningAttempt(reasoningAttempts[cfgIdx + 1]);
+            params.onTrace?.(
+              `OpenRouter reasoning config '${currentLabel}' rejected (HTTP ${res.status}); falling back to '${nextLabel}'.`,
+            );
+            break;
+          }
+          break;
         }
-        break;
+        if (res?.ok) break;
+        if (tryLowerTokenBudget) break;
       }
 
       if (res?.ok) break;
@@ -289,6 +327,12 @@ export async function openrouterGenerateText(params: {
           budget,
         ),
       );
+    }
+    if (res.ok && useDefaultVerbosity) {
+      const textVerbosity = defaultTextVerbosity(params.modelId);
+      if (textVerbosity) {
+        params.onTrace?.(`OpenRouter text verbosity in use: '${textVerbosity}'.`);
+      }
     }
 
     if (params.onDelta) {
