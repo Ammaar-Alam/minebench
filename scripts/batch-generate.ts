@@ -88,6 +88,36 @@ function getJsonPath(promptSlug: string, modelSlug: string): string {
   return path.join(UPLOADS_DIR, promptSlug, `${promptSlug}-${modelSlug}.json`);
 }
 
+function getRawDir(promptSlug: string): string {
+  return path.join(UPLOADS_DIR, promptSlug, "RAW");
+}
+
+function getRawResponsePath(job: Job, ext: "json" | "txt"): string {
+  return path.join(getRawDir(job.promptSlug), `${job.promptSlug}-${job.modelSlug}-RAW.${ext}`);
+}
+
+function writeRawResponse(job: Job, rawText: string): { filePath: string; isJson: boolean } {
+  const rawDir = getRawDir(job.promptSlug);
+  ensureDir(rawDir);
+
+  let isJson = false;
+  try {
+    JSON.parse(rawText);
+    isJson = true;
+  } catch {
+    isJson = false;
+  }
+
+  const nextPath = getRawResponsePath(job, isJson ? "json" : "txt");
+  const stalePath = getRawResponsePath(job, isJson ? "txt" : "json");
+  fs.writeFileSync(nextPath, rawText);
+  if (fs.existsSync(stalePath)) {
+    fs.unlinkSync(stalePath);
+  }
+
+  return { filePath: nextPath, isJson };
+}
+
 function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
   const encoded: Uint8Array[] = [];
   let total = 0;
@@ -358,13 +388,12 @@ async function generateAndSave(
     },
   });
 
+  if (result.rawText) {
+    writeRawResponse(job, result.rawText);
+  }
+
   if (!result.ok) {
     if (result.rawText) {
-      // Preserve the raw output for debugging/benchmarking even if validation failed.
-      ensureDir(path.dirname(job.filePath));
-      const rawPath = job.filePath.endsWith(".json") ? job.filePath.replace(/\.json$/, ".raw.txt") : `${job.filePath}.raw.txt`;
-      fs.writeFileSync(rawPath, result.rawText);
-
       const extracted = extractBestVoxelBuildJson(result.rawText);
       if (extracted) {
         const failedJsonPath = job.filePath.endsWith(".json")
