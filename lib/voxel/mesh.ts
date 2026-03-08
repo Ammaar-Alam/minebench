@@ -8,6 +8,7 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 type BuildProgress = {
   processedBlocks: number;
   totalBlocks: number;
+  stageLabel?: string;
 };
 
 type CreateVoxelGroupAsyncOpts = {
@@ -473,7 +474,11 @@ async function prepareMeshDataAsync(
     maxY = Math.max(maxY, b.y);
     maxZ = Math.max(maxZ, b.z);
     if ((i & 0x03ff) === 0) {
-      await maybeYield();
+      await maybeYield({
+        processedBlocks: i,
+        totalBlocks: Math.max(1, maxInputBlocks),
+        stageLabel: "Indexing blocks",
+      });
     }
   }
 
@@ -812,6 +817,7 @@ async function buildWaterSurfaceBucketAsync(
       await maybeYield({
         processedBlocks: prepared.nonWaterBlocks.length + processedPlanes,
         totalBlocks: prepared.nonWaterBlocks.length + totalPlanes,
+        stageLabel: "Meshing water",
       });
     }
   }
@@ -928,7 +934,11 @@ export async function createVoxelGroupAsync(
     const block = prepared.nonWaterBlocks[i];
     appendStandardFaces(block, prepared, { opaque, cutout, transparent, emissive });
     if ((i & 0x01ff) === 0) {
-      await maybeYield({ processedBlocks: i, totalBlocks: prepared.nonWaterBlocks.length });
+      await maybeYield({
+        processedBlocks: i,
+        totalBlocks: Math.max(1, prepared.nonWaterBlocks.length),
+        stageLabel: "Meshing blocks",
+      });
     }
   }
 
@@ -939,6 +949,7 @@ export async function createVoxelGroupAsync(
   await yieldNow({
     processedBlocks: prepared.filteredBlockCount,
     totalBlocks: geometryStageTotal,
+    stageLabel: "Finalizing geometry",
   });
 
   configureAtlasTexture(atlasTexture);
@@ -980,26 +991,31 @@ export async function createVoxelGroupAsync(
   await yieldNow({
     processedBlocks: prepared.filteredBlockCount + 1,
     totalBlocks: geometryStageTotal,
+    stageLabel: "Finalizing geometry",
   });
   const geoCutout = buildGeometry(cutout, bounds);
   await yieldNow({
     processedBlocks: prepared.filteredBlockCount + 2,
     totalBlocks: geometryStageTotal,
+    stageLabel: "Finalizing geometry",
   });
   const geoTransparent = buildGeometry(transparent, bounds);
   await yieldNow({
     processedBlocks: prepared.filteredBlockCount + 3,
     totalBlocks: geometryStageTotal,
+    stageLabel: "Finalizing geometry",
   });
   const geoWater = buildGeometry(water, bounds);
   await yieldNow({
     processedBlocks: prepared.filteredBlockCount + 4,
     totalBlocks: geometryStageTotal,
+    stageLabel: "Finalizing geometry",
   });
   const geoEmissive = buildGeometry(emissive, bounds);
   opts?.onProgress?.({
     processedBlocks: geometryStageTotal,
     totalBlocks: geometryStageTotal,
+    stageLabel: "Finalizing geometry",
   });
 
   if (geoOpaque) group.add(new THREE.Mesh(geoOpaque, matOpaque));

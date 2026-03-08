@@ -6,7 +6,11 @@ import {
   formatVoxelLoadingMessage,
   type VoxelLoadingProgress,
 } from "@/components/voxel/VoxelLoadingHud";
-import { VoxelViewer, type VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import {
+  VoxelViewer,
+  type VoxelViewerBuildProgress,
+  type VoxelViewerHandle,
+} from "@/components/voxel/VoxelViewer";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -65,6 +69,8 @@ export function VoxelViewerCard({
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
 }) {
+  type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
+
   const isLikelyVoxelBuild = (value: unknown): value is VoxelBuild => {
     if (!value || typeof value !== "object") return false;
     const candidate = value as Partial<VoxelBuild>;
@@ -104,7 +110,7 @@ export function VoxelViewerCard({
   const [preferredView, setPreferredView] = useState<"build" | "json">("build");
   const [showRawBuildJson, setShowRawBuildJson] = useState(false);
   const [viewerReady, setViewerReady] = useState(false);
-  const [placementProgress, setPlacementProgress] = useState<VoxelLoadingProgress | null>(null);
+  const [placementProgress, setPlacementProgress] = useState<PlacementProgressState | null>(null);
 
   const modelOutputText = useMemo(() => {
     const explicitText =
@@ -185,7 +191,7 @@ export function VoxelViewerCard({
         : null);
   const hudLabel = isLoading
     ? loadingLabel
-    : formatVoxelLoadingMessage("Placing blocks", placementProgress);
+    : formatVoxelLoadingMessage(placementProgress?.stageLabel ?? "Placing blocks", placementProgress);
   const showLoadingHud = Boolean((isLoading || placementLoading) && showBuildView && showLoadingOverlay);
 
   useEffect(() => {
@@ -205,7 +211,7 @@ export function VoxelViewerCard({
   );
 
   const handleBuildProgressChange = useCallback(
-    (progress: { processedBlocks: number; totalBlocks: number } | null) => {
+    (progress: VoxelViewerBuildProgress | null) => {
       if (!progress) {
         setPlacementProgress(null);
         return;
@@ -213,6 +219,7 @@ export function VoxelViewerCard({
       setPlacementProgress({
         receivedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
         totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
+        stageLabel: progress.stageLabel ?? null,
       });
     },
     [],

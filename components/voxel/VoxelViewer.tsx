@@ -8,6 +8,12 @@ import { getPalette } from "@/lib/blocks/palettes";
 import { createVoxelGroupAsync, VoxelGroup } from "@/lib/voxel/mesh";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
+export type VoxelViewerBuildProgress = {
+  processedBlocks: number;
+  totalBlocks: number;
+  stageLabel?: string | null;
+};
+
 type ViewerProps = {
   voxelBuild: VoxelBuild | null;
   palette: "simple" | "advanced";
@@ -16,7 +22,7 @@ type ViewerProps = {
   animateIn?: boolean;
   showControls?: boolean;
   onBuildReadyChange?: (ready: boolean) => void;
-  onBuildProgressChange?: (progress: { processedBlocks: number; totalBlocks: number } | null) => void;
+  onBuildProgressChange?: (progress: VoxelViewerBuildProgress | null) => void;
 };
 
 export type VoxelViewerHandle = {
@@ -71,6 +77,7 @@ function loadAtlasTexture(): Promise<THREE.Texture> {
 }
 
 type BuildBounds = { box: THREE.Box3; center: THREE.Vector3; radius: number };
+type RevealGeometry = { geo: THREE.BufferGeometry; total: number };
 
 function computeBuildBounds(build: VoxelBuild, allowed: Set<string>, blockLimit: number): BuildBounds {
   const limit = Math.max(0, Math.min(build.blocks.length, Math.floor(blockLimit)));
@@ -170,6 +177,27 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
   controls.saveState();
 }
 
+function collectRevealGeometries(group: THREE.Group): RevealGeometry[] {
+  const geometries: RevealGeometry[] = [];
+  group.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    const geo = child.geometry;
+    if (!(geo instanceof THREE.BufferGeometry)) return;
+    const total = geo.getIndex()?.count ?? geo.getAttribute("position")?.count ?? 0;
+    if (total <= 0) return;
+    geometries.push({ geo, total });
+  });
+  return geometries;
+}
+
+function applyRevealFraction(geometries: RevealGeometry[], fraction: number) {
+  const clamped = THREE.MathUtils.clamp(fraction, 0, 1);
+  for (const g of geometries) {
+    const count = Math.floor((g.total * clamped) / 3) * 3;
+    g.geo.setDrawRange(0, count);
+  }
+}
+
 export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function VoxelViewer(
   {
     voxelBuild,
@@ -192,9 +220,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const autoRotateRef = useRef(false);
   const userInteractingRef = useRef(false);
   const onBuildReadyChangeRef = useRef<((ready: boolean) => void) | undefined>(undefined);
-  const onBuildProgressChangeRef = useRef<
-    ((progress: { processedBlocks: number; totalBlocks: number } | null) => void) | undefined
-  >(undefined);
+  const onBuildProgressChangeRef = useRef<((progress: VoxelViewerBuildProgress | null) => void) | undefined>(
+    undefined,
+  );
   const requestRenderRef = useRef<(() => void) | null>(null);
   const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const exportCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -392,6 +420,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     onBuildProgressChangeRef.current?.({
       processedBlocks: 0,
       totalBlocks: Math.max(1, desiredBlocks),
+      stageLabel: "Placing blocks",
     });
     const controller = new AbortController();
     activeJobRef.current.controller = controller;
@@ -428,6 +457,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           onBuildProgressChangeRef.current?.({
             processedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
             totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
+            stageLabel: progress.stageLabel ?? "Placing blocks",
           });
         },
       });
@@ -447,14 +477,13 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
 
       const old = voxelGroupRef.current;
+      vg.group.rotation.y = previousRotationY;
+      voxelGroupRef.current = vg;
+      three.scene.add(vg.group);
       if (old) {
         three.scene.remove(old.group);
         old.dispose();
       }
-
-      vg.group.rotation.y = previousRotationY;
-      voxelGroupRef.current = vg;
-      three.scene.add(vg.group);
 
       const allowed = new Set(paletteSnapshot.map((p) => p.id));
       boundsRef.current = vg.bounds ?? computeBuildBounds(buildSnapshot, allowed, blockLimit);
@@ -465,49 +494,67 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         fitView();
       }
       lastBuiltRef.current = { blockLimit, at: performance.now() };
-      onBuildProgressChangeRef.current?.(null);
       const expectedNow = normalizeExpectedBlockCount(expectedSnapshot);
       const desiredNow = Math.max(0, latestRef.current.voxelBuild?.blocks.length ?? 0);
       const requiredNow = expectedNow ?? desiredNow;
-      reportReady(Boolean(requiredNow <= 0 || (blockLimit >= requiredNow && desiredNow >= requiredNow)));
       requestRenderRef.current?.();
 
-      if (!animate) return;
-      if (startHadGroup) return;
+      const revealFromFraction =
+        startHadGroup && blockLimit > lastBuiltBlocks
+          ? THREE.MathUtils.clamp(lastBuiltBlocks / Math.max(1, blockLimit), 0.25, 0.94)
+          : 0;
+      const shouldAnimateReveal =
+        (startHadGroup && blockLimit > lastBuiltBlocks) || (!startHadGroup && animate);
 
-      const geometries: { geo: THREE.BufferGeometry; total: number }[] = [];
-      vg.group.traverse((child) => {
-        if (!(child instanceof THREE.Mesh)) return;
-        const geo = child.geometry;
-        if (!(geo instanceof THREE.BufferGeometry)) return;
-        const total = geo.getIndex()?.count ?? geo.getAttribute("position")?.count ?? 0;
-        if (total <= 0) return;
-        geo.setDrawRange(0, 0);
-        geometries.push({ geo, total });
-      });
+      if (shouldAnimateReveal) {
+        const geometries = collectRevealGeometries(vg.group);
+        if (geometries.length > 0) {
+          applyRevealFraction(geometries, revealFromFraction);
+          requestRenderRef.current?.();
 
-      if (geometries.length === 0) return;
+          const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          const durationMs = reduceMotion
+            ? 90
+            : startHadGroup
+              ? Math.min(420, Math.max(220, Math.round(180 + (1 - revealFromFraction) * 180)))
+              : 150;
+          const start = performance.now();
 
-      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      const durationMs = reduceMotion ? 70 : 150;
-      const start = performance.now();
+          await new Promise<void>((resolve) => {
+            const tick = (now: number) => {
+              if (controller.signal.aborted) {
+                applyRevealFraction(geometries, 1);
+                requestRenderRef.current?.();
+                revealRafRef.current = null;
+                resolve();
+                return;
+              }
+              const t = Math.min(1, (now - start) / durationMs);
+              const eased = 1 - Math.pow(1 - t, 3);
+              const fraction = revealFromFraction + (1 - revealFromFraction) * eased;
+              applyRevealFraction(geometries, fraction);
+              onBuildProgressChangeRef.current?.({
+                processedBlocks: Math.max(1, Math.round(blockLimit * fraction)),
+                totalBlocks: Math.max(1, blockLimit),
+                stageLabel: "Revealing build",
+              });
+              requestRenderRef.current?.();
+              if (t < 1) {
+                revealRafRef.current = window.requestAnimationFrame(tick);
+              } else {
+                revealRafRef.current = null;
+                resolve();
+              }
+            };
 
-      const tick = (now: number) => {
-        const t = Math.min(1, (now - start) / durationMs);
-        const eased = 1 - Math.pow(1 - t, 3);
-        for (const g of geometries) {
-          const count = Math.floor((g.total * eased) / 3) * 3;
-          g.geo.setDrawRange(0, count);
+            revealRafRef.current = window.requestAnimationFrame(tick);
+          });
         }
-        requestRenderRef.current?.();
-        if (t < 1) {
-          revealRafRef.current = window.requestAnimationFrame(tick);
-        } else {
-          revealRafRef.current = null;
-        }
-      };
+      }
 
-      revealRafRef.current = window.requestAnimationFrame(tick);
+      onBuildProgressChangeRef.current?.(null);
+      reportReady(Boolean(requiredNow <= 0 || (blockLimit >= requiredNow && desiredNow >= requiredNow)));
+      requestRenderRef.current?.();
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       console.warn("VoxelViewer build failed", err);

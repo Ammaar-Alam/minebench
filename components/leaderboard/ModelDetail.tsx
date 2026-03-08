@@ -19,6 +19,7 @@ import {
   formatVoxelLoadingMessage,
   type VoxelLoadingProgress,
 } from "@/components/voxel/VoxelLoadingHud";
+import type { VoxelViewerBuildProgress } from "@/components/voxel/VoxelViewer";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
@@ -615,8 +616,10 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
   error?: string | null;
   heightClass?: string;
 }) {
+  type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
+
   const [viewerReady, setViewerReady] = useState(false);
-  const [placementProgress, setPlacementProgress] = useState<VoxelLoadingProgress | null>(null);
+  const [placementProgress, setPlacementProgress] = useState<PlacementProgressState | null>(null);
   useEffect(() => {
     setViewerReady(false);
     setPlacementProgress(null);
@@ -626,7 +629,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
     if (ready) setPlacementProgress(null);
   }, []);
   const handleBuildProgressChange = useCallback(
-    (progress: { processedBlocks: number; totalBlocks: number } | null) => {
+    (progress: VoxelViewerBuildProgress | null) => {
       if (!progress) {
         setPlacementProgress(null);
         return;
@@ -634,6 +637,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
       setPlacementProgress({
         receivedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
         totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
+        stageLabel: progress.stageLabel ?? null,
       });
     },
     [],
@@ -650,7 +654,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
         : null);
   const overlayLabel = loading
     ? loadingLabel ?? "Retrieving build..."
-    : formatVoxelLoadingMessage("Placing blocks", placementProgress);
+    : formatVoxelLoadingMessage(placementProgress?.stageLabel ?? "Placing blocks", placementProgress);
 
   if (loading && !build) {
     return (
