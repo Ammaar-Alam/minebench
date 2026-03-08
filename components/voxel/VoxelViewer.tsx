@@ -16,6 +16,7 @@ type ViewerProps = {
   animateIn?: boolean;
   showControls?: boolean;
   onBuildReadyChange?: (ready: boolean) => void;
+  onBuildProgressChange?: (progress: { processedBlocks: number; totalBlocks: number } | null) => void;
 };
 
 export type VoxelViewerHandle = {
@@ -170,7 +171,16 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
 }
 
 export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function VoxelViewer(
-  { voxelBuild, palette, expectedBlockCount, autoRotate, animateIn, showControls = true, onBuildReadyChange },
+  {
+    voxelBuild,
+    palette,
+    expectedBlockCount,
+    autoRotate,
+    animateIn,
+    showControls = true,
+    onBuildReadyChange,
+    onBuildProgressChange,
+  },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -182,6 +192,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const autoRotateRef = useRef(false);
   const userInteractingRef = useRef(false);
   const onBuildReadyChangeRef = useRef<((ready: boolean) => void) | undefined>(undefined);
+  const onBuildProgressChangeRef = useRef<
+    ((progress: { processedBlocks: number; totalBlocks: number } | null) => void) | undefined
+  >(undefined);
   const requestRenderRef = useRef<(() => void) | null>(null);
   const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const exportCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -269,6 +282,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     onBuildReadyChangeRef.current = onBuildReadyChange;
   }, [onBuildReadyChange]);
 
+  useEffect(() => {
+    onBuildProgressChangeRef.current = onBuildProgressChange;
+  }, [onBuildProgressChange]);
+
   const fitView = useCallback(() => {
     const three = threeRef.current;
     const vg = voxelGroupRef.current;
@@ -295,6 +312,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     boundsRef.current = null;
     lastBuiltRef.current = { blockLimit: 0, at: 0 };
     reportReady(false);
+    onBuildProgressChangeRef.current?.(null);
     requestRenderRef.current?.();
   }, [reportReady]);
 
@@ -325,6 +343,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       activeJobRef.current.controller?.abort();
       activeJobRef.current.controller = null;
       activeJobRef.current.identity = null;
+      onBuildProgressChangeRef.current?.(null);
       clearVoxelGroup(three);
       return;
     }
@@ -332,11 +351,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const identityChanged = !sameIdentity(identityRef.current, incomingIdentity);
     if (identityChanged) {
       identityRef.current = incomingIdentity;
-      clearVoxelGroup(three);
     }
 
     const desiredBlocks = Math.max(0, latest.voxelBuild?.blocks.length ?? 0);
-    const lastBuiltBlocks = Math.max(0, lastBuiltRef.current.blockLimit);
+    const lastBuiltBlocks = identityChanged ? 0 : Math.max(0, lastBuiltRef.current.blockLimit);
     const delta = desiredBlocks - lastBuiltBlocks;
     const now = performance.now();
     const elapsedSinceBuild = Math.max(0, now - lastBuiltRef.current.at);
@@ -349,6 +367,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const force = buildPendingRef.current.force;
     const { minDelta, maxWaitMs } = computeRebuildThreshold(lastBuiltBlocks);
     const shouldBuild =
+      identityChanged ||
       !voxelGroupRef.current ||
       (desiredBlocks > lastBuiltBlocks &&
         (force || delta >= minDelta || elapsedSinceBuild >= maxWaitMs || hasAllRequiredBlocks));
@@ -370,6 +389,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
     buildInProgressRef.current = true;
     reportReady(false);
+    onBuildProgressChangeRef.current?.({
+      processedBlocks: 0,
+      totalBlocks: Math.max(1, desiredBlocks),
+    });
     const controller = new AbortController();
     activeJobRef.current.controller = controller;
     activeJobRef.current.identity = incomingIdentity;
@@ -400,6 +423,13 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       const vg = await createVoxelGroupAsync(buildSnapshot, paletteSnapshot, tex, {
         signal: controller.signal,
         blockLimit,
+        yieldAfterMs: 8,
+        onProgress(progress) {
+          onBuildProgressChangeRef.current?.({
+            processedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
+            totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
+          });
+        },
       });
 
       if (controller.signal.aborted) {
@@ -427,7 +457,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       three.scene.add(vg.group);
 
       const allowed = new Set(paletteSnapshot.map((p) => p.id));
-      boundsRef.current = computeBuildBounds(buildSnapshot, allowed, blockLimit);
+      boundsRef.current = vg.bounds ?? computeBuildBounds(buildSnapshot, allowed, blockLimit);
       if (gridRef.current) {
         gridRef.current.position.y = boundsRef.current.box.min.y - 0.5;
       }
@@ -435,6 +465,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         fitView();
       }
       lastBuiltRef.current = { blockLimit, at: performance.now() };
+      onBuildProgressChangeRef.current?.(null);
       const expectedNow = normalizeExpectedBlockCount(expectedSnapshot);
       const desiredNow = Math.max(0, latestRef.current.voxelBuild?.blocks.length ?? 0);
       const requiredNow = expectedNow ?? desiredNow;
@@ -486,6 +517,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         activeJobRef.current.controller = null;
         activeJobRef.current.identity = null;
       }
+      onBuildProgressChangeRef.current?.(null);
       if (buildPendingRef.current.dirty) scheduleKick();
     }
   }, [clearVoxelGroup, fitView, reportReady, scheduleKick]);

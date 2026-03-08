@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type {
   ModelDetailStats,
@@ -14,6 +14,11 @@ import type {
   ArenaBuildStreamEvent,
   ArenaBuildVariant,
 } from "@/lib/arena/types";
+import {
+  VoxelLoadingHud,
+  formatVoxelLoadingMessage,
+  type VoxelLoadingProgress,
+} from "@/components/voxel/VoxelLoadingHud";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
@@ -599,19 +604,62 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
   build,
   loading = false,
   loadingLabel,
+  loadingProgress,
   error = null,
   heightClass = "h-44",
 }: {
   build: LoadedPromptBuild | null;
   loading?: boolean;
   loadingLabel?: string;
+  loadingProgress?: VoxelLoadingProgress | null;
   error?: string | null;
   heightClass?: string;
 }) {
+  const [viewerReady, setViewerReady] = useState(false);
+  const [placementProgress, setPlacementProgress] = useState<VoxelLoadingProgress | null>(null);
+  useEffect(() => {
+    setViewerReady(false);
+    setPlacementProgress(null);
+  }, [build?.buildId]);
+  const handleBuildReadyChange = useCallback((ready: boolean) => {
+    setViewerReady(ready);
+    if (ready) setPlacementProgress(null);
+  }, []);
+  const handleBuildProgressChange = useCallback(
+    (progress: { processedBlocks: number; totalBlocks: number } | null) => {
+      if (!progress) {
+        setPlacementProgress(null);
+        return;
+      }
+      setPlacementProgress({
+        receivedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
+        totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
+      });
+    },
+    [],
+  );
+  const placementLoading = Boolean(build && !loading && !viewerReady);
+  const overlayProgress = loading
+    ? loadingProgress ?? null
+    : placementProgress ??
+      (placementLoading
+        ? {
+            receivedBlocks: 0,
+            totalBlocks: build?.blockCount ?? null,
+          }
+        : null);
+  const overlayLabel = loading
+    ? loadingLabel ?? "Retrieving build..."
+    : formatVoxelLoadingMessage("Placing blocks", placementProgress);
+
   if (loading && !build) {
     return (
       <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
-        <div className="text-xs text-muted">{loadingLabel ?? "Retrieving build..."}</div>
+        <VoxelLoadingHud
+          label={overlayLabel}
+          progress={overlayProgress}
+          className="pointer-events-none absolute left-2.5 top-2.5 z-20"
+        />
       </div>
     );
   }
@@ -631,11 +679,15 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
         palette={build.palette}
         autoRotate
         showControls={false}
+        onBuildReadyChange={handleBuildReadyChange}
+        onBuildProgressChange={handleBuildProgressChange}
       />
-      {loading ? (
-        <div className="pointer-events-none absolute left-2.5 top-2.5 rounded-md border border-border/70 bg-bg/72 px-2.5 py-1.5 text-[11px] text-muted backdrop-blur-sm">
-          {loadingLabel ?? "Retrieving build..."}
-        </div>
+      {loading || placementLoading ? (
+        <VoxelLoadingHud
+          label={overlayLabel}
+          progress={overlayProgress}
+          className="pointer-events-none absolute left-2.5 top-2.5 z-20"
+        />
       ) : null}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
         <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
@@ -793,16 +845,10 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
       !activeCachedBuild &&
       activeBuildError == null,
   );
-  const activeBuildLoadingLabel = useMemo(() => {
-    const total = activeBuildProgress?.totalBlocks ?? null;
-    const received = activeBuildProgress?.receivedBlocks ?? 0;
-    if (!total || total <= 0) {
-      if (received > 0) return `Retrieving build ${received.toLocaleString()} blocks`;
-      return "Retrieving build...";
-    }
-    const pct = Math.max(1, Math.min(99, Math.round((received / total) * 100)));
-    return `Retrieving build ${pct}%`;
-  }, [activeBuildProgress]);
+  const activeBuildLoadingLabel = useMemo(
+    () => formatVoxelLoadingMessage("Retrieving build", activeBuildProgress),
+    [activeBuildProgress],
+  );
   const tooltipAlignClass =
     hoveredCurveIndex == null
       ? "mb-curve-tooltip-center"
@@ -1591,6 +1637,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                 build={activeLoadedBuild}
                 loading={isActiveBuildLoading}
                 loadingLabel={activeBuildLoadingLabel}
+                loadingProgress={activeBuildProgress}
                 error={activeBuildError}
                 heightClass="h-56 sm:h-64"
               />

@@ -122,6 +122,16 @@ function estimatePayloadBytes(payload: unknown): number | null {
   }
 }
 
+function shouldEstimatePayloadBytes(source: ArenaBuildSource): boolean {
+  return (
+    estimateArenaBuildBytes({
+      blockCount: source.blockCount,
+      voxelByteSize: source.voxelByteSize,
+      voxelCompressedByteSize: source.voxelCompressedByteSize,
+    }) == null
+  );
+}
+
 export function deriveArenaBuildLoadHints(
   source: Pick<ArenaBuildSource, "blockCount" | "voxelByteSize" | "voxelCompressedByteSize">,
 ): ArenaBuildLoadHints {
@@ -353,7 +363,9 @@ function setCachedPrepared(cacheKey: string, prepared: PreparedArenaBuild): void
 
 async function parseAndValidateBuild(source: ArenaBuildSource): Promise<ParsedArenaBuild> {
   const payload = await resolveBuildPayload(source);
-  const payloadEstimatedBytes = estimatePayloadBytes(payload);
+  const payloadEstimatedBytes = shouldEstimatePayloadBytes(source)
+    ? estimatePayloadBytes(payload)
+    : null;
 
   const validated = validateVoxelBuild(payload, {
     gridSize: normalizeGridSize(source.gridSize),

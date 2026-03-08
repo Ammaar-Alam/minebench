@@ -2,7 +2,7 @@
 
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { estimateArenaBuildBytes } from "../lib/arena/buildDeliveryPolicy";
+import { estimateArenaBuildBytes, getArenaArtifactMinBytes } from "../lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
 import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts";
 import {
@@ -47,7 +47,7 @@ function parseArgs(argv: string[]): Args {
     minBytesIndex >= 0 ? Number.parseInt(args[minBytesIndex + 1] ?? "", 10) : NaN;
   const envMinBytes = Number.parseInt(process.env.ARENA_ARTIFACT_MIN_BYTES ?? "", 10);
   const defaultMinBytes =
-    Number.isFinite(envMinBytes) && envMinBytes > 0 ? envMinBytes : 50 * 1024 * 1024;
+    Number.isFinite(envMinBytes) && envMinBytes > 0 ? envMinBytes : getArenaArtifactMinBytes();
   const minBytes =
     Number.isFinite(parsedMinBytes) && parsedMinBytes > 0 ? parsedMinBytes : defaultMinBytes;
 

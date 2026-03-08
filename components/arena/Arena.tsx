@@ -10,6 +10,7 @@ import {
   VoteChoice,
 } from "@/lib/arena/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoteBar } from "@/components/arena/VoteBar";
 import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
@@ -518,12 +519,7 @@ function formatBuildLoadingMessage(
   fullLoading: boolean,
   progress: SideLoadProgress | null,
 ): string {
-  const base = fullLoading ? "Retrieving full build" : "Retrieving build";
-  const total = progress?.totalBlocks ?? null;
-  const received = progress?.receivedBlocks ?? 0;
-  if (!total || total <= 0) return `${base}…`;
-  const pct = Math.max(1, Math.min(99, Math.round((received / total) * 100)));
-  return `${base} ${pct}%`;
+  return formatVoxelLoadingMessage(fullLoading ? "Retrieving full build" : "Retrieving build", progress);
 }
 
 type RevealAction = VoteChoice | "SKIP";
@@ -1561,6 +1557,7 @@ export function Arena() {
               className={`mb-card-enter min-w-[91%] shrink-0 snap-center rounded-3xl transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
             >
               <VoxelViewerCard
+                key={matchup ? `${matchup.id}:a` : "arena-build-a"}
                 title="Build A"
                 subtitle={
                   <ModelReveal
@@ -1601,6 +1598,7 @@ export function Arena() {
               className={`mb-card-enter mb-card-enter-delay min-w-[91%] shrink-0 snap-center rounded-3xl transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
             >
               <VoxelViewerCard
+                key={matchup ? `${matchup.id}:b` : "arena-build-b"}
                 title="Build B"
                 subtitle={
                   <ModelReveal

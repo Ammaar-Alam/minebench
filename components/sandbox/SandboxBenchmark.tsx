@@ -6,6 +6,7 @@ import {
   type SandboxGifExportTarget,
 } from "@/components/sandbox/SandboxGifExportButton";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import type {
   ArenaBuildLoadHints,
@@ -246,14 +247,7 @@ function toSlotProgressTotal(build: BenchmarkBuild | null): number | null {
 }
 
 function formatBuildLoadingMessage(progress: SlotHydrationState["progress"]): string {
-  const total = progress?.totalBlocks ?? null;
-  const received = progress?.receivedBlocks ?? 0;
-  if (!total || total <= 0) {
-    if (received > 0) return `Retrieving build ${received.toLocaleString()} blocks`;
-    return "Retrieving build...";
-  }
-  const pct = Math.max(1, Math.min(99, Math.round((received / total) * 100)));
-  return `Retrieving build ${pct}%`;
+  return formatVoxelLoadingMessage("Retrieving build", progress);
 }
 
 async function fetchBenchmarkResponse(args: {
@@ -882,6 +876,7 @@ export function SandboxBenchmark() {
             animateIn
             isLoading={isHydrating}
             loadingMessage={loadingMessage}
+            loadingProgress={isHydrating ? laneState.progress : undefined}
             viewerRef={viewerRef}
             actions={
               hasRenderableBuild && build && model ? (

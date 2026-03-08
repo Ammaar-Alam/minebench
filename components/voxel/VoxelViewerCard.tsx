@@ -1,6 +1,11 @@
 "use client";
 
-import { useMemo, useState, ReactNode, RefObject } from "react";
+import { useCallback, useEffect, useMemo, useState, ReactNode, RefObject } from "react";
+import {
+  VoxelLoadingHud,
+  formatVoxelLoadingMessage,
+  type VoxelLoadingProgress,
+} from "@/components/voxel/VoxelLoadingHud";
 import { VoxelViewer, type VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -98,6 +103,8 @@ export function VoxelViewerCard({
   const combinedError = error ?? rendered.error ?? undefined;
   const [preferredView, setPreferredView] = useState<"build" | "json">("build");
   const [showRawBuildJson, setShowRawBuildJson] = useState(false);
+  const [viewerReady, setViewerReady] = useState(false);
+  const [placementProgress, setPlacementProgress] = useState<VoxelLoadingProgress | null>(null);
 
   const modelOutputText = useMemo(() => {
     const explicitText =
@@ -161,13 +168,55 @@ export function VoxelViewerCard({
           ? "Streaming…"
           : "Generating…");
   const showLoadingOverlay = loadingMode !== "silent";
-  const showLoadingHud = Boolean(isLoading && showBuildView && showLoadingOverlay);
-  const hudReceived = loadingProgress?.receivedBlocks ?? (build ? build.blocks.length : 0);
-  const hudTotal = loadingProgress?.totalBlocks ?? null;
-  const hudPct =
-    typeof hudTotal === "number" && Number.isFinite(hudTotal) && hudTotal > 0
-      ? Math.max(0, Math.min(1, hudReceived / hudTotal))
-      : null;
+  const placementLoading = Boolean(showBuildView && build && !combinedError && !viewerReady);
+  const hudProgress = isLoading
+    ? loadingProgress
+      ? {
+          receivedBlocks: loadingProgress.receivedBlocks,
+          totalBlocks: loadingProgress.totalBlocks,
+        }
+      : null
+    : placementProgress ??
+      (placementLoading
+        ? {
+            receivedBlocks: 0,
+            totalBlocks: build?.blocks.length ?? null,
+          }
+        : null);
+  const hudLabel = isLoading
+    ? loadingLabel
+    : formatVoxelLoadingMessage("Placing blocks", placementProgress);
+  const showLoadingHud = Boolean((isLoading || placementLoading) && showBuildView && showLoadingOverlay);
+
+  useEffect(() => {
+    setViewerReady(false);
+    setPlacementProgress(null);
+  }, [build?.blocks, palette]);
+
+  const handleBuildReadyChange = useCallback(
+    (ready: boolean) => {
+      setViewerReady(ready);
+      if (ready) {
+        setPlacementProgress(null);
+      }
+      onBuildReadyChange?.(ready);
+    },
+    [onBuildReadyChange],
+  );
+
+  const handleBuildProgressChange = useCallback(
+    (progress: { processedBlocks: number; totalBlocks: number } | null) => {
+      if (!progress) {
+        setPlacementProgress(null);
+        return;
+      }
+      setPlacementProgress({
+        receivedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
+        totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
+      });
+    },
+    [],
+  );
 
   return (
     <div className="mb-panel">
@@ -251,7 +300,8 @@ export function VoxelViewerCard({
               autoRotate={autoRotate}
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
               animateIn={Boolean(animateIn && !isLoading)}
-              onBuildReadyChange={onBuildReadyChange}
+              onBuildReadyChange={handleBuildReadyChange}
+              onBuildProgressChange={handleBuildProgressChange}
             />
           ) : null}
 
@@ -286,41 +336,13 @@ export function VoxelViewerCard({
           ) : null}
 
           {showLoadingHud ? (
-            <div className="pointer-events-none absolute left-3 top-3 z-30">
-              <div className="flex max-w-[92vw] flex-col gap-2 rounded-xl border border-border/70 bg-bg/55 px-3 py-2 text-xs text-muted shadow-soft backdrop-blur-sm sm:max-w-xs">
-                <div className="flex items-center gap-2 text-fg/90">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
-                  <span className="font-medium">{loadingLabel}</span>
-                </div>
-                {hudPct != null ? (
-                  <div className="flex flex-col gap-1.5">
-                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-border/35">
-                      <span
-                        className="block h-full rounded-full bg-gradient-to-r from-accent/75 via-accent2/75 to-accent/75"
-                        style={{ width: `${Math.max(1, Math.min(99, Math.round(hudPct * 100)))}%` }}
-                      />
-                    </div>
-                    <div className="flex items-center justify-between gap-3 font-mono text-[11px] text-muted/90">
-                      <span>{hudReceived.toLocaleString()}</span>
-                      <span>{hudTotal ? hudTotal.toLocaleString() : ""}</span>
-                    </div>
-                  </div>
-                ) : build ? (
-                  <div className="font-mono text-[11px] text-muted/90">
-                    {blockCount.toLocaleString()} blocks
-                  </div>
-                ) : null}
-                {(elapsed || (attempt && attempt > 1)) ? (
-                  <div className="flex items-center gap-3 font-mono text-[11px] text-muted/80">
-                    {elapsed ? <span>{elapsed}</span> : null}
-                    {attempt && attempt > 1 ? <span>retry {attempt}</span> : null}
-                  </div>
-                ) : null}
-                {retryReason ? (
-                  <div className="text-[11px] text-muted/75">{retryReason}</div>
-                ) : null}
-              </div>
-            </div>
+            <VoxelLoadingHud
+              label={hudLabel}
+              progress={hudProgress}
+              elapsed={elapsed}
+              attempt={attempt}
+              retryReason={retryReason}
+            />
           ) : null}
 
           {isLoading && showJsonView && showLoadingOverlay ? (

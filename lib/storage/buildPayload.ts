@@ -115,6 +115,12 @@ export function decodeStoredBuildText(bytes: Uint8Array, encoding?: string | nul
 export async function loadBuildJsonFromStorage(ref: BuildStorageRef): Promise<unknown> {
   const bytes = await fetchStoredBuildBytes(ref);
   const text = decodeStoredBuildText(bytes, ref.encoding);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    // Stored payloads are normally raw JSON; fall back to the more permissive extractor
+    // for older artifacts or LLM-style wrappers.
+  }
   const extracted = extractBestVoxelBuildJson(text);
   if (!extracted) {
     throw new Error("Stored build payload does not contain a valid JSON object");

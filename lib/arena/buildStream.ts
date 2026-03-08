@@ -189,6 +189,15 @@ export type ArenaBuildStreamArtifactRef = {
   path: string;
 };
 
+type StorageListItem = {
+  name?: string | null;
+  updated_at?: string | null;
+  id?: string | null;
+  metadata?: unknown;
+};
+
+const legacyArtifactDiscoveryCache = new Map<string, ArenaBuildStreamArtifactRef | null>();
+
 export function isArenaBuildStreamArtifactEnabled(): boolean {
   return Boolean(ARENA_STREAM_ARTIFACTS_ENABLED && ARENA_STREAM_ARTIFACT_PREFIX && ARENA_STREAM_ARTIFACT_BUCKET);
 }
@@ -246,6 +255,77 @@ function getArenaBuildStreamArtifactFetchRefs(
   }
 
   return refs;
+}
+
+async function discoverLegacyArenaBuildStreamArtifactRef(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  opts?: { signal?: AbortSignal },
+): Promise<ArenaBuildStreamArtifactRef | null> {
+  const cacheKey = `${buildId}:${variant}`;
+  if (legacyArtifactDiscoveryCache.has(cacheKey)) {
+    return legacyArtifactDiscoveryCache.get(cacheKey) ?? null;
+  }
+  if (!isArenaBuildStreamArtifactEnabled()) {
+    legacyArtifactDiscoveryCache.set(cacheKey, null);
+    return null;
+  }
+
+  let config: ReturnType<typeof getSupabaseStorageConfig>;
+  try {
+    config = getSupabaseStorageConfig();
+  } catch {
+    legacyArtifactDiscoveryCache.set(cacheKey, null);
+    return null;
+  }
+
+  const prefix = `${ARENA_STREAM_ARTIFACT_PREFIX}/${buildId}`;
+  const resp = await fetch(
+    `${config.url}/storage/v1/object/list/${encodeURIComponent(ARENA_STREAM_ARTIFACT_BUCKET)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+        apikey: config.serviceRoleKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prefix,
+        limit: 200,
+        offset: 0,
+        sortBy: { column: "name", order: "asc" },
+      }),
+      cache: "no-store",
+      signal: opts?.signal,
+    },
+  );
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Legacy stream artifact list failed (${resp.status}): ${text || "empty response"}`);
+  }
+
+  const pattern = new RegExp(`^${variant}-[^/]+\\.ndjson$`);
+  const items = ((await resp.json()) as StorageListItem[])
+    .filter((item) => {
+      const name = item?.name?.trim();
+      return Boolean(name && pattern.test(name));
+    })
+    .sort((a, b) => {
+      const aTime = Date.parse(a.updated_at ?? "") || 0;
+      const bTime = Date.parse(b.updated_at ?? "") || 0;
+      return bTime - aTime;
+    });
+
+  const name = items[0]?.name?.trim();
+  const ref = name
+    ? {
+        bucket: ARENA_STREAM_ARTIFACT_BUCKET,
+        path: `${prefix}/${name}`,
+      }
+    : null;
+  legacyArtifactDiscoveryCache.set(cacheKey, ref);
+  return ref;
 }
 
 export type ArenaBuildStreamEventSequenceInput = {
@@ -336,6 +416,30 @@ export async function fetchArenaBuildStreamArtifact(
       throw new Error(`Stream artifact fetch failed (${resp.status}): ${text || "empty response"}`);
     }
     return resp;
+  }
+
+  const discoveredLegacy = await discoverLegacyArenaBuildStreamArtifactRef(buildId, variant, opts);
+  if (discoveredLegacy) {
+    const encodedPath = encodeStoragePath(discoveredLegacy.path);
+    const url = `${config.url}/storage/v1/object/${encodeURIComponent(discoveredLegacy.bucket)}/${encodedPath}`;
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+        apikey: config.serviceRoleKey,
+      },
+      cache: "no-store",
+      signal: opts?.signal,
+    });
+
+    if (resp.ok) {
+      return resp;
+    }
+    if (resp.status !== 404) {
+      const text = await resp.text().catch(() => "");
+      throw new Error(`Legacy stream artifact fetch failed (${resp.status}): ${text || "empty response"}`);
+    }
+    legacyArtifactDiscoveryCache.set(`${buildId}:${variant}`, null);
   }
 
   return null;

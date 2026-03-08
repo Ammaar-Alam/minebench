@@ -315,24 +315,22 @@ export async function POST(req: Request) {
         },
       });
 
-  if (!trustedStorageMetadata) {
-    try {
-      await maybePrecomputeArenaStreamArtifactsForBuild({
-        id: saved.id,
-        gridSize: saved.gridSize,
-        palette: saved.palette,
-        blockCount: saved.blockCount,
-        voxelByteSize: saved.voxelByteSize,
-        voxelCompressedByteSize: saved.voxelCompressedByteSize,
-        voxelSha256: saved.voxelSha256,
-        voxelData: saved.voxelData,
-        voxelStorageBucket: saved.voxelStorageBucket,
-        voxelStoragePath: saved.voxelStoragePath,
-        voxelStorageEncoding: saved.voxelStorageEncoding,
-      });
-    } catch (err) {
-      console.warn("import-build artifact precompute skipped", err);
-    }
+  try {
+    await maybePrecomputeArenaStreamArtifactsForBuild({
+      id: saved.id,
+      gridSize: saved.gridSize,
+      palette: saved.palette,
+      blockCount: saved.blockCount,
+      voxelByteSize: saved.voxelByteSize,
+      voxelCompressedByteSize: saved.voxelCompressedByteSize,
+      voxelSha256: saved.voxelSha256,
+      voxelData: saved.voxelData,
+      voxelStorageBucket: saved.voxelStorageBucket,
+      voxelStoragePath: saved.voxelStoragePath,
+      voxelStorageEncoding: saved.voxelStorageEncoding,
+    });
+  } catch (err) {
+    console.warn("import-build artifact precompute skipped", err);
   }
 
   return NextResponse.json({

@@ -10,6 +10,7 @@ import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -532,16 +533,7 @@ export function LocalLab() {
 
   const loadingMessage =
     rendered.kind === "loading"
-      ? (() => {
-          const total = rendered.progress?.totalBlocks ?? null;
-          const received = rendered.progress?.receivedBlocks ?? 0;
-          if (!total || total <= 0) {
-            if (received > 0) return `Retrieving build ${received.toLocaleString()} blocks`;
-            return "Retrieving build...";
-          }
-          const pct = Math.max(1, Math.min(99, Math.round((received / total) * 100)));
-          return `Retrieving build ${pct}%`;
-        })()
+      ? formatVoxelLoadingMessage("Retrieving build", rendered.progress)
       : undefined;
 
   return (
@@ -843,6 +835,7 @@ export function LocalLab() {
               autoRotate
               isLoading={rendered.kind === "loading"}
               loadingMessage={loadingMessage}
+              loadingProgress={rendered.kind === "loading" ? rendered.progress ?? undefined : undefined}
               skipValidation={rendered.kind === "loading"}
               viewerRef={previewViewerRef}
               actions={

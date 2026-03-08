@@ -135,7 +135,10 @@ const DIRS: Direction[] = [
   },
 ];
 
-function buildGeometry(bucket: MeshBucket): THREE.BufferGeometry | null {
+function buildGeometry(
+  bucket: MeshBucket,
+  bounds?: { box: THREE.Box3; center: THREE.Vector3; radius: number },
+): THREE.BufferGeometry | null {
   if (bucket.indices.length === 0) return null;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.Float32BufferAttribute(bucket.positions, 3));
@@ -143,7 +146,12 @@ function buildGeometry(bucket: MeshBucket): THREE.BufferGeometry | null {
   geo.setAttribute("uv", new THREE.Float32BufferAttribute(bucket.uvs, 2));
   geo.setAttribute("color", new THREE.Float32BufferAttribute(bucket.colors, 3));
   geo.setIndex(bucket.indices);
-  geo.computeBoundingSphere();
+  if (bounds) {
+    geo.boundingBox = bounds.box.clone();
+    geo.boundingSphere = new THREE.Sphere(bounds.center.clone(), bounds.radius);
+  } else {
+    geo.computeBoundingSphere();
+  }
   return geo;
 }
 
@@ -180,6 +188,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 export type VoxelGroup = {
   group: THREE.Group;
   dispose: () => void;
+  bounds: { box: THREE.Box3; center: THREE.Vector3; radius: number };
   stats: { blockCount: number };
 };
 
@@ -189,6 +198,12 @@ type PreparedMeshData = {
   nonWaterBlocks: VoxelBuild["blocks"];
   filteredBlockCount: number;
   maxInputBlocks: number;
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
   cx: number;
   cy: number;
   cz: number;
@@ -248,6 +263,9 @@ const TINT_LEAVES = hexToLinearRgb(0x48b518);
 const TINT_GRASS = hexToLinearRgb(0x7fb238);
 const TINT_WATER = hexToLinearRgb(0x3f76e4);
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
+const WATER_TEXTURE_KEY = "water_still";
+
+let cachedWaterTexture: { atlasTexture: THREE.Texture; texture: THREE.Texture } | null = null;
 
 function faceTint(blockType: string, face: Face): [number, number, number] {
   if (blockType === "oak_leaves") return TINT_LEAVES;
@@ -302,6 +320,70 @@ function configureAtlasTexture(atlasTexture: THREE.Texture) {
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
 }
 
+function getWaterSurfaceTexture(atlasTexture: THREE.Texture): THREE.Texture | null {
+  if (cachedWaterTexture?.atlasTexture === atlasTexture) {
+    return cachedWaterTexture.texture;
+  }
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const source = atlasTexture.image as (CanvasImageSource & { width?: number; height?: number }) | undefined;
+  const waterUv = hasAtlasKey(WATER_TEXTURE_KEY) ? getAtlasUv(WATER_TEXTURE_KEY) : null;
+  const width = source?.width;
+  const height = source?.height;
+  if (!source || !waterUv || typeof width !== "number" || typeof height !== "number") {
+    return null;
+  }
+
+  if (cachedWaterTexture) {
+    cachedWaterTexture.texture.dispose();
+    cachedWaterTexture = null;
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, waterUv.w);
+  canvas.height = Math.max(1, waterUv.h);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, waterUv.x, waterUv.y, waterUv.w, waterUv.h, 0, 0, canvas.width, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.flipY = atlasTexture.flipY;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+
+  cachedWaterTexture = { atlasTexture, texture };
+  return texture;
+}
+
+function buildBoundsFromPrepared(prepared: PreparedMeshData) {
+  const box = new THREE.Box3(
+    new THREE.Vector3(
+      prepared.minX - prepared.cx,
+      prepared.minY - prepared.cy,
+      prepared.minZ - prepared.cz,
+    ),
+    new THREE.Vector3(
+      prepared.maxX - prepared.cx + 1,
+      prepared.maxY - prepared.cy + 1,
+      prepared.maxZ - prepared.cz + 1,
+    ),
+  );
+  const center = box.getCenter(new THREE.Vector3());
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+  const radius = Number.isFinite(sphere.radius) && sphere.radius > 0 ? sphere.radius : 0.001;
+  return { box, center, radius };
+}
+
 function prepareMeshData(
   build: VoxelBuild,
   palette: BlockDefinition[],
@@ -346,6 +428,12 @@ function prepareMeshData(
     nonWaterBlocks,
     filteredBlockCount,
     maxInputBlocks,
+    minX,
+    minY,
+    minZ,
+    maxX,
+    maxY,
+    maxZ,
     cx: (minX + maxX + 1) / 2,
     cy: minY,
     cz: (minZ + maxZ + 1) / 2,
@@ -384,7 +472,7 @@ async function prepareMeshDataAsync(
     maxX = Math.max(maxX, b.x);
     maxY = Math.max(maxY, b.y);
     maxZ = Math.max(maxZ, b.z);
-    if ((i & 0x0fff) === 0) {
+    if ((i & 0x03ff) === 0) {
       await maybeYield();
     }
   }
@@ -400,6 +488,12 @@ async function prepareMeshDataAsync(
     nonWaterBlocks,
     filteredBlockCount,
     maxInputBlocks,
+    minX,
+    minY,
+    minZ,
+    maxX,
+    maxY,
+    maxZ,
     cx: (minX + maxX + 1) / 2,
     cy: minY,
     cz: (minZ + maxZ + 1) / 2,
@@ -573,7 +667,13 @@ function appendWaterRect(
       break;
   }
 
-  appendQuad(bucket, verts, normal, TINT_WATER, [0, 0, 0, 0, 0, 0, 0, 0]);
+  appendQuad(
+    bucket,
+    verts,
+    normal,
+    TINT_WATER,
+    [0, 0, 0, height, width, height, width, 0],
+  );
 }
 
 function appendMergedPlaneFaces(
@@ -698,7 +798,7 @@ async function buildWaterSurfaceBucketAsync(
       }
     }
 
-    if ((i & 0x03ff) === 0) {
+    if ((i & 0x01ff) === 0) {
       await maybeYield();
     }
   }
@@ -721,6 +821,7 @@ async function buildWaterSurfaceBucketAsync(
 
 export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], atlasTexture: THREE.Texture): VoxelGroup {
   const prepared = prepareMeshData(build, palette);
+  const bounds = buildBoundsFromPrepared(prepared);
   const opaque = makeBucket();
   const cutout = makeBucket();
   const transparent = makeBucket();
@@ -733,6 +834,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const water = buildWaterSurfaceBucket(build, prepared);
 
   configureAtlasTexture(atlasTexture);
+  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -748,11 +850,14 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
     vertexColors: true,
   });
   const matWater = new THREE.MeshLambertMaterial({
+    map: waterTexture ?? undefined,
     color: 0xffffff,
     transparent: true,
-    opacity: 0.72,
+    opacity: 0.82,
     depthWrite: false,
     side: THREE.DoubleSide,
+    emissive: new THREE.Color(0x0b214f),
+    emissiveIntensity: 0.18,
     vertexColors: true,
   });
   const matEmissive = new THREE.MeshBasicMaterial({
@@ -763,11 +868,11 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const group = new THREE.Group();
   group.name = "VoxelGroup";
 
-  const geoOpaque = buildGeometry(opaque);
-  const geoCutout = buildGeometry(cutout);
-  const geoTransparent = buildGeometry(transparent);
-  const geoWater = buildGeometry(water);
-  const geoEmissive = buildGeometry(emissive);
+  const geoOpaque = buildGeometry(opaque, bounds);
+  const geoCutout = buildGeometry(cutout, bounds);
+  const geoTransparent = buildGeometry(transparent, bounds);
+  const geoWater = buildGeometry(water, bounds);
+  const geoEmissive = buildGeometry(emissive, bounds);
 
   if (geoOpaque) group.add(new THREE.Mesh(geoOpaque, matOpaque));
   if (geoCutout) group.add(new THREE.Mesh(geoCutout, matCutout));
@@ -782,6 +887,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   return {
     group,
     dispose: () => disposeObject(group),
+    bounds,
     stats: { blockCount: prepared.filteredBlockCount },
   };
 }
@@ -804,8 +910,15 @@ export async function createVoxelGroupAsync(
     if (emitProgress) opts?.onProgress?.(emitProgress);
     await nextFrame();
   };
+  const yieldNow = async (emitProgress?: BuildProgress) => {
+    throwIfAborted(opts?.signal);
+    if (emitProgress) opts?.onProgress?.(emitProgress);
+    lastYieldAt = nowMs();
+    await nextFrame();
+  };
 
   const prepared = await prepareMeshDataAsync(build, palette, opts?.blockLimit, maybeYield);
+  const bounds = buildBoundsFromPrepared(prepared);
   const opaque = makeBucket();
   const cutout = makeBucket();
   const transparent = makeBucket();
@@ -814,19 +927,22 @@ export async function createVoxelGroupAsync(
   for (let i = 0; i < prepared.nonWaterBlocks.length; i += 1) {
     const block = prepared.nonWaterBlocks[i];
     appendStandardFaces(block, prepared, { opaque, cutout, transparent, emissive });
-    if ((i & 0x03ff) === 0) {
+    if ((i & 0x01ff) === 0) {
       await maybeYield({ processedBlocks: i, totalBlocks: prepared.nonWaterBlocks.length });
     }
   }
 
   const water = await buildWaterSurfaceBucketAsync(build, prepared, maybeYield);
 
-  opts?.onProgress?.({
+  const geometryStageCount = 5;
+  const geometryStageTotal = prepared.filteredBlockCount + geometryStageCount;
+  await yieldNow({
     processedBlocks: prepared.filteredBlockCount,
-    totalBlocks: prepared.filteredBlockCount,
+    totalBlocks: geometryStageTotal,
   });
 
   configureAtlasTexture(atlasTexture);
+  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -842,11 +958,14 @@ export async function createVoxelGroupAsync(
     vertexColors: true,
   });
   const matWater = new THREE.MeshLambertMaterial({
+    map: waterTexture ?? undefined,
     color: 0xffffff,
     transparent: true,
-    opacity: 0.72,
+    opacity: 0.82,
     depthWrite: false,
     side: THREE.DoubleSide,
+    emissive: new THREE.Color(0x0b214f),
+    emissiveIntensity: 0.18,
     vertexColors: true,
   });
   const matEmissive = new THREE.MeshBasicMaterial({
@@ -857,11 +976,31 @@ export async function createVoxelGroupAsync(
   const group = new THREE.Group();
   group.name = "VoxelGroup";
 
-  const geoOpaque = buildGeometry(opaque);
-  const geoCutout = buildGeometry(cutout);
-  const geoTransparent = buildGeometry(transparent);
-  const geoWater = buildGeometry(water);
-  const geoEmissive = buildGeometry(emissive);
+  const geoOpaque = buildGeometry(opaque, bounds);
+  await yieldNow({
+    processedBlocks: prepared.filteredBlockCount + 1,
+    totalBlocks: geometryStageTotal,
+  });
+  const geoCutout = buildGeometry(cutout, bounds);
+  await yieldNow({
+    processedBlocks: prepared.filteredBlockCount + 2,
+    totalBlocks: geometryStageTotal,
+  });
+  const geoTransparent = buildGeometry(transparent, bounds);
+  await yieldNow({
+    processedBlocks: prepared.filteredBlockCount + 3,
+    totalBlocks: geometryStageTotal,
+  });
+  const geoWater = buildGeometry(water, bounds);
+  await yieldNow({
+    processedBlocks: prepared.filteredBlockCount + 4,
+    totalBlocks: geometryStageTotal,
+  });
+  const geoEmissive = buildGeometry(emissive, bounds);
+  opts?.onProgress?.({
+    processedBlocks: geometryStageTotal,
+    totalBlocks: geometryStageTotal,
+  });
 
   if (geoOpaque) group.add(new THREE.Mesh(geoOpaque, matOpaque));
   if (geoCutout) group.add(new THREE.Mesh(geoCutout, matCutout));
@@ -876,6 +1015,7 @@ export async function createVoxelGroupAsync(
   return {
     group,
     dispose: () => disposeObject(group),
+    bounds,
     stats: { blockCount: prepared.filteredBlockCount },
   };
 }
