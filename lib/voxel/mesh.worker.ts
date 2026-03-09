@@ -34,6 +34,7 @@ type PreparedMeshData = {
   allowed: Set<string>;
   blocksByPos: Map<number, string>;
   nonWaterBlocks: VoxelBuild["blocks"];
+  waterBlocks: VoxelBuild["blocks"];
   filteredBlockCount: number;
   maxInputBlocks: number;
   minX: number;
@@ -185,6 +186,22 @@ function isOccluder(blockType: string): boolean {
   return kind === "opaque" || kind === "emissive";
 }
 
+function canBlockEmitAnyFace(
+  block: VoxelBuild["blocks"][number],
+  blocksByPos: Map<number, string>,
+): boolean {
+  for (const d of DIRS) {
+    const neighborType = blocksByPos.get(
+      encodePosition(block.x + d.dx, block.y + d.dy, block.z + d.dz),
+    );
+    if (!neighborType) return true;
+    if (neighborType === block.type) continue;
+    if (isOccluder(neighborType)) continue;
+    return true;
+  }
+  return false;
+}
+
 function srgbByteToLinear(byte: number): number {
   const s = Math.min(1, Math.max(0, byte / 255));
   return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
@@ -304,9 +321,9 @@ function prepareMeshData(
 ): PreparedMeshData {
   const allowed = new Set(allowedBlockIds);
   const nonWaterBlocks: VoxelBuild["blocks"] = [];
+  const waterBlocks: VoxelBuild["blocks"] = [];
   const blocksByPos = new Map<number, string>();
 
-  let filteredBlockCount = 0;
   let minX = Infinity;
   let minY = Infinity;
   let minZ = Infinity;
@@ -323,9 +340,7 @@ function prepareMeshData(
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
-    filteredBlockCount += 1;
     blocksByPos.set(encodePosition(b.x, b.y, b.z), b.type);
-    if (b.type !== WATER_BLOCK_ID) nonWaterBlocks.push(b);
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
     minZ = Math.min(minZ, b.z);
@@ -334,6 +349,20 @@ function prepareMeshData(
     maxZ = Math.max(maxZ, b.z);
     if ((i & (PROGRESS_EVERY - 1)) === 0) {
       postProgress(i, maxInputBlocks, "Indexing blocks");
+    }
+  }
+
+  for (let i = 0; i < maxInputBlocks; i += 1) {
+    const b = build.blocks[i];
+    if (!b || !allowed.has(b.type)) continue;
+    if (b.type === WATER_BLOCK_ID) {
+      waterBlocks.push(b);
+      continue;
+    }
+    if (!canBlockEmitAnyFace(b, blocksByPos)) continue;
+    nonWaterBlocks.push(b);
+    if ((i & (PROGRESS_EVERY - 1)) === 0) {
+      postProgress(i, maxInputBlocks, "Filtering hidden blocks");
     }
   }
 
@@ -346,7 +375,8 @@ function prepareMeshData(
     allowed,
     blocksByPos,
     nonWaterBlocks,
-    filteredBlockCount,
+    waterBlocks,
+    filteredBlockCount: nonWaterBlocks.length + waterBlocks.length,
     maxInputBlocks,
     minX,
     minY,
@@ -553,14 +583,14 @@ function appendMergedPlaneFaces(
   }
 }
 
-function buildWaterSurfaceBucket(build: VoxelBuild, prepared: PreparedMeshData): MeshBucket {
+function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
   const bucket = makeBucket();
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
-  if (!prepared.allowed.has(WATER_BLOCK_ID)) return bucket;
+  if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return bucket;
 
-  for (let i = 0; i < prepared.maxInputBlocks; i += 1) {
-    const block = build.blocks[i];
-    if (!block || block.type !== WATER_BLOCK_ID || !prepared.allowed.has(block.type)) continue;
+  for (let i = 0; i < prepared.waterBlocks.length; i += 1) {
+    const block = prepared.waterBlocks[i];
+    if (!block) continue;
 
     for (const d of DIRS) {
       const neighborType = prepared.blocksByPos.get(
@@ -594,7 +624,7 @@ function buildWaterSurfaceBucket(build: VoxelBuild, prepared: PreparedMeshData):
     }
 
     if ((i & (PROGRESS_EVERY - 1)) === 0) {
-      postProgress(i, Math.max(1, prepared.maxInputBlocks), "Meshing water");
+      postProgress(i, Math.max(1, prepared.waterBlocks.length), "Meshing water");
     }
   }
 
@@ -626,7 +656,7 @@ function buildMeshPayload(build: VoxelBuild, allowedBlockIds: string[], blockLim
     }
   }
 
-  const water = buildWaterSurfaceBucket(build, prepared);
+  const water = buildWaterSurfaceBucket(prepared);
   postProgress(prepared.filteredBlockCount, Math.max(1, prepared.filteredBlockCount), "Finalizing geometry");
 
   return {

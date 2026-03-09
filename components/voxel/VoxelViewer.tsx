@@ -18,6 +18,7 @@ type ViewerProps = {
   voxelBuild: VoxelBuild | null;
   palette: "simple" | "advanced";
   expectedBlockCount?: number;
+  meshCacheKey?: string | null;
   autoRotate?: boolean;
   animateIn?: boolean;
   showControls?: boolean;
@@ -211,6 +212,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     voxelBuild,
     palette,
     expectedBlockCount,
+    meshCacheKey,
     autoRotate,
     animateIn,
     showControls = true,
@@ -254,12 +256,14 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     paletteDefs: BlockDefinition[];
     animateIn: boolean;
     expectedBlockCount: number | null;
+    meshCacheKey: string | null;
   }>({
     voxelBuild: null,
     palette,
     paletteDefs,
     animateIn: Boolean(animateIn),
     expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
+    meshCacheKey: meshCacheKey?.trim() || null,
   });
   latestRef.current = {
     voxelBuild,
@@ -267,6 +271,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     paletteDefs,
     animateIn: Boolean(animateIn),
     expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
+    meshCacheKey: meshCacheKey?.trim() || null,
   };
 
   const identityRef = useRef<BuildIdentity | null>(null);
@@ -450,6 +455,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const paletteSnapshot = latest.paletteDefs;
     const buildSnapshot = latest.voxelBuild;
     const expectedSnapshot = latest.expectedBlockCount;
+    const meshCacheKeySnapshot = latest.meshCacheKey;
 
     try {
       const tex = await loadAtlasTexture();
@@ -460,6 +466,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       const vg = await createVoxelGroupAsync(buildSnapshot, paletteSnapshot, tex, {
         signal: controller.signal,
         blockLimit,
+        cacheKey: meshCacheKeySnapshot,
         yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
         onProgress(progress) {
           onBuildProgressChangeRef.current?.({
@@ -941,7 +948,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       activeJobRef.current.controller.abort();
     }
     requestBuild();
-  }, [voxelBuild, paletteDefs, animateIn, palette, expectedBlockCount, requestBuild]);
+  }, [voxelBuild, paletteDefs, animateIn, palette, expectedBlockCount, meshCacheKey, requestBuild]);
 
   useEffect(() => {
     const three = threeRef.current;

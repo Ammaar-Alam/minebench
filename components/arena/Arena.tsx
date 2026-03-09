@@ -515,6 +515,39 @@ function getExpectedBlocksForLane(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): 
   return Math.floor(expected);
 }
 
+function getLaneHydratedVariant(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): ArenaBuildVariant {
+  const fullBlockCount = lane.buildLoadHints?.fullBlockCount ?? 0;
+  if (
+    lane.build &&
+    Number.isFinite(fullBlockCount) &&
+    fullBlockCount > 0 &&
+    lane.build.blocks.length < fullBlockCount
+  ) {
+    return "preview";
+  }
+  return "full";
+}
+
+function getLaneMeshCacheKey(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): string | null {
+  if (!lane.build) return null;
+  const variant = getLaneHydratedVariant(lane);
+  const ref = variant === "preview" ? lane.previewRef ?? lane.buildRef : lane.buildRef ?? lane.previewRef;
+  const checksum = ref?.checksum ?? lane.buildRef?.checksum ?? lane.previewRef?.checksum ?? null;
+  if (!ref?.buildId || !checksum) return null;
+  return `${ref.buildId}:${variant}:${checksum}:${lane.build.blocks.length}`;
+}
+
+function estimateCachedHydratedBuildBytes(entry: CachedHydratedBuild): number {
+  if (entry.variant === "preview") {
+    return Math.max(1, entry.build.blocks.length * 34);
+  }
+  const estimated = entry.buildLoadHints?.fullEstimatedBytes;
+  if (typeof estimated === "number" && Number.isFinite(estimated) && estimated > 0) {
+    return Math.floor(estimated);
+  }
+  return Math.max(1, entry.build.blocks.length * 34);
+}
+
 function formatBuildLoadingMessage(
   fullLoading: boolean,
   progress: SideLoadProgress | null,
@@ -767,12 +800,7 @@ export function Arena() {
   }
 
   const cacheHydratedBuild = useCallback((ref: ArenaBuildRef, entry: CachedHydratedBuild) => {
-    const estimated = entry.buildLoadHints?.fullEstimatedBytes ?? null;
-    if (
-      typeof estimated === "number" &&
-      Number.isFinite(estimated) &&
-      estimated > CLIENT_BUILD_CACHE_MAX_EST_BYTES
-    ) {
+    if (estimateCachedHydratedBuildBytes(entry) > CLIENT_BUILD_CACHE_MAX_EST_BYTES) {
       return;
     }
 
@@ -1568,6 +1596,7 @@ export function Arena() {
                 }
                 voxelBuild={matchup?.a.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.a) : undefined}
+                meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.a) : null}
                 skipValidation={Boolean(matchup?.a.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
@@ -1609,6 +1638,7 @@ export function Arena() {
                 }
                 voxelBuild={matchup?.b.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.b) : undefined}
+                meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.b) : null}
                 skipValidation={Boolean(matchup?.b.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;

@@ -21,6 +21,7 @@ export function VoxelViewerCard({
   subtitle,
   voxelBuild,
   expectedBlockCount,
+  meshCacheKey,
   gridSize = 256,
   autoRotate = true,
   animateIn,
@@ -47,6 +48,7 @@ export function VoxelViewerCard({
   subtitle?: ReactNode;
   voxelBuild: unknown | null;
   expectedBlockCount?: number;
+  meshCacheKey?: string | null;
   gridSize?: 64 | 256 | 512;
   autoRotate?: boolean;
   animateIn?: boolean;
@@ -304,6 +306,7 @@ export function VoxelViewerCard({
               voxelBuild={build}
               palette={palette}
               expectedBlockCount={expectedBlockCount}
+              meshCacheKey={meshCacheKey}
               autoRotate={autoRotate}
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
               animateIn={Boolean(animateIn && !isLoading)}

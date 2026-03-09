@@ -4,6 +4,7 @@ import { getRenderKind } from "@/lib/blocks/registry";
 import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -18,6 +19,8 @@ type CreateVoxelGroupAsyncOpts = {
   yieldAfterMs?: number;
   // When set, only process the first N input blocks. Useful for progressive streaming without copying arrays.
   blockLimit?: number;
+  // Stable checksum-keyed cache identifier for persistent browser-side mesh payload reuse.
+  cacheKey?: string | null;
 };
 
 export type SerializedMeshBucket = {
@@ -241,6 +244,7 @@ type PreparedMeshData = {
   allowed: Set<string>;
   blocksByPos: Map<number, string>;
   nonWaterBlocks: VoxelBuild["blocks"];
+  waterBlocks: VoxelBuild["blocks"];
   filteredBlockCount: number;
   maxInputBlocks: number;
   minX: number;
@@ -289,6 +293,22 @@ function unpackPlaneCellV(value: number): number {
 function isOccluder(blockType: string): boolean {
   const kind = getRenderKind(blockType) ?? "opaque";
   return kind === "opaque" || kind === "emissive";
+}
+
+function canBlockEmitAnyFace(
+  block: VoxelBuild["blocks"][number],
+  blocksByPos: Map<number, string>,
+): boolean {
+  for (const d of DIRS) {
+    const neighborType = blocksByPos.get(
+      encodePosition(block.x + d.dx, block.y + d.dy, block.z + d.dz),
+    );
+    if (!neighborType) return true;
+    if (neighborType === block.type) continue;
+    if (isOccluder(neighborType)) continue;
+    return true;
+  }
+  return false;
 }
 
 function srgbByteToLinear(byte: number): number {
@@ -487,9 +507,8 @@ function prepareMeshData(
 ): PreparedMeshData {
   const allowed = new Set(palette.map((p) => p.id));
   const nonWaterBlocks: VoxelBuild["blocks"] = [];
+  const waterBlocks: VoxelBuild["blocks"] = [];
   const blocksByPos = new Map<number, string>();
-
-  let filteredBlockCount = 0;
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
@@ -502,15 +521,24 @@ function prepareMeshData(
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
-    filteredBlockCount += 1;
     blocksByPos.set(encodePosition(b.x, b.y, b.z), b.type);
-    if (b.type !== WATER_BLOCK_ID) nonWaterBlocks.push(b);
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
     minZ = Math.min(minZ, b.z);
     maxX = Math.max(maxX, b.x);
     maxY = Math.max(maxY, b.y);
     maxZ = Math.max(maxZ, b.z);
+  }
+
+  for (let i = 0; i < maxInputBlocks; i += 1) {
+    const b = build.blocks[i];
+    if (!b || !allowed.has(b.type)) continue;
+    if (b.type === WATER_BLOCK_ID) {
+      waterBlocks.push(b);
+      continue;
+    }
+    if (!canBlockEmitAnyFace(b, blocksByPos)) continue;
+    nonWaterBlocks.push(b);
   }
 
   if (!Number.isFinite(minX)) {
@@ -522,7 +550,8 @@ function prepareMeshData(
     allowed,
     blocksByPos,
     nonWaterBlocks,
-    filteredBlockCount,
+    waterBlocks,
+    filteredBlockCount: nonWaterBlocks.length + waterBlocks.length,
     maxInputBlocks,
     minX,
     minY,
@@ -544,9 +573,8 @@ async function prepareMeshDataAsync(
 ): Promise<PreparedMeshData> {
   const allowed = new Set(palette.map((p) => p.id));
   const nonWaterBlocks: VoxelBuild["blocks"] = [];
+  const waterBlocks: VoxelBuild["blocks"] = [];
   const blocksByPos = new Map<number, string>();
-
-  let filteredBlockCount = 0;
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
@@ -559,9 +587,7 @@ async function prepareMeshDataAsync(
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
-    filteredBlockCount += 1;
     blocksByPos.set(encodePosition(b.x, b.y, b.z), b.type);
-    if (b.type !== WATER_BLOCK_ID) nonWaterBlocks.push(b);
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
     minZ = Math.min(minZ, b.z);
@@ -577,6 +603,24 @@ async function prepareMeshDataAsync(
     }
   }
 
+  for (let i = 0; i < maxInputBlocks; i += 1) {
+    const b = build.blocks[i];
+    if (!b || !allowed.has(b.type)) continue;
+    if (b.type === WATER_BLOCK_ID) {
+      waterBlocks.push(b);
+      continue;
+    }
+    if (!canBlockEmitAnyFace(b, blocksByPos)) continue;
+    nonWaterBlocks.push(b);
+    if ((i & 0x03ff) === 0) {
+      await maybeYield({
+        processedBlocks: i,
+        totalBlocks: Math.max(1, maxInputBlocks),
+        stageLabel: "Filtering hidden blocks",
+      });
+    }
+  }
+
   if (!Number.isFinite(minX)) {
     minX = minY = minZ = 0;
     maxX = maxY = maxZ = 0;
@@ -586,7 +630,8 @@ async function prepareMeshDataAsync(
     allowed,
     blocksByPos,
     nonWaterBlocks,
-    filteredBlockCount,
+    waterBlocks,
+    filteredBlockCount: nonWaterBlocks.length + waterBlocks.length,
     maxInputBlocks,
     minX,
     minY,
@@ -650,13 +695,11 @@ function getOrCreatePlane(
   return created;
 }
 
-function collectWaterPlanes(build: VoxelBuild, prepared: PreparedMeshData) {
+function collectWaterPlanes(prepared: PreparedMeshData) {
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
-  if (!prepared.allowed.has(WATER_BLOCK_ID)) return planes;
+  if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return planes;
 
-  for (let i = 0; i < prepared.maxInputBlocks; i += 1) {
-    const block = build.blocks[i];
-    if (!block || block.type !== WATER_BLOCK_ID || !prepared.allowed.has(block.type)) continue;
+  for (const block of prepared.waterBlocks) {
 
     for (const d of DIRS) {
       const neighborType = prepared.blocksByPos.get(
@@ -845,9 +888,9 @@ function appendMergedPlaneFaces(
   }
 }
 
-function buildWaterSurfaceBucket(build: VoxelBuild, prepared: PreparedMeshData): MeshBucket {
+function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
   const bucket = makeBucket();
-  const planes = collectWaterPlanes(build, prepared);
+  const planes = collectWaterPlanes(prepared);
   for (const plane of planes.values()) {
     appendMergedPlaneFaces(bucket, plane.face, plane.plane, plane.cells, prepared);
   }
@@ -855,17 +898,16 @@ function buildWaterSurfaceBucket(build: VoxelBuild, prepared: PreparedMeshData):
 }
 
 async function buildWaterSurfaceBucketAsync(
-  build: VoxelBuild,
   prepared: PreparedMeshData,
   maybeYield: (progress?: BuildProgress) => Promise<void>,
 ): Promise<MeshBucket> {
   const bucket = makeBucket();
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
-  if (!prepared.allowed.has(WATER_BLOCK_ID)) return bucket;
+  if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return bucket;
 
-  for (let i = 0; i < prepared.maxInputBlocks; i += 1) {
-    const block = build.blocks[i];
-    if (!block || block.type !== WATER_BLOCK_ID || !prepared.allowed.has(block.type)) continue;
+  for (let i = 0; i < prepared.waterBlocks.length; i += 1) {
+    const block = prepared.waterBlocks[i];
+    if (!block) continue;
 
     for (const d of DIRS) {
       const neighborType = prepared.blocksByPos.get(
@@ -899,7 +941,11 @@ async function buildWaterSurfaceBucketAsync(
     }
 
     if ((i & 0x01ff) === 0) {
-      await maybeYield();
+      await maybeYield({
+        processedBlocks: i,
+        totalBlocks: Math.max(1, prepared.waterBlocks.length),
+        stageLabel: "Meshing water",
+      });
     }
   }
 
@@ -932,7 +978,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
     appendStandardFaces(block, prepared, { opaque, cutout, transparent, emissive });
   }
 
-  const water = buildWaterSurfaceBucket(build, prepared);
+  const water = buildWaterSurfaceBucket(prepared);
 
   configureAtlasTexture(atlasTexture);
   const waterTexture = getWaterSurfaceTexture(atlasTexture);
@@ -1074,6 +1120,12 @@ async function createVoxelMeshPayloadInWorker(
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelMeshPayload> {
+  const cacheKey = opts?.cacheKey?.trim();
+  if (cacheKey) {
+    const cached = await getCachedMeshPayload(cacheKey);
+    if (cached) return cached;
+  }
+
   if (typeof Worker === "undefined") {
     throw new Error("Web Workers are unavailable in this environment");
   }
@@ -1095,6 +1147,9 @@ async function createVoxelMeshPayloadInWorker(
       settled = true;
       cleanup();
       worker.terminate();
+      if (cacheKey) {
+        void setCachedMeshPayload(cacheKey, payload);
+      }
       resolve(payload);
     };
     const finishReject = (err: unknown) => {
@@ -1188,7 +1243,7 @@ async function createVoxelGroupAsyncLocal(
     }
   }
 
-  const water = await buildWaterSurfaceBucketAsync(build, prepared, maybeYield);
+  const water = await buildWaterSurfaceBucketAsync(prepared, maybeYield);
 
   const geometryStageCount = 5;
   const geometryStageTotal = prepared.filteredBlockCount + geometryStageCount;
