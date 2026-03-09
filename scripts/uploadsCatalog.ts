@@ -4,7 +4,7 @@ import type { ModelKey } from "../lib/ai/modelCatalog";
 
 export const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 export const PROMPT_TEXT_FILENAME = "prompt.txt";
-const IGNORED_UPLOAD_DIRS = new Set(["tool-runs"]);
+const IGNORED_UPLOAD_DIRS = new Set(["tool-runs", "local"]);
 
 // All curated prompts with short slugs for filenames.
 // Add your custom prompts here to make them importable by scripts.
