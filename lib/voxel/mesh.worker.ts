@@ -1,6 +1,7 @@
 import { getRenderKind } from "@/lib/blocks/registry";
 import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
+import { canVoxelBlockEmitAnyFace, isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import type { SerializedBuildBounds, SerializedMeshBucket, VoxelMeshPayload } from "@/lib/voxel/mesh";
 
@@ -181,27 +182,6 @@ function unpackPlaneCellV(value: number): number {
   return value >> POSITION_BITS;
 }
 
-function isOccluder(blockType: string): boolean {
-  const kind = getRenderKind(blockType) ?? "opaque";
-  return kind === "opaque" || kind === "emissive";
-}
-
-function canBlockEmitAnyFace(
-  block: VoxelBuild["blocks"][number],
-  blocksByPos: Map<number, string>,
-): boolean {
-  for (const d of DIRS) {
-    const neighborType = blocksByPos.get(
-      encodePosition(block.x + d.dx, block.y + d.dy, block.z + d.dz),
-    );
-    if (!neighborType) return true;
-    if (neighborType === block.type) continue;
-    if (isOccluder(neighborType)) continue;
-    return true;
-  }
-  return false;
-}
-
 function srgbByteToLinear(byte: number): number {
   const s = Math.min(1, Math.max(0, byte / 255));
   return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
@@ -356,10 +336,11 @@ function prepareMeshData(
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
     if (b.type === WATER_BLOCK_ID) {
+      if (!canVoxelBlockEmitAnyFace(b, blocksByPos)) continue;
       waterBlocks.push(b);
       continue;
     }
-    if (!canBlockEmitAnyFace(b, blocksByPos)) continue;
+    if (!canVoxelBlockEmitAnyFace(b, blocksByPos)) continue;
     nonWaterBlocks.push(b);
     if ((i & (PROGRESS_EVERY - 1)) === 0) {
       postProgress(i, maxInputBlocks, "Filtering hidden blocks");
@@ -410,7 +391,7 @@ function appendStandardFaces(
     );
     if (neighborType) {
       if (neighborType === block.type) continue;
-      if (isOccluder(neighborType)) continue;
+      if (isVoxelOccluder(neighborType)) continue;
     }
 
     const texKey = getTextureKey(block.type, d.face);
@@ -598,7 +579,7 @@ function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
       );
       if (neighborType) {
         if (neighborType === WATER_BLOCK_ID) continue;
-        if (isOccluder(neighborType)) continue;
+        if (isVoxelOccluder(neighborType)) continue;
       }
 
       switch (d.face) {

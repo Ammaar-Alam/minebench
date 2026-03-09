@@ -47,7 +47,7 @@ const ARENA_STREAM_HELLO_PAD_BYTES = readIntEnv(
 
 const ARENA_STREAM_ARTIFACTS_ENABLED = readBoolEnv("ARENA_STREAM_ARTIFACTS_ENABLED", true);
 const ARENA_STREAM_ARTIFACT_PREFIX = normalizePrefix(
-  process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v1",
+  process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v2",
 );
 const ARENA_STREAM_ARTIFACT_BUCKET = (
   process.env.ARENA_STREAM_ARTIFACT_BUCKET ?? getBuildStorageBucketFromEnv()

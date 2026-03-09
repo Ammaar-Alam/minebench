@@ -424,13 +424,30 @@ function withHydratedBuild(
   build: ArenaMatchup["a"]["build"],
   serverValidated: boolean,
   hydratedVariant: ArenaBuildVariant,
+  hydratedRef?: ArenaBuildRef,
   hydratedHints?: ArenaMatchup["a"]["buildLoadHints"],
 ): ArenaMatchup {
   const lane = matchup[side];
   const baseHints = hydratedHints ?? lane.buildLoadHints;
+  const nextBuildId = hydratedRef?.buildId ?? lane.buildRef?.buildId ?? lane.previewRef?.buildId;
+  const nextChecksum = hydratedRef?.checksum ?? lane.buildRef?.checksum ?? lane.previewRef?.checksum ?? null;
   const updatedLane = {
     ...lane,
     build,
+    buildRef: lane.buildRef
+      ? {
+          ...lane.buildRef,
+          buildId: nextBuildId ?? lane.buildRef.buildId,
+          checksum: nextChecksum,
+        }
+      : lane.buildRef,
+    previewRef: lane.previewRef
+      ? {
+          ...lane.previewRef,
+          buildId: nextBuildId ?? lane.previewRef.buildId,
+          checksum: nextChecksum,
+        }
+      : lane.previewRef,
     serverValidated: lane.serverValidated || serverValidated,
     buildLoadHints: baseHints
       ? {
@@ -874,6 +891,7 @@ export function Arena() {
           cached.build,
           cached.serverValidated,
           cached.variant,
+          ref,
           cached.buildLoadHints,
         );
       }
@@ -908,6 +926,7 @@ export function Arena() {
             cached.build,
             cached.serverValidated,
             cached.variant,
+            ref,
             cached.buildLoadHints,
           ),
         };
@@ -980,6 +999,7 @@ export function Arena() {
             progressiveBuild,
             true,
             ref.variant,
+            ref,
           ),
         };
       });
@@ -1010,6 +1030,7 @@ export function Arena() {
             payload.voxelBuild,
             payload.serverValidated,
             payload.variant,
+            resolvedRef,
             payload.buildLoadHints,
           ),
         };

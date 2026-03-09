@@ -6,6 +6,7 @@ import {
   shouldPreferPreviewVariant,
 } from "@/lib/arena/buildDeliveryPolicy";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
+import { filterRenderableVoxelBuild } from "@/lib/voxel/renderVisibility";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { resolveBuildPayload } from "@/lib/storage/buildPayload";
 
@@ -263,25 +264,26 @@ function createPrepared(
   payloadEstimatedBytes: number | null,
   checksumOverride?: string | null,
 ): PreparedArenaBuild {
+  const renderBuild = filterRenderableVoxelBuild(fullBuild);
   const hintsFromMetadata = deriveArenaBuildLoadHints({
-    blockCount: fullBuild.blocks.length,
-    voxelByteSize: source.voxelByteSize,
-    voxelCompressedByteSize: source.voxelCompressedByteSize,
+    blockCount: renderBuild.blocks.length,
+    voxelByteSize: null,
+    voxelCompressedByteSize: null,
   });
   const fullEstimatedBytes = hintsFromMetadata.fullEstimatedBytes ?? payloadEstimatedBytes;
   const deliveryClass = classifyArenaBuildDelivery(fullEstimatedBytes);
   const preferPreview = shouldPreferPreview(fullEstimatedBytes);
   const preview = preferPreview
-    ? buildPreviewBuild(fullBuild, PREVIEW_TARGET_BLOCKS)
-    : { build: fullBuild, stride: 1 };
+    ? buildPreviewBuild(renderBuild, PREVIEW_TARGET_BLOCKS)
+    : { build: renderBuild, stride: 1 };
   const initialVariant: ArenaBuildVariant =
-    preferPreview && preview.build.blocks.length < fullBuild.blocks.length ? "preview" : "full";
-  const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(fullBuild);
+    preferPreview && preview.build.blocks.length < renderBuild.blocks.length ? "preview" : "full";
+  const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(renderBuild);
 
   return {
     buildId: source.id,
     checksum,
-    fullBuild,
+    fullBuild: renderBuild,
     previewBuild: preview.build,
     hints: {
       ...hintsFromMetadata,
