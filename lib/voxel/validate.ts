@@ -49,6 +49,15 @@ export type ValidatedVoxelBuild = {
   warnings: string[];
 };
 
+function normalizeParsedBuild(data: z.infer<typeof buildSchema>): VoxelBuild {
+  return {
+    version: "1.0",
+    boxes: data.boxes ?? [],
+    lines: data.lines ?? [],
+    blocks: data.blocks,
+  };
+}
+
 export function parseVoxelBuildSpec(
   input: unknown,
 ): { ok: true; value: VoxelBuild } | { ok: false; error: string } {
@@ -57,12 +66,7 @@ export function parseVoxelBuildSpec(
 
   return {
     ok: true,
-    value: {
-      version: "1.0",
-      boxes: parsed.data.boxes ?? [],
-      lines: parsed.data.lines ?? [],
-      blocks: parsed.data.blocks,
-    },
+    value: normalizeParsedBuild(parsed.data),
   };
 }
 
@@ -106,13 +110,10 @@ function clampInt(n: number, min: number, max: number): number {
   return n;
 }
 
-export function validateVoxelBuild(
-  input: unknown,
+export function validateVoxelBuildSpec(
+  build: VoxelBuild,
   opts: ValidateVoxelOptions,
 ): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
-  const parsed = buildSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.message };
-
   const allowed = new Set(opts.palette.map((b) => b.id));
   const warnings: string[] = [];
   let droppedNegative = 0;
@@ -156,8 +157,8 @@ export function validateVoxelBuild(
   };
 
   try {
-    const boxes = parsed.data.boxes ?? [];
-    const lines = parsed.data.lines ?? [];
+    const boxes = build.boxes ?? [];
+    const lines = build.lines ?? [];
 
     for (const box of boxes) {
       const xMin = Math.min(box.x1, box.x2);
@@ -223,7 +224,7 @@ export function validateVoxelBuild(
     }
 
     // Explicit blocks last so they can override primitives at the same coordinate.
-    const blocks = parsed.data.blocks;
+    const blocks = build.blocks;
     charge(blocks.length);
     for (const b of blocks) {
       const normalizedType = normalizeBlockType(b.type, allowed);
@@ -262,4 +263,13 @@ export function validateVoxelBuild(
   }
 
   return { ok: true, value: { build: { version: "1.0", blocks }, warnings } };
+}
+
+export function validateVoxelBuild(
+  input: unknown,
+  opts: ValidateVoxelOptions,
+): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+  const parsed = buildSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.message };
+  return validateVoxelBuildSpec(normalizeParsedBuild(parsed.data), opts);
 }

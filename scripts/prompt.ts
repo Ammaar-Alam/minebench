@@ -23,12 +23,14 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "node:crypto";
 import "dotenv/config";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { getModelByKey, MODEL_CATALOG, ModelKey } from "../lib/ai/modelCatalog";
 import { extractBestVoxelBuildJson } from "../lib/ai/jsonExtract";
 import { getPalette } from "../lib/blocks/palettes";
-import { parseVoxelBuildSpec, validateVoxelBuild } from "../lib/voxel/validate";
+import { parseVoxelBuildSpec, validateVoxelBuildSpec } from "../lib/voxel/validate";
 import { maxBlocksForGrid } from "../lib/ai/generateVoxelBuild";
+import { LOCAL_BUILD_STORAGE_BUCKET } from "../lib/storage/buildPayload";
 import {
   listUploadPromptSlugs,
   MODEL_KEY_BY_SLUG,
@@ -63,6 +65,60 @@ type Job = {
   modelSlug: string;
   filePath: string;
 };
+
+type BuildPersistence =
+  | {
+      kind: "inline";
+      voxelData: Prisma.InputJsonValue;
+      voxelStorageBucket: null;
+      voxelStoragePath: null;
+      voxelStorageEncoding: null;
+      voxelCompressedByteSize: null;
+    }
+  | {
+      kind: "external";
+      voxelData: typeof Prisma.DbNull;
+      voxelStorageBucket: string;
+      voxelStoragePath: string;
+      voxelStorageEncoding: null;
+      voxelCompressedByteSize: null;
+    };
+
+const LOCAL_BUILD_STORAGE_DIR = path.join(UPLOADS_DIR, ".build-storage");
+
+function readInlineByteLimit(): number {
+  const raw = (process.env.MINEBENCH_IMPORT_INLINE_MAX_BYTES ?? "").trim();
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+
+  return process.env.MINEBENCH_LOCAL_ENV === "1"
+    ? 64 * 1024 * 1024
+    : Number.MAX_SAFE_INTEGER;
+}
+
+const IMPORT_INLINE_MAX_BYTES = readInlineByteLimit();
+
+function matchesPersistence(
+  existing:
+    | {
+        voxelStorageBucket: string | null;
+        voxelStoragePath: string | null;
+      }
+    | null,
+  next: BuildPersistence,
+): boolean {
+  if (!existing) return false;
+  if (next.kind === "inline") {
+    return !existing.voxelStorageBucket && !existing.voxelStoragePath;
+  }
+
+  return (
+    existing.voxelStorageBucket === next.voxelStorageBucket &&
+    existing.voxelStoragePath === next.voxelStoragePath
+  );
+}
 
 function parseArgs(): Args {
   const argv = process.argv.slice(2);
@@ -113,6 +169,36 @@ function isEmptyPlaceholder(filePath: string): boolean {
   if (!fs.existsSync(filePath)) return true;
   const content = fs.readFileSync(filePath, "utf-8").trim();
   return content === "{}" || content === "";
+}
+
+function persistBuildSpec(spec: Prisma.InputJsonValue, specJson: string, sha256: string): BuildPersistence {
+  const byteSize = Buffer.byteLength(specJson);
+  if (byteSize <= IMPORT_INLINE_MAX_BYTES) {
+    return {
+      kind: "inline",
+      voxelData: spec,
+      voxelStorageBucket: null,
+      voxelStoragePath: null,
+      voxelStorageEncoding: null,
+      voxelCompressedByteSize: null,
+    };
+  }
+
+  ensureDir(LOCAL_BUILD_STORAGE_DIR);
+  const relativePath = path.posix.join("uploads", ".build-storage", `${sha256}.json`);
+  const absolutePath = path.join(process.cwd(), ...relativePath.split("/"));
+  if (!fs.existsSync(absolutePath)) {
+    fs.writeFileSync(absolutePath, specJson);
+  }
+
+  return {
+    kind: "external",
+    voxelData: Prisma.DbNull,
+    voxelStorageBucket: LOCAL_BUILD_STORAGE_BUCKET,
+    voxelStoragePath: relativePath,
+    voxelStorageEncoding: null,
+    voxelCompressedByteSize: null,
+  };
 }
 
 const MODEL_SLUGS_DESC = Object.values(MODEL_SLUG).sort((a, b) => b.length - a.length);
@@ -471,6 +557,44 @@ async function main() {
       }));
     promptCache.set(promptText, prompt);
 
+    const existingBuildsForPrompt = args.dryRun
+      ? new Map<
+          string,
+          {
+            id: string;
+            voxelSha256: string | null;
+            voxelStorageBucket: string | null;
+            voxelStoragePath: string | null;
+          }
+        >()
+      : new Map(
+          (
+            await prisma.build.findMany({
+              where: {
+                promptId: prompt.id,
+                gridSize,
+                palette: args.palette,
+                mode: args.mode,
+              },
+              select: {
+                id: true,
+                modelId: true,
+                voxelSha256: true,
+                voxelStorageBucket: true,
+                voxelStoragePath: true,
+              },
+            })
+          ).map((build) => [
+            build.modelId,
+            {
+              id: build.id,
+              voxelSha256: build.voxelSha256,
+              voxelStorageBucket: build.voxelStorageBucket,
+              voxelStoragePath: build.voxelStoragePath,
+            },
+          ]),
+        );
+
     const promptJobs = jobs.filter((j) => j.promptSlug === promptSlug);
     for (const job of promptJobs) {
       const modelEntry = getModelByKey(job.modelKey);
@@ -519,7 +643,14 @@ async function main() {
         continue;
       }
 
-      const validated = validateVoxelBuild(json, {
+      const spec = parseVoxelBuildSpec(json);
+      if (!spec.ok) {
+        failed += 1;
+        console.error(`❌ ${job.promptSlug} × ${job.modelSlug}: ${spec.error}`);
+        continue;
+      }
+
+      const validated = validateVoxelBuildSpec(spec.value, {
         gridSize,
         palette: paletteDefs,
         maxBlocks,
@@ -530,30 +661,20 @@ async function main() {
         continue;
       }
 
-      const spec = parseVoxelBuildSpec(json);
-      if (!spec.ok) {
-        failed += 1;
-        console.error(`❌ ${job.promptSlug} × ${job.modelSlug}: ${spec.error}`);
-        continue;
-      }
-
       const blockCount = validated.value.build.blocks.length;
       const specJson = JSON.stringify(spec.value);
       const voxelByteSize = Buffer.byteLength(specJson);
       const voxelSha256 = createHash("sha256").update(specJson).digest("hex");
+      const persistence = persistBuildSpec(spec.value as Prisma.InputJsonValue, specJson, voxelSha256);
 
-      const existing = await prisma.build.findFirst({
-        where: {
-          promptId: prompt.id,
-          modelId: model.id,
-          gridSize,
-          palette: args.palette,
-          mode: args.mode,
-        },
-        select: { id: true },
-      });
+      const existing = existingBuildsForPrompt.get(model.id) ?? null;
 
       if (existing && !args.overwrite) {
+        skipped += 1;
+        continue;
+      }
+
+      if (existing?.voxelSha256?.trim() === voxelSha256 && matchesPersistence(existing, persistence)) {
         skipped += 1;
         continue;
       }
@@ -562,36 +683,49 @@ async function main() {
         await prisma.build.update({
           where: { id: existing.id },
           data: {
-            voxelData: spec.value,
-            voxelStorageBucket: null,
-            voxelStoragePath: null,
-            voxelStorageEncoding: null,
-            voxelCompressedByteSize: null,
+            voxelData: persistence.voxelData,
+            voxelStorageBucket: persistence.voxelStorageBucket,
+            voxelStoragePath: persistence.voxelStoragePath,
+            voxelStorageEncoding: persistence.voxelStorageEncoding,
+            voxelCompressedByteSize: persistence.voxelCompressedByteSize,
             voxelByteSize,
             voxelSha256,
             blockCount,
             generationTimeMs: 0,
           },
         });
+        existingBuildsForPrompt.set(model.id, {
+          id: existing.id,
+          voxelSha256,
+          voxelStorageBucket: persistence.voxelStorageBucket,
+          voxelStoragePath: persistence.voxelStoragePath,
+        });
         updated += 1;
       } else {
-        await prisma.build.create({
+        const createdBuild = await prisma.build.create({
           data: {
             promptId: prompt.id,
             modelId: model.id,
             gridSize,
             palette: args.palette,
             mode: args.mode,
-            voxelData: spec.value,
-            voxelStorageBucket: null,
-            voxelStoragePath: null,
-            voxelStorageEncoding: null,
-            voxelCompressedByteSize: null,
+            voxelData: persistence.voxelData,
+            voxelStorageBucket: persistence.voxelStorageBucket,
+            voxelStoragePath: persistence.voxelStoragePath,
+            voxelStorageEncoding: persistence.voxelStorageEncoding,
+            voxelCompressedByteSize: persistence.voxelCompressedByteSize,
             voxelByteSize,
             voxelSha256,
             blockCount,
             generationTimeMs: 0,
           },
+          select: { id: true },
+        });
+        existingBuildsForPrompt.set(model.id, {
+          id: createdBuild.id,
+          voxelSha256,
+          voxelStorageBucket: persistence.voxelStorageBucket,
+          voxelStoragePath: persistence.voxelStoragePath,
         });
         created += 1;
       }

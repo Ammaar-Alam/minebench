@@ -1,8 +1,11 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 export const DEFAULT_BUILD_STORAGE_BUCKET = "builds";
+export const LOCAL_BUILD_STORAGE_BUCKET = "__local_fs__";
 
 export type BuildStorageRef = {
   bucket: string;
@@ -38,6 +41,22 @@ function encodePath(path: string): string {
     .join("/");
 }
 
+function resolveLocalStorageAbsolutePath(rawPath: string): string {
+  const normalizedPath = normalizeBuildStoragePath(rawPath);
+  if (!normalizedPath) {
+    throw new Error("Local storage path is required");
+  }
+
+  const repoRoot = path.resolve(process.cwd());
+  const absolutePath = path.resolve(repoRoot, normalizedPath);
+  const repoPrefix = `${repoRoot}${path.sep}`;
+  if (absolutePath !== repoRoot && !absolutePath.startsWith(repoPrefix)) {
+    throw new Error("Local storage path escapes repository root");
+  }
+
+  return absolutePath;
+}
+
 function hasGzipMagic(bytes: Uint8Array): boolean {
   return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
 }
@@ -71,6 +90,11 @@ export function normalizeBuildStoragePath(rawPath: string): string {
 }
 
 export async function fetchStoredBuildBytes(ref: BuildStorageRef): Promise<Uint8Array> {
+  if ((ref.bucket ?? "").trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    const absolutePath = resolveLocalStorageAbsolutePath(ref.path);
+    return new Uint8Array(await readFile(absolutePath));
+  }
+
   const config = getSupabaseStorageConfig();
   const normalizedPath = normalizeBuildStoragePath(ref.path);
   const bucket = ref.bucket.trim();

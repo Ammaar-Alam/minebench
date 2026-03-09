@@ -28,10 +28,13 @@ type BuildRow = {
   voxelByteSize: number | null;
   voxelCompressedByteSize: number | null;
   voxelSha256: string | null;
-  voxelData: unknown | null;
   voxelStorageBucket: string | null;
   voxelStoragePath: string | null;
   voxelStorageEncoding: string | null;
+};
+
+type BuildPayloadRow = BuildRow & {
+  voxelData: unknown | null;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -94,6 +97,41 @@ function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
   return out;
 }
 
+async function loadBuildPayloadRow(
+  prisma: PrismaClient,
+  row: BuildRow,
+): Promise<BuildPayloadRow> {
+  if (row.voxelStorageBucket && row.voxelStoragePath) {
+    return {
+      ...row,
+      voxelData: null,
+    };
+  }
+
+  const payloadRow = await prisma.build.findUnique({
+    where: { id: row.id },
+    select: {
+      id: true,
+      gridSize: true,
+      palette: true,
+      blockCount: true,
+      voxelByteSize: true,
+      voxelCompressedByteSize: true,
+      voxelSha256: true,
+      voxelData: true,
+      voxelStorageBucket: true,
+      voxelStoragePath: true,
+      voxelStorageEncoding: true,
+    },
+  });
+
+  if (!payloadRow) {
+    throw new Error(`Build ${row.id} not found`);
+  }
+
+  return payloadRow;
+}
+
 async function main() {
   const opts = parseArgs(process.argv);
   const prisma = new PrismaClient();
@@ -132,7 +170,6 @@ async function main() {
         voxelByteSize: true,
         voxelCompressedByteSize: true,
         voxelSha256: true,
-        voxelData: true,
         voxelStorageBucket: true,
         voxelStoragePath: true,
         voxelStorageEncoding: true,
@@ -159,13 +196,18 @@ async function main() {
           voxelCompressedByteSize: row.voxelCompressedByteSize,
         });
         let prepared: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
+        let payloadRow: BuildPayloadRow | null = null;
         let effectiveBytes = estimatedBytes;
         if (effectiveBytes == null) {
-          prepared = await prepareArenaBuild(row);
+          payloadRow = await loadBuildPayloadRow(prisma, row);
+          prepared = await prepareArenaBuild(payloadRow);
           effectiveBytes = prepared.hints.fullEstimatedBytes;
         }
-        if (effectiveBytes == null && row.voxelData != null) {
-          effectiveBytes = Buffer.byteLength(JSON.stringify(row.voxelData));
+        if (effectiveBytes == null) {
+          payloadRow = payloadRow ?? (await loadBuildPayloadRow(prisma, row));
+          if (payloadRow.voxelData != null) {
+            effectiveBytes = Buffer.byteLength(JSON.stringify(payloadRow.voxelData));
+          }
         }
         if (effectiveBytes == null) {
           skippedUnknown += 1;
@@ -182,7 +224,8 @@ async function main() {
         }
 
         if (!prepared) {
-          prepared = await prepareArenaBuild(row);
+          payloadRow = payloadRow ?? (await loadBuildPayloadRow(prisma, row));
+          prepared = await prepareArenaBuild(payloadRow);
         }
         if (!prepared.checksum) {
           skippedChecksum += 1;

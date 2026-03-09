@@ -44,7 +44,6 @@ type BuildMeta = {
   promptText: string;
   modelKey: string;
   modelDisplayName: string;
-  voxelData: unknown | null;
   voxelStorageBucket: string | null;
   voxelStoragePath: string | null;
   voxelStorageEncoding: string | null;
@@ -268,6 +267,38 @@ function groupByPromptText(metas: BuildMeta[]): Array<{ promptText: string; buil
   return Array.from(grouped.values()).sort((a, b) => a.promptText.localeCompare(b.promptText));
 }
 
+async function loadPayloadSource(prisma: PrismaClient, meta: BuildMeta) {
+  if (meta.voxelStorageBucket && meta.voxelStoragePath) {
+    return {
+      voxelData: null,
+      voxelStorageBucket: meta.voxelStorageBucket,
+      voxelStoragePath: meta.voxelStoragePath,
+      voxelStorageEncoding: meta.voxelStorageEncoding,
+    };
+  }
+
+  const row = await prisma.build.findUnique({
+    where: { id: meta.id },
+    select: {
+      voxelData: true,
+      voxelStorageBucket: true,
+      voxelStoragePath: true,
+      voxelStorageEncoding: true,
+    },
+  });
+
+  if (!row) {
+    throw new Error(`Build ${meta.id} not found`);
+  }
+
+  return {
+    voxelData: row.voxelData,
+    voxelStorageBucket: row.voxelStorageBucket,
+    voxelStoragePath: row.voxelStoragePath,
+    voxelStorageEncoding: row.voxelStorageEncoding,
+  };
+}
+
 async function main() {
   const args = parseArgs();
   if (args.help) {
@@ -316,7 +347,6 @@ async function main() {
         id: true,
         prompt: { select: { text: true } },
         model: { select: { key: true, displayName: true } },
-        voxelData: true,
         voxelStorageBucket: true,
         voxelStoragePath: true,
         voxelStorageEncoding: true,
@@ -329,7 +359,6 @@ async function main() {
         promptText: row.prompt.text,
         modelKey: row.model.key,
         modelDisplayName: row.model.displayName,
-        voxelData: row.voxelData,
         voxelStorageBucket: row.voxelStorageBucket,
         voxelStoragePath: row.voxelStoragePath,
         voxelStorageEncoding: row.voxelStorageEncoding,
@@ -429,14 +458,8 @@ async function main() {
       const promptErrors: string[] = [];
 
       for (const { meta, modelSlug } of selectedModels) {
-        const payloadSource = {
-          voxelData: meta.voxelData,
-          voxelStorageBucket: meta.voxelStorageBucket,
-          voxelStoragePath: meta.voxelStoragePath,
-          voxelStorageEncoding: meta.voxelStorageEncoding,
-        };
-
         try {
+          const payloadSource = await loadPayloadSource(prisma, meta);
           const payload = await resolveBuildPayload(payloadSource);
           const parsed = parseVoxelBuildSpec(payload);
           if (!parsed.ok) {
