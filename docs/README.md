@@ -2,6 +2,12 @@
 
 Use this index to find implementation-accurate docs for Arena ranking, generation tooling, and import workflows.
 
+## Guides
+
+- [Local Development](./local-development.md)
+- [Operations and API Reference](./operations.md)
+- [Deployment](./deployment.md)
+
 ## Core
 
 - [Arena Ranking System (Math + Matchmaking)](./arena-ranking-system.md)
