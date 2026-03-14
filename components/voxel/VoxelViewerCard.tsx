@@ -164,7 +164,7 @@ export function VoxelViewerCard({
 
   const viewerHeightClass =
     viewerSize === "arena"
-      ? "relative w-full h-[38vh] min-h-[220px] max-h-[300px] sm:h-[44vh] sm:min-h-[260px] sm:max-h-[360px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
+      ? "relative h-[42svh] min-h-[250px] max-h-[360px] w-full sm:h-[44vh] sm:min-h-[260px] sm:max-h-[360px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
       : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
   const loadingLabel =
     loadingMessage?.trim() ||
@@ -230,61 +230,68 @@ export function VoxelViewerCard({
   return (
     <div className="mb-panel">
       <div className="mb-panel-inner">
-        <div className="flex items-center justify-between gap-2 border-b border-border bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
-          <div className="min-w-0 flex items-center gap-2.5">
-            <div className="font-display text-[1.05rem] font-semibold tracking-tight text-fg sm:text-base">
-              {title}
-            </div>
-            {subtitle ? (
-              <div className="min-h-[1.1rem] text-[12px] sm:text-[13px]">{subtitle}</div>
-            ) : null}
-          </div>
-          <div className="shrink-0 flex items-center gap-1.5 sm:gap-2">
-            {showViewToggle ? (
-              <div className="relative flex w-[182px] rounded-full bg-bg/55 p-1 ring-1 ring-border/80 sm:w-[210px]">
-                <div className="pointer-events-none absolute inset-1 rounded-full">
-                  <span
-                    aria-hidden="true"
-                    className="absolute inset-y-0 left-0 rounded-full border border-accent/55 bg-accent/24 shadow-[0_8px_20px_-14px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-out"
-                    style={{
-                      width: "50%",
-                      transform: activeView === "json" ? "translateX(100%)" : "translateX(0%)",
-                    }}
-                  />
+        <div className="border-b border-border bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
+          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+            <div className="min-w-0">
+              <div className="flex min-w-0 items-center gap-2">
+                <div className="font-display text-base font-semibold tracking-tight text-fg">
+                  {title}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setPreferredView("build")}
-                  className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
-                    activeView === "build" ? "text-fg" : "text-muted hover:text-fg"
-                  }`}
-                >
-                  Build
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPreferredView("json")}
-                  className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
-                    activeView === "json" ? "text-fg" : "text-muted hover:text-fg"
-                  }`}
-                >
-                  JSON
-                </button>
+                {subtitle ? (
+                  <div className="min-h-[1.1rem] text-[12px] sm:text-[13px]">{subtitle}</div>
+                ) : null}
               </div>
-            ) : null}
-            {actions ? <div className="flex items-center">{actions}</div> : null}
-            <div className="text-right text-[11px] text-muted sm:text-xs">
               {build ? (
-                <>
-                  <div className="flex flex-col items-end gap-0.5 sm:hidden">
-                    <span className="font-mono">{blockCount} blocks</span>
-                    {warnings.length ? (
-                      <span className="font-mono">
-                        {warnings.length} warning{warnings.length === 1 ? "" : "s"}
-                      </span>
-                    ) : null}
+                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted sm:hidden">
+                  <span className="font-mono">
+                    {blockCount.toLocaleString()} blocks
+                  </span>
+                  {timing ? (
+                    <span className="font-mono text-muted2">
+                      {timing}
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex items-center justify-between gap-2 sm:shrink-0 sm:justify-end sm:gap-2">
+              {showViewToggle ? (
+                <div className="relative flex w-[182px] rounded-full bg-bg/55 p-1 ring-1 ring-border/80 sm:w-[210px]">
+                  <div className="pointer-events-none absolute inset-1 rounded-full">
+                    <span
+                      aria-hidden="true"
+                      className="absolute inset-y-0 left-0 rounded-full border border-accent/55 bg-accent/24 shadow-[0_8px_20px_-14px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-out"
+                      style={{
+                        width: "50%",
+                        transform: activeView === "json" ? "translateX(100%)" : "translateX(0%)",
+                      }}
+                    />
                   </div>
-                  <div className="hidden items-center gap-2 font-mono sm:flex">
+                  <button
+                    type="button"
+                    onClick={() => setPreferredView("build")}
+                    className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+                      activeView === "build" ? "text-fg" : "text-muted hover:text-fg"
+                    }`}
+                  >
+                    Build
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreferredView("json")}
+                    className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+                      activeView === "json" ? "text-fg" : "text-muted hover:text-fg"
+                    }`}
+                  >
+                    JSON
+                  </button>
+                </div>
+              ) : null}
+              {actions ? <div className="flex items-center">{actions}</div> : null}
+              <div className="hidden text-right text-[11px] text-muted sm:block sm:text-xs">
+                {build ? (
+                  <div className="items-center gap-2 font-mono sm:flex">
                     <span>{blockCount} blocks</span>
                     {timing ? <span>• {timing}</span> : null}
                     {warnings.length ? (
@@ -293,8 +300,8 @@ export function VoxelViewerCard({
                       </span>
                     ) : null}
                   </div>
-                </>
-              ) : null}
+                ) : null}
+              </div>
             </div>
           </div>
         </div>
@@ -338,9 +345,12 @@ export function VoxelViewerCard({
           ) : null}
 
           {showBuildView && build ? (
-            <div className="pointer-events-none absolute bottom-3 left-3 hidden gap-2 sm:flex">
-              <span className="mb-badge">
-                Drag to rotate • <span className="mb-kbd">Ctrl</span>+drag to pan • Scroll to zoom
+            <div className="pointer-events-none absolute bottom-[3.5rem] left-2.5 flex gap-2 sm:bottom-3 sm:left-3">
+              <span className="mb-badge px-2 py-0.5 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs">
+                <span className="sm:hidden">Drag to spin • Pinch to zoom</span>
+                <span className="hidden sm:inline">
+                  Drag to rotate • <span className="mb-kbd">Ctrl</span>+drag to pan • Scroll to zoom
+                </span>
               </span>
             </div>
           ) : null}

@@ -593,10 +593,6 @@ const BUILD_STUCK_AUTOSKIP_MS = Number.parseInt(
   10,
 );
 
-function clamp01(n: number) {
-  return Math.max(0, Math.min(1, n));
-}
-
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -618,16 +614,13 @@ export function Arena() {
   const [customPrompt, setCustomPrompt] = useState("");
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
   const [transitioning, setTransitioning] = useState(false);
-  const [carouselScrollLeft, setCarouselScrollLeft] = useState(0);
-  const [carouselScrollMax, setCarouselScrollMax] = useState(0);
-  const [carouselThumbRatio, setCarouselThumbRatio] = useState(0.25);
+  const [mobileBuildView, setMobileBuildView] = useState<"a" | "b">("a");
+  const [isCoarsePointer, setIsCoarsePointer] = useState(false);
   const [, forceTick] = useState(0);
   const stateRef = useRef<ArenaState>({ kind: "loading" });
   const submittingRef = useRef(false);
   const transitioningStateRef = useRef(false);
   const cardsScrollRef = useRef<HTMLDivElement | null>(null);
-  const carouselTrackRef = useRef<HTMLDivElement | null>(null);
-  const carouselDragRef = useRef<{ pointerId: number; startX: number; startScrollLeft: number } | null>(null);
   const revealRef = useRef<RevealState>({ kind: "none" });
   const transitionRef = useRef(false);
   const hydrateInFlightRef = useRef(new Set<string>());
@@ -736,6 +729,7 @@ export function Arena() {
     const el = cardsScrollRef.current;
     if (!el) return;
     // New matchup should always start at Build A on mobile.
+    setMobileBuildView("a");
     el.scrollTo({ left: 0, behavior: "auto" });
   }, [matchup?.id]);
 
@@ -773,6 +767,14 @@ export function Arena() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [promptDialogOpen]);
 
+  useEffect(() => {
+    const media = window.matchMedia("(pointer: coarse)");
+    const sync = () => setIsCoarsePointer(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
   function clearAutoAdvance() {
     if (autoAdvanceTimeoutRef.current != null) {
       window.clearTimeout(autoAdvanceTimeoutRef.current);
@@ -793,10 +795,11 @@ export function Arena() {
 
     const sync = () => {
       const max = Math.max(0, el.scrollWidth - el.clientWidth);
-      const ratio = el.scrollWidth > 0 ? el.clientWidth / el.scrollWidth : 1;
-      setCarouselScrollMax(max);
-      setCarouselScrollLeft(Math.min(el.scrollLeft, max));
-      setCarouselThumbRatio(Math.max(0.18, Math.min(0.8, ratio)));
+      if (max <= 0) {
+        setMobileBuildView("a");
+        return;
+      }
+      setMobileBuildView(el.scrollLeft >= max / 2 ? "b" : "a");
     };
 
     sync();
@@ -811,6 +814,15 @@ export function Arena() {
       window.removeEventListener("resize", sync);
     };
   }, [matchup?.id]);
+
+  const scrollToMobileBuild = useCallback((side: "a" | "b", behavior: ScrollBehavior = "smooth") => {
+    const el = cardsScrollRef.current;
+    if (!el) return;
+    const max = Math.max(0, el.scrollWidth - el.clientWidth);
+    const left = side === "a" ? 0 : max;
+    setMobileBuildView(side);
+    el.scrollTo({ left, behavior });
+  }, []);
 
   function sleepMs(ms: number) {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -1512,17 +1524,14 @@ export function Arena() {
           laneProgressB,
         )
     : undefined;
-  const carouselThumbLeftRatio =
-    carouselScrollMax > 0
-      ? clamp01((carouselScrollLeft / carouselScrollMax) * (1 - carouselThumbRatio))
-      : 0;
+  const buildSwitchDisabled = state.kind !== "ready" || transitioning;
 
   return (
-    <div className="flex flex-col gap-4 md:gap-5">
-      <div className="mb-panel p-3 sm:p-4 md:p-3">
-        <div className="mb-panel-inner flex flex-col gap-3 md:gap-2.5">
+    <div className="flex flex-col gap-3 md:gap-5">
+      <div className="mb-panel p-2.5 sm:p-4 md:p-3">
+        <div className="mb-panel-inner flex flex-col gap-2 md:gap-2.5">
           {/* prompt */}
-          <div className="mb-subpanel relative overflow-hidden px-3 py-2.5 sm:px-4 sm:py-3 md:py-2.5">
+          <div className="mb-subpanel relative overflow-hidden px-3 py-2 sm:px-4 sm:py-3 md:py-2.5">
             <div
               aria-hidden="true"
               className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-r from-accent/[0.08] via-transparent to-accent2/[0.08]"
@@ -1597,14 +1606,21 @@ export function Arena() {
             </div>
           ) : null}
 
-	          {/* builds grid */}
-	          <div
-	            ref={cardsScrollRef}
-	            className={`mb-x-scroll -mx-1 flex w-[calc(100%+0.5rem)] snap-x snap-proximity gap-2.5 overflow-x-auto px-1 pb-2 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
-	          >
+          {/* builds grid */}
+          <div
+            ref={cardsScrollRef}
+            className={`mb-x-scroll -mx-0.5 flex w-[calc(100%+0.25rem)] snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 scroll-smooth transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+          >
             <div
-              className={`mb-card-enter min-w-[91%] shrink-0 snap-center rounded-3xl transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
+              className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "ring-1 ring-accent/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
             >
+              {/* swipe hint – only on mobile, points toward Build B */}
+              <div className="pointer-events-none absolute right-2.5 top-2.5 z-10 flex items-center gap-1 md:hidden" aria-hidden="true">
+                <span className="text-[9px] uppercase tracking-widest text-muted2/40">swipe</span>
+                <span className="mb-swipe-arrow-right inline-block text-muted2/50">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 4l4 4-4 4"/></svg>
+                </span>
+              </div>
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:a` : "arena-build-a"}
                 title="Build A"
@@ -1622,9 +1638,6 @@ export function Arena() {
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
                   if (!id) return;
-                  // VoxelViewer may signal readiness before `viewerReady` is initialized for a new matchup
-                  // (or after a transition). Guard against stale callbacks from older matchups by checking
-                  // the latest state ref, then allow the update to create/refresh the viewerReady entry.
                   const current = stateRef.current;
                   if (current.kind !== "ready" || current.matchup.id !== id) return;
                   setViewerReady((prev) => {
@@ -1639,14 +1652,21 @@ export function Arena() {
                 loadingMode={buildALoadingMode}
                 loadingMessage={buildALoadingMessage}
                 loadingProgress={laneProgressA ?? undefined}
-                autoRotate
+                autoRotate={!isCoarsePointer || mobileBuildView === "a"}
                 viewerSize="arena"
                 actions={null}
               />
             </div>
             <div
-              className={`mb-card-enter mb-card-enter-delay min-w-[91%] shrink-0 snap-center rounded-3xl transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
+              className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "ring-1 ring-accent2/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
             >
+              {/* swipe hint – only on mobile, points back toward Build A */}
+              <div className="pointer-events-none absolute right-2.5 top-2.5 z-10 flex items-center gap-1 md:hidden" aria-hidden="true">
+                <span className="mb-swipe-arrow-left inline-block text-muted2/50">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 4l-4 4 4 4"/></svg>
+                </span>
+                <span className="text-[9px] uppercase tracking-widest text-muted2/40">swipe</span>
+              </div>
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:b` : "arena-build-b"}
                 title="Build B"
@@ -1678,100 +1698,45 @@ export function Arena() {
                 loadingMode={buildBLoadingMode}
                 loadingMessage={buildBLoadingMessage}
                 loadingProgress={laneProgressB ?? undefined}
-                autoRotate
+                autoRotate={!isCoarsePointer || mobileBuildView === "b"}
                 viewerSize="arena"
                 actions={null}
               />
             </div>
           </div>
 
-          {carouselScrollMax > 0 ? (
-            <div className="px-1 md:hidden">
-              <div
-                ref={carouselTrackRef}
-                role="slider"
-                aria-label="Scroll between Build A and Build B"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={carouselScrollMax > 0 ? Math.round((carouselScrollLeft / carouselScrollMax) * 100) : 0}
-                tabIndex={0}
-                className="mb-carousel-track"
-                onPointerDown={(e) => {
-                  const el = cardsScrollRef.current;
-                  const track = carouselTrackRef.current;
-                  if (!el || !track || carouselScrollMax <= 0) return;
-                  const rect = track.getBoundingClientRect();
-                  const thumbWidth = rect.width * carouselThumbRatio;
-                  const travel = Math.max(1, rect.width - thumbWidth);
-                  const pointerOffset = e.clientX - rect.left;
-                  const initialThumbLeft = clamp01((pointerOffset - thumbWidth / 2) / travel);
-                  el.scrollTo({ left: initialThumbLeft * carouselScrollMax, behavior: "auto" });
-                  carouselDragRef.current = {
-                    pointerId: e.pointerId,
-                    startX: e.clientX,
-                    startScrollLeft: el.scrollLeft,
-                  };
-                  track.setPointerCapture(e.pointerId);
-                }}
-                onPointerMove={(e) => {
-                  const drag = carouselDragRef.current;
-                  const el = cardsScrollRef.current;
-                  const track = carouselTrackRef.current;
-                  if (!drag || drag.pointerId !== e.pointerId || !el || !track || carouselScrollMax <= 0) return;
-                  const rect = track.getBoundingClientRect();
-                  const thumbWidth = rect.width * carouselThumbRatio;
-                  const travel = Math.max(1, rect.width - thumbWidth);
-                  const delta = e.clientX - drag.startX;
-                  const scrollDelta = (delta / travel) * carouselScrollMax;
-                  el.scrollTo({
-                    left: Math.max(0, Math.min(carouselScrollMax, drag.startScrollLeft + scrollDelta)),
-                    behavior: "auto",
-                  });
-                }}
-                onPointerUp={(e) => {
-                  const track = carouselTrackRef.current;
-                  if (carouselDragRef.current?.pointerId === e.pointerId) {
-                    carouselDragRef.current = null;
-                  }
-                  if (track?.hasPointerCapture(e.pointerId)) {
-                    track.releasePointerCapture(e.pointerId);
-                  }
-                }}
-                onPointerCancel={(e) => {
-                  const track = carouselTrackRef.current;
-                  if (carouselDragRef.current?.pointerId === e.pointerId) {
-                    carouselDragRef.current = null;
-                  }
-                  if (track?.hasPointerCapture(e.pointerId)) {
-                    track.releasePointerCapture(e.pointerId);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  const el = cardsScrollRef.current;
-                  if (!el || carouselScrollMax <= 0) return;
-                  if (e.key === "ArrowRight") {
-                    e.preventDefault();
-                    el.scrollTo({ left: Math.min(carouselScrollMax, el.scrollLeft + el.clientWidth * 0.3), behavior: "smooth" });
-                  }
-                  if (e.key === "ArrowLeft") {
-                    e.preventDefault();
-                    el.scrollTo({ left: Math.max(0, el.scrollLeft - el.clientWidth * 0.3), behavior: "smooth" });
-                  }
-                }}
+          {/* segmented build switcher – mobile only */}
+          <div className="md:hidden">
+            <div className="relative flex rounded-xl bg-bg/40 p-0.5 ring-1 ring-border/50">
+              {/* sliding indicator */}
+              <span
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[10px] bg-card/70 ring-1 ring-border/40 transition-transform duration-200 ease-out"
+                style={{ transform: mobileBuildView === "b" ? "translateX(calc(100% + 4px))" : "translateX(0)" }}
+              />
+              <button
+                type="button"
+                aria-pressed={mobileBuildView === "a"}
+                className={`relative z-10 flex-1 rounded-[10px] py-1.5 text-center font-mono text-[11px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "a" ? "text-fg" : "text-muted2 hover:text-fg"}`}
+                disabled={buildSwitchDisabled}
+                onClick={() => scrollToMobileBuild("a")}
               >
-                <div
-                  className="mb-carousel-thumb"
-                  style={{
-                    width: `${(carouselThumbRatio * 100).toFixed(2)}%`,
-                    left: `${(carouselThumbLeftRatio * 100).toFixed(2)}%`,
-                  }}
-                />
-              </div>
+                Build A
+              </button>
+              <button
+                type="button"
+                aria-pressed={mobileBuildView === "b"}
+                className={`relative z-10 flex-1 rounded-[10px] py-1.5 text-center font-mono text-[11px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "b" ? "text-fg" : "text-muted2 hover:text-fg"}`}
+                disabled={buildSwitchDisabled}
+                onClick={() => scrollToMobileBuild("b")}
+              >
+                Build B
+              </button>
             </div>
-          ) : null}
+          </div>
 
           {/* action bar (vote buttons ↔ reveal status) */}
-          <div className="relative h-[8.4rem] sm:h-[7.5rem]">
+          <div className="relative h-[7rem] sm:h-[7.5rem]">
             <div className="relative h-full">
               <div className="relative h-full">
                 <div

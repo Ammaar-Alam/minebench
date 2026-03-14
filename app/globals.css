@@ -153,6 +153,16 @@
     color: hsl(var(--fg));
   }
 
+  @keyframes mb-swipe-nudge-right {
+    0%, 100% { transform: translateX(0); opacity: 0.5; }
+    50% { transform: translateX(3px); opacity: 0.9; }
+  }
+
+  @keyframes mb-swipe-nudge-left {
+    0%, 100% { transform: translateX(0); opacity: 0.5; }
+    50% { transform: translateX(-3px); opacity: 0.9; }
+  }
+
   @keyframes mb-fade-in-up {
     0% {
       opacity: 0;
@@ -271,7 +281,7 @@
 
 @layer components {
   .mb-panel {
-    @apply relative overflow-hidden rounded-3xl bg-card/80 shadow-soft backdrop-blur-xl ring-1 ring-border;
+    @apply relative overflow-hidden rounded-2xl bg-card/80 shadow-soft backdrop-blur-xl ring-1 ring-border sm:rounded-3xl;
   }
 
   .mb-panel::before {
@@ -817,7 +827,7 @@
   }
 
   .mb-subpanel {
-    @apply rounded-2xl bg-bg/60 ring-1 ring-border/70;
+    @apply rounded-xl bg-bg/60 ring-1 ring-border/70 sm:rounded-2xl;
   }
 
   .mb-badge {
@@ -967,6 +977,8 @@
   .mb-x-scroll {
     -ms-overflow-style: none;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    scroll-padding-inline: 0.25rem;
   }
 
   .mb-x-scroll::-webkit-scrollbar {
@@ -1016,6 +1028,89 @@
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.28);
   }
 
+  .mb-mobile-stage-switcher {
+    display: grid;
+    gap: 0.42rem;
+  }
+
+  .mb-mobile-stage-toggle {
+    @apply rounded-[1rem] p-1 ring-1 ring-border/55;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.18rem;
+    background:
+      linear-gradient(180deg, hsl(var(--bg) / 0.54), hsl(var(--bg) / 0.42)),
+      radial-gradient(circle at top, hsl(var(--fg) / 0.02), transparent 56%);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.03);
+  }
+
+  .mb-mobile-stage-tab {
+    @apply rounded-[0.82rem] px-3 py-2.5 text-center ring-1 ring-transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background:
+      linear-gradient(180deg, hsl(var(--bg) / 0.28), hsl(var(--bg) / 0.18)),
+      radial-gradient(circle at top, hsl(var(--fg) / 0.02), transparent 60%);
+    transition:
+      transform 180ms ease,
+      border-color 180ms ease,
+      background-color 180ms ease,
+      color 180ms ease;
+  }
+
+  .mb-mobile-stage-tab:active {
+    transform: translateY(1px);
+  }
+
+  .mb-mobile-stage-tab:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 3px hsl(var(--accent) / 0.16),
+      inset 0 0 0 1px hsl(var(--accent) / 0.28);
+  }
+
+  .mb-mobile-stage-tab-active {
+    border-color: hsl(var(--accent) / 0.28);
+    background:
+      linear-gradient(180deg, hsl(var(--card) / 0.68), hsl(var(--bg) / 0.44)),
+      radial-gradient(circle at top, hsl(var(--accent) / 0.06), transparent 58%);
+    box-shadow:
+      inset 0 0 0 1px hsl(var(--accent) / 0.14),
+      inset 0 1px 0 hsl(0 0% 100% / 0.04);
+  }
+
+  .mb-mobile-stage-label {
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: hsl(var(--muted2));
+  }
+
+  .mb-mobile-stage-tab-active .mb-mobile-stage-label {
+    color: hsl(var(--fg) / 0.94);
+  }
+
+  .mb-mobile-stage-hint {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: hsl(var(--muted2) / 0.84);
+  }
+
+  .mb-mobile-stage-hint-line {
+    width: 1.8rem;
+    height: 1px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, transparent, hsl(var(--muted2) / 0.55), transparent);
+  }
+
   .mb-progress-wait {
     position: relative;
     display: block;
@@ -1042,6 +1137,21 @@
 
   .mb-fade-in {
     animation: mb-fade-in-up 220ms ease-out both;
+  }
+
+  .mb-swipe-arrow-right {
+    animation: mb-swipe-nudge-right 2s ease-in-out infinite;
+  }
+
+  .mb-swipe-arrow-left {
+    animation: mb-swipe-nudge-left 2s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-swipe-arrow-right,
+    .mb-swipe-arrow-left {
+      animation: none;
+    }
   }
 
   .mb-caret {

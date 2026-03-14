@@ -47,8 +47,6 @@ function CubeMark() {
 }
 
 function ThemeToggle() {
-  // Avoid SSR/CSR mismatch: the server renders dark, so hydrate as dark then
-  // sync from DOM/localStorage after mount.
   const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
@@ -75,7 +73,7 @@ function ThemeToggle() {
       type="button"
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:w-10"
+      className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       onClick={toggleTheme}
     >
       <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none">
@@ -109,8 +107,8 @@ function NavLink({ href, label }: { href: string; label: string }) {
       aria-current={active ? "page" : undefined}
       className={
         active
-          ? "inline-flex h-11 shrink-0 items-center rounded-full border border-accent/45 bg-gradient-to-b from-accent/22 via-accent/14 to-accent2/18 px-4 text-[13px] font-semibold text-fg shadow-[0_10px_28px_-18px_rgba(45,211,191,0.95),inset_0_1px_0_rgba(255,255,255,0.08)] ring-1 ring-accent/20 sm:h-10 sm:px-4 sm:text-sm"
-          : "inline-flex h-11 shrink-0 items-center rounded-full border border-transparent px-4 text-[13px] text-muted/90 transition hover:border-border/60 hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:h-10 sm:px-4 sm:text-sm"
+          ? "inline-flex h-10 shrink-0 items-center rounded-full border border-accent/45 bg-gradient-to-b from-accent/22 via-accent/14 to-accent2/18 px-4 text-[13px] font-semibold text-fg shadow-[0_10px_28px_-18px_rgba(45,211,191,0.95),inset_0_1px_0_rgba(255,255,255,0.08)] ring-1 ring-accent/20 sm:text-sm"
+          : "inline-flex h-10 shrink-0 items-center rounded-full border border-transparent px-4 text-[13px] text-muted/90 transition hover:border-border/60 hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:text-sm"
       }
       href={href}
     >
@@ -127,7 +125,7 @@ function SupportLink() {
       rel="noreferrer"
       title="Support MineBench on Buy Me a Coffee"
       aria-label="Support MineBench on Buy Me a Coffee"
-      className="inline-flex h-11 shrink-0 items-center gap-1.5 rounded-full border border-success/45 bg-gradient-to-b from-success/20 via-success/12 to-accent/18 px-4 text-[13px] font-semibold text-success transition hover:border-success/60 hover:from-success/30 hover:via-success/18 hover:to-accent/24 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success/40 sm:h-10 sm:px-4 sm:text-sm"
+      className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-success/40 bg-success/10 px-3.5 text-[13px] font-semibold text-success transition hover:bg-success/18 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success/40 sm:text-sm"
     >
       <svg
         aria-hidden="true"
@@ -143,7 +141,7 @@ function SupportLink() {
         <path d="M16 9h2a3 3 0 0 1 0 6h-2" />
         <path d="M8 3v2M12 3v2" />
       </svg>
-      <span>Support</span>
+      <span className="hidden min-[420px]:inline">Support</span>
     </a>
   );
 }
@@ -160,7 +158,7 @@ function SocialIconLink({
   return (
     <a
       aria-label={label}
-      className="inline-flex h-11 w-11 items-center justify-center text-muted transition hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50 sm:h-10 sm:w-10"
+      className="inline-flex h-10 w-10 items-center justify-center text-muted transition hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50"
       href={href}
       rel="noreferrer"
       target="_blank"
@@ -174,7 +172,7 @@ function SocialIconLink({
 export function SiteHeader() {
   return (
     <header className="relative sticky top-0 z-40 border-b border-border bg-bg/75 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 sm:py-4 lg:px-8">
+      <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 sm:py-3 lg:px-8">
         <a
           href="#main"
           className="sr-only rounded-full bg-card/80 px-4 py-2 text-sm text-fg ring-1 ring-border focus:not-sr-only focus:absolute focus:left-4 focus:top-3"
@@ -182,75 +180,57 @@ export function SiteHeader() {
           Skip to content
         </a>
 
+        {/* Row 1: logo + social icons */}
         <div className="flex w-full items-center justify-between gap-3 sm:w-auto sm:justify-start sm:gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Link className="group flex min-w-0 items-center gap-3" href="/">
-              <CubeMark />
-              <div className="leading-tight">
-                <div className="font-display text-base font-semibold tracking-tight text-fg sm:text-sm">
-                  <span className="text-fg">Mine</span>
-                  <span className="bg-gradient-to-r from-accent to-accent2 bg-clip-text text-transparent">
-                    Bench
-                  </span>
-                </div>
+          <Link className="group flex min-w-0 items-center gap-3" href="/">
+            <CubeMark />
+            <div className="leading-tight">
+              <div className="font-display text-base font-semibold tracking-tight text-fg sm:text-sm">
+                <span className="text-fg">Mine</span>
+                <span className="bg-gradient-to-r from-accent to-accent2 bg-clip-text text-transparent">
+                  Bench
+                </span>
               </div>
-            </Link>
-            <div className="hidden h-5 w-px bg-border/70 sm:block" aria-hidden="true" />
-          </div>
+            </div>
+          </Link>
 
-          <div className="flex items-center rounded-full bg-bg/50 px-0.5 ring-1 ring-border/70 sm:bg-transparent sm:px-0 sm:ring-0">
+          <div className="flex items-center gap-0.5 rounded-full bg-bg/50 px-0.5 ring-1 ring-border/70 sm:bg-transparent sm:px-0 sm:ring-0">
             <SocialIconLink
               href="https://www.linkedin.com/in/ammaar-alam/"
               label="Ammaar Alam on LinkedIn"
             >
-              <svg
-                aria-hidden="true"
-                className="h-[18px] w-[18px]"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
+              <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M22.225 0H1.771C.792 0 0 .774 0 1.727v20.545C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.273V1.727C24 .774 23.2 0 22.222 0zM7.06 20.452H3.56V9h3.5v11.452zM5.31 7.433c-1.12 0-2.03-.92-2.03-2.06 0-1.14.91-2.06 2.03-2.06 1.12 0 2.03.92 2.03 2.06 0 1.14-.91 2.06-2.03 2.06zM20.45 20.452h-3.55v-5.57c0-1.33-.03-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.95v5.66H9.36V9h3.41v1.56h.05c.47-.9 1.63-1.85 3.36-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28z" />
               </svg>
             </SocialIconLink>
             <SocialIconLink href="https://ammaaralam.com" label="Ammaar Alam website">
-              <svg
-                aria-hidden="true"
-                className="h-[22px] w-[22px]"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-              >
+              <svg aria-hidden="true" className="h-[22px] w-[22px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2">
                 <path d="M12 21c4.97 0 9-4.03 9-9s-4.03-9-9-9-9 4.03-9 9 4.03 9 9 9Z" />
                 <path d="M3 12h18" />
                 <path d="M12 3c2.5 2.46 4 5.68 4 9s-1.5 6.54-4 9c-2.5-2.46-4-5.68-4-9s1.5-6.54 4-9Z" />
               </svg>
             </SocialIconLink>
-            <SocialIconLink
-              href="https://github.com/Ammaar-Alam/minebench"
-              label="MineBench on GitHub"
-            >
-              <svg
-                aria-hidden="true"
-                className="h-[22px] w-[22px]"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-              >
+            <SocialIconLink href="https://github.com/Ammaar-Alam/minebench" label="MineBench on GitHub">
+              <svg aria-hidden="true" className="h-[22px] w-[22px]" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2a10 10 0 0 0-3.162 19.492c.5.092.682-.217.682-.482 0-.237-.009-.866-.014-1.699-2.776.603-3.362-1.339-3.362-1.339-.455-1.156-1.11-1.465-1.11-1.465-.908-.62.069-.607.069-.607 1.004.07 1.532 1.031 1.532 1.031.892 1.529 2.341 1.087 2.91.832.091-.647.349-1.087.635-1.338-2.217-.252-4.555-1.108-4.555-4.932 0-1.09.39-1.982 1.029-2.68-.103-.252-.446-1.268.098-2.642 0 0 .84-.269 2.75 1.025a9.563 9.563 0 0 1 2.503-.336c.85.004 1.705.115 2.503.336 1.909-1.294 2.748-1.025 2.748-1.025.546 1.374.203 2.39.1 2.642.64.698 1.028 1.59 1.028 2.68 0 3.834-2.342 4.677-4.566 4.924.359.309.678.919.678 1.852 0 1.337-.012 2.415-.012 2.743 0 .267.18.578.688.48A10 10 0 0 0 12 2Z" />
               </svg>
             </SocialIconLink>
           </div>
         </div>
 
-        <nav className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-[1.15rem] bg-bg/55 p-1 shadow-soft ring-1 ring-border sm:flex sm:w-auto sm:flex-nowrap sm:items-center sm:gap-1 sm:rounded-full">
-          <div className="flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
-            <NavLink href="/" label="Arena" />
-            <NavLink href="/sandbox" label="Sandbox" />
-            <NavLink href="/local" label="Local" />
-            <NavLink href="/leaderboard" label="Leaderboard" />
-            <SupportLink />
+        {/* Row 2: nav – grid keeps ThemeToggle pinned right, links scroll left */}
+        <nav className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border sm:flex sm:w-auto sm:flex-nowrap sm:items-center sm:gap-1 sm:bg-transparent sm:p-0 sm:shadow-none sm:ring-0">
+          <div className="relative min-w-0">
+            <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+              <NavLink href="/" label="Arena" />
+              <NavLink href="/sandbox" label="Sandbox" />
+              <NavLink href="/local" label="Local" />
+              <NavLink href="/leaderboard" label="Leaderboard" />
+              <div className="mx-0.5 h-5 w-px shrink-0 bg-border/50 sm:mx-1" aria-hidden="true" />
+              <SupportLink />
+            </div>
+            {/* fade mask so partially-visible Support fades out cleanly on mobile */}
+            <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-[hsl(var(--bg)/0.55)] to-transparent sm:hidden" aria-hidden="true" />
           </div>
           <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
           <ThemeToggle />

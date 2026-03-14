@@ -247,6 +247,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   type DragMode = "orbit" | "pan";
   const [dragMode, setDragMode] = useState<DragMode>("orbit");
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [supportsFullscreen, setSupportsFullscreen] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
@@ -729,6 +730,17 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   }, [dragMode]);
 
   useEffect(() => {
+    const el = containerRef.current;
+    setSupportsFullscreen(
+      Boolean(
+        document.fullscreenEnabled &&
+          el &&
+          typeof (el as HTMLElement & { requestFullscreen?: () => Promise<void> }).requestFullscreen === "function",
+      ),
+    );
+  }, []);
+
+  useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
 
@@ -990,21 +1002,33 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       <div ref={mountRef} className="h-full w-full" />
 
       {showControls ? (
-        <div className="absolute right-2.5 top-2.5 flex items-center gap-1.5 sm:right-3 sm:top-3 sm:gap-2">
+        <div className="absolute inset-x-2.5 bottom-2.5 flex items-center gap-1 rounded-xl border border-border/60 bg-bg/70 p-1 backdrop-blur-md sm:inset-x-auto sm:bottom-auto sm:right-3 sm:top-3 sm:gap-2 sm:rounded-2xl sm:border-transparent sm:bg-transparent sm:p-0 sm:shadow-none sm:backdrop-blur-0">
           <button
             aria-pressed={dragMode === "pan" || (dragMode === "orbit" && ctrlHeld)}
-            className={`mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs ${dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "mb-btn-primary" : "mb-btn-ghost"}`}
+            aria-label={dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "Switch to rotate mode" : "Switch to move mode"}
+            className={`mb-btn h-9 flex-1 px-3 text-[12px] sm:h-9 sm:flex-none sm:px-3 sm:text-xs ${dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "mb-btn-primary" : "mb-btn-ghost"}`}
             onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
           >
-            Pan <span className="hidden sm:inline"><span className="mb-kbd">Ctrl</span></span>
+            <span>Move</span>
+            <span className="hidden sm:inline"><span className="mb-kbd">Ctrl</span></span>
           </button>
-          <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={fitView}>
-            Fit <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
+          <button
+            aria-label="Reset camera framing"
+            className="mb-btn mb-btn-ghost h-9 flex-1 px-3 text-[12px] sm:h-9 sm:flex-none sm:px-3 sm:text-xs"
+            onClick={fitView}
+          >
+            Reset <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
           </button>
-          <button className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs" onClick={() => void toggleFullscreen()}>
-            {isFullscreen ? "Exit" : "Full"}{" "}
-            <span className="hidden sm:inline"><span className="mb-kbd">F</span></span>
-          </button>
+          {supportsFullscreen || isFullscreen ? (
+            <button
+              aria-label={isFullscreen ? "Exit fullscreen" : "Open fullscreen"}
+              className="mb-btn mb-btn-ghost h-9 flex-1 px-3 text-[12px] sm:h-9 sm:flex-none sm:px-3 sm:text-xs"
+              onClick={() => void toggleFullscreen()}
+            >
+              {isFullscreen ? "Exit" : "Expand"}{" "}
+              <span className="hidden sm:inline"><span className="mb-kbd">F</span></span>
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
