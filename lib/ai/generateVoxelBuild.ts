@@ -7,6 +7,7 @@ import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
 import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
 import { deepseekGenerateText } from "@/lib/ai/providers/deepseek";
 import { geminiGenerateText } from "@/lib/ai/providers/gemini";
+import { minimaxGenerateText } from "@/lib/ai/providers/minimax";
 import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
@@ -88,6 +89,7 @@ function describeRequestedThinkingMode(opts: {
 
   if (opts.provider === "deepseek") return "thinking=enabled";
   if (opts.provider === "moonshot") return "default";
+  if (opts.provider === "minimax") return "default";
   if (opts.provider === "custom") return "default";
 
   if (opts.provider === "openai") {
@@ -169,6 +171,7 @@ type ProviderKeyName =
   | "gemini"
   | "moonshot"
   | "deepseek"
+  | "minimax"
   | "openrouter"
   | "custom";
 
@@ -184,6 +187,8 @@ function envVarForProviderKey(provider: ProviderKeyName): string {
       return "MOONSHOT_API_KEY";
     case "deepseek":
       return "DEEPSEEK_API_KEY";
+    case "minimax":
+      return "MINIMAX_API_KEY";
     case "openrouter":
       return "OPENROUTER_API_KEY";
     case "custom":
@@ -203,6 +208,8 @@ function envVarForDirectProvider(provider: DirectProvider): string | null {
       return envVarForProviderKey("moonshot");
     case "deepseek":
       return envVarForProviderKey("deepseek");
+    case "minimax":
+      return envVarForProviderKey("minimax");
     case "custom":
       return envVarForProviderKey("custom");
     default:
@@ -221,7 +228,7 @@ function effectiveApiKey(opts: {
   allowServerKeys: boolean;
 }): string | null {
   const provider = opts.provider;
-  if (provider === "xai" || provider === "zai" || provider === "qwen" || provider === "minimax" || provider === "meta") return null; // only supported via OpenRouter fallback
+  if (provider === "xai" || provider === "zai" || provider === "qwen" || provider === "meta") return null; // only supported via OpenRouter fallback
 
   const directKey = normalizeApiKey(
     provider === "openrouter"
@@ -236,9 +243,11 @@ function effectiveApiKey(opts: {
               ? opts.providerKeys?.moonshot
               : provider === "deepseek"
                 ? opts.providerKeys?.deepseek
-                : provider === "custom"
-                  ? opts.providerKeys?.custom
-                : undefined,
+                : provider === "minimax"
+                  ? opts.providerKeys?.minimax
+                  : provider === "custom"
+                    ? opts.providerKeys?.custom
+                  : undefined,
   );
   if (directKey) return directKey;
 
@@ -250,6 +259,7 @@ function effectiveApiKey(opts: {
   if (provider === "gemini") return serverApiKey("gemini");
   if (provider === "moonshot") return serverApiKey("moonshot");
   if (provider === "deepseek") return serverApiKey("deepseek");
+  if (provider === "minimax") return serverApiKey("minimax");
   if (provider === "custom") return serverApiKey("custom");
 
   return null;
@@ -421,9 +431,18 @@ async function callDirectProvider(args: {
     throw new Error("Qwen direct API not supported; use OpenRouter fallback");
   }
 
-  // MiniMax models are currently OpenRouter-only in MineBench
   if (args.provider === "minimax") {
-    throw new Error("MiniMax direct API not supported; use OpenRouter fallback");
+    return minimaxGenerateText({
+      modelId: args.modelId,
+      apiKey: args.apiKey,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      temperature: DEFAULT_TEMPERATURE,
+      signal: args.signal,
+      onDelta: args.onDelta,
+      onTrace: args.onTrace,
+    });
   }
 
   // Meta models are currently OpenRouter-only in MineBench

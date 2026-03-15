@@ -287,11 +287,10 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     key: "minimax_m2_5",
     provider: "minimax",
-    modelId: "minimax-m2.5",
+    modelId: "MiniMax-M2.5",
     displayName: "MiniMax M2.5",
     enabled: true,
     openRouterModelId: "minimax/minimax-m2.5",
-    forceOpenRouter: true,
   },
   {
     key: "meta_llama_4_maverick",
