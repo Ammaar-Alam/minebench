@@ -64,7 +64,7 @@ To generate fresh builds in `/sandbox`:
 2. Switch to `Live Generate`
 3. Enter either:
    - an `OpenRouter` key, or
-   - provider-specific keys (OpenAI, Anthropic, Gemini, Moonshot, DeepSeek)
+   - provider-specific keys (OpenAI, Anthropic, Gemini, Moonshot, DeepSeek, MiniMax)
 4. Pick 2 models and click `Generate`
 
 Notes:
@@ -92,6 +92,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `GOOGLE_AI_API_KEY`
 - `MOONSHOT_API_KEY`
 - `DEEPSEEK_API_KEY`
+- `MINIMAX_API_KEY`
 - `OPENROUTER_API_KEY`
 
 ### Optional Provider and Runtime Tuning
@@ -105,7 +106,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
-- `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`
+- `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`, `MINIMAX_BASE_URL`
 - `AI_DEBUG=1` (logs raw model output on failures)
 - `MINEBENCH_TOOL_OUTPUT_DIR`, `MINEBENCH_TOOL_TIMEOUT_MS`, `MINEBENCH_TOOL_MAX_*` (advanced `voxel.exec` controls)
 

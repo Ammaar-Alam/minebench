@@ -110,6 +110,7 @@ function loadProviderKeysFromStorage(): ProviderApiKeys {
     set("gemini");
     set("moonshot");
     set("deepseek");
+    set("minimax");
     set("custom");
     return keys;
   } catch {
@@ -286,6 +287,7 @@ function providerLabel(provider: string): string {
   if (provider === "gemini") return "Google";
   if (provider === "moonshot") return "Moonshot";
   if (provider === "deepseek") return "DeepSeek";
+  if (provider === "minimax") return "MiniMax";
   if (provider === "custom") return "Custom API";
   if (provider === "xai") return "xAI";
   if (provider === "zai") return "Z.AI";
@@ -560,6 +562,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       setKey("gemini", providerKeys.gemini);
       setKey("moonshot", providerKeys.moonshot);
       setKey("deepseek", providerKeys.deepseek);
+      setKey("minimax", providerKeys.minimax);
       setKey("custom", providerKeys.custom);
 
       const res = await fetch("/api/generate", {
@@ -1231,6 +1234,19 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                       autoComplete="off"
                       spellCheck={false}
                       placeholder="Paste your DeepSeek key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">MiniMax</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.minimax ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, minimax: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your MiniMax key"
                     />
                   </label>
                 </div>
