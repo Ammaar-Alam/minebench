@@ -14,6 +14,7 @@ const providerKeysSchema = z
     gemini: z.string().trim().min(1).max(4000).optional(),
     moonshot: z.string().trim().min(1).max(4000).optional(),
     deepseek: z.string().trim().min(1).max(4000).optional(),
+    minimax: z.string().trim().min(1).max(4000).optional(),
     openrouter: z.string().trim().min(1).max(4000).optional(),
     custom: z.string().trim().min(1).max(4000).optional(),
   })
@@ -115,7 +116,7 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error:
-          "No API keys provided. Add an OpenRouter key or a provider key (OpenAI/Anthropic/Gemini/etc.) in Sandbox settings.",
+          "No API keys provided. Add an OpenRouter key or a provider key (OpenAI/Anthropic/Gemini/Moonshot/DeepSeek/MiniMax/etc.) in Sandbox settings.",
       },
       { status: 401 }
     );

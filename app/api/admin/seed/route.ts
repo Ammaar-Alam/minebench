@@ -57,6 +57,7 @@ function providerKeyStatus() {
     gemini: Boolean(process.env.GOOGLE_AI_API_KEY),
     moonshot: Boolean(process.env.MOONSHOT_API_KEY),
     deepseek: Boolean(process.env.DEEPSEEK_API_KEY),
+    minimax: Boolean(process.env.MINIMAX_API_KEY),
     openrouter: Boolean(process.env.OPENROUTER_API_KEY),
   };
 }
@@ -74,6 +75,7 @@ function isModelGeneratable(args: { modelKey: string; provider: string }) {
   if (args.provider === "gemini") return status.gemini || canUseOpenRouter;
   if (args.provider === "moonshot") return status.moonshot || canUseOpenRouter;
   if (args.provider === "deepseek") return status.deepseek || canUseOpenRouter;
+  if (args.provider === "minimax") return status.minimax || canUseOpenRouter;
 
   // Unknown provider: assume it's callable (or OpenRouter-gated via catalog entries).
   return true;
@@ -207,7 +209,7 @@ export async function POST(req: Request) {
       done: true,
       seeded: 0,
       error:
-        "No enabled models found. Set at least one API key (OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY, etc.) or enable models for configured providers.",
+        "No enabled models found. Set at least one API key (OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY, MINIMAX_API_KEY, etc.) or enable models for configured providers.",
       promptCount: prompts.length,
       modelCount: 0,
       settings: ARENA_SETTINGS,

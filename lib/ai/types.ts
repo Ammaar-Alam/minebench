@@ -9,6 +9,7 @@ export type ProviderApiKeys = {
   gemini?: string;
   moonshot?: string;
   deepseek?: string;
+  minimax?: string;
   openrouter?: string;
   custom?: string;
 };
