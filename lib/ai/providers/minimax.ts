@@ -10,11 +10,36 @@ type MiniMaxChatStreamChunk = {
   choices?: { delta?: { content?: unknown } }[];
 };
 
-function extractTextFromChat(data: MiniMaxChatResponse): string {
-  const content = data.choices?.[0]?.message?.content;
+function extractTextContent(content: unknown): string {
   if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((c) => String(c ?? "")).join("");
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object") {
+          return String((part as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+      .join("");
+  }
   return "";
+}
+
+function extractTextFromChat(data: MiniMaxChatResponse): string {
+  return extractTextContent(data.choices?.[0]?.message?.content);
+}
+
+function nextStreamDelta(previousContent: string, nextContent: string): string {
+  if (!nextContent) return "";
+  if (!previousContent) return nextContent;
+  if (nextContent.startsWith(previousContent)) {
+    return nextContent.slice(previousContent.length);
+  }
+  if (previousContent.startsWith(nextContent)) {
+    return "";
+  }
+  return nextContent;
 }
 
 function requestIdFromResponse(res: Response): string | null {
@@ -84,6 +109,7 @@ export async function minimaxGenerateText(params: {
             { role: "user", content: params.user },
           ],
           stream: Boolean(params.onDelta),
+          reasoning_split: true,
           temperature,
           max_tokens: tok,
         }),
@@ -131,11 +157,18 @@ export async function minimaxGenerateText(params: {
       } catch {
         return;
       }
-      const chunk = parsed?.choices?.[0]?.delta?.content;
-      if (typeof chunk === "string" && chunk) {
-        text += chunk;
-        params.onDelta?.(chunk);
+      const cumulativeContent = extractTextContent(parsed?.choices?.[0]?.delta?.content);
+      if (!cumulativeContent) return;
+
+      const delta = nextStreamDelta(text, cumulativeContent);
+      if (!delta) return;
+
+      if (cumulativeContent.startsWith(text)) {
+        text = cumulativeContent;
+      } else {
+        text += delta;
       }
+      params.onDelta?.(delta);
     });
     return { text };
   }
