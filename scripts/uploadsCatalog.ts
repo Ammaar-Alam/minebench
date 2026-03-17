@@ -35,6 +35,8 @@ export const PROMPT_MAP: Record<string, string> = {
 export const MODEL_SLUG: Record<ModelKey, string> = {
   openai_gpt_5_4: "gpt-5-4",
   openai_gpt_5_4_pro: "gpt-5-4-pro",
+  openai_gpt_5_4_mini: "gpt-5-4-mini",
+  openai_gpt_5_4_nano: "gpt-5-4-nano",
   openai_gpt_5_3_codex: "gpt-5-3-codex",
   openai_gpt_5_2: "gpt-5-2",
   openai_gpt_5_2_pro: "gpt-5-2-pro",

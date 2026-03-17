@@ -13,6 +13,8 @@ export type Provider =
 export type ModelKey =
   | "openai_gpt_5_4"
   | "openai_gpt_5_4_pro"
+  | "openai_gpt_5_4_mini"
+  | "openai_gpt_5_4_nano"
   | "openai_gpt_5_3_codex"
   | "openai_gpt_5_2"
   | "openai_gpt_5_2_pro"
@@ -70,6 +72,22 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "GPT 5.4 Pro",
     enabled: true,
     openRouterModelId: "openai/gpt-5.4-pro",
+  },
+  {
+    key: "openai_gpt_5_4_mini",
+    provider: "openai",
+    modelId: "gpt-5.4-mini",
+    displayName: "GPT 5.4 Mini",
+    enabled: true,
+    openRouterModelId: "openai/gpt-5.4-mini",
+  },
+  {
+    key: "openai_gpt_5_4_nano",
+    provider: "openai",
+    modelId: "gpt-5.4-nano",
+    displayName: "GPT 5.4 Nano",
+    enabled: true,
+    openRouterModelId: "openai/gpt-5.4-nano",
   },
   {
     key: "openai_gpt_5_3_codex",

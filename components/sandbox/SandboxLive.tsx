@@ -67,10 +67,13 @@ const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
   baseUrl: DEFAULT_CUSTOM_API_URL,
 };
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
-const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_mini";
+const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
 const DEFAULT_MODEL_A: ModelKey =
-  ENABLED_MODELS.find((model) => model.key === "openai_gpt_5_mini")?.key ?? FALLBACK_MODEL_A;
+  ENABLED_MODELS.find((model) => model.key === "openai_gpt_5_4_mini")?.key ?? FALLBACK_MODEL_A;
 const DEFAULT_MODEL_B: ModelKey =
+  ENABLED_MODELS.find(
+    (model) => model.key === "openai_gpt_5_4_nano" && model.key !== DEFAULT_MODEL_A
+  )?.key ??
   ENABLED_MODELS.find(
     (model) => model.key === "gemini_3_1_flash_lite" && model.key !== DEFAULT_MODEL_A
   )?.key ??
