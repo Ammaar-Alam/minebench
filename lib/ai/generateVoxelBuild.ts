@@ -34,8 +34,20 @@ function parseIntEnvVar(name: string, fallback: number): number {
   return Math.floor(parsed);
 }
 
-function defaultMaxOutputTokens(_gridSize: 64 | 256 | 512, _modelId: string): number {
-  return parseIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS);
+function maxOutputTokenCapForModel(modelId: string): number | undefined {
+  // OpenAI's latest GPT-5 family models use max_output_tokens as a total
+  // generation budget that includes reasoning tokens. Most GPT-5 variants in
+  // MineBench are currently capped at 128k output tokens, with the older
+  // gpt-5-pro alias remaining at 272k.
+  if (modelId === "gpt-5-pro") return 272_000;
+  if (modelId.startsWith("gpt-5")) return 128_000;
+  return undefined;
+}
+
+function defaultMaxOutputTokens(_gridSize: 64 | 256 | 512, modelId: string): number {
+  const requested = parseIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS);
+  const cap = maxOutputTokenCapForModel(modelId);
+  return typeof cap === "number" ? Math.min(requested, cap) : requested;
 }
 
 function defaultMaxReasoningTokens(modelId: string, maxOutputTokens: number): number | undefined {
@@ -157,6 +169,14 @@ function isBilledTimeoutStyleProviderError(message: string): boolean {
     m.includes("request timed out") ||
     (m.includes("openai request failed") && m.includes("timeout")) ||
     (m.includes("anthropic request failed") && m.includes("timeout"))
+  );
+}
+
+function isExhaustedOutputBudgetProviderError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("status incomplete: max_output_tokens") ||
+    m.includes("ended with status incomplete: max_output_tokens")
   );
 }
 
@@ -834,6 +854,7 @@ export async function generateVoxelBuild(
       // Avoid expensive duplicate retries when the upstream likely processed work
       // but the client timed out waiting for headers/body.
       if (isBilledTimeoutStyleProviderError(lastError)) break;
+      if (isExhaustedOutputBudgetProviderError(lastError)) break;
     }
   }
 

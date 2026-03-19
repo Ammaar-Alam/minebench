@@ -10,6 +10,8 @@ type OpenAIChatResponse = {
 type OpenAIResponsesResponse = {
   output_text?: unknown;
   output?: unknown;
+  status?: unknown;
+  usage?: unknown;
 };
 
 type OpenAIBackgroundStatus =
@@ -128,6 +130,51 @@ function summarizeBackgroundError(data: OpenAIResponsesBackgroundResponse): stri
     if (typeof reason === "string" && reason.trim()) return reason.trim();
   }
   return null;
+}
+
+function extractUsageNumbers(data: OpenAIResponsesResponse): {
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+} {
+  const usage = data.usage;
+  if (!usage || typeof usage !== "object") {
+    return { outputTokens: null, reasoningTokens: null };
+  }
+
+  const outputTokensRaw = (usage as { output_tokens?: unknown }).output_tokens;
+  const outputTokens =
+    typeof outputTokensRaw === "number" && Number.isFinite(outputTokensRaw)
+      ? Math.floor(outputTokensRaw)
+      : null;
+
+  const outputDetails = (usage as { output_tokens_details?: unknown }).output_tokens_details;
+  const reasoningTokensRaw =
+    outputDetails && typeof outputDetails === "object"
+      ? (outputDetails as { reasoning_tokens?: unknown }).reasoning_tokens
+      : undefined;
+  const reasoningTokens =
+    typeof reasoningTokensRaw === "number" && Number.isFinite(reasoningTokensRaw)
+      ? Math.floor(reasoningTokensRaw)
+      : null;
+
+  return { outputTokens, reasoningTokens };
+}
+
+function formatUsageNumbers(data: OpenAIResponsesResponse): string {
+  const usage = extractUsageNumbers(data);
+  const parts: string[] = [];
+  if (typeof usage.outputTokens === "number") parts.push(`output_tokens=${usage.outputTokens}`);
+  if (typeof usage.reasoningTokens === "number") {
+    parts.push(`reasoning_tokens=${usage.reasoningTokens}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : "usage unavailable";
+}
+
+function isIncompleteMaxOutputTokensResponse(data: OpenAIResponsesBackgroundResponse): boolean {
+  const status = backgroundStatusOf(data.status);
+  if (status !== "incomplete") return false;
+  const reason = summarizeBackgroundError(data);
+  return Boolean(reason && looksLikeTokenLimitError(reason));
 }
 
 function abortError(): Error {
@@ -442,10 +489,12 @@ export async function openaiGenerateText(params: {
     // Prefer the Responses API (works with modern OpenAI models).
     let res: Response | null = null;
     let lastBody = "";
-    let selectedResponsesReasoningLabel: string | null = null;
-    let selectedResponsesTokenBudget: number | null = null;
     let useStructuredOutput = true;
-    for (const tok of tokenBudgetCandidates(maxOutputTokens)) {
+    let shouldFallBackToChat = false;
+    const outputTokenBudgets = tokenBudgetCandidates(maxOutputTokens);
+    budgetLoop: for (let tokIdx = 0; tokIdx < outputTokenBudgets.length; tokIdx += 1) {
+      const tok = outputTokenBudgets[tokIdx];
+      let tryLowerTokenBudget = false;
       for (const [cfgIdx, cfg] of reasoningConfigAttempts.entries()) {
         const reasoning =
           cfg?.kind === "effort"
@@ -502,12 +551,100 @@ export async function openaiGenerateText(params: {
           );
 
           if (res.ok) {
-            selectedResponsesReasoningLabel = currentReasoningLabel;
-            selectedResponsesTokenBudget = tok;
+            params.onTrace?.(
+              withMaxOutputTokens(
+                `OpenAI Responses reasoning config in use: '${currentReasoningLabel}'.`,
+                tok,
+              ),
+            );
+            if (useDefaultVerbosity) {
+              const textVerbosity = defaultTextVerbosity(params.modelId);
+              if (textVerbosity) {
+                params.onTrace?.(`OpenAI Responses text verbosity in use: '${textVerbosity}'.`);
+              }
+            }
+            if (streamForRequest) {
+              let text = "";
+              let completedResponse: OpenAIResponsesResponse | null = null;
+              await consumeSseStream(res, (evt) => {
+                if (evt.data === "[DONE]") return;
+                let parsed: OpenAIResponsesStreamEvent | null = null;
+                try {
+                  parsed = JSON.parse(evt.data) as OpenAIResponsesStreamEvent;
+                } catch {
+                  return;
+                }
+                if (parsed?.type === "response.output_text.delta" && typeof parsed.delta === "string") {
+                  const delta = parsed.delta;
+                  if (delta) {
+                    text += delta;
+                    params.onDelta?.(delta);
+                  }
+                }
+                if (parsed?.type === "response.output_text.done" && typeof parsed.text === "string") {
+                  const doneText = parsed.text;
+                  if (doneText && text.length === 0) text = doneText;
+                }
+                if (parsed?.type === "response.completed" && parsed.response && typeof parsed.response === "object") {
+                  completedResponse = parsed.response as OpenAIResponsesResponse;
+                }
+              });
+              if (!text && completedResponse) {
+                text = extractTextFromResponses(completedResponse);
+              }
+              // The response body has been fully consumed by the SSE reader above;
+              // never call res.json() after this point.
+              return { text };
+            }
+
+            let data = (await res.json()) as OpenAIResponsesBackgroundResponse;
+            if (useBackgroundMode) {
+              const initialStatus = backgroundStatusOf(data.status);
+              const responseId = typeof data.id === "string" ? data.id : null;
+              if (isBackgroundPending(initialStatus)) {
+                if (!responseId) throw new Error("OpenAI background response missing id");
+                data = await pollBackgroundResponse({
+                  apiKey,
+                  responseId,
+                  signal: controller.signal,
+                  pollIntervalMs: backgroundPollIntervalMs,
+                  onTrace: params.onTrace,
+                });
+              }
+            }
+
+            const finalStatus = backgroundStatusOf(data.status);
+            if (finalStatus && finalStatus !== "completed") {
+              const reason = summarizeBackgroundError(data);
+              if (isIncompleteMaxOutputTokensResponse(data)) {
+                params.onTrace?.(
+                  `OpenAI Responses ended with status incomplete: ${reason ?? "max_output_tokens"}; ${formatUsageNumbers(data)}. ` +
+                    "The current max_output_tokens budget was fully exhausted.",
+                );
+                throw new Error(
+                  `OpenAI background response ended with status incomplete: ${reason ?? "max_output_tokens"} (${formatUsageNumbers(data)})`,
+                );
+              }
+              throw new Error(
+                `OpenAI background response ended with status ${finalStatus}${reason ? `: ${reason}` : ""}`,
+              );
+            }
+
+            const text = extractTextFromResponses(data);
+            if (text) return { text };
+            if (useBackgroundMode) {
+              throw new Error(
+                `OpenAI background response returned no output text${finalStatus ? ` (status ${finalStatus})` : ""}`,
+              );
+            }
+            shouldFallBackToChat = true;
             break;
           }
           lastBody = await res.text().catch(() => "");
-          if (res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
+          if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
+            tryLowerTokenBudget = true;
+            break;
+          }
           if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
             useStructuredOutput = false;
             params.onTrace?.(
@@ -534,10 +671,18 @@ export async function openaiGenerateText(params: {
           }
           break;
         }
+        if (tryLowerTokenBudget || shouldFallBackToChat) break;
         if (res?.ok) break;
-        if (res && res.status === 400 && looksLikeTokenLimitError(lastBody)) break;
+        if (res && res.status === 400 && looksLikeTokenLimitError(lastBody)) {
+          tryLowerTokenBudget = true;
+          break;
+        }
       }
 
+      if (shouldFallBackToChat) break;
+      if (tryLowerTokenBudget) {
+        continue budgetLoop;
+      }
       if (res?.ok) break;
       if (res && res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
       break;
@@ -545,89 +690,7 @@ export async function openaiGenerateText(params: {
 
     if (!res) throw new Error("OpenAI request failed");
 
-    if (res.ok) {
-      if (selectedResponsesReasoningLabel) {
-        const budget = selectedResponsesTokenBudget ?? maxOutputTokens;
-        params.onTrace?.(
-          withMaxOutputTokens(
-            `OpenAI Responses reasoning config in use: '${selectedResponsesReasoningLabel}'.`,
-            budget,
-          ),
-        );
-      }
-      if (useDefaultVerbosity) {
-        const textVerbosity = defaultTextVerbosity(params.modelId);
-        if (textVerbosity) {
-          params.onTrace?.(`OpenAI Responses text verbosity in use: '${textVerbosity}'.`);
-        }
-      }
-      if (streamForRequest) {
-        let text = "";
-        let completedResponse: OpenAIResponsesResponse | null = null;
-        await consumeSseStream(res, (evt) => {
-          if (evt.data === "[DONE]") return;
-          let parsed: OpenAIResponsesStreamEvent | null = null;
-          try {
-            parsed = JSON.parse(evt.data) as OpenAIResponsesStreamEvent;
-          } catch {
-            return;
-          }
-          if (parsed?.type === "response.output_text.delta" && typeof parsed.delta === "string") {
-            const delta = parsed.delta;
-            if (delta) {
-              text += delta;
-              params.onDelta?.(delta);
-            }
-          }
-          if (parsed?.type === "response.output_text.done" && typeof parsed.text === "string") {
-            const doneText = parsed.text;
-            if (doneText && text.length === 0) text = doneText;
-          }
-          if (parsed?.type === "response.completed" && parsed.response && typeof parsed.response === "object") {
-            completedResponse = parsed.response as OpenAIResponsesResponse;
-          }
-        });
-        if (!text && completedResponse) {
-          text = extractTextFromResponses(completedResponse);
-        }
-        // The response body has been fully consumed by the SSE reader above;
-        // never call res.json() after this point.
-        return { text };
-      }
-
-      let data = (await res.json()) as OpenAIResponsesBackgroundResponse;
-      if (useBackgroundMode) {
-        const initialStatus = backgroundStatusOf(data.status);
-        const responseId = typeof data.id === "string" ? data.id : null;
-        if (isBackgroundPending(initialStatus)) {
-          if (!responseId) throw new Error("OpenAI background response missing id");
-          data = await pollBackgroundResponse({
-            apiKey,
-            responseId,
-            signal: controller.signal,
-            pollIntervalMs: backgroundPollIntervalMs,
-            onTrace: params.onTrace,
-          });
-        }
-
-        const finalStatus = backgroundStatusOf(data.status);
-        if (finalStatus && finalStatus !== "completed") {
-          const reason = summarizeBackgroundError(data);
-          throw new Error(
-            `OpenAI background response ended with status ${finalStatus}${reason ? `: ${reason}` : ""}`,
-          );
-        }
-      }
-
-      const text = extractTextFromResponses(data);
-      if (text) return { text };
-      if (useBackgroundMode) {
-        const finalStatus = backgroundStatusOf(data.status);
-        throw new Error(
-          `OpenAI background response returned no output text${finalStatus ? ` (status ${finalStatus})` : ""}`,
-        );
-      }
-    } else {
+    if (!res.ok) {
       const body = lastBody || (await res.text().catch(() => ""));
       const rid = requestIdFromResponse(res);
       // Responses-only models: chat/completions will always fail
