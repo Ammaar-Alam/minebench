@@ -9,6 +9,7 @@
  *   pnpm batch:generate --generate --upload # Generate missing and upload all
  *   pnpm batch:generate --generate --openrouter # Force OpenRouter routing where available
  *   pnpm batch:generate --generate --notools # Generate missing builds without voxel.exec tool usage
+ *   pnpm batch:generate --generate --model gpt-5-4-mini --reasoning high
  *   pnpm batch:generate --prompt "castle"   # Filter by single prompt
  *   pnpm batch:generate --prompt skyscraper castle fighter-jet --generate # Multiple prompts
  *   pnpm batch:generate --model gemini      # Filter by single model
@@ -238,6 +239,7 @@ function buildPromptFilterMatcher(promptSlugs: string[], promptFilters: string[]
 
 function parseArgs() {
   const args = process.argv.slice(2);
+  const reasoning = args.find((a, i) => args[i - 1] === "--reasoning") || null;
   const attemptsRaw = args.find((a, i) => args[i - 1] === "--attempts") || null;
   const attemptsNum = attemptsRaw ? Number(attemptsRaw) : NaN;
   const attempts = Number.isFinite(attemptsNum) ? Math.max(1, Math.floor(attemptsNum)) : 6;
@@ -255,6 +257,7 @@ function parseArgs() {
     openrouter: args.includes("--openrouter"),
     overwrite: args.includes("--overwrite"),
     notools: args.includes("--notools"),
+    reasoning,
     attempts,
     concurrency,
     promptFilters,
@@ -361,6 +364,7 @@ async function generateAndSave(
   attempts: number,
   enableTools: boolean,
   preferOpenRouter: boolean,
+  reasoning: string | null,
 ): Promise<{ ok: boolean; error?: string; blockCount?: number; generationTimeMs?: number }> {
 
   if (!job.promptText) {
@@ -376,6 +380,7 @@ async function generateAndSave(
     maxAttempts: attempts,
     enableTools,
     preferOpenRouter,
+    reasoning: reasoning ?? undefined,
     onRetry: (attempt, reason) => {
       const msg = (reason ?? "").trim();
       if (!msg) return;
@@ -708,6 +713,11 @@ function printUploadCommands(jobs: Job[]) {
 async function main() {
   const opts = parseArgs();
 
+  if (process.argv.slice(2).includes("--reasoning") && !opts.reasoning) {
+    console.error("\nError: --reasoning requires a value.\n");
+    process.exit(1);
+  }
+
   if (opts.help) {
     console.log(`
 MineBench Batch Generate Script
@@ -719,6 +729,7 @@ Usage:
   pnpm batch:generate --generate --upload # Generate missing and upload all
   pnpm batch:generate --generate --openrouter # Force OpenRouter routing where available
   pnpm batch:generate --generate --overwrite # Regenerate even if JSON exists
+  pnpm batch:generate --generate --model gpt-5-4-mini --reasoning high
   pnpm batch:generate --prompt castle     # Filter by single prompt
   pnpm batch:generate --prompt skyscraper castle fighter-jet --generate # Multiple prompts
   pnpm batch:generate --model gemini      # Filter by single model
@@ -732,6 +743,7 @@ Options:
   --openrouter      Prefer OpenRouter over native provider when both are available
   --overwrite       When generating, overwrite existing JSON files
   --notools         Disable voxel.exec tool usage (tools are on by default)
+  --reasoning <s>   Override model thinking/reasoning level when the selected route supports it
   --attempts <n>    Max attempts per build (default 6)
   --concurrency <n> Number of concurrent generations (default 1)
   --prompt <str...> Filter prompts by slug (can specify multiple)
@@ -809,6 +821,7 @@ Upload notes:
   if (opts.promptFilters.length > 0) console.log(`   Filtered by prompt(s): ${opts.promptFilters.join(", ")}`);
   if (opts.modelFilters.length > 0) console.log(`   Filtered by model(s): ${opts.modelFilters.join(", ")}`);
   if (opts.openrouter) console.log("   Provider override: OpenRouter");
+  if (opts.reasoning) console.log(`   Reasoning override: ${opts.reasoning}`);
 
   printStatus(allJobs);
 
@@ -859,7 +872,13 @@ Upload notes:
           console.log(`  ▶ [${startOrdinal}/${total}] ${jobLabel(job)}`);
           inFlight += 1;
           void (async () => {
-            const result = await generateAndSave(job, opts.attempts, !opts.notools, opts.openrouter);
+            const result = await generateAndSave(
+              job,
+              opts.attempts,
+              !opts.notools,
+              opts.openrouter,
+              opts.reasoning,
+            );
             const elapsed = result.generationTimeMs ? `${(result.generationTimeMs / 1000).toFixed(1)}s` : "-";
             if (result.ok) {
               const fileLink = formatFileLink(job.filePath);

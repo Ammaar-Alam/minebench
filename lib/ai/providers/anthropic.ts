@@ -99,11 +99,8 @@ function effortFallbacks(initial: AnthropicEffort, opts: { allowMax: boolean }):
   const ordered: AnthropicEffort[] = opts.allowMax
     ? ["max", "high", "medium", "low"]
     : ["high", "medium", "low"];
-  const out: AnthropicEffort[] = [initial];
-  for (const effort of ordered) {
-    if (!out.includes(effort)) out.push(effort);
-  }
-  return out;
+  const startIndex = Math.max(0, ordered.indexOf(initial));
+  return ordered.slice(startIndex);
 }
 
 function looksLikeEffortConfigError(body: string): boolean {
@@ -169,6 +166,7 @@ export async function anthropicGenerateText(params: {
   system: string;
   user: string;
   maxTokens: number;
+  adaptiveEffortAttempts?: AnthropicEffort[];
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   signal?: AbortSignal;
@@ -185,7 +183,12 @@ export async function anthropicGenerateText(params: {
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
   const useStructuredOutputs = Boolean(params.jsonSchema);
   const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
-  const adaptiveEffortAttempts = usesAdaptiveThinking ? parseAdaptiveEfforts(params.modelId) : [];
+  const adaptiveEffortAttempts =
+    usesAdaptiveThinking && params.adaptiveEffortAttempts && params.adaptiveEffortAttempts.length > 0
+      ? params.adaptiveEffortAttempts
+      : usesAdaptiveThinking
+        ? parseAdaptiveEfforts(params.modelId)
+        : [];
   const preferStreaming = Boolean(params.onDelta) || parseBooleanEnv("ANTHROPIC_STREAM_RESPONSES", true);
   const allowForcedToolStructuredFallback = parseBooleanEnv(
     "ANTHROPIC_ALLOW_FORCED_TOOL_STRUCTURED_FALLBACK",

@@ -1,16 +1,12 @@
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { GeminiThinkingConfig } from "@/lib/ai/reasoningProfiles";
 
 type JsonSchema = Record<string, unknown>;
 
 type GeminiGenerateContentResponse = {
   candidates?: { content?: { parts?: { text?: string }[] } }[];
-};
-
-type GeminiThinkingConfig = {
-  thinkingLevel?: "low" | "high";
-  thinkingBudget?: number;
 };
 
 function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | undefined {
@@ -48,6 +44,7 @@ export async function geminiGenerateText(params: {
   system: string;
   user: string;
   maxOutputTokens?: number;
+  thinkingConfig?: GeminiThinkingConfig;
   temperature?: number;
   jsonSchema?: JsonSchema;
   signal?: AbortSignal;
@@ -72,7 +69,7 @@ export async function geminiGenerateText(params: {
   const timeout: ReturnType<typeof setTimeout> | null = null;
   let res: Response | null = null;
   try {
-    const thinkingConfig = bestThinkingConfigForModel(params.modelId);
+    const thinkingConfig = params.thinkingConfig ?? bestThinkingConfigForModel(params.modelId);
     const thinkingConfigLine = describeThinkingConfigLine(thinkingConfig);
     const basePayload = {
       systemInstruction: { parts: [{ text: params.system }] },

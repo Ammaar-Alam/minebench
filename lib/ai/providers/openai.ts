@@ -431,6 +431,7 @@ export async function openaiGenerateText(params: {
   user: string;
   maxOutputTokens?: number;
   reasoningMaxTokens?: number;
+  reasoningEffortAttempts?: string[];
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   signal?: AbortSignal;
@@ -452,7 +453,7 @@ export async function openaiGenerateText(params: {
     params.modelId === "gpt-5-pro" ||
     params.modelId === "gpt-5.2-codex" ||
     params.modelId === "gpt-5.3-codex";
-  const reasoningEffortAttempts: string[] = isGpt5Family
+  const defaultReasoningEffortAttempts: string[] = isGpt5Family
     ? params.modelId.startsWith("gpt-5.4-pro")
       ? ["xhigh", "high", "medium"]
       : params.modelId === "gpt-5-pro"
@@ -461,6 +462,10 @@ export async function openaiGenerateText(params: {
     : isGptOssFamily
       ? ["xhigh", "high", "medium", "low"]
       : [];
+  const reasoningEffortAttempts =
+    params.reasoningEffortAttempts && params.reasoningEffortAttempts.length > 0
+      ? params.reasoningEffortAttempts
+      : defaultReasoningEffortAttempts;
   const reasoningConfigAttempts = reasoningConfigFallbacks({
     efforts: reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,

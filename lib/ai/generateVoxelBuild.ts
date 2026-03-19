@@ -12,6 +12,14 @@ import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
+import {
+  AnthropicAdaptiveEffort,
+  anthropicAdaptiveEffortAttempts,
+  GeminiThinkingConfig,
+  geminiThinkingConfigForModel,
+  openAiReasoningEffortAttempts,
+  openRouterReasoningEffortAttempts as openRouterReasoningEffortAttemptsForModel,
+} from "@/lib/ai/reasoningProfiles";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
@@ -82,6 +90,8 @@ function describeRequestedThinkingMode(opts: {
   modelId: string;
   reasoningMaxTokens?: number;
   reasoningEffortAttempts?: string[];
+  adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
+  geminiThinkingConfig?: GeminiThinkingConfig;
 }): string {
   if (opts.route === "openrouter") {
     if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
@@ -94,8 +104,12 @@ function describeRequestedThinkingMode(opts: {
   }
 
   if (opts.provider === "gemini") {
-    if (opts.modelId.startsWith("gemini-3")) return "thinking_level=high";
-    if (opts.modelId.startsWith("gemini-2.5-pro")) return "thinking_budget=-1";
+    if (opts.geminiThinkingConfig?.thinkingLevel) {
+      return `thinking_level=${opts.geminiThinkingConfig.thinkingLevel}`;
+    }
+    if (typeof opts.geminiThinkingConfig?.thinkingBudget === "number") {
+      return `thinking_budget=${opts.geminiThinkingConfig.thinkingBudget}`;
+    }
     return "default";
   }
 
@@ -105,14 +119,9 @@ function describeRequestedThinkingMode(opts: {
   if (opts.provider === "custom") return "default";
 
   if (opts.provider === "openai") {
-    if (opts.modelId.startsWith("gpt-5.4-pro")) {
-      return "reasoning_effort_fallback=xhigh->high->medium->disabled";
+    if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
+      return `reasoning_effort_fallback=${opts.reasoningEffortAttempts.join("->")}->disabled`;
     }
-    if (opts.modelId === "gpt-5-pro") {
-      return "reasoning_effort=high";
-    }
-    if (opts.modelId.startsWith("gpt-5")) return "reasoning_effort_fallback=xhigh->high->disabled";
-    if (opts.modelId.startsWith("gpt-oss")) return "reasoning_effort_fallback=xhigh->high->medium->low->disabled";
     if (typeof opts.reasoningMaxTokens === "number") {
       return `reasoning_max_tokens<=${Math.floor(opts.reasoningMaxTokens)}`;
     }
@@ -120,7 +129,9 @@ function describeRequestedThinkingMode(opts: {
   }
 
   if (opts.provider === "anthropic") {
-    if (opts.modelId.startsWith("claude-sonnet-4-6")) return "adaptive_effort=max->xhigh->high->medium->low";
+    if (opts.adaptiveEffortAttempts && opts.adaptiveEffortAttempts.length > 0) {
+      return `adaptive_effort=${opts.adaptiveEffortAttempts.join("->")}`;
+    }
     if (opts.modelId.startsWith("claude")) return "adaptive_or_default";
     if (typeof opts.reasoningMaxTokens === "number") {
       return `thinking_budget<=${Math.floor(opts.reasoningMaxTokens)}`;
@@ -141,6 +152,8 @@ function providerRequestTraceLine(opts: {
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
   reasoningEffortAttempts?: string[];
+  adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
+  geminiThinkingConfig?: GeminiThinkingConfig;
 }): string {
   const thinkingMode = describeRequestedThinkingMode(opts);
   return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${DEFAULT_TEMPERATURE}.`;
@@ -304,6 +317,7 @@ export type GenerateVoxelBuildParams = {
   providerKeys?: ProviderApiKeys;
   allowServerKeys?: boolean;
   preferOpenRouter?: boolean;
+  reasoning?: string;
   abortSignal?: AbortSignal;
   onRetry?: (attempt: number, reason: string) => void;
   onDelta?: (delta: string) => void;
@@ -343,6 +357,9 @@ async function callDirectProvider(args: {
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
+  reasoningEffortAttempts?: string[];
+  adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
+  geminiThinkingConfig?: GeminiThinkingConfig;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
@@ -355,6 +372,7 @@ async function callDirectProvider(args: {
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
       reasoningMaxTokens: args.reasoningMaxTokens,
+      reasoningEffortAttempts: args.reasoningEffortAttempts,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       signal: args.signal,
@@ -370,6 +388,7 @@ async function callDirectProvider(args: {
       system: args.system,
       user: args.user,
       maxTokens: args.maxOutputTokens,
+      adaptiveEffortAttempts: args.adaptiveEffortAttempts,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       signal: args.signal,
@@ -385,6 +404,7 @@ async function callDirectProvider(args: {
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
+      thinkingConfig: args.geminiThinkingConfig,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       signal: args.signal,
@@ -477,6 +497,7 @@ async function providerGenerateText(args: {
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
+  reasoning?: string;
   providerKeys?: ProviderApiKeys;
   allowServerKeys: boolean;
   preferOpenRouter?: boolean;
@@ -542,6 +563,18 @@ async function providerGenerateText(args: {
 
   // try direct provider first if we have the key
   if (!forceOpenRouter && !preferOpenRouter && hasDirect) {
+    const directOpenAiReasoningEffortAttempts =
+      model.provider === "openai"
+        ? openAiReasoningEffortAttempts(model.modelId, args.reasoning)
+        : undefined;
+    const directAnthropicAdaptiveEffortAttempts =
+      model.provider === "anthropic"
+        ? anthropicAdaptiveEffortAttempts(model.modelId, args.reasoning)
+        : undefined;
+    const directGeminiThinkingConfig =
+      model.provider === "gemini"
+        ? geminiThinkingConfigForModel(model.modelId, args.reasoning)
+        : undefined;
     args.onProviderTrace?.(
       `Routing via direct ${model.provider} provider (${model.modelId}). ` +
         providerRequestTraceLine({
@@ -550,6 +583,9 @@ async function providerGenerateText(args: {
           modelId: model.modelId,
           maxOutputTokens: args.maxOutputTokens,
           reasoningMaxTokens: args.reasoningMaxTokens,
+          reasoningEffortAttempts: directOpenAiReasoningEffortAttempts,
+          adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
+          geminiThinkingConfig: directGeminiThinkingConfig,
         }),
     );
     try {
@@ -563,6 +599,9 @@ async function providerGenerateText(args: {
         jsonSchema: args.jsonSchema,
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
+        reasoningEffortAttempts: directOpenAiReasoningEffortAttempts,
+        adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
+        geminiThinkingConfig: directGeminiThinkingConfig,
         signal: args.signal,
         onDelta: args.onDelta,
         onTrace: args.onProviderTrace,
@@ -578,27 +617,10 @@ async function providerGenerateText(args: {
     throw new Error(`No OpenRouter model ID configured for ${model.key}`);
   }
 
-  const openRouterReasoningEffortAttempts =
-    model.openRouterModelId === "openai/gpt-5.4-pro"
-      ? ["xhigh", "high", "medium"]
-      : model.openRouterModelId === "openai/gpt-5-pro"
-      ? ["high"]
-      : model.openRouterModelId.startsWith("openai/gpt-5")
-      ? ["xhigh", "high"]
-      : model.openRouterModelId === "anthropic/claude-sonnet-4.6"
-        ? ["max", "xhigh", "high", "medium", "low"]
-        : model.openRouterModelId === "z-ai/glm-5"
-          ? ["xhigh", "high", "medium", "low"]
-          : model.openRouterModelId.startsWith("google/gemini-3")
-            ? ["high", "medium", "low", "minimal"]
-            : model.openRouterModelId === "qwen/qwen3-max-thinking" ||
-                model.openRouterModelId === "qwen/qwen3.5-397b-a17b"
-              ? ["xhigh", "high", "medium", "low"]
-              : model.openRouterModelId === "openai/gpt-oss-120b"
-                ? ["xhigh", "high", "medium", "low"]
-                : model.openRouterModelId === "minimax/minimax-m2.5"
-                  ? ["xhigh", "high", "medium", "low", "minimal"]
-                  : undefined;
+  const openRouterReasoningEffortAttempts = openRouterReasoningEffortAttemptsForModel(
+    model.openRouterModelId,
+    args.reasoning,
+  );
 
   args.onProviderTrace?.(
     `Routing via OpenRouter (${model.openRouterModelId}). ` +
@@ -751,6 +773,7 @@ export async function generateVoxelBuild(
         jsonSchema,
         maxOutputTokens,
         reasoningMaxTokens,
+        reasoning: params.reasoning,
         providerKeys: params.providerKeys,
         allowServerKeys,
         preferOpenRouter: params.preferOpenRouter,
