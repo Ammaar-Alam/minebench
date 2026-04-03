@@ -90,6 +90,15 @@ export function geminiThinkingConfigForModel(
     return { thinkingLevel: normalized };
   }
 
+  if (modelId.startsWith("gemma-4")) {
+    if (!normalized || normalized === "high") {
+      return { thinkingLevel: "high" };
+    }
+    throw new Error(
+      `Gemini model ${modelId} does not support reasoning '${override}'. Supported values: high.`,
+    );
+  }
+
   if (modelId.startsWith("gemini-2.5-pro")) {
     if (!normalized || normalized === "dynamic" || normalized === "adaptive") {
       return { thinkingBudget: -1 };
@@ -134,6 +143,9 @@ export function openRouterReasoningEffortAttempts(
   }
   if (modelId.startsWith("google/gemini-3")) {
     return descendingAttempts(label, ["high", "medium", "low", "minimal"], override);
+  }
+  if (modelId === "google/gemma-4-31b-it") {
+    return descendingAttempts(label, ["high"], override);
   }
   if (
     modelId === "qwen/qwen3-max-thinking" ||

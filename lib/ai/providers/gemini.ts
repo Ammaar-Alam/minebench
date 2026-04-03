@@ -14,6 +14,10 @@ function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | und
     return { thinkingLevel: "high" };
   }
 
+  if (modelId.startsWith("gemma-4")) {
+    return { thinkingLevel: "high" };
+  }
+
   if (modelId.startsWith("gemini-2.5-pro")) {
     // Use adaptive/dynamic reasoning budget for 2.5 Pro.
     return { thinkingBudget: -1 };
