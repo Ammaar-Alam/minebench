@@ -211,6 +211,7 @@ function providerLabel(provider: string): string {
   if (provider === "gemini") return "Google";
   if (provider === "moonshot") return "Moonshot";
   if (provider === "deepseek") return "DeepSeek";
+  if (provider === "minimax") return "MiniMax";
   if (provider === "xai") return "xAI";
   if (provider === "zai") return "Z.AI";
   if (provider === "qwen") return "Qwen";

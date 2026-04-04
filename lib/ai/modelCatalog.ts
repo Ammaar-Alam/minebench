@@ -42,6 +42,7 @@ export type ModelKey =
   | "zai_glm_4_7"
   | "qwen_qwen3_max_thinking"
   | "qwen_qwen3_5_397b_a17b"
+  | "minimax_m2_7"
   | "minimax_m2_5"
   | "meta_llama_4_maverick";
 
@@ -310,6 +311,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     enabled: true,
     openRouterModelId: "qwen/qwen3.5-397b-a17b",
     forceOpenRouter: true,
+  },
+  {
+    key: "minimax_m2_7",
+    provider: "minimax",
+    modelId: "MiniMax-M2.7",
+    displayName: "MiniMax M2.7",
+    enabled: true,
+    openRouterModelId: "minimax/minimax-m2.7",
   },
   {
     key: "minimax_m2_5",
