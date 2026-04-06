@@ -156,7 +156,10 @@ export function openRouterReasoningEffortAttempts(
   if (modelId === "openai/gpt-oss-120b") {
     return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
   }
-  if (modelId === "minimax/minimax-m2.5") {
+  if (
+    modelId === "minimax/minimax-m2.7" ||
+    modelId === "minimax/minimax-m2.5"
+  ) {
     return descendingAttempts(
       label,
       ["xhigh", "high", "medium", "low", "minimal"],
