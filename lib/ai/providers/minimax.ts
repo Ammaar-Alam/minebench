@@ -50,9 +50,11 @@ function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
   return (
     b.includes("max_tokens") ||
+    b.includes("max tokens") ||
     (b.includes("maximum") && b.includes("tokens")) ||
     b.includes("too many tokens") ||
-    b.includes("token limit")
+    b.includes("token limit") ||
+    (b.includes("does not support") && b.includes("tokens >"))
   );
 }
 
@@ -111,7 +113,7 @@ export async function minimaxGenerateText(params: {
           stream: Boolean(params.onDelta),
           reasoning_split: true,
           temperature,
-          max_tokens: tok,
+          max_completion_tokens: tok,
         }),
       });
       if (res.ok) {
