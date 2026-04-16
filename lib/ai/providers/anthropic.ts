@@ -122,6 +122,10 @@ function isLegacyManualThinkingModel(modelId: string): boolean {
   return modelId.startsWith("claude-sonnet-4-5") || modelId.startsWith("claude-opus-4-5");
 }
 
+function isOpus47(modelId: string): boolean {
+  return modelId.startsWith("claude-opus-4-7");
+}
+
 function isOpus46(modelId: string): boolean {
   return modelId.startsWith("claude-opus-4-6");
 }
@@ -131,10 +135,17 @@ function isSonnet46(modelId: string): boolean {
 }
 
 function isAdaptiveThinkingModel(modelId: string): boolean {
-  return isOpus46(modelId) || isSonnet46(modelId);
+  return isOpus47(modelId) || isOpus46(modelId) || isSonnet46(modelId);
 }
 
 function parseAdaptiveEfforts(modelId: string): AnthropicEffort[] {
+  if (isOpus47(modelId)) {
+    const preferred = parseEffortEnv("ANTHROPIC_OPUS_4_7_EFFORT", {
+      defaultEffort: "max",
+      allowMax: true,
+    });
+    return effortFallbacks(preferred, { allowMax: true });
+  }
   if (isOpus46(modelId)) {
     const preferred = parseEffortEnv("ANTHROPIC_OPUS_4_6_EFFORT", {
       defaultEffort: "max",

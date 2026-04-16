@@ -28,6 +28,7 @@ export type ModelKey =
   | "anthropic_claude_4_6_sonnet"
   | "anthropic_claude_4_5_opus"
   | "anthropic_claude_4_6_opus"
+  | "anthropic_claude_4_7_opus"
   | "gemini_3_0_pro"
   | "gemini_3_1_pro"
   | "gemini_3_0_flash"
@@ -194,6 +195,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Claude 4.6 Opus",
     enabled: true,
     openRouterModelId: "anthropic/claude-opus-4.6",
+  },
+  {
+    key: "anthropic_claude_4_7_opus",
+    provider: "anthropic",
+    modelId: "claude-opus-4-7",
+    displayName: "Claude 4.7 Opus",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-opus-4.7",
   },
   {
     key: "gemini_3_0_pro",

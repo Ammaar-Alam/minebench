@@ -49,6 +49,12 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   // gpt-5-pro alias remaining at 272k.
   if (modelId === "gpt-5-pro") return 272_000;
   if (modelId.startsWith("gpt-5")) return 128_000;
+  if (
+    modelId.startsWith("claude-opus-4-7") ||
+    modelId === "anthropic/claude-opus-4.7"
+  ) {
+    return 128_000;
+  }
   // MiniMax M2.7's OpenAI-compatible route rejects the larger MineBench default
   // output budgets. Keep a lower completion budget so the prompt plus output
   // stays within the model's effective request limit.

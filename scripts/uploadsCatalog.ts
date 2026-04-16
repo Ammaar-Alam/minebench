@@ -50,6 +50,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   anthropic_claude_4_6_sonnet: "sonnet-4-6",
   anthropic_claude_4_5_opus: "opus",
   anthropic_claude_4_6_opus: "opus-4-6",
+  anthropic_claude_4_7_opus: "opus-4-7",
   gemini_3_0_pro: "gemini-pro",
   gemini_3_1_pro: "gemini-3-1-pro",
   gemini_3_0_flash: "gemini-flash",
