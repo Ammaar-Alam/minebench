@@ -203,6 +203,16 @@ function isExhaustedOutputBudgetProviderError(message: string): boolean {
   );
 }
 
+function isDeterministicStructuredSchemaProviderError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("output_config.format.schema") ||
+    (m.includes("json_schema") && m.includes("not supported")) ||
+    (m.includes("structured output") && m.includes("not supported")) ||
+    (m.includes("structured output") && m.includes("invalid"))
+  );
+}
+
 function normalizeApiKey(raw: string | undefined): string | null {
   const v = (raw ?? "").trim();
   return v ? v : null;
@@ -734,6 +744,7 @@ export async function generateVoxelBuild(
     maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
     minBlocks,
     palette: params.palette,
+    enableTools,
   });
   const system = enableTools
     ? baseSystem +
@@ -888,6 +899,7 @@ export async function generateVoxelBuild(
       // but the client timed out waiting for headers/body.
       if (isBilledTimeoutStyleProviderError(lastError)) break;
       if (isExhaustedOutputBudgetProviderError(lastError)) break;
+      if (isDeterministicStructuredSchemaProviderError(lastError)) break;
     }
   }
 

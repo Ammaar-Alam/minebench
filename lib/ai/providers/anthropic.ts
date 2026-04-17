@@ -66,6 +66,60 @@ function looksLikeStructuredFormatUnsupportedError(body: string): boolean {
   );
 }
 
+const ANTHROPIC_UNSUPPORTED_SCHEMA_KEYS = new Set([
+  "exclusiveMaximum",
+  "exclusiveMinimum",
+  "maxContains",
+  "maxItems",
+  "maxLength",
+  "maxProperties",
+  "maximum",
+  "minContains",
+  "minLength",
+  "minProperties",
+  "minimum",
+  "multipleOf",
+  "pattern",
+  "propertyNames",
+  "unevaluatedProperties",
+  "uniqueItems",
+]);
+
+function sanitizeAnthropicStructuredSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((value) => sanitizeAnthropicStructuredSchema(value));
+  }
+  if (!schema || typeof schema !== "object") return schema;
+
+  const input = schema as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(input)) {
+    if (ANTHROPIC_UNSUPPORTED_SCHEMA_KEYS.has(key)) continue;
+    if (key === "minItems") {
+      const normalized = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
+      if (normalized === 0 || normalized === 1) output[key] = normalized;
+      continue;
+    }
+    if (key === "additionalProperties") {
+      if (value === false) output[key] = false;
+      continue;
+    }
+    if (key === "properties" || key === "definitions") {
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const nested: Record<string, unknown> = {};
+      for (const [nestedKey, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+        nested[nestedKey] = sanitizeAnthropicStructuredSchema(nestedValue);
+      }
+      output[key] = nested;
+      continue;
+    }
+    output[key] = sanitizeAnthropicStructuredSchema(value);
+  }
+
+  return output;
+}
+
 function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name];
   if (!raw) return defaultValue;
@@ -193,6 +247,9 @@ export async function anthropicGenerateText(params: {
 
   const maxTokens = Number.isFinite(params.maxTokens) ? Math.floor(params.maxTokens) : 8192;
   const useStructuredOutputs = Boolean(params.jsonSchema);
+  const structuredSchema = useStructuredOutputs
+    ? (sanitizeAnthropicStructuredSchema(params.jsonSchema) as Record<string, unknown>)
+    : undefined;
   const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
   const adaptiveEffortAttempts =
     usesAdaptiveThinking && params.adaptiveEffortAttempts && params.adaptiveEffortAttempts.length > 0
@@ -220,7 +277,7 @@ export async function anthropicGenerateText(params: {
         {
           name: STRUCTURED_OUTPUT_TOOL_NAME,
           description: "Return the final result as JSON that matches the provided schema.",
-          input_schema: params.jsonSchema as Record<string, unknown>,
+          input_schema: structuredSchema as Record<string, unknown>,
         },
       ]
     : undefined;
@@ -254,12 +311,12 @@ export async function anthropicGenerateText(params: {
             ? useForcedToolStructuredOutput
               ? undefined
               : {
-                  ...(usesAdaptiveThinking && effort ? { effort } : {}),
-                  format: {
-                    type: "json_schema",
-                    schema: params.jsonSchema as Record<string, unknown>,
-                  },
-                }
+                ...(usesAdaptiveThinking && effort ? { effort } : {}),
+                format: {
+                  type: "json_schema",
+                  schema: structuredSchema as Record<string, unknown>,
+                },
+              }
             : usesAdaptiveThinking && effort
               ? { effort }
               : undefined;

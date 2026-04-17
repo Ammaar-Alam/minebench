@@ -9,6 +9,7 @@
  *   pnpm batch:generate --generate --upload # Generate missing and upload all
  *   pnpm batch:generate --generate --openrouter # Force OpenRouter routing where available
  *   pnpm batch:generate --generate --notools # Generate missing builds without voxel.exec tool usage
+ *   pnpm batch:generate --generate --no-tools # Alias for --notools
  *   pnpm batch:generate --generate --model gpt-5-4-mini --reasoning high
  *   pnpm batch:generate --prompt "castle"   # Filter by single prompt
  *   pnpm batch:generate --prompt skyscraper castle fighter-jet --generate # Multiple prompts
@@ -256,7 +257,7 @@ function parseArgs() {
     upload: args.includes("--upload"),
     openrouter: args.includes("--openrouter"),
     overwrite: args.includes("--overwrite"),
-    notools: args.includes("--notools"),
+    notools: args.includes("--notools") || args.includes("--no-tools"),
     reasoning,
     attempts,
     concurrency,
@@ -743,6 +744,7 @@ Options:
   --openrouter      Prefer OpenRouter over native provider when both are available
   --overwrite       When generating, overwrite existing JSON files
   --notools         Disable voxel.exec tool usage (tools are on by default)
+  --no-tools        Alias for --notools
   --reasoning <s>   Override model thinking/reasoning level when the selected route supports it
   --attempts <n>    Max attempts per build (default 6)
   --concurrency <n> Number of concurrent generations (default 1)
