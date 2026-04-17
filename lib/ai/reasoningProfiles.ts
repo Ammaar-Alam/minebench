@@ -58,7 +58,9 @@ export function anthropicAdaptiveEffortAttempts(
   override?: string,
 ): AnthropicAdaptiveEffort[] | undefined {
   const isAdaptiveModel =
-    modelId.startsWith("claude-opus-4-6") || modelId.startsWith("claude-sonnet-4-6");
+    modelId.startsWith("claude-opus-4-7") ||
+    modelId.startsWith("claude-opus-4-6") ||
+    modelId.startsWith("claude-sonnet-4-6");
   if (!isAdaptiveModel) {
     const normalized = normalizeReasoningOverride(override);
     if (normalized) {
@@ -129,6 +131,7 @@ export function openRouterReasoningEffortAttempts(
     return descendingAttempts(label, ["xhigh", "high"], override);
   }
   if (
+    modelId === "anthropic/claude-opus-4.7" ||
     modelId === "anthropic/claude-sonnet-4.6" ||
     modelId === "anthropic/claude-opus-4.6"
   ) {
