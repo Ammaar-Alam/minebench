@@ -5,9 +5,11 @@ export function buildSystemPrompt(opts: {
   maxBlocks: number;
   minBlocks: number;
   palette: "simple" | "advanced";
+  enableTools?: boolean;
 }): string {
   const paletteBlocks = getPalette(opts.palette);
   const blockList = paletteBlocks.map((b) => b.id).join(", ");
+  const enableTools = opts.enableTools ?? true;
 
   const center = Math.floor(opts.gridSize / 2);
   const minBlocksLabel = opts.minBlocks.toLocaleString("en-US");
@@ -16,6 +18,67 @@ export function buildSystemPrompt(opts: {
   const targetHigh = Math.max(3_000_000, targetLow);
   const targetLowLabel = targetLow.toLocaleString("en-US");
   const targetHighLabel = targetHigh.toLocaleString("en-US");
+  const outputSection = enableTools
+    ? `<tool_usage_voxel_exec>
+## Tool Usage: voxel.exec
+You must use the voxel.exec tool to generate your build. You will write JavaScript code that calls these runtime functions:
+
+<runtime_functions>
+- \`block(x, y, z, type)\` - Place a single block at coordinates
+- \`box(x1, y1, z1, x2, y2, z2, type)\` - Create a filled rectangular prism from corner1 to corner2
+- \`line(x1, y1, z1, x2, y2, z2, type)\` - Create a line of blocks from point1 to point2
+- \`rng()\` - Seeded random number generator (if you need controlled randomness)
+- \`Math\` - Standard JavaScript Math object
+</runtime_functions>
+
+<output_format>
+**Output format:** Return ONLY this JSON structure (no markdown, no code blocks, no explanations):
+\`\`\`json
+{"tool":"voxel.exec","input":{"code":"/* your JavaScript code here */","gridSize":${opts.gridSize},"palette":"${opts.palette}","seed":123}}
+\`\`\`
+</output_format>
+
+<important>
+**Important:**
+- Do NOT output voxel JSON directly (with boxes/lines/blocks arrays)
+- Generate the voxels through JavaScript code in the tool call
+- The tool executes your code; it does not design for you
+- All planning and design is YOUR responsibility
+</important>
+</tool_usage_voxel_exec>`
+    : `<output_format>
+## Output Format
+Return ONLY a single voxel build JSON object with this shape (no markdown, no code blocks, no explanations):
+\`\`\`json
+{"version":"1.0","boxes":[],"lines":[],"blocks":[]}
+\`\`\`
+</output_format>
+
+<important>
+**Important:**
+- Do NOT return a tool call
+- Do NOT return JavaScript code
+- Put your final build directly into the \`boxes\`, \`lines\`, and \`blocks\` arrays
+- Keep the JSON valid and keep all coordinates within the grid
+</important>`;
+  const planningStepSeven = enableTools
+    ? `7. **Plan code structure**:
+   - Which primitives (box/line/block) will you use for each component?
+   - What materials/block types for each part?
+   - Any helper functions or loops to organize your code?
+   - Estimated total block count`
+    : `7. **Plan output structure**:
+   - Which primitives (box/line/block) will you use for each component?
+   - What materials/block types for each part?
+   - How will you organize the final JSON across boxes, lines, and blocks?
+   - Estimated total block count`;
+  const finalOutputRequirements = enableTools
+    ? `After completing your build plan in the thinking block, write the JavaScript code and output the required tool call JSON outside of the thinking block.
+
+Your final output should consist only of the JSON tool call and should not duplicate or rehash any of the planning work you did in the thinking block.`
+    : `After completing your build plan in the thinking block, output the required voxel build JSON outside of the thinking block.
+
+Your final output should consist only of the voxel build JSON and should not duplicate or rehash any of the planning work you did in the thinking block.`;
   return `<system_prompt>
 <intro>
 You are competing in MineBench, a competitive benchmark where AI models create 3D voxel structures. You will compete head-to-head against another AI model on the same build request, and human judges will vote on which build is superior.
@@ -238,33 +301,7 @@ ${blockList}
 </primitive_selection_strategy>
 </constraints_and_requirements>
 
-<tool_usage_voxel_exec>
-## Tool Usage: voxel.exec
-You must use the voxel.exec tool to generate your build. You will write JavaScript code that calls these runtime functions:
-
-<runtime_functions>
-- \`block(x, y, z, type)\` - Place a single block at coordinates
-- \`box(x1, y1, z1, x2, y2, z2, type)\` - Create a filled rectangular prism from corner1 to corner2
-- \`line(x1, y1, z1, x2, y2, z2, type)\` - Create a line of blocks from point1 to point2
-- \`rng()\` - Seeded random number generator (if you need controlled randomness)
-- \`Math\` - Standard JavaScript Math object
-</runtime_functions>
-
-<output_format>
-**Output format:** Return ONLY this JSON structure (no markdown, no code blocks, no explanations):
-\`\`\`json
-{"tool":"voxel.exec","input":{"code":"/* your JavaScript code here */","gridSize":${opts.gridSize},"palette":"${opts.palette}","seed":123}}
-\`\`\`
-</output_format>
-
-<important>
-**Important:**
-- Do NOT output voxel JSON directly (with boxes/lines/blocks arrays)
-- Generate the voxels through JavaScript code in the tool call
-- The tool executes your code; it does not design for you
-- All planning and design is YOUR responsibility
-</important>
-</tool_usage_voxel_exec>
+${outputSection}
 
 <your_task>
 ## Your Task
@@ -304,17 +341,11 @@ Before writing code, create a detailed build plan inside <build_plan> tags in yo
    - Are you creating something that represents the pinnacle of your ability?
    - Have you avoided creating something "safe" or simple?
 
-7. **Plan code structure**:
-   - Which primitives (box/line/block) will you use for each component?
-   - What materials/block types for each part?
-   - Any helper functions or loops to organize your code?
-   - Estimated total block count
+${planningStepSeven}
 </build_plan_requirement>
 
 <final_output_requirements>
-After completing your build plan in the thinking block, write the JavaScript code and output the required tool call JSON outside of the thinking block.
-
-Your final output should consist only of the JSON tool call and should not duplicate or rehash any of the planning work you did in the thinking block.
+${finalOutputRequirements}
 
 Remember: **This is a competition. Create something extraordinary that demonstrates your superiority.**
 </final_output_requirements>
