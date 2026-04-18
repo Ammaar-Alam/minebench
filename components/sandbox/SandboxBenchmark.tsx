@@ -8,6 +8,7 @@ import {
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { ErrorState } from "@/components/ErrorState";
 import type {
   ArenaBuildLoadHints,
   ArenaBuildRef,
@@ -929,8 +930,23 @@ export function SandboxBenchmark() {
           </div>
 
           {error ? (
-            <div className="mt-4 rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-              {error}
+            <div className="mt-4">
+              <ErrorState
+                error={new Error(error)}
+                title="Couldn't load benchmark"
+                hint={error}
+                onRetry={() =>
+                  void runLoad(
+                    {
+                      promptId,
+                      modelA: modelPair.a || undefined,
+                      modelB: modelPair.b || undefined,
+                    },
+                    { initial: true },
+                  )
+                }
+                retrying={loading || refreshing}
+              />
             </div>
           ) : null}
 

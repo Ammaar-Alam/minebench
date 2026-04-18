@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { PromptListResponse } from "@/lib/arena/types";
+import { fetchWithRetry } from "@/lib/fetchWithRetry";
 
 export function PromptPicker({
   selectedPromptId,
@@ -13,17 +14,20 @@ export function PromptPicker({
   const [prompts, setPrompts] = useState<PromptListResponse["prompts"]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
     setStatus("loading");
     setError(null);
-    fetch("/api/arena/prompts", { method: "GET" })
-      .then(async (r) => {
-        if (r.ok) return (await r.json()) as PromptListResponse;
-        const text = await r.text().catch(() => "");
-        throw new Error(text || `Failed to load prompts (${r.status})`);
-      })
+    fetchWithRetry("/api/arena/prompts", {
+      method: "GET",
+      parentSignal: controller.signal,
+      timeoutMs: 10_000,
+      retries: 2,
+    })
+      .then(async (r) => (await r.json()) as PromptListResponse)
       .then((data: PromptListResponse) => {
         if (cancelled) return;
         setPrompts(data.prompts);
@@ -31,13 +35,19 @@ export function PromptPicker({
       })
       .catch((e: unknown) => {
         if (cancelled) return;
+        if (e instanceof DOMException && e.name === "AbortError") return;
         setPrompts([]);
         setStatus("error");
         setError(e instanceof Error ? e.message : "Failed to load prompts");
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
+  }, [reloadToken]);
+
+  const handleRetry = useCallback(() => {
+    setReloadToken((n) => n + 1);
   }, []);
 
   return (
@@ -81,8 +91,15 @@ export function PromptPicker({
         </svg>
       </div>
       {status === "error" && error ? (
-        <div className="text-xs text-danger">
-          {error}
+        <div className="flex items-center justify-between gap-2 text-xs text-danger">
+          <span className="truncate">{error}</span>
+          <button
+            type="button"
+            onClick={handleRetry}
+            className="shrink-0 rounded-full px-2 py-0.5 font-medium text-danger ring-1 ring-danger/30 transition hover:bg-danger/10 focus-visible:outline-none focus-visible:ring-danger/60"
+          >
+            Retry
+          </button>
         </div>
       ) : null}
     </label>

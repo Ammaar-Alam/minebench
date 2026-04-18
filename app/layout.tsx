@@ -3,8 +3,10 @@ import { IBM_Plex_Mono, Spline_Sans, Unbounded } from "next/font/google";
 import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
+import { SiteHealthBanner } from "@/components/SiteHealthBanner";
 import {
   DEFAULT_OG_IMAGE,
   SEO_KEYWORDS,
@@ -140,6 +142,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="absolute inset-0 mb-bg-grid" />
           <div className="absolute inset-0 mb-bg-noise" />
         </div>
+
+        <OfflineBanner />
+        <SiteHealthBanner />
 
         <div id="mb-shell" className="relative z-10 flex min-h-dvh flex-col">
           <SiteHeader />

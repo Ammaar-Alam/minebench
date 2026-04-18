@@ -1,9 +1,18 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { LeaderboardResponse } from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+import { ErrorState } from "@/components/ErrorState";
+import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
+import { formatAge, readStale, writeStale } from "@/lib/staleCache";
+
+const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v1";
+// accept cached data up to 10 min — older than that we prefer "loading…" over shipping stale rankings
+const LEADERBOARD_STALE_MAX_AGE_MS = 10 * 60 * 1000;
+const LEADERBOARD_SLOW_THRESHOLD_MS = 5_000;
+const LEADERBOARD_TIMEOUT_MS = 10_000;
 
 function ChevronUp({ className }: { className?: string }) {
   return (
@@ -138,7 +147,13 @@ function MovementMark({ badge }: { badge: MovementBadge | null }) {
 
 export function Leaderboard() {
   const [data, setData] = useState<LeaderboardResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [dataAgeMs, setDataAgeMs] = useState<number | null>(null);
+  const [isStale, setIsStale] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const [refreshError, setRefreshError] = useState<unknown>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
   const [navigatingModelKey, setNavigatingModelKey] = useState<string | null>(null);
   const [showDetailed, setShowDetailed] = useState(false);
   const router = useRouter();
@@ -156,20 +171,76 @@ export function Leaderboard() {
     data?.models.reduce((sum, model) => sum + summarizeArenaVotes(model).totalVotes, 0) ?? 0;
 
   useEffect(() => {
+    const controller = new AbortController();
     let cancelled = false;
-    fetch("/api/leaderboard", { method: "GET" })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("Failed"))))
+
+    // 1. hydrate from stale cache immediately so the first paint shows data
+    //    this is the biggest win when the API is slow or 5xx-ing: users see
+    //    the last-known ranking instead of a blank page.
+    const cached = readStale<LeaderboardResponse>(LEADERBOARD_CACHE_KEY, LEADERBOARD_STALE_MAX_AGE_MS);
+    if (cached.value) {
+      setData(cached.value);
+      setDataAgeMs(cached.ageMs);
+      setIsStale(true);
+    }
+
+    setError(null);
+    setRefreshError(null);
+    setSlow(false);
+
+    // 2. fetch fresh — retries: 0 because the leaderboard is a heavy endpoint
+    //    and auto-retries just compound DB pressure when the backend is already
+    //    struggling. users get a manual "Try again" instead.
+    fetchWithRetry("/api/leaderboard", {
+      method: "GET",
+      parentSignal: controller.signal,
+      timeoutMs: LEADERBOARD_TIMEOUT_MS,
+      retries: 0,
+      slowThresholdMs: LEADERBOARD_SLOW_THRESHOLD_MS,
+      onSlow: () => {
+        if (!cancelled) setSlow(true);
+      },
+    })
+      .then((r) => r.json())
       .then((d: LeaderboardResponse) => {
         if (cancelled) return;
         setData(d);
+        setDataAgeMs(0);
+        setIsStale(false);
+        setRefreshError(null);
+        writeStale(LEADERBOARD_CACHE_KEY, d);
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Failed to load leaderboard");
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        const fetchErr = e instanceof FetchError
+          ? e
+          : new FetchError("network", "Failed to load leaderboard", null, true);
+        // if we already painted cached data, keep it and surface a soft
+        // "couldn't refresh" indicator instead of wiping the table.
+        if (cached.value) {
+          setRefreshError(fetchErr);
+        } else {
+          setError(fetchErr);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRetrying(false);
+          setSlow(false);
+        }
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
+  }, [reloadToken]);
+
+  const handleRetry = useCallback(() => {
+    setRetrying(true);
+    setError(null);
+    setRefreshError(null);
+    setReloadToken((n) => n + 1);
   }, []);
 
   const getModelPath = (modelKey: string) => `/leaderboard/${encodeURIComponent(modelKey)}`;
@@ -209,20 +280,57 @@ export function Leaderboard() {
             ) : null}
           </div>
           {activeModelCount > 0 ? (
-            <div className="mb-leaderboard-live-chip mb-model-reveal mb-model-reveal-in group w-fit max-w-full">
-              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted2">
-                <span className="text-fg">Live</span>
-                <span>{activeModelCount} models</span>
-                <span>{renderedVotes.toLocaleString()} votes</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="mb-leaderboard-live-chip mb-model-reveal mb-model-reveal-in group w-fit max-w-full">
+                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted2">
+                  <span className="text-fg">Live</span>
+                  <span>{activeModelCount} models</span>
+                  <span>{renderedVotes.toLocaleString()} votes</span>
+                </div>
               </div>
+              {isStale && refreshError ? (
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  disabled={retrying}
+                  aria-live="polite"
+                  className="mb-leaderboard-live-chip inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-warn" aria-hidden="true" />
+                  <span>
+                    {retrying ? "Refreshing…" : `Couldn't refresh${dataAgeMs != null ? ` · ${formatAge(dataAgeMs)}` : ""}`}
+                  </span>
+                </button>
+              ) : isStale && dataAgeMs != null && dataAgeMs > 15_000 ? (
+                <span
+                  aria-live="polite"
+                  className="mb-leaderboard-live-chip inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted2"
+                >
+                  <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
+                  <span>Refreshing · updated {formatAge(dataAgeMs)}</span>
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>
       </div>
 
       {error ? (
-        <div className="mb-subpanel shrink-0 p-3 text-sm text-danger">
-          {error}
+        <ErrorState
+          error={error}
+          onRetry={handleRetry}
+          retrying={retrying}
+          className="shrink-0"
+        />
+      ) : null}
+      {!data && slow ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="mb-subpanel shrink-0 flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-muted"
+        >
+          <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
+          <span>Taking longer than usual — MineBench may be under heavy load.</span>
         </div>
       ) : null}
       <div className="hidden shrink-0 items-center justify-end px-1 sm:flex">

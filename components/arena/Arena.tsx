@@ -14,6 +14,7 @@ import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoteBar } from "@/components/arena/VoteBar";
 import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
+import { ErrorState } from "@/components/ErrorState";
 
 type ArenaState =
   | { kind: "loading" }
@@ -61,14 +62,31 @@ async function fetchMatchup(promptId?: string): Promise<ArenaMatchup> {
   throw (lastError instanceof Error ? lastError : new Error("Failed to load matchup"));
 }
 
+const VOTE_REQUEST_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_VOTE_REQUEST_TIMEOUT_MS ?? "10000",
+  10,
+);
+
 async function submitVote(matchupId: string, choice: VoteChoice) {
-  const res = await fetch("/api/arena/vote", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ matchupId, choice }),
-  });
-  if (!res.ok) throw new Error(await res.text());
+  // hard timeout so a stalled /api/arena/vote call can't hang the reveal state
+  const timed = makeTimeoutSignal(undefined, VOTE_REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch("/api/arena/vote", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matchupId, choice }),
+      signal: timed.signal,
+    });
+    if (!res.ok) throw new Error(await res.text());
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Vote timed out — the site may be under heavy load. Please try again.");
+    }
+    throw err;
+  } finally {
+    timed.cleanup();
+  }
 }
 
 type BuildVariantResponse = {
@@ -607,6 +625,9 @@ function isInteractiveTarget(target: EventTarget | null) {
 
 export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
+  const [reloadToken, setReloadToken] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [slowInitialLoad, setSlowInitialLoad] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [reveal, setReveal] = useState<RevealState>({ kind: "none" });
   const [sideLoadState, setSideLoadState] = useState<SideLoadState | null>(null);
@@ -1104,6 +1125,12 @@ export function Arena() {
   useEffect(() => {
     let cancelled = false;
     setState({ kind: "loading" });
+    setSlowInitialLoad(false);
+    // nudge after 5s if the initial matchup is still loading so users know
+    // the delay is server-side, not their browser
+    const slowTimer = setTimeout(() => {
+      if (!cancelled) setSlowInitialLoad(true);
+    }, 5_000);
     fetchMatchup(undefined)
       .then((m) => {
         if (cancelled) return;
@@ -1115,11 +1142,23 @@ export function Arena() {
           kind: "error",
           message: err instanceof Error ? err.message : "Failed to load matchup",
         });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRetrying(false);
+          setSlowInitialLoad(false);
+        }
       });
     return () => {
       cancelled = true;
+      clearTimeout(slowTimer);
     };
-  }, [applyCachedBuildsToMatchup]);
+  }, [applyCachedBuildsToMatchup, reloadToken]);
+
+  const handleRetry = useCallback(() => {
+    setRetrying(true);
+    setReloadToken((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const current =
@@ -1601,8 +1640,23 @@ export function Arena() {
           ) : null}
 
           {state.kind === "error" ? (
-            <div className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
-              {state.message}
+            <ErrorState
+              error={new Error(state.message)}
+              title="Couldn't load matchup"
+              hint={state.message || "The site may be under heavy load. Try again in a moment."}
+              onRetry={handleRetry}
+              retrying={retrying}
+            />
+          ) : null}
+
+          {state.kind === "loading" && slowInitialLoad ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center gap-2 rounded-xl bg-bg/50 px-3 py-2 text-xs text-muted ring-1 ring-border/60"
+            >
+              <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
+              <span>Taking longer than usual — MineBench may be under heavy load.</span>
             </div>
           ) : null}
 
