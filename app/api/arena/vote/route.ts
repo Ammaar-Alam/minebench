@@ -4,6 +4,11 @@ import { prisma } from "@/lib/prisma";
 import { conservativeScore, updateRatingPair } from "@/lib/arena/rating";
 import type { VoteChoice } from "@/lib/arena/types";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
+import {
+  applyDecisiveVoteCoverageUpdate,
+  isDecisiveChoice,
+} from "@/lib/arena/coverage";
+import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
 
@@ -31,51 +36,69 @@ function getOrSetSessionId(res: NextResponse, req: Request) {
 }
 
 export async function POST(req: Request) {
+  const timing = new ServerTiming();
+  const requestStartedAt = timing.start();
+  let finalized = false;
+  const finalizeHeaders = (headers?: HeadersInit) => {
+    const nextHeaders = new Headers(headers);
+    if (!finalized) {
+      timing.end("total", requestStartedAt);
+      finalized = true;
+    }
+    timing.apply(nextHeaders);
+    return nextHeaders;
+  };
+  const respondJson = (body: unknown, init?: ResponseInit) =>
+    NextResponse.json(body, {
+      ...init,
+      headers: finalizeHeaders(init?.headers),
+    });
+
   const json = (await req.json().catch(() => null)) as unknown;
   const parsed = reqSchema.safeParse(json);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.message }, { status: 400 });
+    return respondJson({ error: parsed.error.message }, { status: 400 });
   }
 
   const { matchupId, choice } = parsed.data as { matchupId: string; choice: VoteChoice };
 
+  const lookupStartedAt = timing.start();
   const matchup = await prisma.matchup.findUnique({
     where: { id: matchupId },
     include: { modelA: true, modelB: true },
   });
+  timing.end("lookup", lookupStartedAt);
 
-  if (!matchup) return NextResponse.json({ error: "Matchup not found" }, { status: 404 });
+  if (!matchup) return respondJson({ error: "Matchup not found" }, { status: 404 });
 
   const res = NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
   const sessionId = getOrSetSessionId(res, req);
 
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.vote.create({
-        data: { matchupId, sessionId, choice },
-      });
+    const txStartedAt = timing.start();
+    const a = matchup.modelA;
+    const b = matchup.modelB;
 
-      const a = matchup.modelA;
-      const b = matchup.modelB;
-
-      if (choice === "BOTH_BAD") {
-        await tx.model.update({
+    if (choice === "BOTH_BAD") {
+      await prisma.$transaction([
+        prisma.vote.create({
+          data: { matchupId, sessionId, choice },
+        }),
+        prisma.model.update({
           where: { id: a.id },
           data: {
             bothBadCount: { increment: 1 },
           },
-        });
-        await tx.model.update({
+        }),
+        prisma.model.update({
           where: { id: b.id },
           data: {
             bothBadCount: { increment: 1 },
           },
-        });
-        return;
-      }
-
-      const outcome =
-        choice === "A" ? "A_WIN" : choice === "B" ? "B_WIN" : "DRAW";
+        }),
+      ]);
+    } else {
+      const outcome = choice === "A" ? "A_WIN" : choice === "B" ? "B_WIN" : "DRAW";
       const updated = updateRatingPair({
         a: {
           rating: Number(a.eloRating),
@@ -103,40 +126,69 @@ export async function POST(req: Request) {
         conservativeRating: conservativeScore(updated.b.rating, updated.b.rd),
       };
 
-      if (outcome === "A_WIN") {
-        await tx.model.update({
-          where: { id: a.id },
-          data: { ...updateModelA, winCount: { increment: 1 } },
-        });
-        await tx.model.update({
-          where: { id: b.id },
-          data: { ...updateModelB, lossCount: { increment: 1 } },
-        });
-      } else if (outcome === "B_WIN") {
-        await tx.model.update({
-          where: { id: a.id },
-          data: { ...updateModelA, lossCount: { increment: 1 } },
-        });
-        await tx.model.update({
-          where: { id: b.id },
-          data: { ...updateModelB, winCount: { increment: 1 } },
+      if (isDecisiveChoice(choice)) {
+        await prisma.$transaction(async (tx) => {
+          await tx.vote.create({
+            data: { matchupId, sessionId, choice },
+          });
+
+          if (outcome === "A_WIN") {
+            await Promise.all([
+              tx.model.update({
+                where: { id: a.id },
+                data: { ...updateModelA, winCount: { increment: 1 } },
+              }),
+              tx.model.update({
+                where: { id: b.id },
+                data: { ...updateModelB, lossCount: { increment: 1 } },
+              }),
+            ]);
+          } else {
+            await Promise.all([
+              tx.model.update({
+                where: { id: a.id },
+                data: { ...updateModelA, lossCount: { increment: 1 } },
+              }),
+              tx.model.update({
+                where: { id: b.id },
+                data: { ...updateModelB, winCount: { increment: 1 } },
+              }),
+            ]);
+          }
+
+          await applyDecisiveVoteCoverageUpdate(tx, {
+            modelAId: a.id,
+            modelBId: b.id,
+            promptId: matchup.promptId,
+          });
         });
       } else {
-        await tx.model.update({
-          where: { id: a.id },
-          data: { ...updateModelA, drawCount: { increment: 1 } },
-        });
-        await tx.model.update({
-          where: { id: b.id },
-          data: { ...updateModelB, drawCount: { increment: 1 } },
-        });
+        await prisma.$transaction([
+          prisma.vote.create({
+            data: { matchupId, sessionId, choice },
+          }),
+          prisma.model.update({
+            where: { id: a.id },
+            data: { ...updateModelA, drawCount: { increment: 1 } },
+          }),
+          prisma.model.update({
+            where: { id: b.id },
+            data: { ...updateModelB, drawCount: { increment: 1 } },
+          }),
+        ]);
       }
-    });
+    }
+    timing.end("tx", txStartedAt);
     invalidateArenaStatsCache();
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Vote failed";
-    return NextResponse.json({ error: msg }, { status: 409 });
+    return respondJson({ error: msg }, { status: 409 });
   }
 
+  if (!finalized) {
+    timing.end("total", requestStartedAt);
+    finalized = true;
+  }
+  timing.apply(res.headers);
   return res;
 }
