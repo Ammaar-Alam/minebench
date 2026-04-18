@@ -162,6 +162,53 @@
     to { opacity: 1; }
   }
 
+  /* Spread-curve draw-in: the line traces itself on mount, then the area
+     fills, then the endpoint dots pop in. pathLength="1" on the <path>
+     lets stroke-dasharray use normalized units. */
+  @keyframes mb-curve-line-draw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+
+  @keyframes mb-curve-area-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes mb-curve-endpoint-pop {
+    from { opacity: 0; transform: scale(0.4); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .mb-curve-line-draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: mb-curve-line-draw 900ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .mb-curve-area-fade {
+    opacity: 0;
+    animation: mb-curve-area-fade 500ms ease-out 400ms forwards;
+  }
+
+  .mb-curve-endpoint {
+    opacity: 0;
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: mb-curve-endpoint-pop 300ms cubic-bezier(0.22, 1, 0.36, 1) 900ms forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-curve-line-draw,
+    .mb-curve-area-fade,
+    .mb-curve-endpoint {
+      animation: none;
+      stroke-dashoffset: 0;
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
   @keyframes mb-caret-blink {
     0%,
     49% {
@@ -293,10 +340,6 @@
 
   .mb-panel-pulse-slow {
     animation-duration: 17s;
-  }
-
-  .mb-section-shell {
-    border-top: 1px solid hsl(var(--border) / 0.38);
   }
 
   .mb-leaderboard-header {
@@ -576,100 +619,50 @@
     background-color: hsl(var(--accent));
   }
 
-  .mb-model-stat-pill {
-    @apply rounded-full px-3 py-2 ring-1;
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
+  /* Flat metric row — no boxes, no vertical dividers. Rhythm comes from
+     top + bottom hairlines that bracket the group, plus an internal mid-rule
+     after the first row on wide screens. Columns separate via grid gap
+     alone; typography carries the rest. */
+  .mb-metric-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 1.25rem;
+    row-gap: 0;
+    border-top: 1px solid hsl(var(--border) / 0.45);
+    border-bottom: 1px solid hsl(var(--border) / 0.45);
   }
 
-  .mb-model-stat-pill-success {
-    background-color: hsl(var(--success) / 0.12);
-    border-color: hsl(var(--success) / 0.3);
-    color: hsl(var(--success));
-    box-shadow: inset 0 0 0 1px hsl(var(--success) / 0.25);
-  }
-
-  .mb-model-stat-pill-neutral {
-    background-color: hsl(var(--bg) / 0.55);
-    border-color: hsl(var(--border) / 0.75);
-    color: hsl(var(--fg));
-    box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.3);
-  }
-
-  .mb-model-stat-pill-danger {
-    background-color: hsl(var(--danger) / 0.1);
-    border-color: hsl(var(--danger) / 0.28);
-    color: hsl(var(--danger));
-    box-shadow: inset 0 0 0 1px hsl(var(--danger) / 0.24);
+  @media (min-width: 640px) {
+    .mb-metric-row {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      column-gap: 1.5rem;
+    }
   }
 
   .mb-metric-tile {
-    @apply rounded-2xl px-3 py-2.5 ring-1 ring-border/70 sm:px-3.5 sm:py-3;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.62), hsl(var(--bg) / 0.4));
-    box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.24);
-  }
-
-  .mb-hero-signal-strip {
-    @apply grid grid-cols-3 gap-2 rounded-2xl p-2 ring-1 ring-border/70;
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.58), hsl(var(--bg) / 0.42));
-  }
-
-  .mb-hero-signal-strip-item {
-    @apply rounded-xl px-2.5 py-1.5 text-[11px] ring-1 ring-border/55;
-    background-color: hsl(var(--bg) / 0.44);
-    display: grid;
-    gap: 0.18rem;
-    text-align: center;
-  }
-
-  .mb-hero-provenance {
-    @apply rounded-2xl px-3 py-2 ring-1 ring-border/70;
-    display: grid;
-    gap: 0.45rem;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.58), hsl(var(--bg) / 0.42));
-  }
-
-  .mb-hero-provenance-head {
-    @apply flex flex-wrap items-center justify-between gap-2;
-  }
-
-  .mb-profile-snapshot {
+    padding: 0.65rem 0 0.7rem;
     position: relative;
   }
 
-  .mb-profile-snapshot::before {
-    content: "";
-    position: absolute;
-    inset-inline: 0;
-    top: 0;
-    height: 2.6rem;
-    background: linear-gradient(to bottom, hsl(var(--fg) / 0.04), transparent);
-    pointer-events: none;
+  /* Single mid-rule between the two rows. On 2-col mobile this kicks in
+     after the second tile (row break); on 4-col desktop it kicks in after
+     the fourth. */
+  .mb-metric-tile:nth-child(-n + 2) {
+    border-bottom: 1px solid hsl(var(--border) / 0.35);
   }
 
-  .mb-breakdown-summary {
-    @apply rounded-2xl p-3 ring-1 ring-border/70 sm:p-3.5;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.58), hsl(var(--bg) / 0.44));
-  }
-
-  .mb-breakdown-summary-head {
-    @apply mb-2 flex items-center justify-between gap-2;
-  }
-
-  .mb-breakdown-summary-tile {
-    @apply rounded-xl px-2.5 py-2 ring-1 ring-border/65;
-    background-color: hsl(var(--bg) / 0.44);
-    display: grid;
-    gap: 0.14rem;
+  @media (min-width: 640px) {
+    .mb-metric-tile:nth-child(-n + 2) {
+      border-bottom: none;
+    }
+    .mb-metric-tile:nth-child(-n + 4) {
+      border-bottom: 1px solid hsl(var(--border) / 0.35);
+    }
   }
 
   .mb-curve-tooltip {
     @apply pointer-events-none -translate-y-full transform-gpu rounded-xl bg-card/95 px-3 py-2 text-xs ring-1 ring-border backdrop-blur;
-    box-shadow: 0 12px 34px hsl(220 40% 2% / 0.45);
+    box-shadow: 0 6px 16px -6px hsl(220 40% 2% / 0.35);
     transition: opacity 150ms ease-out;
   }
 
@@ -686,12 +679,8 @@
   }
 
   .mb-head-to-head-card {
-    @apply rounded-2xl p-3.5 ring-1 ring-border/70;
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.52), hsl(var(--bg) / 0.4));
-    transition-property: box-shadow, background-color, border-color;
+    @apply rounded-2xl bg-bg/40 p-3.5 ring-1 ring-border/60;
+    transition-property: box-shadow, background-color, ring-color;
     transition-duration: 200ms;
   }
 
@@ -722,14 +711,6 @@
     @apply relative;
   }
 
-  .mb-hero-spread {
-    background:
-      radial-gradient(46rem 18rem at 12% 0%, hsl(var(--accent) / 0.28), transparent 64%),
-      radial-gradient(38rem 16rem at 89% 0%, hsl(var(--accent2) / 0.26), transparent 62%),
-      linear-gradient(125deg, hsl(var(--accent) / 0.06) 0%, transparent 58%);
-    mask-image: linear-gradient(to bottom, rgb(0 0 0 / 0.9), rgb(0 0 0 / 0.24) 65%, transparent);
-    animation: mb-curve-sweep 23s ease-in-out infinite;
-  }
 
   .mb-sheen-surface {
     position: relative;
@@ -742,8 +723,7 @@
   }
 
   .mb-back-link {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-full text-fg ring-1 ring-border/75;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.68), hsl(var(--bg) / 0.52));
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-full bg-bg/55 text-muted ring-1 ring-border/70;
     transition: box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease, color 180ms ease;
   }
 
@@ -1211,7 +1191,6 @@
       animation: none;
     }
 
-    .mb-model-stat-pill:hover,
     .mb-jump-chip:hover,
     .mb-head-to-head-card:hover,
     .mb-metric-tile:hover,
