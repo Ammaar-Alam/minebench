@@ -29,9 +29,6 @@ const MATCHUP_REQUEST_RETRIES = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_MATCHUP_REQUEST_RETRIES ?? "0",
   10,
 );
-const OVERLAP_MATCHUP_FETCH =
-  (process.env.NEXT_PUBLIC_ARENA_OVERLAP_MATCHUP_FETCH ?? "").trim().toLowerCase() === "1" ||
-  (process.env.NEXT_PUBLIC_ARENA_OVERLAP_MATCHUP_FETCH ?? "").trim().toLowerCase() === "true";
 const FULL_HYDRATION_SLOW_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_SLOW_MS ?? "2500",
   10,
@@ -1313,13 +1310,8 @@ export function Arena() {
     const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
     setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
     try {
-      const nextPromise = OVERLAP_MATCHUP_FETCH
-        ? fetchMatchup(undefined).then(applyCachedBuildsToMatchup)
-        : null;
       await submitVote(matchup.id, choice);
-      const next = nextPromise
-        ? await nextPromise
-        : applyCachedBuildsToMatchup(await fetchMatchup(undefined));
+      const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
       prefetchMatchupBuilds(next);
       const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
       if (stillRevealing) {
