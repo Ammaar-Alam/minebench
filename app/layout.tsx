@@ -137,10 +137,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         `}</Script>
 
         <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0">
-          <div className="absolute inset-0 mb-bg-mesh" />
-          <div className="absolute inset-0 mb-bg-anim motion-reduce:animate-none" />
+          <div className="absolute inset-0 mb-bg-halo" />
           <div className="absolute inset-0 mb-bg-grid" />
-          <div className="absolute inset-0 mb-bg-noise" />
         </div>
 
         <OfflineBanner />

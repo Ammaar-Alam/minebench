@@ -22,10 +22,8 @@
     --success: 152 60% 34%;
 
     /* Background effects */
-    --bg-mesh-opacity: 0.40;
-    --bg-anim-opacity: 0.20;
-    --bg-grid-opacity: 0.20;
-    --bg-noise-opacity: 0.02;
+    --bg-halo-opacity: 0.45;
+    --bg-grid-opacity: 0.26;
   }
 
   :root[data-theme="dark"] {
@@ -44,10 +42,8 @@
     --warn: 40 95% 58%;
     --success: 152 70% 44%;
 
-    --bg-mesh-opacity: 0.18;
-    --bg-anim-opacity: 0.10;
-    --bg-grid-opacity: 0.22;
-    --bg-noise-opacity: 0.05;
+    --bg-halo-opacity: 0.55;
+    --bg-grid-opacity: 0.30;
   }
 
   html,
@@ -63,6 +59,13 @@
     font-family: var(--font-sans), system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     background-color: hsl(var(--bg));
     color: hsl(var(--fg));
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  a,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
   }
 
   body.mb-page-fixed {
@@ -87,18 +90,6 @@
     flex-shrink: 0;
   }
 
-  @keyframes mb-gradient-shift {
-    0%,
-    100% {
-      background-position: 0% 50%;
-      opacity: 1;
-    }
-    50% {
-      background-position: 100% 50%;
-      opacity: 0.85;
-    }
-  }
-
   .mb-bg-grid {
     opacity: var(--bg-grid-opacity);
     background-image:
@@ -118,34 +109,25 @@
       linear-gradient(to bottom, hsl(var(--fg) / 0.09) 1px, transparent 1px);
   }
 
-  .mb-bg-noise {
-    opacity: var(--bg-noise-opacity);
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-  }
-
-  .mb-bg-mesh {
-    opacity: var(--bg-mesh-opacity);
+  /* Single brand-accent halo. Positioned just off the top-right corner so it
+     reads as a distant light source rather than a decorative wash. The
+     secondary gradient is a very subtle accent2 echo from the opposite corner
+     — matches the logo's accent-dominant gradient (accent as the bright spot,
+     accent2 as a quieter supporting tone). */
+  .mb-bg-halo {
+    opacity: var(--bg-halo-opacity);
     background:
-      radial-gradient(ellipse 80% 60% at 5% 10%, rgba(96, 165, 250, 0.5) 0%, transparent 50%),
-      radial-gradient(ellipse 70% 50% at 95% 5%, rgba(167, 139, 250, 0.45) 0%, transparent 50%),
-      radial-gradient(ellipse 60% 55% at 80% 70%, rgba(251, 191, 36, 0.35) 0%, transparent 50%),
-      radial-gradient(ellipse 75% 60% at 15% 80%, rgba(244, 114, 182, 0.35) 0%, transparent 50%),
-      radial-gradient(ellipse 50% 40% at 50% 100%, rgba(139, 92, 246, 0.25) 0%, transparent 50%);
-  }
-
-  .mb-bg-anim {
-    opacity: var(--bg-anim-opacity);
-    background: linear-gradient(
-      135deg,
-      rgba(96, 165, 250, 0.25) 0%,
-      rgba(167, 139, 250, 0.2) 20%,
-      rgba(244, 114, 182, 0.18) 40%,
-      rgba(251, 191, 36, 0.2) 60%,
-      rgba(139, 92, 246, 0.2) 80%,
-      rgba(96, 165, 250, 0.25) 100%
-    );
-    background-size: 300% 300%;
-    animation: mb-gradient-shift 14s ease-in-out infinite;
+      radial-gradient(
+        ellipse 90% 70% at 88% -8%,
+        hsl(var(--accent) / 0.32) 0%,
+        hsl(var(--accent) / 0.12) 28%,
+        transparent 62%
+      ),
+      radial-gradient(
+        ellipse 70% 60% at 8% 102%,
+        hsl(var(--accent2) / 0.14) 0%,
+        transparent 58%
+      );
   }
 
   ::selection {
@@ -840,33 +822,66 @@
   }
 
   .mb-btn {
-    @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg transition duration-150 ease-out focus-visible:outline-none;
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg focus-visible:outline-none;
+    transition:
+      background-image 140ms ease-out,
+      background-color 140ms ease-out,
+      box-shadow 140ms ease-out,
+      transform 140ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 120ms ease-out;
   }
 
   .mb-btn:focus-visible {
-    box-shadow: 0 0 0 4px hsl(var(--accent) / 0.18);
+    box-shadow: 0 0 0 3px hsl(var(--accent) / 0.22);
   }
 
-  .mb-btn:active {
-    transform: translateY(1px);
+  .mb-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .mb-btn:active:not(:disabled) {
+    transform: translateY(0);
+    transition-duration: 60ms;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-btn {
+      transition: none;
+    }
+    .mb-btn:hover:not(:disabled),
+    .mb-btn:active:not(:disabled) {
+      transform: none;
+    }
   }
 
   .mb-btn-primary {
-    @apply ring-1 ring-accent/45 hover:shadow-glow;
+    @apply ring-1 ring-accent/45;
     background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.30), hsl(var(--accent) / 0.16));
   }
 
-  .mb-btn-primary:hover {
-    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.34), hsl(var(--accent) / 0.18));
+  .mb-btn-primary:hover:not(:disabled) {
+    @apply ring-accent/70;
+    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.38), hsl(var(--accent) / 0.22));
+  }
+
+  .mb-btn-primary:active:not(:disabled) {
+    @apply ring-accent/70;
+    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.44), hsl(var(--accent) / 0.28));
   }
 
   .mb-btn-ghost {
-    @apply ring-1 ring-border/80 hover:shadow-soft;
+    @apply ring-1 ring-border/80;
     background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.72), hsl(var(--bg) / 0.46));
   }
 
-  .mb-btn-ghost:hover {
-    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.80), hsl(var(--bg) / 0.52));
+  .mb-btn-ghost:hover:not(:disabled) {
+    @apply ring-border;
+    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.86), hsl(var(--bg) / 0.58));
+  }
+
+  .mb-btn-ghost:active:not(:disabled) {
+    @apply ring-border;
+    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.94), hsl(var(--bg) / 0.68));
   }
 
   .mb-btn-danger {
@@ -1231,20 +1246,117 @@
   }
 
   /* vote button variants */
+  .mb-vote-a,
+  .mb-vote-b,
+  .mb-vote-tie,
+  .mb-vote-bad,
+  .mb-vote-skip {
+    transition:
+      background 160ms ease-out,
+      box-shadow 160ms ease-out,
+      transform 140ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 120ms ease-out;
+  }
+
+  @keyframes mb-vote-confirm {
+    0% {
+      transform: scale(1);
+      box-shadow:
+        0 0 0 0 hsl(var(--vote-confirm-color, var(--accent)) / 0.55),
+        0 0 0 0 hsl(var(--vote-confirm-color, var(--accent)) / 0.35);
+    }
+    28% {
+      transform: scale(1.045);
+      box-shadow:
+        0 0 0 4px hsl(var(--vote-confirm-color, var(--accent)) / 0.28),
+        0 10px 28px -8px hsl(var(--vote-confirm-color, var(--accent)) / 0.45);
+    }
+    100% {
+      transform: scale(1);
+      box-shadow:
+        0 0 0 18px hsl(var(--vote-confirm-color, var(--accent)) / 0),
+        0 10px 28px -8px hsl(var(--vote-confirm-color, var(--accent)) / 0);
+    }
+  }
+
+  .mb-vote-confirmed {
+    animation: mb-vote-confirm 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    z-index: 1;
+  }
+
+  .mb-vote-a.mb-vote-confirmed {
+    --vote-confirm-color: var(--accent);
+  }
+  .mb-vote-b.mb-vote-confirmed {
+    --vote-confirm-color: var(--accent2);
+  }
+  .mb-vote-bad.mb-vote-confirmed {
+    --vote-confirm-color: var(--danger);
+  }
+  .mb-vote-tie.mb-vote-confirmed,
+  .mb-vote-skip.mb-vote-confirmed {
+    --vote-confirm-color: var(--fg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-vote-confirmed {
+      animation: none;
+      box-shadow: 0 0 0 3px hsl(var(--vote-confirm-color, var(--accent)) / 0.35);
+    }
+  }
+
+  .mb-vote-a:hover:not(:disabled),
+  .mb-vote-b:hover:not(:disabled),
+  .mb-vote-tie:hover:not(:disabled),
+  .mb-vote-bad:hover:not(:disabled),
+  .mb-vote-skip:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .mb-vote-a:active:not(:disabled),
+  .mb-vote-b:active:not(:disabled),
+  .mb-vote-tie:active:not(:disabled),
+  .mb-vote-bad:active:not(:disabled),
+  .mb-vote-skip:active:not(:disabled) {
+    transform: translateY(0) scale(0.985);
+    transition-duration: 60ms;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-vote-a,
+    .mb-vote-b,
+    .mb-vote-tie,
+    .mb-vote-bad,
+    .mb-vote-skip {
+      transition: none;
+    }
+    .mb-vote-a:hover:not(:disabled),
+    .mb-vote-b:hover:not(:disabled),
+    .mb-vote-tie:hover:not(:disabled),
+    .mb-vote-bad:hover:not(:disabled),
+    .mb-vote-skip:hover:not(:disabled),
+    .mb-vote-a:active:not(:disabled),
+    .mb-vote-b:active:not(:disabled),
+    .mb-vote-tie:active:not(:disabled),
+    .mb-vote-bad:active:not(:disabled),
+    .mb-vote-skip:active:not(:disabled) {
+      transform: none;
+    }
+  }
+
   .mb-vote-a {
     @apply ring-1 ring-accent/40;
     background: linear-gradient(135deg, hsl(var(--accent) / 0.22) 0%, hsl(var(--accent) / 0.10) 100%);
   }
 
   .mb-vote-a:hover:not(:disabled) {
-    @apply ring-accent/60;
-    background: linear-gradient(135deg, hsl(var(--accent) / 0.30) 0%, hsl(var(--accent) / 0.14) 100%);
-    box-shadow: 0 2px 12px -2px hsl(var(--accent) / 0.30);
+    @apply ring-accent/70;
+    background: linear-gradient(135deg, hsl(var(--accent) / 0.32) 0%, hsl(var(--accent) / 0.16) 100%);
   }
 
   .mb-vote-a:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--accent) / 0.34) 0%, hsl(var(--accent) / 0.18) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.1);
+    background: linear-gradient(135deg, hsl(var(--accent) / 0.38) 0%, hsl(var(--accent) / 0.22) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.12);
   }
 
   .mb-vote-b {
@@ -1253,14 +1365,13 @@
   }
 
   .mb-vote-b:hover:not(:disabled) {
-    @apply ring-accent2/60;
-    background: linear-gradient(135deg, hsl(var(--accent2) / 0.26) 0%, hsl(var(--accent2) / 0.12) 100%);
-    box-shadow: 0 2px 12px -2px hsl(var(--accent2) / 0.30);
+    @apply ring-accent2/70;
+    background: linear-gradient(135deg, hsl(var(--accent2) / 0.28) 0%, hsl(var(--accent2) / 0.14) 100%);
   }
 
   .mb-vote-b:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--accent2) / 0.30) 0%, hsl(var(--accent2) / 0.16) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.1);
+    background: linear-gradient(135deg, hsl(var(--accent2) / 0.34) 0%, hsl(var(--accent2) / 0.20) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.12);
   }
 
   .mb-vote-tie {
@@ -1270,13 +1381,12 @@
 
   .mb-vote-tie:hover:not(:disabled) {
     @apply ring-border;
-    background: linear-gradient(135deg, hsl(var(--bg) / 0.85) 0%, hsl(var(--bg) / 0.60) 100%);
-    box-shadow: 0 2px 8px -2px hsl(0 0% 0% / 0.12);
+    background: linear-gradient(135deg, hsl(var(--bg) / 0.88) 0%, hsl(var(--bg) / 0.62) 100%);
   }
 
   .mb-vote-tie:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--bg) / 0.90) 0%, hsl(var(--bg) / 0.70) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.08);
+    background: linear-gradient(135deg, hsl(var(--bg) / 0.95) 0%, hsl(var(--bg) / 0.72) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.10);
   }
 
   .mb-vote-bad {
@@ -1285,14 +1395,13 @@
   }
 
   .mb-vote-bad:hover:not(:disabled) {
-    @apply ring-danger/50;
-    background: linear-gradient(135deg, hsl(var(--danger) / 0.18) 0%, hsl(var(--danger) / 0.08) 100%);
-    box-shadow: 0 2px 8px -2px hsl(var(--danger) / 0.20);
+    @apply ring-danger/55;
+    background: linear-gradient(135deg, hsl(var(--danger) / 0.20) 0%, hsl(var(--danger) / 0.09) 100%);
   }
 
   .mb-vote-bad:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--danger) / 0.22) 0%, hsl(var(--danger) / 0.10) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.08);
+    background: linear-gradient(135deg, hsl(var(--danger) / 0.24) 0%, hsl(var(--danger) / 0.12) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.10);
   }
 
   .mb-vote-skip {
@@ -1301,12 +1410,12 @@
   }
 
   .mb-vote-skip:hover:not(:disabled) {
-    @apply ring-border/70;
-    background: linear-gradient(135deg, hsl(var(--muted) / 0.14) 0%, hsl(var(--muted) / 0.06) 100%);
+    @apply ring-border/80;
+    background: linear-gradient(135deg, hsl(var(--muted) / 0.16) 0%, hsl(var(--muted) / 0.07) 100%);
   }
 
   .mb-vote-skip:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--muted) / 0.18) 0%, hsl(var(--muted) / 0.08) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.06);
+    background: linear-gradient(135deg, hsl(var(--muted) / 0.20) 0%, hsl(var(--muted) / 0.09) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.08);
   }
 }
