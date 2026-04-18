@@ -1112,18 +1112,18 @@ export function SandboxBenchmark() {
                       strokeWidth="1.7"
                     />
                   </svg>
-                  <span>{refreshing ? "Refreshing..." : "Refresh"}</span>
+                  <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
                 </span>
               </button>
             </div>
           </div>
 
-          <div className="text-sm leading-relaxed text-fg">{selectedPromptText || "Loading benchmark prompt..."}</div>
+          <div className="text-sm leading-relaxed text-fg">{selectedPromptText || "Loading benchmark prompt…"}</div>
         </div>
       </div>
 
       {loading && !data ? (
-        <div className="mb-panel p-10 text-center text-sm text-muted">Loading benchmark builds...</div>
+        <div className="mb-panel p-10 text-center text-sm text-muted">Loading benchmark builds…</div>
       ) : null}
 
       {!loading && data ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{cards}</div> : null}

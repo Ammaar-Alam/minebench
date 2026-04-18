@@ -898,7 +898,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             <div className="flex flex-col gap-4">
               <section className="mb-subpanel p-4 sm:p-5">
                 <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">
-                  Build Settings
+                  Build settings
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="flex flex-col gap-1">
@@ -944,7 +944,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                     disabled={running || !canCompare}
                     className={`mb-btn h-8 px-3 text-xs ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
                   >
-                    {compareEnabled ? "Compare on" : "Compare off"}
+                    {compareEnabled ? "Stop comparing" : "Compare models"}
                   </button>
                 </div>
 
@@ -1121,7 +1121,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
               <details className="md:col-span-2 rounded-xl border border-border/70 bg-bg/35 px-3 py-2">
                 <summary className="cursor-pointer select-none text-xs font-medium text-muted">
-                  Provider keys
+                  Use a provider-specific key instead (optional)
                 </summary>
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                   <label className="flex flex-col gap-1">
