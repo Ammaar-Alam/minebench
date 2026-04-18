@@ -3,13 +3,7 @@
 import Link from "next/link";
 import { useEffect } from "react";
 
-export default function RouteError({
-  error,
-  reset,
-}: {
-  error: Error & { digest?: string };
-  reset: () => void;
-}) {
+export default function RouteError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   useEffect(() => {
     if (process.env.NODE_ENV !== "production") {
       console.error("[mb/route-error]", error);
@@ -28,12 +22,10 @@ export default function RouteError({
             We hit a snag loading this page
           </h2>
           <p className="text-sm text-muted">
-            The site may be under heavy load. Your work isn&apos;t lost — try again in a moment.
+            The site may be under heavy load. I am (probably) working to get it back up — try again in a moment.
           </p>
           {error.digest ? (
-            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted2">
-              ref {error.digest}
-            </p>
+            <p className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted2">ref {error.digest}</p>
           ) : null}
           <div className="flex items-center justify-center gap-2 pt-1">
             <button type="button" onClick={reset} className="mb-btn mb-btn-primary h-9 px-4 text-sm">
