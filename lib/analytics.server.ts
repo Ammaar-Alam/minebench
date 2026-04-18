@@ -12,3 +12,10 @@ export async function trackServerEvent(
     // best effort only
   }
 }
+
+export function trackServerEventInBackground(
+  name: string,
+  properties?: Record<string, AnalyticsValue>,
+) {
+  void trackServerEvent(name, properties);
+}

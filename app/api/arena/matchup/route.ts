@@ -11,6 +11,7 @@ import {
 import type { ArenaBuildDeliveryClass } from "@/lib/arena/types";
 import {
   getArenaMatchupSamplingStateWithMeta,
+  invalidateArenaCoverageCache,
   orderPairIds,
   type CoverageState,
   type EligibleModel,
@@ -782,6 +783,7 @@ export async function GET(req: Request) {
   );
   const txMs = performance.now() - txStartedAt;
   timing.add("tx", txMs);
+  invalidateArenaCoverageCache();
 
   const body: ArenaMatchup = {
     id: created.id,
