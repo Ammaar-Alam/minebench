@@ -934,12 +934,65 @@ export function SandboxBenchmark() {
   return (
     <div className="flex flex-col gap-5">
       <div className="mb-panel p-4 sm:p-5">
-        <div className="flex flex-col gap-1.5">
-          <div className="font-display text-2xl font-semibold tracking-tight">
-            Compare arena builds directly
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <div className="font-display text-2xl font-semibold tracking-tight">
+              Compare arena builds directly
+            </div>
+            <div className="text-sm text-muted">
+              Pick a curated benchmark prompt and compare two models side by side.
+            </div>
           </div>
-          <div className="text-sm text-muted">
-            Pick a curated benchmark prompt and compare two models side by side.
+
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2">
+            <SandboxGifExportButton
+              targets={compareTargets}
+              promptText={selectedPromptText}
+              label="Export GIF"
+              className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+            />
+
+            <button
+              type="button"
+              className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+              onClick={() =>
+                void runLoad(
+                  {
+                    promptId,
+                    modelA: modelPair.a,
+                    modelB: modelPair.b,
+                  },
+                  { initial: false },
+                )
+              }
+              disabled={loading || refreshing}
+              title="Refresh builds"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+                  fill="none"
+                >
+                  <path
+                    d="M20 12a8 8 0 1 1-2.34-5.66"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.7"
+                  />
+                  <path
+                    d="M20 4v6h-6"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.7"
+                  />
+                </svg>
+                <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
+              </span>
+            </button>
           </div>
         </div>
 
@@ -966,7 +1019,35 @@ export function SandboxBenchmark() {
 
         <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
           <label className="flex flex-col gap-1 md:col-span-2">
-            <div className="text-xs font-medium text-muted">Benchmark prompt</div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted">Benchmark prompt</span>
+              <button
+                type="button"
+                className="mb-btn mb-btn-ghost h-7 rounded-full px-2 text-[11px] sm:h-7 sm:px-2.5 sm:text-[11px]"
+                onClick={handleRandomPrompt}
+                disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
+                title="Pick a random prompt"
+              >
+                <span className="inline-flex items-center gap-1">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5">
+                    <rect
+                      x="5"
+                      y="5"
+                      width="14"
+                      height="14"
+                      rx="3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                    />
+                    <circle cx="9" cy="9" r="1.1" fill="currentColor" />
+                    <circle cx="12" cy="12" r="1.1" fill="currentColor" />
+                    <circle cx="15" cy="15" r="1.1" fill="currentColor" />
+                  </svg>
+                  <span>Random</span>
+                </span>
+              </button>
+            </div>
             <div className="relative">
               <select
                 className="mb-field h-11 w-full appearance-none pr-10"
@@ -1031,94 +1112,16 @@ export function SandboxBenchmark() {
           </label>
         </div>
 
-        <div className="mt-5 flex flex-col gap-3 border-t border-border/70 pt-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0 text-xs text-muted">
-              <span className="font-mono">
-                {gridSize} grid · {palette} palette · {data?.settings.mode ?? "precise"} mode
-              </span>
-            </div>
-
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
-              <SandboxGifExportButton
-                targets={compareTargets}
-                promptText={selectedPromptText}
-                label="Export comparison GIF"
-                className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
-              />
-
-              <button
-                type="button"
-                className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
-                onClick={handleRandomPrompt}
-                disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
-                title="Pick a random prompt"
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-                    <rect
-                      x="5"
-                      y="5"
-                      width="14"
-                      height="14"
-                      rx="3"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                    />
-                    <circle cx="9" cy="9" r="1.1" fill="currentColor" />
-                    <circle cx="12" cy="12" r="1.1" fill="currentColor" />
-                    <circle cx="15" cy="15" r="1.1" fill="currentColor" />
-                  </svg>
-                  <span>Random</span>
-                </span>
-              </button>
-
-              <button
-                type="button"
-                className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
-                onClick={() =>
-                  void runLoad(
-                    {
-                      promptId,
-                      modelA: modelPair.a,
-                      modelB: modelPair.b,
-                    },
-                    { initial: false },
-                  )
-                }
-                disabled={loading || refreshing}
-                title="Refresh builds"
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
-                    fill="none"
-                  >
-                    <path
-                      d="M20 12a8 8 0 1 1-2.34-5.66"
-                      stroke="currentColor"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="1.7"
-                    />
-                    <path
-                      d="M20 4v6h-6"
-                      stroke="currentColor"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="1.7"
-                    />
-                  </svg>
-                  <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
-                </span>
-              </button>
-            </div>
+        <div className="mt-5 border-t border-border/70 pt-4">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">
+            Selected prompt
           </div>
-
-          <div className="text-sm leading-relaxed text-fg">{selectedPromptText || "Loading benchmark prompt…"}</div>
+          <div className="mt-2 text-sm leading-relaxed text-fg">
+            {selectedPromptText || "Loading benchmark prompt…"}
+          </div>
+          <div className="mt-2 font-mono text-[11px] text-muted/80">
+            {gridSize} · {palette} · {data?.settings.mode ?? "precise"}
+          </div>
         </div>
       </div>
 

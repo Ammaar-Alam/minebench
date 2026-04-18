@@ -871,7 +871,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   });
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       <div className="mb-panel p-4 sm:p-5">
         <div className="flex flex-col gap-1.5">
           <div className="font-display text-2xl font-semibold tracking-tight">
@@ -882,10 +882,10 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           </div>
         </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <section className="mb-subpanel p-4 sm:p-5">
-              <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">Prompt</div>
-              <label className="mt-3 flex flex-col gap-1">
+          <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <section className="flex flex-col">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">Prompt</div>
+              <label className="mt-2 flex flex-col gap-1">
                 <span className="text-xs font-medium text-muted">Describe your build</span>
                 <textarea
                   className="mb-field min-h-44 resize-none py-3"
@@ -895,9 +895,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               </label>
             </section>
 
-            <div className="flex flex-col gap-4">
-              <section className="mb-subpanel p-4 sm:p-5">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">
+            <div className="flex flex-col gap-5">
+              <section>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">
                   Build settings
                 </div>
                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -934,15 +934,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 </div>
               </section>
 
-              <section className="mb-subpanel p-4 sm:p-5">
+              <section>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">Models</div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">Models</div>
                   <button
                     type="button"
                     aria-pressed={compareEnabled}
                     onClick={() => setCompareEnabled((v) => !v)}
                     disabled={running || !canCompare}
-                    className={`mb-btn h-8 px-3 text-xs ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
+                    className={`mb-btn h-7 rounded-full px-2.5 text-[11px] ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
                   >
                     {compareEnabled ? "Stop comparing" : "Compare models"}
                   </button>
@@ -1219,7 +1219,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-4">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-5">
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={prompt}
