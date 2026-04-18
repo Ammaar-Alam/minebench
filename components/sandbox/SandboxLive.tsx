@@ -1079,7 +1079,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  className="mb-btn h-9"
+                  className="mb-btn mb-btn-ghost h-7 rounded-full px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => {
                     setProviderKeys({});
                     setRequestError(null);
@@ -1090,7 +1090,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 </button>
                 <button
                   type="button"
-                  className="mb-btn h-9"
+                  aria-pressed={showKeys}
+                  className={`mb-btn h-7 rounded-full px-2.5 text-[11px] ${showKeys ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
                   onClick={() => setShowKeys((v) => !v)}
                   disabled={running}
                 >
