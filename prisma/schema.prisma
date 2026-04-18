@@ -31,6 +31,11 @@ model Model {
   matchupsAsA Matchup[] @relation("MatchupModelA")
   matchupsAsB Matchup[] @relation("MatchupModelB")
   rankSnapshots ModelRankSnapshot[]
+  coverageByPrompt ArenaCoverageModelPrompt[]
+  coveragePairsLow ArenaCoveragePair[] @relation("ArenaCoveragePairLow")
+  coveragePairsHigh ArenaCoveragePair[] @relation("ArenaCoveragePairHigh")
+  coveragePairPromptsLow ArenaCoveragePairPrompt[] @relation("ArenaCoveragePairPromptLow")
+  coveragePairPromptsHigh ArenaCoveragePairPrompt[] @relation("ArenaCoveragePairPromptHigh")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -63,6 +68,8 @@ model Prompt {
 
   builds  Build[]
   matchups Matchup[]
+  coverageByModel ArenaCoverageModelPrompt[]
+  coveragePairs ArenaCoveragePairPrompt[]
 
   @@unique([text])
   @@index([active])
@@ -143,4 +150,41 @@ model Vote {
   @@index([sessionId])
   @@index([createdAt])
   @@index([matchupId, createdAt])
+}
+
+model ArenaCoverageModelPrompt {
+  modelId String
+  promptId String
+  decisiveVotes Int @default(0)
+
+  model Model @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@id([modelId, promptId])
+  @@index([promptId])
+}
+
+model ArenaCoveragePair {
+  modelLowId String
+  modelHighId String
+  decisiveVotes Int @default(0)
+
+  modelLow Model @relation("ArenaCoveragePairLow", fields: [modelLowId], references: [id], onDelete: Cascade)
+  modelHigh Model @relation("ArenaCoveragePairHigh", fields: [modelHighId], references: [id], onDelete: Cascade)
+
+  @@id([modelLowId, modelHighId])
+}
+
+model ArenaCoveragePairPrompt {
+  modelLowId String
+  modelHighId String
+  promptId String
+  decisiveVotes Int @default(0)
+
+  modelLow Model @relation("ArenaCoveragePairPromptLow", fields: [modelLowId], references: [id], onDelete: Cascade)
+  modelHigh Model @relation("ArenaCoveragePairPromptHigh", fields: [modelHighId], references: [id], onDelete: Cascade)
+  prompt Prompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@id([modelLowId, modelHighId, promptId])
+  @@index([promptId])
 }

@@ -1,0 +1,611 @@
+import { Prisma, PrismaClient } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+
+const MATCHUP_STATE_CACHE_TTL_MS = readIntEnv("ARENA_MATCHUP_STATE_CACHE_TTL_MS", 5_000);
+
+const ARENA_GRID_SIZE = 256;
+const ARENA_PALETTE = "simple";
+const ARENA_MODE = "precise";
+const PROMPT_COVERAGE_FLOOR = 2;
+
+type CachedValue<T> = {
+  expiresAt: number;
+  value: T;
+};
+
+export type ArenaMatchupSamplingMeta = {
+  cacheStatus: "hit" | "miss" | "inflight";
+  eligibilityMs: number;
+  coverageMs: number;
+  totalMs: number;
+};
+
+export type EligiblePrompt = {
+  id: string;
+  text: string;
+  modelIds: string[];
+};
+
+export type EligibleModel = {
+  id: string;
+  key: string;
+  provider: string;
+  displayName: string;
+  eloRating: number;
+  conservativeRating: number;
+  ratingDeviation: number;
+  shownCount: number;
+};
+
+export type CoverageState = {
+  modelPromptDecisiveVotes: Map<string, number>;
+  pairDecisiveVotes: Map<string, number>;
+  pairPromptCounts: Map<string, number>;
+  pairPromptDecisiveVotes: Map<string, number>;
+  promptCoverageByModelId: Map<string, number>;
+  promptDecisiveTotals: Map<string, number>;
+};
+
+export type ArenaMatchupSamplingState = {
+  prompts: EligiblePrompt[];
+  modelsById: Map<string, EligibleModel>;
+  promptIdsByModelId: Map<string, Set<string>>;
+  coverage: CoverageState;
+};
+
+export type ArenaMatchupSamplingResult = {
+  state: ArenaMatchupSamplingState;
+  meta: ArenaMatchupSamplingMeta;
+};
+
+export type PairCoverage = {
+  decisiveVotes: number;
+  promptCount: number;
+};
+
+type NumberLike = number | bigint | string | null;
+
+let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
+let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
+
+function readIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return parsed;
+}
+
+function toNumber(value: NumberLike, fallback = 0): number {
+  if (value == null) return fallback;
+  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
+  if (typeof value === "bigint") return Number(value);
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export function orderPairIds(modelAId: string, modelBId: string): [string, string] {
+  return modelAId < modelBId ? [modelAId, modelBId] : [modelBId, modelAId];
+}
+
+export function pairKey(modelAId: string, modelBId: string): string {
+  const [low, high] = orderPairIds(modelAId, modelBId);
+  return `${low}|${high}`;
+}
+
+export function modelPromptKey(modelId: string, promptId: string): string {
+  return `${modelId}|${promptId}`;
+}
+
+export function pairPromptKey(modelAId: string, modelBId: string, promptId: string): string {
+  return `${pairKey(modelAId, modelBId)}|${promptId}`;
+}
+
+export function invalidateArenaCoverageCache() {
+  matchupStateCache = null;
+}
+
+export function isDecisiveChoice(choice: string): choice is "A" | "B" {
+  return choice === "A" || choice === "B";
+}
+
+function emptyCoverageState(): CoverageState {
+  return {
+    modelPromptDecisiveVotes: new Map(),
+    pairDecisiveVotes: new Map(),
+    pairPromptCounts: new Map(),
+    pairPromptDecisiveVotes: new Map(),
+    promptCoverageByModelId: new Map(),
+    promptDecisiveTotals: new Map(),
+  };
+}
+
+function roundDuration(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) return 0;
+  return Math.round(ms * 100) / 100;
+}
+
+async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingResult> {
+  const startedAt = performance.now();
+  const eligibilityStartedAt = startedAt;
+  const rows = await prisma.build.groupBy({
+    by: ["promptId", "modelId"],
+    where: {
+      gridSize: ARENA_GRID_SIZE,
+      palette: ARENA_PALETTE,
+      mode: ARENA_MODE,
+      model: { enabled: true, isBaseline: false },
+      prompt: { active: true },
+    },
+  });
+
+  const modelIdsByPromptId = new Map<string, Set<string>>();
+  const promptIdsByModelId = new Map<string, Set<string>>();
+
+  for (const row of rows) {
+    const models = modelIdsByPromptId.get(row.promptId) ?? new Set<string>();
+    models.add(row.modelId);
+    modelIdsByPromptId.set(row.promptId, models);
+
+    const prompts = promptIdsByModelId.get(row.modelId) ?? new Set<string>();
+    prompts.add(row.promptId);
+    promptIdsByModelId.set(row.modelId, prompts);
+  }
+
+  const eligiblePromptIds = Array.from(modelIdsByPromptId.entries())
+    .filter(([, modelIds]) => modelIds.size >= 2)
+    .map(([promptId]) => promptId);
+
+  if (eligiblePromptIds.length === 0) {
+    return {
+      state: {
+        prompts: [],
+        modelsById: new Map(),
+        promptIdsByModelId: new Map(),
+        coverage: emptyCoverageState(),
+      },
+      meta: {
+        cacheStatus: "miss",
+        eligibilityMs: roundDuration(performance.now() - eligibilityStartedAt),
+        coverageMs: 0,
+        totalMs: roundDuration(performance.now() - startedAt),
+      },
+    };
+  }
+
+  const [prompts, models] = await Promise.all([
+    prisma.prompt.findMany({
+      where: { id: { in: eligiblePromptIds }, active: true },
+      select: { id: true, text: true },
+    }),
+    prisma.model.findMany({
+      where: {
+        enabled: true,
+        isBaseline: false,
+        id: { in: Array.from(promptIdsByModelId.keys()) },
+      },
+      select: {
+        id: true,
+        key: true,
+        provider: true,
+        displayName: true,
+        eloRating: true,
+        conservativeRating: true,
+        glickoRd: true,
+        shownCount: true,
+      },
+    }),
+  ]);
+
+  const modelsById = new Map<string, EligibleModel>(
+    models.map((model) => [
+      model.id,
+      {
+        id: model.id,
+        key: model.key,
+        provider: model.provider,
+        displayName: model.displayName,
+        eloRating: Number(model.eloRating),
+        conservativeRating: Number(model.conservativeRating),
+        ratingDeviation: Number(model.glickoRd),
+        shownCount: model.shownCount,
+      },
+    ]),
+  );
+
+  const eligiblePrompts = prompts
+    .map((prompt) => {
+      const modelIds = Array.from(modelIdsByPromptId.get(prompt.id) ?? []);
+      const filteredModelIds = modelIds.filter((modelId) => modelsById.has(modelId));
+      return {
+        id: prompt.id,
+        text: prompt.text,
+        modelIds: filteredModelIds,
+      } satisfies EligiblePrompt;
+    })
+    .filter((prompt) => prompt.modelIds.length >= 2);
+
+  const filteredPromptIdsByModelId = new Map<string, Set<string>>();
+  for (const prompt of eligiblePrompts) {
+    for (const modelId of prompt.modelIds) {
+      const promptIds = filteredPromptIdsByModelId.get(modelId) ?? new Set<string>();
+      promptIds.add(prompt.id);
+      filteredPromptIdsByModelId.set(modelId, promptIds);
+    }
+  }
+
+  const eligibleModelIds = Array.from(filteredPromptIdsByModelId.keys());
+  const eligibilityMs = roundDuration(performance.now() - eligibilityStartedAt);
+  const coverageStartedAt = performance.now();
+  const coverage = await queryCoverageState(eligiblePrompts, eligibleModelIds);
+
+  return {
+    state: {
+      prompts: eligiblePrompts,
+      modelsById,
+      promptIdsByModelId: filteredPromptIdsByModelId,
+      coverage,
+    },
+    meta: {
+      cacheStatus: "miss",
+      eligibilityMs,
+      coverageMs: roundDuration(performance.now() - coverageStartedAt),
+      totalMs: roundDuration(performance.now() - startedAt),
+    },
+  };
+}
+
+async function queryCoverageState(
+  eligiblePrompts: EligiblePrompt[],
+  eligibleModelIds: string[],
+): Promise<CoverageState> {
+  if (eligiblePrompts.length === 0 || eligibleModelIds.length === 0) {
+    return emptyCoverageState();
+  }
+
+  const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
+
+  const [modelPromptRows, pairPromptRows] = await Promise.all([
+    prisma.arenaCoverageModelPrompt.findMany({
+      where: {
+        promptId: { in: eligiblePromptIds },
+        modelId: { in: eligibleModelIds },
+      },
+      select: {
+        modelId: true,
+        promptId: true,
+        decisiveVotes: true,
+      },
+    }),
+    prisma.arenaCoveragePairPrompt.findMany({
+      where: {
+        promptId: { in: eligiblePromptIds },
+        modelLowId: { in: eligibleModelIds },
+        modelHighId: { in: eligibleModelIds },
+      },
+      select: {
+        modelLowId: true,
+        modelHighId: true,
+        promptId: true,
+        decisiveVotes: true,
+      },
+    }),
+  ]);
+
+  const modelPromptDecisiveVotes = new Map<string, number>();
+  const pairDecisiveVotes = new Map<string, number>();
+  const pairPromptCounts = new Map<string, number>();
+  const pairPromptDecisiveVotes = new Map<string, number>();
+  const promptDecisiveTotals = new Map<string, number>();
+
+  for (const row of modelPromptRows) {
+    modelPromptDecisiveVotes.set(modelPromptKey(row.modelId, row.promptId), row.decisiveVotes);
+    promptDecisiveTotals.set(
+      row.promptId,
+      (promptDecisiveTotals.get(row.promptId) ?? 0) + row.decisiveVotes,
+    );
+  }
+
+  for (const row of pairPromptRows) {
+    const pairPromptVotes = toNumber(row.decisiveVotes);
+    pairPromptDecisiveVotes.set(
+      pairPromptKey(row.modelLowId, row.modelHighId, row.promptId),
+      pairPromptVotes,
+    );
+    const key = pairKey(row.modelLowId, row.modelHighId);
+    pairDecisiveVotes.set(key, (pairDecisiveVotes.get(key) ?? 0) + pairPromptVotes);
+    pairPromptCounts.set(key, (pairPromptCounts.get(key) ?? 0) + 1);
+  }
+
+  const totalPrompts = eligiblePrompts.length;
+  const promptCoverageByModelId = new Map<string, number>();
+  for (const modelId of eligibleModelIds) {
+    let covered = 0;
+    for (const prompt of eligiblePrompts) {
+      const votes = modelPromptDecisiveVotes.get(modelPromptKey(modelId, prompt.id)) ?? 0;
+      if (votes >= PROMPT_COVERAGE_FLOOR) covered += 1;
+    }
+    promptCoverageByModelId.set(modelId, totalPrompts > 0 ? covered / totalPrompts : 0);
+  }
+
+  return {
+    modelPromptDecisiveVotes,
+    pairDecisiveVotes,
+    pairPromptCounts,
+    pairPromptDecisiveVotes,
+    promptCoverageByModelId,
+    promptDecisiveTotals,
+  };
+}
+
+export async function getArenaMatchupSamplingStateWithMeta(): Promise<ArenaMatchupSamplingResult> {
+  const now = Date.now();
+  if (matchupStateCache && matchupStateCache.expiresAt > now) {
+    return {
+      state: matchupStateCache.value,
+      meta: {
+        cacheStatus: "hit",
+        eligibilityMs: 0,
+        coverageMs: 0,
+        totalMs: 0,
+      },
+    };
+  }
+  if (matchupStateInFlight) {
+    const result = await matchupStateInFlight;
+    return {
+      state: result.state,
+      meta: {
+        ...result.meta,
+        cacheStatus: "inflight",
+      },
+    };
+  }
+
+  matchupStateInFlight = queryArenaMatchupSamplingState()
+    .then((result) => {
+      matchupStateCache = {
+        value: result.state,
+        expiresAt: Date.now() + MATCHUP_STATE_CACHE_TTL_MS,
+      };
+      return result;
+    })
+    .finally(() => {
+      matchupStateInFlight = null;
+    });
+
+  return matchupStateInFlight;
+}
+
+export async function getArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingState> {
+  const result = await getArenaMatchupSamplingStateWithMeta();
+  return result.state;
+}
+
+export async function getArenaPairCoverageByKey(
+  modelIds: string[],
+  promptIds: string[],
+): Promise<Map<string, PairCoverage>> {
+  if (modelIds.length < 2 || promptIds.length === 0) {
+    return new Map();
+  }
+
+  const pairPromptRows = await prisma.arenaCoveragePairPrompt.findMany({
+    where: {
+      modelLowId: { in: modelIds },
+      modelHighId: { in: modelIds },
+      promptId: { in: promptIds },
+    },
+    select: {
+      modelLowId: true,
+      modelHighId: true,
+      decisiveVotes: true,
+    },
+  });
+
+  const byKey = new Map<string, PairCoverage>();
+  for (const row of pairPromptRows) {
+    const key = pairKey(row.modelLowId, row.modelHighId);
+    const current = byKey.get(key) ?? { decisiveVotes: 0, promptCount: 0 };
+    current.decisiveVotes += toNumber(row.decisiveVotes);
+    current.promptCount += 1;
+    byKey.set(key, current);
+  }
+
+  return byKey;
+}
+
+type CoverageRebuildSeedRow = {
+  modelAId: string;
+  modelBId: string;
+  promptId: string;
+  decisiveVotes: NumberLike;
+};
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+  return chunks;
+}
+
+export async function rebuildArenaCoverageTables(client: PrismaClient = prisma): Promise<{
+  modelPromptRows: number;
+  pairRows: number;
+  pairPromptRows: number;
+}> {
+  const seedRows = await client.$queryRaw<CoverageRebuildSeedRow[]>`
+    SELECT
+      matchup."modelAId" AS "modelAId",
+      matchup."modelBId" AS "modelBId",
+      matchup."promptId" AS "promptId",
+      COUNT(*)::int AS "decisiveVotes"
+    FROM "Vote" vote
+    INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+    WHERE vote.choice IN ('A', 'B')
+    GROUP BY matchup."modelAId", matchup."modelBId", matchup."promptId"
+  `;
+
+  const modelPromptCounts = new Map<string, number>();
+  const pairCounts = new Map<string, number>();
+  const pairPromptCounts = new Map<string, number>();
+
+  for (const row of seedRows) {
+    const decisiveVotes = toNumber(row.decisiveVotes);
+    if (decisiveVotes <= 0) continue;
+
+    modelPromptCounts.set(
+      modelPromptKey(row.modelAId, row.promptId),
+      (modelPromptCounts.get(modelPromptKey(row.modelAId, row.promptId)) ?? 0) + decisiveVotes,
+    );
+    modelPromptCounts.set(
+      modelPromptKey(row.modelBId, row.promptId),
+      (modelPromptCounts.get(modelPromptKey(row.modelBId, row.promptId)) ?? 0) + decisiveVotes,
+    );
+
+    const [modelLowId, modelHighId] = orderPairIds(row.modelAId, row.modelBId);
+    const pair = pairKey(modelLowId, modelHighId);
+    pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + decisiveVotes);
+    pairPromptCounts.set(
+      pairPromptKey(modelLowId, modelHighId, row.promptId),
+      (pairPromptCounts.get(pairPromptKey(modelLowId, modelHighId, row.promptId)) ?? 0) +
+        decisiveVotes,
+    );
+  }
+
+  const modelPromptData = Array.from(modelPromptCounts.entries()).map(([key, decisiveVotes]) => {
+    const [modelId, promptId] = key.split("|");
+    return {
+      modelId,
+      promptId,
+      decisiveVotes,
+    };
+  });
+
+  const pairData = Array.from(pairCounts.entries()).map(([key, decisiveVotes]) => {
+    const [modelLowId, modelHighId] = key.split("|");
+    return {
+      modelLowId,
+      modelHighId,
+      decisiveVotes,
+    };
+  });
+
+  const pairPromptData = Array.from(pairPromptCounts.entries()).map(([key, decisiveVotes]) => {
+    const [modelLowId, modelHighId, promptId] = key.split("|");
+    return {
+      modelLowId,
+      modelHighId,
+      promptId,
+      decisiveVotes,
+    };
+  });
+
+  await client.$transaction(async (tx) => {
+    await tx.arenaCoveragePairPrompt.deleteMany();
+    await tx.arenaCoveragePair.deleteMany();
+    await tx.arenaCoverageModelPrompt.deleteMany();
+
+    for (const chunk of chunkArray(modelPromptData, 500)) {
+      if (chunk.length === 0) continue;
+      await tx.arenaCoverageModelPrompt.createMany({ data: chunk });
+    }
+    for (const chunk of chunkArray(pairData, 500)) {
+      if (chunk.length === 0) continue;
+      await tx.arenaCoveragePair.createMany({ data: chunk });
+    }
+    for (const chunk of chunkArray(pairPromptData, 500)) {
+      if (chunk.length === 0) continue;
+      await tx.arenaCoveragePairPrompt.createMany({ data: chunk });
+    }
+  });
+
+  invalidateArenaCoverageCache();
+
+  return {
+    modelPromptRows: modelPromptData.length,
+    pairRows: pairData.length,
+    pairPromptRows: pairPromptData.length,
+  };
+}
+
+export async function applyDecisiveVoteCoverageUpdate(
+  tx: Prisma.TransactionClient,
+  input: {
+    modelAId: string;
+    modelBId: string;
+    promptId: string;
+  },
+) {
+  const [modelLowId, modelHighId] = orderPairIds(input.modelAId, input.modelBId);
+
+  await Promise.all([
+    tx.arenaCoverageModelPrompt.upsert({
+      where: {
+        modelId_promptId: {
+          modelId: input.modelAId,
+          promptId: input.promptId,
+        },
+      },
+      create: {
+        modelId: input.modelAId,
+        promptId: input.promptId,
+        decisiveVotes: 1,
+      },
+      update: {
+        decisiveVotes: { increment: 1 },
+      },
+    }),
+    tx.arenaCoverageModelPrompt.upsert({
+      where: {
+        modelId_promptId: {
+          modelId: input.modelBId,
+          promptId: input.promptId,
+        },
+      },
+      create: {
+        modelId: input.modelBId,
+        promptId: input.promptId,
+        decisiveVotes: 1,
+      },
+      update: {
+        decisiveVotes: { increment: 1 },
+      },
+    }),
+    tx.arenaCoveragePair.upsert({
+      where: {
+        modelLowId_modelHighId: {
+          modelLowId,
+          modelHighId,
+        },
+      },
+      create: {
+        modelLowId,
+        modelHighId,
+        decisiveVotes: 1,
+      },
+      update: {
+        decisiveVotes: { increment: 1 },
+      },
+    }),
+    tx.arenaCoveragePairPrompt.upsert({
+      where: {
+        modelLowId_modelHighId_promptId: {
+          modelLowId,
+          modelHighId,
+          promptId: input.promptId,
+        },
+      },
+      create: {
+        modelLowId,
+        modelHighId,
+        promptId: input.promptId,
+        decisiveVotes: 1,
+      },
+      update: {
+        decisiveVotes: { increment: 1 },
+      },
+    }),
+  ]);
+}
