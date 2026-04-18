@@ -577,7 +577,7 @@ export function LocalLab() {
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
         <div className="mb-panel flex h-full flex-col">
-          <div className="p-4 sm:p-5">
+          <div className="flex flex-1 flex-col p-4 sm:p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-fg">System prompt</div>
@@ -613,7 +613,7 @@ export function LocalLab() {
 
             <textarea
               aria-label="System prompt"
-              className="mb-field mt-3 min-h-[178px] font-mono text-[12px] leading-snug"
+              className="mb-field mt-3 min-h-[178px] flex-1 font-mono text-[12px] leading-snug"
               value={systemPrompt}
               spellCheck={false}
               onChange={(e) => {
@@ -670,96 +670,98 @@ export function LocalLab() {
           </div>
         </div>
 
-        <div className="mb-panel flex flex-col gap-3 p-4 sm:p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-fg">Paste JSON</div>
-              <div className="text-xs text-muted">Drop the model&apos;s JSON output here. Cmd/Ctrl+Enter to render.</div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
-                onClick={clearModelInput}
-                disabled={!hasInput}
-              >
-                Clear
-              </button>
-              <button
-                type="button"
-                className="mb-btn mb-btn-primary h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
-                onClick={renderFromInput}
-              >
-                <span className="inline-flex items-center gap-1.5">
-                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none">
-                    <path d="m6 4 12 8-12 8V4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
-                  </svg>
-                  <span>Render</span>
-                </span>
-              </button>
-            </div>
-          </div>
-
-          <textarea
-            ref={modelOutputRef}
-            aria-label="Paste model JSON output"
-            className="mb-field min-h-[150px] font-mono text-[12px] leading-snug"
-            placeholder='{"version":"1.0","boxes":[],"lines":[],"blocks":[{"x":0,"y":0,"z":0,"type":"stone"}]}'
-            spellCheck={false}
-            onPaste={(e) => {
-              const pasted = e.clipboardData?.getData("text") ?? "";
-              if (!pasted || pasted.length < LARGE_PASTE_CHAR_THRESHOLD) return;
-
-              e.preventDefault();
-              bufferedOutputRef.current = pasted;
-              if (modelOutputRef.current) modelOutputRef.current.value = "";
-              setInputStats({ mode: "buffered", chars: pasted.length });
-              setStatusNote(
-                `Large paste ready (~${formatApproxMbFromChars(pasted.length)}).`,
-              );
-            }}
-            onChange={(e) => {
-              if (bufferedOutputRef.current != null) {
-                bufferedOutputRef.current = null;
-              }
-              const chars = e.target.value.length;
-              setInputStats({ mode: chars > 0 ? "editor" : "empty", chars });
-            }}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                renderFromInput();
-              }
-            }}
-          />
-
-          {inputStats.mode !== "empty" ? (
-            <div className="text-[11px] text-muted">
-              {formatCompactCount(inputStats.chars)} chars (~{formatApproxMbFromChars(inputStats.chars)})
-              {inputStats.mode === "buffered" ? " held in memory" : ""}
-            </div>
-          ) : null}
-
-          {rendered.kind === "error" && rendered.message ? (
-            <div className="mb-subpanel p-3 text-sm text-danger">{rendered.message}</div>
-          ) : statusNote ? (
-            <div className="mb-subpanel p-3 text-xs text-muted">{statusNote}</div>
-          ) : null}
-
-          {rendered.kind === "ready" && rendered.warnings.length ? (
-            <div className="mb-subpanel p-3 text-xs text-muted">
-              <div className="font-semibold text-fg">
-                Rendered with {rendered.warnings.length} warning
-                {rendered.warnings.length === 1 ? "" : "s"}.
+        <div className="flex h-full flex-col gap-4">
+          <div className="mb-panel flex flex-col gap-3 p-4 sm:p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-fg">Paste JSON</div>
+                <div className="text-xs text-muted">Drop the model&apos;s JSON output here. Cmd/Ctrl+Enter to render.</div>
               </div>
-              <ul className="mt-1.5 list-disc space-y-1 pl-4">
-                {rendered.warnings.slice(0, 4).map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-                {rendered.warnings.length > 4 ? <li>...and {rendered.warnings.length - 4} more</li> : null}
-              </ul>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
+                  onClick={clearModelInput}
+                  disabled={!hasInput}
+                >
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  className="mb-btn mb-btn-primary h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
+                  onClick={renderFromInput}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none">
+                      <path d="m6 4 12 8-12 8V4Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+                    </svg>
+                    <span>Render</span>
+                  </span>
+                </button>
+              </div>
             </div>
-          ) : null}
+
+            <textarea
+              ref={modelOutputRef}
+              aria-label="Paste model JSON output"
+              className="mb-field min-h-[150px] flex-1 font-mono text-[12px] leading-snug"
+              placeholder='{"version":"1.0","boxes":[],"lines":[],"blocks":[{"x":0,"y":0,"z":0,"type":"stone"}]}'
+              spellCheck={false}
+              onPaste={(e) => {
+                const pasted = e.clipboardData?.getData("text") ?? "";
+                if (!pasted || pasted.length < LARGE_PASTE_CHAR_THRESHOLD) return;
+
+                e.preventDefault();
+                bufferedOutputRef.current = pasted;
+                if (modelOutputRef.current) modelOutputRef.current.value = "";
+                setInputStats({ mode: "buffered", chars: pasted.length });
+                setStatusNote(
+                  `Large paste ready (~${formatApproxMbFromChars(pasted.length)}).`,
+                );
+              }}
+              onChange={(e) => {
+                if (bufferedOutputRef.current != null) {
+                  bufferedOutputRef.current = null;
+                }
+                const chars = e.target.value.length;
+                setInputStats({ mode: chars > 0 ? "editor" : "empty", chars });
+              }}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  renderFromInput();
+                }
+              }}
+            />
+
+            {inputStats.mode !== "empty" ? (
+              <div className="text-[11px] text-muted">
+                {formatCompactCount(inputStats.chars)} chars (~{formatApproxMbFromChars(inputStats.chars)})
+                {inputStats.mode === "buffered" ? " held in memory" : ""}
+              </div>
+            ) : null}
+
+            {rendered.kind === "error" && rendered.message ? (
+              <div className="mb-subpanel p-3 text-sm text-danger">{rendered.message}</div>
+            ) : statusNote ? (
+              <div className="mb-subpanel p-3 text-xs text-muted">{statusNote}</div>
+            ) : null}
+
+            {rendered.kind === "ready" && rendered.warnings.length ? (
+              <div className="mb-subpanel p-3 text-xs text-muted">
+                <div className="font-semibold text-fg">
+                  Rendered with {rendered.warnings.length} warning
+                  {rendered.warnings.length === 1 ? "" : "s"}.
+                </div>
+                <ul className="mt-1.5 list-disc space-y-1 pl-4">
+                  {rendered.warnings.slice(0, 4).map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                  {rendered.warnings.length > 4 ? <li>...and {rendered.warnings.length - 4} more</li> : null}
+                </ul>
+              </div>
+            ) : null}
+          </div>
 
           <VoxelViewerCard
             title="Preview"
