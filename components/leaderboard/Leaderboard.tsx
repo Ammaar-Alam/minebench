@@ -180,11 +180,13 @@ export function Leaderboard() {
     const controller = new AbortController();
     let cancelled = false;
 
-    // 1. hydrate from stale cache immediately so the first paint shows data
-    //    this is the biggest win when the API is slow or 5xx-ing: users see
-    //    the last-known ranking instead of a blank page.
+    // 1. hydrate from stale cache immediately so the first paint shows data —
+    //    but only when the cache is still within our stated freshness window
+    //    (LEADERBOARD_STALE_MAX_AGE_MS). Beyond that, hours-old rankings as
+    //    the primary table would mislead users; we'd rather show the loader
+    //    and fall through to error handling if the fetch can't recover.
     const cached = readStale<LeaderboardResponse>(LEADERBOARD_CACHE_KEY, LEADERBOARD_STALE_MAX_AGE_MS);
-    if (cached.value) {
+    if (cached.value && cached.isFresh) {
       setData(cached.value);
       setDataAgeMs(cached.ageMs);
       setIsStale(true);
@@ -222,9 +224,11 @@ export function Leaderboard() {
         const fetchErr = e instanceof FetchError
           ? e
           : new FetchError("network", "Failed to load leaderboard", null, true);
-        // if we already painted cached data, keep it and surface a soft
-        // "couldn't refresh" indicator instead of wiping the table.
-        if (cached.value) {
+        // keep cached data on refresh failure only if it was fresh enough to
+        // paint in the first place; otherwise fall through to the full error
+        // state so we don't leave hours-old rankings on screen with a soft
+        // "couldn't refresh" note pretending they're current.
+        if (cached.value && cached.isFresh) {
           setRefreshError(fetchErr);
         } else {
           setError(fetchErr);

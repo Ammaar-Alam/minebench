@@ -212,9 +212,12 @@ export async function fetchWithRetry(input: RequestInfo | URL, options: FetchWit
     }
   }
 
-  // only record a session-level failure if it's a retryable/transient kind —
-  // 400/404-style client errors aren't "site is degraded" signals
-  if (lastError && lastError.retryable) {
+  // only record a session-level failure for server-sourced transient kinds —
+  // 400/404 client errors aren't "site is degraded" signals, and neither is
+  // "offline" (that's a local connectivity problem; flipping session health
+  // on it would surface a false "MineBench is having trouble" banner after
+  // the user reconnects, even if the backend was fine the whole time).
+  if (lastError && lastError.retryable && lastError.kind !== "offline") {
     recordApiFailure(endpoint);
   }
   throw lastError ?? new FetchError("network", "Request failed.", null, false);
