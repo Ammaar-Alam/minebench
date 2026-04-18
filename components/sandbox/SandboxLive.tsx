@@ -884,11 +884,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
           <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
             <section className="flex flex-col">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">Prompt</div>
-              <label className="mt-2 flex flex-col gap-1">
-                <span className="text-xs font-medium text-muted">Describe your build</span>
+              <label className="flex flex-col gap-2">
+                <span className="mb-eyebrow">Prompt</span>
                 <textarea
                   className="mb-field min-h-44 resize-none py-3"
+                  placeholder="Describe the build — shape, materials, scale, mood…"
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                 />
@@ -897,9 +897,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
             <div className="flex flex-col gap-5">
               <section>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">
-                  Build settings
-                </div>
+                <div className="mb-eyebrow">Build settings</div>
                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <label className="flex flex-col gap-1">
                     <div className="text-xs font-medium text-muted">Size</div>
@@ -936,7 +934,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
               <section>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">Models</div>
+                  <div className="mb-eyebrow">Models</div>
                   <button
                     type="button"
                     aria-pressed={compareEnabled}
@@ -1071,9 +1069,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           <div className="mt-5 border-t border-border/70 pt-4 sm:pt-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">
-                  API keys
-                </div>
+                <div className="mb-eyebrow">API keys</div>
                 <div className="mt-1 text-xs text-muted">Stored in your browser only.</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">

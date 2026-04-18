@@ -806,6 +806,18 @@
     @apply inline-flex items-center gap-2 rounded-full bg-bg/70 px-3 py-1 text-xs font-medium text-muted ring-1 ring-border/80;
   }
 
+  /* Shared eyebrow label used across sections to label a region without a
+     heavy pill. Mono + uppercase + letter-spaced at a mute level. */
+  .mb-eyebrow {
+    @apply font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted/70 sm:text-[11px];
+  }
+
+  /* Accent-tinted step marker (e.g. 01/02/03 in the pipeline diagram). Sized
+     to sit inline with an eyebrow label. */
+  .mb-step-num {
+    @apply rounded-md border border-accent/25 bg-accent/[0.08] px-1.5 py-0.5 font-mono text-[11px] font-medium text-accent;
+  }
+
   .mb-dot {
     @apply h-1.5 w-1.5 rounded-sm bg-accent shadow-[0_0_0_3px_hsl(var(--accent)_/_0.18)];
   }

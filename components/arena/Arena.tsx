@@ -1688,9 +1688,7 @@ export function Arena() {
           {/* prompt */}
           <div className="mb-subpanel relative overflow-hidden px-3 py-2.5 sm:px-4 sm:py-3 md:py-2.5">
             <div className="relative z-10 flex items-center gap-3 sm:gap-3.5">
-              <span className="shrink-0 font-mono text-[10px] font-semibold uppercase tracking-[0.22em] text-muted/65 sm:text-[11px]">
-                Prompt
-              </span>
+              <span className="mb-eyebrow shrink-0">Prompt</span>
               <div
                 title={promptText}
                 className={`min-w-0 flex-1 overflow-hidden whitespace-nowrap text-ellipsis pr-1 text-[14px] font-medium leading-tight text-fg/95 sm:text-[15px] ${isLongPrompt ? "cursor-help" : ""}`}
@@ -1729,9 +1727,7 @@ export function Arena() {
                 className="relative w-full max-w-2xl overflow-hidden rounded-3xl bg-card/90 shadow-soft ring-1 ring-border backdrop-blur-xl"
               >
                 <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
-                  <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.22em] text-muted/70 sm:text-[11px]">
-                    Prompt
-                  </span>
+                  <span className="mb-eyebrow">Prompt</span>
                   <button
                     type="button"
                     className="mb-btn mb-btn-ghost h-9 rounded-full px-4 text-xs"
@@ -2084,10 +2080,7 @@ export function Arena() {
       {/* how it works — pipeline diagram */}
       <div className="mb-panel mb-panel-solid overflow-hidden p-5 sm:p-7 md:p-10">
         <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent ring-1 ring-accent/20 sm:mb-5">
-            <span>Community benchmark</span>
-          </div>
-          <h2 className="mb-3 text-center font-display text-2xl font-bold tracking-tight text-fg md:mb-4 md:text-3xl">
+          <h2 className="mb-3 text-center font-display text-2xl font-semibold tracking-tight text-fg sm:text-[1.75rem] md:mb-4 md:text-3xl">
             How it works
           </h2>
           <p className="mb-8 max-w-2xl text-center text-[15px] leading-relaxed text-fg/80 sm:mb-10 sm:text-base">
@@ -2099,10 +2092,8 @@ export function Arena() {
             {/* 01 — Prompt */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <span className="mb-kbd border-accent/25 bg-accent/[0.08] text-accent">01</span>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted/70">
-                  Prompt
-                </div>
+                <span className="mb-step-num">01</span>
+                <span className="mb-eyebrow">Prompt</span>
               </div>
               <figure className="rounded-xl border border-border/60 bg-bg/40 p-4 font-mono text-[12px] italic leading-relaxed text-fg/85">
                 &ldquo;A warm wooden cabin beside a pond, with a stone chimney, a small dock, and a few trees.&rdquo;
@@ -2117,10 +2108,8 @@ export function Arena() {
             {/* 02 — Generate */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <span className="mb-kbd border-accent/25 bg-accent/[0.08] text-accent">02</span>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted/70">
-                  Generate
-                </div>
+                <span className="mb-step-num">02</span>
+                <span className="mb-eyebrow">Generate</span>
               </div>
               <figure className="relative rounded-xl border border-accent/25 bg-bg/40 p-4 font-mono text-[11px] leading-relaxed text-fg/85">
                 <pre className="overflow-x-auto whitespace-pre">
@@ -2147,10 +2136,8 @@ export function Arena() {
             {/* 03 — Vote & rank */}
             <div className="flex flex-col gap-3">
               <div className="flex items-center gap-2">
-                <span className="mb-kbd border-accent/25 bg-accent/[0.08] text-accent">03</span>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted/70">
-                  Vote &amp; rank
-                </div>
+                <span className="mb-step-num">03</span>
+                <span className="mb-eyebrow">Vote &amp; rank</span>
               </div>
               <figure className="flex flex-col gap-3 rounded-xl border border-border/60 bg-bg/40 p-4">
                 <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
@@ -2191,28 +2178,36 @@ export function Arena() {
 
       {/* sandbox cta - moved to bottom & polished */}
       <div className="mb-panel mb-panel-solid flex flex-col items-center gap-4 p-5 text-center sm:p-6 md:p-7">
-        <div className="flex flex-col items-center gap-1">
-          <h3 className="font-semibold text-fg">Want to test a model yourself?</h3>
-          <p className="text-sm text-fg/70">
+        <div className="flex flex-col items-center gap-1.5">
+          <h3 className="font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
+            Want to test a model yourself?
+          </h3>
+          <p className="text-sm leading-relaxed text-fg/70">
             Enter any prompt to generate a 3D build in the Sandbox.
           </p>
         </div>
-        <div className="relative flex w-full max-w-md items-center">
+        <form
+          className="relative flex w-full max-w-md items-center"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const q = customPrompt.trim();
+            window.location.href = `/sandbox${q ? `?prompt=${encodeURIComponent(q)}` : ""}`;
+          }}
+        >
           <input
-            className="mb-field h-12 w-full pr-24 text-base shadow-sm focus:ring-accent/20"
-            placeholder="e.g. A giant rubber duck..."
+            aria-label="Prompt for the sandbox"
+            className="mb-field h-12 w-full pr-[7.5rem] text-base"
+            placeholder="e.g. A giant rubber duck…"
             value={customPrompt}
             onChange={(e) => setCustomPrompt(e.target.value)}
           />
-          <div className="absolute right-1.5 top-1.5 bottom-1.5">
-            <a
-              className="mb-btn mb-btn-primary h-full px-4 text-sm shadow-sm"
-              href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
-            >
-              Generate
-            </a>
-          </div>
-        </div>
+          <a
+            className="mb-btn mb-btn-primary absolute right-1.5 top-1.5 bottom-1.5 flex items-center rounded-md px-4 text-sm"
+            href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
+          >
+            Generate
+          </a>
+        </form>
       </div>
     </div>
   );

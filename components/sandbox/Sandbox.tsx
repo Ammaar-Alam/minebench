@@ -70,9 +70,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.28em] text-muted/70">
-          Sandbox
-        </span>
+        <span className="mb-eyebrow">Sandbox</span>
         <ModeSegmentedControl value={mode} onChange={setMode} className="w-full sm:w-[360px]" />
       </div>
 
