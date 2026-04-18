@@ -96,8 +96,14 @@ export function recordApiFailure(endpoint: string): void {
   pruneFailures(now);
   failures.push({ endpoint, at: now });
   updateHealth(now);
-  // schedule a re-check when this failure ages out of the window
-  scheduleRecoveryCheck(FAILURE_WATCH_WINDOW_MS + 100);
+  // Schedule the re-check at the oldest in-window failure's expiry — not
+  // `now + window`. Otherwise failures at t=0 and t=20 leave the banner up
+  // ~20s past when the count should have dropped below the threshold
+  // (first one ages out at t=30, but a now-relative timer would wait
+  // until t=50).
+  const oldestAt = failures[0]?.at ?? now;
+  const nextExpiry = oldestAt + FAILURE_WATCH_WINDOW_MS + 100;
+  scheduleRecoveryCheck(Math.max(0, nextExpiry - now));
 }
 
 export function recordApiSuccess(endpoint: string): void {

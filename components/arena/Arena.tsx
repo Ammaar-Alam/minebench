@@ -1461,10 +1461,13 @@ export function Arena() {
     const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
     setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
 
-    const nextPromise = fetchMatchup(undefined).then(applyCachedBuildsToMatchup);
-    // Kick off the vote and the next-matchup fetch in parallel. A vote failure
-    // shouldn't nuke the whole arena — if we still have a next matchup, we
-    // recover with a soft warning and advance the user forward.
+    // Submit the vote first, catch its error, THEN fetch the next matchup.
+    // We used to pre-fetch the next matchup in parallel, but /api/arena/matchup
+    // persists a matchup row + increments shownCount on every fetch, so a vote
+    // outage would create "shown" matchups with no vote signal and bias
+    // sampling/coverage. Sequential is the correct tradeoff: we still don't
+    // nuke the arena on a vote-only failure — the error is captured and
+    // surfaced as a soft warning while we fetch forward.
     let voteError: Error | null = null;
     try {
       await submitVote(matchup.id, choice);
@@ -1473,7 +1476,7 @@ export function Arena() {
     }
 
     try {
-      const next = await nextPromise;
+      const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
       prefetchMatchupBuilds(next);
       if (voteError) {
         flashVoteWarning(voteError.message);

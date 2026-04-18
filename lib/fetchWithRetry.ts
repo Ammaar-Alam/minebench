@@ -207,7 +207,12 @@ export async function fetchWithRetry(input: RequestInfo | URL, options: FetchWit
 
     try {
       await sleep(backoffFor(attempt, backoffMs, maxBackoffMs), parentSignal);
-    } catch {
+    } catch (err) {
+      // If the parent signal cancelled us during backoff (component unmount,
+      // route change), propagate the AbortError instead of masking it as a
+      // network/server failure — callers differentiate abort to avoid
+      // surfacing spurious errors on cancelled requests.
+      if (err instanceof Error && err.name === "AbortError") throw err;
       throw lastError;
     }
   }
