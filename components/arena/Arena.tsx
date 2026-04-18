@@ -14,6 +14,7 @@ import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoteBar } from "@/components/arena/VoteBar";
 import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
+import { trackEvent } from "@/lib/analytics";
 
 type ArenaState =
   | { kind: "loading" }
@@ -25,7 +26,14 @@ const MATCHUP_REQUEST_TIMEOUT_MS = Number.parseInt(
   10,
 );
 const MATCHUP_REQUEST_RETRIES = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_MATCHUP_REQUEST_RETRIES ?? "1",
+  process.env.NEXT_PUBLIC_ARENA_MATCHUP_REQUEST_RETRIES ?? "0",
+  10,
+);
+const OVERLAP_MATCHUP_FETCH =
+  (process.env.NEXT_PUBLIC_ARENA_OVERLAP_MATCHUP_FETCH ?? "").trim().toLowerCase() === "1" ||
+  (process.env.NEXT_PUBLIC_ARENA_OVERLAP_MATCHUP_FETCH ?? "").trim().toLowerCase() === "true";
+const FULL_HYDRATION_SLOW_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_SLOW_MS ?? "2500",
   10,
 );
 
@@ -50,6 +58,13 @@ async function fetchMatchup(promptId?: string): Promise<ArenaMatchup> {
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") {
         lastError = new Error("Matchup request timed out");
+        if (attempt >= maxAttempts) {
+          trackEvent("arena_matchup_timeout", {
+            timeoutMs: MATCHUP_REQUEST_TIMEOUT_MS,
+            attempts: maxAttempts,
+            promptMode: promptId ? "forced" : "random",
+          });
+        }
       } else {
         lastError = err;
       }
@@ -1018,14 +1033,12 @@ export function Arena() {
     };
 
     try {
-      const fetchWithDelivery =
-        lane.buildLoadHints?.deliveryClass === "snapshot"
-          ? fetchBuildVariantSnapshot(ref, opts?.signal)
-          : fetchBuildVariantStream(ref, {
-              signal: opts?.signal,
-              onProgress: applyProgressiveBuild,
-            });
-      const payload = await fetchWithDelivery;
+      const hydrationStartedAt = performance.now();
+      const payload = await fetchBuildVariantStream(ref, {
+        signal: opts?.signal,
+        onProgress: applyProgressiveBuild,
+      });
+      const hydrationMs = performance.now() - hydrationStartedAt;
       const resolvedRef: ArenaBuildRef = {
         buildId: payload.buildId || ref.buildId,
         variant: payload.variant ?? ref.variant,
@@ -1057,6 +1070,18 @@ export function Arena() {
         setLaneLoadProgress(matchupValue.id, side, {
           receivedBlocks: payload.voxelBuild.blocks.length,
           totalBlocks: payload.voxelBuild.blocks.length,
+        });
+      }
+      if (
+        target === "full" &&
+        Number.isFinite(hydrationMs) &&
+        hydrationMs >= FULL_HYDRATION_SLOW_MS
+      ) {
+        trackEvent("arena_full_hydration_slow", {
+          ms: Math.round(hydrationMs),
+          deliveryClass: lane.buildLoadHints?.deliveryClass ?? "unknown",
+          initialVariant: lane.buildLoadHints?.initialVariant ?? "unknown",
+          side,
         });
       }
     } catch (err: unknown) {
@@ -1288,9 +1313,13 @@ export function Arena() {
     const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
     setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
     try {
-      const nextPromise = fetchMatchup(undefined).then(applyCachedBuildsToMatchup);
+      const nextPromise = OVERLAP_MATCHUP_FETCH
+        ? fetchMatchup(undefined).then(applyCachedBuildsToMatchup)
+        : null;
       await submitVote(matchup.id, choice);
-      const next = await nextPromise;
+      const next = nextPromise
+        ? await nextPromise
+        : applyCachedBuildsToMatchup(await fetchMatchup(undefined));
       prefetchMatchupBuilds(next);
       const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
       if (stillRevealing) {

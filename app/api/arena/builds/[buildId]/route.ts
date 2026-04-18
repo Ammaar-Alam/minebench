@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
 import { pickBuildVariant, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
 import { prisma } from "@/lib/prisma";
+import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,8 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ buildId: string }> },
 ) {
+  const timing = new ServerTiming();
+  const requestStartedAt = timing.start();
   const { buildId } = await params;
   const url = new URL(request.url);
   const variant = parseVariant(url.searchParams.get("variant"));
@@ -40,12 +43,14 @@ export async function GET(
   }
 
   let prepared: Awaited<ReturnType<typeof prepareArenaBuild>>;
+  const prepareStartedAt = timing.start();
   try {
     prepared = await prepareArenaBuild(build);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load build payload";
     return NextResponse.json({ error: message }, { status: 422 });
   }
+  timing.end("prepare", prepareStartedAt);
 
   if (expectedChecksum && expectedChecksum !== prepared.checksum) {
     return NextResponse.json(
@@ -60,6 +65,12 @@ export async function GET(
 
   const voxelBuild = pickBuildVariant(prepared, variant);
 
+  timing.end("total", requestStartedAt);
+  const headers = new Headers({
+    "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
+  });
+  timing.apply(headers);
+
   return NextResponse.json(
     {
       buildId,
@@ -69,10 +80,6 @@ export async function GET(
       buildLoadHints: prepared.hints,
       voxelBuild,
     },
-    {
-      headers: {
-        "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
-      },
-    },
+    { headers },
   );
 }
