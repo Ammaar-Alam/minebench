@@ -832,7 +832,20 @@ export function SandboxBenchmark() {
     handlePromptChange(pick.id);
   }
 
+  function navigatePrompt(delta: 1 | -1) {
+    if (!data || data.prompts.length === 0) return;
+    const len = data.prompts.length;
+    const currentIndex = data.prompts.findIndex((p) => p.id === promptId);
+    const base = currentIndex >= 0 ? currentIndex : 0;
+    const next = data.prompts[(base + delta + len) % len];
+    if (!next) return;
+    handlePromptChange(next.id);
+  }
+
   const selectedPromptText = data?.selectedPrompt?.text ?? "";
+  const selectedPromptIndex = data?.prompts.findIndex((p) => p.id === promptId) ?? -1;
+  const totalPrompts = data?.prompts.length ?? 0;
+  const canNavigatePrompts = totalPrompts > 1;
   const gridSize = toGridSize(data?.settings.gridSize ?? 256);
   const palette = toPalette(data?.settings.palette ?? "simple");
 
@@ -1017,56 +1030,110 @@ export function SandboxBenchmark() {
           </div>
         ) : null}
 
-        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label className="flex flex-col gap-1 md:col-span-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-muted">Benchmark prompt</span>
-              <button
-                type="button"
-                className="mb-btn mb-btn-ghost h-7 rounded-full px-2 text-[11px] sm:h-7 sm:px-2.5 sm:text-[11px]"
-                onClick={handleRandomPrompt}
-                disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
-                title="Pick a random prompt"
-              >
-                <span className="inline-flex items-center gap-1">
-                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5">
-                    <rect
-                      x="5"
-                      y="5"
-                      width="14"
-                      height="14"
-                      rx="3"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.7"
-                    />
-                    <circle cx="9" cy="9" r="1.1" fill="currentColor" />
-                    <circle cx="12" cy="12" r="1.1" fill="currentColor" />
-                    <circle cx="15" cy="15" r="1.1" fill="currentColor" />
+        {/* Current prompt — shown once, as the hero. Prev/Random/Next below
+           form the prompt-navigation cluster so Random's scope is unambiguous. */}
+        <div className="mt-5">
+          <p className="text-[17px] font-medium leading-snug text-fg sm:text-lg">
+            {selectedPromptText || "Loading benchmark prompt…"}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted/80">
+            <span>{gridSize}</span>
+            <span className="text-muted/35">·</span>
+            <span>{palette}</span>
+            <span className="text-muted/35">·</span>
+            <span>{data?.settings.mode ?? "precise"}</span>
+            {totalPrompts > 0 ? (
+              <>
+                <span className="text-muted/35">·</span>
+                {/* The counter IS the picker: native <select> overlaid on the
+                   counter label. No extra chrome — the existing "N of M"
+                   indicator gains a chevron and click behaviour. */}
+                <label
+                  className={`relative -my-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors focus-within:bg-bg/70 focus-within:text-fg focus-within:ring-2 focus-within:ring-accent/35 ${
+                    loading || refreshing || totalPrompts <= 1
+                      ? "cursor-not-allowed opacity-80"
+                      : "cursor-pointer hover:bg-bg/60 hover:text-fg"
+                  }`}
+                >
+                  <span>
+                    {(selectedPromptIndex >= 0 ? selectedPromptIndex + 1 : 1)} / {totalPrompts}
+                  </span>
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className="h-3 w-3 text-muted/60"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="m7 10 5 5 5-5" />
                   </svg>
-                  <span>Random</span>
-                </span>
-              </button>
-            </div>
-            <div className="relative">
-              <select
-                className="mb-field h-11 w-full appearance-none pr-10"
-                value={promptId}
-                onChange={(e) => handlePromptChange(e.target.value)}
-                disabled={loading || refreshing || (data?.prompts.length ?? 0) === 0}
-              >
-                {(data?.prompts ?? []).map((prompt) => (
-                  <option key={prompt.id} value={prompt.id}>
-                    {prompt.text}
-                  </option>
-                ))}
-              </select>
-              <SelectChevron />
-            </div>
-          </label>
+                  <select
+                    aria-label="Jump to a specific benchmark prompt"
+                    className="absolute inset-0 cursor-pointer opacity-0 focus:outline-none"
+                    value={promptId}
+                    onChange={(e) => handlePromptChange(e.target.value)}
+                    disabled={loading || refreshing || totalPrompts <= 1}
+                  >
+                    {(data?.prompts ?? []).map((p, i) => (
+                      <option key={p.id} value={p.id}>
+                        {i + 1}. {p.text}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : null}
+          </div>
 
+          <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Browse benchmark prompts">
+            <button
+              type="button"
+              aria-label="Previous prompt"
+              className="mb-btn mb-btn-ghost h-9 w-9 rounded-full p-0"
+              onClick={() => navigatePrompt(-1)}
+              disabled={loading || refreshing || !canNavigatePrompts}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m14 6-6 6 6 6" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="mb-btn mb-btn-ghost h-9 rounded-full px-3 text-xs"
+              onClick={handleRandomPrompt}
+              disabled={loading || refreshing || !canNavigatePrompts}
+              title="Pick a random prompt"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <rect x="5" y="5" width="14" height="14" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                  <circle cx="9" cy="9" r="1.1" fill="currentColor" />
+                  <circle cx="12" cy="12" r="1.1" fill="currentColor" />
+                  <circle cx="15" cy="15" r="1.1" fill="currentColor" />
+                </svg>
+                <span>Random</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-label="Next prompt"
+              className="mb-btn mb-btn-ghost h-9 w-9 rounded-full p-0"
+              onClick={() => navigatePrompt(1)}
+              disabled={loading || refreshing || !canNavigatePrompts}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m10 6 6 6-6 6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
           <label className="flex flex-col gap-1">
-            <div className="text-xs font-medium text-muted">Model A</div>
+            <span className="text-xs font-medium text-muted">Model A</span>
             <div className="relative">
               <select
                 className="mb-field h-11 w-full appearance-none pr-10"
@@ -1089,7 +1156,7 @@ export function SandboxBenchmark() {
           </label>
 
           <label className="flex flex-col gap-1">
-            <div className="text-xs font-medium text-muted">Model B</div>
+            <span className="text-xs font-medium text-muted">Model B</span>
             <div className="relative">
               <select
                 className="mb-field h-11 w-full appearance-none pr-10"
@@ -1110,18 +1177,6 @@ export function SandboxBenchmark() {
               <SelectChevron />
             </div>
           </label>
-        </div>
-
-        <div className="mt-5 border-t border-border/70 pt-4">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted/70">
-            Selected prompt
-          </div>
-          <div className="mt-2 text-sm leading-relaxed text-fg">
-            {selectedPromptText || "Loading benchmark prompt…"}
-          </div>
-          <div className="mt-2 font-mono text-[11px] text-muted/80">
-            {gridSize} · {palette} · {data?.settings.mode ?? "precise"}
-          </div>
         </div>
       </div>
 
