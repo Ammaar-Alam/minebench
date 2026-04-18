@@ -85,15 +85,25 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
   return (await res.json()) as ArenaMatchup;
 }
 
-async function fetchMatchup(promptId?: string): Promise<ArenaMatchup> {
+async function fetchMatchup(
+  promptId?: string,
+  parentSignal?: AbortSignal,
+): Promise<ArenaMatchup> {
   const maxAttempts = Math.max(1, MATCHUP_REQUEST_RETRIES + 1);
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const timed = makeTimeoutSignal(undefined, MATCHUP_REQUEST_TIMEOUT_MS);
+    // compose caller's abort signal with our per-attempt timeout so either
+    // source (retry cleanup, navigation, user cancel) can kill in-flight reqs
+    const timed = makeTimeoutSignal(parentSignal, MATCHUP_REQUEST_TIMEOUT_MS);
     try {
       return await fetchMatchupOnce(promptId, timed.signal);
     } catch (err: unknown) {
+      // if the caller aborted, stop retrying and surface the abort — the
+      // effect/caller will handle it (typically by ignoring the result)
+      if (parentSignal?.aborted) {
+        throw err instanceof Error ? err : new DOMException("Aborted", "AbortError");
+      }
       if (err instanceof Error && err.name === "AbortError") {
         lastError = new Error("Matchup request timed out");
         if (attempt >= maxAttempts) {
@@ -1234,6 +1244,14 @@ export function Arena() {
   }, []);
 
   useEffect(() => {
+    // AbortController lets us actually cancel the in-flight fetchMatchup
+    // when reloadToken bumps (retry click). /api/arena/matchup is
+    // side-effecting — it creates a matchup row + increments shownCount —
+    // so silently ignoring a stale response would still let the previous
+    // request run to completion on the server, burning matchups with no
+    // vote signal. Aborting short-circuits the network round-trip so at
+    // least the response body parse + any follow-up is cancelled.
+    const controller = new AbortController();
     let cancelled = false;
     setState({ kind: "loading" });
     setSlowInitialLoad(false);
@@ -1242,13 +1260,14 @@ export function Arena() {
     const slowTimer = setTimeout(() => {
       if (!cancelled) setSlowInitialLoad(true);
     }, 5_000);
-    fetchMatchup(undefined)
+    fetchMatchup(undefined, controller.signal)
       .then((m) => {
         if (cancelled) return;
         setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(m) });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        if (err instanceof Error && err.name === "AbortError") return;
         setState({
           kind: "error",
           message: err instanceof Error ? err.message : "Failed to load matchup",
@@ -1262,6 +1281,7 @@ export function Arena() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
       clearTimeout(slowTimer);
     };
   }, [applyCachedBuildsToMatchup, reloadToken]);
@@ -1461,26 +1481,24 @@ export function Arena() {
     const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
     setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
 
-    // Submit the vote first, catch its error, THEN fetch the next matchup.
-    // We used to pre-fetch the next matchup in parallel, but /api/arena/matchup
-    // persists a matchup row + increments shownCount on every fetch, so a vote
-    // outage would create "shown" matchups with no vote signal and bias
-    // sampling/coverage. Sequential is the correct tradeoff: we still don't
-    // nuke the arena on a vote-only failure — the error is captured and
-    // surfaced as a soft warning while we fetch forward.
-    let voteError: Error | null = null;
+    // Submit the vote first. If it fails, stay on the current matchup so
+    // the user can retry — advancing anyway would silently convert a
+    // dropped vote into a skip and bias rankings + prompt coverage. We
+    // also don't fetch the next matchup (which would burn a shownCount
+    // row with no vote signal).
     try {
       await submitVote(matchup.id, choice);
     } catch (err) {
-      voteError = err instanceof Error ? err : new Error("Couldn't record your vote.");
+      const msg = err instanceof Error ? err.message : "Couldn't record your vote.";
+      flashVoteWarning(msg);
+      setReveal({ kind: "none" });
+      setSubmitting(false);
+      return;
     }
 
     try {
       const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
       prefetchMatchupBuilds(next);
-      if (voteError) {
-        flashVoteWarning(voteError.message);
-      }
       const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
       if (stillRevealing) {
         const requestedAt = advanceNowRequestedAtRef.current;
@@ -1501,12 +1519,13 @@ export function Arena() {
         setSubmitting(false);
       }
     } catch (err) {
-      // Next matchup failed to load → we have nothing to show. Full error state.
+      // Vote already persisted; this is a pure next-matchup load failure,
+      // so show the full error state (nothing to present next).
       clearAutoAdvance();
-      const msg =
-        voteError?.message
-        ?? (err instanceof Error ? err.message : "Couldn't load the next matchup");
-      setState({ kind: "error", message: msg });
+      setState({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Couldn't load the next matchup",
+      });
       setReveal({ kind: "none" });
       setSubmitting(false);
     }
