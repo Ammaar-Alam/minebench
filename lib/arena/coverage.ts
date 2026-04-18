@@ -127,6 +127,68 @@ export function recordArenaMatchupShown(modelIds: string[]) {
   }
 }
 
+function refreshPromptCoverageForModel(state: ArenaMatchupSamplingState, modelId: string) {
+  const promptIds = state.promptIdsByModelId.get(modelId);
+  const totalPrompts = promptIds?.size ?? 0;
+  if (totalPrompts <= 0) {
+    state.coverage.promptCoverageByModelId.set(modelId, 0);
+    return;
+  }
+
+  const activePromptIds = promptIds ?? new Set<string>();
+  let covered = 0;
+  for (const promptId of activePromptIds) {
+    const votes = state.coverage.modelPromptDecisiveVotes.get(modelPromptKey(modelId, promptId)) ?? 0;
+    if (votes >= PROMPT_COVERAGE_FLOOR) covered += 1;
+  }
+
+  state.coverage.promptCoverageByModelId.set(modelId, covered / totalPrompts);
+}
+
+export function recordArenaVoteInSamplingCache(input: {
+  promptId: string;
+  decisive: boolean;
+  modelA: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
+  modelB: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
+}) {
+  matchupStateVersion += 1;
+  matchupStateInFlight = null;
+
+  const state = matchupStateCache?.value;
+  if (!state) return;
+
+  for (const nextModel of [input.modelA, input.modelB]) {
+    const cachedModel = state.modelsById.get(nextModel.id);
+    if (!cachedModel) continue;
+    cachedModel.eloRating = nextModel.eloRating;
+    cachedModel.conservativeRating = nextModel.conservativeRating;
+    cachedModel.ratingDeviation = nextModel.ratingDeviation;
+  }
+
+  if (!input.decisive) return;
+
+  const coverage = state.coverage;
+  const pair = pairKey(input.modelA.id, input.modelB.id);
+  const pairPrompt = pairPromptKey(input.modelA.id, input.modelB.id, input.promptId);
+  const previousPairPromptVotes = coverage.pairPromptDecisiveVotes.get(pairPrompt) ?? 0;
+
+  coverage.pairDecisiveVotes.set(pair, (coverage.pairDecisiveVotes.get(pair) ?? 0) + 1);
+  coverage.pairPromptDecisiveVotes.set(pairPrompt, previousPairPromptVotes + 1);
+  if (previousPairPromptVotes === 0) {
+    coverage.pairPromptCounts.set(pair, (coverage.pairPromptCounts.get(pair) ?? 0) + 1);
+  }
+  coverage.promptDecisiveTotals.set(
+    input.promptId,
+    (coverage.promptDecisiveTotals.get(input.promptId) ?? 0) + 1,
+  );
+
+  for (const modelId of [input.modelA.id, input.modelB.id]) {
+    const key = modelPromptKey(modelId, input.promptId);
+    coverage.modelPromptDecisiveVotes.set(key, (coverage.modelPromptDecisiveVotes.get(key) ?? 0) + 1);
+    refreshPromptCoverageForModel(state, modelId);
+  }
+}
+
 export function isDecisiveChoice(choice: string): choice is "A" | "B" {
   return choice === "A" || choice === "B";
 }

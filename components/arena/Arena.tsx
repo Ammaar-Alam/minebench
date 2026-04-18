@@ -535,6 +535,12 @@ function isHeavyRetrievalDeliveryClass(
   return deliveryClass === "stream-live" || deliveryClass === "stream-artifact";
 }
 
+function shouldHydrateViaSnapshot(
+  deliveryClass: ArenaBuildDeliveryClass | undefined,
+): boolean {
+  return deliveryClass === "snapshot";
+}
+
 function getExpectedBlocksForLane(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): number | undefined {
   const hints = lane.buildLoadHints;
   if (!hints) return undefined;
@@ -1031,10 +1037,12 @@ export function Arena() {
 
     try {
       const hydrationStartedAt = performance.now();
-      const payload = await fetchBuildVariantStream(ref, {
-        signal: opts?.signal,
-        onProgress: applyProgressiveBuild,
-      });
+      const payload = shouldHydrateViaSnapshot(lane.buildLoadHints?.deliveryClass)
+        ? await fetchBuildVariantSnapshot(ref, opts?.signal)
+        : await fetchBuildVariantStream(ref, {
+            signal: opts?.signal,
+            onProgress: applyProgressiveBuild,
+          });
       const hydrationMs = performance.now() - hydrationStartedAt;
       const resolvedRef: ArenaBuildRef = {
         buildId: payload.buildId || ref.buildId,

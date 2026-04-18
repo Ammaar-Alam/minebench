@@ -7,8 +7,8 @@ import type { VoteChoice } from "@/lib/arena/types";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import {
   applyDecisiveVoteCoverageUpdate,
-  invalidateArenaCoverageCache,
   isDecisiveChoice,
+  recordArenaVoteInSamplingCache,
 } from "@/lib/arena/coverage";
 import { withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { ServerTiming } from "@/lib/serverTiming";
@@ -104,6 +104,24 @@ export async function POST(req: Request) {
     const txStartedAt = timing.start();
     const a = matchup.modelA;
     const b = matchup.modelB;
+    let cacheUpdate:
+      | {
+          decisive: boolean;
+          promptId: string;
+          modelA: {
+            id: string;
+            eloRating: number;
+            conservativeRating: number;
+            ratingDeviation: number;
+          };
+          modelB: {
+            id: string;
+            eloRating: number;
+            conservativeRating: number;
+            ratingDeviation: number;
+          };
+        }
+      | null = null;
 
     if (choice === "BOTH_BAD") {
       const updates = orderModelUpdatePlans([
@@ -161,6 +179,22 @@ export async function POST(req: Request) {
         glickoRd: updated.b.rd,
         glickoVolatility: updated.b.volatility,
         conservativeRating: conservativeScore(updated.b.rating, updated.b.rd),
+      };
+      cacheUpdate = {
+        decisive: isDecisiveChoice(choice),
+        promptId: matchup.promptId,
+        modelA: {
+          id: a.id,
+          eloRating: updateModelA.eloRating,
+          conservativeRating: updateModelA.conservativeRating,
+          ratingDeviation: updateModelA.glickoRd,
+        },
+        modelB: {
+          id: b.id,
+          eloRating: updateModelB.eloRating,
+          conservativeRating: updateModelB.conservativeRating,
+          ratingDeviation: updateModelB.glickoRd,
+        },
       };
 
       if (isDecisiveChoice(choice)) {
@@ -238,7 +272,9 @@ export async function POST(req: Request) {
     }
     timing.end("tx", txStartedAt);
     invalidateArenaStatsCache();
-    invalidateArenaCoverageCache();
+    if (cacheUpdate) {
+      recordArenaVoteInSamplingCache(cacheUpdate);
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Vote failed";
     return respondJson({ error: msg }, { status: 409 });
