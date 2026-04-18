@@ -67,6 +67,7 @@ type NumberLike = number | bigint | string | null;
 
 let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
 let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
+let matchupStateVersion = 0;
 
 function readIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -102,7 +103,9 @@ export function pairPromptKey(modelAId: string, modelBId: string, promptId: stri
 }
 
 export function invalidateArenaCoverageCache() {
+  matchupStateVersion += 1;
   matchupStateCache = null;
+  matchupStateInFlight = null;
 }
 
 export function isDecisiveChoice(choice: string): choice is "A" | "B" {
@@ -376,17 +379,24 @@ export async function getArenaMatchupSamplingStateWithMeta(): Promise<ArenaMatch
     };
   }
 
-  matchupStateInFlight = queryArenaMatchupSamplingState()
+  const refreshVersion = matchupStateVersion;
+  let inFlight: Promise<ArenaMatchupSamplingResult>;
+  inFlight = queryArenaMatchupSamplingState()
     .then((result) => {
-      matchupStateCache = {
-        value: result.state,
-        expiresAt: Date.now() + MATCHUP_STATE_CACHE_TTL_MS,
-      };
+      if (matchupStateVersion === refreshVersion) {
+        matchupStateCache = {
+          value: result.state,
+          expiresAt: Date.now() + MATCHUP_STATE_CACHE_TTL_MS,
+        };
+      }
       return result;
     })
     .finally(() => {
-      matchupStateInFlight = null;
+      if (matchupStateInFlight === inFlight) {
+        matchupStateInFlight = null;
+      }
     });
+  matchupStateInFlight = inFlight;
 
   return matchupStateInFlight;
 }

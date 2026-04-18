@@ -7,6 +7,7 @@ import type { VoteChoice } from "@/lib/arena/types";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import {
   applyDecisiveVoteCoverageUpdate,
+  invalidateArenaCoverageCache,
   isDecisiveChoice,
 } from "@/lib/arena/coverage";
 import { withArenaWriteRetry } from "@/lib/arena/writeRetry";
@@ -237,6 +238,9 @@ export async function POST(req: Request) {
     }
     timing.end("tx", txStartedAt);
     invalidateArenaStatsCache();
+    if (isDecisiveChoice(choice)) {
+      invalidateArenaCoverageCache();
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Vote failed";
     return respondJson({ error: msg }, { status: 409 });
