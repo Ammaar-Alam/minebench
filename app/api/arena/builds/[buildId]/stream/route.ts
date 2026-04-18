@@ -11,7 +11,7 @@ import {
 import { deriveArenaBuildLoadHints, pickBuildVariant, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
-import { trackEvent } from "@/lib/analytics";
+import { trackServerEvent } from "@/lib/analytics.server";
 
 export const runtime = "nodejs";
 
@@ -154,7 +154,7 @@ export async function GET(
         return new Response(artifact.body, { headers });
       }
       timing.end("artifact_miss", artifactStartedAt);
-      trackEvent("arena_artifact_miss", {
+      await trackServerEvent("arena_artifact_miss", {
         variant,
         deliveryClass: shellHints.deliveryClass,
         estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
@@ -163,7 +163,7 @@ export async function GET(
     }
   } catch (err) {
     if (artifactFetchAllowed && !trackedArtifactMiss) {
-      trackEvent("arena_artifact_miss", {
+      await trackServerEvent("arena_artifact_miss", {
         variant,
         deliveryClass: shellHints.deliveryClass,
         estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
@@ -175,7 +175,7 @@ export async function GET(
   }
 
   if (artifactFetchAllowed && !trackedArtifactMiss) {
-    trackEvent("arena_artifact_miss", {
+    await trackServerEvent("arena_artifact_miss", {
       variant,
       deliveryClass: shellHints.deliveryClass,
       estimatedBytes: shellHints.fullEstimatedBytes ?? 0,

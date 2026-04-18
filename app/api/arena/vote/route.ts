@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
@@ -8,11 +9,14 @@ import {
   applyDecisiveVoteCoverageUpdate,
   isDecisiveChoice,
 } from "@/lib/arena/coverage";
+import { withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
+const DECISIVE_VOTE_TX_MAX_WAIT_MS = 5_000;
+const DECISIVE_VOTE_TX_TIMEOUT_MS = 10_000;
 
 const reqSchema = z.object({
   matchupId: z.string().min(1),
@@ -33,6 +37,27 @@ function getOrSetSessionId(res: NextResponse, req: Request) {
     maxAge: 60 * 60 * 24 * 365,
   });
   return id;
+}
+
+type ModelUpdatePlan = {
+  id: string;
+  data: Prisma.ModelUpdateInput;
+};
+
+function orderModelUpdatePlans(plans: ModelUpdatePlan[]): ModelUpdatePlan[] {
+  return [...plans].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+async function applyOrderedModelUpdates(
+  tx: Prisma.TransactionClient,
+  plans: ModelUpdatePlan[],
+) {
+  for (const plan of orderModelUpdatePlans(plans)) {
+    await tx.model.update({
+      where: { id: plan.id },
+      data: plan.data,
+    });
+  }
 }
 
 export async function POST(req: Request) {
@@ -80,23 +105,34 @@ export async function POST(req: Request) {
     const b = matchup.modelB;
 
     if (choice === "BOTH_BAD") {
-      await prisma.$transaction([
-        prisma.vote.create({
-          data: { matchupId, sessionId, choice },
-        }),
-        prisma.model.update({
-          where: { id: a.id },
+      const updates = orderModelUpdatePlans([
+        {
+          id: a.id,
           data: {
             bothBadCount: { increment: 1 },
           },
-        }),
-        prisma.model.update({
-          where: { id: b.id },
+        },
+        {
+          id: b.id,
           data: {
             bothBadCount: { increment: 1 },
           },
-        }),
+        },
       ]);
+
+      await withArenaWriteRetry(() =>
+        prisma.$transaction([
+          prisma.vote.create({
+            data: { matchupId, sessionId, choice },
+          }),
+          ...updates.map((update) =>
+            prisma.model.update({
+              where: { id: update.id },
+              data: update.data,
+            }),
+          ),
+        ]),
+      );
     } else {
       const outcome = choice === "A" ? "A_WIN" : choice === "B" ? "B_WIN" : "DRAW";
       const updated = updateRatingPair({
@@ -127,55 +163,76 @@ export async function POST(req: Request) {
       };
 
       if (isDecisiveChoice(choice)) {
-        await prisma.$transaction(async (tx) => {
-          await tx.vote.create({
-            data: { matchupId, sessionId, choice },
-          });
+        const updates = orderModelUpdatePlans(
+          outcome === "A_WIN"
+            ? [
+                {
+                  id: a.id,
+                  data: { ...updateModelA, winCount: { increment: 1 } },
+                },
+                {
+                  id: b.id,
+                  data: { ...updateModelB, lossCount: { increment: 1 } },
+                },
+              ]
+            : [
+                {
+                  id: a.id,
+                  data: { ...updateModelA, lossCount: { increment: 1 } },
+                },
+                {
+                  id: b.id,
+                  data: { ...updateModelB, winCount: { increment: 1 } },
+                },
+              ],
+        );
 
-          if (outcome === "A_WIN") {
-            await Promise.all([
-              tx.model.update({
-                where: { id: a.id },
-                data: { ...updateModelA, winCount: { increment: 1 } },
-              }),
-              tx.model.update({
-                where: { id: b.id },
-                data: { ...updateModelB, lossCount: { increment: 1 } },
-              }),
-            ]);
-          } else {
-            await Promise.all([
-              tx.model.update({
-                where: { id: a.id },
-                data: { ...updateModelA, lossCount: { increment: 1 } },
-              }),
-              tx.model.update({
-                where: { id: b.id },
-                data: { ...updateModelB, winCount: { increment: 1 } },
-              }),
-            ]);
-          }
+        await withArenaWriteRetry(() =>
+          prisma.$transaction(
+            async (tx) => {
+              await tx.vote.create({
+                data: { matchupId, sessionId, choice },
+              });
 
-          await applyDecisiveVoteCoverageUpdate(tx, {
-            modelAId: a.id,
-            modelBId: b.id,
-            promptId: matchup.promptId,
-          });
-        });
+              await applyOrderedModelUpdates(tx, updates);
+
+              await applyDecisiveVoteCoverageUpdate(tx, {
+                modelAId: a.id,
+                modelBId: b.id,
+                promptId: matchup.promptId,
+              });
+            },
+            {
+              maxWait: DECISIVE_VOTE_TX_MAX_WAIT_MS,
+              timeout: DECISIVE_VOTE_TX_TIMEOUT_MS,
+            },
+          ),
+        );
       } else {
-        await prisma.$transaction([
-          prisma.vote.create({
-            data: { matchupId, sessionId, choice },
-          }),
-          prisma.model.update({
-            where: { id: a.id },
+        const updates = orderModelUpdatePlans([
+          {
+            id: a.id,
             data: { ...updateModelA, drawCount: { increment: 1 } },
-          }),
-          prisma.model.update({
-            where: { id: b.id },
+          },
+          {
+            id: b.id,
             data: { ...updateModelB, drawCount: { increment: 1 } },
-          }),
+          },
         ]);
+
+        await withArenaWriteRetry(() =>
+          prisma.$transaction([
+            prisma.vote.create({
+              data: { matchupId, sessionId, choice },
+            }),
+            ...updates.map((update) =>
+              prisma.model.update({
+                where: { id: update.id },
+                data: update.data,
+              }),
+            ),
+          ]),
+        );
       }
     }
     timing.end("tx", txStartedAt);

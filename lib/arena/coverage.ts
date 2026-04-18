@@ -553,73 +553,61 @@ export async function applyDecisiveVoteCoverageUpdate(
   },
 ) {
   const [modelLowId, modelHighId] = orderPairIds(input.modelAId, input.modelBId);
+  const orderedModelIds =
+    input.modelAId < input.modelBId ? [input.modelAId, input.modelBId] : [input.modelBId, input.modelAId];
 
-  await Promise.all([
-    tx.arenaCoverageModelPrompt.upsert({
+  for (const modelId of orderedModelIds) {
+    await tx.arenaCoverageModelPrompt.upsert({
       where: {
         modelId_promptId: {
-          modelId: input.modelAId,
+          modelId,
           promptId: input.promptId,
         },
       },
       create: {
-        modelId: input.modelAId,
+        modelId,
         promptId: input.promptId,
         decisiveVotes: 1,
       },
       update: {
         decisiveVotes: { increment: 1 },
       },
-    }),
-    tx.arenaCoverageModelPrompt.upsert({
-      where: {
-        modelId_promptId: {
-          modelId: input.modelBId,
-          promptId: input.promptId,
-        },
-      },
-      create: {
-        modelId: input.modelBId,
-        promptId: input.promptId,
-        decisiveVotes: 1,
-      },
-      update: {
-        decisiveVotes: { increment: 1 },
-      },
-    }),
-    tx.arenaCoveragePair.upsert({
-      where: {
-        modelLowId_modelHighId: {
-          modelLowId,
-          modelHighId,
-        },
-      },
-      create: {
+    });
+  }
+
+  await tx.arenaCoveragePair.upsert({
+    where: {
+      modelLowId_modelHighId: {
         modelLowId,
         modelHighId,
-        decisiveVotes: 1,
       },
-      update: {
-        decisiveVotes: { increment: 1 },
-      },
-    }),
-    tx.arenaCoveragePairPrompt.upsert({
-      where: {
-        modelLowId_modelHighId_promptId: {
-          modelLowId,
-          modelHighId,
-          promptId: input.promptId,
-        },
-      },
-      create: {
+    },
+    create: {
+      modelLowId,
+      modelHighId,
+      decisiveVotes: 1,
+    },
+    update: {
+      decisiveVotes: { increment: 1 },
+    },
+  });
+
+  await tx.arenaCoveragePairPrompt.upsert({
+    where: {
+      modelLowId_modelHighId_promptId: {
         modelLowId,
         modelHighId,
         promptId: input.promptId,
-        decisiveVotes: 1,
       },
-      update: {
-        decisiveVotes: { increment: 1 },
-      },
-    }),
-  ]);
+    },
+    create: {
+      modelLowId,
+      modelHighId,
+      promptId: input.promptId,
+      decisiveVotes: 1,
+    },
+    update: {
+      decisiveVotes: { increment: 1 },
+    },
+  });
 }

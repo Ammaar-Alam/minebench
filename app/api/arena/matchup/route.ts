@@ -11,12 +11,14 @@ import {
 import type { ArenaBuildDeliveryClass } from "@/lib/arena/types";
 import {
   getArenaMatchupSamplingStateWithMeta,
+  orderPairIds,
   type CoverageState,
   type EligibleModel,
   type EligiblePrompt,
 } from "@/lib/arena/coverage";
+import { withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { ServerTiming } from "@/lib/serverTiming";
-import { trackEvent } from "@/lib/analytics";
+import { trackServerEvent } from "@/lib/analytics.server";
 
 export const runtime = "nodejs";
 
@@ -754,27 +756,30 @@ export async function GET(req: Request) {
       shouldInlineInAdaptiveMode((preparedB?.hints ?? shellHintsB).deliveryClass));
 
   const txStartedAt = performance.now();
-  const [created] = await prisma.$transaction([
-    prisma.matchup.create({
-      data: {
-        promptId: picked.prompt.id,
-        modelAId: leftModel.id,
-        modelBId: rightModel.id,
-        buildAId: buildA.id,
-        buildBId: buildB.id,
-        samplingLane: picked.lane,
-        samplingReason: picked.reason,
-      },
-    }),
-    prisma.model.update({
-      where: { id: leftModel.id },
-      data: { shownCount: { increment: 1 } },
-    }),
-    prisma.model.update({
-      where: { id: rightModel.id },
-      data: { shownCount: { increment: 1 } },
-    }),
-  ]);
+  const [shownCountLowId, shownCountHighId] = orderPairIds(leftModel.id, rightModel.id);
+  const [created] = await withArenaWriteRetry(() =>
+    prisma.$transaction([
+      prisma.matchup.create({
+        data: {
+          promptId: picked.prompt.id,
+          modelAId: leftModel.id,
+          modelBId: rightModel.id,
+          buildAId: buildA.id,
+          buildBId: buildB.id,
+          samplingLane: picked.lane,
+          samplingReason: picked.reason,
+        },
+      }),
+      prisma.model.update({
+        where: { id: shownCountLowId },
+        data: { shownCount: { increment: 1 } },
+      }),
+      prisma.model.update({
+        where: { id: shownCountHighId },
+        data: { shownCount: { increment: 1 } },
+      }),
+    ]),
+  );
   const txMs = performance.now() - txStartedAt;
   timing.add("tx", txMs);
 
@@ -830,7 +835,7 @@ export async function GET(req: Request) {
 
   const totalMs = performance.now() - requestStartedAt;
   if (Number.isFinite(totalMs) && totalMs >= MATCHUP_SLOW_EVENT_MS) {
-    trackEvent("arena_matchup_slow", {
+    await trackServerEvent("arena_matchup_slow", {
       ms: Math.round(totalMs),
       eligibilityMs: Math.round(sampling.meta.eligibilityMs),
       coverageMs: Math.round(sampling.meta.coverageMs),
