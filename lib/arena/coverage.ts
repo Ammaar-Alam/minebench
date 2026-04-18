@@ -265,7 +265,7 @@ async function queryCoverageState(
 
   const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
 
-  const [modelPromptRows, pairPromptRows] = await Promise.all([
+  const [modelPromptRows, pairRows, pairPromptRows] = await Promise.all([
     prisma.arenaCoverageModelPrompt.findMany({
       where: {
         promptId: { in: eligiblePromptIds },
@@ -274,6 +274,17 @@ async function queryCoverageState(
       select: {
         modelId: true,
         promptId: true,
+        decisiveVotes: true,
+      },
+    }),
+    prisma.arenaCoveragePair.findMany({
+      where: {
+        modelLowId: { in: eligibleModelIds },
+        modelHighId: { in: eligibleModelIds },
+      },
+      select: {
+        modelLowId: true,
+        modelHighId: true,
         decisiveVotes: true,
       },
     }),
@@ -306,6 +317,10 @@ async function queryCoverageState(
     );
   }
 
+  for (const row of pairRows) {
+    pairDecisiveVotes.set(pairKey(row.modelLowId, row.modelHighId), toNumber(row.decisiveVotes));
+  }
+
   for (const row of pairPromptRows) {
     const pairPromptVotes = toNumber(row.decisiveVotes);
     pairPromptDecisiveVotes.set(
@@ -313,7 +328,6 @@ async function queryCoverageState(
       pairPromptVotes,
     );
     const key = pairKey(row.modelLowId, row.modelHighId);
-    pairDecisiveVotes.set(key, (pairDecisiveVotes.get(key) ?? 0) + pairPromptVotes);
     pairPromptCounts.set(key, (pairPromptCounts.get(key) ?? 0) + 1);
   }
 
