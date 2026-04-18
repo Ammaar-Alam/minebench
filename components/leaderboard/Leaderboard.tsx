@@ -255,46 +255,65 @@ export function Leaderboard() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 sm:gap-5">
-      <div className="mb-panel shrink-0 p-4 sm:p-[1.1rem] [&::before]:hidden">
-        <div className="mb-panel-inner flex flex-col gap-3.5 sm:flex-row sm:items-end sm:justify-between">
-          <div className="space-y-2">
-            <div className="mb-badge w-fit">
-              <span className="mb-dot" />
-              <span className="text-fg">Leaderboard</span>
-            </div>
-            {topModel ? (
-              <div className="mb-leaderboard-favorite mb-model-reveal mb-model-reveal-in">
-                <div className="mb-leaderboard-favorite-head">
-                  <span className="mb-leaderboard-favorite-name">{topModel.displayName}</span>
+      <div className="mb-panel shrink-0 p-4 sm:p-5 [&::before]:hidden">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          {topModel ? (
+            <div className="mb-model-reveal mb-model-reveal-in flex min-w-0 items-center gap-3 sm:gap-4">
+              <span
+                aria-hidden="true"
+                className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 ring-1 ring-accent/35 sm:h-12 sm:w-12"
+              >
+                <span
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 rounded-full shadow-[0_0_0_4px_hsl(var(--accent)/0.06),0_10px_24px_-10px_hsl(var(--accent)/0.45)]"
+                />
+                <span className="relative font-mono text-sm font-semibold text-accent sm:text-base">#1</span>
+              </span>
+              <div className="flex min-w-0 flex-col">
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                  <span className="truncate font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
+                    {topModel.displayName}
+                  </span>
+                  <span className="font-mono text-sm font-medium text-muted">
+                    {Math.round(topModel.rankScore).toLocaleString()}
+                  </span>
                 </div>
-                <div className="mb-leaderboard-favorite-meta">
-                  <span className="mb-leaderboard-favorite-chip">{topRecord} record</span>
-                  <span className="mb-leaderboard-favorite-chip">{topModel.stability}</span>
+                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted2">
+                  {topRecord ? <span>{topRecord}</span> : null}
                   {topWinRate != null ? (
-                    <span className="mb-leaderboard-favorite-chip">
-                      {formatPercent(topWinRate)} wins
-                    </span>
+                    <>
+                      <span className="text-muted/35">·</span>
+                      <span>{formatPercent(topWinRate)} wins</span>
+                    </>
                   ) : null}
+                  <span className="text-muted/35">·</span>
+                  <span className="capitalize">{topModel.stability}</span>
                 </div>
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : (
+            <div aria-hidden="true" className="h-12" />
+          )}
           {activeModelCount > 0 ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="mb-leaderboard-live-chip mb-model-reveal mb-model-reveal-in group w-fit max-w-full">
-                <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted2">
-                  <span className="text-fg">Live</span>
-                  <span>{activeModelCount} models</span>
-                  <span>{renderedVotes.toLocaleString()} votes</span>
-                </div>
-              </div>
+            <div className="flex flex-wrap items-center gap-3 sm:shrink-0">
+              <span className="mb-model-reveal mb-model-reveal-in inline-flex items-center gap-2 font-mono text-[11px] text-muted2">
+                <span className="relative h-1.5 w-1.5 shrink-0" aria-hidden="true">
+                  <span className="absolute inset-0 rounded-full bg-success" />
+                  <span className="absolute inset-0 animate-ping rounded-full bg-success/60 motion-reduce:animate-none" />
+                </span>
+                <span className="text-fg">Live</span>
+                <span className="text-muted/40">·</span>
+                <span>{activeModelCount} models</span>
+                <span className="text-muted/40">·</span>
+                <span>{renderedVotes.toLocaleString()} votes</span>
+              </span>
               {isStale && refreshError ? (
                 <button
                   type="button"
                   onClick={handleRetry}
                   disabled={retrying}
                   aria-live="polite"
-                  className="mb-leaderboard-live-chip inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[11px] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <span className="h-1.5 w-1.5 rounded-full bg-warn" aria-hidden="true" />
                   <span>
@@ -304,7 +323,7 @@ export function Leaderboard() {
               ) : isStale && dataAgeMs != null && dataAgeMs > 15_000 ? (
                 <span
                   aria-live="polite"
-                  className="mb-leaderboard-live-chip inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-[0.12em] text-muted2"
+                  className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted2"
                 >
                   <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
                   <span>Refreshing · updated {formatAge(dataAgeMs)}</span>
