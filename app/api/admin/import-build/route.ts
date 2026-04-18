@@ -10,6 +10,7 @@ import { BuildStorageRef, loadBuildJsonFromStorage } from "@/lib/storage/buildPa
 import { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { maybePrecomputeArenaStreamArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
+import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 
 export const runtime = "nodejs";
 
@@ -332,6 +333,8 @@ export async function POST(req: Request) {
   } catch (err) {
     console.warn("import-build artifact precompute skipped", err);
   }
+
+  invalidateArenaCoverageCache();
 
   return NextResponse.json({
     ok: true,

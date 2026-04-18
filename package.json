@@ -36,6 +36,7 @@
     "prompt": "npx tsx scripts/prompt.ts",
     "elo:reset": "npx tsx scripts/reset-elo.ts",
     "elo:recompute": "npx tsx scripts/recompute-elo.ts",
+    "arena:load": "npx tsx scripts/load-arena.ts",
     "arena:stream:precompute": "npx tsx scripts/precompute-arena-stream-artifacts.ts",
     "arena:stream:clear": "npx tsx scripts/clear-arena-stream-artifacts.ts"
   },

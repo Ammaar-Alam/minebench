@@ -123,11 +123,50 @@ Copy `.env.example` to `.env` and set what you need.
 - `pnpm prompt`: inspect or import prompt build files from `uploads/`
 - `pnpm batch:generate`: batch-generate and or upload build files
 - `pnpm elo:reset --yes [--keep-history]`: reset arena rating and leaderboard stats
+- `pnpm arena:load --base-url http://localhost:3000 --users 12 --duration 90`: simulate concurrent arena users
 
 ## Quality Checks
 
 - `pnpm lint` for static checks
 - no automated test suite is configured yet
+
+## Arena Load Testing
+
+Use the load harness to reproduce the real arena path under concurrency:
+
+1. fetch `/api/arena/matchup?payload=adaptive`
+2. wait for both full builds to finish loading
+3. submit `/api/arena/vote`
+4. repeat with separate session cookies per virtual user
+
+Example runs:
+
+```bash
+pnpm arena:load --base-url http://localhost:3000 --users 12 --duration 90
+pnpm arena:load --base-url https://your-preview-url.vercel.app --users 16 --duration 120
+```
+
+Useful flags:
+
+- `--payload adaptive|inline|shell`
+- `--prompt-id` with a seeded prompt id if you want to pin the run to one prompt
+- `--think-ms 150`
+- `--matchup-timeout-ms 12000`
+- `--vote-timeout-ms 12000`
+- `--build-timeout-ms 35000`
+
+The summary includes:
+
+- round, matchup, vote, and full-hydration latency percentiles
+- timeout and error counts by stage
+- `Server-Timing` breakdowns from matchup, vote, and build responses
+- build source counts so you can see whether full hydration came from artifacts, live streams, or snapshot fallback
+
+For the most realistic production test:
+
+- point `--base-url` at the deployed preview or production URL
+- make sure the deployment is using the pooled runtime `DATABASE_URL`
+- precompute large build artifacts before the run so you measure the intended fast path
 
 ## Project Structure
 

@@ -1,4 +1,3 @@
-import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { LeaderboardResponse } from "@/lib/arena/types";
@@ -6,6 +5,8 @@ import { getLeaderboardDispersionByModelId } from "@/lib/arena/stats";
 import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
+import { getArenaPairCoverageByKey } from "@/lib/arena/coverage";
+import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
 
@@ -14,13 +15,6 @@ const ADJ_PAIR_VOTES_FLOOR = 12;
 const ADJ_PAIR_PROMPTS_FLOOR = 6;
 const MOVEMENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const MOVEMENT_CONFIDENCE_FLOOR = 50;
-
-type PairCoverageRow = {
-  modelLowId: string;
-  modelHighId: string;
-  decisiveVotes: number;
-  promptCount: number;
-};
 
 type PairCoverage = {
   decisiveVotes: number;
@@ -39,6 +33,8 @@ function pairCompletion(coverage: PairCoverage | null): number {
 }
 
 export async function GET() {
+  const timing = new ServerTiming();
+  const requestStartedAt = timing.start();
   const movementAnchorTime = new Date(Date.now() - MOVEMENT_LOOKBACK_MS);
   const [models, dispersionByModelId, eligiblePromptIds, baselineAnchor] = await Promise.all([
     prisma.model.findMany({
@@ -83,29 +79,7 @@ export async function GET() {
   let pairCoverageByKey = new Map<string, PairCoverage>();
 
   if (topBandIds.length >= 2 && eligiblePromptIds.length > 0) {
-    const idList = Prisma.join(topBandIds);
-    const promptIdList = Prisma.join(eligiblePromptIds);
-    const pairRows = await prisma.$queryRaw<PairCoverageRow[]>`
-      SELECT
-        LEAST(matchup."modelAId", matchup."modelBId") AS "modelLowId",
-        GREATEST(matchup."modelAId", matchup."modelBId") AS "modelHighId",
-        COUNT(*)::int AS "decisiveVotes",
-        COUNT(DISTINCT matchup."promptId")::int AS "promptCount"
-      FROM "Vote" vote
-      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-      WHERE vote.choice IN ('A', 'B')
-        AND matchup."modelAId" IN (${idList})
-        AND matchup."modelBId" IN (${idList})
-        AND matchup."promptId" IN (${promptIdList})
-      GROUP BY LEAST(matchup."modelAId", matchup."modelBId"), GREATEST(matchup."modelAId", matchup."modelBId")
-    `;
-
-    pairCoverageByKey = new Map(
-      pairRows.map((row) => [
-        pairKey(row.modelLowId, row.modelHighId),
-        { decisiveVotes: Number(row.decisiveVotes), promptCount: Number(row.promptCount) },
-      ]),
-    );
+    pairCoverageByKey = await getArenaPairCoverageByKey(topBandIds, eligiblePromptIds);
   }
 
   const body: LeaderboardResponse = {
@@ -191,5 +165,8 @@ export async function GET() {
     }),
   };
 
-  return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
+  timing.end("total", requestStartedAt);
+  const headers = new Headers({ "Cache-Control": "no-store" });
+  timing.apply(headers);
+  return NextResponse.json(body, { headers });
 }

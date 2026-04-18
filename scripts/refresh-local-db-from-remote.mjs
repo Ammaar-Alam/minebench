@@ -27,6 +27,15 @@ function assertUrl(name, value) {
   }
 }
 
+function isManagedMinebenchLocalUrl(url) {
+  return (
+    ["localhost", "127.0.0.1"].includes(url.hostname) &&
+    url.username === "minebench" &&
+    decodeURIComponent(url.password) === "minebench" &&
+    url.pathname.replace(/^\/+/, "") === "minebench"
+  );
+}
+
 function run(command, args, opts = {}) {
   const result = spawnSync(command, args, {
     stdio: "inherit",
@@ -56,8 +65,10 @@ function main() {
   if (["localhost", "127.0.0.1"].includes(remoteUrl.hostname)) {
     fail("Refusing to snapshot: .env points at localhost, not the real remote DB");
   }
-  if (!["localhost", "127.0.0.1"].includes(localUrl.hostname)) {
-    fail("Refusing to restore: .env.localdb.local does not point at local Postgres");
+  if (!isManagedMinebenchLocalUrl(localUrl)) {
+    fail(
+      "Refusing to restore: .env.localdb.local must point at the dedicated minebench local database",
+    );
   }
 
   console.log(`Remote DB host: ${remoteUrl.hostname}`);
