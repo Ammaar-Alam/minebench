@@ -68,6 +68,9 @@ type NumberLike = number | bigint | string | null;
 let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
 let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
 let matchupStateVersion = 0;
+let coverageSyncInFlight: Promise<void> | null = null;
+
+const ARENA_COVERAGE_LOCK_KEY = 860101;
 
 function readIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -106,6 +109,7 @@ export function invalidateArenaCoverageCache() {
   matchupStateVersion += 1;
   matchupStateCache = null;
   matchupStateInFlight = null;
+  coverageSyncInFlight = null;
 }
 
 export function recordArenaMatchupShown(modelIds: string[]) {
@@ -255,6 +259,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
   const eligibleModelIds = Array.from(filteredPromptIdsByModelId.keys());
   const eligibilityMs = roundDuration(performance.now() - eligibilityStartedAt);
   const coverageStartedAt = performance.now();
+  await ensureArenaCoverageTablesCurrent();
   const coverage = await queryCoverageState(eligiblePrompts, eligibleModelIds);
 
   return {
@@ -424,6 +429,8 @@ export async function getArenaPairCoverageByKey(
     return new Map();
   }
 
+  await ensureArenaCoverageTablesCurrent();
+
   const pairPromptRows = await prisma.arenaCoveragePairPrompt.findMany({
     where: {
       modelLowId: { in: modelIds },
@@ -464,79 +471,122 @@ function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   return chunks;
 }
 
+async function acquireArenaCoverageLock(tx: Prisma.TransactionClient) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ARENA_COVERAGE_LOCK_KEY})`;
+}
+
+async function readCoverageDriftCounts(client: PrismaClient = prisma) {
+  const [decisiveVoteCount, pairAggregate] = await Promise.all([
+    client.vote.count({
+      where: {
+        choice: {
+          in: ["A", "B"],
+        },
+      },
+    }),
+    client.arenaCoveragePair.aggregate({
+      _sum: {
+        decisiveVotes: true,
+      },
+    }),
+  ]);
+
+  return {
+    decisiveVoteCount,
+    derivedPairVoteCount: pairAggregate._sum.decisiveVotes ?? 0,
+  };
+}
+
+async function ensureArenaCoverageTablesCurrent(client: PrismaClient = prisma) {
+  if (coverageSyncInFlight) {
+    return coverageSyncInFlight;
+  }
+
+  coverageSyncInFlight = (async () => {
+    const { decisiveVoteCount, derivedPairVoteCount } = await readCoverageDriftCounts(client);
+    if (decisiveVoteCount === derivedPairVoteCount) return;
+    await rebuildArenaCoverageTables(client);
+  })().finally(() => {
+    coverageSyncInFlight = null;
+  });
+
+  return coverageSyncInFlight;
+}
+
 export async function rebuildArenaCoverageTables(client: PrismaClient = prisma): Promise<{
   modelPromptRows: number;
   pairRows: number;
   pairPromptRows: number;
 }> {
-  const seedRows = await client.$queryRaw<CoverageRebuildSeedRow[]>`
-    SELECT
-      matchup."modelAId" AS "modelAId",
-      matchup."modelBId" AS "modelBId",
-      matchup."promptId" AS "promptId",
-      COUNT(*)::int AS "decisiveVotes"
-    FROM "Vote" vote
-    INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-    WHERE vote.choice IN ('A', 'B')
-    GROUP BY matchup."modelAId", matchup."modelBId", matchup."promptId"
-  `;
+  return client.$transaction(async (tx) => {
+    await acquireArenaCoverageLock(tx);
+    const seedRows = await tx.$queryRaw<CoverageRebuildSeedRow[]>`
+      SELECT
+        matchup."modelAId" AS "modelAId",
+        matchup."modelBId" AS "modelBId",
+        matchup."promptId" AS "promptId",
+        COUNT(*)::int AS "decisiveVotes"
+      FROM "Vote" vote
+      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+      WHERE vote.choice IN ('A', 'B')
+      GROUP BY matchup."modelAId", matchup."modelBId", matchup."promptId"
+    `;
 
-  const modelPromptCounts = new Map<string, number>();
-  const pairCounts = new Map<string, number>();
-  const pairPromptCounts = new Map<string, number>();
+    const modelPromptCounts = new Map<string, number>();
+    const pairCounts = new Map<string, number>();
+    const pairPromptCounts = new Map<string, number>();
 
-  for (const row of seedRows) {
-    const decisiveVotes = toNumber(row.decisiveVotes);
-    if (decisiveVotes <= 0) continue;
+    for (const row of seedRows) {
+      const decisiveVotes = toNumber(row.decisiveVotes);
+      if (decisiveVotes <= 0) continue;
 
-    modelPromptCounts.set(
-      modelPromptKey(row.modelAId, row.promptId),
-      (modelPromptCounts.get(modelPromptKey(row.modelAId, row.promptId)) ?? 0) + decisiveVotes,
-    );
-    modelPromptCounts.set(
-      modelPromptKey(row.modelBId, row.promptId),
-      (modelPromptCounts.get(modelPromptKey(row.modelBId, row.promptId)) ?? 0) + decisiveVotes,
-    );
+      modelPromptCounts.set(
+        modelPromptKey(row.modelAId, row.promptId),
+        (modelPromptCounts.get(modelPromptKey(row.modelAId, row.promptId)) ?? 0) + decisiveVotes,
+      );
+      modelPromptCounts.set(
+        modelPromptKey(row.modelBId, row.promptId),
+        (modelPromptCounts.get(modelPromptKey(row.modelBId, row.promptId)) ?? 0) + decisiveVotes,
+      );
 
-    const [modelLowId, modelHighId] = orderPairIds(row.modelAId, row.modelBId);
-    const pair = pairKey(modelLowId, modelHighId);
-    pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + decisiveVotes);
-    pairPromptCounts.set(
-      pairPromptKey(modelLowId, modelHighId, row.promptId),
-      (pairPromptCounts.get(pairPromptKey(modelLowId, modelHighId, row.promptId)) ?? 0) +
+      const [modelLowId, modelHighId] = orderPairIds(row.modelAId, row.modelBId);
+      const pair = pairKey(modelLowId, modelHighId);
+      pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + decisiveVotes);
+      pairPromptCounts.set(
+        pairPromptKey(modelLowId, modelHighId, row.promptId),
+        (pairPromptCounts.get(pairPromptKey(modelLowId, modelHighId, row.promptId)) ?? 0) +
+          decisiveVotes,
+      );
+    }
+
+    const modelPromptData = Array.from(modelPromptCounts.entries()).map(([key, decisiveVotes]) => {
+      const [modelId, promptId] = key.split("|");
+      return {
+        modelId,
+        promptId,
         decisiveVotes,
-    );
-  }
+      };
+    });
 
-  const modelPromptData = Array.from(modelPromptCounts.entries()).map(([key, decisiveVotes]) => {
-    const [modelId, promptId] = key.split("|");
-    return {
-      modelId,
-      promptId,
-      decisiveVotes,
-    };
-  });
+    const pairData = Array.from(pairCounts.entries()).map(([key, decisiveVotes]) => {
+      const [modelLowId, modelHighId] = key.split("|");
+      return {
+        modelLowId,
+        modelHighId,
+        decisiveVotes,
+      };
+    });
 
-  const pairData = Array.from(pairCounts.entries()).map(([key, decisiveVotes]) => {
-    const [modelLowId, modelHighId] = key.split("|");
-    return {
-      modelLowId,
-      modelHighId,
-      decisiveVotes,
-    };
-  });
+    const pairPromptData = Array.from(pairPromptCounts.entries()).map(([key, decisiveVotes]) => {
+      const [modelLowId, modelHighId, promptId] = key.split("|");
+      return {
+        modelLowId,
+        modelHighId,
+        promptId,
+        decisiveVotes,
+      };
+    });
 
-  const pairPromptData = Array.from(pairPromptCounts.entries()).map(([key, decisiveVotes]) => {
-    const [modelLowId, modelHighId, promptId] = key.split("|");
-    return {
-      modelLowId,
-      modelHighId,
-      promptId,
-      decisiveVotes,
-    };
-  });
-
-  await client.$transaction(async (tx) => {
     await tx.arenaCoveragePairPrompt.deleteMany();
     await tx.arenaCoveragePair.deleteMany();
     await tx.arenaCoverageModelPrompt.deleteMany();
@@ -553,15 +603,14 @@ export async function rebuildArenaCoverageTables(client: PrismaClient = prisma):
       if (chunk.length === 0) continue;
       await tx.arenaCoveragePairPrompt.createMany({ data: chunk });
     }
+    invalidateArenaCoverageCache();
+
+    return {
+      modelPromptRows: modelPromptData.length,
+      pairRows: pairData.length,
+      pairPromptRows: pairPromptData.length,
+    };
   });
-
-  invalidateArenaCoverageCache();
-
-  return {
-    modelPromptRows: modelPromptData.length,
-    pairRows: pairData.length,
-    pairPromptRows: pairPromptData.length,
-  };
 }
 
 export async function applyDecisiveVoteCoverageUpdate(
@@ -572,6 +621,7 @@ export async function applyDecisiveVoteCoverageUpdate(
     promptId: string;
   },
 ) {
+  await acquireArenaCoverageLock(tx);
   const [modelLowId, modelHighId] = orderPairIds(input.modelAId, input.modelBId);
   const orderedModelIds =
     input.modelAId < input.modelBId ? [input.modelAId, input.modelBId] : [input.modelBId, input.modelAId];

@@ -19,7 +19,7 @@ import {
 } from "@/lib/arena/coverage";
 import { withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { ServerTiming } from "@/lib/serverTiming";
-import { trackServerEvent } from "@/lib/analytics.server";
+import { trackServerEventInBackground } from "@/lib/analytics.server";
 
 export const runtime = "nodejs";
 
@@ -837,7 +837,7 @@ export async function GET(req: Request) {
 
   const totalMs = performance.now() - requestStartedAt;
   if (Number.isFinite(totalMs) && totalMs >= MATCHUP_SLOW_EVENT_MS) {
-    await trackServerEvent("arena_matchup_slow", {
+    trackServerEventInBackground("arena_matchup_slow", {
       ms: Math.round(totalMs),
       eligibilityMs: Math.round(sampling.meta.eligibilityMs),
       coverageMs: Math.round(sampling.meta.coverageMs),
