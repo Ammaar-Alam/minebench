@@ -329,8 +329,8 @@ export function LocalLab() {
             message.resolved.gridSize !== gridSizeRef.current || message.resolved.palette !== paletteRef.current;
           setStatusNote(
             switchedSettings
-              ? `Converted tool output and matched settings to ${message.resolved.gridSize} / ${message.resolved.palette}.`
-              : "Converted tool output and rendered.",
+              ? `Detected a tool-call output. Switched to ${message.resolved.gridSize} / ${message.resolved.palette} to match.`
+              : "Detected a tool-call output and rendered it.",
           );
         } else {
           setStatusNote(null);
@@ -426,7 +426,7 @@ export function LocalLab() {
           kind: "error",
           build: null,
           warnings: [],
-          message: "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
+          message: "Couldn't find a valid JSON object. Paste just the raw JSON — no extra text.",
         });
         return;
       }
@@ -513,7 +513,7 @@ export function LocalLab() {
               Test models locally
             </div>
             <div className="mt-1 text-sm text-muted">
-              Test out changing the system prompt, generate a custom build, then paste the JSON to render it.
+              Tweak the prompt, run it in your model, paste the JSON back here to see the build.
             </div>
           </div>
 
@@ -582,7 +582,7 @@ export function LocalLab() {
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-fg">System prompt</div>
                 <div className="text-xs text-muted">
-                  Here&apos;s the default system prompt the official benchmark uses. Feel free to play around with it.
+                  This is what the benchmark uses. Edit freely — the default is one click away.
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -628,7 +628,7 @@ export function LocalLab() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-fg">User prompt</div>
-                <div className="text-xs text-muted">The actual object you want the model to build.</div>
+                <div className="text-xs text-muted">What you want the model to build.</div>
               </div>
               <CopyButton
                 label="Copy both"
@@ -654,14 +654,13 @@ export function LocalLab() {
               {taskPrompt.trim() ? (
                 <pre className="max-h-56 overflow-auto whitespace-pre-wrap">{userPrompt}</pre>
               ) : (
-                <div className="text-muted">Add a task prompt to generate the user message.</div>
+                <div className="text-muted">Describe the build above to see the full message.</div>
               )}
             </div>
 
             <p className="mt-3 text-[11px] leading-relaxed text-muted">
-              If you&apos;re generating the build through a site like chatgpt.com directly, add one final line asking
-              for a downloadable JSON file or artifact attachment instead of raw JSON text. Otherwise the model will
-              output just raw text and hit it&apos;s output limit.
+              Running this through a chat UI (chatgpt.com, claude.ai, etc.)? Ask for a JSON file or artifact
+              attachment — otherwise the model will hit its output limit on raw text.
             </p>
             <div className="mt-1.5 rounded-lg border border-border/70 bg-bg/45 p-2 font-mono text-[11px] leading-snug text-muted">
               Return only the final voxel object as a JSON file/artifact attachment.
@@ -672,8 +671,8 @@ export function LocalLab() {
         <div className="mb-panel flex flex-col gap-3 p-4 sm:p-5">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-fg">Render JSON</div>
-              <div className="text-xs text-muted">Paste model output and render with Cmd/Ctrl+Enter.</div>
+              <div className="text-sm font-semibold text-fg">Paste JSON</div>
+              <div className="text-xs text-muted">Drop the model&apos;s JSON output here. Cmd/Ctrl+Enter to render.</div>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -713,9 +712,7 @@ export function LocalLab() {
               if (modelOutputRef.current) modelOutputRef.current.value = "";
               setInputStats({ mode: "buffered", chars: pasted.length });
               setStatusNote(
-                `Large paste buffered (${formatCompactCount(pasted.length)} chars, ~${formatApproxMbFromChars(
-                  pasted.length,
-                )}).`,
+                `Large paste ready (~${formatApproxMbFromChars(pasted.length)}).`,
               );
             }}
             onChange={(e) => {
@@ -735,8 +732,8 @@ export function LocalLab() {
 
           {inputStats.mode !== "empty" ? (
             <div className="text-[11px] text-muted">
-              {inputStats.mode === "buffered" ? "Buffered paste" : "Editor input"}:{" "}
               {formatCompactCount(inputStats.chars)} chars (~{formatApproxMbFromChars(inputStats.chars)})
+              {inputStats.mode === "buffered" ? " held in memory" : ""}
             </div>
           ) : null}
 
