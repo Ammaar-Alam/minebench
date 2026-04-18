@@ -53,16 +53,22 @@ Usage:
   }
 
   const db = getDbInfo();
-  const [modelTotal, matchupTotal, voteTotal] = await Promise.all([
+  const [modelTotal, matchupTotal, voteTotal, coverageModelPromptTotal, coveragePairTotal, coveragePairPromptTotal] = await Promise.all([
     prisma.model.count(),
     prisma.matchup.count(),
     prisma.vote.count(),
+    prisma.arenaCoverageModelPrompt.count(),
+    prisma.arenaCoveragePair.count(),
+    prisma.arenaCoveragePairPrompt.count(),
   ]);
 
   console.log(`db: ${db ? `${db.host}:${db.port}/${db.database}${db.pgbouncer ? " (pgbouncer)" : ""}` : "unknown"}`);
   console.log(`models: ${modelTotal}`);
   console.log(`matchups: ${matchupTotal}`);
   console.log(`votes: ${voteTotal}`);
+  console.log(
+    `derived coverage rows: ${coverageModelPromptTotal}/${coveragePairTotal}/${coveragePairPromptTotal} (model-prompt/pair/pair-prompt)`,
+  );
 
   if (!args.yes) {
     console.log("dry run: pass --yes to apply");
@@ -74,8 +80,20 @@ Usage:
   const result = await prisma.$transaction(async (tx) => {
     let deletedVotes = 0;
     let deletedMatchups = 0;
+    let deletedCoverageModelPrompts = 0;
+    let deletedCoveragePairs = 0;
+    let deletedCoveragePairPrompts = 0;
 
     if (!args.keepHistory) {
+      const dcpp = await tx.arenaCoveragePairPrompt.deleteMany();
+      deletedCoveragePairPrompts = dcpp.count;
+
+      const dcp = await tx.arenaCoveragePair.deleteMany();
+      deletedCoveragePairs = dcp.count;
+
+      const dcmp = await tx.arenaCoverageModelPrompt.deleteMany();
+      deletedCoverageModelPrompts = dcmp.count;
+
       const dv = await tx.vote.deleteMany();
       deletedVotes = dv.count;
 
@@ -97,7 +115,14 @@ Usage:
       },
     });
 
-    return { deletedVotes, deletedMatchups, updatedModels: updatedModels.count };
+    return {
+      deletedVotes,
+      deletedMatchups,
+      deletedCoverageModelPrompts,
+      deletedCoveragePairs,
+      deletedCoveragePairPrompts,
+      updatedModels: updatedModels.count,
+    };
   });
 
   console.log("done");
@@ -105,6 +130,9 @@ Usage:
   if (args.keepHistory) {
     console.log("history kept: matchups/votes unchanged");
   } else {
+    console.log(
+      `derived coverage deleted: ${result.deletedCoverageModelPrompts}/${result.deletedCoveragePairs}/${result.deletedCoveragePairPrompts} (model-prompt/pair/pair-prompt)`,
+    );
     console.log(`votes deleted: ${result.deletedVotes} (was ${before.voteTotal})`);
     console.log(`matchups deleted: ${result.deletedMatchups} (was ${before.matchupTotal})`);
   }

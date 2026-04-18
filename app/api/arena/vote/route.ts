@@ -238,9 +238,7 @@ export async function POST(req: Request) {
     }
     timing.end("tx", txStartedAt);
     invalidateArenaStatsCache();
-    if (isDecisiveChoice(choice)) {
-      invalidateArenaCoverageCache();
-    }
+    invalidateArenaCoverageCache();
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Vote failed";
     return respondJson({ error: msg }, { status: 409 });
