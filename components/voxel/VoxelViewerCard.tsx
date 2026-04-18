@@ -59,7 +59,7 @@ export function VoxelViewerCard({
   attempt?: number;
   retryReason?: string;
   elapsedMs?: number;
-  metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
+  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number };
   error?: string;
   loadingMessage?: string;
   jsonText?: string;

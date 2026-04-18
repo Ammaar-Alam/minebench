@@ -191,7 +191,7 @@ function SegmentedControl({
             type="button"
             aria-pressed={active}
             className={cx(
-              "relative z-10 flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg px-3 text-sm font-semibold transition-colors duration-150 sm:h-10",
+              "relative z-10 flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg px-3 text-sm font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-10",
               active ? "text-fg" : "text-muted hover:text-fg",
             )}
             onClick={() => onChange(option.value)}
@@ -612,6 +612,7 @@ export function LocalLab() {
             </div>
 
             <textarea
+              aria-label="System prompt"
               className="mb-field mt-3 min-h-[178px] font-mono text-[12px] leading-snug"
               value={systemPrompt}
               spellCheck={false}
@@ -645,6 +646,7 @@ export function LocalLab() {
             </div>
 
             <input
+              aria-label="User prompt — what to build"
               className="mb-field mt-3 h-10"
               value={taskPrompt}
               onChange={(e) => setTaskPrompt(e.target.value)}
@@ -700,6 +702,7 @@ export function LocalLab() {
 
           <textarea
             ref={modelOutputRef}
+            aria-label="Paste model JSON output"
             className="mb-field min-h-[150px] font-mono text-[12px] leading-snug"
             placeholder='{"version":"1.0","boxes":[],"lines":[],"blocks":[{"x":0,"y":0,"z":0,"type":"stone"}]}'
             spellCheck={false}
@@ -785,7 +788,6 @@ export function LocalLab() {
                     blockCount:
                       rendered.progress?.receivedBlocks ?? rendered.build?.blocks.length ?? 0,
                     warnings: rendered.warnings,
-                    generationTimeMs: 0,
                   }
                 : undefined
             }
