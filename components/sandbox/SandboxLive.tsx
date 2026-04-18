@@ -83,6 +83,25 @@ const DEFAULT_MODEL_B: ModelKey =
   ENABLED_MODELS.find((model) => model.key !== DEFAULT_MODEL_A)?.key ??
   DEFAULT_MODEL_A;
 
+function SelectChevron() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+      viewBox="0 0 24 24"
+      fill="none"
+    >
+      <path
+        d="m7 10 5 5 5-5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 function safeJsonParseObject(text: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(text) as unknown;
@@ -853,20 +872,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="mb-panel p-5">
-        <div className="mb-panel-inner">
-          <div className="flex flex-col gap-2">
-            <div className="mb-badge w-fit">
-              <span className="mb-dot" />
-              <span className="text-fg">Sandbox</span>
-            </div>
-            <div className="font-display text-2xl font-semibold tracking-tight">
-              Live generate
-            </div>
-            <div className="text-sm text-muted">
-              Create one build or compare two.
-            </div>
+      <div className="mb-panel p-4 sm:p-5">
+        <div className="flex flex-col gap-1.5">
+          <div className="font-display text-2xl font-semibold tracking-tight">
+            Live generate
           </div>
+          <div className="text-sm text-muted">
+            Generate a build from your own prompt, or compare two models side by side.
+          </div>
+        </div>
 
           <div className="mt-5 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
             <section className="mb-subpanel p-4 sm:p-5">
@@ -899,20 +913,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                         <option value={256}>256</option>
                         <option value={512}>512</option>
                       </select>
-                      <svg
-                        aria-hidden="true"
-                        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                      >
-                        <path
-                          d="m7 10 5 5 5-5"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.8"
-                        />
-                      </svg>
+                      <SelectChevron />
                     </div>
                   </label>
 
@@ -927,20 +928,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                         <option value="simple">Simple</option>
                         <option value="advanced">Advanced</option>
                       </select>
-                      <svg
-                        aria-hidden="true"
-                        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                      >
-                        <path
-                          d="m7 10 5 5 5-5"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.8"
-                        />
-                      </svg>
+                      <SelectChevron />
                     </div>
                   </label>
                 </div>
@@ -997,20 +985,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                           </option>
                         </optgroup>
                       </select>
-                      <svg
-                        aria-hidden="true"
-                        className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                      >
-                        <path
-                          d="m7 10 5 5 5-5"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.8"
-                        />
-                      </svg>
+                      <SelectChevron />
                     </div>
                   </label>
 
@@ -1046,20 +1021,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                             </option>
                           </optgroup>
                         </select>
-                        <svg
-                          aria-hidden="true"
-                          className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                        >
-                          <path
-                            d="m7 10 5 5 5-5"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="1.8"
-                          />
-                        </svg>
+                        <SelectChevron />
                       </div>
                     </label>
                   ) : null}
@@ -1106,11 +1068,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             </div>
           </div>
 
-          <div className="mt-4 mb-subpanel p-4 sm:p-5">
+          <div className="mt-5 border-t border-border/70 pt-4 sm:pt-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.14em] text-muted/80">
-                  API Keys
+                  API keys
                 </div>
                 <div className="mt-1 text-xs text-muted">Stored in your browser only.</div>
               </div>
@@ -1281,7 +1243,6 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               </button>
             </div>
           </div>
-        </div>
       </div>
 
       <div className={`grid grid-cols-1 gap-4 ${selectedModels.length > 1 ? "md:grid-cols-2" : ""}`}>

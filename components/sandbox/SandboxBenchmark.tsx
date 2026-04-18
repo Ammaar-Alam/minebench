@@ -206,6 +206,25 @@ async function readWithTimeout<T>(
   });
 }
 
+function SelectChevron() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+      viewBox="0 0 24 24"
+      fill="none"
+    >
+      <path
+        d="m7 10 5 5 5-5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
+}
+
 function providerLabel(provider: string): string {
   if (provider === "openai") return "OpenAI";
   if (provider === "anthropic") return "Anthropic";
@@ -914,242 +933,192 @@ export function SandboxBenchmark() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="mb-panel p-5">
-        <div className="mb-panel-inner">
-          <div className="flex flex-col gap-2">
-            <div className="mb-badge w-fit">
-              <span className="mb-dot" />
-              <span className="text-fg">Benchmark Compare</span>
-            </div>
-            <div className="font-display text-2xl font-semibold tracking-tight">
-              Compare Arena Builds Directly
-            </div>
-            <div className="text-sm text-muted">
-              Pick any curated benchmark prompt and compare two models.
-            </div>
+      <div className="mb-panel p-4 sm:p-5">
+        <div className="flex flex-col gap-1.5">
+          <div className="font-display text-2xl font-semibold tracking-tight">
+            Compare arena builds directly
           </div>
+          <div className="text-sm text-muted">
+            Pick a curated benchmark prompt and compare two models side by side.
+          </div>
+        </div>
 
-          {error ? (
-            <div className="mt-4">
-              <ErrorState
-                error={new Error(error)}
-                title="Couldn't load benchmark"
-                hint={error}
-                onRetry={() =>
+        {error ? (
+          <div className="mt-4">
+            <ErrorState
+              error={new Error(error)}
+              title="Couldn't load benchmark"
+              hint={error}
+              onRetry={() =>
+                void runLoad(
+                  {
+                    promptId,
+                    modelA: modelPair.a || undefined,
+                    modelB: modelPair.b || undefined,
+                  },
+                  { initial: true },
+                )
+              }
+              retrying={loading || refreshing}
+            />
+          </div>
+        ) : null}
+
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label className="flex flex-col gap-1 md:col-span-2">
+            <div className="text-xs font-medium text-muted">Benchmark prompt</div>
+            <div className="relative">
+              <select
+                className="mb-field h-11 w-full appearance-none pr-10"
+                value={promptId}
+                onChange={(e) => handlePromptChange(e.target.value)}
+                disabled={loading || refreshing || (data?.prompts.length ?? 0) === 0}
+              >
+                {(data?.prompts ?? []).map((prompt) => (
+                  <option key={prompt.id} value={prompt.id}>
+                    {prompt.text}
+                  </option>
+                ))}
+              </select>
+              <SelectChevron />
+            </div>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <div className="text-xs font-medium text-muted">Model A</div>
+            <div className="relative">
+              <select
+                className="mb-field h-11 w-full appearance-none pr-10"
+                value={modelPair.a}
+                onChange={(e) => handleModelChange("a", e.target.value)}
+                disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
+              >
+                {modelGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.models.map((model) => (
+                      <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
+                        {model.displayName}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <SelectChevron />
+            </div>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <div className="text-xs font-medium text-muted">Model B</div>
+            <div className="relative">
+              <select
+                className="mb-field h-11 w-full appearance-none pr-10"
+                value={modelPair.b}
+                onChange={(e) => handleModelChange("b", e.target.value)}
+                disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
+              >
+                {modelGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.models.map((model) => (
+                      <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
+                        {model.displayName}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <SelectChevron />
+            </div>
+          </label>
+        </div>
+
+        <div className="mt-5 flex flex-col gap-3 border-t border-border/70 pt-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 text-xs text-muted">
+              <span className="font-mono">
+                {gridSize} grid · {palette} palette · {data?.settings.mode ?? "precise"} mode
+              </span>
+            </div>
+
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+              <SandboxGifExportButton
+                targets={compareTargets}
+                promptText={selectedPromptText}
+                label="Export comparison GIF"
+                className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+              />
+
+              <button
+                type="button"
+                className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+                onClick={handleRandomPrompt}
+                disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
+                title="Pick a random prompt"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                    <rect
+                      x="5"
+                      y="5"
+                      width="14"
+                      height="14"
+                      rx="3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.7"
+                    />
+                    <circle cx="9" cy="9" r="1.1" fill="currentColor" />
+                    <circle cx="12" cy="12" r="1.1" fill="currentColor" />
+                    <circle cx="15" cy="15" r="1.1" fill="currentColor" />
+                  </svg>
+                  <span>Random</span>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+                onClick={() =>
                   void runLoad(
                     {
                       promptId,
-                      modelA: modelPair.a || undefined,
-                      modelB: modelPair.b || undefined,
+                      modelA: modelPair.a,
+                      modelB: modelPair.b,
                     },
-                    { initial: true },
+                    { initial: false },
                   )
                 }
-                retrying={loading || refreshing}
-              />
-            </div>
-          ) : null}
-
-          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <label className="flex flex-col gap-1 md:col-span-2">
-              <div className="text-xs font-medium text-muted">Benchmark prompt</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={promptId}
-                  onChange={(e) => handlePromptChange(e.target.value)}
-                  disabled={loading || refreshing || (data?.prompts.length ?? 0) === 0}
-                >
-                  {(data?.prompts ?? []).map((prompt) => (
-                    <option key={prompt.id} value={prompt.id}>
-                      {prompt.text}
-                    </option>
-                  ))}
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Model A</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={modelPair.a}
-                  onChange={(e) => handleModelChange("a", e.target.value)}
-                  disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
-                >
-                  {modelGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Model B</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={modelPair.b}
-                  onChange={(e) => handleModelChange("b", e.target.value)}
-                  disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
-                >
-                  {modelGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
-          </div>
-
-          <div className="mt-4 mb-subpanel p-4">
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <div className="text-xs font-medium text-muted">Selected prompt</div>
-                  <div className="text-xs text-muted">
-                    <span className="font-mono">
-                      {gridSize} grid - {palette} palette - {data?.settings.mode ?? "precise"} mode
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
-                  <SandboxGifExportButton
-                    targets={compareTargets}
-                    promptText={selectedPromptText}
-                    label="Export comparison GIF"
-                    className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
-                  />
-
-                  <button
-                    type="button"
-                    className="mb-btn mb-btn-ghost h-8 rounded-full border border-border/70 bg-bg/55 px-2.5 text-[11px] tracking-[0.01em] backdrop-blur-sm hover:bg-bg/70 sm:h-9 sm:px-3 sm:text-xs"
-                    onClick={handleRandomPrompt}
-                    disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
-                    title="Pick a random prompt"
+                disabled={loading || refreshing}
+                title="Refresh builds"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+                    fill="none"
                   >
-                    <span className="inline-flex items-center gap-1.5">
-                      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-                        <rect
-                          x="5"
-                          y="5"
-                          width="14"
-                          height="14"
-                          rx="3"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.7"
-                        />
-                        <circle cx="9" cy="9" r="1.1" fill="currentColor" />
-                        <circle cx="12" cy="12" r="1.1" fill="currentColor" />
-                        <circle cx="15" cy="15" r="1.1" fill="currentColor" />
-                      </svg>
-                      <span>Random</span>
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="mb-btn mb-btn-ghost h-8 rounded-full border border-border/70 bg-bg/55 px-2.5 text-[11px] tracking-[0.01em] backdrop-blur-sm hover:bg-bg/70 sm:h-9 sm:px-3 sm:text-xs"
-                    onClick={() =>
-                      void runLoad(
-                        {
-                          promptId,
-                          modelA: modelPair.a,
-                          modelB: modelPair.b,
-                        },
-                        { initial: false },
-                      )
-                    }
-                    disabled={loading || refreshing}
-                    title="Refresh builds"
-                  >
-                    <span className="inline-flex items-center gap-1.5">
-                      <svg
-                        aria-hidden="true"
-                        viewBox="0 0 24 24"
-                        className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
-                        fill="none"
-                      >
-                        <path
-                          d="M20 12a8 8 0 1 1-2.34-5.66"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.7"
-                        />
-                        <path
-                          d="M20 4v6h-6"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.7"
-                        />
-                      </svg>
-                      <span>{refreshing ? "Refreshing..." : "Refresh"}</span>
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="text-sm leading-relaxed text-fg">{selectedPromptText || "Loading benchmark prompt..."}</div>
+                    <path
+                      d="M20 12a8 8 0 1 1-2.34-5.66"
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="1.7"
+                    />
+                    <path
+                      d="M20 4v6h-6"
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="1.7"
+                    />
+                  </svg>
+                  <span>{refreshing ? "Refreshing..." : "Refresh"}</span>
+                </span>
+              </button>
             </div>
           </div>
+
+          <div className="text-sm leading-relaxed text-fg">{selectedPromptText || "Loading benchmark prompt..."}</div>
         </div>
       </div>
 
