@@ -129,7 +129,7 @@ export function recordArenaMatchupShown(modelIds: string[]) {
 
 function refreshPromptCoverageForModel(state: ArenaMatchupSamplingState, modelId: string) {
   const promptIds = state.promptIdsByModelId.get(modelId);
-  const totalPrompts = promptIds?.size ?? 0;
+  const totalPrompts = state.prompts.length;
   if (totalPrompts <= 0) {
     state.coverage.promptCoverageByModelId.set(modelId, 0);
     return;
@@ -350,32 +350,19 @@ async function queryCoverageState(
 
   const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
 
-  const [pairRows, pairPromptRows] = await Promise.all([
-    prisma.arenaCoveragePair.findMany({
-      where: {
-        modelLowId: { in: eligibleModelIds },
-        modelHighId: { in: eligibleModelIds },
-      },
-      select: {
-        modelLowId: true,
-        modelHighId: true,
-        decisiveVotes: true,
-      },
-    }),
-    prisma.arenaCoveragePairPrompt.findMany({
-      where: {
-        promptId: { in: eligiblePromptIds },
-        modelLowId: { in: eligibleModelIds },
-        modelHighId: { in: eligibleModelIds },
-      },
-      select: {
-        modelLowId: true,
-        modelHighId: true,
-        promptId: true,
-        decisiveVotes: true,
-      },
-    }),
-  ]);
+  const pairPromptRows = await prisma.arenaCoveragePairPrompt.findMany({
+    where: {
+      promptId: { in: eligiblePromptIds },
+      modelLowId: { in: eligibleModelIds },
+      modelHighId: { in: eligibleModelIds },
+    },
+    select: {
+      modelLowId: true,
+      modelHighId: true,
+      promptId: true,
+      decisiveVotes: true,
+    },
+  });
 
   const modelPromptDecisiveVotes = new Map<string, number>();
   const pairDecisiveVotes = new Map<string, number>();
@@ -383,12 +370,9 @@ async function queryCoverageState(
   const pairPromptDecisiveVotes = new Map<string, number>();
   const promptDecisiveTotals = new Map<string, number>();
 
-  for (const row of pairRows) {
-    pairDecisiveVotes.set(pairKey(row.modelLowId, row.modelHighId), toNumber(row.decisiveVotes));
-  }
-
   for (const row of pairPromptRows) {
     const pairPromptVotes = toNumber(row.decisiveVotes);
+    const pair = pairKey(row.modelLowId, row.modelHighId);
     modelPromptDecisiveVotes.set(
       modelPromptKey(row.modelLowId, row.promptId),
       (modelPromptDecisiveVotes.get(modelPromptKey(row.modelLowId, row.promptId)) ?? 0) +
@@ -403,8 +387,8 @@ async function queryCoverageState(
       pairPromptKey(row.modelLowId, row.modelHighId, row.promptId),
       pairPromptVotes,
     );
-    const key = pairKey(row.modelLowId, row.modelHighId);
-    pairPromptCounts.set(key, (pairPromptCounts.get(key) ?? 0) + 1);
+    pairDecisiveVotes.set(pair, (pairDecisiveVotes.get(pair) ?? 0) + pairPromptVotes);
+    pairPromptCounts.set(pair, (pairPromptCounts.get(pair) ?? 0) + 1);
     promptDecisiveTotals.set(
       row.promptId,
       (promptDecisiveTotals.get(row.promptId) ?? 0) + pairPromptVotes,

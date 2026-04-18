@@ -5,7 +5,7 @@ import {
   estimateArenaBuildBytes,
   getArenaArtifactMinBytes,
 } from "@/lib/arena/buildDeliveryPolicy";
-import { getArenaBuildStreamArtifactRef } from "@/lib/arena/buildStream";
+import { getArenaBuildStreamArtifactFetchRefs } from "@/lib/arena/buildStream";
 import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
@@ -74,15 +74,14 @@ async function getArenaArtifactCoverage() {
         return null;
       }
 
-      const full = getArenaBuildStreamArtifactRef(build.id, "full", checksum);
-      const preview = getArenaBuildStreamArtifactRef(build.id, "preview", checksum);
-      if (!full || !preview) return null;
+      const fullRefs = getArenaBuildStreamArtifactFetchRefs(build.id, "full", checksum);
+      const previewRefs = getArenaBuildStreamArtifactFetchRefs(build.id, "preview", checksum);
+      if (fullRefs.length === 0 || previewRefs.length === 0) return null;
 
       return {
         buildId: build.id,
-        bucket: full.bucket,
-        fullPath: full.path,
-        previewPath: preview.path,
+        fullRefs,
+        previewRefs,
       };
     })
     .filter(
@@ -90,9 +89,8 @@ async function getArenaArtifactCoverage() {
         build,
       ): build is {
         buildId: string;
-        bucket: string;
-        fullPath: string;
-        previewPath: string;
+        fullRefs: Array<{ bucket: string; path: string }>;
+        previewRefs: Array<{ bucket: string; path: string }>;
       } => build != null,
     );
 
@@ -110,9 +108,11 @@ async function getArenaArtifactCoverage() {
   try {
     const pathsByBucket = new Map<string, string[]>();
     for (const build of eligibleBuilds) {
-      const bucketPaths = pathsByBucket.get(build.bucket) ?? [];
-      bucketPaths.push(build.fullPath, build.previewPath);
-      pathsByBucket.set(build.bucket, bucketPaths);
+      for (const ref of [...build.fullRefs, ...build.previewRefs]) {
+        const bucketPaths = pathsByBucket.get(ref.bucket) ?? [];
+        bucketPaths.push(ref.path);
+        pathsByBucket.set(ref.bucket, bucketPaths);
+      }
     }
 
     const existingPaths = new Set<string>();
@@ -132,8 +132,9 @@ async function getArenaArtifactCoverage() {
     }
 
     const buildsWithBothVariants = eligibleBuilds.reduce((count, build) => {
-      return count +
-        (existingPaths.has(build.fullPath) && existingPaths.has(build.previewPath) ? 1 : 0);
+      const hasFull = build.fullRefs.some((ref) => existingPaths.has(ref.path));
+      const hasPreview = build.previewRefs.some((ref) => existingPaths.has(ref.path));
+      return count + (hasFull && hasPreview ? 1 : 0);
     }, 0);
 
     return {
