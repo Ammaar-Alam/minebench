@@ -140,6 +140,7 @@ export function Leaderboard() {
   const [data, setData] = useState<LeaderboardResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [navigatingModelKey, setNavigatingModelKey] = useState<string | null>(null);
+  const [showDetailed, setShowDetailed] = useState(false);
   const router = useRouter();
   const activeModelCount = data?.models.length ?? 0;
   const topModel = data?.models[0] ?? null;
@@ -183,20 +184,16 @@ export function Leaderboard() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 sm:gap-5">
-      <div className="mb-panel shrink-0 p-4 sm:p-[1.1rem]">
+      <div className="mb-panel shrink-0 p-4 sm:p-[1.1rem] [&::before]:hidden">
         <div className="mb-panel-inner flex flex-col gap-3.5 sm:flex-row sm:items-end sm:justify-between">
           <div className="space-y-2">
             <div className="mb-badge w-fit">
               <span className="mb-dot" />
               <span className="text-fg">Leaderboard</span>
             </div>
-            <div className="font-display text-[2rem] font-semibold tracking-tight sm:text-[2.2rem]">
-              Rankings
-            </div>
             {topModel ? (
               <div className="mb-leaderboard-favorite mb-model-reveal mb-model-reveal-in">
                 <div className="mb-leaderboard-favorite-head">
-                  <span className="mb-leaderboard-favorite-kicker">Top model</span>
                   <span className="mb-leaderboard-favorite-name">{topModel.displayName}</span>
                 </div>
                 <div className="mb-leaderboard-favorite-meta">
@@ -228,22 +225,17 @@ export function Leaderboard() {
           {error}
         </div>
       ) : null}
+      <div className="hidden shrink-0 items-center justify-end px-1 sm:flex">
+        <button
+          type="button"
+          onClick={() => setShowDetailed((v) => !v)}
+          aria-pressed={showDetailed}
+          className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted2 transition hover:text-fg focus-visible:text-fg focus-visible:outline-none"
+        >
+          {showDetailed ? "Hide details" : "Show details"}
+        </button>
+      </div>
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-0 z-[1] h-28 bg-gradient-to-b from-accent/10 via-accent2/6 to-transparent"
-        />
-        {navigatingModelKey ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-2 sm:inset-x-auto sm:right-3 sm:bottom-3 sm:px-0">
-            <div
-              role="status"
-              aria-live="polite"
-              className="mb-subpanel rounded-full px-3 py-1.5 font-mono text-[11px] tracking-[0.08em] text-muted"
-            >
-              Loading model profile...
-            </div>
-          </div>
-        ) : null}
         <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
         <div className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
@@ -298,9 +290,6 @@ export function Leaderboard() {
                       <div className="font-mono text-[1.15rem] font-semibold text-fg">
                         {Math.round(m.rankScore).toLocaleString()}
                       </div>
-                      <div className="text-[11px] text-muted2">
-                        Raw {Math.round(m.eloRating).toLocaleString()}
-                      </div>
                     </div>
                   </div>
 
@@ -327,7 +316,7 @@ export function Leaderboard() {
                     </span>
                     <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
                       <div
-                        className="h-full rounded-full bg-gradient-to-r from-accent to-accent2 transition-[width] duration-500"
+                        className="h-full rounded-full bg-accent transition-[width] duration-500"
                         style={{
                           width: `${Math.max(0, Math.min(100, consistency)).toFixed(1)}%`,
                         }}
@@ -369,15 +358,15 @@ export function Leaderboard() {
             className="relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table"
           >
             <colgroup>
-              <col className="w-[21%]" />
-              <col className="w-[12%]" />
-              <col className="w-[10%]" />
-              <col className="w-[8%]" />
-              <col className="w-[13%]" />
-              <col className="hidden lg:table-column lg:w-[7%]" />
-              <col className="hidden lg:table-column lg:w-[7%]" />
-              <col className="w-[12%]" />
-              <col className="w-[10%]" />
+              <col className={showDetailed ? "w-[21%]" : "w-[28%]"} />
+              <col className={showDetailed ? "w-[12%]" : "w-[14%]"} />
+              <col className={showDetailed ? "w-[10%]" : "w-[14%]"} />
+              {showDetailed ? <col className="w-[8%]" /> : null}
+              <col className={showDetailed ? "w-[13%]" : "w-[18%]"} />
+              {showDetailed ? <col className="w-[7%]" /> : null}
+              {showDetailed ? <col className="w-[7%]" /> : null}
+              <col className={showDetailed ? "w-[12%]" : "w-[14%]"} />
+              <col className={showDetailed ? "w-[10%]" : "w-[12%]"} />
             </colgroup>
             <thead className="text-xs uppercase text-muted2">
               <tr>
@@ -409,15 +398,17 @@ export function Leaderboard() {
                 >
                   <span className="mb-col-help-label">Confidence</span>
                 </th>
-                <th
-                  scope="col"
-                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Top percent is prompt coverage. Gray x/y is covered prompts out of all arena-eligible prompts."
-                  aria-label="Coverage. Share of arena-eligible prompts with enough decisive votes for this model."
-                  tabIndex={0}
-                >
-                  <span className="mb-col-help-label">Coverage</span>
-                </th>
+                {showDetailed ? (
+                  <th
+                    scope="col"
+                    className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                    data-help="Top percent is prompt coverage. Gray x/y is covered prompts out of all arena-eligible prompts."
+                    aria-label="Coverage. Share of arena-eligible prompts with enough decisive votes for this model."
+                    tabIndex={0}
+                  >
+                    <span className="mb-col-help-label">Coverage</span>
+                  </th>
+                ) : null}
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
@@ -427,24 +418,28 @@ export function Leaderboard() {
                 >
                   <span className="mb-col-help-label">Consistency</span>
                 </th>
-                <th
-                  scope="col"
-                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center lg:table-cell"
-                  data-help="Prompt-to-prompt variability. Lower spread means more stable output."
-                  aria-label="Spread. Prompt-to-prompt variability. Lower spread means more stable output."
-                  tabIndex={0}
-                >
-                  <span className="mb-col-help-label">Spread</span>
-                </th>
-                <th
-                  scope="col"
-                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help hidden text-center lg:table-cell"
-                  data-help="Average prompt score from decisive comparisons. Higher means stronger typical output."
-                  aria-label="Average score. Average prompt score in decisive comparisons. Higher means stronger typical output."
-                  tabIndex={0}
-                >
-                  <span className="mb-col-help-label">Avg score</span>
-                </th>
+                {showDetailed ? (
+                  <th
+                    scope="col"
+                    className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                    data-help="Prompt-to-prompt variability. Lower spread means more stable output."
+                    aria-label="Spread. Prompt-to-prompt variability. Lower spread means more stable output."
+                    tabIndex={0}
+                  >
+                    <span className="mb-col-help-label">Spread</span>
+                  </th>
+                ) : null}
+                {showDetailed ? (
+                  <th
+                    scope="col"
+                    className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                    data-help="Average prompt score from decisive comparisons. Higher means stronger typical output."
+                    aria-label="Average score. Average prompt score in decisive comparisons. Higher means stronger typical output."
+                    tabIndex={0}
+                  >
+                    <span className="mb-col-help-label">Avg score</span>
+                  </th>
+                ) : null}
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
@@ -469,7 +464,6 @@ export function Leaderboard() {
             <tbody>
 	              {data?.models.map((m, index) => {
 	                const voteSummary = summarizeArenaVotes(m);
-	                const tierClass = index === 0 ? "mb-tier-glow-top" : index < 3 ? "mb-tier-glow" : "";
 	                const tier = index === 0 ? "champion" : index < 3 ? "top" : "base";
 	                const moveBadge = movementBadge(m);
 	                return (
@@ -487,7 +481,7 @@ export function Leaderboard() {
                       e.preventDefault();
                       navigateToModel(m.key);
                     }}
-                    className={`mb-leaderboard-row group mb-card-enter cursor-pointer ${tierClass} ${
+                    className={`mb-leaderboard-row group mb-card-enter cursor-pointer ${
                       navigatingModelKey === m.key ? "opacity-75" : ""
                     }`}
                     style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}
@@ -521,9 +515,6 @@ export function Leaderboard() {
                       <div className="font-mono font-semibold tracking-tight text-fg/95">
                         {Math.round(m.rankScore).toLocaleString()}
                       </div>
-                      <div className="text-[11px] text-muted2">
-                        Raw {Math.round(m.eloRating).toLocaleString()}
-                      </div>
                     </td>
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
                       <div className={`font-mono text-sm ${confidenceClass(m.confidence)}`}>
@@ -531,14 +522,16 @@ export function Leaderboard() {
                       </div>
                       <div className="text-[11px] text-muted2">RD {Math.round(m.ratingDeviation)}</div>
                     </td>
-                    <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
-                      <div className="font-mono text-sm text-fg">
-                        {Math.round((m.promptCoverage ?? 0) * 100)}%
-                      </div>
-                      <div className="text-[11px] text-muted2">
-                        {m.coveredPrompts}/{m.activePrompts}
-                      </div>
-                    </td>
+                    {showDetailed ? (
+                      <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
+                        <div className="font-mono text-sm text-fg">
+                          {Math.round((m.promptCoverage ?? 0) * 100)}%
+                        </div>
+                        <div className="text-[11px] text-muted2">
+                          {m.coveredPrompts}/{m.activePrompts}
+                        </div>
+                      </td>
+                    ) : null}
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
                       <div className="flex w-full items-center justify-center gap-1.5">
                         <span className="w-8 font-mono text-xs text-fg/95">
@@ -546,7 +539,7 @@ export function Leaderboard() {
                         </span>
                         <div className="h-1.5 w-full max-w-[8.5rem] overflow-hidden rounded-full bg-border/40">
                           <div
-                            className="h-full rounded-full bg-gradient-to-r from-accent to-accent2 transition-[width] duration-500"
+                            className="h-full rounded-full bg-accent transition-[width] duration-500"
                             style={{
                               width: `${Math.max(0, Math.min(100, m.consistency ?? 0)).toFixed(1)}%`,
                             }}
@@ -554,19 +547,23 @@ export function Leaderboard() {
                         </div>
                       </div>
                     </td>
-                    <td className="mb-leaderboard-cell hidden px-3 py-3 text-center align-middle lg:table-cell sm:px-4 sm:py-3.5">
-                      <div className={`font-mono text-xs ${spreadTone(m.scoreSpread)}`}>
-                        {formatPercent(m.scoreSpread)}
-                      </div>
-                      <div className="text-[11px] uppercase tracking-wide text-muted2">
-                        {spreadLabel(m.scoreSpread)}
-                      </div>
-                    </td>
-                    <td className="mb-leaderboard-cell hidden px-3 py-3 text-center align-middle lg:table-cell sm:px-4 sm:py-3.5">
-                      <div className="flex flex-col items-center gap-1 font-mono">
-                        <span className="font-semibold text-fg/95">{formatPercent(m.meanScore)}</span>
-                      </div>
-                    </td>
+                    {showDetailed ? (
+                      <td className="mb-leaderboard-cell px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
+                        <div className={`font-mono text-xs ${spreadTone(m.scoreSpread)}`}>
+                          {formatPercent(m.scoreSpread)}
+                        </div>
+                        <div className="text-[11px] uppercase tracking-wide text-muted2">
+                          {spreadLabel(m.scoreSpread)}
+                        </div>
+                      </td>
+                    ) : null}
+                    {showDetailed ? (
+                      <td className="mb-leaderboard-cell px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
+                        <div className="flex flex-col items-center gap-1 font-mono">
+                          <span className="font-semibold text-fg/95">{formatPercent(m.meanScore)}</span>
+                        </div>
+                      </td>
+                    ) : null}
                     <td className="mb-leaderboard-cell px-2.5 py-3 text-center align-middle sm:px-3 sm:py-3.5">
                       <div className="mb-leaderboard-record-grid font-mono text-[11px]">
                         <span className="mb-leaderboard-outcome-chip mb-leaderboard-record-chip mb-leaderboard-outcome-chip-success">
@@ -595,7 +592,7 @@ export function Leaderboard() {
               })}
               {!data ? (
                 <tr role="status" aria-live="polite">
-                  <td className="px-3 py-6 text-muted sm:px-4" colSpan={9}>
+                  <td className="px-3 py-6 text-muted sm:px-4" colSpan={showDetailed ? 9 : 6}>
                     <div className="mx-auto w-fit animate-pulse rounded-full bg-border/22 px-4 py-1.5 font-mono text-xs text-muted">
                       Loading…
                     </div>

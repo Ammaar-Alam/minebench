@@ -311,16 +311,6 @@
     border-top: 1px solid hsl(var(--border) / 0.38);
   }
 
-  .mb-tier-glow {
-    box-shadow: inset 2px 0 0 hsl(var(--accent) / 0.33);
-  }
-
-  .mb-tier-glow-top {
-    box-shadow:
-      inset 2px 0 0 hsl(var(--accent) / 0.5),
-      inset 0 0 0 1px hsl(var(--accent) / 0.14);
-  }
-
   .mb-leaderboard-live-chip {
     @apply ring-1 ring-border/70;
     border-radius: 999px;
