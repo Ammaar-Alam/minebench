@@ -10,6 +10,8 @@ import {
 } from "@/lib/arena/buildStream";
 import { deriveArenaBuildLoadHints, pickBuildVariant, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
 import { prisma } from "@/lib/prisma";
+import { ServerTiming } from "@/lib/serverTiming";
+import { trackServerEventInBackground } from "@/lib/analytics.server";
 
 export const runtime = "nodejs";
 
@@ -92,6 +94,8 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ buildId: string }> },
 ) {
+  const timing = new ServerTiming();
+  const requestStartedAt = timing.start();
   const { buildId } = await params;
   const url = new URL(request.url);
   const variant = parseVariant(url.searchParams.get("variant"));
@@ -129,25 +133,54 @@ export async function GET(
   const shellHints = deriveArenaBuildLoadHints(meta);
   const artifactFetchAllowed =
     url.searchParams.get("artifact") !== "0" && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
+  let trackedArtifactMiss = false;
 
   try {
     if (artifactFetchAllowed) {
+      const artifactStartedAt = timing.start();
       const artifact = await withTimeout(
         (signal) => fetchArenaBuildStreamArtifact(buildId, variant, storedChecksum, { signal }),
         ARTIFACT_FETCH_TIMEOUT_MS,
         "artifact fetch",
       );
       if (artifact?.body) {
-        return new Response(artifact.body, {
-          headers: createStreamHeaders("artifact", {
-            deliveryClass: shellHints.deliveryClass,
-            estimatedBytes: shellHints.fullEstimatedBytes,
-          }),
+        timing.end("artifact_hit", artifactStartedAt);
+        timing.end("total", requestStartedAt);
+        const headers = createStreamHeaders("artifact", {
+          deliveryClass: shellHints.deliveryClass,
+          estimatedBytes: shellHints.fullEstimatedBytes,
         });
+        timing.apply(headers);
+        return new Response(artifact.body, { headers });
       }
+      timing.end("artifact_miss", artifactStartedAt);
+      trackServerEventInBackground("arena_artifact_miss", {
+        variant,
+        deliveryClass: shellHints.deliveryClass,
+        estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
+      });
+      trackedArtifactMiss = true;
     }
   } catch (err) {
+    if (artifactFetchAllowed && !trackedArtifactMiss) {
+      trackServerEventInBackground("arena_artifact_miss", {
+        variant,
+        deliveryClass: shellHints.deliveryClass,
+        estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
+      });
+      trackedArtifactMiss = true;
+      timing.add("artifact_miss", ARTIFACT_FETCH_TIMEOUT_MS);
+    }
     console.warn("arena stream artifact fetch failed", err);
+  }
+
+  if (artifactFetchAllowed && !trackedArtifactMiss) {
+    trackServerEventInBackground("arena_artifact_miss", {
+      variant,
+      deliveryClass: shellHints.deliveryClass,
+      estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
+    });
+    trackedArtifactMiss = true;
   }
 
   const build = await prisma.build.findUnique({
@@ -182,6 +215,13 @@ export async function GET(
 
   let ping: ReturnType<typeof setInterval> | null = null;
   let closed = false;
+
+  timing.end("total", requestStartedAt);
+  const responseHeaders = createStreamHeaders("live", {
+    deliveryClass: initialHints.deliveryClass,
+    estimatedBytes: initialHints.fullEstimatedBytes,
+  });
+  timing.apply(responseHeaders);
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -297,10 +337,5 @@ export async function GET(
     },
   });
 
-  return new Response(stream, {
-    headers: createStreamHeaders("live", {
-      deliveryClass: initialHints.deliveryClass,
-      estimatedBytes: initialHints.fullEstimatedBytes,
-    }),
-  });
+  return new Response(stream, { headers: responseHeaders });
 }

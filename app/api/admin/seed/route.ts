@@ -5,6 +5,7 @@ import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { createHash } from "node:crypto";
 import { maybePrecomputeArenaStreamArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
+import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 
 export const runtime = "nodejs";
 
@@ -153,6 +154,7 @@ export async function POST(req: Request) {
       });
     }
   });
+  invalidateArenaCoverageCache();
 
   if (!generateBuilds) {
     const [promptCount, modelCount] = await Promise.all([
@@ -400,6 +402,7 @@ export async function POST(req: Request) {
   const remainingAfter = Math.max(0, remainingBefore - seeded);
   const remainingAfterGeneratable = Math.max(0, remainingBeforeGeneratable - seeded);
   console.log(`[seed:${runId}] batch complete (seeded=${seeded}, remaining≈${remainingAfter}, durationMs=${durationMs})`);
+  invalidateArenaCoverageCache();
 
   return NextResponse.json({
     ok: true,

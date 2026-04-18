@@ -237,7 +237,7 @@ export function getArenaBuildStreamArtifactRef(
   return getArenaBuildStreamArtifactRefByChecksum(buildId, variant, normalizedChecksum);
 }
 
-function getArenaBuildStreamArtifactFetchRefs(
+export function getArenaBuildStreamArtifactFetchRefs(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,

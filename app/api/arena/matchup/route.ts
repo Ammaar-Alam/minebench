@@ -1,4 +1,3 @@
-import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { ArenaMatchup } from "@/lib/arena/types";
@@ -10,6 +9,17 @@ import {
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
 import type { ArenaBuildDeliveryClass } from "@/lib/arena/types";
+import {
+  getArenaMatchupSamplingStateWithMeta,
+  orderPairIds,
+  recordArenaMatchupShown,
+  type CoverageState,
+  type EligibleModel,
+  type EligiblePrompt,
+} from "@/lib/arena/coverage";
+import { withArenaWriteRetry } from "@/lib/arena/writeRetry";
+import { ServerTiming } from "@/lib/serverTiming";
+import { trackServerEventInBackground } from "@/lib/analytics.server";
 
 export const runtime = "nodejs";
 
@@ -18,7 +28,6 @@ const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
 const ARENA_MODE = "precise";
 
-const PROMPT_COVERAGE_FLOOR = 2;
 const CONTENDER_BAND_SIZE = 8;
 const ADJ_PAIR_VOTES_FLOOR = 12;
 const ADJ_PAIR_PROMPTS_FLOOR = 6;
@@ -31,25 +40,10 @@ const LANE_WEIGHTS: Array<{ lane: Lane; weight: number }> = [
   { lane: "uncertainty", weight: 0.2 },
   { lane: "exploration", weight: 0.1 },
 ];
-
-type NumberLike = number | bigint | string | null;
-
-type EligiblePrompt = {
-  id: string;
-  text: string;
-  modelIds: string[];
-};
-
-type EligibleModel = {
-  id: string;
-  key: string;
-  provider: string;
-  displayName: string;
-  eloRating: number;
-  conservativeRating: number;
-  ratingDeviation: number;
-  shownCount: number;
-};
+const MATCHUP_SLOW_EVENT_MS = Number.parseInt(
+  process.env.ARENA_MATCHUP_SLOW_EVENT_MS ?? "1500",
+  10,
+);
 
 type MatchupChoice = {
   lane: Lane;
@@ -58,43 +52,6 @@ type MatchupChoice = {
   modelA: EligibleModel;
   modelB: EligibleModel;
 };
-
-type ModelPromptCoverageRow = {
-  modelId: string;
-  promptId: string;
-  decisiveVotes: NumberLike;
-};
-
-type PairCoverageRow = {
-  modelLowId: string;
-  modelHighId: string;
-  decisiveVotes: NumberLike;
-  promptCount: NumberLike;
-};
-
-type PairPromptCoverageRow = {
-  modelLowId: string;
-  modelHighId: string;
-  promptId: string;
-  decisiveVotes: NumberLike;
-};
-
-type CoverageState = {
-  modelPromptDecisiveVotes: Map<string, number>;
-  pairDecisiveVotes: Map<string, number>;
-  pairPromptCounts: Map<string, number>;
-  pairPromptDecisiveVotes: Map<string, number>;
-  promptCoverageByModelId: Map<string, number>;
-  promptDecisiveTotals: Map<string, number>;
-};
-
-function toNumber(value: NumberLike, fallback = 0): number {
-  if (value == null) return fallback;
-  if (typeof value === "number") return Number.isFinite(value) ? value : fallback;
-  if (typeof value === "bigint") return Number(value);
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
 
 function getOrSetSessionId(res: NextResponse, req: Request) {
   const cookieHeader = req.headers.get("cookie") ?? "";
@@ -166,238 +123,6 @@ function chooseLane(): Lane {
 function candidateLanes(primary: Lane): Lane[] {
   const fallback: Lane[] = ["coverage", "contender", "uncertainty", "exploration"];
   return [primary, ...fallback.filter((lane) => lane !== primary)];
-}
-
-async function getEligiblePromptsAndModels() {
-  const rows = await prisma.build.groupBy({
-    by: ["promptId", "modelId"],
-    where: {
-      gridSize: ARENA_GRID_SIZE,
-      palette: ARENA_PALETTE,
-      mode: ARENA_MODE,
-      model: { enabled: true, isBaseline: false },
-      prompt: { active: true },
-    },
-  });
-
-  const modelIdsByPromptId = new Map<string, Set<string>>();
-  const promptIdsByModelId = new Map<string, Set<string>>();
-
-  for (const row of rows) {
-    const models = modelIdsByPromptId.get(row.promptId) ?? new Set<string>();
-    models.add(row.modelId);
-    modelIdsByPromptId.set(row.promptId, models);
-
-    const prompts = promptIdsByModelId.get(row.modelId) ?? new Set<string>();
-    prompts.add(row.promptId);
-    promptIdsByModelId.set(row.modelId, prompts);
-  }
-
-  const eligiblePromptIds = Array.from(modelIdsByPromptId.entries())
-    .filter(([, modelIds]) => modelIds.size >= 2)
-    .map(([promptId]) => promptId);
-
-  if (eligiblePromptIds.length === 0) {
-    return {
-      prompts: [] as EligiblePrompt[],
-      modelsById: new Map<string, EligibleModel>(),
-      promptIdsByModelId: new Map<string, Set<string>>(),
-    };
-  }
-
-  const [prompts, models] = await Promise.all([
-    prisma.prompt.findMany({
-      where: { id: { in: eligiblePromptIds }, active: true },
-      select: { id: true, text: true },
-    }),
-    prisma.model.findMany({
-      where: {
-        enabled: true,
-        isBaseline: false,
-        id: { in: Array.from(promptIdsByModelId.keys()) },
-      },
-      select: {
-        id: true,
-        key: true,
-        provider: true,
-        displayName: true,
-        eloRating: true,
-        conservativeRating: true,
-        glickoRd: true,
-        shownCount: true,
-      },
-    }),
-  ]);
-
-  const modelsById = new Map(
-    models.map((model) => [
-      model.id,
-      {
-        id: model.id,
-        key: model.key,
-        provider: model.provider,
-        displayName: model.displayName,
-        eloRating: Number(model.eloRating),
-        conservativeRating: Number(model.conservativeRating),
-        ratingDeviation: Number(model.glickoRd),
-        shownCount: model.shownCount,
-      } satisfies EligibleModel,
-    ]),
-  );
-
-  const eligiblePrompts: EligiblePrompt[] = prompts
-    .map((prompt) => {
-      const modelIds = Array.from(modelIdsByPromptId.get(prompt.id) ?? []);
-      const filtered = modelIds.filter((modelId) => modelsById.has(modelId));
-      return {
-        id: prompt.id,
-        text: prompt.text,
-        modelIds: filtered,
-      };
-    })
-    .filter((prompt) => prompt.modelIds.length >= 2);
-
-  const filteredPromptIdsByModelId = new Map<string, Set<string>>();
-  for (const prompt of eligiblePrompts) {
-    for (const modelId of prompt.modelIds) {
-      const set = filteredPromptIdsByModelId.get(modelId) ?? new Set<string>();
-      set.add(prompt.id);
-      filteredPromptIdsByModelId.set(modelId, set);
-    }
-  }
-
-  return {
-    prompts: eligiblePrompts,
-    modelsById,
-    promptIdsByModelId: filteredPromptIdsByModelId,
-  };
-}
-
-async function loadCoverageState(
-  eligiblePrompts: EligiblePrompt[],
-  models: EligibleModel[],
-): Promise<CoverageState> {
-  if (eligiblePrompts.length === 0 || models.length === 0) {
-    return {
-      modelPromptDecisiveVotes: new Map(),
-      pairDecisiveVotes: new Map(),
-      pairPromptCounts: new Map(),
-      pairPromptDecisiveVotes: new Map(),
-      promptCoverageByModelId: new Map(),
-      promptDecisiveTotals: new Map(),
-    };
-  }
-
-  const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
-  const eligibleModelIds = models.map((model) => model.id);
-  const promptIdList = Prisma.join(eligiblePromptIds);
-  const modelIdList = Prisma.join(eligibleModelIds);
-
-  const [modelPromptRows, pairRows, pairPromptRows] = await Promise.all([
-    prisma.$queryRaw<ModelPromptCoverageRow[]>`
-      WITH decisive_votes AS (
-        SELECT matchup."modelAId" AS "modelId", matchup."promptId" AS "promptId"
-        FROM "Vote" vote
-        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-        WHERE vote.choice IN ('A', 'B')
-          AND matchup."promptId" IN (${promptIdList})
-          AND matchup."modelAId" IN (${modelIdList})
-          AND matchup."modelBId" IN (${modelIdList})
-
-        UNION ALL
-
-        SELECT matchup."modelBId" AS "modelId", matchup."promptId" AS "promptId"
-        FROM "Vote" vote
-        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-        WHERE vote.choice IN ('A', 'B')
-          AND matchup."promptId" IN (${promptIdList})
-          AND matchup."modelAId" IN (${modelIdList})
-          AND matchup."modelBId" IN (${modelIdList})
-      )
-      SELECT
-        decisive_votes."modelId" AS "modelId",
-        decisive_votes."promptId" AS "promptId",
-        COUNT(*)::int AS "decisiveVotes"
-      FROM decisive_votes
-      GROUP BY decisive_votes."modelId", decisive_votes."promptId"
-    `,
-    prisma.$queryRaw<PairCoverageRow[]>`
-      SELECT
-        LEAST(matchup."modelAId", matchup."modelBId") AS "modelLowId",
-        GREATEST(matchup."modelAId", matchup."modelBId") AS "modelHighId",
-        COUNT(*)::int AS "decisiveVotes",
-        COUNT(DISTINCT matchup."promptId")::int AS "promptCount"
-      FROM "Vote" vote
-      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-      WHERE vote.choice IN ('A', 'B')
-        AND matchup."promptId" IN (${promptIdList})
-        AND matchup."modelAId" IN (${modelIdList})
-        AND matchup."modelBId" IN (${modelIdList})
-      GROUP BY LEAST(matchup."modelAId", matchup."modelBId"), GREATEST(matchup."modelAId", matchup."modelBId")
-    `,
-    prisma.$queryRaw<PairPromptCoverageRow[]>`
-      SELECT
-        LEAST(matchup."modelAId", matchup."modelBId") AS "modelLowId",
-        GREATEST(matchup."modelAId", matchup."modelBId") AS "modelHighId",
-        matchup."promptId" AS "promptId",
-        COUNT(*)::int AS "decisiveVotes"
-      FROM "Vote" vote
-      INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-      WHERE vote.choice IN ('A', 'B')
-        AND matchup."promptId" IN (${promptIdList})
-        AND matchup."modelAId" IN (${modelIdList})
-        AND matchup."modelBId" IN (${modelIdList})
-      GROUP BY LEAST(matchup."modelAId", matchup."modelBId"), GREATEST(matchup."modelAId", matchup."modelBId"), matchup."promptId"
-    `,
-  ]);
-
-  const modelPromptDecisiveVotes = new Map<string, number>();
-  const pairDecisiveVotes = new Map<string, number>();
-  const pairPromptCounts = new Map<string, number>();
-  const pairPromptDecisiveVotes = new Map<string, number>();
-  const promptDecisiveTotals = new Map<string, number>();
-
-  for (const row of modelPromptRows) {
-    const decisiveVotes = toNumber(row.decisiveVotes);
-    modelPromptDecisiveVotes.set(modelPromptKey(row.modelId, row.promptId), decisiveVotes);
-    promptDecisiveTotals.set(
-      row.promptId,
-      (promptDecisiveTotals.get(row.promptId) ?? 0) + decisiveVotes,
-    );
-  }
-
-  for (const row of pairRows) {
-    const key = pairKey(row.modelLowId, row.modelHighId);
-    pairDecisiveVotes.set(key, toNumber(row.decisiveVotes));
-    pairPromptCounts.set(key, toNumber(row.promptCount));
-  }
-
-  for (const row of pairPromptRows) {
-    pairPromptDecisiveVotes.set(
-      pairPromptKey(row.modelLowId, row.modelHighId, row.promptId),
-      toNumber(row.decisiveVotes),
-    );
-  }
-
-  const totalPrompts = eligiblePrompts.length;
-  const promptCoverageByModelId = new Map<string, number>();
-  for (const model of models) {
-    let covered = 0;
-    for (const prompt of eligiblePrompts) {
-      const votes = modelPromptDecisiveVotes.get(modelPromptKey(model.id, prompt.id)) ?? 0;
-      if (votes >= PROMPT_COVERAGE_FLOOR) covered += 1;
-    }
-    promptCoverageByModelId.set(model.id, totalPrompts > 0 ? covered / totalPrompts : 0);
-  }
-
-  return {
-    modelPromptDecisiveVotes,
-    pairDecisiveVotes,
-    pairPromptCounts,
-    pairPromptDecisiveVotes,
-    promptCoverageByModelId,
-    promptDecisiveTotals,
-  };
 }
 
 function getCommonPromptIds(
@@ -847,13 +572,34 @@ function pickMatchup(params: {
 }
 
 export async function GET(req: Request) {
+  const timing = new ServerTiming();
+  const requestStartedAt = timing.start();
+  let finalized = false;
+  const finalizeHeaders = (headers?: HeadersInit) => {
+    const nextHeaders = new Headers(headers);
+    if (!finalized) {
+      timing.end("total", requestStartedAt);
+      finalized = true;
+    }
+    timing.apply(nextHeaders);
+    return nextHeaders;
+  };
+  const respondJson = (body: unknown, init?: ResponseInit) =>
+    NextResponse.json(body, {
+      ...init,
+      headers: finalizeHeaders(init?.headers),
+    });
+
   const url = new URL(req.url);
   const payloadMode = parseBuildPayloadMode(url.searchParams.get("payload"));
   const requestedPromptId = url.searchParams.get("promptId") ?? undefined;
+  const sampling = await getArenaMatchupSamplingStateWithMeta();
+  timing.add("eligibility", sampling.meta.eligibilityMs, sampling.meta.cacheStatus);
+  timing.add("coverage", sampling.meta.coverageMs, sampling.meta.cacheStatus);
 
-  const { prompts, modelsById, promptIdsByModelId } = await getEligiblePromptsAndModels();
+  const { prompts, modelsById, promptIdsByModelId, coverage } = sampling.state;
   if (prompts.length === 0) {
-    return NextResponse.json(
+    return respondJson(
       { error: "No seeded prompts found. Seed curated prompts/builds first." },
       { status: 409 },
     );
@@ -862,8 +608,6 @@ export async function GET(req: Request) {
   const forcedPromptId = prompts.some((prompt) => prompt.id === requestedPromptId)
     ? requestedPromptId
     : undefined;
-
-  const coverage = await loadCoverageState(prompts, Array.from(modelsById.values()));
   const picked = pickMatchup({
     prompts,
     modelsById,
@@ -873,7 +617,7 @@ export async function GET(req: Request) {
   });
 
   if (!picked) {
-    return NextResponse.json(
+    return respondJson(
       { error: "Failed to sample matchup models" },
       { status: 500 },
     );
@@ -882,8 +626,8 @@ export async function GET(req: Request) {
   const swapSides = Math.random() < 0.5;
   const leftModel = swapSides ? picked.modelB : picked.modelA;
   const rightModel = swapSides ? picked.modelA : picked.modelB;
-  const startedAt = performance.now();
 
+  const buildMetaStartedAt = performance.now();
   const [buildA, buildB] = await Promise.all([
     prisma.build.findFirst({
       where: {
@@ -922,9 +666,11 @@ export async function GET(req: Request) {
       },
     }),
   ]);
+  const buildMetaMs = performance.now() - buildMetaStartedAt;
+  timing.add("build_meta", buildMetaMs);
 
   if (!buildA || !buildB) {
-    return NextResponse.json({ error: "Missing seeded build" }, { status: 500 });
+    return respondJson({ error: "Missing seeded build" }, { status: 500 });
   }
 
   const checksumA = buildA.voxelSha256?.trim() || null;
@@ -944,6 +690,7 @@ export async function GET(req: Request) {
 
   let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
   let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
+  const prepareStartedAt = performance.now();
   if (shouldPrepareA || shouldPrepareB) {
     try {
       const [buildAForPrepare, buildBForPrepare] = await Promise.all([
@@ -986,7 +733,7 @@ export async function GET(req: Request) {
       ]);
 
       if ((shouldPrepareA && !buildAForPrepare) || (shouldPrepareB && !buildBForPrepare)) {
-        return NextResponse.json({ error: "Missing seeded build payload" }, { status: 500 });
+        return respondJson({ error: "Missing seeded build payload" }, { status: 500 });
       }
 
       [preparedA, preparedB] = await Promise.all([
@@ -995,9 +742,11 @@ export async function GET(req: Request) {
       ]);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load build payload";
-      return NextResponse.json({ error: message }, { status: 500 });
+      return respondJson({ error: message }, { status: 500 });
     }
   }
+  const prepareMs = performance.now() - prepareStartedAt;
+  timing.add("prepare", prepareMs);
   const shouldInlineA =
     payloadMode === "inline" ||
     (payloadMode === "adaptive" &&
@@ -1007,32 +756,34 @@ export async function GET(req: Request) {
     (payloadMode === "adaptive" &&
       shouldInlineInAdaptiveMode((preparedB?.hints ?? shellHintsB).deliveryClass));
 
-  const created = await prisma.$transaction(async (tx) => {
-    const matchup = await tx.matchup.create({
-      data: {
-        promptId: picked.prompt.id,
-        modelAId: leftModel.id,
-        modelBId: rightModel.id,
-        buildAId: buildA.id,
-        buildBId: buildB.id,
-        samplingLane: picked.lane,
-        samplingReason: picked.reason,
-      },
-    });
-
-    await Promise.all([
-      tx.model.update({
-        where: { id: leftModel.id },
+  const txStartedAt = performance.now();
+  const [shownCountLowId, shownCountHighId] = orderPairIds(leftModel.id, rightModel.id);
+  const [created] = await withArenaWriteRetry(() =>
+    prisma.$transaction([
+      prisma.matchup.create({
+        data: {
+          promptId: picked.prompt.id,
+          modelAId: leftModel.id,
+          modelBId: rightModel.id,
+          buildAId: buildA.id,
+          buildBId: buildB.id,
+          samplingLane: picked.lane,
+          samplingReason: picked.reason,
+        },
+      }),
+      prisma.model.update({
+        where: { id: shownCountLowId },
         data: { shownCount: { increment: 1 } },
       }),
-      tx.model.update({
-        where: { id: rightModel.id },
+      prisma.model.update({
+        where: { id: shownCountHighId },
         data: { shownCount: { increment: 1 } },
       }),
-    ]);
-
-    return matchup;
-  });
+    ]),
+  );
+  const txMs = performance.now() - txStartedAt;
+  timing.add("tx", txMs);
+  recordArenaMatchupShown([leftModel.id, rightModel.id]);
 
   const body: ArenaMatchup = {
     id: created.id,
@@ -1084,14 +835,30 @@ export async function GET(req: Request) {
     },
   };
 
-  const prepareMs = Math.round(performance.now() - startedAt);
+  const totalMs = performance.now() - requestStartedAt;
+  if (Number.isFinite(totalMs) && totalMs >= MATCHUP_SLOW_EVENT_MS) {
+    trackServerEventInBackground("arena_matchup_slow", {
+      ms: Math.round(totalMs),
+      eligibilityMs: Math.round(sampling.meta.eligibilityMs),
+      coverageMs: Math.round(sampling.meta.coverageMs),
+      buildMetaMs: Math.round(buildMetaMs),
+      prepareMs: Math.round(prepareMs),
+      txMs: Math.round(txMs),
+      cacheStatus: sampling.meta.cacheStatus,
+      lane: picked.lane,
+      payloadMode,
+    });
+  }
+
   const res = NextResponse.json(body, {
     headers: {
       "Cache-Control": "no-store",
+      "x-arena-coverage-cache": sampling.meta.cacheStatus,
       "x-build-payload-mode": payloadMode,
-      "x-build-prepare-ms": String(prepareMs),
+      "x-build-prepare-ms": String(Math.round(prepareMs)),
       "x-build-initial-a": preparedA?.hints.initialVariant ?? shellHintsA.initialVariant,
       "x-build-initial-b": preparedB?.hints.initialVariant ?? shellHintsB.initialVariant,
+      ...Object.fromEntries(finalizeHeaders()),
     },
   });
   getOrSetSessionId(res, req);
