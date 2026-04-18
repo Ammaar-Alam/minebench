@@ -87,6 +87,12 @@ function stabilityChipClass(stability: "Provisional" | "Established" | "Stable")
   return "bg-warn/14 text-warn ring-warn/35";
 }
 
+function stabilityDotClass(stability: string): string {
+  if (stability === "Stable") return "bg-success";
+  if (stability === "Established") return "bg-accent";
+  return "bg-warn";
+}
+
 function confidenceClass(confidence: number): string {
   if (confidence >= 75) return "text-success";
   if (confidence >= 50) return "text-accent";
@@ -255,10 +261,10 @@ export function Leaderboard() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 sm:gap-5">
-      <div className="mb-panel shrink-0 p-4 sm:p-5 [&::before]:hidden">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="mb-panel shrink-0 px-5 py-5 before:hidden sm:px-8 sm:py-5 lg:px-10">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
           {topModel ? (
-            <div className="mb-model-reveal mb-model-reveal-in flex min-w-0 items-center gap-3 sm:gap-4">
+            <div className="mb-model-reveal mb-model-reveal-in flex min-w-0 items-center gap-4 sm:gap-5">
               <span
                 aria-hidden="true"
                 className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 ring-1 ring-accent/35 sm:h-12 sm:w-12"
@@ -267,35 +273,56 @@ export function Leaderboard() {
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-0 rounded-full shadow-[0_0_0_4px_hsl(var(--accent)/0.06),0_10px_24px_-10px_hsl(var(--accent)/0.45)]"
                 />
-                <span className="relative font-mono text-sm font-semibold text-accent sm:text-base">#1</span>
+                <span className="relative text-center font-mono text-sm font-semibold leading-none tracking-tight text-accent tabular-nums sm:text-base">
+                  1
+                </span>
               </span>
-              <div className="flex min-w-0 flex-col">
-                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <div className="flex min-w-0 items-baseline gap-x-3 gap-y-0.5">
                   <span className="truncate font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
                     {topModel.displayName}
                   </span>
-                  <span className="font-mono text-sm font-medium text-muted">
+                  {/* Mobile-only small rating; desktop gets the hero Elo to the right. */}
+                  <span className="font-mono text-sm font-medium text-muted sm:hidden">
                     {Math.round(topModel.rankScore).toLocaleString()}
                   </span>
                 </div>
-                <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-muted2">
                   {topRecord ? <span>{topRecord}</span> : null}
                   {topWinRate != null ? (
                     <>
-                      <span className="text-muted/35">·</span>
+                      <span aria-hidden="true" className="text-muted/30">·</span>
                       <span>{formatPercent(topWinRate)} wins</span>
                     </>
                   ) : null}
-                  <span className="text-muted/35">·</span>
-                  <span className="capitalize">{topModel.stability}</span>
+                  <span aria-hidden="true" className="text-muted/30">·</span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className={`h-1 w-1 rounded-full ${stabilityDotClass(topModel.stability)}`}
+                    />
+                    <span className="capitalize">{topModel.stability}</span>
+                  </span>
                 </div>
+              </div>
+              {/* Hero Elo — packed tight against the champion info on desktop.
+                 Real data, prominent. Hidden on mobile where the small inline
+                 Elo above appears next to the name. */}
+              <div
+                aria-hidden="true"
+                className="hidden shrink-0 flex-col items-end gap-0.5 border-l border-border/60 pl-5 pr-2 sm:flex sm:pr-3"
+              >
+                <span className="font-display text-2xl font-semibold tabular-nums tracking-tight text-fg lg:text-[1.75rem]">
+                  {Math.round(topModel.rankScore).toLocaleString()}
+                </span>
+                <span className="mb-eyebrow">Rating</span>
               </div>
             </div>
           ) : (
             <div aria-hidden="true" className="h-12" />
           )}
-          {activeModelCount > 0 ? (
-            <div className="flex flex-wrap items-center gap-3 sm:shrink-0">
+          <div className="flex flex-wrap items-center gap-2 sm:ml-auto sm:shrink-0 sm:gap-3">
+            {activeModelCount > 0 ? (
               <span className="mb-model-reveal mb-model-reveal-in inline-flex items-center gap-2 font-mono text-[11px] text-muted2">
                 <span className="relative h-1.5 w-1.5 shrink-0" aria-hidden="true">
                   <span className="absolute inset-0 rounded-full bg-success" />
@@ -307,30 +334,30 @@ export function Leaderboard() {
                 <span className="text-muted/40">·</span>
                 <span>{renderedVotes.toLocaleString()} votes</span>
               </span>
-              {isStale && refreshError ? (
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  disabled={retrying}
-                  aria-live="polite"
-                  className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[11px] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <span className="h-1.5 w-1.5 rounded-full bg-warn" aria-hidden="true" />
-                  <span>
-                    {retrying ? "Refreshing…" : `Couldn't refresh${dataAgeMs != null ? ` · ${formatAge(dataAgeMs)}` : ""}`}
-                  </span>
-                </button>
-              ) : isStale && dataAgeMs != null && dataAgeMs > 15_000 ? (
-                <span
-                  aria-live="polite"
-                  className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted2"
-                >
-                  <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
-                  <span>Refreshing · updated {formatAge(dataAgeMs)}</span>
+            ) : null}
+            {isStale && refreshError ? (
+              <button
+                type="button"
+                onClick={handleRetry}
+                disabled={retrying}
+                aria-live="polite"
+                className="mb-refresh-retry inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[11px] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-warn" aria-hidden="true" />
+                <span>
+                  {retrying ? "Refreshing…" : `Couldn't refresh${dataAgeMs != null ? ` · ${formatAge(dataAgeMs)}` : ""}`}
                 </span>
-              ) : null}
-            </div>
-          ) : null}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setShowDetailed((v) => !v)}
+              aria-pressed={showDetailed}
+              className={`mb-btn h-7 rounded-full px-2.5 text-[11px] ${showDetailed ? "mb-btn-primary" : "mb-btn-ghost"}`}
+            >
+              {showDetailed ? "Hide details" : "Show details"}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -352,16 +379,6 @@ export function Leaderboard() {
           <span>Taking longer than usual — MineBench may be under heavy load.</span>
         </div>
       ) : null}
-      <div className="hidden shrink-0 items-center justify-end px-1 sm:flex">
-        <button
-          type="button"
-          onClick={() => setShowDetailed((v) => !v)}
-          aria-pressed={showDetailed}
-          className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted2 transition hover:text-fg focus-visible:text-fg focus-visible:outline-none"
-        >
-          {showDetailed ? "Hide details" : "Show details"}
-        </button>
-      </div>
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
         <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
@@ -528,7 +545,7 @@ export function Leaderboard() {
                 {showDetailed ? (
                   <th
                     scope="col"
-                    className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                    className="mb-leaderboard-header mb-leaderboard-col-label mb-leaderboard-detail-col mb-col-help text-center"
                     data-help="Top percent is prompt coverage. Gray x/y is covered prompts out of all arena-eligible prompts."
                     aria-label="Coverage. Share of arena-eligible prompts with enough decisive votes for this model."
                     tabIndex={0}
@@ -548,7 +565,7 @@ export function Leaderboard() {
                 {showDetailed ? (
                   <th
                     scope="col"
-                    className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                    className="mb-leaderboard-header mb-leaderboard-col-label mb-leaderboard-detail-col mb-col-help text-center"
                     data-help="Prompt-to-prompt variability. Lower spread means more stable output."
                     aria-label="Spread. Prompt-to-prompt variability. Lower spread means more stable output."
                     tabIndex={0}
@@ -559,7 +576,7 @@ export function Leaderboard() {
                 {showDetailed ? (
                   <th
                     scope="col"
-                    className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+                    className="mb-leaderboard-header mb-leaderboard-col-label mb-leaderboard-detail-col mb-col-help text-center"
                     data-help="Average prompt score from decisive comparisons. Higher means stronger typical output."
                     aria-label="Average score. Average prompt score in decisive comparisons. Higher means stronger typical output."
                     tabIndex={0}
@@ -650,7 +667,7 @@ export function Leaderboard() {
                       <div className="text-[11px] text-muted2">RD {Math.round(m.ratingDeviation)}</div>
                     </td>
                     {showDetailed ? (
-                      <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
+                      <td className="mb-leaderboard-cell mb-leaderboard-detail-col px-3 py-3 text-center sm:px-4 sm:py-3.5">
                         <div className="font-mono text-sm text-fg">
                           {Math.round((m.promptCoverage ?? 0) * 100)}%
                         </div>
@@ -675,7 +692,7 @@ export function Leaderboard() {
                       </div>
                     </td>
                     {showDetailed ? (
-                      <td className="mb-leaderboard-cell px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
+                      <td className="mb-leaderboard-cell mb-leaderboard-detail-col px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
                         <div className={`font-mono text-xs ${spreadTone(m.scoreSpread)}`}>
                           {formatPercent(m.scoreSpread)}
                         </div>
@@ -685,7 +702,7 @@ export function Leaderboard() {
                       </td>
                     ) : null}
                     {showDetailed ? (
-                      <td className="mb-leaderboard-cell px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
+                      <td className="mb-leaderboard-cell mb-leaderboard-detail-col px-3 py-3 text-center align-middle sm:px-4 sm:py-3.5">
                         <div className="flex flex-col items-center gap-1 font-mono">
                           <span className="font-semibold text-fg/95">{formatPercent(m.meanScore)}</span>
                         </div>
