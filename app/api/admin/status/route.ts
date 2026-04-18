@@ -53,6 +53,18 @@ function getDbInfo() {
 
 async function getArenaArtifactCoverage() {
   const builds = await prisma.build.findMany({
+    where: {
+      gridSize: 256,
+      palette: "simple",
+      mode: "precise",
+      model: {
+        enabled: true,
+        isBaseline: false,
+      },
+      prompt: {
+        active: true,
+      },
+    },
     select: {
       id: true,
       blockCount: true,

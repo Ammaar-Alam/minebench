@@ -512,38 +512,53 @@ async function readBuildStream(
 async function hydrateFullBuild(params: {
   baseUrl: string;
   ref: ArenaBuildRef;
+  deliveryClass?: string;
   timeoutMs: number;
   jar: CookieJar;
   headers?: HeadersInit;
   metrics: Metrics;
 }) {
-  const { baseUrl, ref, timeoutMs, jar, headers, metrics } = params;
-  const attempts: Array<{
+  const { baseUrl, ref, deliveryClass, timeoutMs, jar, headers, metrics } = params;
+  const snapshotUrl = `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}?variant=${ref.variant}${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`;
+  const streamArtifactUrl = `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}/stream?variant=${ref.variant}${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`;
+  const streamLiveUrl = `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}/stream?variant=${ref.variant}&artifact=0${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`;
+
+  const streamAttempts: Array<{
     url: string;
     stage: string;
     source: string;
   }> = [
     {
-      url: `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}/stream?variant=${ref.variant}${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`,
+      url: streamArtifactUrl,
       stage: "build_stream",
       source: "stream_artifact",
     },
     {
-      url: `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}?variant=${ref.variant}${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`,
+      url: snapshotUrl,
       stage: "build_snapshot",
       source: "snapshot_primary",
     },
     {
-      url: `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}/stream?variant=${ref.variant}&artifact=0${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`,
+      url: streamLiveUrl,
       stage: "build_stream",
       source: "stream_live",
     },
     {
-      url: `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}?variant=${ref.variant}${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`,
+      url: snapshotUrl,
       stage: "build_snapshot",
       source: "snapshot_fallback",
     },
   ];
+  const attempts =
+    deliveryClass === "snapshot"
+      ? [
+          {
+            url: snapshotUrl,
+            stage: "build_snapshot",
+            source: "snapshot_primary",
+          },
+        ]
+      : streamAttempts;
 
   const startedAt = performance.now();
   let lastError: unknown = null;
@@ -682,6 +697,7 @@ async function runUser(userIndex: number, args: Args, deadlineAt: number, metric
           ? hydrateFullBuild({
               baseUrl: args.baseUrl,
               ref: matchup.a.buildRef as ArenaBuildRef,
+              deliveryClass: matchup.a.buildLoadHints?.deliveryClass,
               timeoutMs: args.buildTimeoutMs,
               jar,
               headers,
@@ -692,6 +708,7 @@ async function runUser(userIndex: number, args: Args, deadlineAt: number, metric
           ? hydrateFullBuild({
               baseUrl: args.baseUrl,
               ref: matchup.b.buildRef as ArenaBuildRef,
+              deliveryClass: matchup.b.buildLoadHints?.deliveryClass,
               timeoutMs: args.buildTimeoutMs,
               jar,
               headers,
