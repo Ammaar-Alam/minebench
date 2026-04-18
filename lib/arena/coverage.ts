@@ -64,11 +64,13 @@ export type PairCoverage = {
 };
 
 type NumberLike = number | bigint | string | null;
+type SamplingStateMutation = (state: ArenaMatchupSamplingState) => void;
 
 let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
 let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
 let matchupStateVersion = 0;
 let coverageSyncInFlight: Promise<void> | null = null;
+let pendingSamplingStateMutations: SamplingStateMutation[] = [];
 
 const ARENA_COVERAGE_LOCK_KEY = 860101;
 
@@ -110,21 +112,31 @@ export function invalidateArenaCoverageCache() {
   matchupStateCache = null;
   matchupStateInFlight = null;
   coverageSyncInFlight = null;
+  pendingSamplingStateMutations = [];
+}
+
+function applySamplingStateMutation(mutation: SamplingStateMutation) {
+  const cache = matchupStateCache;
+  if (cache && cache.expiresAt > Date.now()) {
+    mutation(cache.value);
+  }
+  if (matchupStateInFlight) {
+    pendingSamplingStateMutations.push(mutation);
+  }
 }
 
 export function recordArenaMatchupShown(modelIds: string[]) {
-  const state = matchupStateCache?.value;
-  if (!state) return;
-
-  const seen = new Set<string>();
-  for (const modelId of modelIds) {
-    if (!modelId || seen.has(modelId)) continue;
-    seen.add(modelId);
-    const model = state.modelsById.get(modelId);
-    if (model) {
-      model.shownCount += 1;
+  applySamplingStateMutation((state) => {
+    const seen = new Set<string>();
+    for (const modelId of modelIds) {
+      if (!modelId || seen.has(modelId)) continue;
+      seen.add(modelId);
+      const model = state.modelsById.get(modelId);
+      if (model) {
+        model.shownCount += 1;
+      }
     }
-  }
+  });
 }
 
 function refreshPromptCoverageForModel(state: ArenaMatchupSamplingState, modelId: string) {
@@ -151,42 +163,41 @@ export function recordArenaVoteInSamplingCache(input: {
   modelA: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
   modelB: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
 }) {
-  matchupStateVersion += 1;
-  matchupStateInFlight = null;
+  applySamplingStateMutation((state) => {
+    for (const nextModel of [input.modelA, input.modelB]) {
+      const cachedModel = state.modelsById.get(nextModel.id);
+      if (!cachedModel) continue;
+      cachedModel.eloRating = nextModel.eloRating;
+      cachedModel.conservativeRating = nextModel.conservativeRating;
+      cachedModel.ratingDeviation = nextModel.ratingDeviation;
+    }
 
-  const state = matchupStateCache?.value;
-  if (!state) return;
+    if (!input.decisive) return;
 
-  for (const nextModel of [input.modelA, input.modelB]) {
-    const cachedModel = state.modelsById.get(nextModel.id);
-    if (!cachedModel) continue;
-    cachedModel.eloRating = nextModel.eloRating;
-    cachedModel.conservativeRating = nextModel.conservativeRating;
-    cachedModel.ratingDeviation = nextModel.ratingDeviation;
-  }
+    const coverage = state.coverage;
+    const pair = pairKey(input.modelA.id, input.modelB.id);
+    const pairPrompt = pairPromptKey(input.modelA.id, input.modelB.id, input.promptId);
+    const previousPairPromptVotes = coverage.pairPromptDecisiveVotes.get(pairPrompt) ?? 0;
 
-  if (!input.decisive) return;
+    coverage.pairDecisiveVotes.set(pair, (coverage.pairDecisiveVotes.get(pair) ?? 0) + 1);
+    coverage.pairPromptDecisiveVotes.set(pairPrompt, previousPairPromptVotes + 1);
+    if (previousPairPromptVotes === 0) {
+      coverage.pairPromptCounts.set(pair, (coverage.pairPromptCounts.get(pair) ?? 0) + 1);
+    }
+    coverage.promptDecisiveTotals.set(
+      input.promptId,
+      (coverage.promptDecisiveTotals.get(input.promptId) ?? 0) + 1,
+    );
 
-  const coverage = state.coverage;
-  const pair = pairKey(input.modelA.id, input.modelB.id);
-  const pairPrompt = pairPromptKey(input.modelA.id, input.modelB.id, input.promptId);
-  const previousPairPromptVotes = coverage.pairPromptDecisiveVotes.get(pairPrompt) ?? 0;
-
-  coverage.pairDecisiveVotes.set(pair, (coverage.pairDecisiveVotes.get(pair) ?? 0) + 1);
-  coverage.pairPromptDecisiveVotes.set(pairPrompt, previousPairPromptVotes + 1);
-  if (previousPairPromptVotes === 0) {
-    coverage.pairPromptCounts.set(pair, (coverage.pairPromptCounts.get(pair) ?? 0) + 1);
-  }
-  coverage.promptDecisiveTotals.set(
-    input.promptId,
-    (coverage.promptDecisiveTotals.get(input.promptId) ?? 0) + 1,
-  );
-
-  for (const modelId of [input.modelA.id, input.modelB.id]) {
-    const key = modelPromptKey(modelId, input.promptId);
-    coverage.modelPromptDecisiveVotes.set(key, (coverage.modelPromptDecisiveVotes.get(key) ?? 0) + 1);
-    refreshPromptCoverageForModel(state, modelId);
-  }
+    for (const modelId of [input.modelA.id, input.modelB.id]) {
+      const key = modelPromptKey(modelId, input.promptId);
+      coverage.modelPromptDecisiveVotes.set(
+        key,
+        (coverage.modelPromptDecisiveVotes.get(key) ?? 0) + 1,
+      );
+      refreshPromptCoverageForModel(state, modelId);
+    }
+  });
 }
 
 export function isDecisiveChoice(choice: string): choice is "A" | "B" {
@@ -444,6 +455,11 @@ export async function getArenaMatchupSamplingStateWithMeta(): Promise<ArenaMatch
   let inFlight: Promise<ArenaMatchupSamplingResult>;
   inFlight = queryArenaMatchupSamplingState()
     .then((result) => {
+      const queuedMutations = pendingSamplingStateMutations;
+      pendingSamplingStateMutations = [];
+      for (const mutation of queuedMutations) {
+        mutation(result.state);
+      }
       if (matchupStateVersion === refreshVersion) {
         matchupStateCache = {
           value: result.state,
