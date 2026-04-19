@@ -59,7 +59,7 @@ export function VoxelViewerCard({
   attempt?: number;
   retryReason?: string;
   elapsedMs?: number;
-  metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
+  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number };
   error?: string;
   loadingMessage?: string;
   jsonText?: string;
@@ -292,7 +292,7 @@ export function VoxelViewerCard({
               <div className="hidden text-right text-[11px] text-muted sm:block sm:text-xs">
                 {build ? (
                   <div className="items-center gap-2 font-mono sm:flex">
-                    <span>{blockCount} blocks</span>
+                    <span>{blockCount.toLocaleString()} blocks</span>
                     {timing ? <span>• {timing}</span> : null}
                     {warnings.length ? (
                       <span>
@@ -377,31 +377,105 @@ export function VoxelViewerCard({
           ) : null}
 
           {combinedError && showBuildView ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-bg/70 px-4 text-center text-sm text-danger">
-              <div className="flex w-full max-w-[92%] flex-col items-center gap-3">
-                <div>{combinedError}</div>
+            <div className="absolute inset-0 flex items-center justify-center bg-bg/75 px-4 text-center backdrop-blur-[2px]">
+              <div className="flex w-full max-w-[94%] flex-col items-center gap-2.5 sm:max-w-sm">
+                <div
+                  aria-hidden="true"
+                  className="flex h-9 w-9 items-center justify-center rounded-full bg-danger/15 text-danger ring-1 ring-danger/30"
+                >
+                  <svg
+                    className="h-4 w-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M12 8v4" />
+                    <path d="M12 16h.01" />
+                    <circle cx="12" cy="12" r="9" />
+                  </svg>
+                </div>
+                <div className="text-sm font-medium text-fg">Couldn&apos;t render this build</div>
+                <div className="max-w-full break-words text-xs leading-relaxed text-muted">
+                  {combinedError}
+                </div>
                 {hasJsonView && showViewToggle ? (
-                  <div className="text-xs text-muted">Open JSON to inspect raw model output.</div>
+                  <div className="text-[11px] text-muted/75">
+                    Switch to JSON to inspect the raw output.
+                  </div>
                 ) : null}
               </div>
             </div>
           ) : null}
 
           {combinedError && showJsonView ? (
-            <div className="absolute left-3 right-3 top-14 rounded-md border border-danger/45 bg-danger/12 px-3 py-2 text-xs text-danger">
-              {combinedError}
+            <div className="absolute left-3 right-3 top-14 flex items-start gap-2 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-[11px] leading-relaxed text-danger backdrop-blur-sm">
+              <svg
+                aria-hidden="true"
+                className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 8v4" />
+                <path d="M12 16h.01" />
+                <circle cx="12" cy="12" r="9" />
+              </svg>
+              <span className="min-w-0 break-words">{combinedError}</span>
             </div>
           ) : null}
 
           {showBuildView && !build && !isLoading && !combinedError ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-bg/20 text-sm text-muted">
-              No build yet
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-bg/20 text-sm text-muted">
+              <div
+                aria-hidden="true"
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-border/70 text-muted/60"
+              >
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                  <path d="M3.3 7l8.7 5 8.7-5" />
+                  <path d="M12 22v-9" />
+                </svg>
+              </div>
+              <span className="text-xs text-muted/80">No build yet</span>
             </div>
           ) : null}
 
           {showJsonView && !hasJsonView && !isLoading ? (
-            <div className="absolute inset-0 flex items-center justify-center bg-bg/20 text-sm text-muted">
-              No JSON yet
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-bg/20 text-sm text-muted">
+              <div
+                aria-hidden="true"
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-border/70 text-muted/60"
+              >
+                <svg
+                  className="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M10 13V9a2 2 0 0 0-2-2H6" />
+                  <path d="M6 17h2a2 2 0 0 0 2-2v-2" />
+                  <path d="M14 13V9a2 2 0 0 1 2-2h2" />
+                  <path d="M18 17h-2a2 2 0 0 1-2-2v-2" />
+                </svg>
+              </div>
+              <span className="text-xs text-muted/80">No JSON yet</span>
             </div>
           ) : null}
         </div>

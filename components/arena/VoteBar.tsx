@@ -2,6 +2,8 @@
 
 import { VoteChoice } from "@/lib/arena/types";
 
+export type VoteConfirmTarget = VoteChoice | "SKIP";
+
 function ChevronLeft({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -48,11 +50,13 @@ export function VoteBar({
   disableVotes,
   onVote,
   onSkip,
+  confirming,
 }: {
   disabled?: boolean;
   disableVotes?: boolean;
   onVote: (choice: VoteChoice) => void;
   onSkip: () => void;
+  confirming?: VoteConfirmTarget | null;
 }) {
   const voteDisabled = Boolean(disabled || disableVotes);
   const buttonBase =
@@ -62,18 +66,15 @@ export function VoteBar({
   const mobileSecondary = "h-9 px-2.5 text-[12px]";
   const desktopBase = "h-11 px-4 text-sm sm:rounded-xl";
 
-  return (
-    <div className="mb-subpanel relative h-full overflow-hidden px-2 py-2 sm:px-3.5 sm:py-3">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 bg-gradient-to-r from-accent/[0.06] via-transparent to-accent2/[0.06]"
-      />
+  const flash = (target: VoteConfirmTarget) => (confirming === target ? " mb-vote-confirmed" : "");
 
-      <div className="relative flex h-full flex-col justify-center gap-1.5">
+  return (
+    <div className="mb-subpanel relative h-full px-2 py-2 sm:px-3.5 sm:py-3">
+      <div className="flex h-full flex-col justify-center gap-1.5">
         <div className="grid grid-cols-2 gap-1.5 sm:hidden">
           <button
             aria-label="Vote for Build A"
-            className={`${buttonBase} ${mobilePrimary} mb-vote-a`}
+            className={`${buttonBase} ${mobilePrimary} mb-vote-a${flash("A")}`}
             disabled={voteDisabled}
             onClick={() => onVote("A")}
           >
@@ -83,7 +84,7 @@ export function VoteBar({
 
           <button
             aria-label="Vote for Build B"
-            className={`${buttonBase} ${mobilePrimary} mb-vote-b`}
+            className={`${buttonBase} ${mobilePrimary} mb-vote-b${flash("B")}`}
             disabled={voteDisabled}
             onClick={() => onVote("B")}
           >
@@ -95,7 +96,7 @@ export function VoteBar({
         <div className="grid grid-cols-3 gap-1.5 sm:hidden">
           <button
             aria-label="Tie"
-            className={`${buttonBase} ${mobileSecondary} mb-vote-tie`}
+            className={`${buttonBase} ${mobileSecondary} mb-vote-tie${flash("TIE")}`}
             disabled={voteDisabled}
             onClick={() => onVote("TIE")}
           >
@@ -105,7 +106,7 @@ export function VoteBar({
 
           <button
             aria-label="Both bad"
-            className={`${buttonBase} ${mobileSecondary} mb-vote-bad`}
+            className={`${buttonBase} ${mobileSecondary} mb-vote-bad${flash("BOTH_BAD")}`}
             disabled={voteDisabled}
             onClick={() => onVote("BOTH_BAD")}
           >
@@ -115,7 +116,7 @@ export function VoteBar({
 
           <button
             aria-label="Skip"
-            className={`${buttonBase} ${mobileSecondary} mb-vote-skip`}
+            className={`${buttonBase} ${mobileSecondary} mb-vote-skip${flash("SKIP")}`}
             disabled={disabled}
             onClick={onSkip}
           >
@@ -128,7 +129,7 @@ export function VoteBar({
           <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-2.5">
             <button
               aria-label="Vote for Build A"
-              className={`${buttonBase} ${desktopBase} mb-vote-a flex-1`}
+              className={`${buttonBase} ${desktopBase} mb-vote-a flex-1${flash("A")}`}
               disabled={voteDisabled}
               onClick={() => onVote("A")}
             >
@@ -139,7 +140,7 @@ export function VoteBar({
 
             <button
               aria-label="Tie"
-              className={`${buttonBase} ${desktopBase} mb-vote-tie`}
+              className={`${buttonBase} ${desktopBase} mb-vote-tie${flash("TIE")}`}
               disabled={voteDisabled}
               onClick={() => onVote("TIE")}
             >
@@ -149,7 +150,7 @@ export function VoteBar({
 
             <button
               aria-label="Vote for Build B"
-              className={`${buttonBase} ${desktopBase} mb-vote-b flex-1`}
+              className={`${buttonBase} ${desktopBase} mb-vote-b flex-1${flash("B")}`}
               disabled={voteDisabled}
               onClick={() => onVote("B")}
             >
@@ -162,7 +163,7 @@ export function VoteBar({
           <div className="flex items-center justify-center gap-2 sm:gap-2.5">
             <button
               aria-label="Both bad"
-              className={`${buttonBase} ${desktopBase} mb-vote-bad h-9 min-w-[9.5rem] flex-none`}
+              className={`${buttonBase} ${desktopBase} mb-vote-bad h-9 min-w-[9.5rem] flex-none${flash("BOTH_BAD")}`}
               disabled={voteDisabled}
               onClick={() => onVote("BOTH_BAD")}
             >
@@ -173,7 +174,7 @@ export function VoteBar({
 
             <button
               aria-label="Skip"
-              className={`${buttonBase} ${desktopBase} mb-vote-skip h-9 min-w-[9.5rem] flex-none`}
+              className={`${buttonBase} ${desktopBase} mb-vote-skip h-9 min-w-[9.5rem] flex-none${flash("SKIP")}`}
               disabled={disabled}
               onClick={onSkip}
             >

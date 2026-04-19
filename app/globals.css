@@ -22,10 +22,8 @@
     --success: 152 60% 34%;
 
     /* Background effects */
-    --bg-mesh-opacity: 0.40;
-    --bg-anim-opacity: 0.20;
-    --bg-grid-opacity: 0.20;
-    --bg-noise-opacity: 0.02;
+    --bg-halo-opacity: 0.45;
+    --bg-grid-opacity: 0.26;
   }
 
   :root[data-theme="dark"] {
@@ -44,10 +42,8 @@
     --warn: 40 95% 58%;
     --success: 152 70% 44%;
 
-    --bg-mesh-opacity: 0.18;
-    --bg-anim-opacity: 0.10;
-    --bg-grid-opacity: 0.22;
-    --bg-noise-opacity: 0.05;
+    --bg-halo-opacity: 0.55;
+    --bg-grid-opacity: 0.30;
   }
 
   html,
@@ -63,6 +59,13 @@
     font-family: var(--font-sans), system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     background-color: hsl(var(--bg));
     color: hsl(var(--fg));
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  a,
+  [role="button"] {
+    -webkit-tap-highlight-color: transparent;
   }
 
   body.mb-page-fixed {
@@ -87,18 +90,6 @@
     flex-shrink: 0;
   }
 
-  @keyframes mb-gradient-shift {
-    0%,
-    100% {
-      background-position: 0% 50%;
-      opacity: 1;
-    }
-    50% {
-      background-position: 100% 50%;
-      opacity: 0.85;
-    }
-  }
-
   .mb-bg-grid {
     opacity: var(--bg-grid-opacity);
     background-image:
@@ -118,34 +109,25 @@
       linear-gradient(to bottom, hsl(var(--fg) / 0.09) 1px, transparent 1px);
   }
 
-  .mb-bg-noise {
-    opacity: var(--bg-noise-opacity);
-    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-  }
-
-  .mb-bg-mesh {
-    opacity: var(--bg-mesh-opacity);
+  /* Single brand-accent halo. Positioned just off the top-right corner so it
+     reads as a distant light source rather than a decorative wash. The
+     secondary gradient is a very subtle accent2 echo from the opposite corner
+     — matches the logo's accent-dominant gradient (accent as the bright spot,
+     accent2 as a quieter supporting tone). */
+  .mb-bg-halo {
+    opacity: var(--bg-halo-opacity);
     background:
-      radial-gradient(ellipse 80% 60% at 5% 10%, rgba(96, 165, 250, 0.5) 0%, transparent 50%),
-      radial-gradient(ellipse 70% 50% at 95% 5%, rgba(167, 139, 250, 0.45) 0%, transparent 50%),
-      radial-gradient(ellipse 60% 55% at 80% 70%, rgba(251, 191, 36, 0.35) 0%, transparent 50%),
-      radial-gradient(ellipse 75% 60% at 15% 80%, rgba(244, 114, 182, 0.35) 0%, transparent 50%),
-      radial-gradient(ellipse 50% 40% at 50% 100%, rgba(139, 92, 246, 0.25) 0%, transparent 50%);
-  }
-
-  .mb-bg-anim {
-    opacity: var(--bg-anim-opacity);
-    background: linear-gradient(
-      135deg,
-      rgba(96, 165, 250, 0.25) 0%,
-      rgba(167, 139, 250, 0.2) 20%,
-      rgba(244, 114, 182, 0.18) 40%,
-      rgba(251, 191, 36, 0.2) 60%,
-      rgba(139, 92, 246, 0.2) 80%,
-      rgba(96, 165, 250, 0.25) 100%
-    );
-    background-size: 300% 300%;
-    animation: mb-gradient-shift 14s ease-in-out infinite;
+      radial-gradient(
+        ellipse 90% 70% at 88% -8%,
+        hsl(var(--accent) / 0.32) 0%,
+        hsl(var(--accent) / 0.12) 28%,
+        transparent 62%
+      ),
+      radial-gradient(
+        ellipse 70% 60% at 8% 102%,
+        hsl(var(--accent2) / 0.14) 0%,
+        transparent 58%
+      );
   }
 
   ::selection {
@@ -171,6 +153,59 @@
     100% {
       opacity: 1;
       transform: translateY(0);
+    }
+  }
+
+  /* Opacity-only fade for table cells; transform would shift table layout. */
+  @keyframes mb-col-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  /* Spread-curve draw-in: the line traces itself on mount, then the area
+     fills, then the endpoint dots pop in. pathLength="1" on the <path>
+     lets stroke-dasharray use normalized units. */
+  @keyframes mb-curve-line-draw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+
+  @keyframes mb-curve-area-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes mb-curve-endpoint-pop {
+    from { opacity: 0; transform: scale(0.4); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .mb-curve-line-draw {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: mb-curve-line-draw 900ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+
+  .mb-curve-area-fade {
+    opacity: 0;
+    animation: mb-curve-area-fade 500ms ease-out 400ms forwards;
+  }
+
+  .mb-curve-endpoint {
+    opacity: 0;
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: mb-curve-endpoint-pop 300ms cubic-bezier(0.22, 1, 0.36, 1) 900ms forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-curve-line-draw,
+    .mb-curve-area-fade,
+    .mb-curve-endpoint {
+      animation: none;
+      stroke-dashoffset: 0;
+      opacity: 1;
+      transform: scale(1);
     }
   }
 
@@ -307,101 +342,40 @@
     animation-duration: 17s;
   }
 
-  .mb-section-shell {
-    border-top: 1px solid hsl(var(--border) / 0.38);
-  }
-
-  .mb-tier-glow {
-    box-shadow: inset 2px 0 0 hsl(var(--accent) / 0.33);
-  }
-
-  .mb-tier-glow-top {
-    box-shadow:
-      inset 2px 0 0 hsl(var(--accent) / 0.5),
-      inset 0 0 0 1px hsl(var(--accent) / 0.14);
-  }
-
-  .mb-leaderboard-live-chip {
-    @apply ring-1 ring-border/70;
-    border-radius: 999px;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.56), hsl(var(--bg) / 0.42));
-    padding: 0.5rem 0.78rem;
-    box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.2);
-  }
-
-  .mb-leaderboard-favorite {
-    @apply rounded-2xl px-3.5 py-2.5 ring-1;
-    display: grid;
-    gap: 0.46rem;
-    width: min(100%, 34rem);
-    background:
-      linear-gradient(to right, hsl(var(--success) / 0.15), hsl(var(--bg) / 0.44) 48%),
-      linear-gradient(to bottom, hsl(var(--bg) / 0.72), hsl(var(--bg) / 0.5));
-    box-shadow:
-      inset 0 0 0 1px hsl(var(--success) / 0.22),
-      0 14px 28px -28px hsl(var(--success) / 0.75);
-  }
-
-  .mb-leaderboard-favorite-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.58rem;
-  }
-
-  .mb-leaderboard-favorite-kicker {
-    @apply font-mono text-[10px] uppercase tracking-[0.2em] text-success;
-  }
-
-  .mb-leaderboard-favorite-name {
-    @apply truncate text-[1.05rem] font-semibold tracking-tight text-fg;
-    line-height: 1.08;
-  }
-
-  .mb-leaderboard-favorite-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.34rem;
-  }
-
-  .mb-leaderboard-favorite-chip {
-    @apply inline-flex items-center rounded-full px-2.5 py-0.5 font-mono text-[11px] text-muted2 ring-1 ring-border/70;
-    background-color: hsl(var(--bg) / 0.5);
-  }
-
-  @media (max-width: 640px) {
-    .mb-leaderboard-favorite {
-      width: 100%;
-      gap: 0.34rem;
-      padding-inline: 0.75rem;
-      padding-block: 0.68rem;
-    }
-
-    .mb-leaderboard-live-chip {
-      padding-inline: 0.62rem;
-      padding-block: 0.42rem;
-    }
-
-    .mb-leaderboard-favorite-name {
-      font-size: 1.08rem;
-    }
-
-    .mb-leaderboard-favorite-chip {
-      padding-inline: 0.55rem;
-      font-size: 10px;
-    }
-  }
-
   .mb-leaderboard-header {
     @apply sticky top-0 z-10 border-b border-border px-3 py-2.5 tracking-[0.16em] backdrop-blur-md sm:px-4 sm:py-3;
     background-color: hsl(var(--bg) / 0.88);
     box-shadow: inset 0 -1px 0 hsl(var(--border) / 0.35);
     transition: background-color 180ms ease-out, color 180ms ease-out;
+    /* Keep header row height stable when detail columns toggle in/out.
+       Without this, narrowing columns can wrap labels onto 2 lines and
+       the whole header jumps in height. */
+    min-height: 3rem;
   }
 
   .mb-leaderboard-header-model {
     @apply font-semibold tracking-[0.18em];
     color: hsl(var(--fg) / 0.82);
+  }
+
+  /* Applied to the optional detail columns (th + td) so they fade in when
+     the Details toggle flips on. The header row's min-height keeps its
+     size stable across the toggle, so only the cell contents animate. */
+  .mb-leaderboard-detail-col {
+    animation: mb-col-fade-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* Fade-in the retry button when a refresh actually fails so it doesn't
+     pop harshly into the stable header row. */
+  .mb-refresh-retry {
+    animation: mb-fade-in-up 200ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-leaderboard-detail-col,
+    .mb-refresh-retry {
+      animation: none;
+    }
   }
 
   .mb-leaderboard-col-label {
@@ -425,6 +399,10 @@
     gap: 0.25rem;
     border-bottom: 1px dotted hsl(var(--muted2) / 0.55);
     line-height: 1.05;
+    /* Prevent column headers from wrapping to two lines when detail columns
+       toggle in and shrink each column's width. Labels are short enough
+       ("Rating", "Consistency", "Coverage", etc.) that nowrap is safe. */
+    white-space: nowrap;
   }
 
   .mb-col-help::after {
@@ -641,100 +619,50 @@
     background-color: hsl(var(--accent));
   }
 
-  .mb-model-stat-pill {
-    @apply rounded-full px-3 py-2 ring-1;
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
+  /* Flat metric row — no boxes, no vertical dividers. Rhythm comes from
+     top + bottom hairlines that bracket the group, plus an internal mid-rule
+     after the first row on wide screens. Columns separate via grid gap
+     alone; typography carries the rest. */
+  .mb-metric-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 1.25rem;
+    row-gap: 0;
+    border-top: 1px solid hsl(var(--border) / 0.45);
+    border-bottom: 1px solid hsl(var(--border) / 0.45);
   }
 
-  .mb-model-stat-pill-success {
-    background-color: hsl(var(--success) / 0.12);
-    border-color: hsl(var(--success) / 0.3);
-    color: hsl(var(--success));
-    box-shadow: inset 0 0 0 1px hsl(var(--success) / 0.25);
-  }
-
-  .mb-model-stat-pill-neutral {
-    background-color: hsl(var(--bg) / 0.55);
-    border-color: hsl(var(--border) / 0.75);
-    color: hsl(var(--fg));
-    box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.3);
-  }
-
-  .mb-model-stat-pill-danger {
-    background-color: hsl(var(--danger) / 0.1);
-    border-color: hsl(var(--danger) / 0.28);
-    color: hsl(var(--danger));
-    box-shadow: inset 0 0 0 1px hsl(var(--danger) / 0.24);
+  @media (min-width: 640px) {
+    .mb-metric-row {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      column-gap: 1.5rem;
+    }
   }
 
   .mb-metric-tile {
-    @apply rounded-2xl px-3 py-2.5 ring-1 ring-border/70 sm:px-3.5 sm:py-3;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.62), hsl(var(--bg) / 0.4));
-    box-shadow: inset 0 0 0 1px hsl(var(--border) / 0.24);
-  }
-
-  .mb-hero-signal-strip {
-    @apply grid grid-cols-3 gap-2 rounded-2xl p-2 ring-1 ring-border/70;
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.58), hsl(var(--bg) / 0.42));
-  }
-
-  .mb-hero-signal-strip-item {
-    @apply rounded-xl px-2.5 py-1.5 text-[11px] ring-1 ring-border/55;
-    background-color: hsl(var(--bg) / 0.44);
-    display: grid;
-    gap: 0.18rem;
-    text-align: center;
-  }
-
-  .mb-hero-provenance {
-    @apply rounded-2xl px-3 py-2 ring-1 ring-border/70;
-    display: grid;
-    gap: 0.45rem;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.58), hsl(var(--bg) / 0.42));
-  }
-
-  .mb-hero-provenance-head {
-    @apply flex flex-wrap items-center justify-between gap-2;
-  }
-
-  .mb-profile-snapshot {
+    padding: 0.65rem 0 0.7rem;
     position: relative;
   }
 
-  .mb-profile-snapshot::before {
-    content: "";
-    position: absolute;
-    inset-inline: 0;
-    top: 0;
-    height: 2.6rem;
-    background: linear-gradient(to bottom, hsl(var(--fg) / 0.04), transparent);
-    pointer-events: none;
+  /* Single mid-rule between the two rows. On 2-col mobile this kicks in
+     after the second tile (row break); on 4-col desktop it kicks in after
+     the fourth. */
+  .mb-metric-tile:nth-child(-n + 2) {
+    border-bottom: 1px solid hsl(var(--border) / 0.35);
   }
 
-  .mb-breakdown-summary {
-    @apply rounded-2xl p-3 ring-1 ring-border/70 sm:p-3.5;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.58), hsl(var(--bg) / 0.44));
-  }
-
-  .mb-breakdown-summary-head {
-    @apply mb-2 flex items-center justify-between gap-2;
-  }
-
-  .mb-breakdown-summary-tile {
-    @apply rounded-xl px-2.5 py-2 ring-1 ring-border/65;
-    background-color: hsl(var(--bg) / 0.44);
-    display: grid;
-    gap: 0.14rem;
+  @media (min-width: 640px) {
+    .mb-metric-tile:nth-child(-n + 2) {
+      border-bottom: none;
+    }
+    .mb-metric-tile:nth-child(-n + 4) {
+      border-bottom: 1px solid hsl(var(--border) / 0.35);
+    }
   }
 
   .mb-curve-tooltip {
     @apply pointer-events-none -translate-y-full transform-gpu rounded-xl bg-card/95 px-3 py-2 text-xs ring-1 ring-border backdrop-blur;
-    box-shadow: 0 12px 34px hsl(220 40% 2% / 0.45);
+    box-shadow: 0 6px 16px -6px hsl(220 40% 2% / 0.35);
     transition: opacity 150ms ease-out;
   }
 
@@ -751,12 +679,8 @@
   }
 
   .mb-head-to-head-card {
-    @apply rounded-2xl p-3.5 ring-1 ring-border/70;
-    position: relative;
-    overflow: hidden;
-    isolation: isolate;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.52), hsl(var(--bg) / 0.4));
-    transition-property: box-shadow, background-color, border-color;
+    @apply rounded-2xl bg-bg/40 p-3.5 ring-1 ring-border/60;
+    transition-property: box-shadow, background-color, ring-color;
     transition-duration: 200ms;
   }
 
@@ -787,14 +711,6 @@
     @apply relative;
   }
 
-  .mb-hero-spread {
-    background:
-      radial-gradient(46rem 18rem at 12% 0%, hsl(var(--accent) / 0.28), transparent 64%),
-      radial-gradient(38rem 16rem at 89% 0%, hsl(var(--accent2) / 0.26), transparent 62%),
-      linear-gradient(125deg, hsl(var(--accent) / 0.06) 0%, transparent 58%);
-    mask-image: linear-gradient(to bottom, rgb(0 0 0 / 0.9), rgb(0 0 0 / 0.24) 65%, transparent);
-    animation: mb-curve-sweep 23s ease-in-out infinite;
-  }
 
   .mb-sheen-surface {
     position: relative;
@@ -807,8 +723,7 @@
   }
 
   .mb-back-link {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-full text-fg ring-1 ring-border/75;
-    background: linear-gradient(to bottom, hsl(var(--bg) / 0.68), hsl(var(--bg) / 0.52));
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-full bg-bg/55 text-muted ring-1 ring-border/70;
     transition: box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease, color 180ms ease;
   }
 
@@ -834,6 +749,18 @@
     @apply inline-flex items-center gap-2 rounded-full bg-bg/70 px-3 py-1 text-xs font-medium text-muted ring-1 ring-border/80;
   }
 
+  /* Shared eyebrow label used across sections to label a region without a
+     heavy pill. Mono + uppercase + letter-spaced at a mute level. */
+  .mb-eyebrow {
+    @apply font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-muted/70 sm:text-[11px];
+  }
+
+  /* Accent-tinted step marker (e.g. 01/02/03 in the pipeline diagram). Sized
+     to sit inline with an eyebrow label. */
+  .mb-step-num {
+    @apply rounded-md border border-accent/25 bg-accent/[0.08] px-1.5 py-0.5 font-mono text-[11px] font-medium text-accent;
+  }
+
   .mb-dot {
     @apply h-1.5 w-1.5 rounded-sm bg-accent shadow-[0_0_0_3px_hsl(var(--accent)_/_0.18)];
   }
@@ -850,33 +777,66 @@
   }
 
   .mb-btn {
-    @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg transition duration-150 ease-out focus-visible:outline-none;
+    @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg focus-visible:outline-none;
+    transition:
+      background-image 140ms ease-out,
+      background-color 140ms ease-out,
+      box-shadow 140ms ease-out,
+      transform 140ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 120ms ease-out;
   }
 
   .mb-btn:focus-visible {
-    box-shadow: 0 0 0 4px hsl(var(--accent) / 0.18);
+    box-shadow: 0 0 0 3px hsl(var(--accent) / 0.22);
   }
 
-  .mb-btn:active {
-    transform: translateY(1px);
+  .mb-btn:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .mb-btn:active:not(:disabled) {
+    transform: translateY(0);
+    transition-duration: 60ms;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-btn {
+      transition: none;
+    }
+    .mb-btn:hover:not(:disabled),
+    .mb-btn:active:not(:disabled) {
+      transform: none;
+    }
   }
 
   .mb-btn-primary {
-    @apply ring-1 ring-accent/45 hover:shadow-glow;
+    @apply ring-1 ring-accent/45;
     background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.30), hsl(var(--accent) / 0.16));
   }
 
-  .mb-btn-primary:hover {
-    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.34), hsl(var(--accent) / 0.18));
+  .mb-btn-primary:hover:not(:disabled) {
+    @apply ring-accent/70;
+    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.38), hsl(var(--accent) / 0.22));
+  }
+
+  .mb-btn-primary:active:not(:disabled) {
+    @apply ring-accent/70;
+    background-image: linear-gradient(to bottom, hsl(var(--accent) / 0.44), hsl(var(--accent) / 0.28));
   }
 
   .mb-btn-ghost {
-    @apply ring-1 ring-border/80 hover:shadow-soft;
+    @apply ring-1 ring-border/80;
     background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.72), hsl(var(--bg) / 0.46));
   }
 
-  .mb-btn-ghost:hover {
-    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.80), hsl(var(--bg) / 0.52));
+  .mb-btn-ghost:hover:not(:disabled) {
+    @apply ring-border;
+    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.86), hsl(var(--bg) / 0.58));
+  }
+
+  .mb-btn-ghost:active:not(:disabled) {
+    @apply ring-border;
+    background-image: linear-gradient(to bottom, hsl(var(--bg) / 0.94), hsl(var(--bg) / 0.68));
   }
 
   .mb-btn-danger {
@@ -1186,7 +1146,7 @@
   }
 
   .mb-model-reveal-in {
-    animation: mb-reveal-in 280ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    animation: mb-reveal-in 260ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }
 
   /* card entrance animation */
@@ -1231,7 +1191,6 @@
       animation: none;
     }
 
-    .mb-model-stat-pill:hover,
     .mb-jump-chip:hover,
     .mb-head-to-head-card:hover,
     .mb-metric-tile:hover,
@@ -1241,20 +1200,117 @@
   }
 
   /* vote button variants */
+  .mb-vote-a,
+  .mb-vote-b,
+  .mb-vote-tie,
+  .mb-vote-bad,
+  .mb-vote-skip {
+    transition:
+      background 160ms ease-out,
+      box-shadow 160ms ease-out,
+      transform 140ms cubic-bezier(0.22, 1, 0.36, 1),
+      color 120ms ease-out;
+  }
+
+  @keyframes mb-vote-confirm {
+    0% {
+      transform: scale(1);
+      box-shadow:
+        0 0 0 0 hsl(var(--vote-confirm-color, var(--accent)) / 0.55),
+        0 0 0 0 hsl(var(--vote-confirm-color, var(--accent)) / 0.35);
+    }
+    28% {
+      transform: scale(1.045);
+      box-shadow:
+        0 0 0 4px hsl(var(--vote-confirm-color, var(--accent)) / 0.28),
+        0 10px 28px -8px hsl(var(--vote-confirm-color, var(--accent)) / 0.45);
+    }
+    100% {
+      transform: scale(1);
+      box-shadow:
+        0 0 0 18px hsl(var(--vote-confirm-color, var(--accent)) / 0),
+        0 10px 28px -8px hsl(var(--vote-confirm-color, var(--accent)) / 0);
+    }
+  }
+
+  .mb-vote-confirmed {
+    animation: mb-vote-confirm 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    z-index: 1;
+  }
+
+  .mb-vote-a.mb-vote-confirmed {
+    --vote-confirm-color: var(--accent);
+  }
+  .mb-vote-b.mb-vote-confirmed {
+    --vote-confirm-color: var(--accent2);
+  }
+  .mb-vote-bad.mb-vote-confirmed {
+    --vote-confirm-color: var(--danger);
+  }
+  .mb-vote-tie.mb-vote-confirmed,
+  .mb-vote-skip.mb-vote-confirmed {
+    --vote-confirm-color: var(--fg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-vote-confirmed {
+      animation: none;
+      box-shadow: 0 0 0 3px hsl(var(--vote-confirm-color, var(--accent)) / 0.35);
+    }
+  }
+
+  .mb-vote-a:hover:not(:disabled),
+  .mb-vote-b:hover:not(:disabled),
+  .mb-vote-tie:hover:not(:disabled),
+  .mb-vote-bad:hover:not(:disabled),
+  .mb-vote-skip:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .mb-vote-a:active:not(:disabled),
+  .mb-vote-b:active:not(:disabled),
+  .mb-vote-tie:active:not(:disabled),
+  .mb-vote-bad:active:not(:disabled),
+  .mb-vote-skip:active:not(:disabled) {
+    transform: translateY(0) scale(0.985);
+    transition-duration: 60ms;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-vote-a,
+    .mb-vote-b,
+    .mb-vote-tie,
+    .mb-vote-bad,
+    .mb-vote-skip {
+      transition: none;
+    }
+    .mb-vote-a:hover:not(:disabled),
+    .mb-vote-b:hover:not(:disabled),
+    .mb-vote-tie:hover:not(:disabled),
+    .mb-vote-bad:hover:not(:disabled),
+    .mb-vote-skip:hover:not(:disabled),
+    .mb-vote-a:active:not(:disabled),
+    .mb-vote-b:active:not(:disabled),
+    .mb-vote-tie:active:not(:disabled),
+    .mb-vote-bad:active:not(:disabled),
+    .mb-vote-skip:active:not(:disabled) {
+      transform: none;
+    }
+  }
+
   .mb-vote-a {
     @apply ring-1 ring-accent/40;
     background: linear-gradient(135deg, hsl(var(--accent) / 0.22) 0%, hsl(var(--accent) / 0.10) 100%);
   }
 
   .mb-vote-a:hover:not(:disabled) {
-    @apply ring-accent/60;
-    background: linear-gradient(135deg, hsl(var(--accent) / 0.30) 0%, hsl(var(--accent) / 0.14) 100%);
-    box-shadow: 0 2px 12px -2px hsl(var(--accent) / 0.30);
+    @apply ring-accent/70;
+    background: linear-gradient(135deg, hsl(var(--accent) / 0.32) 0%, hsl(var(--accent) / 0.16) 100%);
   }
 
   .mb-vote-a:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--accent) / 0.34) 0%, hsl(var(--accent) / 0.18) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.1);
+    background: linear-gradient(135deg, hsl(var(--accent) / 0.38) 0%, hsl(var(--accent) / 0.22) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.12);
   }
 
   .mb-vote-b {
@@ -1263,14 +1319,13 @@
   }
 
   .mb-vote-b:hover:not(:disabled) {
-    @apply ring-accent2/60;
-    background: linear-gradient(135deg, hsl(var(--accent2) / 0.26) 0%, hsl(var(--accent2) / 0.12) 100%);
-    box-shadow: 0 2px 12px -2px hsl(var(--accent2) / 0.30);
+    @apply ring-accent2/70;
+    background: linear-gradient(135deg, hsl(var(--accent2) / 0.28) 0%, hsl(var(--accent2) / 0.14) 100%);
   }
 
   .mb-vote-b:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--accent2) / 0.30) 0%, hsl(var(--accent2) / 0.16) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.1);
+    background: linear-gradient(135deg, hsl(var(--accent2) / 0.34) 0%, hsl(var(--accent2) / 0.20) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.12);
   }
 
   .mb-vote-tie {
@@ -1280,13 +1335,12 @@
 
   .mb-vote-tie:hover:not(:disabled) {
     @apply ring-border;
-    background: linear-gradient(135deg, hsl(var(--bg) / 0.85) 0%, hsl(var(--bg) / 0.60) 100%);
-    box-shadow: 0 2px 8px -2px hsl(0 0% 0% / 0.12);
+    background: linear-gradient(135deg, hsl(var(--bg) / 0.88) 0%, hsl(var(--bg) / 0.62) 100%);
   }
 
   .mb-vote-tie:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--bg) / 0.90) 0%, hsl(var(--bg) / 0.70) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.08);
+    background: linear-gradient(135deg, hsl(var(--bg) / 0.95) 0%, hsl(var(--bg) / 0.72) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.10);
   }
 
   .mb-vote-bad {
@@ -1295,14 +1349,13 @@
   }
 
   .mb-vote-bad:hover:not(:disabled) {
-    @apply ring-danger/50;
-    background: linear-gradient(135deg, hsl(var(--danger) / 0.18) 0%, hsl(var(--danger) / 0.08) 100%);
-    box-shadow: 0 2px 8px -2px hsl(var(--danger) / 0.20);
+    @apply ring-danger/55;
+    background: linear-gradient(135deg, hsl(var(--danger) / 0.20) 0%, hsl(var(--danger) / 0.09) 100%);
   }
 
   .mb-vote-bad:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--danger) / 0.22) 0%, hsl(var(--danger) / 0.10) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.08);
+    background: linear-gradient(135deg, hsl(var(--danger) / 0.24) 0%, hsl(var(--danger) / 0.12) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.10);
   }
 
   .mb-vote-skip {
@@ -1311,12 +1364,12 @@
   }
 
   .mb-vote-skip:hover:not(:disabled) {
-    @apply ring-border/70;
-    background: linear-gradient(135deg, hsl(var(--muted) / 0.14) 0%, hsl(var(--muted) / 0.06) 100%);
+    @apply ring-border/80;
+    background: linear-gradient(135deg, hsl(var(--muted) / 0.16) 0%, hsl(var(--muted) / 0.07) 100%);
   }
 
   .mb-vote-skip:active:not(:disabled) {
-    background: linear-gradient(135deg, hsl(var(--muted) / 0.18) 0%, hsl(var(--muted) / 0.08) 100%);
-    box-shadow: inset 0 1px 3px hsl(0 0% 0% / 0.06);
+    background: linear-gradient(135deg, hsl(var(--muted) / 0.20) 0%, hsl(var(--muted) / 0.09) 100%);
+    box-shadow: inset 0 1px 2px hsl(0 0% 0% / 0.08);
   }
 }

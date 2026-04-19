@@ -8,6 +8,7 @@ import {
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { ErrorState } from "@/components/ErrorState";
 import type {
   ArenaBuildLoadHints,
   ArenaBuildRef,
@@ -203,6 +204,25 @@ async function readWithTimeout<T>(
       },
     );
   });
+}
+
+function SelectChevron() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+      viewBox="0 0 24 24"
+      fill="none"
+    >
+      <path
+        d="m7 10 5 5 5-5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.8"
+      />
+    </svg>
+  );
 }
 
 function providerLabel(provider: string): string {
@@ -812,7 +832,20 @@ export function SandboxBenchmark() {
     handlePromptChange(pick.id);
   }
 
+  function navigatePrompt(delta: 1 | -1) {
+    if (!data || data.prompts.length === 0) return;
+    const len = data.prompts.length;
+    const currentIndex = data.prompts.findIndex((p) => p.id === promptId);
+    const base = currentIndex >= 0 ? currentIndex : 0;
+    const next = data.prompts[(base + delta + len) % len];
+    if (!next) return;
+    handlePromptChange(next.id);
+  }
+
   const selectedPromptText = data?.selectedPrompt?.text ?? "";
+  const selectedPromptIndex = data?.prompts.findIndex((p) => p.id === promptId) ?? -1;
+  const totalPrompts = data?.prompts.length ?? 0;
+  const canNavigatePrompts = totalPrompts > 1;
   const gridSize = toGridSize(data?.settings.gridSize ?? 256);
   const palette = toPalette(data?.settings.palette ?? "simple");
 
@@ -913,232 +946,242 @@ export function SandboxBenchmark() {
 
   return (
     <div className="flex flex-col gap-5">
-      <div className="mb-panel p-5">
-        <div className="mb-panel-inner">
-          <div className="flex flex-col gap-2">
-            <div className="mb-badge w-fit">
-              <span className="mb-dot" />
-              <span className="text-fg">Benchmark Compare</span>
-            </div>
+      <div className="mb-panel p-4 sm:p-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-1.5">
             <div className="font-display text-2xl font-semibold tracking-tight">
-              Compare Arena Builds Directly
+              Compare arena builds directly
             </div>
             <div className="text-sm text-muted">
-              Pick any curated benchmark prompt and compare two models.
+              Pick a curated benchmark prompt and compare two models side by side.
             </div>
           </div>
 
-          {error ? (
-            <div className="mt-4 rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
-              {error}
-            </div>
-          ) : null}
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2">
+            <SandboxGifExportButton
+              targets={compareTargets}
+              promptText={selectedPromptText}
+              label="Export GIF"
+              className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+            />
 
-          <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-            <label className="flex flex-col gap-1 md:col-span-2">
-              <div className="text-xs font-medium text-muted">Benchmark prompt</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={promptId}
-                  onChange={(e) => handlePromptChange(e.target.value)}
-                  disabled={loading || refreshing || (data?.prompts.length ?? 0) === 0}
-                >
-                  {(data?.prompts ?? []).map((prompt) => (
-                    <option key={prompt.id} value={prompt.id}>
-                      {prompt.text}
-                    </option>
-                  ))}
-                </select>
+            <button
+              type="button"
+              className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+              onClick={() =>
+                void runLoad(
+                  {
+                    promptId,
+                    modelA: modelPair.a,
+                    modelB: modelPair.b,
+                  },
+                  { initial: false },
+                )
+              }
+              disabled={loading || refreshing}
+              title="Refresh builds"
+            >
+              <span className="inline-flex items-center gap-1.5">
                 <svg
                   aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
                   viewBox="0 0 24 24"
+                  className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
                   fill="none"
                 >
                   <path
-                    d="m7 10 5 5 5-5"
+                    d="M20 12a8 8 0 1 1-2.34-5.66"
                     stroke="currentColor"
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    strokeWidth="1.8"
+                    strokeWidth="1.7"
                   />
-                </svg>
-              </div>
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Model A</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={modelPair.a}
-                  onChange={(e) => handleModelChange("a", e.target.value)}
-                  disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
-                >
-                  {modelGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
                   <path
-                    d="m7 10 5 5 5-5"
+                    d="M20 4v6h-6"
                     stroke="currentColor"
                     strokeLinecap="round"
                     strokeLinejoin="round"
-                    strokeWidth="1.8"
+                    strokeWidth="1.7"
                   />
                 </svg>
-              </div>
-            </label>
-
-            <label className="flex flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Model B</div>
-              <div className="relative">
-                <select
-                  className="mb-field h-11 w-full appearance-none pr-10"
-                  value={modelPair.b}
-                  onChange={(e) => handleModelChange("b", e.target.value)}
-                  disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
-                >
-                  {modelGroups.map((group) => (
-                    <optgroup key={group.label} label={group.label}>
-                      {group.models.map((model) => (
-                        <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
-                          {model.displayName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <svg
-                  aria-hidden="true"
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                >
-                  <path
-                    d="m7 10 5 5 5-5"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.8"
-                  />
-                </svg>
-              </div>
-            </label>
+                <span>{refreshing ? "Refreshing…" : "Refresh"}</span>
+              </span>
+            </button>
           </div>
+        </div>
 
-          <div className="mt-4 mb-subpanel p-4">
-            <div className="flex flex-col gap-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 flex-col gap-1">
-                  <div className="text-xs font-medium text-muted">Selected prompt</div>
-                  <div className="text-xs text-muted">
-                    <span className="font-mono">
-                      {gridSize} grid - {palette} palette - {data?.settings.mode ?? "precise"} mode
-                    </span>
-                  </div>
-                </div>
+        {error ? (
+          <div className="mt-4">
+            <ErrorState
+              error={new Error(error)}
+              title="Couldn't load benchmark"
+              hint={error}
+              onRetry={() =>
+                void runLoad(
+                  {
+                    promptId,
+                    modelA: modelPair.a || undefined,
+                    modelB: modelPair.b || undefined,
+                  },
+                  { initial: true },
+                )
+              }
+              retrying={loading || refreshing}
+            />
+          </div>
+        ) : null}
 
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
-                  <SandboxGifExportButton
-                    targets={compareTargets}
-                    promptText={selectedPromptText}
-                    label="Export comparison GIF"
-                    className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
-                  />
-
-                  <button
-                    type="button"
-                    className="mb-btn mb-btn-ghost h-8 rounded-full border border-border/70 bg-bg/55 px-2.5 text-[11px] tracking-[0.01em] backdrop-blur-sm hover:bg-bg/70 sm:h-9 sm:px-3 sm:text-xs"
-                    onClick={handleRandomPrompt}
-                    disabled={loading || refreshing || (data?.prompts.length ?? 0) < 2}
-                    title="Pick a random prompt"
+        {/* Current prompt — shown once, as the hero. Prev/Random/Next below
+           form the prompt-navigation cluster so Random's scope is unambiguous. */}
+        <div className="mt-5">
+          <p className="text-[17px] font-medium leading-snug text-fg sm:text-lg">
+            {selectedPromptText || "Loading benchmark prompt…"}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted/80">
+            <span>{gridSize}</span>
+            <span className="text-muted/35">·</span>
+            <span>{palette}</span>
+            <span className="text-muted/35">·</span>
+            <span>{data?.settings.mode ?? "precise"}</span>
+            {totalPrompts > 0 ? (
+              <>
+                <span className="text-muted/35">·</span>
+                {/* The counter IS the picker: native <select> overlaid on the
+                   counter label. No extra chrome — the existing "N of M"
+                   indicator gains a chevron and click behaviour. */}
+                <label
+                  className={`relative -my-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 transition-colors focus-within:bg-bg/70 focus-within:text-fg focus-within:ring-2 focus-within:ring-accent/35 ${
+                    loading || refreshing || totalPrompts <= 1
+                      ? "cursor-not-allowed opacity-80"
+                      : "cursor-pointer hover:bg-bg/60 hover:text-fg"
+                  }`}
+                >
+                  <span>
+                    {(selectedPromptIndex >= 0 ? selectedPromptIndex + 1 : 1)} / {totalPrompts}
+                  </span>
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    className="h-3 w-3 text-muted/60"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                   >
-                    <span className="inline-flex items-center gap-1.5">
-                      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-                        <rect
-                          x="5"
-                          y="5"
-                          width="14"
-                          height="14"
-                          rx="3"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.7"
-                        />
-                        <circle cx="9" cy="9" r="1.1" fill="currentColor" />
-                        <circle cx="12" cy="12" r="1.1" fill="currentColor" />
-                        <circle cx="15" cy="15" r="1.1" fill="currentColor" />
-                      </svg>
-                      <span>Random</span>
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    className="mb-btn mb-btn-ghost h-8 rounded-full border border-border/70 bg-bg/55 px-2.5 text-[11px] tracking-[0.01em] backdrop-blur-sm hover:bg-bg/70 sm:h-9 sm:px-3 sm:text-xs"
-                    onClick={() =>
-                      void runLoad(
-                        {
-                          promptId,
-                          modelA: modelPair.a,
-                          modelB: modelPair.b,
-                        },
-                        { initial: false },
-                      )
-                    }
-                    disabled={loading || refreshing}
-                    title="Refresh builds"
+                    <path d="m7 10 5 5 5-5" />
+                  </svg>
+                  <select
+                    aria-label="Jump to a specific benchmark prompt"
+                    className="absolute inset-0 cursor-pointer opacity-0 focus:outline-none"
+                    value={promptId}
+                    onChange={(e) => handlePromptChange(e.target.value)}
+                    disabled={loading || refreshing || totalPrompts <= 1}
                   >
-                    <span className="inline-flex items-center gap-1.5">
-                      <svg
-                        aria-hidden="true"
-                        viewBox="0 0 24 24"
-                        className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
-                        fill="none"
-                      >
-                        <path
-                          d="M20 12a8 8 0 1 1-2.34-5.66"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.7"
-                        />
-                        <path
-                          d="M20 4v6h-6"
-                          stroke="currentColor"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.7"
-                        />
-                      </svg>
-                      <span>{refreshing ? "Refreshing..." : "Refresh"}</span>
-                    </span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="text-sm leading-relaxed text-fg">{selectedPromptText || "Loading benchmark prompt..."}</div>
-            </div>
+                    {(data?.prompts ?? []).map((p, i) => (
+                      <option key={p.id} value={p.id}>
+                        {i + 1}. {p.text}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </>
+            ) : null}
           </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2" role="group" aria-label="Browse benchmark prompts">
+            <button
+              type="button"
+              aria-label="Previous prompt"
+              className="mb-btn mb-btn-ghost h-9 w-9 rounded-full p-0"
+              onClick={() => navigatePrompt(-1)}
+              disabled={loading || refreshing || !canNavigatePrompts}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m14 6-6 6 6 6" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              className="mb-btn mb-btn-ghost h-9 rounded-full px-3 text-xs"
+              onClick={handleRandomPrompt}
+              disabled={loading || refreshing || !canNavigatePrompts}
+              title="Pick a random prompt"
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <rect x="5" y="5" width="14" height="14" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                  <circle cx="9" cy="9" r="1.1" fill="currentColor" />
+                  <circle cx="12" cy="12" r="1.1" fill="currentColor" />
+                  <circle cx="15" cy="15" r="1.1" fill="currentColor" />
+                </svg>
+                <span>Random</span>
+              </span>
+            </button>
+            <button
+              type="button"
+              aria-label="Next prompt"
+              className="mb-btn mb-btn-ghost h-9 w-9 rounded-full p-0"
+              onClick={() => navigatePrompt(1)}
+              disabled={loading || refreshing || !canNavigatePrompts}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="m10 6 6 6-6 6" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted">Model A</span>
+            <div className="relative">
+              <select
+                className="mb-field h-11 w-full appearance-none pr-10"
+                value={modelPair.a}
+                onChange={(e) => handleModelChange("a", e.target.value)}
+                disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
+              >
+                {modelGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.models.map((model) => (
+                      <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
+                        {model.displayName}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <SelectChevron />
+            </div>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted">Model B</span>
+            <div className="relative">
+              <select
+                className="mb-field h-11 w-full appearance-none pr-10"
+                value={modelPair.b}
+                onChange={(e) => handleModelChange("b", e.target.value)}
+                disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
+              >
+                {modelGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.models.map((model) => (
+                      <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
+                        {model.displayName}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+              <SelectChevron />
+            </div>
+          </label>
         </div>
       </div>
 
       {loading && !data ? (
-        <div className="mb-panel p-10 text-center text-sm text-muted">Loading benchmark builds...</div>
+        <div className="mb-panel p-10 text-center text-sm text-muted">Loading benchmark builds…</div>
       ) : null}
 
       {!loading && data ? <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{cards}</div> : null}

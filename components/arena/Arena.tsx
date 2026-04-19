@@ -11,9 +11,10 @@ import {
 } from "@/lib/arena/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
-import { VoteBar } from "@/components/arena/VoteBar";
+import { VoteBar, type VoteConfirmTarget } from "@/components/arena/VoteBar";
 import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
+import { ErrorState } from "@/components/ErrorState";
 import { trackEvent } from "@/lib/analytics";
 
 type ArenaState =
@@ -34,25 +35,75 @@ const FULL_HYDRATION_SLOW_MS = Number.parseInt(
   10,
 );
 
+async function readErrorResponse(res: Response, fallback: string): Promise<string> {
+  // Categorize common statuses so the UI isn't showing a raw HTML error page.
+  const statusHint =
+    res.status === 429
+      ? "Slow down — you're going a bit fast. Try again in a few seconds."
+      : res.status === 503 || res.status === 504
+        ? "The server is overloaded right now. Please try again shortly."
+        : res.status >= 500
+          ? "The server had a problem. Please try again."
+          : res.status === 404
+            ? "Not found."
+            : res.status === 401 || res.status === 403
+              ? "You don't have access to this."
+              : null;
+
+  // Best-effort body extraction: JSON { error | message } → string, else truncated text.
+  let detail: string | null = null;
+  try {
+    const body = await res.clone().json();
+    if (body && typeof body === "object") {
+      const candidate = (body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message;
+      if (typeof candidate === "string" && candidate.trim()) detail = candidate.trim();
+    }
+  } catch {
+    // not JSON — fall through to text
+  }
+  if (!detail) {
+    try {
+      const text = (await res.text()).trim();
+      // Skip raw HTML error pages
+      if (text && !text.startsWith("<") && text.length <= 500) detail = text;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (statusHint && detail && detail !== statusHint) return `${statusHint} (${detail})`;
+  return statusHint ?? detail ?? fallback;
+}
+
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const url = new URL("/api/arena/matchup", window.location.origin);
   if (promptId) url.searchParams.set("promptId", promptId);
   // Adaptive mode keeps small builds instant while deferring large payloads.
   url.searchParams.set("payload", "adaptive");
   const res = await fetch(url, { method: "GET", credentials: "include", signal });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readErrorResponse(res, "Failed to load matchup"));
   return (await res.json()) as ArenaMatchup;
 }
 
-async function fetchMatchup(promptId?: string): Promise<ArenaMatchup> {
+async function fetchMatchup(
+  promptId?: string,
+  parentSignal?: AbortSignal,
+): Promise<ArenaMatchup> {
   const maxAttempts = Math.max(1, MATCHUP_REQUEST_RETRIES + 1);
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const timed = makeTimeoutSignal(undefined, MATCHUP_REQUEST_TIMEOUT_MS);
+    // compose caller's abort signal with our per-attempt timeout so either
+    // source (retry cleanup, navigation, user cancel) can kill in-flight reqs
+    const timed = makeTimeoutSignal(parentSignal, MATCHUP_REQUEST_TIMEOUT_MS);
     try {
       return await fetchMatchupOnce(promptId, timed.signal);
     } catch (err: unknown) {
+      // if the caller aborted, stop retrying and surface the abort — the
+      // effect/caller will handle it (typically by ignoring the result)
+      if (parentSignal?.aborted) {
+        throw err instanceof Error ? err : new DOMException("Aborted", "AbortError");
+      }
       if (err instanceof Error && err.name === "AbortError") {
         lastError = new Error("Matchup request timed out");
         if (attempt >= maxAttempts) {
@@ -73,14 +124,35 @@ async function fetchMatchup(promptId?: string): Promise<ArenaMatchup> {
   throw (lastError instanceof Error ? lastError : new Error("Failed to load matchup"));
 }
 
+const VOTE_REQUEST_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_VOTE_REQUEST_TIMEOUT_MS ?? "10000",
+  10,
+);
+
 async function submitVote(matchupId: string, choice: VoteChoice) {
-  const res = await fetch("/api/arena/vote", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ matchupId, choice }),
-  });
-  if (!res.ok) throw new Error(await res.text());
+  // hard timeout so a stalled /api/arena/vote call can't hang the reveal state
+  const timed = makeTimeoutSignal(undefined, VOTE_REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch("/api/arena/vote", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ matchupId, choice }),
+      signal: timed.signal,
+    });
+    if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't record your vote."));
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Vote timed out — the site may be under heavy load. Please try again.");
+    }
+    if (err instanceof TypeError) {
+      // Network failure (offline, DNS, CORS, etc.)
+      throw new Error("Couldn't reach the server. Check your connection and try again.");
+    }
+    throw err;
+  } finally {
+    timed.cleanup();
+  }
 }
 
 type BuildVariantResponse = {
@@ -231,7 +303,7 @@ async function fetchBuildVariantSnapshot(
       credentials: "include",
       signal: timed.signal,
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't load build"));
     return (await res.json()) as BuildVariantResponse;
   } finally {
     timed.cleanup();
@@ -271,7 +343,7 @@ async function fetchBuildVariantStreamOnce(
   } finally {
     requestTimed.cleanup();
   }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't load build"));
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
@@ -611,6 +683,28 @@ const BUILD_STUCK_AUTOSKIP_MS = Number.parseInt(
   10,
 );
 
+function PipelineArrow() {
+  return (
+    <div
+      aria-hidden="true"
+      className="hidden items-center justify-center text-muted/40 md:flex"
+    >
+      <svg
+        width="22"
+        height="22"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M5 12h14M13 6l6 6-6 6" />
+      </svg>
+    </div>
+  );
+}
+
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -625,7 +719,14 @@ function isInteractiveTarget(target: EventTarget | null) {
 
 export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
+  const [reloadToken, setReloadToken] = useState(0);
+  const [retrying, setRetrying] = useState(false);
+  const [slowInitialLoad, setSlowInitialLoad] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [voteConfirming, setVoteConfirming] = useState<VoteConfirmTarget | null>(null);
+  const voteConfirmTimerRef = useRef<number | null>(null);
+  const [voteWarning, setVoteWarning] = useState<string | null>(null);
+  const voteWarningTimerRef = useRef<number | null>(null);
   const [reveal, setReveal] = useState<RevealState>({ kind: "none" });
   const [sideLoadState, setSideLoadState] = useState<SideLoadState | null>(null);
   const [viewerReady, setViewerReady] = useState<{ matchupId: string; a: boolean; b: boolean } | null>(null);
@@ -791,6 +892,17 @@ export function Arena() {
     sync();
     media.addEventListener("change", sync);
     return () => media.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (voteConfirmTimerRef.current != null) {
+        window.clearTimeout(voteConfirmTimerRef.current);
+      }
+      if (voteWarningTimerRef.current != null) {
+        window.clearTimeout(voteWarningTimerRef.current);
+      }
+    };
   }, []);
 
   function clearAutoAdvance() {
@@ -1132,24 +1244,52 @@ export function Arena() {
   }, []);
 
   useEffect(() => {
+    // AbortController lets us actually cancel the in-flight fetchMatchup
+    // when reloadToken bumps (retry click). /api/arena/matchup is
+    // side-effecting — it creates a matchup row + increments shownCount —
+    // so silently ignoring a stale response would still let the previous
+    // request run to completion on the server, burning matchups with no
+    // vote signal. Aborting short-circuits the network round-trip so at
+    // least the response body parse + any follow-up is cancelled.
+    const controller = new AbortController();
     let cancelled = false;
     setState({ kind: "loading" });
-    fetchMatchup(undefined)
+    setSlowInitialLoad(false);
+    // nudge after 5s if the initial matchup is still loading so users know
+    // the delay is server-side, not their browser
+    const slowTimer = setTimeout(() => {
+      if (!cancelled) setSlowInitialLoad(true);
+    }, 5_000);
+    fetchMatchup(undefined, controller.signal)
       .then((m) => {
         if (cancelled) return;
         setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(m) });
       })
       .catch((err: unknown) => {
         if (cancelled) return;
+        if (err instanceof Error && err.name === "AbortError") return;
         setState({
           kind: "error",
           message: err instanceof Error ? err.message : "Failed to load matchup",
         });
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRetrying(false);
+          setSlowInitialLoad(false);
+        }
       });
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(slowTimer);
     };
-  }, [applyCachedBuildsToMatchup]);
+  }, [applyCachedBuildsToMatchup, reloadToken]);
+
+  const handleRetry = useCallback(() => {
+    setRetrying(true);
+    setReloadToken((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const current =
@@ -1306,19 +1446,57 @@ export function Arena() {
     }, delay);
   }
 
+  function flashVoteConfirm(target: VoteConfirmTarget) {
+    setVoteConfirming(target);
+    if (voteConfirmTimerRef.current != null) {
+      window.clearTimeout(voteConfirmTimerRef.current);
+    }
+    voteConfirmTimerRef.current = window.setTimeout(() => {
+      setVoteConfirming(null);
+      voteConfirmTimerRef.current = null;
+    }, 620);
+  }
+
+  function flashVoteWarning(message: string) {
+    setVoteWarning(message);
+    if (voteWarningTimerRef.current != null) {
+      window.clearTimeout(voteWarningTimerRef.current);
+    }
+    voteWarningTimerRef.current = window.setTimeout(() => {
+      setVoteWarning(null);
+      voteWarningTimerRef.current = null;
+    }, 6000);
+  }
+
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     if (isMatchupBuildLoading(matchup, sideLoadStateRef.current)) return;
     const viewer = viewerReadyRef.current;
     if (!viewer || viewer.matchupId !== matchup.id || !viewer.a || !viewer.b) return;
+    flashVoteConfirm(choice);
     setSubmitting(true);
     clearAutoAdvance();
     advanceNowRequestedAtRef.current = null;
     const startedAt = Date.now();
     const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
     setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
+
+    // Submit the vote first. If it fails, stay on the current matchup so
+    // the user can retry — advancing anyway would silently convert a
+    // dropped vote into a skip and bias rankings + prompt coverage. We
+    // also don't fetch the next matchup (which would burn a shownCount
+    // row with no vote signal).
     try {
       await submitVote(matchup.id, choice);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Couldn't record your vote.";
+      flashVoteWarning(msg);
+      setReveal({ kind: "none" });
+      setSubmitting(false);
+      return;
+    }
+
+    try {
       const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
       prefetchMatchupBuilds(next);
       const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
@@ -1341,20 +1519,21 @@ export function Arena() {
         setSubmitting(false);
       }
     } catch (err) {
+      // Vote already persisted; this is a pure next-matchup load failure,
+      // so show the full error state (nothing to present next).
       clearAutoAdvance();
       setState({
         kind: "error",
-        message: err instanceof Error ? err.message : "Vote failed",
+        message: err instanceof Error ? err.message : "Couldn't load the next matchup",
       });
       setReveal({ kind: "none" });
       setSubmitting(false);
-    } finally {
-      // `submitting` stays true through the reveal so users can see the model names.
     }
   }
 
   async function handleSkip() {
     if (!matchup || submitting) return;
+    flashVoteConfirm("SKIP");
     setSubmitting(true);
     try {
       clearAutoAdvance();
@@ -1556,20 +1735,12 @@ export function Arena() {
   const buildSwitchDisabled = state.kind !== "ready" || transitioning;
 
   return (
-    <div className="flex flex-col gap-3 md:gap-5">
-      <div className="mb-panel p-2.5 sm:p-4 md:p-3">
-        <div className="mb-panel-inner flex flex-col gap-2 md:gap-2.5">
+    <div className="flex flex-col gap-4 md:gap-6">
+      <div className="mb-panel flex flex-col gap-2 p-2.5 sm:p-4 md:gap-2.5 md:p-3">
           {/* prompt */}
-          <div className="mb-subpanel relative overflow-hidden px-3 py-2 sm:px-4 sm:py-3 md:py-2.5">
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-r from-accent/[0.08] via-transparent to-accent2/[0.08]"
-            />
-            <div className="relative z-10 flex items-center gap-2.5 sm:gap-3">
-              <div className="mb-badge shrink-0">
-                <span className="mb-dot" />
-                <span className="text-fg">Prompt</span>
-              </div>
+          <div className="mb-subpanel relative overflow-hidden px-3 py-2.5 sm:px-4 sm:py-3 md:py-2.5">
+            <div className="relative z-10 flex items-center gap-3 sm:gap-3.5">
+              <span className="mb-eyebrow shrink-0">Prompt</span>
               <div
                 title={promptText}
                 className={`min-w-0 flex-1 overflow-hidden whitespace-nowrap text-ellipsis pr-1 text-[14px] font-medium leading-tight text-fg/95 sm:text-[15px] ${isLongPrompt ? "cursor-help" : ""}`}
@@ -1608,10 +1779,7 @@ export function Arena() {
                 className="relative w-full max-w-2xl overflow-hidden rounded-3xl bg-card/90 shadow-soft ring-1 ring-border backdrop-blur-xl"
               >
                 <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
-                  <div className="mb-badge">
-                    <span className="mb-dot" />
-                    <span className="text-fg">Prompt</span>
-                  </div>
+                  <span className="mb-eyebrow">Prompt</span>
                   <button
                     type="button"
                     className="mb-btn mb-btn-ghost h-9 rounded-full px-4 text-xs"
@@ -1630,8 +1798,65 @@ export function Arena() {
           ) : null}
 
           {state.kind === "error" ? (
-            <div className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
-              {state.message}
+            <ErrorState
+              error={new Error(state.message)}
+              title="Couldn't load matchup"
+              hint={state.message || "The site may be under heavy load. Try again in a moment."}
+              onRetry={handleRetry}
+              retrying={retrying}
+            />
+          ) : null}
+
+          {state.kind === "loading" && slowInitialLoad ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center gap-2 rounded-xl bg-bg/50 px-3 py-2 text-xs text-muted ring-1 ring-border/60"
+            >
+              <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
+              <span>Taking longer than usual — MineBench may be under heavy load.</span>
+            </div>
+          ) : null}
+
+          {voteWarning ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-start gap-2 rounded-xl bg-warn/8 px-3 py-2 text-xs text-warn ring-1 ring-warn/30"
+            >
+              <svg
+                aria-hidden="true"
+                className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <path d="M12 9v4" />
+                <path d="M12 17h.01" />
+              </svg>
+              <span className="min-w-0 break-words">
+                Vote didn&apos;t save: {voteWarning} Try voting again.
+              </span>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                className="ml-auto shrink-0 text-warn/70 hover:text-warn"
+                onClick={() => {
+                  setVoteWarning(null);
+                  if (voteWarningTimerRef.current != null) {
+                    window.clearTimeout(voteWarningTimerRef.current);
+                    voteWarningTimerRef.current = null;
+                  }
+                }}
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
             </div>
           ) : null}
 
@@ -1746,7 +1971,7 @@ export function Arena() {
               <button
                 type="button"
                 aria-pressed={mobileBuildView === "a"}
-                className={`relative z-10 flex-1 rounded-[10px] py-1.5 text-center font-mono text-[11px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "a" ? "text-fg" : "text-muted2 hover:text-fg"}`}
+                className={`relative z-10 flex-1 rounded-[10px] py-2 text-center font-mono text-[12px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "a" ? "text-fg" : "text-muted2 hover:text-fg"}`}
                 disabled={buildSwitchDisabled}
                 onClick={() => scrollToMobileBuild("a")}
               >
@@ -1755,7 +1980,7 @@ export function Arena() {
               <button
                 type="button"
                 aria-pressed={mobileBuildView === "b"}
-                className={`relative z-10 flex-1 rounded-[10px] py-1.5 text-center font-mono text-[11px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "b" ? "text-fg" : "text-muted2 hover:text-fg"}`}
+                className={`relative z-10 flex-1 rounded-[10px] py-2 text-center font-mono text-[12px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "b" ? "text-fg" : "text-muted2 hover:text-fg"}`}
                 disabled={buildSwitchDisabled}
                 onClick={() => scrollToMobileBuild("b")}
               >
@@ -1765,7 +1990,7 @@ export function Arena() {
           </div>
 
           {/* action bar (vote buttons ↔ reveal status) */}
-          <div className="relative h-[7rem] sm:h-[7.5rem]">
+          <div className="relative h-[8.5rem] sm:h-[7.5rem]">
             <div className="relative h-full">
               <div className="relative h-full">
                 <div
@@ -1776,6 +2001,7 @@ export function Arena() {
                       disableVotes={state.kind !== "ready" || matchupBuildLoading}
                       onVote={handleVote}
                       onSkip={handleSkip}
+                      confirming={voteConfirming}
                     />
                   </div>
 
@@ -1858,9 +2084,37 @@ export function Arena() {
                           </div>
                         </div>
 
+                        {/* Mobile-only: show both model names so user doesn't have to swipe */}
+                        <div className="flex items-center gap-2 text-[11px] sm:hidden">
+                          <div
+                            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-accent/8 px-2 py-1 ring-1 ring-accent/20 ${
+                              revealAction === "A" ? "ring-accent/50" : ""
+                            }`}
+                          >
+                            <span className="inline-flex h-4 items-center rounded-full bg-accent/15 px-1.5 font-mono text-[10px] font-semibold text-accent ring-1 ring-accent/30">
+                              A
+                            </span>
+                            <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
+                              {matchup?.a.model.displayName ?? "—"}
+                            </span>
+                          </div>
+                          <div
+                            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-accent2/8 px-2 py-1 ring-1 ring-accent2/20 ${
+                              revealAction === "B" ? "ring-accent2/50" : ""
+                            }`}
+                          >
+                            <span className="inline-flex h-4 items-center rounded-full bg-accent2/15 px-1.5 font-mono text-[10px] font-semibold text-accent2 ring-1 ring-accent2/30">
+                              B
+                            </span>
+                            <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
+                              {matchup?.b.model.displayName ?? "—"}
+                            </span>
+                          </div>
+                        </div>
+
                         <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-border/40">
                           <div
-                            className="h-full rounded-full bg-gradient-to-r from-accent/80 to-accent2/80 transition-[width] duration-100 ease-linear motion-reduce:transition-none"
+                            className="h-full rounded-full bg-accent/70 transition-[width] duration-100 ease-linear motion-reduce:transition-none"
                             style={{ width: `${(revealMeta.progress * 100).toFixed(1)}%` }}
                           />
                           {revealMeta.waitingForNext ? (
@@ -1873,96 +2127,102 @@ export function Arena() {
                 </div>
               </div>
             </div>
-
-        </div>
       </div>
 
-      {/* explanatory section */}
+      {/* how it works — pipeline diagram */}
       <div className="mb-panel mb-panel-solid overflow-hidden p-5 sm:p-7 md:p-10">
-        <div className="mx-auto flex w-full max-w-7xl flex-col items-center text-center">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full bg-accent/10 px-3 py-1 text-xs font-medium text-accent ring-1 ring-accent/20 sm:mb-5">
-            <span>Unofficial Benchmark</span>
-          </div>
-          <h2 className="mb-3 font-display text-2xl font-bold tracking-tight text-fg md:mb-4 md:text-3xl">
-            Spatial Intelligence Test
+        <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
+          <h2 className="mb-3 text-center font-display text-2xl font-semibold tracking-tight text-fg sm:text-[1.75rem] md:mb-4 md:text-3xl">
+            How it works
           </h2>
-          <p className="mb-8 max-w-2xl text-[15px] leading-relaxed text-fg/85 sm:mb-12 sm:text-base">
-            MineBench is an AI benchmark and LLM benchmark for Minecraft-style voxel builds.
-            Models must generate raw JSON coordinates for blocks with no images or 3D tools. We
-            visualize their pure code output here.
+          <p className="mb-8 max-w-2xl text-center text-[15px] leading-relaxed text-fg/80 sm:mb-10 sm:text-base">
+            Models read a text prompt and output raw JSON coordinates for voxel blocks — no images,
+            no 3D tools. Humans vote pair-wise and rankings emerge from Elo.
           </p>
 
-          <div className="grid w-full grid-cols-1 gap-3.5 text-left sm:gap-5 md:grid-cols-2 lg:grid-cols-3 lg:gap-6">
-            <div className="flex h-full flex-col rounded-2xl border border-border/40 bg-bg/30 p-5 sm:p-6">
-              <div className="mb-4 text-accent">
-                <svg
-                  className="h-6 w-6"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                  <path d="M3.3 7l8.7 5 8.7-5" />
-                  <path d="M12 22v-9" />
-                </svg>
+          <div className="grid w-full grid-cols-1 items-stretch gap-5 md:grid-cols-[1fr_auto_1fr_auto_1fr] md:gap-6">
+            {/* 01 — Prompt */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <span className="mb-step-num">01</span>
+                <span className="mb-eyebrow">Prompt</span>
               </div>
-              <div className="mb-2 font-semibold text-fg">Pure Logic</div>
-              <div className="text-sm leading-relaxed text-fg/75">
-                Models blindly derive 3D coordinates using only math and spatial reasoning. They ARE
-                allowed to execute code (python) to help create the JSON; specifically they are
-                given a custom voxelBuilder tool which gives them access to primitive functions such
-                as cube, sphere, and square.
-              </div>
+              <figure className="rounded-xl border border-border/60 bg-bg/40 p-4 font-mono text-[12px] italic leading-relaxed text-fg/85">
+                &ldquo;A warm wooden cabin beside a pond, with a stone chimney, a small dock, and a few trees.&rdquo;
+              </figure>
+              <p className="text-sm leading-relaxed text-fg/70">
+                Curated, natural-language prompts probe spatial reasoning.
+              </p>
             </div>
 
-            <div className="flex h-full flex-col rounded-2xl border border-border/40 bg-bg/30 p-5 sm:p-6">
-              <div className="mb-4 text-accent">
-                <svg
-                  className="h-6 w-6"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M3 3v18h18" />
-                  <path d="M18 17V9" />
-                  <path d="M13 17V5" />
-                  <path d="M8 17v-3" />
-                </svg>
+            <PipelineArrow />
+
+            {/* 02 — Generate */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <span className="mb-step-num">02</span>
+                <span className="mb-eyebrow">Generate</span>
               </div>
-              <div className="mb-2 font-semibold text-fg">Elo Rated</div>
-              <div className="text-sm leading-relaxed text-fg/75">
-                Builds are ranked via head-to-head voting, creating a live leaderboard of spatial
-                skill.
-              </div>
+              <figure className="relative rounded-xl border border-accent/25 bg-bg/40 p-4 font-mono text-[11px] leading-relaxed text-fg/85">
+                <pre className="overflow-x-auto whitespace-pre">
+{`{
+  "version": "1.0",
+  "blocks": [
+    {"x":0,"y":0,"z":0,"type":`}<span className="text-accent">&quot;oak_log&quot;</span>{`},
+    {"x":1,"y":0,"z":0,"type":`}<span className="text-accent">&quot;stone&quot;</span>{`},
+    …
+  ]
+}`}
+                </pre>
+                <span className="absolute bottom-2 right-3 font-mono text-[10px] text-muted/70">
+                  1,247 blocks
+                </span>
+              </figure>
+              <p className="text-sm leading-relaxed text-fg/70">
+                Models output raw block coordinates. We render them directly — no post-processing.
+              </p>
             </div>
 
-            <div className="flex h-full flex-col rounded-2xl border border-border/40 bg-bg/30 p-5 sm:p-6">
-              <div className="mb-4 text-accent">
-                <svg
-                  className="h-6 w-6"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <ellipse cx="12" cy="5" rx="9" ry="3" />
-                  <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
-                  <path d="M3 5v14c0 1.66 4 3 9 3s 9-1.34 9-3V5" />
-                </svg>
+            <PipelineArrow />
+
+            {/* 03 — Vote & rank */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <span className="mb-step-num">03</span>
+                <span className="mb-eyebrow">Vote &amp; rank</span>
               </div>
-              <div className="mb-2 font-semibold text-fg">Recorded Data</div>
-              <div className="text-sm leading-relaxed text-fg/75">
-                Prompts, generations, and votes are stored to compute rankings and track
-                performance.
-              </div>
+              <figure className="flex flex-col gap-3 rounded-xl border border-border/60 bg-bg/40 p-4">
+                <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
+                  <span className="inline-flex h-7 items-center rounded-lg bg-accent/15 px-2.5 font-semibold text-accent ring-1 ring-accent/30">
+                    A wins
+                  </span>
+                  <span className="hidden text-muted/60 sm:inline">·</span>
+                  <span className="inline-flex h-7 items-center rounded-lg bg-muted/10 px-2.5 font-semibold text-muted/90 ring-1 ring-border/70">
+                    Tie
+                  </span>
+                  <span className="hidden text-muted/60 sm:inline">·</span>
+                  <span className="inline-flex h-7 items-center rounded-lg bg-accent2/15 px-2.5 font-semibold text-accent2 ring-1 ring-accent2/30">
+                    B wins
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1 font-mono text-[11px]">
+                  <div className="flex items-center justify-between text-fg/90">
+                    <span>GPT-5.4</span>
+                    <span className="text-accent">2150</span>
+                  </div>
+                  <div className="flex items-center justify-between text-fg/75">
+                    <span>Claude 4.5</span>
+                    <span>2108</span>
+                  </div>
+                  <div className="flex items-center justify-between text-fg/60">
+                    <span>Gemini 3 Pro</span>
+                    <span>2091</span>
+                  </div>
+                </div>
+              </figure>
+              <p className="text-sm leading-relaxed text-fg/70">
+                Every vote feeds a live Elo leaderboard.
+              </p>
             </div>
           </div>
         </div>
@@ -1970,28 +2230,36 @@ export function Arena() {
 
       {/* sandbox cta - moved to bottom & polished */}
       <div className="mb-panel mb-panel-solid flex flex-col items-center gap-4 p-5 text-center sm:p-6 md:p-7">
-        <div className="flex flex-col items-center gap-1">
-          <h3 className="font-semibold text-fg">Want to test a model yourself?</h3>
-          <p className="text-sm text-fg/70">
+        <div className="flex flex-col items-center gap-1.5">
+          <h3 className="font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
+            Want to test a model yourself?
+          </h3>
+          <p className="text-sm leading-relaxed text-fg/70">
             Enter any prompt to generate a 3D build in the Sandbox.
           </p>
         </div>
-        <div className="relative flex w-full max-w-md items-center">
+        <form
+          className="relative flex w-full max-w-md items-center"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const q = customPrompt.trim();
+            window.location.href = `/sandbox${q ? `?prompt=${encodeURIComponent(q)}` : ""}`;
+          }}
+        >
           <input
-            className="mb-field h-12 w-full pr-24 text-base shadow-sm focus:ring-accent/20"
-            placeholder="e.g. A giant rubber duck..."
+            aria-label="Prompt for the sandbox"
+            className="mb-field h-12 w-full pr-[7.5rem] text-base"
+            placeholder="e.g. A giant rubber duck…"
             value={customPrompt}
             onChange={(e) => setCustomPrompt(e.target.value)}
           />
-          <div className="absolute right-1.5 top-1.5 bottom-1.5">
-            <a
-              className="mb-btn mb-btn-primary h-full px-4 text-sm shadow-sm"
-              href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
-            >
-              Generate
-            </a>
-          </div>
-        </div>
+          <a
+            className="mb-btn mb-btn-primary absolute right-1.5 top-1.5 bottom-1.5 flex items-center rounded-md px-4 text-sm"
+            href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
+          >
+            Generate
+          </a>
+        </form>
       </div>
     </div>
   );

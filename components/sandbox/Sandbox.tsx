@@ -25,17 +25,17 @@ function ModeSegmentedControl({
     0,
     options.findIndex((option) => option.value === value),
   );
-  const segmentWidth = `calc((100% - 0.5rem) / ${safeCount})`;
+  const segmentWidth = `${100 / safeCount}%`;
   const segmentTranslate = `${activeIndex * 100}%`;
 
   return (
     <div
-      className={`relative flex rounded-full bg-bg/55 p-1 ring-1 ring-border/80 ${className ?? ""}`}
+      className={`relative flex rounded-xl bg-bg/60 p-1 ring-1 ring-border ${className ?? ""}`}
     >
-      <div className="pointer-events-none absolute inset-1 rounded-full">
+      <div className="pointer-events-none absolute inset-1 rounded-lg">
         <span
           aria-hidden="true"
-          className="absolute inset-y-0 left-0 rounded-full border border-accent/55 bg-accent/24 shadow-[0_8px_20px_-14px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-out"
+          className="absolute inset-y-0 left-0 rounded-lg bg-accent/15 ring-1 ring-accent/40 transition-transform duration-200 ease-out"
           style={{
             width: segmentWidth,
             transform: `translateX(${segmentTranslate})`,
@@ -49,7 +49,7 @@ function ModeSegmentedControl({
             key={option.value}
             type="button"
             aria-pressed={active}
-            className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
+            className={`relative z-10 h-9 min-w-0 flex-1 rounded-lg px-3 text-xs font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-10 sm:px-4 sm:text-sm ${
               active ? "text-fg" : "text-muted hover:text-fg"
             }`}
             onClick={() => onChange(option.value)}
@@ -68,22 +68,10 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
   );
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="mb-panel p-3 sm:p-4">
-        <div className="mb-panel-inner flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <div className="mb-badge">
-              <span className="mb-dot" />
-              <span className="text-fg">Sandbox Mode</span>
-            </div>
-            <div className="hidden text-xs text-muted sm:block">
-              Compare builds by specific models or generate your own builds with custom prompts
-              (requires your own API keys).
-            </div>
-          </div>
-
-          <ModeSegmentedControl value={mode} onChange={setMode} className="w-full sm:w-[420px]" />
-        </div>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <span className="mb-eyebrow">Sandbox</span>
+        <ModeSegmentedControl value={mode} onChange={setMode} className="w-full sm:w-[360px]" />
       </div>
 
       {mode === "benchmark" ? <SandboxBenchmark /> : <SandboxLive initialPrompt={initialPrompt} />}

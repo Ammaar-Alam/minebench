@@ -169,14 +169,14 @@ function SegmentedControl({
   return (
     <div
       className={cx(
-        "relative flex rounded-[1.5rem] bg-[linear-gradient(180deg,rgba(4,8,21,0.96),rgba(4,8,21,0.78))] p-1.5 ring-1 ring-white/8 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_24px_40px_-34px_rgba(3,10,28,0.96)] backdrop-blur-sm",
+        "relative flex rounded-xl bg-bg/60 p-1 ring-1 ring-border",
         className,
       )}
     >
-      <div className="pointer-events-none absolute inset-1.5 rounded-[1rem]">
+      <div className="pointer-events-none absolute inset-1 rounded-lg">
         <span
           aria-hidden="true"
-          className="absolute inset-y-0 left-0 rounded-[1rem] border border-accent/45 bg-[radial-gradient(circle_at_20%_20%,rgba(118,255,232,0.2),rgba(61,229,204,0.1)_55%,rgba(61,229,204,0.04))] shadow-[0_0_0_1px_rgba(61,229,204,0.14),0_14px_28px_-20px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+          className="absolute inset-y-0 left-0 rounded-lg bg-accent/15 ring-1 ring-accent/40 transition-transform duration-200 ease-out"
           style={{
             width: segmentWidth,
             transform: `translateX(${segmentTranslate})`,
@@ -191,8 +191,8 @@ function SegmentedControl({
             type="button"
             aria-pressed={active}
             className={cx(
-              "relative z-10 flex h-10 min-w-0 flex-1 items-center justify-center rounded-[1rem] px-4 text-sm font-semibold tracking-[-0.015em] transition-colors duration-200 sm:h-11",
-              active ? "text-fg" : "text-muted/90 hover:text-fg",
+              "relative z-10 flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg px-3 text-sm font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-10",
+              active ? "text-fg" : "text-muted hover:text-fg",
             )}
             onClick={() => onChange(option.value)}
           >
@@ -206,52 +206,20 @@ function SegmentedControl({
 
 function SegmentedField({
   label,
-  tooltipTitle,
-  tooltipBody,
-  tooltipAlign = "right",
+  hint,
   className,
   children,
 }: {
   label: string;
-  tooltipTitle: string;
-  tooltipBody: string;
-  tooltipAlign?: "left" | "right";
+  hint?: string;
   className?: string;
   children: ReactNode;
 }) {
   return (
-    <div
-      className={cx(
-        "group/field relative flex min-w-0 flex-col gap-2.5",
-        className,
-      )}
-    >
-      <div className="flex items-center gap-2">
-        <div className="text-[0.64rem] font-semibold uppercase tracking-[0.32em] text-muted/72">{label}</div>
-        <div className="group/tooltip relative ml-auto flex">
-          <button
-            type="button"
-            aria-label={`${label} info`}
-            className="flex h-7 w-7 items-center justify-center rounded-full bg-white/[0.035] text-[11px] font-semibold text-muted/85 ring-1 ring-white/8 transition-colors duration-200 hover:bg-white/[0.06] hover:text-fg focus-visible:bg-white/[0.06] focus-visible:text-fg focus-visible:outline-none"
-          >
-            ?
-          </button>
-
-          <div
-            className={cx(
-              "pointer-events-none absolute top-[calc(100%+0.65rem)] z-[80] w-[min(22rem,calc(100vw-2rem))] translate-y-1 opacity-0 transition duration-200 group-hover/tooltip:translate-y-0 group-hover/tooltip:opacity-100 group-focus-within/tooltip:translate-y-0 group-focus-within/tooltip:opacity-100",
-              tooltipAlign === "right" ? "right-0 origin-top-right" : "left-0 origin-top-left",
-            )}
-          >
-            <div className="rounded-[1.15rem] border border-white/10 bg-[linear-gradient(180deg,rgba(8,13,30,0.98),rgba(5,9,22,0.96))] p-4 shadow-[0_24px_60px_-28px_rgba(4,11,31,0.95)] backdrop-blur-md">
-              <div className="text-sm font-semibold tracking-[-0.01em] text-fg">{tooltipTitle}</div>
-              <p className="mt-1.5 text-xs leading-relaxed text-muted">{tooltipBody}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <div className={cx("flex min-w-0 flex-col gap-2", className)}>
+      <div className="text-[0.64rem] font-semibold uppercase tracking-[0.32em] text-muted/72">{label}</div>
       {children}
+      {hint ? <div className="text-xs text-muted/80">{hint}</div> : null}
     </div>
   );
 }
@@ -361,8 +329,8 @@ export function LocalLab() {
             message.resolved.gridSize !== gridSizeRef.current || message.resolved.palette !== paletteRef.current;
           setStatusNote(
             switchedSettings
-              ? `Converted tool output and matched settings to ${message.resolved.gridSize} / ${message.resolved.palette}.`
-              : "Converted tool output and rendered.",
+              ? `Detected a tool-call output. Switched to ${message.resolved.gridSize} / ${message.resolved.palette} to match.`
+              : "Detected a tool-call output and rendered it.",
           );
         } else {
           setStatusNote(null);
@@ -458,7 +426,7 @@ export function LocalLab() {
           kind: "error",
           build: null,
           warnings: [],
-          message: "Could not find a valid JSON object. Paste the raw JSON (no extra text) if possible.",
+          message: "Couldn't find a valid JSON object. Paste just the raw JSON — no extra text.",
         });
         return;
       }
@@ -538,206 +506,176 @@ export function LocalLab() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="mb-panel z-30 overflow-visible p-4 sm:p-5">
-        <div className="mb-panel-inner flex flex-col gap-3">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="font-display text-[1.85rem] font-semibold tracking-tight text-fg sm:text-[2.1rem]">
-                Test models locally
-              </div>
-              <div className="mt-1 text-sm text-muted">
-                Test out changing the system prompt, generate a custom build, then paste the JSON to render it.
-              </div>
+      <div className="mb-panel p-4 sm:p-5">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <div className="font-display text-[1.85rem] font-semibold tracking-tight text-fg sm:text-[2.1rem]">
+              Test models locally
             </div>
+            <div className="mt-1 text-sm text-muted">
+              Tweak the prompt, run it in your model, paste the JSON back here to see the build.
+            </div>
+          </div>
 
-            <div className="flex flex-wrap items-start gap-x-5 gap-y-3 lg:justify-end">
-              <SegmentedField
-                label="Grid size"
-                tooltipTitle="Grid size"
-                tooltipBody="Sets the build volume. Larger grids give the model more room for detail and variation, which broadens the output range and helps keep the benchmark from getting saturated."
-                className="min-w-[220px] flex-1 sm:min-w-[240px]"
-              >
-                <SegmentedControl
-                  value={String(gridSize)}
-                  onChange={(value) => setGridSize(Number(value) as GridSize)}
-                  options={[
-                    {
-                      value: "64",
-                      label: (
-                        <span className="inline-flex items-start">
-                          <span>64</span>
-                          <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                        </span>
-                      ),
-                    },
-                    {
-                      value: "256",
-                      label: (
-                        <span className="inline-flex items-start">
-                          <span>256</span>
-                          <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                        </span>
-                      ),
-                    },
-                    {
-                      value: "512",
-                      label: (
-                        <span className="inline-flex items-start">
-                          <span>512</span>
-                          <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-              </SegmentedField>
-              <SegmentedField
-                label="Block palette"
-                tooltipTitle="Block palette"
-                tooltipBody="Sets the selection of blocks available to the model. Simple keeps the block set tight. Advanced unlocks a wider palette for richer, more varied builds."
-                tooltipAlign="right"
-                className="min-w-[210px] flex-1 sm:min-w-[230px]"
-              >
-                <SegmentedControl
-                  value={palette}
-                  onChange={(value) => setPalette(value as Palette)}
-                  options={[
-                    { value: "simple", label: "Simple" },
-                    { value: "advanced", label: "Advanced" },
-                  ]}
-                />
-              </SegmentedField>
-            </div>
+          <div className="flex flex-wrap items-start gap-x-5 gap-y-3 lg:justify-end">
+            <SegmentedField
+              label="Grid size"
+              hint="Larger grids allow more detail."
+              className="min-w-[220px] flex-1 sm:min-w-[240px]"
+            >
+              <SegmentedControl
+                value={String(gridSize)}
+                onChange={(value) => setGridSize(Number(value) as GridSize)}
+                options={[
+                  {
+                    value: "64",
+                    label: (
+                      <span className="inline-flex items-start">
+                        <span>64</span>
+                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                      </span>
+                    ),
+                  },
+                  {
+                    value: "256",
+                    label: (
+                      <span className="inline-flex items-start">
+                        <span>256</span>
+                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                      </span>
+                    ),
+                  },
+                  {
+                    value: "512",
+                    label: (
+                      <span className="inline-flex items-start">
+                        <span>512</span>
+                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </SegmentedField>
+            <SegmentedField
+              label="Block palette"
+              hint="Advanced unlocks a wider block set."
+              className="min-w-[210px] flex-1 sm:min-w-[230px]"
+            >
+              <SegmentedControl
+                value={palette}
+                onChange={(value) => setPalette(value as Palette)}
+                options={[
+                  { value: "simple", label: "Simple" },
+                  { value: "advanced", label: "Advanced" },
+                ]}
+              />
+            </SegmentedField>
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
-        <div className="mb-panel h-full p-4">
-          <div className="mb-panel-inner h-full">
-            <div className="flex h-full flex-col rounded-2xl border border-border/70 bg-bg/20">
-              <div className="p-3 sm:p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-fg">System prompt</div>
-                    <div className="text-xs text-muted">
-                      Here&apos;s the default system prompt the official benchmark uses. Feel free to play around with
-                      it.
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CopyButton
-                      label="Copy system"
-                      text={systemPrompt}
-                      tone="ghost"
-                      icon={
-                        <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-                          <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                          <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                        </svg>
-                      }
-                    />
-                    <button
-                      type="button"
-                      className="mb-btn mb-btn-ghost h-8 w-8 rounded-full p-0 text-muted sm:h-9 sm:w-9"
-                      disabled={systemIsDefault}
-                      onClick={() => {
-                        setSystemPrompt(defaultSystem);
-                        setSystemIsDefault(true);
-                      }}
-                      title="Reset system prompt"
-                    >
-                      <svg
-                        aria-hidden="true"
-                        className="h-4 w-4"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                      >
-                        <path d="M20 12a8 8 0 1 1-2.34-5.66" strokeLinecap="round" strokeLinejoin="round" />
-                        <path d="M20 4v6h-6" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </button>
-                  </div>
+        <div className="mb-panel flex h-full flex-col">
+          <div className="flex flex-1 flex-col p-4 sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-fg">System prompt</div>
+                <div className="text-xs text-muted">
+                  This is what the benchmark uses. Edit freely — the default is one click away.
                 </div>
-
-                <textarea
-                  className="mb-field mt-3 min-h-[178px] font-mono text-[12px] leading-snug"
-                  value={systemPrompt}
-                  spellCheck={false}
-                  onChange={(e) => {
-                    setSystemIsDefault(false);
-                    setSystemPrompt(e.target.value);
+              </div>
+              <div className="flex items-center gap-2">
+                <CopyButton
+                  label="Copy system"
+                  text={systemPrompt}
+                  tone="ghost"
+                  icon={
+                    <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                      <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                      <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                    </svg>
+                  }
+                />
+                <button
+                  type="button"
+                  className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+                  disabled={systemIsDefault}
+                  onClick={() => {
+                    setSystemPrompt(defaultSystem);
+                    setSystemIsDefault(true);
                   }}
-                />
+                >
+                  Reset
+                </button>
               </div>
+            </div>
 
-              <div className="border-t border-border/70" />
+            <textarea
+              aria-label="System prompt"
+              className="mb-field mt-3 min-h-[178px] flex-1 font-mono text-[12px] leading-snug"
+              value={systemPrompt}
+              spellCheck={false}
+              onChange={(e) => {
+                setSystemIsDefault(false);
+                setSystemPrompt(e.target.value);
+              }}
+            />
+          </div>
 
-              <div className="p-3 sm:p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-fg">User prompt</div>
-                    <div className="text-xs text-muted">The actual object you want the model to build.</div>
-                  </div>
-                  <CopyButton
-                    label="Copy both"
-                    text={combinedPrompt}
-                    disabled={!taskPrompt.trim()}
-                    tone="primary"
-                    icon={
-                      <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-                        <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                        <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                      </svg>
-                    }
-                  />
-                </div>
+          <div className="border-t border-border/70" />
 
-                <input
-                  className="mb-field mt-3 h-10"
-                  value={taskPrompt}
-                  onChange={(e) => setTaskPrompt(e.target.value)}
-                  placeholder="Describe the build..."
-                />
-                <div className="mt-2 min-h-[142px] rounded-xl border border-border/70 bg-bg/40 p-3 font-mono text-[12px] leading-snug text-muted">
-                  {taskPrompt.trim() ? (
-                    <pre className="max-h-56 overflow-auto whitespace-pre-wrap">{userPrompt}</pre>
-                  ) : (
-                    <div className="text-muted">Add a task prompt to generate the user message.</div>
-                  )}
-                </div>
+          <div className="p-4 sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-fg">User prompt</div>
+                <div className="text-xs text-muted">What you want the model to build.</div>
               </div>
+              <CopyButton
+                label="Copy both"
+                text={combinedPrompt}
+                disabled={!taskPrompt.trim()}
+                tone="primary"
+                icon={
+                  <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                    <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                    <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                  </svg>
+                }
+              />
+            </div>
 
-              <div className="border-t border-border/70" />
+            <input
+              aria-label="User prompt — what to build"
+              className="mb-field mt-3 h-10"
+              value={taskPrompt}
+              onChange={(e) => setTaskPrompt(e.target.value)}
+              placeholder="Describe the build..."
+            />
+            <div className="mt-2 min-h-[142px] rounded-xl border border-border/70 bg-bg/40 p-3 font-mono text-[12px] leading-snug text-muted">
+              {taskPrompt.trim() ? (
+                <pre className="max-h-56 overflow-auto whitespace-pre-wrap">{userPrompt}</pre>
+              ) : (
+                <div className="text-muted">Describe the build above to see the full message.</div>
+              )}
+            </div>
 
-              <div className="p-3 sm:p-4">
-                <div className="text-sm font-semibold text-fg">
-                  Test Local Models or Try Directly On a Website (e.g. ChatGPT or Claude)
-                </div>
-                <div className="mt-1 text-xs leading-relaxed text-muted">
-                  Press the Copy Both button to copy the system prompt with your user prompt.
-                </div>
-                <div className="mt-2 text-xs leading-relaxed text-muted">
-                  Note: If you&apos;re generating the build through a site like chatgpt.com directly, add one final line
-                  asking for a downloadable JSON file or artifact attachment instead of raw JSON text. Otherwise the
-                  model will output just raw text and hit it&apos;s output limit.
-                </div>
-                <div className="mt-2 rounded-lg border border-border/70 bg-bg/45 p-2 font-mono text-[11px] leading-snug text-muted">
-                  Return only the final voxel object as a JSON file/artifact attachment.
-                </div>
-              </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-muted">
+              Running this through a chat UI (chatgpt.com, claude.ai, etc.)? Ask for a JSON file or artifact
+              attachment — otherwise the model will hit its output limit on raw text.
+            </p>
+            <div className="mt-1.5 rounded-lg border border-border/70 bg-bg/45 p-2 font-mono text-[11px] leading-snug text-muted">
+              Return only the final voxel object as a JSON file/artifact attachment.
             </div>
           </div>
         </div>
 
-        <div className="mb-panel p-4">
-          <div className="mb-panel-inner flex flex-col gap-3">
+        <div className="flex h-full flex-col gap-4">
+          <div className="mb-panel flex flex-col gap-3 p-4 sm:p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-fg">Render JSON</div>
-                <div className="text-xs text-muted">Paste model output and render with Cmd/Ctrl+Enter.</div>
+                <div className="text-sm font-semibold text-fg">Paste JSON</div>
+                <div className="text-xs text-muted">Drop the model&apos;s JSON output here. Cmd/Ctrl+Enter to render.</div>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -765,7 +703,8 @@ export function LocalLab() {
 
             <textarea
               ref={modelOutputRef}
-              className="mb-field min-h-[150px] font-mono text-[12px] leading-snug"
+              aria-label="Paste model JSON output"
+              className="mb-field min-h-[150px] flex-1 font-mono text-[12px] leading-snug"
               placeholder='{"version":"1.0","boxes":[],"lines":[],"blocks":[{"x":0,"y":0,"z":0,"type":"stone"}]}'
               spellCheck={false}
               onPaste={(e) => {
@@ -777,9 +716,7 @@ export function LocalLab() {
                 if (modelOutputRef.current) modelOutputRef.current.value = "";
                 setInputStats({ mode: "buffered", chars: pasted.length });
                 setStatusNote(
-                  `Large paste buffered (${formatCompactCount(pasted.length)} chars, ~${formatApproxMbFromChars(
-                    pasted.length,
-                  )}).`,
+                  `Large paste ready (~${formatApproxMbFromChars(pasted.length)}).`,
                 );
               }}
               onChange={(e) => {
@@ -799,15 +736,15 @@ export function LocalLab() {
 
             {inputStats.mode !== "empty" ? (
               <div className="text-[11px] text-muted">
-                {inputStats.mode === "buffered" ? "Buffered paste" : "Editor input"}:{" "}
                 {formatCompactCount(inputStats.chars)} chars (~{formatApproxMbFromChars(inputStats.chars)})
+                {inputStats.mode === "buffered" ? " held in memory" : ""}
               </div>
             ) : null}
 
-            {statusNote ? <div className="mb-subpanel p-3 text-xs text-muted">{statusNote}</div> : null}
-
             {rendered.kind === "error" && rendered.message ? (
               <div className="mb-subpanel p-3 text-sm text-danger">{rendered.message}</div>
+            ) : statusNote ? (
+              <div className="mb-subpanel p-3 text-xs text-muted">{statusNote}</div>
             ) : null}
 
             {rendered.kind === "ready" && rendered.warnings.length ? (
@@ -824,40 +761,39 @@ export function LocalLab() {
                 </ul>
               </div>
             ) : null}
-
-            <VoxelViewerCard
-              title="Preview"
-              voxelBuild={
-                rendered.kind === "ready" || rendered.kind === "loading" ? rendered.build : null
-              }
-              gridSize={gridSize}
-              palette={palette}
-              autoRotate
-              isLoading={rendered.kind === "loading"}
-              loadingMessage={loadingMessage}
-              loadingProgress={rendered.kind === "loading" ? rendered.progress ?? undefined : undefined}
-              skipValidation={rendered.kind === "loading"}
-              viewerRef={previewViewerRef}
-              actions={
-                <SandboxGifExportButton
-                  targets={previewExportTargets}
-                  promptText={taskPrompt}
-                  label="Export GIF"
-                  iconOnly
-                />
-              }
-              metrics={
-                rendered.kind === "ready" || rendered.kind === "loading"
-                  ? {
-                      blockCount:
-                        rendered.progress?.receivedBlocks ?? rendered.build?.blocks.length ?? 0,
-                      warnings: rendered.warnings,
-                      generationTimeMs: 0,
-                    }
-                  : undefined
-              }
-            />
           </div>
+
+          <VoxelViewerCard
+            title="Preview"
+            voxelBuild={
+              rendered.kind === "ready" || rendered.kind === "loading" ? rendered.build : null
+            }
+            gridSize={gridSize}
+            palette={palette}
+            autoRotate
+            isLoading={rendered.kind === "loading"}
+            loadingMessage={loadingMessage}
+            loadingProgress={rendered.kind === "loading" ? rendered.progress ?? undefined : undefined}
+            skipValidation={rendered.kind === "loading"}
+            viewerRef={previewViewerRef}
+            actions={
+              <SandboxGifExportButton
+                targets={previewExportTargets}
+                promptText={taskPrompt}
+                label="Export GIF"
+                iconOnly
+              />
+            }
+            metrics={
+              rendered.kind === "ready" || rendered.kind === "loading"
+                ? {
+                    blockCount:
+                      rendered.progress?.receivedBlocks ?? rendered.build?.blocks.length ?? 0,
+                    warnings: rendered.warnings,
+                  }
+                : undefined
+            }
+          />
         </div>
       </div>
     </div>

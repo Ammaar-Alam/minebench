@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import type {
   ModelDetailStats,
@@ -29,8 +29,6 @@ const CHART_PAD_LEFT = 28;
 const CHART_PAD_RIGHT = 24;
 const CHART_PAD_TOP = 16;
 const CHART_PAD_BOTTOM = 34;
-const HERO_MOTIF_WIDTH = 1100;
-const HERO_MOTIF_HEIGHT = 154;
 const INITIAL_VISIBLE_OPPONENTS = 8;
 const INITIAL_VISIBLE_PROMPTS = 8;
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
@@ -403,10 +401,120 @@ function consistencyTone(consistency: number | null): string {
 }
 
 function scoreBarClass(score: number): string {
-  if (score >= 0.66) return "from-success/85 to-accent/85";
-  if (score >= 0.5) return "from-accent/85 to-accent2/85";
-  if (score >= 0.35) return "from-warn/85 to-accent2/78";
-  return "from-danger/85 to-warn/78";
+  if (score >= 0.66) return "bg-success/75";
+  if (score >= 0.5) return "bg-accent/75";
+  if (score >= 0.35) return "bg-warn/75";
+  return "bg-danger/75";
+}
+
+function winRateTone(value: number | null): string {
+  if (value == null) return "text-muted";
+  if (value >= 0.58) return "text-success";
+  if (value >= 0.45) return "text-accent";
+  return "text-warn";
+}
+
+function momentumTone(delta: number | null): string {
+  if (delta == null) return "text-muted";
+  if (delta > 0.005) return "text-success";
+  if (delta < -0.005) return "text-danger";
+  return "text-muted";
+}
+
+function stabilityTextClass(stability: string): string {
+  if (stability === "Stable") return "text-success";
+  if (stability === "Established") return "text-accent";
+  return "text-warn";
+}
+
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduced(mq.matches);
+    const listener = () => setReduced(mq.matches);
+    mq.addEventListener("change", listener);
+    return () => mq.removeEventListener("change", listener);
+  }, []);
+  return reduced;
+}
+
+// Counts from 0 → target on mount with ease-out-quart. null targets snap to
+// 0 so format helpers can still render "-" when they see null.
+function useCountUp(target: number | null, duration = 900): number {
+  const [current, setCurrent] = useState<number>(0);
+  const reduced = useReducedMotion();
+
+  useEffect(() => {
+    if (target == null) {
+      setCurrent(0);
+      return;
+    }
+    if (reduced) {
+      setCurrent(target);
+      return;
+    }
+
+    const start = performance.now();
+    let raf = 0;
+
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 4);
+      setCurrent(target * eased);
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, duration, reduced]);
+
+  return current;
+}
+
+function MomentumArrow({ delta }: { delta: number | null }) {
+  if (delta == null || Math.abs(delta) < 0.005) {
+    return (
+      <svg
+        className="h-3 w-3 shrink-0"
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path d="M2 6H10" />
+      </svg>
+    );
+  }
+  const up = delta > 0;
+  return (
+    <svg
+      className="h-3 w-3 shrink-0"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {up ? (
+        <>
+          <path d="M3 8L8.5 3" />
+          <path d="M4.5 3H8.5V7" />
+        </>
+      ) : (
+        <>
+          <path d="M3 3L8.5 8" />
+          <path d="M8.5 4V8H4.5" />
+        </>
+      )}
+    </svg>
+  );
 }
 
 function topStrongest(prompts: ModelPromptBreakdown[]) {
@@ -464,103 +572,104 @@ function buildCurve(values: number[]): {
   return { linePath, areaPath, points };
 }
 
-function buildHeroMotif(values: number[]): { linePath: string; areaPath: string } {
-  if (values.length === 0) return { linePath: "", areaPath: "" };
-
-  const padX = 28;
-  const padTop = 48;
-  const padBottom = 28;
-  const innerWidth = HERO_MOTIF_WIDTH - padX * 2;
-  const innerHeight = HERO_MOTIF_HEIGHT - padTop - padBottom;
-  const denom = Math.max(1, values.length - 1);
-
-  const points = values.map((value, index) => ({
-    x: padX + (index / denom) * innerWidth,
-    y: padTop + (1 - clamp01(value)) * innerHeight,
-  }));
-
-  const linePath = points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
-    .join(" ");
-
-  const baselineY = HERO_MOTIF_HEIGHT - padBottom;
-  const first = points[0];
-  const last = points[points.length - 1];
-  const areaPath = [
-    `M ${first.x.toFixed(2)} ${baselineY.toFixed(2)}`,
-    ...points.map((point) => `L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`),
-    `L ${last.x.toFixed(2)} ${baselineY.toFixed(2)}`,
-    "Z",
-  ].join(" ");
-
-  return { linePath, areaPath };
-}
-
 function MetricTile({
   label,
   value,
   sub,
   tone = "text-fg",
   valueClassName = "text-[1.72rem] font-semibold leading-tight tracking-tight",
+  leading,
 }: {
   label: string;
-  value: string;
-  sub?: string;
+  value: ReactNode;
+  sub?: ReactNode;
   tone?: string;
   valueClassName?: string;
+  leading?: ReactNode;
 }) {
   return (
     <div className="mb-metric-tile">
       <div className="text-[10px] uppercase tracking-[0.11em] text-muted">{label}</div>
-      <div className={`mt-0.5 ${valueClassName} ${tone}`}>
-        {value}
+      <div className={`mt-0.5 flex items-center gap-1.5 ${valueClassName} ${tone}`}>
+        {leading}
+        <span className="tabular-nums">{value}</span>
       </div>
       {sub ? <div className="mt-0.5 text-[11px] text-muted">{sub}</div> : null}
     </div>
   );
 }
 
-function ConsistencyGauge({ value, label }: { value: number | null; label: string }) {
-  const safe = Math.max(0, Math.min(100, value ?? 0));
-  const radius = 62;
+// Renders a number that counts up from 0 on mount. Pass a pre-formatted string
+// via `format` — handles trailing units ("%", "k") and sign prefixes cleanly.
+function AnimatedNumber({
+  value,
+  format,
+  duration = 900,
+}: {
+  value: number | null;
+  format: (current: number) => string;
+  duration?: number;
+}) {
+  const current = useCountUp(value, duration);
+  if (value == null) return <>-</>;
+  return <>{format(current)}</>;
+}
+
+function ConsistencyGauge({
+  value,
+  size = 148,
+}: {
+  value: number | null;
+  size?: number;
+}) {
+  // Single count-up source drives both the ring offset and the center number
+  // so they tick in lockstep. Ring keeps its own 700ms CSS transition for
+  // subsequent value changes — the mount animation uses the count-up value.
+  const animated = useCountUp(value, 1100);
+  const safe = Math.max(0, Math.min(100, animated));
+
+  // keep ring proportions constant across sizes — base design is 148px/r=62/stroke=9
+  const radius = (62 / 148) * size;
+  const strokeWidth = Math.max(4, (9 / 148) * size);
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - safe / 100);
+  const center = size / 2;
+  const numberSize = size >= 120 ? "text-[1.65rem]" : size >= 88 ? "text-[1.15rem]" : "text-[0.95rem]";
 
   return (
-    <div className="relative h-[148px] w-[148px] shrink-0">
-      <svg viewBox="0 0 160 160" className="h-full w-full">
+    <div
+      className="relative shrink-0"
+      style={{ height: `${size}px`, width: `${size}px` }}
+    >
+      <svg viewBox={`0 0 ${size} ${size}`} className="h-full w-full">
         <circle
-          cx="80"
-          cy="80"
+          cx={center}
+          cy={center}
           r={radius}
           fill="none"
           stroke="hsl(var(--border) / 0.45)"
-          strokeWidth="9"
+          strokeWidth={strokeWidth}
         />
         <circle
-          cx="80"
-          cy="80"
+          cx={center}
+          cy={center}
           r={radius}
           fill="none"
-          stroke="url(#mb-consistency-ring)"
-          strokeWidth="9"
+          stroke="hsl(var(--accent) / 0.9)"
+          strokeWidth={strokeWidth}
           strokeLinecap="round"
           strokeDasharray={`${circumference.toFixed(2)} ${circumference.toFixed(2)}`}
           strokeDashoffset={offset.toFixed(2)}
-          transform="rotate(-90 80 80)"
+          transform={`rotate(-90 ${center} ${center})`}
+          style={{ transition: "stroke-dashoffset 240ms cubic-bezier(0.22, 1, 0.36, 1)" }}
         />
-        <defs>
-          <linearGradient id="mb-consistency-ring" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="hsl(var(--accent) / 0.95)" />
-            <stop offset="100%" stopColor="hsl(var(--accent2) / 0.96)" />
-          </linearGradient>
-        </defs>
       </svg>
-      <div className="pointer-events-none absolute inset-[14px] flex flex-col items-center justify-center gap-1">
-        <div className={`text-[1.65rem] font-semibold leading-none ${consistencyTone(value)}`}>
-          {value != null ? `${value}` : "-"}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+        <div
+          className={`${numberSize} font-semibold leading-none tabular-nums ${consistencyTone(value)}`}
+        >
+          {value != null ? Math.round(animated) : "-"}
         </div>
-        <div className="mt-0.5 text-[7px] uppercase tracking-[0.19em] text-muted">{label}</div>
       </div>
     </div>
   );
@@ -573,7 +682,11 @@ function HeadToHeadCard({ opponent }: { opponent: ModelOpponentBreakdown }) {
   const drawPct = Math.max(0, 100 - winPct - lossPct);
 
   return (
-    <article className="mb-head-to-head-card mb-sheen-surface group">
+    <Link
+      href={`/leaderboard/${opponent.key}`}
+      className="mb-head-to-head-card mb-card-enter group block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      aria-label={`Open ${opponent.displayName} profile`}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-fg transition group-hover:text-accent">
@@ -597,7 +710,7 @@ function HeadToHeadCard({ opponent }: { opponent: ModelOpponentBreakdown }) {
         </span>
         <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">D {opponent.draws}</span>
       </div>
-    </article>
+    </Link>
   );
 }
 
@@ -795,18 +908,12 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
   const promptCurveValues = promptCurveSource.map((prompt) => prompt.averageScore);
   const curve = useMemo(() => buildCurve(promptCurveValues), [promptCurveValues]);
-  const heroMotif = useMemo(() => buildHeroMotif(promptCurveValues), [promptCurveValues]);
   const strongestCurveScore = promptCurveValues[0] ?? null;
   const weakestCurveScore = promptCurveValues[promptCurveValues.length - 1] ?? null;
-  const medianCurveScore =
-    promptCurveValues.length > 0
-      ? promptCurveValues[Math.floor((promptCurveValues.length - 1) / 2)]
-      : null;
 
   const bestPromptScore = strongest[0]?.averageScore ?? null;
   const weakPromptScore = weakest[0]?.averageScore ?? null;
   const voteSummary = summarizeArenaVotes(data.model);
-  const recordText = `${data.model.winCount}-${voteSummary.decisiveLossCount}-${data.model.drawCount}`;
   const decisiveVotes = voteSummary.decisiveVotes;
   const coveragePercent = Math.round((data.summary.promptCoverage ?? 0) * 100);
   const coverageLabel =
@@ -824,7 +931,6 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
       ),
     [data.prompts],
   );
-  const promptBuildCount = promptBreakdown.filter((prompt) => prompt.build != null).length;
   const maxPromptVotes = Math.max(1, ...promptBreakdown.map((prompt) => prompt.votes));
   const visibleOpponents = showAllOpponents
     ? opponents
@@ -968,235 +1074,244 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   return (
     <div className="mx-auto w-full max-w-[90rem] space-y-3.5 pb-10 sm:space-y-4 sm:pb-14">
       <section
-        className="mb-panel mb-card-enter relative isolate overflow-hidden bg-gradient-to-br from-card/84 via-card/72 to-card/58 p-3.5 sm:p-4"
-        style={{ animationDelay: "30ms" }}
+        className="mb-panel mb-card-enter relative isolate overflow-hidden p-4 before:hidden sm:p-5"
+        style={{ animationDelay: "0ms" }}
       >
-        <div aria-hidden="true" className="mb-hero-spread pointer-events-none absolute inset-0" />
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(44rem_22rem_at_8%_0%,hsl(var(--accent)/0.15),transparent_66%),radial-gradient(38rem_19rem_at_96%_0%,hsl(var(--accent2)/0.16),transparent_64%)]"
-        />
-        {heroMotif.linePath ? (
-          <svg
-            aria-hidden="true"
-            viewBox={`0 0 ${HERO_MOTIF_WIDTH} ${HERO_MOTIF_HEIGHT}`}
-            preserveAspectRatio="none"
-            className="pointer-events-none absolute inset-x-0 top-2 h-[116px] w-full opacity-60 motion-safe:opacity-85"
-            style={{ mixBlendMode: "screen" }}
-          >
-            <defs>
-              <linearGradient id="mb-hero-motif-line" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="hsl(var(--accent) / 0.52)" />
-                <stop offset="100%" stopColor="hsl(var(--accent2) / 0.50)" />
-              </linearGradient>
-              <linearGradient id="mb-hero-motif-area" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stopColor="hsl(var(--accent2) / 0.16)" />
-                <stop offset="100%" stopColor="hsl(var(--accent) / 0.00)" />
-              </linearGradient>
-            </defs>
-            <path d={heroMotif.areaPath} fill="url(#mb-hero-motif-area)" />
-            <path
-              d={heroMotif.linePath}
-              fill="none"
-              stroke="url(#mb-hero-motif-line)"
-              strokeWidth={2.2}
-              strokeLinecap="round"
-            />
-          </svg>
-        ) : null}
-
-        <div className="mb-panel-inner relative z-[1] space-y-2.5">
+        <div className="relative z-[1] space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2.5">
-            <div className="flex flex-wrap items-center gap-2">
-              <Link href="/leaderboard" aria-label="Back to leaderboard" className="mb-back-link">
-                <svg
-                  className="h-4 w-4"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M10 4L6 8L10 12" />
-                </svg>
-              </Link>
-            </div>
-            <div
-              className="mb-model-reveal mb-model-reveal-in rounded-full bg-bg/62 ring-border/75"
-              style={{ animationDelay: "90ms" }}
-            >
-              <span className="text-fg">{data.model.provider}</span>
-            </div>
+            <Link href="/leaderboard" aria-label="Back to leaderboard" className="mb-back-link">
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M10 4L6 8L10 12" />
+              </svg>
+            </Link>
+            <span className="mb-eyebrow">{data.model.provider}</span>
           </div>
 
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.9fr)] xl:items-stretch xl:gap-3">
-            <div className="space-y-3">
-              <h1 className="max-w-[20ch] font-display text-[2.3rem] font-semibold leading-[0.94] tracking-[-0.02em] text-fg sm:text-[3.7rem]">
+          <div className="space-y-4">
+            {/* Hero name + meta in a single flex row. On wide screens the meta
+               pushes to the far right at the name's baseline so the dead
+               space next to the display-type is used; on mobile it wraps
+               underneath. */}
+            <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
+              <h1 className="max-w-[18ch] font-display text-[2.1rem] font-semibold leading-[0.96] tracking-[-0.02em] text-fg sm:text-[3.2rem]">
                 {data.model.displayName}
               </h1>
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="mb-model-stat-pill mb-model-stat-pill-neutral mb-model-reveal mb-model-reveal-in">
-                  <span className="font-mono text-[13px] font-semibold">
+              {/* Colorized meta — stability takes its colored dot+word, the
+                 record W–L–D becomes three tinted tokens so you can read
+                 the result at a glance instead of parsing one gray string. */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pb-1 font-mono text-[11px] text-muted2 sm:ml-auto sm:justify-end">
+                <span className="inline-flex items-center gap-1.5">
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      data.model.stability === "Stable"
+                        ? "bg-success"
+                        : data.model.stability === "Established"
+                          ? "bg-accent"
+                          : "bg-warn"
+                    }`}
+                  />
+                  <span
+                    className={`capitalize ${stabilityTextClass(data.model.stability)}`}
+                  >
                     {data.model.stability}
                   </span>
-                </div>
-                <div className="mb-model-stat-pill mb-model-stat-pill-success mb-model-reveal mb-model-reveal-in">
-                  <span className="font-mono text-[13px] font-semibold">Record {recordText}</span>
-                </div>
-                <div
-                  className="mb-model-stat-pill mb-model-stat-pill-neutral mb-model-reveal mb-model-reveal-in"
-                  style={{ animationDelay: "55ms" }}
-                >
-                  <span className="font-mono text-[13px] font-semibold">
-                    Decisive {decisiveVotes.toLocaleString()}
-                  </span>
-                </div>
-                <div
-                  className="mb-model-stat-pill mb-model-stat-pill-danger mb-model-reveal mb-model-reveal-in"
-                  style={{ animationDelay: "95ms" }}
-                >
-                  <span className="font-mono text-[13px] font-semibold">
-                    Both bad {data.model.bothBadCount.toLocaleString()}
-                  </span>
-                </div>
+                </span>
+                <span className="text-muted/30">·</span>
+                <span className="inline-flex items-baseline gap-1">
+                  <span className="text-muted">Record</span>
+                  <span className="text-success">{data.model.winCount}</span>
+                  <span className="text-muted/40">–</span>
+                  <span className="text-danger">{voteSummary.decisiveLossCount}</span>
+                  <span className="text-muted/40">–</span>
+                  <span className="text-muted">{data.model.drawCount}</span>
+                </span>
+                <span className="text-muted/30">·</span>
+                <span>
+                  <span className="text-accent">{decisiveVotes.toLocaleString()}</span>{" "}
+                  decisive votes
+                </span>
+                {data.model.bothBadCount > 0 ? (
+                  <>
+                    <span className="text-muted/30">·</span>
+                    <span>
+                      <span className="text-warn">
+                        {data.model.bothBadCount.toLocaleString()}
+                      </span>{" "}
+                      both-bad
+                    </span>
+                  </>
+                ) : null}
               </div>
+            </div>
 
-              <div className="rounded-[1.2rem] bg-gradient-to-br from-accent/[0.09] via-transparent to-accent2/[0.12] p-px">
-                <div className="rounded-[1.12rem] bg-bg/45 p-1.5 ring-1 ring-border/70">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                    <MetricTile
-                      label="Rank score"
-                      value={`${Math.round(data.model.rankScore)}`}
-                      sub={`Raw ${Math.round(data.model.eloRating)}`}
+              {/* Flat 8-metric grid — the canonical source of this page's
+                 stats. Recent form + Momentum were living in a separate
+                 signal-snapshot panel; consolidated here so we don't have
+                 two competing stat layouts. */}
+              {/* Flat typographic grid — no boxes. Separators come from the
+                 shared label row + subtle dividers between columns so the
+                 eye reads them as one rhythm of numbers instead of eight
+                 identical cards. */}
+              <div className="mb-metric-row">
+                <MetricTile
+                  label="Rank score"
+                  tone="text-accent"
+                  value={
+                    <AnimatedNumber
+                      value={data.model.rankScore}
+                      format={(v) => Math.round(v).toLocaleString()}
                     />
-                    <MetricTile
-                      label="Confidence"
-                      value={`${data.model.confidence}%`}
-                      sub={`RD ${Math.round(data.model.ratingDeviation)}`}
+                  }
+                  sub={`Raw ${Math.round(data.model.eloRating).toLocaleString()}`}
+                />
+                <MetricTile
+                  label="Confidence"
+                  value={
+                    <AnimatedNumber
+                      value={data.model.confidence}
+                      format={(v) => `${Math.round(v)}%`}
                     />
-                    <MetricTile label="Coverage" value={`${coveragePercent}%`} sub={coverageLabel} />
-                    <MetricTile label="Win rate" value={formatPercent(data.summary.winRate)} />
-                    <MetricTile label="Spread" value={formatPercent(data.summary.scoreSpread)} />
-                    <MetricTile label="Votes" value={data.summary.totalVotes.toLocaleString()} />
-                    <MetricTile
-                      label="Stability"
-                      value={data.model.stability}
-                      valueClassName="text-[1.2rem] font-semibold leading-tight tracking-tight"
-                      tone={
-                        data.model.stability === "Stable"
-                          ? "text-success"
-                          : data.model.stability === "Established"
-                            ? "text-accent"
-                            : "text-warn"
+                  }
+                  sub={`RD ${Math.round(data.model.ratingDeviation)}`}
+                />
+                <MetricTile
+                  label="Coverage"
+                  value={
+                    <AnimatedNumber
+                      value={coveragePercent}
+                      format={(v) => `${Math.round(v)}%`}
+                    />
+                  }
+                  sub={coverageLabel}
+                />
+                <MetricTile
+                  label="Win rate"
+                  tone={winRateTone(data.summary.winRate)}
+                  value={
+                    <AnimatedNumber
+                      value={data.summary.winRate == null ? null : data.summary.winRate * 100}
+                      format={(v) => `${Math.round(v)}%`}
+                    />
+                  }
+                />
+                <MetricTile
+                  label="Spread"
+                  value={
+                    <AnimatedNumber
+                      value={
+                        data.summary.scoreSpread == null ? null : data.summary.scoreSpread * 100
                       }
+                      format={(v) => `${Math.round(v)}%`}
                     />
-                    <MetricTile
-                      label="Quality floor"
-                      value={formatPercent(data.summary.qualityFloorScore)}
+                  }
+                />
+                <MetricTile
+                  label="Votes"
+                  value={
+                    <AnimatedNumber
+                      value={data.summary.totalVotes}
+                      format={(v) => Math.round(v).toLocaleString()}
                     />
-                  </div>
-                </div>
+                  }
+                />
+                <MetricTile
+                  label="Recent form"
+                  value={
+                    <AnimatedNumber
+                      value={
+                        data.summary.recentForm == null ? null : data.summary.recentForm * 100
+                      }
+                      format={(v) => `${Math.round(v)}%`}
+                    />
+                  }
+                />
+                <MetricTile
+                  label="Momentum"
+                  tone={momentumTone(data.summary.recentDelta)}
+                  leading={<MomentumArrow delta={data.summary.recentDelta} />}
+                  value={
+                    data.summary.recentDelta == null ? (
+                      "-"
+                    ) : (
+                      <AnimatedNumber
+                        value={data.summary.recentDelta * 100}
+                        format={(v) => {
+                          const sign = v > 0 ? "+" : "";
+                          return `${sign}${v.toFixed(1)}%`;
+                        }}
+                      />
+                    )
+                  }
+                />
               </div>
             </div>
-
-            <div className="mb-profile-snapshot self-stretch h-full rounded-2xl bg-gradient-to-b from-card/82 to-card/50 p-3 ring-1 ring-white/12 shadow-[0_36px_52px_-52px_hsl(220_40%_2%_/_1)] backdrop-blur-sm sm:p-3.5 flex flex-col justify-between gap-4">
-              <div className="text-[10px] uppercase tracking-[0.16em] text-muted">
-                Signal snapshot
-              </div>
-              <div className="mt-2.5 flex-1">
-                <div className="grid auto-rows-min items-start gap-3 sm:grid-cols-[auto_1fr] sm:gap-3">
-                  <ConsistencyGauge value={data.summary.consistency} label="Consistency" />
-                  <div className="grid auto-rows-min grid-cols-2 gap-2">
-                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                      <div className="text-[11px] text-muted">Best prompt</div>
-                      <div className="font-mono text-base text-success">
-                        {formatPercent(bestPromptScore)}
-                      </div>
-                    </div>
-                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                      <div className="text-[11px] text-muted">Weakest prompt</div>
-                      <div className="font-mono text-base text-danger">
-                        {formatPercent(weakPromptScore)}
-                      </div>
-                    </div>
-                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                      <div className="text-[11px] text-muted">Recent form</div>
-                      <div className="font-mono text-base text-fg">
-                        {formatPercent(data.summary.recentForm)}
-                      </div>
-                    </div>
-                    <div className="min-h-[68px] rounded-xl bg-card/65 px-3 py-2.5 ring-1 ring-border/55">
-                      <div className="text-[11px] text-muted">Momentum</div>
-                      <div
-                        className={`font-mono text-base ${
-                          data.summary.recentDelta == null
-                            ? "text-muted"
-                            : data.summary.recentDelta >= 0
-                              ? "text-success"
-                              : "text-danger"
-                        }`}
-                      >
-                        {formatSignedPercent(data.summary.recentDelta)}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="text-xs text-muted">
-                {consistencyLabel(data.summary.consistency)}
-              </div>
-            </div>
-          </div>
         </div>
       </section>
 
       <div className="grid grid-cols-1 gap-3.5 xl:grid-cols-[1.34fr_0.66fr] xl:gap-4">
         <section
           id="spread-curve"
-          className="mb-panel mb-section-shell mb-card-enter overflow-hidden p-3.5 sm:p-4"
-          style={{ animationDelay: "90ms" }}
+          className="mb-panel mb-card-enter overflow-hidden p-4 before:hidden sm:p-5"
+          style={{ animationDelay: "50ms" }}
         >
-          <div className="mb-panel-inner space-y-3">
-            <SectionHeader
-              eyebrow="Distribution"
-              title="Prompt spread curve"
-              meta={
-                promptCurveValues.length > 0
-                  ? `${promptCurveValues.length} ranked prompts`
-                  : "Waiting for prompt data"
-              }
-            />
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-              <div className="rounded-xl bg-gradient-to-b from-bg/60 to-bg/42 px-3 py-2 ring-1 ring-border/65">
-                <div className="text-[10px] uppercase tracking-[0.12em] text-muted">Strongest</div>
-                <div className="font-mono text-sm text-success">
-                  {formatPercent(strongestCurveScore)}
+          <div className="space-y-3.5">
+            {/* Custom header — SectionHeader inlined so the consistency gauge
+               can sit next to it as contextual aside. Gauge here instead of
+               in the hero because consistency is a summary of this curve's
+               flatness; the two belong together, not in separate panels. */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-[0.14em] text-muted">Distribution</div>
+                <div className="text-[1.12rem] font-semibold leading-tight text-fg">
+                  Prompt spread curve
+                </div>
+                <div className="mt-1 font-mono text-[11px] text-muted2">
+                  {promptCurveValues.length > 0
+                    ? `${promptCurveValues.length} prompts · ${formatPercent(strongestCurveScore)} → ${formatPercent(weakestCurveScore)}`
+                    : "Waiting for prompt data"}
                 </div>
               </div>
-              <div className="rounded-xl bg-gradient-to-b from-bg/60 to-bg/42 px-3 py-2 ring-1 ring-border/65">
-                <div className="text-[10px] uppercase tracking-[0.12em] text-muted">Median</div>
-                <div className="font-mono text-sm text-fg">{formatPercent(medianCurveScore)}</div>
-              </div>
-              <div className="rounded-xl bg-gradient-to-b from-bg/60 to-bg/42 px-3 py-2 ring-1 ring-border/65">
-                <div className="text-[10px] uppercase tracking-[0.12em] text-muted">Weakest</div>
-                <div className="font-mono text-sm text-danger">
-                  {formatPercent(weakestCurveScore)}
+              <div className="flex shrink-0 items-center gap-2.5">
+                <ConsistencyGauge value={data.summary.consistency} size={72} />
+                <div className="flex flex-col">
+                  <span className="text-[10px] uppercase tracking-[0.14em] text-muted">
+                    Consistency
+                  </span>
+                  <span className="text-[11px] text-muted2">
+                    {consistencyLabel(data.summary.consistency)}
+                  </span>
                 </div>
               </div>
             </div>
-            <div className="rounded-[1.1rem] bg-gradient-to-br from-accent/14 via-transparent to-accent2/14 p-px">
-              <div className="rounded-2xl bg-bg/45 p-3 ring-1 ring-border/70 sm:p-3.5">
+            {/* Chart: accent-to-accent2 stroke stays here — this is the one
+               place the bi-color encodes real meaning (strongest→weakest).
+               No outer card — the SVG's own plot-area rect is container
+               enough; the nested ring was the second-order box we kept
+               tripping over. */}
+            <div className="pt-1">
                 {curve.points.length > 0 ? (
-                  <div className="relative">
-                    <svg
-                      viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-                      preserveAspectRatio="none"
-                      className="h-[284px] w-full"
-                      role="img"
-                      aria-label="Prompt spread curve from strongest to weakest prompts"
-                    >
+                  <div>
+                    {/* Inner wrapper sized exactly to the SVG so the absolute
+                       dot buttons position against a height that matches the
+                       plotted area — not against the legend's extra height. */}
+                    <div className="relative h-[284px]">
+                      <svg
+                        viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
+                        preserveAspectRatio="none"
+                        className="h-full w-full"
+                        role="img"
+                        aria-label="Prompt spread curve from strongest to weakest prompts"
+                      >
                       <defs>
                         <linearGradient
                           id="mb-profile-curve-line"
@@ -1263,7 +1378,11 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         );
                       })}
 
-                      <path d={curve.areaPath} fill="url(#mb-profile-curve-area)" />
+                      <path
+                        d={curve.areaPath}
+                        fill="url(#mb-profile-curve-area)"
+                        className="mb-curve-area-fade"
+                      />
                       <path
                         d={curve.linePath}
                         fill="none"
@@ -1271,6 +1390,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         strokeWidth={3.5}
                         strokeLinecap="round"
                         strokeLinejoin="round"
+                        pathLength={1}
+                        className="mb-curve-line-draw"
                       />
 
                       <circle
@@ -1280,6 +1401,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         fill="hsl(var(--accent) / 0.95)"
                         stroke="hsl(var(--bg))"
                         strokeWidth={2}
+                        className="mb-curve-endpoint"
                       />
                       <circle
                         cx={curve.points[curve.points.length - 1]?.x}
@@ -1288,6 +1410,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         fill="hsl(var(--warn) / 0.95)"
                         stroke="hsl(var(--bg))"
                         strokeWidth={2}
+                        className="mb-curve-endpoint"
                       />
                     </svg>
 
@@ -1334,6 +1457,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         </div>
                       </div>
                     ) : null}
+                    </div>
 
                     <div className="mt-2 flex items-center justify-between text-xs text-muted">
                       <span>Strongest prompts</span>
@@ -1347,16 +1471,15 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   </div>
                 )}
               </div>
-            </div>
           </div>
         </section>
 
         <section
           id="prompt-highs-lows"
-          className="mb-panel mb-section-shell mb-card-enter overflow-hidden p-3.5 sm:p-4"
-          style={{ animationDelay: "130ms" }}
+          className="mb-panel mb-card-enter overflow-hidden p-4 before:hidden sm:p-5"
+          style={{ animationDelay: "90ms" }}
         >
-          <div className="mb-panel-inner space-y-3">
+          <div className="space-y-3.5">
             <SectionHeader eyebrow="Signal edges" title="Prompt highs and lows" />
             <div className="grid gap-5 lg:grid-cols-2">
               <div>
@@ -1409,24 +1532,18 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
       <section
         id="head-to-head"
-        className="mb-panel mb-section-shell mb-card-enter overflow-hidden p-3.5 sm:p-4"
-        style={{ animationDelay: "170ms" }}
+        className="mb-panel mb-card-enter overflow-hidden p-4 before:hidden sm:p-5"
+        style={{ animationDelay: "130ms" }}
       >
-        <div className="mb-panel-inner space-y-3">
+        <div className="space-y-3.5">
           <SectionHeader
             eyebrow="Matchups"
             title="Head-to-head"
             meta={`${data.opponents.length} opponents`}
           />
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
-            {visibleOpponents.map((opponent, index) => (
-              <div
-                key={opponent.key}
-                className="mb-card-enter"
-                style={{ animationDelay: `${180 + index * 26}ms` }}
-              >
-                <HeadToHeadCard opponent={opponent} />
-              </div>
+            {visibleOpponents.map((opponent) => (
+              <HeadToHeadCard key={opponent.key} opponent={opponent} />
             ))}
             {opponents.length === 0 ? (
               <div className="text-sm text-muted xl:col-span-3">Not enough signal yet.</div>
@@ -1449,10 +1566,10 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
       <section
         id="prompt-breakdown"
-        className="mb-panel mb-section-shell mb-card-enter overflow-hidden p-3.5 sm:p-4"
-        style={{ animationDelay: "210ms" }}
+        className="mb-panel mb-card-enter overflow-hidden p-4 before:hidden sm:p-5"
+        style={{ animationDelay: "170ms" }}
       >
-        <div className="mb-panel-inner space-y-3">
+        <div className="space-y-3.5">
           <SectionHeader
             eyebrow="Per prompt"
             title="Prompt breakdown"
@@ -1460,48 +1577,6 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           />
 
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-            {promptBreakdown.length > 0 ? (
-              <article
-                className="mb-breakdown-summary mb-card-enter xl:col-span-2"
-                style={{ animationDelay: "230ms" }}
-              >
-                <div className="mb-breakdown-summary-head">
-                  <div className="text-[10px] uppercase tracking-[0.15em] text-muted">
-                    At a glance
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                  <div className="mb-breakdown-summary-tile">
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
-                      Strongest
-                    </div>
-                    <div className="font-mono text-sm text-success">
-                      {formatPercent(bestPromptScore)}
-                    </div>
-                  </div>
-                  <div className="mb-breakdown-summary-tile">
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">Median</div>
-                    <div className="font-mono text-sm text-fg">
-                      {formatPercent(medianCurveScore)}
-                    </div>
-                  </div>
-                  <div className="mb-breakdown-summary-tile">
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
-                      Weakest
-                    </div>
-                    <div className="font-mono text-sm text-danger">
-                      {formatPercent(weakPromptScore)}
-                    </div>
-                  </div>
-                  <div className="mb-breakdown-summary-tile">
-                    <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
-                      Builds
-                    </div>
-                    <div className="font-mono text-sm text-fg">{promptBuildCount}</div>
-                  </div>
-                </div>
-              </article>
-            ) : null}
             {visiblePromptBreakdown.map((prompt, index) => {
               const voteDensity = prompt.votes / maxPromptVotes;
               return (
@@ -1516,8 +1591,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                     event.preventDefault();
                     setActivePrompt(prompt);
                   }}
-                  className="relative mb-card-enter h-full cursor-pointer rounded-2xl bg-gradient-to-b from-bg/56 to-bg/40 p-3.5 ring-1 ring-border/70 transition-all duration-200 hover:-translate-y-0.5 hover:ring-accent/45 hover:from-bg/62 hover:to-bg/44 hover:shadow-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:p-4"
-                  style={{ animationDelay: `${240 + index * 18}ms` }}
+                  className="relative mb-card-enter h-full cursor-pointer rounded-2xl bg-bg/40 p-3.5 ring-1 ring-border/60 transition duration-200 hover:-translate-y-0.5 hover:bg-bg/55 hover:ring-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:p-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
@@ -1540,7 +1614,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                     <div className="flex items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
                         <div
-                          className={`h-full rounded-full bg-gradient-to-r ${scoreBarClass(prompt.averageScore)}`}
+                          className={`h-full rounded-full ${scoreBarClass(prompt.averageScore)}`}
                           style={{
                             width: `${Math.max(0, Math.min(100, prompt.averageScore * 100)).toFixed(1)}%`,
                           }}
@@ -1623,10 +1697,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             className="relative w-full max-w-3xl overflow-hidden rounded-3xl bg-card/92 shadow-soft ring-1 ring-border backdrop-blur-xl"
           >
             <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
-              <div className="mb-badge">
-                <span className="mb-dot" />
-                <span className="text-fg">Prompt</span>
-              </div>
+              <span className="mb-eyebrow">Prompt</span>
               <button
                 type="button"
                 className="mb-btn mb-btn-ghost h-9 rounded-full px-4 text-xs"
