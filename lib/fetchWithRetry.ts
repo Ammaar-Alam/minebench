@@ -90,14 +90,56 @@ function makeComposedSignal(parent: AbortSignal | undefined, timeoutMs: number):
     if (parent.aborted) controller.abort();
     else parent.addEventListener("abort", onParentAbort, { once: true });
   }
+  let cleanedUp = false;
   return {
     signal: controller.signal,
     cleanup: () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       clearTimeout(timer);
       parent?.removeEventListener("abort", onParentAbort);
     },
     didTimeout: () => timedOut,
   };
+}
+
+// Wrap a response body so the composed timeout stays armed until the body
+// is fully consumed. fetch resolves once headers arrive — without this,
+// a server that sends 200 OK then stalls the body would never trigger
+// timeoutMs, and callers parsing with r.json() outside fetchWithRetry
+// would hang indefinitely.
+function guardResponseBody(res: Response, onDone: () => void): Response {
+  if (!res.body) {
+    onDone();
+    return res;
+  }
+  const source = res.body;
+  const guarded = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const reader = source.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      } finally {
+        onDone();
+      }
+    },
+    cancel(reason) {
+      onDone();
+      return source.cancel(reason);
+    },
+  });
+  return new Response(guarded, {
+    status: res.status,
+    statusText: res.statusText,
+    headers: res.headers,
+  });
 }
 
 async function readErrorText(res: Response): Promise<string> {
@@ -180,9 +222,12 @@ export async function fetchWithRetry(input: RequestInfo | URL, options: FetchWit
         const res = await fetch(input, { ...init, signal: composed.signal });
         if (slowTimer) clearTimeout(slowTimer);
         if (res.ok) {
-          composed.cleanup();
           recordApiSuccess(endpoint);
-          return res;
+          // Don't cleanup yet — keep the timeout + parent-abort listener
+          // armed through body consumption. guardResponseBody hooks cleanup
+          // to the stream's close/cancel/error so a body that stalls after
+          // headers still trips timeoutMs (and cancellation still propagates).
+          return guardResponseBody(res, composed.cleanup);
         }
         const message = await readErrorText(res);
         composed.cleanup();

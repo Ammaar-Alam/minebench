@@ -1839,7 +1839,7 @@ export function Arena() {
                 <path d="M12 17h.01" />
               </svg>
               <span className="min-w-0 break-words">
-                Vote didn&apos;t save: {voteWarning} We&apos;ve moved you to the next matchup.
+                Vote didn&apos;t save: {voteWarning} Try voting again.
               </span>
               <button
                 type="button"
