@@ -5,6 +5,10 @@ export type GeminiThinkingConfig = {
   thinkingBudget?: number;
 };
 
+export type MoonshotThinkingConfig = {
+  type: "enabled" | "disabled";
+};
+
 function normalizeReasoningOverride(value?: string): string | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized ? normalized : undefined;
@@ -114,6 +118,33 @@ export function geminiThinkingConfigForModel(
     throw new Error(`Gemini model ${modelId} does not expose a thinking override.`);
   }
   return undefined;
+}
+
+export function moonshotThinkingConfigForModel(
+  modelId: string,
+  override?: string,
+): MoonshotThinkingConfig | undefined {
+  const normalized = normalizeReasoningOverride(override);
+  const supportsThinkingToggle = modelId === "kimi-k2.6" || modelId === "kimi-k2.5";
+
+  if (!supportsThinkingToggle) {
+    if (normalized) {
+      throw new Error(`Moonshot model ${modelId} does not expose a thinking override.`);
+    }
+    return undefined;
+  }
+
+  if (!normalized || normalized === "enabled" || normalized === "on" || normalized === "default") {
+    return { type: "enabled" };
+  }
+
+  if (normalized === "disabled" || normalized === "off" || normalized === "none") {
+    return { type: "disabled" };
+  }
+
+  throw new Error(
+    `Moonshot model ${modelId} does not support reasoning '${override}'. Supported values: enabled, disabled.`,
+  );
 }
 
 export function openRouterReasoningEffortAttempts(
