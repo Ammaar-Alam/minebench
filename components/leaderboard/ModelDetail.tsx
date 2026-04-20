@@ -19,9 +19,17 @@ import {
   formatVoxelLoadingMessage,
   type VoxelLoadingProgress,
 } from "@/components/voxel/VoxelLoadingHud";
-import type { VoxelViewerBuildProgress } from "@/components/voxel/VoxelViewer";
+import type {
+  VoxelViewerBuildProgress,
+  VoxelViewerHandle,
+} from "@/components/voxel/VoxelViewer";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { ModelLateralNav, PromptLateralNav } from "@/components/leaderboard/LateralNav";
+import {
+  SandboxGifExportButton,
+  type SandboxGifExportTarget,
+} from "@/components/sandbox/SandboxGifExportButton";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -721,6 +729,9 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
   loadingProgress,
   error = null,
   heightClass = "h-44",
+  overlay,
+  viewerRef,
+  actions,
 }: {
   build: LoadedPromptBuild | null;
   loading?: boolean;
@@ -728,6 +739,17 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
   loadingProgress?: VoxelLoadingProgress | null;
   error?: string | null;
   heightClass?: string;
+  /** when provided, replaces the default blocks pill with caller-supplied
+      overlay content (typically the combined votes · score · blocks chip
+      used in the prompt modal). rendered absolute-positioned inside the
+      preview container, so callers should include their own positioning. */
+  overlay?: ReactNode;
+  /** ref forwarded to the underlying VoxelViewer — needed by callers that
+      want to invoke handle methods like captureFrame (e.g. the gif exporter). */
+  viewerRef?: React.RefObject<VoxelViewerHandle | null>;
+  /** action slot pinned to the preview's top-right corner. typically a single
+      icon button (gif export); multiple buttons stack horizontally. */
+  actions?: ReactNode;
 }) {
   type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
 
@@ -792,6 +814,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
   return (
     <div className={`relative w-full overflow-hidden rounded-xl bg-bg/32 ring-1 ring-border/65 ${heightClass}`}>
       <LazyVoxelViewer
+        ref={viewerRef}
         voxelBuild={build.voxelBuild}
         palette={build.palette}
         autoRotate
@@ -806,11 +829,20 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
           className="pointer-events-none absolute left-2.5 top-2.5 z-20"
         />
       ) : null}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
-        <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
-          {build.blockCount.toLocaleString()} blocks
-        </span>
-      </div>
+      {actions ? (
+        <div className="absolute right-2.5 top-2.5 z-20 flex items-center gap-1.5">
+          {actions}
+        </div>
+      ) : null}
+      {overlay !== undefined ? (
+        overlay
+      ) : (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
+          <span className="inline-flex items-center rounded-full bg-bg/76 px-2 py-0.5 font-mono text-[10px] text-muted ring-1 ring-border/75">
+            {build.blockCount.toLocaleString()} blocks
+          </span>
+        </div>
+      )}
     </div>
   );
 });
@@ -892,6 +924,11 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     totalBlocks: number | null;
   } | null>(null);
   const [activeBuildError, setActiveBuildError] = useState<string | null>(null);
+  const lastPromptTriggerRef = useRef<HTMLElement | null>(null);
+  const modalCloseRef = useRef<HTMLButtonElement | null>(null);
+  const modalSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const modalWasOpenRef = useRef(false);
+  const modalViewerRef = useRef<VoxelViewerHandle | null>(null);
 
   const strongest = topStrongest(data.prompts);
   const weakest = topWeakest(data.prompts);
@@ -977,6 +1014,55 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activePrompt]);
+
+  const activePromptIndex = useMemo(() => {
+    if (!activePrompt) return -1;
+    return promptBreakdown.findIndex((p) => p.promptId === activePrompt.promptId);
+  }, [activePrompt, promptBreakdown]);
+
+  const modalExportTargets: SandboxGifExportTarget[] = useMemo(() => {
+    if (!activePrompt?.build) return [];
+    return [
+      {
+        viewerRef: modalViewerRef,
+        modelName: data.model.displayName,
+        company: data.model.provider,
+        blockCount: activePrompt.build.blockCount,
+      },
+    ];
+  }, [activePrompt, data.model.displayName, data.model.provider]);
+
+  const handlePromptPrev = useCallback(() => {
+    if (activePromptIndex <= 0) return;
+    setActivePrompt(promptBreakdown[activePromptIndex - 1]);
+  }, [activePromptIndex, promptBreakdown]);
+
+  const handlePromptNext = useCallback(() => {
+    if (activePromptIndex < 0 || activePromptIndex >= promptBreakdown.length - 1) return;
+    setActivePrompt(promptBreakdown[activePromptIndex + 1]);
+  }, [activePromptIndex, promptBreakdown]);
+
+  // focus close on open, return focus to the prompt card on close so keyboard
+  // users resume where they were. only fires on the open/close transitions so
+  // cycling prev/next inside the modal doesn't yank focus mid-browse.
+  useEffect(() => {
+    const open = activePrompt != null;
+    const wasOpen = modalWasOpenRef.current;
+    modalWasOpenRef.current = open;
+    if (open && !wasOpen) {
+      const id = window.requestAnimationFrame(() => {
+        modalCloseRef.current?.focus();
+      });
+      return () => window.cancelAnimationFrame(id);
+    }
+    if (!open && wasOpen) {
+      const trigger = lastPromptTriggerRef.current;
+      lastPromptTriggerRef.current = null;
+      if (trigger && document.contains(trigger)) {
+        trigger.focus();
+      }
+    }
   }, [activePrompt]);
 
   useEffect(() => {
@@ -1078,22 +1164,30 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
         style={{ animationDelay: "0ms" }}
       >
         <div className="relative z-[1] space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2.5">
-            <Link href="/leaderboard" aria-label="Back to leaderboard" className="mb-back-link">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <Link
+              href="/leaderboard"
+              aria-label="Back to leaderboard"
+              className="mb-eyebrow -my-2 inline-flex items-center gap-1.5 py-2 transition-colors duration-150 hover:text-fg focus-visible:text-fg focus-visible:outline-none"
+            >
               <svg
-                className="h-4 w-4"
+                className="h-3 w-3"
                 viewBox="0 0 16 16"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="2.4"
                 strokeLinecap="round"
                 strokeLinejoin="round"
                 aria-hidden="true"
               >
                 <path d="M10 4L6 8L10 12" />
               </svg>
+              <span>Leaderboard</span>
             </Link>
-            <span className="mb-eyebrow">{data.model.provider}</span>
+            <span className="mb-eyebrow ml-auto sm:order-3">{data.model.provider}</span>
+            <div className="basis-full sm:order-2 sm:flex sm:basis-auto sm:flex-1 sm:justify-center">
+              <ModelLateralNav currentKey={data.model.key} modalOpen={activePrompt != null} />
+            </div>
           </div>
 
           <div className="space-y-4">
@@ -1585,10 +1679,14 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   role="button"
                   tabIndex={0}
                   aria-label={`Open prompt details for ${prompt.promptText}`}
-                  onClick={() => setActivePrompt(prompt)}
+                  onClick={(event) => {
+                    lastPromptTriggerRef.current = event.currentTarget;
+                    setActivePrompt(prompt);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
+                    lastPromptTriggerRef.current = event.currentTarget;
                     setActivePrompt(prompt);
                   }}
                   className="relative mb-card-enter h-full cursor-pointer rounded-2xl bg-bg/40 p-3.5 ring-1 ring-border/60 transition duration-200 hover:-translate-y-0.5 hover:bg-bg/55 hover:ring-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:p-4"
@@ -1691,41 +1789,96 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             onClick={() => setActivePrompt(null)}
           />
           <div
+            ref={modalSurfaceRef}
             role="dialog"
             aria-modal="true"
             aria-label="Full prompt details"
             className="relative w-full max-w-3xl overflow-hidden rounded-3xl bg-card/92 shadow-soft ring-1 ring-border backdrop-blur-xl"
           >
-            <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
-              <span className="mb-eyebrow">Prompt</span>
+            <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-3 sm:gap-3 sm:px-4">
+              <PromptLateralNav
+                index={activePromptIndex}
+                total={promptBreakdown.length}
+                onPrev={handlePromptPrev}
+                onNext={handlePromptNext}
+                enabled={activePrompt != null}
+                surfaceRef={modalSurfaceRef}
+              />
               <button
                 type="button"
-                className="mb-btn mb-btn-ghost h-9 rounded-full px-4 text-xs"
+                ref={modalCloseRef}
+                className="mb-btn mb-btn-ghost h-9 shrink-0 rounded-full px-3 text-xs sm:px-4"
                 onClick={() => setActivePrompt(null)}
+                aria-label="Close prompt details"
               >
-                Close <span className="hidden sm:inline"><span className="mb-kbd">Esc</span></span>
+                <svg
+                  className="h-4 w-4 sm:hidden"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+                <span className="hidden sm:inline">Close</span>
+                <span className="ml-1.5 hidden sm:inline">
+                  <span className="mb-kbd">Esc</span>
+                </span>
               </button>
             </div>
 
-            <div className="max-h-[76vh] space-y-3 overflow-auto px-4 py-4">
-              <PromptBuildPreview
-                build={activeLoadedBuild}
-                loading={isActiveBuildLoading}
-                loadingLabel={activeBuildLoadingLabel}
-                loadingProgress={activeBuildProgress}
-                error={activeBuildError}
-                heightClass="h-56 sm:h-64"
-              />
-              <div className="inline-flex items-center gap-1.5 font-mono text-[11px] text-muted">
-                <span>{activePrompt.votes} votes</span>
-                <span>•</span>
-                <span>{formatPercent(activePrompt.averageScore)} score</span>
-                {activePrompt.build ? (
-                  <>
-                    <span>•</span>
-                    <span>{activePrompt.build.blockCount.toLocaleString()} blocks</span>
-                  </>
-                ) : null}
+            <div className="max-h-[min(86vh,1060px)] space-y-3.5 overflow-auto px-4 py-4">
+              <div data-no-swipe>
+                <PromptBuildPreview
+                  build={activeLoadedBuild}
+                  loading={isActiveBuildLoading}
+                  loadingLabel={activeBuildLoadingLabel}
+                  loadingProgress={activeBuildProgress}
+                  error={activeBuildError}
+                  heightClass="h-[min(62vh,580px)] min-h-[18rem]"
+                  viewerRef={modalViewerRef}
+                  actions={
+                    modalExportTargets.length > 0 ? (
+                      <SandboxGifExportButton
+                        targets={modalExportTargets}
+                        promptText={activePrompt.promptText}
+                        iconOnly
+                        label="Export GIF"
+                      />
+                    ) : null
+                  }
+                  overlay={
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-bg/88 via-bg/56 to-transparent p-2.5">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-bg/76 px-2.5 py-1 font-mono text-[10px] text-muted ring-1 ring-border/75">
+                        <span>
+                          <span className="text-fg/85">{activePrompt.votes}</span>{" "}
+                          <span className="text-muted/70">votes</span>
+                        </span>
+                        <span className="text-muted/40">·</span>
+                        <span>
+                          <span className="text-fg/85">
+                            {formatPercent(activePrompt.averageScore)}
+                          </span>{" "}
+                          <span className="text-muted/70">score</span>
+                        </span>
+                        {activePrompt.build ? (
+                          <>
+                            <span className="text-muted/40">·</span>
+                            <span>
+                              <span className="text-fg/85">
+                                {activePrompt.build.blockCount.toLocaleString()}
+                              </span>{" "}
+                              <span className="text-muted/70">blocks</span>
+                            </span>
+                          </>
+                        ) : null}
+                      </span>
+                    </div>
+                  }
+                />
               </div>
               <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-fg/92">
                 {activePrompt.promptText}
