@@ -835,6 +835,7 @@ export async function generateVoxelBuild(
     maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
     minBlocks,
     palette: params.palette,
+    enableTools,
   });
   const system = enableTools
     ? baseSystem +
