@@ -133,6 +133,7 @@ function loadProviderKeysFromStorage(): ProviderApiKeys {
     set("moonshot");
     set("deepseek");
     set("minimax");
+    set("xai");
     set("custom");
     return keys;
   } catch {
