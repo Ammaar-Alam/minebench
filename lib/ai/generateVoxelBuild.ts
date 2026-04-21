@@ -54,6 +54,7 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   // gpt-5-pro alias remaining at 272k.
   if (modelId === "gpt-5-pro") return 272_000;
   if (modelId.startsWith("gpt-5")) return 128_000;
+  if (modelId === "glm-5.1" || modelId === "glm-5") return 131_072;
   if (
     modelId.startsWith("claude-opus-4-7") ||
     modelId === "anthropic/claude-opus-4.7"

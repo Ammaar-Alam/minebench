@@ -41,6 +41,7 @@ export type ModelKey =
   | "deepseek_v3_2"
   | "xai_grok_4_1"
   | "xai_grok_4_20"
+  | "zai_glm_5_1"
   | "zai_glm_5"
   | "zai_glm_4_7"
   | "qwen_qwen3_max_thinking"
@@ -302,6 +303,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Grok 4.20",
     enabled: true,
     openRouterModelId: "x-ai/grok-4.20",
+  },
+  {
+    key: "zai_glm_5_1",
+    provider: "zai",
+    modelId: "glm-5.1",
+    displayName: "Z.AI GLM 5.1",
+    enabled: true,
+    openRouterModelId: "z-ai/glm-5.1",
+    forceOpenRouter: true,
   },
   {
     key: "zai_glm_5",

@@ -207,7 +207,10 @@ export function openRouterReasoningEffortAttempts(
       override,
     );
   }
-  if (modelId === "z-ai/glm-5") {
+  if (
+    modelId === "z-ai/glm-5.1" ||
+    modelId === "z-ai/glm-5"
+  ) {
     return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
   }
   if (modelId.startsWith("google/gemini-3")) {
