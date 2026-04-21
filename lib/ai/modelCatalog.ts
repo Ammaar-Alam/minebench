@@ -40,6 +40,7 @@ export type ModelKey =
   | "moonshot_kimi_k2_5"
   | "deepseek_v3_2"
   | "xai_grok_4_1"
+  | "xai_grok_4_20"
   | "zai_glm_5"
   | "zai_glm_4_7"
   | "qwen_qwen3_max_thinking"
@@ -289,10 +290,18 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     key: "xai_grok_4_1",
     provider: "xai",
-    modelId: "grok-4.1-fast",
-    displayName: "Grok 4.1",
+    modelId: "grok-4-1-fast-reasoning",
+    displayName: "Grok 4.1 Fast",
     enabled: true,
     openRouterModelId: "x-ai/grok-4.1-fast",
+  },
+  {
+    key: "xai_grok_4_20",
+    provider: "xai",
+    modelId: "grok-4.20-0309-reasoning",
+    displayName: "Grok 4.20",
+    enabled: true,
+    openRouterModelId: "x-ai/grok-4.20",
   },
   {
     key: "zai_glm_5",

@@ -12,6 +12,7 @@ import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
+import { xaiGenerateText } from "@/lib/ai/providers/xai";
 import {
   AnthropicAdaptiveEffort,
   anthropicAdaptiveEffortAttempts,
@@ -20,7 +21,9 @@ import {
   MoonshotThinkingConfig,
   moonshotThinkingConfigForModel,
   openAiReasoningEffortAttempts,
+  openRouterReasoningEnabledForModel,
   openRouterReasoningEffortAttempts as openRouterReasoningEffortAttemptsForModel,
+  xaiAutomaticReasoningForModel,
 } from "@/lib/ai/reasoningProfiles";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -61,6 +64,13 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   // output budgets. Keep a lower completion budget so the prompt plus output
   // stays within the model's effective request limit.
   if (modelId === "MiniMax-M2.7") return 131_072;
+  if (
+    modelId === "grok-4-1-fast" ||
+    modelId === "grok-4-1-fast-reasoning" ||
+    modelId === "x-ai/grok-4.1-fast"
+  ) {
+    return 30_000;
+  }
   return undefined;
 }
 
@@ -127,6 +137,7 @@ function describeRequestedThinkingMode(opts: {
   }
 
   if (opts.provider === "deepseek") return "thinking=enabled";
+  if (opts.provider === "xai") return "automatic";
   if (opts.provider === "moonshot") {
     return opts.moonshotThinkingConfig
       ? `thinking=${opts.moonshotThinkingConfig.type}`
@@ -245,6 +256,7 @@ type ProviderKeyName =
   | "moonshot"
   | "deepseek"
   | "minimax"
+  | "xai"
   | "openrouter"
   | "custom";
 
@@ -262,6 +274,8 @@ function envVarForProviderKey(provider: ProviderKeyName): string {
       return "DEEPSEEK_API_KEY";
     case "minimax":
       return "MINIMAX_API_KEY";
+    case "xai":
+      return "XAI_API_KEY";
     case "openrouter":
       return "OPENROUTER_API_KEY";
     case "custom":
@@ -283,6 +297,8 @@ function envVarForDirectProvider(provider: DirectProvider): string | null {
       return envVarForProviderKey("deepseek");
     case "minimax":
       return envVarForProviderKey("minimax");
+    case "xai":
+      return envVarForProviderKey("xai");
     case "custom":
       return envVarForProviderKey("custom");
     default:
@@ -301,7 +317,7 @@ function effectiveApiKey(opts: {
   allowServerKeys: boolean;
 }): string | null {
   const provider = opts.provider;
-  if (provider === "xai" || provider === "zai" || provider === "qwen" || provider === "meta") return null; // only supported via OpenRouter fallback
+  if (provider === "zai" || provider === "qwen" || provider === "meta") return null; // only supported via OpenRouter fallback
 
   const directKey = normalizeApiKey(
     provider === "openrouter"
@@ -318,6 +334,8 @@ function effectiveApiKey(opts: {
                 ? opts.providerKeys?.deepseek
                 : provider === "minimax"
                   ? opts.providerKeys?.minimax
+                  : provider === "xai"
+                    ? opts.providerKeys?.xai
                   : provider === "custom"
                     ? opts.providerKeys?.custom
                   : undefined,
@@ -333,6 +351,7 @@ function effectiveApiKey(opts: {
   if (provider === "moonshot") return serverApiKey("moonshot");
   if (provider === "deepseek") return serverApiKey("deepseek");
   if (provider === "minimax") return serverApiKey("minimax");
+  if (provider === "xai") return serverApiKey("xai");
   if (provider === "custom") return serverApiKey("custom");
 
   return null;
@@ -500,7 +519,18 @@ async function callDirectProvider(args: {
   }
 
   if (args.provider === "xai") {
-    throw new Error("xAI direct API not supported; use OpenRouter fallback");
+    return xaiGenerateText({
+      modelId: args.modelId,
+      apiKey: args.apiKey,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
+      signal: args.signal,
+      onDelta: args.onDelta,
+      onTrace: args.onTrace,
+    });
   }
 
   // Z.AI models are currently OpenRouter-only in MineBench
@@ -621,6 +651,9 @@ async function providerGenerateText(args: {
       model.provider === "moonshot"
         ? moonshotThinkingConfigForModel(model.modelId, args.reasoning)
         : undefined;
+    if (model.provider === "xai") {
+      xaiAutomaticReasoningForModel(model.modelId, args.reasoning);
+    }
     args.onProviderTrace?.(
       `Routing via direct ${model.provider} provider (${model.modelId}). ` +
         providerRequestTraceLine({
@@ -669,13 +702,18 @@ async function providerGenerateText(args: {
   const openRouterUsesThinkingToggle =
     model.openRouterModelId === "moonshotai/kimi-k2.6" ||
     model.openRouterModelId === "moonshotai/kimi-k2.5";
+  const xaiOpenRouterReasoningEnabled = openRouterReasoningEnabledForModel(
+    model.openRouterModelId,
+    args.reasoning,
+  );
   const openRouterReasoningEnabled =
-    openRouterUsesThinkingToggle
+    xaiOpenRouterReasoningEnabled ??
+    (openRouterUsesThinkingToggle
       ? !normalizedReasoning ||
         normalizedReasoning === "enabled" ||
         normalizedReasoning === "default" ||
         normalizedReasoning === "on"
-      : false;
+      : false);
   if (
     openRouterUsesThinkingToggle &&
     normalizedReasoning &&
@@ -686,7 +724,7 @@ async function providerGenerateText(args: {
     );
   }
   const openRouterReasoningEffortAttempts =
-    openRouterUsesThinkingToggle
+    xaiOpenRouterReasoningEnabled !== undefined || openRouterUsesThinkingToggle
       ? undefined
       : openRouterReasoningEffortAttemptsForModel(
           model.openRouterModelId,
