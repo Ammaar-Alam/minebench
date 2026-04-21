@@ -30,20 +30,24 @@ function sleepMs(ms: number) {
 }
 
 type ReasoningConfigAttempt =
+  | { kind: "enabled" }
   | { kind: "effort"; effort: string }
   | { kind: "max_tokens"; maxTokens: number }
   | "__default__"
   | undefined;
 
 function reasoningConfigFallbacks(opts: {
+  enabled?: boolean;
   efforts?: string[];
   maxTokens?: number;
 }): ReasoningConfigAttempt[] {
+  const explicitlyEnabled = Boolean(opts.enabled);
   const requested = opts.efforts;
   const normalized = (requested ?? [])
     .map((v) => v.trim())
     .filter((v) => v.length > 0);
   const efforts: ReasoningConfigAttempt[] = [];
+  if (explicitlyEnabled) efforts.push({ kind: "enabled" });
   for (const v of normalized) {
     if (!efforts.some((e) => typeof e === "object" && e.kind === "effort" && e.effort === v)) {
       efforts.push({ kind: "effort", effort: v });
@@ -56,6 +60,9 @@ function reasoningConfigFallbacks(opts: {
   }
 
   if (efforts.length === 0) return [undefined];
+  if (explicitlyEnabled && normalized.length === 0 && !(Number.isFinite(rawMaxTokens) && rawMaxTokens > 0)) {
+    return efforts;
+  }
   // Fallback to plain reasoning mode when effort enums are not supported,
   // then disable reasoning only as a final recovery path.
   return [...efforts, "__default__", undefined];
@@ -153,6 +160,7 @@ export async function openrouterGenerateText(params: {
   system: string;
   user: string;
   maxOutputTokens?: number;
+  enableReasoning?: boolean;
   reasoningMaxTokens?: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
@@ -167,6 +175,7 @@ export async function openrouterGenerateText(params: {
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
   const maxTokens = params.maxOutputTokens ?? 8192;
   const reasoningAttempts = reasoningConfigFallbacks({
+    enabled: params.enableReasoning,
     efforts: params.reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
   });
@@ -175,6 +184,7 @@ export async function openrouterGenerateText(params: {
   const describeReasoningAttempt = (cfg: ReasoningConfigAttempt): string => {
     if (cfg === "__default__") return "default";
     if (cfg == null) return "disabled";
+    if (cfg.kind === "enabled") return "enabled";
     if (cfg.kind === "effort") return cfg.effort;
     return `max_tokens=${cfg.maxTokens}`;
   };
@@ -188,11 +198,14 @@ export async function openrouterGenerateText(params: {
     let lastBody = "";
     let selectedReasoningLabel: string | null = null;
     let selectedReasoningTokenBudget: number | null = null;
-    for (const tok of tokenBudgetCandidates(maxTokens)) {
+    const tokenBudgets = tokenBudgetCandidates(maxTokens);
+    for (const [tokIdx, tok] of tokenBudgets.entries()) {
       let tryLowerTokenBudget = false;
       for (const [cfgIdx, cfg] of reasoningAttempts.entries()) {
         const reasoningConfig =
-          cfg === "__default__"
+          cfg && typeof cfg === "object" && cfg.kind === "enabled"
+            ? { enabled: true }
+            : cfg === "__default__"
             ? {}
             : cfg && typeof cfg === "object" && cfg.kind === "effort"
               ? { effort: cfg.effort }
@@ -220,6 +233,13 @@ export async function openrouterGenerateText(params: {
                   { role: "system", content: params.system },
                   { role: "user", content: params.user },
                 ],
+                ...(params.jsonSchema
+                  ? {
+                      provider: {
+                        require_parameters: true,
+                      },
+                    }
+                  : {}),
                 stream: Boolean(params.onDelta),
                 temperature: params.temperature ?? 0.2,
                 max_tokens: tok,
@@ -250,6 +270,12 @@ export async function openrouterGenerateText(params: {
           lastBody = await res.text().catch(() => "");
           if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
             tryLowerTokenBudget = true;
+            const nextBudget = tokenBudgets[tokIdx + 1];
+            if (typeof nextBudget === "number") {
+              params.onTrace?.(
+                `OpenRouter rejected max_output_tokens=${tok}; retrying with ${nextBudget}.`,
+              );
+            }
             break;
           }
           if (res.status === 400 && textVerbosity && looksLikeVerbosityConfigError(lastBody)) {

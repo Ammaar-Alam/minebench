@@ -36,6 +36,7 @@ export type ModelKey =
   | "gemini_2_5_pro"
   | "gemma_4_31b"
   | "moonshot_kimi_k2"
+  | "moonshot_kimi_k2_6"
   | "moonshot_kimi_k2_5"
   | "deepseek_v3_2"
   | "xai_grok_4_1"
@@ -259,6 +260,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Kimi K2",
     enabled: true,
     openRouterModelId: "moonshotai/kimi-k2-thinking",
+  },
+  {
+    key: "moonshot_kimi_k2_6",
+    provider: "moonshot",
+    modelId: "kimi-k2.6",
+    displayName: "Kimi K2.6",
+    enabled: true,
+    openRouterModelId: "moonshotai/kimi-k2.6",
   },
   {
     key: "moonshot_kimi_k2_5",

@@ -17,6 +17,8 @@ import {
   anthropicAdaptiveEffortAttempts,
   GeminiThinkingConfig,
   geminiThinkingConfigForModel,
+  MoonshotThinkingConfig,
+  moonshotThinkingConfigForModel,
   openAiReasoningEffortAttempts,
   openRouterReasoningEffortAttempts as openRouterReasoningEffortAttemptsForModel,
 } from "@/lib/ai/reasoningProfiles";
@@ -102,6 +104,7 @@ function describeRequestedThinkingMode(opts: {
   reasoningEffortAttempts?: string[];
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
+  moonshotThinkingConfig?: MoonshotThinkingConfig;
 }): string {
   if (opts.route === "openrouter") {
     if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
@@ -124,7 +127,11 @@ function describeRequestedThinkingMode(opts: {
   }
 
   if (opts.provider === "deepseek") return "thinking=enabled";
-  if (opts.provider === "moonshot") return "default";
+  if (opts.provider === "moonshot") {
+    return opts.moonshotThinkingConfig
+      ? `thinking=${opts.moonshotThinkingConfig.type}`
+      : "default";
+  }
   if (opts.provider === "minimax") return "default";
   if (opts.provider === "custom") return "default";
 
@@ -162,11 +169,24 @@ function providerRequestTraceLine(opts: {
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
   reasoningEffortAttempts?: string[];
+  openRouterReasoningEnabled?: boolean;
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
+  moonshotThinkingConfig?: MoonshotThinkingConfig;
 }): string {
-  const thinkingMode = describeRequestedThinkingMode(opts);
-  return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${DEFAULT_TEMPERATURE}.`;
+  const thinkingMode =
+    opts.route === "openrouter" && opts.openRouterReasoningEnabled
+      ? "enabled"
+      : describeRequestedThinkingMode(opts);
+  const temperature =
+    opts.route === "direct" && opts.provider === "moonshot"
+      ? opts.modelId === "kimi-k2.6" || opts.modelId === "kimi-k2.5"
+        ? opts.moonshotThinkingConfig?.type === "disabled"
+          ? 0.6
+          : 1.0
+        : 0.6
+      : DEFAULT_TEMPERATURE;
+  return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${temperature}.`;
 }
 
 type DirectProvider = ModelCatalogEntry["provider"] | "custom";
@@ -380,6 +400,7 @@ async function callDirectProvider(args: {
   reasoningEffortAttempts?: string[];
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
+  moonshotThinkingConfig?: MoonshotThinkingConfig;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
@@ -440,7 +461,8 @@ async function callDirectProvider(args: {
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
-      temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
+      thinkingConfig: args.moonshotThinkingConfig,
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
@@ -595,6 +617,10 @@ async function providerGenerateText(args: {
       model.provider === "gemini"
         ? geminiThinkingConfigForModel(model.modelId, args.reasoning)
         : undefined;
+    const directMoonshotThinkingConfig =
+      model.provider === "moonshot"
+        ? moonshotThinkingConfigForModel(model.modelId, args.reasoning)
+        : undefined;
     args.onProviderTrace?.(
       `Routing via direct ${model.provider} provider (${model.modelId}). ` +
         providerRequestTraceLine({
@@ -606,6 +632,7 @@ async function providerGenerateText(args: {
           reasoningEffortAttempts: directOpenAiReasoningEffortAttempts,
           adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
           geminiThinkingConfig: directGeminiThinkingConfig,
+          moonshotThinkingConfig: directMoonshotThinkingConfig,
         }),
     );
     try {
@@ -622,6 +649,7 @@ async function providerGenerateText(args: {
         reasoningEffortAttempts: directOpenAiReasoningEffortAttempts,
         adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
         geminiThinkingConfig: directGeminiThinkingConfig,
+        moonshotThinkingConfig: directMoonshotThinkingConfig,
         signal: args.signal,
         onDelta: args.onDelta,
         onTrace: args.onProviderTrace,
@@ -637,10 +665,33 @@ async function providerGenerateText(args: {
     throw new Error(`No OpenRouter model ID configured for ${model.key}`);
   }
 
-  const openRouterReasoningEffortAttempts = openRouterReasoningEffortAttemptsForModel(
-    model.openRouterModelId,
-    args.reasoning,
-  );
+  const normalizedReasoning = args.reasoning?.trim().toLowerCase();
+  const openRouterUsesThinkingToggle =
+    model.openRouterModelId === "moonshotai/kimi-k2.6" ||
+    model.openRouterModelId === "moonshotai/kimi-k2.5";
+  const openRouterReasoningEnabled =
+    openRouterUsesThinkingToggle
+      ? !normalizedReasoning ||
+        normalizedReasoning === "enabled" ||
+        normalizedReasoning === "default" ||
+        normalizedReasoning === "on"
+      : false;
+  if (
+    openRouterUsesThinkingToggle &&
+    normalizedReasoning &&
+    !["enabled", "default", "on", "disabled", "off", "none"].includes(normalizedReasoning)
+  ) {
+    throw new Error(
+      `OpenRouter model ${model.openRouterModelId} does not support reasoning '${args.reasoning}'. Supported values: enabled, disabled.`,
+    );
+  }
+  const openRouterReasoningEffortAttempts =
+    openRouterUsesThinkingToggle
+      ? undefined
+      : openRouterReasoningEffortAttemptsForModel(
+          model.openRouterModelId,
+          args.reasoning,
+        );
 
   args.onProviderTrace?.(
     `Routing via OpenRouter (${model.openRouterModelId}). ` +
@@ -651,6 +702,7 @@ async function providerGenerateText(args: {
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
         reasoningEffortAttempts: openRouterReasoningEffortAttempts,
+        openRouterReasoningEnabled,
       }),
   );
 
@@ -660,6 +712,7 @@ async function providerGenerateText(args: {
     system: args.system,
     user: args.user,
     maxOutputTokens: args.maxOutputTokens,
+    enableReasoning: openRouterReasoningEnabled,
     reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
     jsonSchema: args.jsonSchema,
