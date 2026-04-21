@@ -147,6 +147,41 @@ export function moonshotThinkingConfigForModel(
   );
 }
 
+export function xaiAutomaticReasoningForModel(
+  modelId: string,
+  override?: string,
+): "automatic" | undefined {
+  const normalized = normalizeReasoningOverride(override);
+  const label = `xAI model ${modelId}`;
+  const isAutomaticReasoningModel =
+    modelId === "grok-4.20-0309-reasoning" ||
+    modelId === "grok-4.20-reasoning" ||
+    modelId === "grok-4-1-fast-reasoning" ||
+    modelId === "grok-4-1-fast";
+
+  if (!isAutomaticReasoningModel) {
+    if (normalized) {
+      throw new Error(`${label} does not expose a reasoning override.`);
+    }
+    return undefined;
+  }
+
+  if (
+    !normalized ||
+    normalized === "automatic" ||
+    normalized === "auto" ||
+    normalized === "enabled" ||
+    normalized === "on" ||
+    normalized === "true"
+  ) {
+    return "automatic";
+  }
+
+  throw new Error(
+    `${label} reasons automatically and does not support reasoning overrides like '${override}'.`,
+  );
+}
+
 export function openRouterReasoningEffortAttempts(
   modelId: string,
   override?: string,
@@ -206,4 +241,40 @@ export function openRouterReasoningEffortAttempts(
     throw new Error(`${label} does not expose a reasoning-effort override.`);
   }
   return undefined;
+}
+
+export function openRouterReasoningEnabledForModel(
+  modelId: string,
+  override?: string,
+): boolean | undefined {
+  const normalized = normalizeReasoningOverride(override);
+  const label = `OpenRouter model ${modelId}`;
+  const isBooleanReasoningModel =
+    modelId === "x-ai/grok-4.20" ||
+    modelId === "x-ai/grok-4.1-fast";
+
+  if (!isBooleanReasoningModel) {
+    return undefined;
+  }
+
+  if (!normalized) return true;
+  if (
+    normalized === "enabled" ||
+    normalized === "on" ||
+    normalized === "true"
+  ) {
+    return true;
+  }
+  if (
+    normalized === "disabled" ||
+    normalized === "off" ||
+    normalized === "false" ||
+    normalized === "none"
+  ) {
+    return false;
+  }
+
+  throw new Error(
+    `${label} does not support reasoning '${override}'. Supported values: enabled, disabled.`,
+  );
 }

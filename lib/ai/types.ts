@@ -10,6 +10,7 @@ export type ProviderApiKeys = {
   moonshot?: string;
   deepseek?: string;
   minimax?: string;
+  xai?: string;
   openrouter?: string;
   custom?: string;
 };

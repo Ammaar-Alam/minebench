@@ -471,15 +471,17 @@ export async function openAiCompatibleGenerateText(params: {
   maxOutputTokens?: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
+  serviceLabel?: string;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
 }): Promise<{ text: string }> {
+  const serviceLabel = params.serviceLabel ?? "Custom API";
   const apiKey = params.apiKey ?? process.env.CUSTOM_API_KEY;
-  if (!apiKey) throw new Error("Missing custom API key");
+  if (!apiKey) throw new Error(`Missing ${serviceLabel} API key`);
 
   const rawBaseUrl = params.baseUrl ?? process.env.CUSTOM_API_BASE_URL;
-  if (!rawBaseUrl) throw new Error("Missing custom API server URL");
+  if (!rawBaseUrl) throw new Error(`Missing ${serviceLabel} API server URL`);
   const target = await resolveCustomApiTarget(rawBaseUrl);
   const controller = new AbortController();
   const detachAbort = attachAbortSignal(controller, params.signal);
@@ -537,11 +539,11 @@ export async function openAiCompatibleGenerateText(params: {
     }
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Custom API request timed out");
+      throw new Error(`${serviceLabel} request timed out`);
     }
-    console.error("Custom API network error:", err);
+    console.error(`${serviceLabel} network error:`, err);
     const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
-    throw new Error(`Custom API request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
+    throw new Error(`${serviceLabel} request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
   } finally {
     detachAbort();
     if (timeout) clearTimeout(timeout);
@@ -554,15 +556,15 @@ export async function openAiCompatibleGenerateText(params: {
   if (res.status < 200 || res.status >= 300) {
     const body = lastBody || (await readResponseText(res.body).catch(() => ""));
     const rid = requestIdFromHeaders(res.headers);
-    throw new Error(`Custom API error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
+    throw new Error(`${serviceLabel} error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
   }
 
   const budget = selectedTokenBudget ?? maxTokens;
   params.onTrace?.(
     withMaxOutputTokens(
       useStructuredOutput
-        ? "Custom API chat completions in use with structured output."
-        : "Custom API chat completions in use without structured output.",
+        ? `${serviceLabel} chat completions in use with structured output.`
+        : `${serviceLabel} chat completions in use without structured output.`,
       budget,
     ),
   );

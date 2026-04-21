@@ -585,6 +585,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       setKey("moonshot", providerKeys.moonshot);
       setKey("deepseek", providerKeys.deepseek);
       setKey("minimax", providerKeys.minimax);
+      setKey("xai", providerKeys.xai);
       setKey("custom", providerKeys.custom);
 
       const res = await fetch("/api/generate", {
@@ -1209,6 +1210,19 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                       autoComplete="off"
                       spellCheck={false}
                       placeholder="Paste your MiniMax key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">xAI</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.xai ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, xai: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your xAI key"
                     />
                   </label>
                 </div>
