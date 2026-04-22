@@ -3,35 +3,42 @@ Canonical release body template for MineBench.
 Copy this, fill in the sections, and pass it to `gh release create` via --notes-file.
 
 Example:
-  gh release create v1.2.0 --draft \
-    --title "v1.2.0 — <new model>" \
+  gh release create v3.1.0 --draft \
+    --title "v3.1.0 — <what shipped>" \
     --notes-file .github/RELEASE_TEMPLATE.md \
     --generate-notes \
     --repo Ammaar-Alam/minebench
 
-When --generate-notes is passed alongside --notes-file, GitHub appends the auto-generated
-"What's Changed" section (merged PRs since the prior tag + compare link) to the end of your
-notes content.
+Notes:
+- Keep entries tight and scannable. The narrative sections should read like a human wrote
+  them; the Changelog at the bottom is the raw PR/commit list.
+- Link PRs as `#123` and commits as short SHAs (`e684ca5`) — GitHub auto-renders both.
+- Drop any section with no content — don't leave an empty "Bug Fixes" heading.
+- For per-model cost/timing info, include it inline on the model's own New Features bullet.
 
 See .github/VERSIONING.md for when to bump MAJOR vs MINOR vs PATCH.
 -->
 
-## What's New
-
--
--
-
-## Notes
+## New Features
 
 -
 
-## Cost to benchmark this release
+## Bug Fixes
 
 -
 
-## Links
+## Documentation
 
-- Benchmark: https://minebench.ai/
-- Support: https://buymeacoffee.com/ammaaralam
-<!-- Optional, only if the thread has useful discussion worth linking: -->
-<!-- - Reddit discussion: https://reddit.com/r/LocalLLaMA/... -->
+-
+
+## Chores
+
+-
+
+---
+
+## Changelog
+
+<!-- When --generate-notes is passed, GitHub replaces this section with an auto-populated
+     "What's Changed" block listing merged PRs + a "Full Changelog" compare link.
+     For manual / curated releases, list PRs and commits directly below. -->

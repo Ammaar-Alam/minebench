@@ -17,10 +17,10 @@ MineBench follows [semver](https://semver.org/) with project-specific rules for 
 
 ## Worked examples
 
-- **v1.0.0** — initial public release bundling four model additions (Grok 4.20, Kimi K2.6, Opus 4.7, GLM 5.1), the frontend redesign, GIF export, and lateral navigation.
-- **v1.1.0** — hypothetical next model added (e.g. DeepSeek V4). Single new model = MINOR.
-- **v1.1.1** — hypothetical leaderboard sort fix. No new capability = PATCH.
-- **v2.0.0** — hypothetical replacement of the Glicko-style scoring system, or a second full redesign.
+- **v3.0.0** — first tracked release. MineBench had already been through two paradigm shifts before formal releases existed (the Glicko-style ranking rewrite in [#3](https://github.com/Ammaar-Alam/minebench/pull/3) and the full frontend redesign in [#18](https://github.com/Ammaar-Alam/minebench/pull/18)), so v3.0.0 honors those historical MAJOR events rather than pretending the project started fresh.
+- **v3.1.0** — hypothetical next model added (single new model = MINOR).
+- **v3.1.1** — hypothetical leaderboard sort fix (no new capability = PATCH).
+- **v4.0.0** — hypothetical replacement of the Glicko-style scoring system, or a third full redesign.
 
 ## Release workflow
 
