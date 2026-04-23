@@ -93,10 +93,13 @@ function rateLimitedResponse(retryAfterSeconds: number) {
   });
 }
 
-function getArenaRateLimitSession(req: NextRequest) {
+function getArenaRateLimitSession(req: NextRequest, stableFallbackBucketId: string) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
-  if (existing) return { sessionId: existing, shouldSetCookie: false };
-  return { sessionId: crypto.randomUUID(), shouldSetCookie: true };
+  if (existing) return { bucketId: existing, cookieValue: null };
+  return {
+    bucketId: stableFallbackBucketId,
+    cookieValue: crypto.randomUUID(),
+  };
 }
 
 export function middleware(req: NextRequest) {
@@ -112,7 +115,7 @@ export function middleware(req: NextRequest) {
   const ip = getIp(req);
   const now = Date.now();
   maybePruneExpiredBuckets(now);
-  const arenaSession = isArenaApi ? getArenaRateLimitSession(req) : null;
+  const arenaSession = isArenaApi ? getArenaRateLimitSession(req, `anon:${ip}`) : null;
   const rules: RateLimitRule[] = isArenaApi
     ? [
         // Keep arena primarily session-scoped, but retain a wider IP guardrail so
@@ -121,7 +124,7 @@ export function middleware(req: NextRequest) {
           key: `ip:${ip}:${bucketPath}`,
           maxPerWindow: maxPerWindow * ARENA_IP_GUARDRAIL_MULTIPLIER,
         },
-        { key: `session:${arenaSession?.sessionId}:${bucketPath}`, maxPerWindow },
+        { key: `session:${arenaSession?.bucketId}:${bucketPath}`, maxPerWindow },
       ]
     : [{ key: `${ip}:${bucketPath}`, maxPerWindow }];
 
@@ -131,8 +134,8 @@ export function middleware(req: NextRequest) {
   }
 
   const response = NextResponse.next();
-  if (arenaSession?.shouldSetCookie) {
-    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, arenaSession.sessionId, {
+  if (arenaSession?.cookieValue) {
+    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, arenaSession.cookieValue, {
       httpOnly: true,
       sameSite: "lax",
       path: "/",

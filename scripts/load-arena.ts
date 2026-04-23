@@ -83,12 +83,21 @@ type Args = {
 class RequestError extends Error {
   stage: string;
   timeout: boolean;
+  durationMs: number | null;
+  responseHeaders: Headers | null;
 
-  constructor(stage: string, message: string, timeout = false) {
+  constructor(
+    stage: string,
+    message: string,
+    timeout = false,
+    opts?: { durationMs?: number | null; responseHeaders?: Headers | null },
+  ) {
     super(message);
     this.name = "RequestError";
     this.stage = stage;
     this.timeout = timeout;
+    this.durationMs = opts?.durationMs ?? null;
+    this.responseHeaders = opts?.responseHeaders ?? null;
   }
 }
 
@@ -342,6 +351,47 @@ function parseServerTiming(header: string) {
     .filter((entry): entry is { name: string; dur: number } => entry != null);
 }
 
+function recordRequestMetrics(
+  metrics: Metrics,
+  stage: string,
+  durationMs: number,
+  responseHeaders?: Headers | null,
+) {
+  metrics.addTiming(stage, durationMs);
+  metrics.recordServerTiming(stage, responseHeaders?.get("server-timing") ?? null);
+}
+
+function asRequestError(
+  stage: string,
+  error: unknown,
+  opts?: { timeout?: boolean; durationMs?: number | null; responseHeaders?: Headers | null },
+) {
+  if (error instanceof RequestError) {
+    if (opts?.durationMs != null && error.durationMs == null) {
+      error.durationMs = opts.durationMs;
+    }
+    if (opts?.responseHeaders && !error.responseHeaders) {
+      error.responseHeaders = opts.responseHeaders;
+    }
+    if (opts?.timeout) {
+      error.timeout = true;
+    }
+    return error;
+  }
+
+  const message =
+    error instanceof Error && error.message.trim()
+      ? error.message.trim()
+      : typeof error === "string" && error.trim()
+        ? error.trim()
+        : "request failed";
+
+  return new RequestError(stage, message, opts?.timeout ?? false, {
+    durationMs: opts?.durationMs ?? null,
+    responseHeaders: opts?.responseHeaders ?? null,
+  });
+}
+
 async function fetchWithTimeout<T>(params: {
   url: string;
   init: RequestInit;
@@ -357,6 +407,7 @@ async function fetchWithTimeout<T>(params: {
   const cookie = jar.headerValue();
   if (cookie) headers.set("cookie", cookie);
   const startedAt = performance.now();
+  let responseHeaders: Headers | null = null;
 
   try {
     const response = await fetch(url, {
@@ -364,6 +415,7 @@ async function fetchWithTimeout<T>(params: {
       headers,
       signal: controller.signal,
     });
+    responseHeaders = response.headers;
     jar.apply(response.headers);
     return {
       value: await read(response),
@@ -372,9 +424,15 @@ async function fetchWithTimeout<T>(params: {
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new RequestError(stage, `timed out after ${timeoutMs}ms`, true);
+      throw new RequestError(stage, `timed out after ${timeoutMs}ms`, true, {
+        durationMs: performance.now() - startedAt,
+        responseHeaders,
+      });
     }
-    throw error;
+    throw asRequestError(stage, error, {
+      durationMs: performance.now() - startedAt,
+      responseHeaders,
+    });
   } finally {
     clearTimeout(timer);
   }
@@ -391,9 +449,10 @@ async function requestJson<T>(params: {
   metrics: Metrics;
 }) {
   const { url, method, timeoutMs, jar, body, headers, stage, metrics } = params;
-  const result = await fetchWithTimeout({
-    url,
-    init: {
+  try {
+    const result = await fetchWithTimeout({
+      url,
+      init: {
         method,
         headers: {
           ...(body ? { "Content-Type": "application/json" } : {}),
@@ -401,27 +460,32 @@ async function requestJson<T>(params: {
         },
         body: body ? JSON.stringify(body) : undefined,
       },
-    timeoutMs,
-    jar,
-    stage,
-    read: async (response) => {
-      if (!response.ok) {
-        const text = await response.text().catch(() => `HTTP ${response.status}`);
-        throw new RequestError(stage, `HTTP ${response.status}: ${truncate(text, 220)}`);
-      }
+      timeoutMs,
+      jar,
+      stage,
+      read: async (response) => {
+        if (!response.ok) {
+          const text = await response.text().catch(() => `HTTP ${response.status}`);
+          throw new RequestError(stage, `HTTP ${response.status}: ${truncate(text, 220)}`);
+        }
 
-      return (await response.json()) as T;
-    },
-  });
+        return (await response.json()) as T;
+      },
+    });
 
-  metrics.addTiming(stage, result.durationMs);
-  metrics.recordServerTiming(stage, result.headers.get("server-timing"));
+    recordRequestMetrics(metrics, stage, result.durationMs, result.headers);
 
-  return {
-    body: result.value,
-    headers: result.headers,
-    durationMs: result.durationMs,
-  };
+    return {
+      body: result.value,
+      headers: result.headers,
+      durationMs: result.durationMs,
+    };
+  } catch (error) {
+    if (error instanceof RequestError && error.durationMs != null) {
+      recordRequestMetrics(metrics, stage, error.durationMs, error.responseHeaders);
+    }
+    throw error;
+  }
 }
 
 function needsFullHydration(lane: ArenaMatchupLane) {
@@ -580,8 +644,7 @@ async function hydrateFullBuild(params: {
         },
       });
 
-      metrics.addTiming(attempt.stage, result.durationMs);
-      metrics.recordServerTiming(attempt.stage, result.headers.get("server-timing"));
+      recordRequestMetrics(metrics, attempt.stage, result.durationMs, result.headers);
 
       metrics.addTiming("build_total", performance.now() - startedAt);
       metrics.increment("full_hydrations");
@@ -595,6 +658,9 @@ async function hydrateFullBuild(params: {
       }
       return;
     } catch (error) {
+      if (error instanceof RequestError && error.durationMs != null) {
+        recordRequestMetrics(metrics, attempt.stage, error.durationMs, error.responseHeaders);
+      }
       lastError = error;
       metrics.recordError(attempt.stage, error);
     }
