@@ -78,13 +78,13 @@ type RecentScoreRow = {
   score: NumberLike;
 };
 
-type DecisiveVoteRow = {
-  choice: "A" | "B" | "TIE";
-  matchup: {
-    promptId: string;
-    modelAId: string;
-    modelBId: string;
-  };
+type PromptSignalPairAggregateRow = {
+  promptId: string;
+  modelAId: string;
+  modelBId: string;
+  pointsA: NumberLike;
+  pointsB: NumberLike;
+  total: NumberLike;
 };
 
 type PromptStrengthStats = {
@@ -101,6 +101,7 @@ type PromptStrengthStats = {
 
 type PromptSignalSnapshot = {
   eligiblePromptIds: string[];
+  activeModelIds: string[];
   byPromptModel: Map<string, PromptStrengthStats>;
 };
 
@@ -381,6 +382,7 @@ function aggregatePairRow(
   modelBId: string,
   pointsA: number,
   pointsB: number,
+  total = 1,
 ) {
   if (modelAId === modelBId) return;
   const canonicalA = modelAId < modelBId ? modelAId : modelBId;
@@ -397,7 +399,7 @@ function aggregatePairRow(
   };
   row.pointsA += canonicalPointsA;
   row.pointsB += canonicalPointsB;
-  row.total += 1;
+  row.total += total;
   pairRows.set(key, row);
 }
 
@@ -667,56 +669,87 @@ export function invalidateArenaStatsCache() {
 }
 
 function promptFilterSql(promptIds: string[]): Prisma.Sql {
-  if (promptIds.length === 0) {
+  return sqlInColumn(Prisma.sql`matchup."promptId"`, promptIds);
+}
+
+function modelFilterSql(column: Prisma.Sql, modelIds: string[]): Prisma.Sql {
+  return sqlInColumn(column, modelIds);
+}
+
+function sqlInColumn(column: Prisma.Sql, values: string[]): Prisma.Sql {
+  if (values.length === 0) {
     return Prisma.sql`FALSE`;
   }
-  return Prisma.sql`matchup."promptId" IN (${Prisma.join(promptIds)})`;
+  return Prisma.sql`${column} IN (${Prisma.join(values)})`;
 }
 
 async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
   const eligiblePromptIds = await getArenaEligiblePromptIds();
   if (eligiblePromptIds.length === 0) {
-    return { eligiblePromptIds, byPromptModel: new Map() };
+    return { eligiblePromptIds, activeModelIds: [], byPromptModel: new Map() };
   }
 
-  const eligiblePromptSet = new Set(eligiblePromptIds);
-  const [models, votes] = await Promise.all([
-    prisma.model.findMany({
-      where: { enabled: true, isBaseline: false },
-      select: { id: true, displayName: true },
-    }),
-    prisma.vote.findMany({
-      where: { choice: { in: ["A", "B", "TIE"] } },
-      select: {
-        choice: true,
-        matchup: {
-          select: {
-            promptId: true,
-            modelAId: true,
-            modelBId: true,
-          },
-        },
-      },
-    }) as Promise<DecisiveVoteRow[]>,
-  ]);
+  const models = await prisma.model.findMany({
+    where: { enabled: true, isBaseline: false },
+    select: { id: true, displayName: true },
+  });
 
-  const activeModelIds = new Set(models.map((model) => model.id));
+  const activeModelIds = models.map((model) => model.id);
+  if (activeModelIds.length === 0) {
+    return { eligiblePromptIds, activeModelIds, byPromptModel: new Map() };
+  }
+
   const displayNames = new Map(models.map((model) => [model.id, model.displayName]));
+  const promptFilter = promptFilterSql(eligiblePromptIds);
+  const modelAFilter = modelFilterSql(Prisma.sql`matchup."modelAId"`, activeModelIds);
+  const modelBFilter = modelFilterSql(Prisma.sql`matchup."modelBId"`, activeModelIds);
+  const pairVotes = await prisma.$queryRaw<PromptSignalPairAggregateRow[]>`
+    SELECT
+      matchup."promptId" AS "promptId",
+      matchup."modelAId" AS "modelAId",
+      matchup."modelBId" AS "modelBId",
+      SUM(
+        CASE vote.choice
+          WHEN 'A' THEN 1.0
+          WHEN 'B' THEN 0.0
+          WHEN 'TIE' THEN 0.5
+          ELSE 0.0
+        END
+      )::double precision AS "pointsA",
+      SUM(
+        CASE vote.choice
+          WHEN 'A' THEN 0.0
+          WHEN 'B' THEN 1.0
+          WHEN 'TIE' THEN 0.5
+          ELSE 0.0
+        END
+      )::double precision AS "pointsB",
+      COUNT(*)::int AS total
+    FROM "Vote" vote
+    INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+    WHERE vote.choice IN ('A', 'B', 'TIE')
+      AND ${promptFilter}
+      AND ${modelAFilter}
+      AND ${modelBFilter}
+    GROUP BY matchup."promptId", matchup."modelAId", matchup."modelBId"
+  `;
+
   const globalPairRows = new Map<string, PairwiseRow>();
   const pairRowsByPrompt = new Map<string, Map<string, PairwiseRow>>();
   const modelIdsByPrompt = new Map<string, Set<string>>();
 
-  for (const vote of votes) {
-    const { promptId, modelAId, modelBId } = vote.matchup;
-    if (!eligiblePromptSet.has(promptId)) continue;
-    if (!activeModelIds.has(modelAId) || !activeModelIds.has(modelBId)) continue;
+  for (const row of pairVotes) {
+    const promptId = row.promptId;
+    const modelAId = row.modelAId;
+    const modelBId = row.modelBId;
+    const pointsA = toNumber(row.pointsA);
+    const pointsB = toNumber(row.pointsB);
+    const total = toNumber(row.total);
 
-    const pointsA = vote.choice === "A" ? 1 : vote.choice === "B" ? 0 : 0.5;
-    const pointsB = vote.choice === "B" ? 1 : vote.choice === "A" ? 0 : 0.5;
-    aggregatePairRow(globalPairRows, modelAId, modelBId, pointsA, pointsB);
+    aggregatePairRow(globalPairRows, modelAId, modelBId, pointsA, pointsB, total);
 
     const promptPairs = pairRowsByPrompt.get(promptId) ?? new Map<string, PairwiseRow>();
-    aggregatePairRow(promptPairs, modelAId, modelBId, pointsA, pointsB);
+    aggregatePairRow(promptPairs, modelAId, modelBId, pointsA, pointsB, total);
     pairRowsByPrompt.set(promptId, promptPairs);
 
     const promptModelIds = modelIdsByPrompt.get(promptId) ?? new Set<string>();
@@ -755,7 +788,7 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
     });
   }
 
-  return { eligiblePromptIds, byPromptModel };
+  return { eligiblePromptIds, activeModelIds, byPromptModel };
 }
 
 async function getPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
@@ -785,38 +818,61 @@ async function getPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
 async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
   const promptSignal = await getPromptSignalSnapshot();
   const activePromptCount = promptSignal.eligiblePromptIds.length;
+  if (promptSignal.activeModelIds.length === 0) {
+    return new Map();
+  }
   const filter = promptFilterSql(promptSignal.eligiblePromptIds);
+  const activeModelAFilter = modelFilterSql(
+    Prisma.sql`eligible_votes."modelAId"`,
+    promptSignal.activeModelIds,
+  );
+  const activeModelBFilter = modelFilterSql(
+    Prisma.sql`eligible_votes."modelBId"`,
+    promptSignal.activeModelIds,
+  );
+  const activeModelEitherFilter = Prisma.sql`(
+    ${modelFilterSql(Prisma.sql`matchup."modelAId"`, promptSignal.activeModelIds)}
+    OR ${modelFilterSql(Prisma.sql`matchup."modelBId"`, promptSignal.activeModelIds)}
+  )`;
   const rows = await prisma.$queryRaw<PromptDispersionRow[]>`
-      WITH model_prompt_scores AS (
+      WITH eligible_votes AS (
         SELECT
-          matchup."modelAId" AS model_id,
           matchup."promptId" AS prompt_id,
-          CASE vote.choice
+          matchup."modelAId" AS "modelAId",
+          matchup."modelBId" AS "modelBId",
+          vote.choice AS choice
+        FROM "Vote" vote
+        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+        WHERE vote.choice IN ('A', 'B', 'TIE')
+          AND ${filter}
+          AND ${activeModelEitherFilter}
+      ),
+      model_prompt_scores AS (
+        SELECT
+          eligible_votes."modelAId" AS model_id,
+          eligible_votes.prompt_id AS prompt_id,
+          CASE eligible_votes.choice
             WHEN 'A' THEN 1.0
             WHEN 'B' THEN 0.0
             WHEN 'TIE' THEN 0.5
             ELSE NULL
           END AS score
-        FROM "Vote" vote
-        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-        WHERE vote.choice IN ('A', 'B', 'TIE')
-          AND ${filter}
+        FROM eligible_votes
+        WHERE ${activeModelAFilter}
 
         UNION ALL
 
         SELECT
-          matchup."modelBId" AS model_id,
-          matchup."promptId" AS prompt_id,
-          CASE vote.choice
+          eligible_votes."modelBId" AS model_id,
+          eligible_votes.prompt_id AS prompt_id,
+          CASE eligible_votes.choice
             WHEN 'A' THEN 0.0
             WHEN 'B' THEN 1.0
             WHEN 'TIE' THEN 0.5
             ELSE NULL
           END AS score
-        FROM "Vote" vote
-        INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
-        WHERE vote.choice IN ('A', 'B', 'TIE')
-          AND ${filter}
+        FROM eligible_votes
+        WHERE ${activeModelBFilter}
       ),
       per_prompt AS (
         SELECT

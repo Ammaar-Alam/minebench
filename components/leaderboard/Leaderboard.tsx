@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { LeaderboardResponse } from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { ErrorState } from "@/components/ErrorState";
+import { getConsistencyBand } from "@/lib/arena/consistencyBands";
 import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
 import { formatAge, readStale, writeStale } from "@/lib/staleCache";
 
@@ -103,6 +104,24 @@ function confidenceClass(confidence: number): string {
   if (confidence >= 75) return "text-success";
   if (confidence >= 50) return "text-accent";
   return "text-warn";
+}
+
+function consistencyNumberClass(consistency: number | null): string {
+  const band = getConsistencyBand(consistency);
+  if (band === "very-steady") return "text-success";
+  if (band === "steady") return "text-accent";
+  if (band === "mixed") return "text-warn";
+  if (band === "high-swing") return "text-danger";
+  return "text-muted";
+}
+
+function consistencyFillClass(consistency: number | null): string {
+  const band = getConsistencyBand(consistency);
+  if (band === "very-steady") return "relative bg-success after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-white/30";
+  if (band === "steady") return "relative bg-accent after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-white/26";
+  if (band === "mixed") return "relative bg-warn after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-white/24";
+  if (band === "high-swing") return "relative bg-danger after:absolute after:inset-y-0 after:right-0 after:w-px after:bg-white/24";
+  return "bg-muted/45";
 }
 
 type MovementBadge = {
@@ -465,12 +484,18 @@ export function Leaderboard() {
                   </div>
 
 	                  <div className="mt-2.5 flex items-center gap-2">
-	                    <span className="w-10 shrink-0 text-right font-mono text-xs text-fg/95">
+	                    <span
+                        className={`w-10 shrink-0 text-right font-mono text-xs font-medium ${consistencyNumberClass(
+                          m.consistency,
+                        )}`}
+                      >
 	                      {formatMetricValue(m.consistency)}
 	                    </span>
                     <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
                       <div
-                        className="h-full rounded-full bg-accent transition-[width] duration-500"
+                        className={`h-full rounded-full transition-[width] duration-500 ${consistencyFillClass(
+                          m.consistency,
+                        )}`}
                         style={{
                           width: `${Math.max(0, Math.min(100, consistency)).toFixed(1)}%`,
                         }}
@@ -688,12 +713,18 @@ export function Leaderboard() {
                     ) : null}
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
 	                      <div className="flex w-full items-center justify-center gap-1.5">
-	                        <span className="w-10 font-mono text-xs text-fg/95">
+	                        <span
+                            className={`w-10 font-mono text-xs font-medium ${consistencyNumberClass(
+                              m.consistency,
+                            )}`}
+                          >
 	                          {formatMetricValue(m.consistency)}
 	                        </span>
                         <div className="h-1.5 w-full max-w-[8.5rem] overflow-hidden rounded-full bg-border/40">
                           <div
-                            className="h-full rounded-full bg-accent transition-[width] duration-500"
+                            className={`h-full rounded-full transition-[width] duration-500 ${consistencyFillClass(
+                              m.consistency,
+                            )}`}
                             style={{
                               width: `${Math.max(0, Math.min(100, m.consistency ?? 0)).toFixed(1)}%`,
                             }}

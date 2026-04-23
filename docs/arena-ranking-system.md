@@ -343,6 +343,42 @@ Implemented branch version:
 - `gap = highTail - lowTail`
 - `consistency = round(clamp(100 - gap - 0.75 * gap^2 / 100, 0, 100), 1)`
 
+Notation:
+
+- \(i\) = model
+- \(p\) = prompt
+- \(N_p\) = active ranked models with usable prompt signal on prompt \(p\)
+- \(n_i\) = retained prompts for model \(i\)
+- \(k_i = \max(1, \lceil 0.2 \cdot n_i \rceil)\)
+- \(\tilde{r}_{i,p}\) = shrunk prompt-local rank
+- \(\tilde{q}_{i,p}\) = shrunk prompt-strength percentile
+
+The percentile mapping is:
+
+\[
+\tilde{q}_{i,p} =
+\begin{cases}
+100, & N_p \le 1 \\
+100 \cdot \dfrac{N_p - \tilde{r}_{i,p}}{N_p - 1}, & N_p > 1
+\end{cases}
+\]
+
+For each model \(i\), let \(\tilde{q}_{i,(t)}\) be the ordered retained prompt-strength percentiles. Then:
+
+\[
+L_i = \frac{1}{k_i}\sum_{t=1}^{k_i} \tilde{q}_{i,(t)}, \qquad
+U_i = \frac{1}{k_i}\sum_{t=n_i-k_i+1}^{n_i} \tilde{q}_{i,(t)}
+\]
+
+\[
+G_i = U_i - L_i
+\]
+
+\[
+\operatorname{Consistency}_i =
+\operatorname{clamp}\left(100 - G_i - 0.75 \cdot \frac{G_i^2}{100}, 0, 100\right)
+\]
+
 See [Consistency Metric (Prompt-Local Percentiles + Shrunk ES Gap)](./consistency-metric-percentile-band.md) for:
 
 - the Gemini treehouse confound example

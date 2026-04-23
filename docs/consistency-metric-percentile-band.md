@@ -2,7 +2,7 @@
 
 Status: implemented on this branch
 
-Last updated: April 22, 2026
+Last updated: April 23, 2026
 
 Scope: define the implemented public `Consistency` metric, explain the model-detail prompt graph change, document why raw prompt scores are schedule-confounded, and keep the residual-based alternative as a research comparison.
 
@@ -110,6 +110,43 @@ That is much closer to what users mean when they inspect the prompt breakdown.
 
 The branch implementation uses an empirical-Bayes version of the GPT 5.4 Pro design.
 
+### Notation
+
+Throughout this document:
+
+- \(i, j\) index models
+- \(p\) indexes prompts
+- \(N_p\) is the number of active ranked models with usable prompt signal on prompt \(p\)
+- \(n_i\) is the number of retained prompts for model \(i\)
+- \(k_i = \max(1, \lceil 0.2 \cdot n_i \rceil)\) is the tail size used for model \(i\)
+- \(\alpha_i\) is model \(i\)'s global Bradley-Terry ability
+- \(\hat{\theta}_{i,p}\) is the raw prompt-local Bradley-Terry ability for model \(i\) on prompt \(p\)
+- \(s_{i,p}^2\) is the approximate posterior variance of \(\hat{\theta}_{i,p}\)
+- \(\tau_p^2\) is the between-model prompt variance used for shrinkage on prompt \(p\)
+- \(\rho_{i,p}\) is the shrinkage weight for model \(i\) on prompt \(p\)
+- \(\tilde{\theta}_{i,p}\) is the shrunk prompt-local ability
+- \(\tilde{r}_{i,p}\) is the rank induced by \(\tilde{\theta}_{i,p}\) on prompt \(p\)
+- \(\tilde{q}_{i,p}\) is the shrunk prompt-strength percentile shown in the UI
+
+All public prompt percentiles are on a `0-100` scale, where:
+
+- `100` = strongest active model on that prompt
+- `0` = weakest active model on that prompt
+
+### Statistical target
+
+The branch is trying to estimate:
+
+\[
+\text{Consistency} \approx \text{how tightly model } i \text{ stays in the same field-relative quality band across prompts}
+\]
+
+That is deliberately different from:
+
+- raw prompt win-rate spread
+- deviation from the model's own expected baseline
+- a lower-tail-only robustness metric
+
 ### 1. Global prompt-agnostic ability
 
 Across all decisive votes on active prompts:
@@ -118,6 +155,14 @@ Across all decisive votes on active prompts:
 2. get a global latent ability `alpha(i)` for each model `i`
 
 This acts as the shrinkage anchor.
+
+Formally, for a decisive comparison between models \(i\) and \(j\),
+
+\[
+\Pr(i \succ j) = \frac{\exp(\alpha_i)}{\exp(\alpha_i) + \exp(\alpha_j)}
+\]
+
+with the usual Bradley-Terry location constraint handled numerically by centering the fitted latent scores.
 
 ### 2. Prompt-local ability
 
@@ -128,20 +173,33 @@ For each prompt `p`:
 3. estimate an approximate posterior variance `s(i, p)^2` from the prompt-level comparison graph
 4. align disconnected prompt components back onto the global `alpha(i)` scale before shrinkage
 
+For a decisive comparison on prompt \(p\),
+
+\[
+\Pr(i \succ j \mid p) = \frac{\exp(\hat{\theta}_{i,p})}{\exp(\hat{\theta}_{i,p}) + \exp(\hat{\theta}_{j,p})}
+\]
+
+The implementation estimates \(s_{i,p}^2\) from the stabilized inverse information matrix of the prompt-local Bradley-Terry fit, with a small variance floor to avoid singular behavior on sparse prompt graphs.
+
 ### 3. Prompt-level shrinkage
 
 For each prompt `p`, estimate a between-model prompt variance:
 
-```text
-tau(p)^2 = max(0, VAR(theta_hat(i, p) - alpha(i)) - mean(s(i, p)^2))
-```
+Estimate the prompt-level between-model variance:
+
+\[
+\tau_p^2 = \max\left(0, \operatorname{Var}\big(\hat{\theta}_{i,p} - \alpha_i\big) - \operatorname{mean}(s_{i,p}^2)\right)
+\]
 
 Then shrink each prompt-local estimate toward the global ability:
 
-```text
-rho(i, p) = tau(p)^2 / (tau(p)^2 + s(i, p)^2)
-theta_tilde(i, p) = alpha(i) + rho(i, p) * (theta_hat(i, p) - alpha(i))
-```
+\[
+\rho_{i,p} = \frac{\tau_p^2}{\tau_p^2 + s_{i,p}^2}
+\]
+
+\[
+\tilde{\theta}_{i,p} = \alpha_i + \rho_{i,p}\big(\hat{\theta}_{i,p} - \alpha_i\big)
+\]
 
 Finally:
 
@@ -149,6 +207,16 @@ Finally:
 2. convert that rank to a percentile `q_tilde(i, p)`
 
 That percentile is the main `Prompt strength` number shown on the model detail page.
+
+The percentile mapping is:
+
+\[
+\tilde{q}_{i,p} =
+\begin{cases}
+100, & N_p \le 1 \\
+100 \cdot \dfrac{N_p - \tilde{r}_{i,p}}{N_p - 1}, & N_p > 1
+\end{cases}
+\]
 
 ### 4. Public consistency
 
@@ -160,13 +228,24 @@ For each model `i`:
 4. let `k = max(1, ceil(0.2 * n))`
 5. compute:
 
-```text
-L(i) = average(bottom k prompt-strength percentiles)
-U(i) = average(top k prompt-strength percentiles)
-G(i) = U(i) - L(i)
+\[
+L_i = \frac{1}{k_i}\sum_{t=1}^{k_i} \tilde{q}_{i,(t)}
+\]
 
-Consistency(i) = clamp(100 - G(i) - 0.75 * G(i)^2 / 100, 0, 100)
-```
+\[
+U_i = \frac{1}{k_i}\sum_{t=n_i-k_i+1}^{n_i} \tilde{q}_{i,(t)}
+\]
+
+\[
+G_i = U_i - L_i
+\]
+
+\[
+\operatorname{Consistency}_i =
+\operatorname{clamp}\left(100 - G_i - 0.75 \cdot \frac{G_i^2}{100}, 0, 100\right)
+\]
+
+where \(\tilde{q}_{i,(t)}\) is the \(t\)-th order statistic of the retained shrunk prompt-strength percentiles for model \(i\).
 
 This gives the intended behavior:
 
@@ -180,18 +259,41 @@ This was the strongest earlier alternative.
 
 For each decisive vote:
 
-```text
-residual = observed - expectedScore(conservativeRating_model, conservativeRating_opponent)
-```
+\[
+e_{i,v} = \operatorname{expectedScore}(C_i, C_j)
+\]
+
+\[
+r_{i,v} = y_{i,v} - e_{i,v}
+\]
+
+where:
+
+- \(C_i\) is the conservative rating for model \(i\)
+- \(y_{i,v} \in \{1, 0.5, 0\}\) is the observed decisive vote score for model \(i\) on vote \(v\)
 
 For each prompt, average those residuals. Then for each model:
 
-```text
-span(i) = average(top 20% promptResiduals) - average(bottom 20% promptResiduals)
-x(i) = min(0.5, span(i)) / 0.5
+\[
+\bar{r}_{i,p} = \operatorname{mean}_{v \in p}(r_{i,v})
+\]
 
-Consistency_residual(i) = round(100 * (1 - x(i)^2), 1)
-```
+\[
+\operatorname{span}_i =
+\operatorname{mean}(\text{top 20\% of } \bar{r}_{i,p})
+-
+\operatorname{mean}(\text{bottom 20\% of } \bar{r}_{i,p})
+\]
+
+\[
+x_i = \frac{\min(0.5, \operatorname{span}_i)}{0.5}
+\]
+
+\[
+\operatorname{Consistency}^{\text{residual}}_i
+=
+\operatorname{round}\left(100(1 - x_i^2), 1\right)
+\]
 
 What it measures well:
 
@@ -296,6 +398,13 @@ This branch implements the clean public split:
 4. public `Consistency` = shrunk convex ES-gap on prompt-strength percentiles
 5. `Spread` stays raw
 6. `Avg score` stays raw
+
+Formally:
+
+- `Prompt strength` on prompt \(p\) is \(\tilde{q}_{i,p}\)
+- public `Consistency` is a tail-gap functional of \(\tilde{q}_{i,p}\)
+- `Spread` is the population standard deviation of the retained raw prompt averages
+- `Avg score` is the arithmetic mean of those retained raw prompt averages
 
 ## Secondary research metric
 

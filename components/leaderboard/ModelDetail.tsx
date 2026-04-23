@@ -30,6 +30,7 @@ import {
   SandboxGifExportButton,
   type SandboxGifExportTarget,
 } from "@/components/sandbox/SandboxGifExportButton";
+import { getConsistencyBand, getConsistencyLabel } from "@/lib/arena/consistencyBands";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -406,18 +407,22 @@ function formatSignedPercent(value: number | null, digits = 1): string {
   return `${value > 0 ? "+" : ""}${pct}%`;
 }
 
-function consistencyLabel(consistency: number | null): string {
-  if (consistency == null) return "Insufficient data";
-  if (consistency >= 78) return "Very steady";
-  if (consistency >= 58) return "Balanced";
-  return "High swing";
+function consistencyTone(consistency: number | null): string {
+  const band = getConsistencyBand(consistency);
+  if (band === "very-steady") return "text-success";
+  if (band === "steady") return "text-accent";
+  if (band === "mixed") return "text-warn";
+  if (band === "high-swing") return "text-danger";
+  return "text-muted";
 }
 
-function consistencyTone(consistency: number | null): string {
-  if (consistency == null) return "text-muted";
-  if (consistency >= 78) return "text-success";
-  if (consistency >= 58) return "text-accent";
-  return "text-warn";
+function consistencyStroke(consistency: number | null): string {
+  const band = getConsistencyBand(consistency);
+  if (band === "very-steady") return "hsl(var(--success) / 0.94)";
+  if (band === "steady") return "hsl(var(--accent) / 0.92)";
+  if (band === "mixed") return "hsl(var(--warn) / 0.92)";
+  if (band === "high-swing") return "hsl(var(--danger) / 0.92)";
+  return "hsl(var(--muted) / 0.72)";
 }
 
 function strengthBarClass(percentile: number | null): string {
@@ -684,7 +689,7 @@ function ConsistencyGauge({
           cy={center}
           r={radius}
           fill="none"
-          stroke="hsl(var(--accent) / 0.9)"
+          stroke={consistencyStroke(value)}
           strokeWidth={strokeWidth}
           strokeLinecap="round"
           strokeDasharray={`${circumference.toFixed(2)} ${circumference.toFixed(2)}`}
@@ -1415,8 +1420,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   <span className="text-[10px] uppercase tracking-[0.14em] text-muted">
                     Consistency
                   </span>
-                  <span className="text-[11px] text-muted2">
-                    {consistencyLabel(data.summary.consistency)}
+                  <span className={`text-[11px] ${consistencyTone(data.summary.consistency)}`}>
+                    {getConsistencyLabel(data.summary.consistency)}
                   </span>
                 </div>
               </div>
