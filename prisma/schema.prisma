@@ -96,6 +96,9 @@ model Build {
   voxelByteSize      Int?
   voxelCompressedByteSize Int?
   voxelSha256        String?
+  arenaBuildHints    Json?
+  arenaSnapshotPreview Json?
+  arenaSnapshotFull  Json?
   blockCount        Int
   generationTimeMs  Int
 
@@ -103,6 +106,7 @@ model Build {
   matchupsAsB Matchup[] @relation("MatchupBuildB")
 
   @@unique([promptId, modelId, gridSize, palette, mode])
+  @@index([gridSize, palette, mode, promptId, modelId])
   @@index([promptId])
   @@index([modelId])
 }
@@ -142,6 +146,7 @@ model Vote {
 
   matchupId String
   matchup   Matchup @relation(fields: [matchupId], references: [id], onDelete: Cascade)
+  jobs      ArenaVoteJob[]
 
   sessionId String
   choice    String
@@ -150,6 +155,23 @@ model Vote {
   @@index([sessionId])
   @@index([createdAt])
   @@index([matchupId, createdAt])
+}
+
+model ArenaVoteJob {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  voteId  String @unique
+  vote    Vote   @relation(fields: [voteId], references: [id], onDelete: Cascade)
+
+  matchupId String
+  promptId  String
+  modelAId  String
+  modelBId  String
+  choice    String
+
+  @@index([matchupId])
 }
 
 model ArenaCoverageModelPrompt {

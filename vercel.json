@@ -3,6 +3,10 @@
     {
       "path": "/api/admin/rank-snapshots/capture",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/admin/arena/drain-vote-jobs",
+      "schedule": "* * * * *"
     }
   ]
 }

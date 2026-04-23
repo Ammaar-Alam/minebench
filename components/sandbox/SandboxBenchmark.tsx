@@ -10,6 +10,7 @@ import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { ErrorState } from "@/components/ErrorState";
 import type {
+  ArenaBuildDeliveryClass,
   ArenaBuildLoadHints,
   ArenaBuildRef,
   ArenaBuildStreamEvent,
@@ -518,6 +519,10 @@ async function fetchBuildVariantStream(
   throw (lastError instanceof Error ? lastError : new Error("Failed to retrieve build"));
 }
 
+function getInitialDeliveryClass(hints: ArenaBuildLoadHints | undefined): ArenaBuildDeliveryClass | undefined {
+  return hints?.initialDeliveryClass ?? hints?.deliveryClass;
+}
+
 export function SandboxBenchmark() {
   const [promptId, setPromptId] = useState("");
   const [modelPair, setModelPair] = useState({ a: DEFAULT_MODEL_A, b: DEFAULT_MODEL_B });
@@ -690,42 +695,45 @@ export function SandboxBenchmark() {
 
       void (async () => {
         try {
-          const payload =
-            lane.buildLoadHints.deliveryClass === "snapshot"
-              ? await fetchBuildVariantSnapshot(lane.buildRef, controller.signal)
-              : await fetchBuildVariantStream(lane.buildRef, {
-                  signal: controller.signal,
-                  onProgress: (progressiveBuild, progress, meta) => {
-                    if (hydrationRunIdRef.current !== runId) return;
-                    setSlotState((prev) => {
-                      const current = prev[slot];
-                      if (!current || current.buildId !== lane.buildId) return prev;
+          const streamFetch = () =>
+            fetchBuildVariantStream(lane.buildRef, {
+              signal: controller.signal,
+              onProgress: (progressiveBuild, progress, meta) => {
+                if (hydrationRunIdRef.current !== runId) return;
+                setSlotState((prev) => {
+                  const current = prev[slot];
+                  if (!current || current.buildId !== lane.buildId) return prev;
 
-                      const sameProgress =
-                        current.progress?.receivedBlocks === progress.receivedBlocks &&
-                        current.progress?.totalBlocks === progress.totalBlocks;
-                      const sameValidation = current.serverValidated === meta.serverValidated;
-                      if (sameProgress && sameValidation && current.build === progressiveBuild) {
-                        return prev;
-                      }
+                  const sameProgress =
+                    current.progress?.receivedBlocks === progress.receivedBlocks &&
+                    current.progress?.totalBlocks === progress.totalBlocks;
+                  const sameValidation = current.serverValidated === meta.serverValidated;
+                  if (sameProgress && sameValidation && current.build === progressiveBuild) {
+                    return prev;
+                  }
 
-                      return {
-                        ...prev,
-                        [slot]: {
-                          ...current,
-                          phase: "loading",
-                          build: progressiveBuild,
-                          progress: {
-                            receivedBlocks: progress.receivedBlocks,
-                            totalBlocks: progress.totalBlocks,
-                          },
-                          error: null,
-                          serverValidated: current.serverValidated || meta.serverValidated,
-                        },
-                      };
-                    });
-                  },
+                  return {
+                    ...prev,
+                    [slot]: {
+                      ...current,
+                      phase: "loading",
+                      build: progressiveBuild,
+                      progress: {
+                        receivedBlocks: progress.receivedBlocks,
+                        totalBlocks: progress.totalBlocks,
+                      },
+                      error: null,
+                      serverValidated: current.serverValidated || meta.serverValidated,
+                    },
+                  };
                 });
+              },
+            });
+          const initialDeliveryClass = getInitialDeliveryClass(lane.buildLoadHints);
+          const payload =
+            initialDeliveryClass === "snapshot" || initialDeliveryClass === "inline"
+              ? await fetchBuildVariantSnapshot(lane.buildRef, controller.signal).catch(streamFetch)
+              : await streamFetch();
 
           if (hydrationRunIdRef.current !== runId) return;
 

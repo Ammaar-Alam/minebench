@@ -20,10 +20,12 @@ export type ArenaBuildRef = {
 
 export type ArenaBuildLoadHints = {
   initialVariant: ArenaBuildVariant;
+  initialDeliveryClass: "inline" | "snapshot" | "stream-live" | "stream-artifact";
   deliveryClass: "inline" | "snapshot" | "stream-live" | "stream-artifact";
   fullBlockCount: number;
   previewBlockCount: number;
   previewStride: number;
+  initialEstimatedBytes: number | null;
   fullEstimatedBytes: number | null;
 };
 
@@ -39,6 +41,7 @@ export type ArenaBuildSource = {
   voxelStorageBucket: string | null;
   voxelStoragePath: string | null;
   voxelStorageEncoding: string | null;
+  arenaBuildHints?: unknown | null;
 };
 
 export type PreparedArenaBuild = {
@@ -53,6 +56,7 @@ export type PreparedArenaBuild = {
 
 type CachedArtifact = {
   prepared: PreparedArenaBuild;
+  jsonResponses: Partial<Record<ArenaBuildVariant, Uint8Array>>;
   byteWeight: number;
   touchedAt: number;
 };
@@ -62,11 +66,15 @@ type ParsedArenaBuild = {
   payloadEstimatedBytes: number | null;
 };
 
+type PrepareArenaBuildOptions = {
+  signal?: AbortSignal;
+};
+
 const ARENA_ARTIFACTS_ENABLED = readBoolEnv("ARENA_ARTIFACTS_ENABLED", true);
 const ARENA_PREVIEW_STAGE_ENABLED = readBoolEnv("ARENA_PREVIEW_STAGE_ENABLED", true);
-const PREVIEW_TARGET_BLOCKS = readIntEnv("ARENA_PREVIEW_TARGET_BLOCKS", 900_000);
-const MEMORY_CACHE_MAX_ENTRIES = readIntEnv("ARENA_ARTIFACT_CACHE_MAX_ENTRIES", 24);
-const MEMORY_CACHE_MAX_WEIGHT = readIntEnv("ARENA_ARTIFACT_CACHE_MAX_WEIGHT", 180_000_000);
+const PREVIEW_TARGET_BLOCKS = readIntEnv("ARENA_PREVIEW_TARGET_BLOCKS", 3_000);
+const MEMORY_CACHE_MAX_ENTRIES = readIntEnv("ARENA_ARTIFACT_CACHE_MAX_ENTRIES", 128);
+const MEMORY_CACHE_MAX_WEIGHT = readIntEnv("ARENA_ARTIFACT_CACHE_MAX_WEIGHT", 600_000_000);
 
 const artifactCache = new Map<string, CachedArtifact>();
 const inflight = new Map<string, Promise<PreparedArenaBuild>>();
@@ -88,6 +96,10 @@ function readIntEnv(name: string, fallback: number): number {
   return parsed;
 }
 
+export function getArenaPreviewTargetBlocks(): number {
+  return PREVIEW_TARGET_BLOCKS;
+}
+
 function normalizePalette(value: string): "simple" | "advanced" {
   return value === "advanced" ? "advanced" : "simple";
 }
@@ -106,6 +118,10 @@ function buildCacheKey(source: ArenaBuildSource, checksum: string): string {
   return `${source.id}:${checksum}`;
 }
 
+function buildCacheKeyFromParts(buildId: string, checksum: string): string {
+  return `${buildId}:${checksum}`;
+}
+
 function normalizeBlockCount(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
   return Math.floor(value);
@@ -113,6 +129,94 @@ function normalizeBlockCount(value: number): number {
 
 function shouldPreferPreview(fullEstimatedBytes: number | null): boolean {
   return ARENA_PREVIEW_STAGE_ENABLED && shouldPreferPreviewVariant(fullEstimatedBytes);
+}
+
+function parseArenaBuildVariant(value: unknown): ArenaBuildVariant | null {
+  return value === "preview" || value === "full" ? value : null;
+}
+
+function parseArenaBuildDeliveryClass(
+  value: unknown,
+): ArenaBuildLoadHints["deliveryClass"] | null {
+  return value === "inline" ||
+    value === "snapshot" ||
+    value === "stream-live" ||
+    value === "stream-artifact"
+    ? value
+    : null;
+}
+
+function parseNonNegativeInt(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+function parseNullableEstimatedBytes(value: unknown): number | null {
+  return value == null ? null : parseNonNegativeInt(value);
+}
+
+export function parsePersistedArenaBuildLoadHints(value: unknown): ArenaBuildLoadHints | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const initialVariant = parseArenaBuildVariant(candidate.initialVariant);
+  const deliveryClass = parseArenaBuildDeliveryClass(candidate.deliveryClass);
+  const initialDeliveryClass =
+    parseArenaBuildDeliveryClass(candidate.initialDeliveryClass) ?? deliveryClass;
+  const fullBlockCount = parseNonNegativeInt(candidate.fullBlockCount);
+  const previewBlockCount = parseNonNegativeInt(candidate.previewBlockCount);
+  const previewStride = parseNonNegativeInt(candidate.previewStride);
+  const fullEstimatedBytes = parseNullableEstimatedBytes(candidate.fullEstimatedBytes);
+  const initialEstimatedBytes =
+    parseNullableEstimatedBytes(candidate.initialEstimatedBytes) ?? fullEstimatedBytes;
+
+  if (
+    !initialVariant ||
+    !deliveryClass ||
+    !initialDeliveryClass ||
+    fullBlockCount == null ||
+    previewBlockCount == null ||
+    previewStride == null
+  ) {
+    return null;
+  }
+
+  return {
+    initialVariant,
+    initialDeliveryClass,
+    deliveryClass,
+    fullBlockCount,
+    previewBlockCount,
+    previewStride,
+    initialEstimatedBytes,
+    fullEstimatedBytes,
+  };
+}
+
+export function serializeArenaBuildLoadHints(hints: ArenaBuildLoadHints): Record<string, unknown> {
+  return {
+    initialVariant: hints.initialVariant,
+    initialDeliveryClass: hints.initialDeliveryClass,
+    deliveryClass: hints.deliveryClass,
+    fullBlockCount: hints.fullBlockCount,
+    previewBlockCount: hints.previewBlockCount,
+    previewStride: hints.previewStride,
+    initialEstimatedBytes: hints.initialEstimatedBytes,
+    fullEstimatedBytes: hints.fullEstimatedBytes,
+  };
+}
+
+export function getPreparedArenaBuildMetadataUpdate(prepared: PreparedArenaBuild): Record<string, unknown> {
+  const shouldPersistPreparedPayload = prepared.hints.deliveryClass !== "stream-artifact";
+  const snapshotPreview =
+    shouldPersistPreparedPayload && prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length
+      ? prepared.previewBuild
+      : null;
+  const snapshotFull = shouldPersistPreparedPayload ? prepared.fullBuild : null;
+  return {
+    voxelSha256: prepared.checksum,
+    arenaBuildHints: serializeArenaBuildLoadHints(prepared.hints),
+    arenaSnapshotPreview: snapshotPreview,
+    arenaSnapshotFull: snapshotFull,
+  };
 }
 
 function estimatePayloadBytes(payload: unknown): number | null {
@@ -134,10 +238,16 @@ function shouldEstimatePayloadBytes(source: ArenaBuildSource): boolean {
 }
 
 export function deriveArenaBuildLoadHints(
-  source: Pick<ArenaBuildSource, "blockCount" | "voxelByteSize" | "voxelCompressedByteSize">,
+  source: Pick<ArenaBuildSource, "blockCount" | "voxelByteSize" | "voxelCompressedByteSize"> & {
+    arenaBuildHints?: unknown | null;
+  },
 ): ArenaBuildLoadHints {
+  const persisted = parsePersistedArenaBuildLoadHints(source.arenaBuildHints);
+  if (persisted) return persisted;
+
   const fullBlockCount = normalizeBlockCount(source.blockCount);
   const previewBlockCount = Math.min(fullBlockCount, PREVIEW_TARGET_BLOCKS);
+  const previewEstimatedBytes = estimateArenaBuildBytes({ blockCount: previewBlockCount });
   const fullEstimatedBytes = estimateArenaBuildBytes({
     blockCount: fullBlockCount,
     voxelByteSize: source.voxelByteSize,
@@ -148,12 +258,16 @@ export function deriveArenaBuildLoadHints(
   // preview target, "preview" would be identical to "full" and would add UX friction (extra hydration pass).
   const initialVariant: ArenaBuildVariant =
     shouldPreferPreview(fullEstimatedBytes) && previewBlockCount < fullBlockCount ? "preview" : "full";
+  const initialEstimatedBytes =
+    initialVariant === "preview" ? previewEstimatedBytes : fullEstimatedBytes;
   return {
     initialVariant,
+    initialDeliveryClass: classifyArenaBuildDelivery(initialEstimatedBytes),
     deliveryClass,
     fullBlockCount,
     previewBlockCount,
     previewStride: 1,
+    initialEstimatedBytes,
     fullEstimatedBytes,
   };
 }
@@ -278,6 +392,11 @@ function createPrepared(
     : { build: renderBuild, stride: 1 };
   const initialVariant: ArenaBuildVariant =
     preferPreview && preview.build.blocks.length < renderBuild.blocks.length ? "preview" : "full";
+  const previewEstimatedBytes = estimateArenaBuildBytes({
+    blockCount: preview.build.blocks.length,
+  });
+  const initialEstimatedBytes =
+    initialVariant === "preview" ? previewEstimatedBytes : fullEstimatedBytes;
   const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(renderBuild);
 
   return {
@@ -287,11 +406,13 @@ function createPrepared(
     previewBuild: preview.build,
     hints: {
       ...hintsFromMetadata,
+      initialDeliveryClass: classifyArenaBuildDelivery(initialEstimatedBytes),
       fullEstimatedBytes,
       deliveryClass,
       initialVariant,
       previewBlockCount: preview.build.blocks.length,
       previewStride: preview.stride,
+      initialEstimatedBytes,
     },
     buildRef: {
       buildId: source.id,
@@ -354,17 +475,71 @@ function getCachedPrepared(cacheKey: string): PreparedArenaBuild | null {
   return cached.prepared;
 }
 
+export function getCachedPreparedArenaBuild(
+  buildId: string,
+  checksum: string | null | undefined,
+): PreparedArenaBuild | null {
+  const normalizedChecksum = checksum?.trim();
+  if (!normalizedChecksum) return null;
+  return getCachedPrepared(buildCacheKeyFromParts(buildId, normalizedChecksum));
+}
+
 function setCachedPrepared(cacheKey: string, prepared: PreparedArenaBuild): void {
   artifactCache.set(cacheKey, {
     prepared,
+    jsonResponses: {},
     byteWeight: estimateCacheWeight(prepared),
     touchedAt: Date.now(),
   });
   pruneCache();
 }
 
-async function parseAndValidateBuild(source: ArenaBuildSource): Promise<ParsedArenaBuild> {
-  const payload = await resolveBuildPayload(source);
+export function getCachedPreparedArenaBuildResponse(
+  buildId: string,
+  checksum: string | null | undefined,
+  variant: ArenaBuildVariant,
+): Uint8Array | null {
+  const normalizedChecksum = checksum?.trim();
+  if (!normalizedChecksum) return null;
+  const cached = artifactCache.get(buildCacheKeyFromParts(buildId, normalizedChecksum));
+  if (!cached) return null;
+  cached.touchedAt = Date.now();
+  return cached.jsonResponses[variant] ?? null;
+}
+
+export function rememberCachedPreparedArenaBuildResponse(
+  prepared: PreparedArenaBuild,
+  variant: ArenaBuildVariant,
+  bytes: Uint8Array,
+): void {
+  const normalizedChecksum = prepared.checksum?.trim();
+  if (!normalizedChecksum) return;
+  const cacheKey = buildCacheKeyFromParts(prepared.buildId, normalizedChecksum);
+  const cached = artifactCache.get(cacheKey);
+  if (!cached) return;
+  const previousBytes = cached.jsonResponses[variant];
+  if (previousBytes) {
+    cached.byteWeight -= previousBytes.byteLength;
+  }
+  cached.jsonResponses[variant] = bytes;
+  cached.byteWeight += bytes.byteLength;
+  cached.touchedAt = Date.now();
+  pruneCache();
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
+
+async function parseAndValidateBuild(
+  source: ArenaBuildSource,
+  opts?: PrepareArenaBuildOptions,
+): Promise<ParsedArenaBuild> {
+  throwIfAborted(opts?.signal);
+  const payload = await resolveBuildPayload(source, { signal: opts?.signal });
+  throwIfAborted(opts?.signal);
   const payloadEstimatedBytes = shouldEstimatePayloadBytes(source)
     ? estimatePayloadBytes(payload)
     : null;
@@ -377,6 +552,7 @@ async function parseAndValidateBuild(source: ArenaBuildSource): Promise<ParsedAr
   });
 
   if (validated.ok) {
+    throwIfAborted(opts?.signal);
     return { build: validated.value.build, payloadEstimatedBytes };
   }
 
@@ -384,14 +560,19 @@ async function parseAndValidateBuild(source: ArenaBuildSource): Promise<ParsedAr
   if (!parsed.ok) {
     throw new Error(`Build payload is invalid: ${parsed.error}`);
   }
+  throwIfAborted(opts?.signal);
   return { build: parsed.value, payloadEstimatedBytes };
 }
 
-export async function prepareArenaBuild(source: ArenaBuildSource): Promise<PreparedArenaBuild> {
+export async function prepareArenaBuild(
+  source: ArenaBuildSource,
+  opts?: PrepareArenaBuildOptions,
+): Promise<PreparedArenaBuild> {
   const storedChecksum = normalizeStoredChecksum(source);
+  throwIfAborted(opts?.signal);
 
   if (!ARENA_ARTIFACTS_ENABLED) {
-    const parsed = await parseAndValidateBuild(source);
+    const parsed = await parseAndValidateBuild(source, opts);
     const prepared = createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
     prepared.hints.initialVariant = "full";
     return prepared;
@@ -399,7 +580,7 @@ export async function prepareArenaBuild(source: ArenaBuildSource): Promise<Prepa
 
   // Without a durable content checksum we skip cache reuse to avoid stale artifacts after in-place overwrites.
   if (!storedChecksum) {
-    const parsed = await parseAndValidateBuild(source);
+    const parsed = await parseAndValidateBuild(source, opts);
     return createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, null);
   }
 
@@ -411,7 +592,8 @@ export async function prepareArenaBuild(source: ArenaBuildSource): Promise<Prepa
   if (existing) return existing;
 
   const promise = (async () => {
-    const parsed = await parseAndValidateBuild(source);
+    const parsed = await parseAndValidateBuild(source, opts);
+    throwIfAborted(opts?.signal);
     const prepared = createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
     setCachedPrepared(cacheKey, prepared);
     return prepared;

@@ -1,26 +1,22 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { conservativeScore, updateRatingPair } from "@/lib/arena/rating";
 import type { VoteChoice } from "@/lib/arena/types";
-import { invalidateArenaStatsCache } from "@/lib/arena/stats";
-import {
-  applyDecisiveVoteCoverageUpdate,
-  isDecisiveChoice,
-  recordArenaVoteInSamplingCache,
-} from "@/lib/arena/coverage";
-import { withArenaWriteRetry } from "@/lib/arena/writeRetry";
+import { recordArenaMatchupShown } from "@/lib/arena/coverage";
+import { parseArenaMatchupToken } from "@/lib/arena/matchupToken";
+import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetry";
+import { scheduleArenaVoteJobDrain } from "@/lib/arena/voteJobs";
 import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
-const DECISIVE_VOTE_TX_MAX_WAIT_MS = 750;
-const DECISIVE_VOTE_TX_TIMEOUT_MS = 2_500;
+const VOTE_JOB_DRAIN_AFTER_RESPONSE =
+  (process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE ?? "0").trim() === "1";
 
 const reqSchema = z.object({
-  matchupId: z.string().min(1),
+  matchupId: z.string().min(1).max(2048),
   choice: z.union([z.literal("A"), z.literal("B"), z.literal("TIE"), z.literal("BOTH_BAD")]),
 });
 
@@ -40,83 +36,12 @@ function getOrSetSessionId(res: NextResponse, req: Request) {
   return id;
 }
 
-type ModelUpdatePlan = {
-  id: string;
-  data: Prisma.ModelUpdateInput;
-};
-
-type VoteCacheUpdate = {
-  decisive: boolean;
-  promptId: string;
-  modelA: {
-    id: string;
-    eloRating: number;
-    conservativeRating: number;
-    ratingDeviation: number;
-  };
-  modelB: {
-    id: string;
-    eloRating: number;
-    conservativeRating: number;
-    ratingDeviation: number;
-  };
-};
-
-type LockedModelRow = {
-  id: string;
-  eloRating: number;
-  glickoRd: number;
-  glickoVolatility: number;
-};
-
-function orderModelUpdatePlans(plans: ModelUpdatePlan[]): ModelUpdatePlan[] {
-  return [...plans].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+function isCapacityVoteError(error: unknown): boolean {
+  return isArenaCapacityError(error);
 }
 
-async function applyOrderedModelUpdates(
-  tx: Prisma.TransactionClient,
-  plans: ModelUpdatePlan[],
-) {
-  for (const plan of orderModelUpdatePlans(plans)) {
-    await tx.model.update({
-      where: { id: plan.id },
-      data: plan.data,
-    });
-  }
-}
-
-async function loadModelsForVote(
-  tx: Prisma.TransactionClient,
-  modelIds: [string, string],
-): Promise<Map<string, LockedModelRow>> {
-  const orderedIds = Array.from(new Set(modelIds)).sort();
-  const rows = await tx.model.findMany({
-    where: {
-      id: { in: orderedIds },
-    },
-    select: {
-      id: true,
-      eloRating: true,
-      glickoRd: true,
-      glickoVolatility: true,
-    },
-  });
-
-  if (rows.length !== orderedIds.length) {
-    throw new Error("Vote models not found");
-  }
-
-  return new Map(
-    rows.map((row) => [
-      row.id,
-      {
-        id: row.id,
-        eloRating: Number(row.eloRating),
-        glickoRd: Number(row.glickoRd),
-        glickoVolatility: Number(row.glickoVolatility),
-      },
-    ]),
-  );
+function isDuplicateVoteError(error: unknown): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
 export async function POST(req: Request) {
@@ -147,15 +72,32 @@ export async function POST(req: Request) {
   const { matchupId, choice } = parsed.data as { matchupId: string; choice: VoteChoice };
 
   const lookupStartedAt = timing.start();
-  const matchup = await prisma.matchup.findUnique({
-    where: { id: matchupId },
-    select: {
-      id: true,
-      promptId: true,
-      modelAId: true,
-      modelBId: true,
-    },
-  });
+  const tokenMatchup = parseArenaMatchupToken(matchupId);
+  const dbMatchupId = tokenMatchup?.id ?? matchupId;
+  const matchup = tokenMatchup
+    ? {
+        id: tokenMatchup.id,
+        promptId: tokenMatchup.promptId,
+        modelAId: tokenMatchup.modelAId,
+        modelBId: tokenMatchup.modelBId,
+        buildAId: tokenMatchup.buildAId,
+        buildBId: tokenMatchup.buildBId,
+        samplingLane: tokenMatchup.samplingLane ?? null,
+        samplingReason: tokenMatchup.samplingReason ?? null,
+      }
+    : await prisma.matchup.findUnique({
+        where: { id: dbMatchupId },
+        select: {
+          id: true,
+          promptId: true,
+          modelAId: true,
+          modelBId: true,
+          buildAId: true,
+          buildBId: true,
+          samplingLane: true,
+          samplingReason: true,
+        },
+      });
   timing.end("lookup", lookupStartedAt);
 
   if (!matchup) return respondJson({ error: "Matchup not found" }, { status: 404 });
@@ -165,160 +107,92 @@ export async function POST(req: Request) {
 
   try {
     const txStartedAt = timing.start();
-    let cacheUpdate: VoteCacheUpdate | null = null;
-
-    if (choice === "BOTH_BAD") {
-      const updates = orderModelUpdatePlans([
-        {
-          id: matchup.modelAId,
-          data: {
-            bothBadCount: { increment: 1 },
-          },
-        },
-        {
-          id: matchup.modelBId,
-          data: {
-            bothBadCount: { increment: 1 },
-          },
-        },
-      ]);
-
-      await withArenaWriteRetry(() =>
-        prisma.$transaction(
-          async (tx) => {
-            await loadModelsForVote(tx, [matchup.modelAId, matchup.modelBId]);
-            await tx.vote.create({
-              data: { matchupId, sessionId, choice },
-            });
-            await applyOrderedModelUpdates(tx, updates);
-          },
-          {
-            maxWait: DECISIVE_VOTE_TX_MAX_WAIT_MS,
-            timeout: DECISIVE_VOTE_TX_TIMEOUT_MS,
-            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-          },
+    const voteId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
+    const insertedRows = await withArenaWriteRetry(async () => {
+      return prisma.$queryRaw<Array<{ voteId: string }>>(Prisma.sql`
+        WITH inserted_matchup AS (
+          INSERT INTO "Matchup" (
+            "id",
+            "promptId",
+            "modelAId",
+            "modelBId",
+            "buildAId",
+            "buildBId",
+            "samplingLane",
+            "samplingReason"
+          )
+          VALUES (
+            ${dbMatchupId},
+            ${matchup.promptId},
+            ${matchup.modelAId},
+            ${matchup.modelBId},
+            ${matchup.buildAId},
+            ${matchup.buildBId},
+            ${matchup.samplingLane},
+            ${matchup.samplingReason}
+          )
+          ON CONFLICT ("id") DO NOTHING
         ),
-      );
-    } else {
-      cacheUpdate = await withArenaWriteRetry(() =>
-        prisma.$transaction(
-          async (tx) => {
-            const lockedModels = await loadModelsForVote(tx, [matchup.modelAId, matchup.modelBId]);
-            const modelA = lockedModels.get(matchup.modelAId);
-            const modelB = lockedModels.get(matchup.modelBId);
-            if (!modelA || !modelB) {
-              throw new Error("Vote models not found");
-            }
-
-            const outcome = choice === "A" ? "A_WIN" : choice === "B" ? "B_WIN" : "DRAW";
-            const updated = updateRatingPair({
-              a: {
-                rating: modelA.eloRating,
-                rd: modelA.glickoRd,
-                volatility: modelA.glickoVolatility,
-              },
-              b: {
-                rating: modelB.eloRating,
-                rd: modelB.glickoRd,
-                volatility: modelB.glickoVolatility,
-              },
-              outcome,
-            });
-
-            const updateModelA = {
-              eloRating: updated.a.rating,
-              glickoRd: updated.a.rd,
-              glickoVolatility: updated.a.volatility,
-              conservativeRating: conservativeScore(updated.a.rating, updated.a.rd),
-            };
-            const updateModelB = {
-              eloRating: updated.b.rating,
-              glickoRd: updated.b.rd,
-              glickoVolatility: updated.b.volatility,
-              conservativeRating: conservativeScore(updated.b.rating, updated.b.rd),
-            };
-
-            const updates = orderModelUpdatePlans(
-              isDecisiveChoice(choice)
-                ? outcome === "A_WIN"
-                  ? [
-                      {
-                        id: matchup.modelAId,
-                        data: { ...updateModelA, winCount: { increment: 1 } },
-                      },
-                      {
-                        id: matchup.modelBId,
-                        data: { ...updateModelB, lossCount: { increment: 1 } },
-                      },
-                    ]
-                  : [
-                      {
-                        id: matchup.modelAId,
-                        data: { ...updateModelA, lossCount: { increment: 1 } },
-                      },
-                      {
-                        id: matchup.modelBId,
-                        data: { ...updateModelB, winCount: { increment: 1 } },
-                      },
-                    ]
-                : [
-                    {
-                      id: matchup.modelAId,
-                      data: { ...updateModelA, drawCount: { increment: 1 } },
-                    },
-                    {
-                      id: matchup.modelBId,
-                      data: { ...updateModelB, drawCount: { increment: 1 } },
-                    },
-                  ],
-            );
-
-            await tx.vote.create({
-              data: { matchupId, sessionId, choice },
-            });
-            await applyOrderedModelUpdates(tx, updates);
-
-            if (isDecisiveChoice(choice)) {
-              await applyDecisiveVoteCoverageUpdate(tx, {
-                modelAId: matchup.modelAId,
-                modelBId: matchup.modelBId,
-                promptId: matchup.promptId,
-              });
-            }
-
-            return {
-              decisive: isDecisiveChoice(choice),
-              promptId: matchup.promptId,
-              modelA: {
-                id: matchup.modelAId,
-                eloRating: updateModelA.eloRating,
-                conservativeRating: updateModelA.conservativeRating,
-                ratingDeviation: updateModelA.glickoRd,
-              },
-              modelB: {
-                id: matchup.modelBId,
-                eloRating: updateModelB.eloRating,
-                conservativeRating: updateModelB.conservativeRating,
-                ratingDeviation: updateModelB.glickoRd,
-              },
-            } satisfies VoteCacheUpdate;
-          },
-          {
-            maxWait: DECISIVE_VOTE_TX_MAX_WAIT_MS,
-            timeout: DECISIVE_VOTE_TX_TIMEOUT_MS,
-            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-          },
-        ),
-      );
-    }
+        inserted_vote AS (
+          INSERT INTO "Vote" (
+            "id",
+            "matchupId",
+            "sessionId",
+            "choice"
+          )
+          VALUES (${voteId}, ${dbMatchupId}, ${sessionId}, ${choice})
+          ON CONFLICT ("matchupId", "sessionId") DO NOTHING
+          RETURNING "id"
+        )
+        INSERT INTO "ArenaVoteJob" (
+          "id",
+          "voteId",
+          "matchupId",
+          "promptId",
+          "modelAId",
+          "modelBId",
+          "choice"
+        )
+        SELECT
+          ${jobId},
+          "id",
+          ${dbMatchupId},
+          ${matchup.promptId},
+          ${matchup.modelAId},
+          ${matchup.modelBId},
+          ${choice}
+        FROM inserted_vote
+        RETURNING "voteId"
+      `);
+    });
     timing.end("tx", txStartedAt);
-    invalidateArenaStatsCache();
-    if (cacheUpdate) {
-      recordArenaVoteInSamplingCache(cacheUpdate);
+    if (insertedRows.length > 0) {
+      recordArenaMatchupShown([matchup.modelAId, matchup.modelBId]);
+      if (VOTE_JOB_DRAIN_AFTER_RESPONSE) {
+        after(() => {
+          void scheduleArenaVoteJobDrain();
+        });
+      }
     }
   } catch (err) {
+    if (isDuplicateVoteError(err)) {
+      if (!finalized) {
+        timing.end("total", requestStartedAt);
+        finalized = true;
+      }
+      timing.apply(res.headers);
+      return res;
+    }
+    const capacityError = isCapacityVoteError(err);
     const msg = err instanceof Error ? err.message : "Vote failed";
-    return respondJson({ error: msg }, { status: 409 });
+    return respondJson(
+      { error: msg },
+      {
+        status: capacityError ? 503 : 409,
+        headers: capacityError ? { "Retry-After": "1" } : undefined,
+      },
+    );
   }
 
   if (!finalized) {

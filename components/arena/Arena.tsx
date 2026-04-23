@@ -34,6 +34,14 @@ const FULL_HYDRATION_SLOW_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_SLOW_MS ?? "2500",
   10,
 );
+const FULL_AUTOFETCH_MAX_BYTES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_AUTOFETCH_MAX_BYTES ?? "0",
+  10,
+);
+const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_PREFETCH_INITIAL_MAX_BYTES ?? "524288",
+  10,
+);
 
 async function readErrorResponse(res: Response, fallback: string): Promise<string> {
   // Categorize common statuses so the UI isn't showing a raw HTML error page.
@@ -174,6 +182,7 @@ type BuildStreamProgress = {
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
   onProgress?: (build: ArenaMatchup["a"]["build"], progress: BuildStreamProgress) => void;
+  allowSnapshotFallback?: boolean;
 };
 
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
@@ -253,12 +262,14 @@ async function readWithTimeout<T>(
   read: () => Promise<T>,
   timeoutMs: number,
   signal?: AbortSignal,
+  onTimeout?: () => void,
 ): Promise<T> {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   return await new Promise<T>((resolve, reject) => {
     const timer =
       Number.isFinite(timeoutMs) && timeoutMs > 0
         ? window.setTimeout(() => {
+            onTimeout?.();
             cleanup();
             reject(new Error("Build stream stalled"));
           }, timeoutMs)
@@ -292,18 +303,44 @@ async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
   timeoutMs = SNAPSHOT_FETCH_TIMEOUT_MS,
+  opts?: { redirect?: boolean },
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+  const allowRedirect = opts?.redirect !== false;
+  if (!allowRedirect) url.searchParams.set("redirect", "0");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
     const res = await fetch(url, {
       method: "GET",
       credentials: "include",
       signal: timed.signal,
+      redirect: allowRedirect ? "manual" : "follow",
     });
-    if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't load build"));
+    if (allowRedirect && [301, 302, 303, 307, 308].includes(res.status)) {
+      const location = res.headers.get("location");
+      if (!location) throw new Error("Build redirect was missing a destination.");
+      const redirectUrl = new URL(location, window.location.origin);
+      try {
+        const redirected = await fetch(redirectUrl, {
+          method: "GET",
+          signal: timed.signal,
+        });
+        if (redirected.ok) return (await redirected.json()) as BuildVariantResponse;
+        if ([400, 429, 500, 502, 503, 504].includes(redirected.status)) {
+          return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+        }
+        throw new Error(await readErrorResponse(redirected, "Couldn't load build"));
+      } catch (err: unknown) {
+        if (err instanceof Error && err.name === "AbortError") throw err;
+        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+      }
+    }
+    if (!res.ok) {
+      const message = await readErrorResponse(res, "Couldn't load build");
+      throw new Error(message);
+    }
     return (await res.json()) as BuildVariantResponse;
   } finally {
     timed.cleanup();
@@ -350,8 +387,16 @@ async function fetchBuildVariantStreamOnce(
     return (await res.json()) as BuildVariantResponse;
   }
 
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let cancelled = false;
+  const cancelReader = () => {
+    if (cancelled) return;
+    cancelled = true;
+    void reader?.cancel().catch(() => undefined);
+  };
+
   try {
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const startedAt = performance.now();
@@ -427,13 +472,15 @@ async function fetchBuildVariantStreamOnce(
 
     while (true) {
       if (performance.now() - startedAt > STREAM_HARD_TIMEOUT_MS) {
+        cancelReader();
         throw new Error("Build stream hard timeout");
       }
 
       const { done, value } = await readWithTimeout(
-        () => reader.read(),
+        () => reader!.read(),
         sawFirstEvent ? STREAM_STALL_TIMEOUT_MS : STREAM_FIRST_EVENT_TIMEOUT_MS,
         opts?.signal,
+        cancelReader,
       );
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -456,6 +503,10 @@ async function fetchBuildVariantStreamOnce(
       hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
 
     if (!streamLooksComplete) {
+      cancelReader();
+      if (opts?.allowSnapshotFallback === false) {
+        throw new Error("Build stream ended before all blocks loaded");
+      }
       return fetchBuildVariantSnapshot(ref, opts?.signal);
     }
 
@@ -471,6 +522,7 @@ async function fetchBuildVariantStreamOnce(
       },
     };
   } catch (err: unknown) {
+    cancelReader();
     if (err instanceof Error && err.name === "AbortError") throw err;
     throw err;
   }
@@ -483,10 +535,10 @@ async function fetchBuildVariantStream(
   let lastError: unknown = null;
   const attempts: Array<() => Promise<BuildVariantResponse>> = [
     () => fetchBuildVariantStreamOnce(ref, true, opts),
-    () => fetchBuildVariantSnapshot(ref, opts?.signal),
-    () => fetchBuildVariantStreamOnce(ref, false, opts),
-    () => fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS * 2),
   ];
+  if (opts?.allowSnapshotFallback !== false) {
+    attempts.push(() => fetchBuildVariantSnapshot(ref, opts?.signal));
+  }
 
   for (const attempt of attempts) {
     try {
@@ -567,6 +619,8 @@ type SideLoadState = {
   bOverlayVisible: boolean;
   aProgress: SideLoadProgress | null;
   bProgress: SideLoadProgress | null;
+  aError: string | null;
+  bError: string | null;
 };
 
 function laneNeedsFullHydration(lane: ArenaMatchup["a"]): boolean {
@@ -578,20 +632,28 @@ function laneNeedsFullHydration(lane: ArenaMatchup["a"]): boolean {
   return lane.build.blocks.length < full;
 }
 
+function laneShouldAutoUpgradeToFull(lane: ArenaMatchup["a"]): boolean {
+  if (!laneNeedsFullHydration(lane)) return false;
+  if (!Number.isFinite(FULL_AUTOFETCH_MAX_BYTES) || FULL_AUTOFETCH_MAX_BYTES <= 0) return false;
+  const estimated = lane.buildLoadHints?.fullEstimatedBytes;
+  return (
+    typeof estimated === "number" &&
+    Number.isFinite(estimated) &&
+    estimated > 0 &&
+    estimated <= FULL_AUTOFETCH_MAX_BYTES
+  );
+}
+
 function isMatchupBuildLoading(matchup: ArenaMatchup, sideState: SideLoadState | null): boolean {
   if (!matchup.a.build || !matchup.b.build) return true;
-  // Treat preview lanes as still loading until the full payload is hydrated.
-  // (If preview is identical to full, `laneNeedsFullHydration` returns false so we don't block the UI.)
-  if (laneNeedsFullHydration(matchup.a) || laneNeedsFullHydration(matchup.b)) return true;
   if (!sideState || sideState.matchupId !== matchup.id) return false;
-  return sideState.a !== "idle" || sideState.b !== "idle";
+  return sideState.a === "loading-initial" || sideState.b === "loading-initial";
 }
 
 function getInitialHydrateRef(matchup: ArenaMatchup, side: "a" | "b"): ArenaBuildRef | null {
   const lane = matchup[side];
   if (lane.build) return null;
-  // Start with the server-selected initial variant (preview for huge builds),
-  // then hydrate full automatically in the background.
+  // Start with the server-selected initial variant (preview for huge builds).
   const initialVariant = lane.buildLoadHints?.initialVariant ?? "full";
   if (initialVariant === "preview") return lane.previewRef ?? lane.buildRef ?? null;
   return lane.buildRef ?? lane.previewRef ?? null;
@@ -601,16 +663,47 @@ function getHydratedBuildCacheKey(ref: ArenaBuildRef): string {
   return `${ref.buildId}:${ref.variant}:${ref.checksum ?? "none"}`;
 }
 
+function getAutoFullHydrationFailureKey(
+  matchupId: string,
+  side: "a" | "b",
+  ref: ArenaBuildRef,
+): string {
+  return `${matchupId}:${side}:${ref.buildId}:${ref.checksum ?? "none"}`;
+}
+
 function isHeavyRetrievalDeliveryClass(
   deliveryClass: ArenaBuildDeliveryClass | undefined,
 ): boolean {
   return deliveryClass === "stream-live" || deliveryClass === "stream-artifact";
 }
 
+function getInitialDeliveryClass(
+  hints: ArenaMatchup["a"]["buildLoadHints"] | ArenaMatchup["b"]["buildLoadHints"] | undefined,
+): ArenaBuildDeliveryClass | undefined {
+  return hints?.initialDeliveryClass ?? hints?.deliveryClass;
+}
+
+function shouldPrefetchInitialBuild(
+  hints: ArenaMatchup["a"]["buildLoadHints"] | ArenaMatchup["b"]["buildLoadHints"] | undefined,
+): boolean {
+  const deliveryClass = getInitialDeliveryClass(hints);
+  if (deliveryClass !== "inline") return false;
+  if (PREFETCH_INITIAL_MAX_BYTES <= 0) return false;
+  const estimatedBytes = hints?.initialEstimatedBytes;
+  return typeof estimatedBytes === "number" && estimatedBytes > 0 && estimatedBytes <= PREFETCH_INITIAL_MAX_BYTES;
+}
+
+function getHydrationDeliveryClass(
+  hints: ArenaMatchup["a"]["buildLoadHints"] | ArenaMatchup["b"]["buildLoadHints"] | undefined,
+  target: "initial" | "full",
+): ArenaBuildDeliveryClass | undefined {
+  return target === "initial" ? getInitialDeliveryClass(hints) : hints?.deliveryClass;
+}
+
 function shouldHydrateViaSnapshot(
   deliveryClass: ArenaBuildDeliveryClass | undefined,
 ): boolean {
-  return deliveryClass === "snapshot";
+  return deliveryClass === "snapshot" || deliveryClass === "inline";
 }
 
 function getExpectedBlocksForLane(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): number | undefined {
@@ -743,9 +836,11 @@ export function Arena() {
   const revealRef = useRef<RevealState>({ kind: "none" });
   const transitionRef = useRef(false);
   const hydrateInFlightRef = useRef(new Set<string>());
+  const fullHydrationControllersRef = useRef(new Map<string, AbortController>());
   const hydratedBuildCacheRef = useRef(new Map<string, CachedHydratedBuild>());
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
   const viewerReadyRef = useRef<{ matchupId: string; a: boolean; b: boolean } | null>(null);
+  const autoFullHydrationFailuresRef = useRef(new Set<string>());
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
   const advanceNowRequestedAtRef = useRef<number | null>(null);
@@ -757,21 +852,23 @@ export function Arena() {
     async () => undefined
   );
 
-	  const setLaneLoadPhase = useCallback((matchupId: string, side: "a" | "b", phase: SideLoadPhase) => {
-	    setSideLoadState((prev) => {
-	      if (!prev) return prev;
+  const setLaneLoadPhase = useCallback((matchupId: string, side: "a" | "b", phase: SideLoadPhase) => {
+    setSideLoadState((prev) => {
+      if (!prev) return prev;
       if (prev.matchupId !== matchupId) return prev;
       if (prev[side] === phase) return prev;
       const progressKey = side === "a" ? "aProgress" : "bProgress";
       const overlayKey = side === "a" ? "aOverlayVisible" : "bOverlayVisible";
+      const errorKey = side === "a" ? "aError" : "bError";
       return {
         ...prev,
         [side]: phase,
         [overlayKey]: phase === "idle" ? false : prev[overlayKey],
         [progressKey]: phase === "idle" ? null : prev[progressKey],
-	      };
-	    });
-	  }, []);
+        [errorKey]: phase === "idle" ? prev[errorKey] : null,
+      };
+    });
+  }, []);
 
   const setLaneOverlayVisible = useCallback(
     (matchupId: string, side: "a" | "b", visible: boolean) => {
@@ -801,6 +898,21 @@ export function Arena() {
         return {
           ...prev,
           [progressKey]: progress,
+        };
+      });
+    },
+    [],
+  );
+
+  const setLaneLoadError = useCallback(
+    (matchupId: string, side: "a" | "b", message: string | null) => {
+      setSideLoadState((prev) => {
+        if (!prev || prev.matchupId !== matchupId) return prev;
+        const errorKey = side === "a" ? "aError" : "bError";
+        if (prev[errorKey] === message) return prev;
+        return {
+          ...prev,
+          [errorKey]: message,
         };
       });
     },
@@ -842,6 +954,7 @@ export function Arena() {
 
   useEffect(() => {
     setPromptDialogOpen(false);
+    autoFullHydrationFailuresRef.current.clear();
   }, [matchup?.id]);
 
   useEffect(() => {
@@ -868,6 +981,8 @@ export function Arena() {
         bOverlayVisible: false,
         aProgress: null,
         bProgress: null,
+        aError: null,
+        bError: null,
       };
     });
 
@@ -1043,6 +1158,14 @@ export function Arena() {
     [cacheHydratedBuild, readHydratedBuildFromCache],
   );
 
+  const abortFullHydrations = useCallback((matchupId?: string) => {
+    for (const [key, controller] of fullHydrationControllersRef.current) {
+      if (matchupId && !key.startsWith(`${matchupId}:`)) continue;
+      controller.abort();
+      fullHydrationControllersRef.current.delete(key);
+    }
+  }, []);
+
   const hydrateMatchupSide = useCallback(async (
     matchupValue: ArenaMatchup,
     side: "a" | "b",
@@ -1077,6 +1200,7 @@ export function Arena() {
         receivedBlocks: cached.build.blocks.length,
         totalBlocks: cached.build.blocks.length,
       });
+      setLaneLoadError(matchupValue.id, side, null);
       setLaneLoadPhase(matchupValue.id, side, "idle");
       setLaneOverlayVisible(matchupValue.id, side, false);
       return;
@@ -1085,13 +1209,22 @@ export function Arena() {
     const key = `${matchupValue.id}:${side}:${target}:${ref.variant}:${ref.buildId}:${ref.checksum ?? "none"}`;
     if (hydrateInFlightRef.current.has(key)) return;
     hydrateInFlightRef.current.add(key);
+    const fullAbortKey = target === "full" ? `${matchupValue.id}:${side}` : null;
+    let ownedFullController: AbortController | null = null;
+    let effectiveSignal = opts?.signal;
+    if (fullAbortKey && !effectiveSignal) {
+      fullHydrationControllersRef.current.get(fullAbortKey)?.abort();
+      ownedFullController = new AbortController();
+      fullHydrationControllersRef.current.set(fullAbortKey, ownedFullController);
+      effectiveSignal = ownedFullController.signal;
+    }
     setLaneLoadPhase(matchupValue.id, side, target === "full" ? "loading-full" : "loading-initial");
     setLaneLoadProgress(matchupValue.id, side, { receivedBlocks: 0, totalBlocks: null });
 
     let overlayTimer: number | null = null;
     const showOverlayImmediately =
       target === "full" ||
-      isHeavyRetrievalDeliveryClass(lane.buildLoadHints?.deliveryClass) ||
+      isHeavyRetrievalDeliveryClass(getHydrationDeliveryClass(lane.buildLoadHints, target)) ||
       !Number.isFinite(INITIAL_RETRIEVAL_OVERLAY_DELAY_MS) ||
       INITIAL_RETRIEVAL_OVERLAY_DELAY_MS <= 0;
     if (showOverlayImmediately) {
@@ -1149,15 +1282,29 @@ export function Arena() {
 
     try {
       const hydrationStartedAt = performance.now();
-      const payload = shouldHydrateViaSnapshot(lane.buildLoadHints?.deliveryClass)
-        ? await fetchBuildVariantSnapshot(ref, opts?.signal)
-        : await fetchBuildVariantStream(ref, {
-            signal: opts?.signal,
+      let payload: BuildVariantResponse;
+      const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, target);
+      const allowSnapshotFallback = deliveryClass !== "stream-artifact";
+      if (shouldHydrateViaSnapshot(deliveryClass)) {
+        try {
+          payload = await fetchBuildVariantSnapshot(ref, effectiveSignal);
+        } catch {
+          payload = await fetchBuildVariantStream(ref, {
+            signal: effectiveSignal,
             onProgress: applyProgressiveBuild,
+            allowSnapshotFallback,
           });
+        }
+      } else {
+        payload = await fetchBuildVariantStream(ref, {
+          signal: effectiveSignal,
+          onProgress: applyProgressiveBuild,
+          allowSnapshotFallback,
+        });
+      }
       const hydrationMs = performance.now() - hydrationStartedAt;
       const resolvedRef: ArenaBuildRef = {
-        buildId: payload.buildId || ref.buildId,
+        buildId: payload.buildId === ref.buildId ? payload.buildId : ref.buildId,
         variant: payload.variant ?? ref.variant,
         checksum: payload.checksum ?? ref.checksum ?? null,
       };
@@ -1188,6 +1335,7 @@ export function Arena() {
           receivedBlocks: payload.voxelBuild.blocks.length,
           totalBlocks: payload.voxelBuild.blocks.length,
         });
+        setLaneLoadError(matchupValue.id, side, null);
       }
       if (
         target === "full" &&
@@ -1203,12 +1351,27 @@ export function Arena() {
       }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return;
+      if (target === "full") {
+        autoFullHydrationFailuresRef.current.add(
+          getAutoFullHydrationFailureKey(matchupValue.id, side, ref),
+        );
+      }
+      if (target === "initial" || !lane.build) {
+        setLaneLoadError(matchupValue.id, side, "Build stalled.");
+      }
       if (!opts?.silent) {
         console.warn("arena full build hydration failed", err);
       }
     } finally {
       if (overlayTimer != null) window.clearTimeout(overlayTimer);
       hydrateInFlightRef.current.delete(key);
+      if (
+        fullAbortKey &&
+        ownedFullController &&
+        fullHydrationControllersRef.current.get(fullAbortKey) === ownedFullController
+      ) {
+        fullHydrationControllersRef.current.delete(fullAbortKey);
+      }
       setLaneOverlayVisible(matchupValue.id, side, false);
       setLaneLoadProgress(matchupValue.id, side, null);
       setLaneLoadPhase(matchupValue.id, side, "idle");
@@ -1217,18 +1380,54 @@ export function Arena() {
     cacheHydratedBuild,
     readHydratedBuildFromCache,
     setLaneLoadPhase,
+    setLaneLoadError,
     setLaneLoadProgress,
     setLaneOverlayVisible,
   ]);
 
+  const requestFullLaneDetail = useCallback(
+    (side: "a" | "b") => {
+      const current =
+        stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
+      if (!current) return;
+      if (!laneNeedsFullHydration(current[side])) return;
+      const ref = current[side].buildRef;
+      if (ref) {
+        autoFullHydrationFailuresRef.current.delete(
+          getAutoFullHydrationFailureKey(current.id, side, ref),
+        );
+      }
+      void hydrateMatchupSide(current, side, "full", { silent: true });
+    },
+    [hydrateMatchupSide],
+  );
+
+  const retryLaneInitialBuild = useCallback(
+    (side: "a" | "b") => {
+      const current = stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
+      if (!current) return;
+      if (current[side].build) return;
+      void hydrateMatchupSide(current, side, "initial", { silent: false });
+    },
+    [hydrateMatchupSide],
+  );
+
   const prefetchMatchupBuilds = useCallback(
     (matchupValue: ArenaMatchup) => {
       for (const side of ["a", "b"] as const) {
+        const lane = matchupValue[side];
+        if (!shouldPrefetchInitialBuild(lane.buildLoadHints)) continue;
         void hydrateMatchupSide(matchupValue, side, "initial", { silent: true });
       }
     },
     [hydrateMatchupSide],
   );
+
+  useEffect(() => {
+    return () => {
+      if (matchup?.id) abortFullHydrations(matchup.id);
+    };
+  }, [abortFullHydrations, matchup?.id]);
 
   useEffect(() => {
     if (reveal.kind !== "reveal") return;
@@ -1245,12 +1444,11 @@ export function Arena() {
 
   useEffect(() => {
     // AbortController lets us actually cancel the in-flight fetchMatchup
-    // when reloadToken bumps (retry click). /api/arena/matchup is
-    // side-effecting — it creates a matchup row + increments shownCount —
-    // so silently ignoring a stale response would still let the previous
-    // request run to completion on the server, burning matchups with no
-    // vote signal. Aborting short-circuits the network round-trip so at
-    // least the response body parse + any follow-up is cancelled.
+    // when reloadToken bumps (retry click). /api/arena/matchup still
+    // creates a matchup row server-side, so silently ignoring a stale
+    // response would burn matchups with no vote signal. Aborting
+    // short-circuits the network round-trip so at least the response body
+    // parse + any follow-up is cancelled.
     const controller = new AbortController();
     let cancelled = false;
     setState({ kind: "loading" });
@@ -1312,8 +1510,8 @@ export function Arena() {
     };
   }, [hydrateMatchupSide, matchup?.id]);
 
-  // If the initial variant is a preview (huge builds), start hydrating full as soon as
-  // the preview is in place so users always end up with full fidelity automatically.
+  // Small preview lanes can upgrade automatically. Very large scenes stay
+  // judgeable as preview until the user explicitly asks for more detail.
   useEffect(() => {
     const current =
       stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
@@ -1322,13 +1520,15 @@ export function Arena() {
     for (const side of ["a", "b"] as const) {
       const lane = current[side];
       if (!lane.build) continue;
-      if (lane.buildLoadHints?.initialVariant !== "preview") continue;
+      if (!laneShouldAutoUpgradeToFull(lane)) continue;
       if (!lane.buildRef) continue;
-
-      // If preview is effectively identical to full (e.g. full is under the preview cap),
-      // there's nothing to "upgrade" and we should not block the lane on full hydration.
-      const fullBlockCount = lane.buildLoadHints?.fullBlockCount ?? lane.build.blocks.length;
-      if (lane.build.blocks.length >= fullBlockCount) continue;
+      if (
+        autoFullHydrationFailuresRef.current.has(
+          getAutoFullHydrationFailureKey(current.id, side, lane.buildRef),
+        )
+      ) {
+        continue;
+      }
 
       // Wait until the preview lane is idle so we don't compete with initial hydration.
       const phase = side === "a" ? sideStatePhaseA : sideStatePhaseB;
@@ -1412,6 +1612,7 @@ export function Arena() {
     }
 
     setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(next) });
+    abortFullHydrations(matchupId);
     setReveal({ kind: "none" });
     setSubmitting(false);
 
@@ -1484,8 +1685,8 @@ export function Arena() {
     // Submit the vote first. If it fails, stay on the current matchup so
     // the user can retry — advancing anyway would silently convert a
     // dropped vote into a skip and bias rankings + prompt coverage. We
-    // also don't fetch the next matchup (which would burn a shownCount
-    // row with no vote signal).
+    // also don't fetch the next matchup because matchup creation is still
+    // a server-side side effect.
     try {
       await submitVote(matchup.id, choice);
     } catch (err) {
@@ -1665,14 +1866,16 @@ export function Arena() {
   const laneOverlayB = isSideLoadActive && sideLoadState ? sideLoadState.bOverlayVisible : true;
   const laneProgressA = isSideLoadActive && sideLoadState ? sideLoadState.aProgress : null;
   const laneProgressB = isSideLoadActive && sideLoadState ? sideLoadState.bProgress : null;
+  const laneErrorA = isSideLoadActive && sideLoadState ? sideLoadState.aError : null;
+  const laneErrorB = isSideLoadActive && sideLoadState ? sideLoadState.bError : null;
   const viewerState =
     matchup && viewerReady && viewerReady.matchupId === matchup.id ? viewerReady : null;
   const viewerReadyA = Boolean(viewerState?.a);
   const viewerReadyB = Boolean(viewerState?.b);
   const laneNeedsFullA = Boolean(matchup && laneNeedsFullHydration(matchup.a));
   const laneNeedsFullB = Boolean(matchup && laneNeedsFullHydration(matchup.b));
-  const buildAUpgradePending = Boolean(matchup && laneLoadA === "idle" && laneNeedsFullA);
-  const buildBUpgradePending = Boolean(matchup && laneLoadB === "idle" && laneNeedsFullB);
+  const buildAUpgradePending = laneLoadA === "loading-full";
+  const buildBUpgradePending = laneLoadB === "loading-full";
 
   const matchupBuildLoading = Boolean(
     matchup && (isMatchupBuildLoading(matchup, sideLoadState) || !viewerReadyA || !viewerReadyB),
@@ -1681,23 +1884,21 @@ export function Arena() {
   const buildARetrieving =
     state.kind === "loading" ||
     Boolean(
-      matchup &&
-        (!matchup.a.build ||
-          laneLoadA !== "idle" ||
-          buildAUpgradePending),
+	      matchup &&
+	        ((!matchup.a.build && !laneErrorA) ||
+	          laneLoadA === "loading-initial"),
     );
   const buildBRetrieving =
     state.kind === "loading" ||
     Boolean(
-      matchup &&
-        (!matchup.b.build ||
-          laneLoadB !== "idle" ||
-          buildBUpgradePending),
+	      matchup &&
+	        ((!matchup.b.build && !laneErrorB) ||
+	          laneLoadB === "loading-initial"),
     );
   const buildAPlacing = Boolean(matchup && matchup.a.build && laneLoadA === "idle" && !viewerReadyA);
   const buildBPlacing = Boolean(matchup && matchup.b.build && laneLoadB === "idle" && !viewerReadyB);
-  const buildALoading = buildARetrieving || buildAPlacing;
-  const buildBLoading = buildBRetrieving || buildBPlacing;
+  const buildALoading = buildARetrieving || buildAPlacing || buildAUpgradePending;
+  const buildBLoading = buildBRetrieving || buildBPlacing || buildBUpgradePending;
   const buildALoadingMode =
     buildALoading &&
     state.kind !== "loading" &&
@@ -1716,6 +1917,8 @@ export function Arena() {
       : "overlay";
   const buildAFullLoading = laneLoadA === "loading-full";
   const buildBFullLoading = laneLoadB === "loading-full";
+  const buildLoadError =
+    laneErrorA && laneErrorB ? "Both builds stalled." : laneErrorA || laneErrorB;
   const buildALoadingMessage = buildALoading
     ? buildAPlacing
       ? "Placing blocks…"
@@ -1908,7 +2111,18 @@ export function Arena() {
                 loadingProgress={laneProgressA ?? undefined}
                 autoRotate={!isCoarsePointer || mobileBuildView === "a"}
                 viewerSize="arena"
-                actions={null}
+                actions={
+                  laneNeedsFullA ? (
+                    <button
+                      type="button"
+                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+                      disabled={laneLoadA === "loading-full"}
+                      onClick={() => requestFullLaneDetail("a")}
+                    >
+                      {laneLoadA === "loading-full" ? "Loading..." : "Detail"}
+                    </button>
+                  ) : null
+                }
               />
             </div>
             <div
@@ -1954,14 +2168,25 @@ export function Arena() {
                 loadingProgress={laneProgressB ?? undefined}
                 autoRotate={!isCoarsePointer || mobileBuildView === "b"}
                 viewerSize="arena"
-                actions={null}
+                actions={
+                  laneNeedsFullB ? (
+                    <button
+                      type="button"
+                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+                      disabled={laneLoadB === "loading-full"}
+                      onClick={() => requestFullLaneDetail("b")}
+                    >
+                      {laneLoadB === "loading-full" ? "Loading..." : "Detail"}
+                    </button>
+                  ) : null
+                }
               />
             </div>
           </div>
 
           {/* segmented build switcher – mobile only */}
-          <div className="md:hidden">
-            <div className="relative flex rounded-xl bg-bg/40 p-0.5 ring-1 ring-border/50">
+	          <div className="md:hidden">
+	            <div className="relative flex rounded-xl bg-bg/40 p-0.5 ring-1 ring-border/50">
               {/* sliding indicator */}
               <span
                 aria-hidden="true"
@@ -1985,11 +2210,38 @@ export function Arena() {
                 onClick={() => scrollToMobileBuild("b")}
               >
                 Build B
-              </button>
-            </div>
-          </div>
+	              </button>
+	            </div>
+	          </div>
 
-          {/* action bar (vote buttons ↔ reveal status) */}
+	          {buildLoadError ? (
+	            <div className="mb-subpanel flex items-center justify-between gap-3 px-3 py-2 text-sm text-muted sm:px-4">
+	              <span>{buildLoadError}</span>
+	              <div className="flex shrink-0 items-center gap-2">
+	                <button
+	                  type="button"
+	                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+	                  onClick={() => {
+	                    if (laneErrorA) retryLaneInitialBuild("a");
+	                    if (laneErrorB) retryLaneInitialBuild("b");
+	                  }}
+	                >
+	                  Retry
+	                </button>
+	                <button
+	                  type="button"
+	                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+	                  onClick={() => {
+	                    void handleSkip();
+	                  }}
+	                >
+	                  Skip
+	                </button>
+	              </div>
+	            </div>
+	          ) : null}
+
+	          {/* action bar (vote buttons ↔ reveal status) */}
           <div className="relative h-[8.5rem] sm:h-[7.5rem]">
             <div className="relative h-full">
               <div className="relative h-full">

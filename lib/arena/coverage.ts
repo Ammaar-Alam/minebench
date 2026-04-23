@@ -1,7 +1,7 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
-const MATCHUP_STATE_CACHE_TTL_MS = readIntEnv("ARENA_MATCHUP_STATE_CACHE_TTL_MS", 5_000);
+const MATCHUP_STATE_CACHE_TTL_MS = readIntEnv("ARENA_MATCHUP_STATE_CACHE_TTL_MS", 60_000);
 
 const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
@@ -37,6 +37,17 @@ export type EligibleModel = {
   shownCount: number;
 };
 
+export type EligibleBuildMeta = {
+  id: string;
+  gridSize: number;
+  palette: string;
+  blockCount: number;
+  voxelByteSize: number | null;
+  voxelCompressedByteSize: number | null;
+  voxelSha256: string | null;
+  arenaBuildHints?: unknown | null;
+};
+
 export type CoverageState = {
   modelPromptDecisiveVotes: Map<string, number>;
   pairDecisiveVotes: Map<string, number>;
@@ -50,6 +61,7 @@ export type ArenaMatchupSamplingState = {
   prompts: EligiblePrompt[];
   modelsById: Map<string, EligibleModel>;
   promptIdsByModelId: Map<string, Set<string>>;
+  buildsByModelPromptKey: Map<string, EligibleBuildMeta>;
   coverage: CoverageState;
 };
 
@@ -71,6 +83,7 @@ let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
 let matchupStateVersion = 0;
 let coverageSyncInFlight: Promise<void> | null = null;
 let pendingSamplingStateMutations: SamplingStateMutation[] = [];
+const shownCountDeltas = new Map<string, number>();
 
 const ARENA_COVERAGE_LOCK_KEY = 860101;
 
@@ -126,17 +139,37 @@ function applySamplingStateMutation(mutation: SamplingStateMutation) {
 }
 
 export function recordArenaMatchupShown(modelIds: string[]) {
+  const seen = new Set<string>();
+  for (const modelId of modelIds) {
+    if (!modelId || seen.has(modelId)) continue;
+    seen.add(modelId);
+    shownCountDeltas.set(modelId, (shownCountDeltas.get(modelId) ?? 0) + 1);
+  }
+
   applySamplingStateMutation((state) => {
-    const seen = new Set<string>();
+    const cacheSeen = new Set<string>();
     for (const modelId of modelIds) {
-      if (!modelId || seen.has(modelId)) continue;
-      seen.add(modelId);
+      if (!modelId || cacheSeen.has(modelId)) continue;
+      cacheSeen.add(modelId);
       const model = state.modelsById.get(modelId);
       if (model) {
         model.shownCount += 1;
       }
     }
   });
+}
+
+export function settleArenaMatchupShown(modelCounts: Map<string, number>) {
+  for (const [modelId, count] of modelCounts.entries()) {
+    if (!modelId || count <= 0) continue;
+    const current = shownCountDeltas.get(modelId) ?? 0;
+    const next = Math.max(0, current - count);
+    if (next > 0) {
+      shownCountDeltas.set(modelId, next);
+    } else {
+      shownCountDeltas.delete(modelId);
+    }
+  }
 }
 
 function refreshPromptCoverageForModel(state: ArenaMatchupSamplingState, modelId: string) {
@@ -223,8 +256,7 @@ function roundDuration(ms: number): number {
 async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingResult> {
   const startedAt = performance.now();
   const eligibilityStartedAt = startedAt;
-  const rows = await prisma.build.groupBy({
-    by: ["promptId", "modelId"],
+  const rows = await prisma.build.findMany({
     where: {
       gridSize: ARENA_GRID_SIZE,
       palette: ARENA_PALETTE,
@@ -232,10 +264,23 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
       model: { enabled: true, isBaseline: false },
       prompt: { active: true },
     },
+    select: {
+      id: true,
+      promptId: true,
+      modelId: true,
+      gridSize: true,
+      palette: true,
+      blockCount: true,
+      voxelByteSize: true,
+      voxelCompressedByteSize: true,
+      voxelSha256: true,
+      arenaBuildHints: true,
+    },
   });
 
   const modelIdsByPromptId = new Map<string, Set<string>>();
   const promptIdsByModelId = new Map<string, Set<string>>();
+  const buildsByModelPromptKey = new Map<string, EligibleBuildMeta>();
 
   for (const row of rows) {
     const models = modelIdsByPromptId.get(row.promptId) ?? new Set<string>();
@@ -245,6 +290,17 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
     const prompts = promptIdsByModelId.get(row.modelId) ?? new Set<string>();
     prompts.add(row.promptId);
     promptIdsByModelId.set(row.modelId, prompts);
+
+    buildsByModelPromptKey.set(modelPromptKey(row.modelId, row.promptId), {
+      id: row.id,
+      gridSize: row.gridSize,
+      palette: row.palette,
+      blockCount: row.blockCount,
+      voxelByteSize: row.voxelByteSize,
+      voxelCompressedByteSize: row.voxelCompressedByteSize,
+      voxelSha256: row.voxelSha256,
+      arenaBuildHints: row.arenaBuildHints,
+    });
   }
 
   const eligiblePromptIds = Array.from(modelIdsByPromptId.entries())
@@ -257,6 +313,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
         prompts: [],
         modelsById: new Map(),
         promptIdsByModelId: new Map(),
+        buildsByModelPromptKey: new Map(),
         coverage: emptyCoverageState(),
       },
       meta: {
@@ -303,7 +360,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
         eloRating: Number(model.eloRating),
         conservativeRating: Number(model.conservativeRating),
         ratingDeviation: Number(model.glickoRd),
-        shownCount: model.shownCount,
+        shownCount: model.shownCount + (shownCountDeltas.get(model.id) ?? 0),
       },
     ]),
   );
@@ -332,7 +389,6 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
   const eligibleModelIds = Array.from(filteredPromptIdsByModelId.keys());
   const eligibilityMs = roundDuration(performance.now() - eligibilityStartedAt);
   const coverageStartedAt = performance.now();
-  await ensureArenaCoverageTablesCurrent();
   const coverage = await queryCoverageState(eligiblePrompts, eligibleModelIds);
 
   return {
@@ -340,6 +396,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
       prompts: eligiblePrompts,
       modelsById,
       promptIdsByModelId: filteredPromptIdsByModelId,
+      buildsByModelPromptKey,
       coverage,
     },
     meta: {
@@ -490,8 +547,6 @@ export async function getArenaPairCoverageByKey(
   if (modelIds.length < 2 || promptIds.length === 0) {
     return new Map();
   }
-
-  await ensureArenaCoverageTablesCurrent();
 
   const pairPromptRows = await prisma.arenaCoveragePairPrompt.findMany({
     where: {
@@ -676,70 +731,39 @@ export async function rebuildArenaCoverageTables(client: PrismaClient = prisma):
 }
 
 export async function applyDecisiveVoteCoverageUpdate(
-  tx: Prisma.TransactionClient,
+  tx: Prisma.TransactionClient | PrismaClient,
   input: {
     modelAId: string;
     modelBId: string;
     promptId: string;
   },
 ) {
-  await acquireArenaCoverageLock(tx);
   const [modelLowId, modelHighId] = orderPairIds(input.modelAId, input.modelBId);
-  const orderedModelIds =
-    input.modelAId < input.modelBId ? [input.modelAId, input.modelBId] : [input.modelBId, input.modelAId];
+  await tx.$executeRaw`
+    INSERT INTO "ArenaCoverageModelPrompt" ("modelId", "promptId", "decisiveVotes")
+    VALUES
+      (${modelLowId}, ${input.promptId}, 1),
+      (${modelHighId}, ${input.promptId}, 1)
+    ON CONFLICT ("modelId", "promptId")
+    DO UPDATE SET "decisiveVotes" = "ArenaCoverageModelPrompt"."decisiveVotes" + 1
+  `;
 
-  for (const modelId of orderedModelIds) {
-    await tx.arenaCoverageModelPrompt.upsert({
-      where: {
-        modelId_promptId: {
-          modelId,
-          promptId: input.promptId,
-        },
-      },
-      create: {
-        modelId,
-        promptId: input.promptId,
-        decisiveVotes: 1,
-      },
-      update: {
-        decisiveVotes: { increment: 1 },
-      },
-    });
-  }
+  await tx.$executeRaw`
+    INSERT INTO "ArenaCoveragePair" ("modelLowId", "modelHighId", "decisiveVotes")
+    VALUES (${modelLowId}, ${modelHighId}, 1)
+    ON CONFLICT ("modelLowId", "modelHighId")
+    DO UPDATE SET "decisiveVotes" = "ArenaCoveragePair"."decisiveVotes" + 1
+  `;
 
-  await tx.arenaCoveragePair.upsert({
-    where: {
-      modelLowId_modelHighId: {
-        modelLowId,
-        modelHighId,
-      },
-    },
-    create: {
-      modelLowId,
-      modelHighId,
-      decisiveVotes: 1,
-    },
-    update: {
-      decisiveVotes: { increment: 1 },
-    },
-  });
-
-  await tx.arenaCoveragePairPrompt.upsert({
-    where: {
-      modelLowId_modelHighId_promptId: {
-        modelLowId,
-        modelHighId,
-        promptId: input.promptId,
-      },
-    },
-    create: {
-      modelLowId,
-      modelHighId,
-      promptId: input.promptId,
-      decisiveVotes: 1,
-    },
-    update: {
-      decisiveVotes: { increment: 1 },
-    },
-  });
+  await tx.$executeRaw`
+    INSERT INTO "ArenaCoveragePairPrompt" (
+      "modelLowId",
+      "modelHighId",
+      "promptId",
+      "decisiveVotes"
+    )
+    VALUES (${modelLowId}, ${modelHighId}, ${input.promptId}, 1)
+    ON CONFLICT ("modelLowId", "modelHighId", "promptId")
+    DO UPDATE SET "decisiveVotes" = "ArenaCoveragePairPrompt"."decisiveVotes" + 1
+  `;
 }

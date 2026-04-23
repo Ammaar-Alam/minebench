@@ -169,6 +169,24 @@ async function getArenaArtifactCoverage() {
   }
 }
 
+async function getArenaVoteJobStatus() {
+  const [pendingCount, oldestPending] = await Promise.all([
+    prisma.arenaVoteJob.count({ where: { processedAt: null } }),
+    prisma.arenaVoteJob.findFirst({
+      where: { processedAt: null },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+  ]);
+
+  return {
+    pendingCount,
+    oldestPendingAgeMs: oldestPending
+      ? Math.max(0, Date.now() - oldestPending.createdAt.getTime())
+      : null,
+  };
+}
+
 export async function GET(req: Request) {
   const denied = requireAdmin(req);
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
@@ -186,6 +204,7 @@ export async function GET(req: Request) {
       matchupTotal,
       voteTotal,
       artifactCoverage,
+      voteJobs,
     ] = await Promise.all([
       prisma.prompt.count(),
       prisma.prompt.count({ where: { active: true } }),
@@ -195,6 +214,7 @@ export async function GET(req: Request) {
       prisma.matchup.count(),
       prisma.vote.count(),
       getArenaArtifactCoverage(),
+      getArenaVoteJobStatus(),
     ]);
     timing.end("artifact_status", artifactStartedAt);
     timing.end("total", requestStartedAt);
@@ -214,6 +234,7 @@ export async function GET(req: Request) {
           votes: { total: voteTotal },
         },
         artifacts: artifactCoverage,
+        voteJobs,
       },
       { headers }
     );

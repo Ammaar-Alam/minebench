@@ -9,7 +9,7 @@ import { gunzipSync } from "node:zlib";
 import { BuildStorageRef, loadBuildJsonFromStorage } from "@/lib/storage/buildPayload";
 import { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
-import { maybePrecomputeArenaStreamArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
+import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 
 export const runtime = "nodejs";
@@ -317,7 +317,7 @@ export async function POST(req: Request) {
       });
 
   try {
-    await maybePrecomputeArenaStreamArtifactsForBuild({
+    await maybePrecomputeArenaArtifactsForBuild({
       id: saved.id,
       gridSize: saved.gridSize,
       palette: saved.palette,

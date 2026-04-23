@@ -18,10 +18,12 @@ export type ArenaBuildRef = {
 
 export type ArenaBuildLoadHints = {
   initialVariant: ArenaBuildVariant;
+  initialDeliveryClass: ArenaBuildDeliveryClass;
   deliveryClass: ArenaBuildDeliveryClass;
   fullBlockCount: number;
   previewBlockCount: number;
   previewStride: number;
+  initialEstimatedBytes: number | null;
   fullEstimatedBytes: number | null;
 };
 

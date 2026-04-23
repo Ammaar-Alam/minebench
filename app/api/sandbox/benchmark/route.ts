@@ -86,6 +86,10 @@ function shouldInlineInAdaptiveMode(deliveryClass: ArenaBuildDeliveryClass): boo
   return deliveryClass === "inline";
 }
 
+function getInitialAdaptiveDeliveryClass(hints: ArenaBuildLoadHints): ArenaBuildDeliveryClass {
+  return hints.initialDeliveryClass ?? hints.deliveryClass;
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
@@ -212,6 +216,7 @@ export async function GET(req: Request) {
               voxelByteSize: true,
               voxelCompressedByteSize: true,
               voxelSha256: true,
+              arenaBuildHints: true,
               model: {
                 select: {
                   key: true,
@@ -242,6 +247,7 @@ export async function GET(req: Request) {
               voxelByteSize: true,
               voxelCompressedByteSize: true,
               voxelSha256: true,
+              arenaBuildHints: true,
               model: {
                 select: {
                   key: true,
@@ -257,13 +263,13 @@ export async function GET(req: Request) {
 
     const hintsA = buildA ? deriveArenaBuildLoadHints(buildA) : null;
     const hintsB = buildB ? deriveArenaBuildLoadHints(buildB) : null;
-    const shouldProbeA = Boolean(hintsA && hintsA.fullEstimatedBytes == null);
-    const shouldProbeB = Boolean(hintsB && hintsB.fullEstimatedBytes == null);
+    const shouldProbeA = Boolean(hintsA && hintsA.initialEstimatedBytes == null);
+    const shouldProbeB = Boolean(hintsB && hintsB.initialEstimatedBytes == null);
     const shouldPrepareA = hintsA
-      ? shouldInlineInAdaptiveMode(hintsA.deliveryClass) || shouldProbeA
+      ? shouldInlineInAdaptiveMode(getInitialAdaptiveDeliveryClass(hintsA)) || shouldProbeA
       : false;
     const shouldPrepareB = hintsB
-      ? shouldInlineInAdaptiveMode(hintsB.deliveryClass) || shouldProbeB
+      ? shouldInlineInAdaptiveMode(getInitialAdaptiveDeliveryClass(hintsB)) || shouldProbeB
       : false;
 
     let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
@@ -283,6 +289,7 @@ export async function GET(req: Request) {
                   voxelByteSize: true,
                   voxelCompressedByteSize: true,
                   voxelSha256: true,
+                  arenaBuildHints: true,
                   voxelData: true,
                   voxelStorageBucket: true,
                   voxelStoragePath: true,
@@ -301,6 +308,7 @@ export async function GET(req: Request) {
                   voxelByteSize: true,
                   voxelCompressedByteSize: true,
                   voxelSha256: true,
+                  arenaBuildHints: true,
                   voxelData: true,
                   voxelStorageBucket: true,
                   voxelStoragePath: true,
@@ -342,7 +350,7 @@ export async function GET(req: Request) {
 
       const checksum = (prepared?.checksum ?? build.voxelSha256)?.trim() || null;
       const effectiveHints = prepared?.hints ?? hints;
-      const shouldInline = shouldInlineInAdaptiveMode(effectiveHints.deliveryClass);
+      const shouldInline = shouldInlineInAdaptiveMode(getInitialAdaptiveDeliveryClass(effectiveHints));
       const buildRef: ArenaBuildRef = prepared?.buildRef ?? {
         buildId: build.id,
         variant: "full",
