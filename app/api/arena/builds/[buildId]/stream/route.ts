@@ -133,7 +133,6 @@ export async function GET(
   const shellHints = deriveArenaBuildLoadHints(meta);
   const artifactFetchAllowed =
     url.searchParams.get("artifact") !== "0" && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
-  let trackedArtifactMiss = false;
 
   try {
     if (artifactFetchAllowed) {
@@ -159,28 +158,17 @@ export async function GET(
         deliveryClass: shellHints.deliveryClass,
         estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
       });
-      trackedArtifactMiss = true;
     }
   } catch (err) {
-    if (artifactFetchAllowed && !trackedArtifactMiss) {
-      trackServerEventInBackground("arena_artifact_miss", {
+    if (artifactFetchAllowed) {
+      trackServerEventInBackground("arena_artifact_fetch_error", {
         variant,
         deliveryClass: shellHints.deliveryClass,
         estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
       });
-      trackedArtifactMiss = true;
-      timing.add("artifact_miss", ARTIFACT_FETCH_TIMEOUT_MS);
+      timing.add("artifact_error", ARTIFACT_FETCH_TIMEOUT_MS);
     }
     console.warn("arena stream artifact fetch failed", err);
-  }
-
-  if (artifactFetchAllowed && !trackedArtifactMiss) {
-    trackServerEventInBackground("arena_artifact_miss", {
-      variant,
-      deliveryClass: shellHints.deliveryClass,
-      estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
-    });
-    trackedArtifactMiss = true;
   }
 
   const build = await prisma.build.findUnique({

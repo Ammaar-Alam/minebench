@@ -17,6 +17,9 @@ function isRetryableArenaWriteError(error: unknown): boolean {
   return (
     message.includes("deadlock detected") ||
     message.includes("40P01") ||
+    message.includes("could not serialize access due to") ||
+    message.includes("serialization failure") ||
+    message.includes("Please retry your transaction") ||
     message.includes("Transaction already closed") ||
     message.includes("write conflict")
   );
@@ -37,7 +40,9 @@ export async function withArenaWriteRetry<T>(run: () => Promise<T>): Promise<T> 
         throw error;
       }
 
-      await sleep(BASE_DELAY_MS * 2 ** attempt);
+      const backoffMs = BASE_DELAY_MS * 2 ** attempt;
+      const jitterMs = Math.floor(Math.random() * BASE_DELAY_MS);
+      await sleep(backoffMs + jitterMs);
       attempt += 1;
     }
   }
