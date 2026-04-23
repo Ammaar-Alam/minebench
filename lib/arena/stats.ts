@@ -822,18 +822,10 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
     return new Map();
   }
   const filter = promptFilterSql(promptSignal.eligiblePromptIds);
-  const activeModelAFilter = modelFilterSql(
-    Prisma.sql`eligible_votes."modelAId"`,
-    promptSignal.activeModelIds,
-  );
-  const activeModelBFilter = modelFilterSql(
-    Prisma.sql`eligible_votes."modelBId"`,
-    promptSignal.activeModelIds,
-  );
-  const activeModelEitherFilter = Prisma.sql`(
+  const activeModelBothFilter = Prisma.sql`
     ${modelFilterSql(Prisma.sql`matchup."modelAId"`, promptSignal.activeModelIds)}
-    OR ${modelFilterSql(Prisma.sql`matchup."modelBId"`, promptSignal.activeModelIds)}
-  )`;
+    AND ${modelFilterSql(Prisma.sql`matchup."modelBId"`, promptSignal.activeModelIds)}
+  `;
   const rows = await prisma.$queryRaw<PromptDispersionRow[]>`
       WITH eligible_votes AS (
         SELECT
@@ -845,7 +837,7 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
         INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
         WHERE vote.choice IN ('A', 'B', 'TIE')
           AND ${filter}
-          AND ${activeModelEitherFilter}
+          AND ${activeModelBothFilter}
       ),
       model_prompt_scores AS (
         SELECT
@@ -858,7 +850,6 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
             ELSE NULL
           END AS score
         FROM eligible_votes
-        WHERE ${activeModelAFilter}
 
         UNION ALL
 
@@ -872,7 +863,6 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
             ELSE NULL
           END AS score
         FROM eligible_votes
-        WHERE ${activeModelBFilter}
       ),
       per_prompt AS (
         SELECT
@@ -956,6 +946,13 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   const promptSignal = await getPromptSignalSnapshot();
   const activePromptCount = promptSignal.eligiblePromptIds.length;
   const filter = promptFilterSql(promptSignal.eligiblePromptIds);
+  const activeOpponentFilter = Prisma.sql`(
+    (matchup."modelAId" = ${model.id}
+      AND ${modelFilterSql(Prisma.sql`matchup."modelBId"`, promptSignal.activeModelIds)})
+    OR
+    (matchup."modelBId" = ${model.id}
+      AND ${modelFilterSql(Prisma.sql`matchup."modelAId"`, promptSignal.activeModelIds)})
+  )`;
 
   const [promptRows, opponentRows, recentScoreRows, builds] = await Promise.all([
     prisma.$queryRaw<PromptBreakdownRow[]>`
@@ -999,6 +996,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       INNER JOIN "Prompt" prompt ON prompt.id = matchup."promptId"
       WHERE (matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id})
         AND ${filter}
+        AND ${activeOpponentFilter}
       GROUP BY matchup."promptId", prompt.text
     `,
     prisma.$queryRaw<OpponentBreakdownRow[]>`
@@ -1046,6 +1044,8 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         END
       WHERE (matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id})
         AND ${filter}
+        AND opponent.enabled = true
+        AND opponent."isBaseline" = false
       GROUP BY opponent.id, opponent.key, opponent."displayName"
     `,
     prisma.$queryRaw<RecentScoreRow[]>`
@@ -1070,6 +1070,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
       WHERE (matchup."modelAId" = ${model.id} OR matchup."modelBId" = ${model.id})
         AND ${filter}
+        AND ${activeOpponentFilter}
         AND vote.choice IN ('A', 'B', 'TIE')
       ORDER BY vote."createdAt" DESC
       LIMIT ${RECENT_FORM_WINDOW * 2}

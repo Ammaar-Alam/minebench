@@ -318,6 +318,12 @@ Raw prompt score inputs on that retained prompt set:
 - `meanScore = average(promptAverages)`
 - `scoreSpread = sqrt(VAR_POP(promptAverages))`
 
+That retained prompt sample is built from:
+
+- eligible prompts only
+- decisive votes only
+- active ranked models on both sides of the matchup
+
 The important design change is that public prompt consistency should no longer be driven by raw observed prompt-score spread alone.
 
 Prompt-local percentile is the right primitive:

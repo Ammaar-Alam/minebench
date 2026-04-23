@@ -51,6 +51,14 @@ That number is useful, but it is not an absolute prompt-quality percentile.
 
 Because matchmaking is coverage-aware and contender-heavy, strong models often face other strong models on the same prompt. That can drag a raw prompt score down even when the build is still one of the best in the field.
 
+In the implemented branch, the public prompt-strength and consistency pipeline uses a single aligned population:
+
+- eligible prompts only
+- decisive votes only (`A`, `B`, `TIE`)
+- active ranked models only on both sides of the comparison
+
+That alignment matters because prompt-strength percentiles, raw prompt averages used for spread, and consistency should all summarize the same cohort rather than mixing active-only prompt strength with historical votes against retired or disabled opponents.
+
 ### Gemini 3.1 Pro treehouse example
 
 On the April 22, 2026 snapshot, under the implemented branch code:
