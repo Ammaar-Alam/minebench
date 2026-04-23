@@ -205,6 +205,8 @@ type StorageListItem = {
 const legacyArtifactDiscoveryCache = new Map<string, ArenaBuildStreamArtifactRef | null>();
 // Repeated missing-artifact lookups are pure latency; cache misses briefly and fall back immediately.
 const artifactMissCache = new Map<string, number>();
+const ARTIFACT_MISS_CACHE_PRUNE_INTERVAL = 256;
+let artifactMissCacheTouches = 0;
 
 export function isArenaBuildStreamArtifactEnabled(): boolean {
   return Boolean(ARENA_STREAM_ARTIFACTS_ENABLED && ARENA_STREAM_ARTIFACT_PREFIX && ARENA_STREAM_ARTIFACT_BUCKET);
@@ -219,13 +221,27 @@ function getArtifactMissCacheKey(
 }
 
 function hasFreshArtifactMiss(cacheKey: string): boolean {
+  const now = Date.now();
+  maybePruneArtifactMissCache(now);
   const expiresAt = artifactMissCache.get(cacheKey);
   if (!expiresAt) return false;
-  if (expiresAt <= Date.now()) {
+  if (expiresAt <= now) {
     artifactMissCache.delete(cacheKey);
     return false;
   }
   return true;
+}
+
+function maybePruneArtifactMissCache(now: number): void {
+  artifactMissCacheTouches += 1;
+  if (artifactMissCacheTouches < ARTIFACT_MISS_CACHE_PRUNE_INTERVAL) return;
+  artifactMissCacheTouches = 0;
+
+  for (const [key, expiresAt] of artifactMissCache) {
+    if (expiresAt <= now) {
+      artifactMissCache.delete(key);
+    }
+  }
 }
 
 export function rememberArenaBuildStreamArtifactMiss(
@@ -233,9 +249,11 @@ export function rememberArenaBuildStreamArtifactMiss(
   variant: ArenaBuildVariant,
   checksum: string | null,
 ): void {
+  const now = Date.now();
+  maybePruneArtifactMissCache(now);
   artifactMissCache.set(
     getArtifactMissCacheKey(buildId, variant, checksum),
-    Date.now() + ARENA_STREAM_ARTIFACT_MISS_TTL_MS,
+    now + ARENA_STREAM_ARTIFACT_MISS_TTL_MS,
   );
 }
 

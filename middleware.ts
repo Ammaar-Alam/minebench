@@ -12,6 +12,7 @@ type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
 type RateLimitRule = { key: string; maxPerWindow: number };
 let requestsSinceLastPrune = 0;
+type BucketPreview = { key: string; resetAt: number; nextCount: number };
 
 function getIp(req: NextRequest) {
   const forwarded = req.headers.get("x-forwarded-for");
@@ -55,30 +56,26 @@ function maybePruneExpiredBuckets(now: number) {
   }
 }
 
-function consumeBucket(key: string, maxPerWindow: number, now: number) {
-  const bucket = buckets.get(key);
-  if (!bucket || bucket.resetAt <= now) {
-    buckets.set(key, { resetAt: now + WINDOW_MS, count: 1 });
-    return { allowed: true, retryAfterSeconds: 0 };
-  }
-
-  bucket.count += 1;
-  if (bucket.count > maxPerWindow) {
-    return {
-      allowed: false,
-      retryAfterSeconds: Math.ceil((bucket.resetAt - now) / 1000),
-    };
-  }
-
-  return { allowed: true, retryAfterSeconds: 0 };
-}
-
 function consumeBuckets(rules: RateLimitRule[], now: number) {
+  const previews: BucketPreview[] = [];
+
   for (const rule of rules) {
-    const result = consumeBucket(rule.key, rule.maxPerWindow, now);
-    if (!result.allowed) {
-      return result;
+    const bucket = buckets.get(rule.key);
+    const resetAt = !bucket || bucket.resetAt <= now ? now + WINDOW_MS : bucket.resetAt;
+    const nextCount = !bucket || bucket.resetAt <= now ? 1 : bucket.count + 1;
+
+    if (nextCount > rule.maxPerWindow) {
+      return {
+        allowed: false,
+        retryAfterSeconds: Math.ceil((resetAt - now) / 1000),
+      };
     }
+
+    previews.push({ key: rule.key, resetAt, nextCount });
+  }
+
+  for (const preview of previews) {
+    buckets.set(preview.key, { resetAt: preview.resetAt, count: preview.nextCount });
   }
 
   return {
