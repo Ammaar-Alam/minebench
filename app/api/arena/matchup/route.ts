@@ -629,13 +629,15 @@ export async function GET(req: Request) {
 
   const buildMetaStartedAt = performance.now();
   const [buildA, buildB] = await Promise.all([
-    prisma.build.findFirst({
+    prisma.build.findUnique({
       where: {
-        promptId: picked.prompt.id,
-        modelId: leftModel.id,
-        gridSize: ARENA_GRID_SIZE,
-        palette: ARENA_PALETTE,
-        mode: ARENA_MODE,
+        promptId_modelId_gridSize_palette_mode: {
+          promptId: picked.prompt.id,
+          modelId: leftModel.id,
+          gridSize: ARENA_GRID_SIZE,
+          palette: ARENA_PALETTE,
+          mode: ARENA_MODE,
+        },
       },
       select: {
         id: true,
@@ -647,13 +649,15 @@ export async function GET(req: Request) {
         voxelSha256: true,
       },
     }),
-    prisma.build.findFirst({
+    prisma.build.findUnique({
       where: {
-        promptId: picked.prompt.id,
-        modelId: rightModel.id,
-        gridSize: ARENA_GRID_SIZE,
-        palette: ARENA_PALETTE,
-        mode: ARENA_MODE,
+        promptId_modelId_gridSize_palette_mode: {
+          promptId: picked.prompt.id,
+          modelId: rightModel.id,
+          gridSize: ARENA_GRID_SIZE,
+          palette: ARENA_PALETTE,
+          mode: ARENA_MODE,
+        },
       },
       select: {
         id: true,

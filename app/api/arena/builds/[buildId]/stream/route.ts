@@ -3,10 +3,12 @@ import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "@/lib/arena/types
 import { isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
 import {
   ARENA_BUILD_STREAM_HELLO_PAD,
+  clearArenaBuildStreamArtifactMiss,
   encodeArenaBuildStreamEvent,
   fetchArenaBuildStreamArtifact,
   iterateArenaBuildChunks,
   planArenaBuildStream,
+  rememberArenaBuildStreamArtifactMiss,
 } from "@/lib/arena/buildStream";
 import { deriveArenaBuildLoadHints, pickBuildVariant, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
 import { prisma } from "@/lib/prisma";
@@ -145,6 +147,7 @@ export async function GET(
       );
       if (artifact?.body) {
         timing.end("artifact_hit", artifactStartedAt);
+        clearArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
         timing.end("total", requestStartedAt);
         const headers = createStreamHeaders("artifact", {
           deliveryClass: shellHints.deliveryClass,
@@ -154,6 +157,7 @@ export async function GET(
         return new Response(artifact.body, { headers });
       }
       timing.end("artifact_miss", artifactStartedAt);
+      rememberArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
       trackServerEventInBackground("arena_artifact_miss", {
         variant,
         deliveryClass: shellHints.deliveryClass,
@@ -163,6 +167,7 @@ export async function GET(
     }
   } catch (err) {
     if (artifactFetchAllowed && !trackedArtifactMiss) {
+      rememberArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
       trackServerEventInBackground("arena_artifact_miss", {
         variant,
         deliveryClass: shellHints.deliveryClass,
@@ -175,6 +180,7 @@ export async function GET(
   }
 
   if (artifactFetchAllowed && !trackedArtifactMiss) {
+    rememberArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
     trackServerEventInBackground("arena_artifact_miss", {
       variant,
       deliveryClass: shellHints.deliveryClass,

@@ -52,6 +52,12 @@ const ARENA_STREAM_ARTIFACT_PREFIX = normalizePrefix(
 const ARENA_STREAM_ARTIFACT_BUCKET = (
   process.env.ARENA_STREAM_ARTIFACT_BUCKET ?? getBuildStorageBucketFromEnv()
 ).trim();
+const ARENA_STREAM_ARTIFACT_MISS_TTL_MS = readIntEnv(
+  "ARENA_STREAM_ARTIFACT_MISS_TTL_MS",
+  5 * 60 * 1000,
+  1_000,
+  60 * 60 * 1000,
+);
 
 function readBoolEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
@@ -197,9 +203,48 @@ type StorageListItem = {
 };
 
 const legacyArtifactDiscoveryCache = new Map<string, ArenaBuildStreamArtifactRef | null>();
+// Repeated missing-artifact lookups are pure latency; cache misses briefly and fall back immediately.
+const artifactMissCache = new Map<string, number>();
 
 export function isArenaBuildStreamArtifactEnabled(): boolean {
   return Boolean(ARENA_STREAM_ARTIFACTS_ENABLED && ARENA_STREAM_ARTIFACT_PREFIX && ARENA_STREAM_ARTIFACT_BUCKET);
+}
+
+function getArtifactMissCacheKey(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string | null,
+): string {
+  return `${buildId}:${variant}:${checksum?.trim() || "none"}`;
+}
+
+function hasFreshArtifactMiss(cacheKey: string): boolean {
+  const expiresAt = artifactMissCache.get(cacheKey);
+  if (!expiresAt) return false;
+  if (expiresAt <= Date.now()) {
+    artifactMissCache.delete(cacheKey);
+    return false;
+  }
+  return true;
+}
+
+export function rememberArenaBuildStreamArtifactMiss(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string | null,
+): void {
+  artifactMissCache.set(
+    getArtifactMissCacheKey(buildId, variant, checksum),
+    Date.now() + ARENA_STREAM_ARTIFACT_MISS_TTL_MS,
+  );
+}
+
+export function clearArenaBuildStreamArtifactMiss(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string | null,
+): void {
+  artifactMissCache.delete(getArtifactMissCacheKey(buildId, variant, checksum));
 }
 
 function getArenaBuildStreamArtifactRefByChecksum(
@@ -383,6 +428,11 @@ export async function fetchArenaBuildStreamArtifact(
   checksum: string | null,
   opts?: { signal?: AbortSignal },
 ): Promise<Response | null> {
+  const missCacheKey = getArtifactMissCacheKey(buildId, variant, checksum);
+  if (hasFreshArtifactMiss(missCacheKey)) {
+    return null;
+  }
+
   let config: ReturnType<typeof getSupabaseStorageConfig>;
   try {
     config = getSupabaseStorageConfig();
@@ -415,6 +465,7 @@ export async function fetchArenaBuildStreamArtifact(
       if (objectMissing) continue;
       throw new Error(`Stream artifact fetch failed (${resp.status}): ${text || "empty response"}`);
     }
+    artifactMissCache.delete(missCacheKey);
     return resp;
   }
 
@@ -433,6 +484,7 @@ export async function fetchArenaBuildStreamArtifact(
     });
 
     if (resp.ok) {
+      artifactMissCache.delete(missCacheKey);
       return resp;
     }
     if (resp.status !== 404) {
@@ -442,6 +494,7 @@ export async function fetchArenaBuildStreamArtifact(
     legacyArtifactDiscoveryCache.set(`${buildId}:${variant}`, null);
   }
 
+  rememberArenaBuildStreamArtifactMiss(buildId, variant, checksum);
   return null;
 }
 
@@ -473,5 +526,6 @@ export async function uploadArenaBuildStreamArtifact(
     const text = await resp.text().catch(() => "");
     throw new Error(`Stream artifact upload failed (${resp.status}): ${text || "empty response"}`);
   }
+  clearArenaBuildStreamArtifactMiss(buildId, variant, checksum);
   return ref;
 }

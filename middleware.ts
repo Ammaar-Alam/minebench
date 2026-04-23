@@ -4,6 +4,7 @@ import { LEGACY_HOSTS, SITE_HOST } from "@/lib/seo";
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
 const MAX_PER_WINDOW_LOCAL_EXEC = 6;
+const RATE_LIMIT_SESSION_COOKIE = "mb_rls";
 
 type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
@@ -28,6 +29,39 @@ function maybeRedirectToCanonicalHost(req: NextRequest) {
   return NextResponse.redirect(nextUrl, 308);
 }
 
+function consumeBucket(key: string, maxPerWindow: number, now: number) {
+  const bucket = buckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    buckets.set(key, { resetAt: now + WINDOW_MS, count: 1 });
+    return { allowed: true, retryAfterSeconds: 0 };
+  }
+
+  bucket.count += 1;
+  if (bucket.count > maxPerWindow) {
+    return {
+      allowed: false,
+      retryAfterSeconds: Math.ceil((bucket.resetAt - now) / 1000),
+    };
+  }
+
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function rateLimitedResponse(retryAfterSeconds: number) {
+  return new NextResponse("Too Many Requests", {
+    status: 429,
+    headers: {
+      "Retry-After": String(retryAfterSeconds),
+    },
+  });
+}
+
+function getArenaRateLimitSession(req: NextRequest) {
+  const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
+  if (existing) return { sessionId: existing, shouldSetCookie: false };
+  return { sessionId: crypto.randomUUID(), shouldSetCookie: true };
+}
+
 export function middleware(req: NextRequest) {
   const canonicalRedirect = maybeRedirectToCanonicalHost(req);
   if (canonicalRedirect) return canonicalRedirect;
@@ -35,29 +69,31 @@ export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
+  const isArenaApi = pathname.startsWith("/api/arena/");
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
-
   const ip = getIp(req);
-  const key = `${ip}:${pathname}`;
   const now = Date.now();
+  const arenaSession = isArenaApi ? getArenaRateLimitSession(req) : null;
+  const primaryKey = isArenaApi
+    ? `session:${arenaSession?.sessionId}:${pathname}`
+    : `${ip}:${pathname}`;
 
-  const bucket = buckets.get(key);
-  if (!bucket || bucket.resetAt <= now) {
-    buckets.set(key, { resetAt: now + WINDOW_MS, count: 1 });
-    return NextResponse.next();
+  const primary = consumeBucket(primaryKey, maxPerWindow, now);
+  if (!primary.allowed) {
+    return rateLimitedResponse(primary.retryAfterSeconds);
   }
 
-  bucket.count += 1;
-  if (bucket.count > maxPerWindow) {
-    return new NextResponse("Too Many Requests", {
-      status: 429,
-      headers: {
-        "Retry-After": String(Math.ceil((bucket.resetAt - now) / 1000)),
-      },
+  const response = NextResponse.next();
+  if (arenaSession?.shouldSetCookie) {
+    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, arenaSession.sessionId, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365,
     });
   }
 
-  return NextResponse.next();
+  return response;
 }
 
 export const config = {
