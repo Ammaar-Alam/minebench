@@ -5,9 +5,13 @@ const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
 const MAX_PER_WINDOW_LOCAL_EXEC = 6;
 const RATE_LIMIT_SESSION_COOKIE = "mb_rls";
+const ARENA_IP_GUARDRAIL_MULTIPLIER = 12;
+const BUCKET_PRUNE_INTERVAL = 256;
 
 type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
+type RateLimitRule = { key: string; maxPerWindow: number };
+let requestsSinceLastPrune = 0;
 
 function getIp(req: NextRequest) {
   const forwarded = req.headers.get("x-forwarded-for");
@@ -29,6 +33,28 @@ function maybeRedirectToCanonicalHost(req: NextRequest) {
   return NextResponse.redirect(nextUrl, 308);
 }
 
+function normalizeRateLimitPath(pathname: string): string {
+  if (/^\/api\/arena\/builds\/[^/]+\/stream$/.test(pathname)) {
+    return "/api/arena/builds/:buildId/stream";
+  }
+  if (/^\/api\/arena\/builds\/[^/]+$/.test(pathname)) {
+    return "/api/arena/builds/:buildId";
+  }
+  return pathname;
+}
+
+function maybePruneExpiredBuckets(now: number) {
+  requestsSinceLastPrune += 1;
+  if (requestsSinceLastPrune < BUCKET_PRUNE_INTERVAL) return;
+  requestsSinceLastPrune = 0;
+
+  for (const [key, bucket] of buckets) {
+    if (bucket.resetAt <= now) {
+      buckets.delete(key);
+    }
+  }
+}
+
 function consumeBucket(key: string, maxPerWindow: number, now: number) {
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= now) {
@@ -45,6 +71,20 @@ function consumeBucket(key: string, maxPerWindow: number, now: number) {
   }
 
   return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function consumeBuckets(rules: RateLimitRule[], now: number) {
+  for (const rule of rules) {
+    const result = consumeBucket(rule.key, rule.maxPerWindow, now);
+    if (!result.allowed) {
+      return result;
+    }
+  }
+
+  return {
+    allowed: true,
+    retryAfterSeconds: 0,
+  };
 }
 
 function rateLimitedResponse(retryAfterSeconds: number) {
@@ -71,16 +111,26 @@ export function middleware(req: NextRequest) {
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
   const isArenaApi = pathname.startsWith("/api/arena/");
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
+  const bucketPath = normalizeRateLimitPath(pathname);
   const ip = getIp(req);
   const now = Date.now();
+  maybePruneExpiredBuckets(now);
   const arenaSession = isArenaApi ? getArenaRateLimitSession(req) : null;
-  const primaryKey = isArenaApi
-    ? `session:${arenaSession?.sessionId}:${pathname}`
-    : `${ip}:${pathname}`;
+  const rules: RateLimitRule[] = isArenaApi
+    ? [
+        // Keep arena primarily session-scoped, but retain a wider IP guardrail so
+        // clients cannot disable throttling by dropping or rotating cookies.
+        {
+          key: `ip:${ip}:${bucketPath}`,
+          maxPerWindow: maxPerWindow * ARENA_IP_GUARDRAIL_MULTIPLIER,
+        },
+        { key: `session:${arenaSession?.sessionId}:${bucketPath}`, maxPerWindow },
+      ]
+    : [{ key: `${ip}:${bucketPath}`, maxPerWindow }];
 
-  const primary = consumeBucket(primaryKey, maxPerWindow, now);
-  if (!primary.allowed) {
-    return rateLimitedResponse(primary.retryAfterSeconds);
+  const rateLimit = consumeBuckets(rules, now);
+  if (!rateLimit.allowed) {
+    return rateLimitedResponse(rateLimit.retryAfterSeconds);
   }
 
   const response = NextResponse.next();

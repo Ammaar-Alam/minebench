@@ -3,12 +3,10 @@ import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "@/lib/arena/types
 import { isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
 import {
   ARENA_BUILD_STREAM_HELLO_PAD,
-  clearArenaBuildStreamArtifactMiss,
   encodeArenaBuildStreamEvent,
   fetchArenaBuildStreamArtifact,
   iterateArenaBuildChunks,
   planArenaBuildStream,
-  rememberArenaBuildStreamArtifactMiss,
 } from "@/lib/arena/buildStream";
 import { deriveArenaBuildLoadHints, pickBuildVariant, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
 import { prisma } from "@/lib/prisma";
@@ -135,7 +133,6 @@ export async function GET(
   const shellHints = deriveArenaBuildLoadHints(meta);
   const artifactFetchAllowed =
     url.searchParams.get("artifact") !== "0" && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
-  let trackedArtifactMiss = false;
 
   try {
     if (artifactFetchAllowed) {
@@ -147,7 +144,6 @@ export async function GET(
       );
       if (artifact?.body) {
         timing.end("artifact_hit", artifactStartedAt);
-        clearArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
         timing.end("total", requestStartedAt);
         const headers = createStreamHeaders("artifact", {
           deliveryClass: shellHints.deliveryClass,
@@ -157,36 +153,22 @@ export async function GET(
         return new Response(artifact.body, { headers });
       }
       timing.end("artifact_miss", artifactStartedAt);
-      rememberArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
       trackServerEventInBackground("arena_artifact_miss", {
         variant,
         deliveryClass: shellHints.deliveryClass,
         estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
       });
-      trackedArtifactMiss = true;
     }
   } catch (err) {
-    if (artifactFetchAllowed && !trackedArtifactMiss) {
-      rememberArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
-      trackServerEventInBackground("arena_artifact_miss", {
+    if (artifactFetchAllowed) {
+      trackServerEventInBackground("arena_artifact_fetch_error", {
         variant,
         deliveryClass: shellHints.deliveryClass,
         estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
       });
-      trackedArtifactMiss = true;
-      timing.add("artifact_miss", ARTIFACT_FETCH_TIMEOUT_MS);
+      timing.add("artifact_error", ARTIFACT_FETCH_TIMEOUT_MS);
     }
     console.warn("arena stream artifact fetch failed", err);
-  }
-
-  if (artifactFetchAllowed && !trackedArtifactMiss) {
-    rememberArenaBuildStreamArtifactMiss(buildId, variant, storedChecksum);
-    trackServerEventInBackground("arena_artifact_miss", {
-      variant,
-      deliveryClass: shellHints.deliveryClass,
-      estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
-    });
-    trackedArtifactMiss = true;
   }
 
   const build = await prisma.build.findUnique({

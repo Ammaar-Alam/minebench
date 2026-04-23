@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-const MAX_ATTEMPTS = 5;
+const MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 40;
 
 function getErrorMessage(error: unknown): string {

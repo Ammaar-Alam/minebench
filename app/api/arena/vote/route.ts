@@ -16,8 +16,8 @@ import { ServerTiming } from "@/lib/serverTiming";
 export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
-const DECISIVE_VOTE_TX_MAX_WAIT_MS = 5_000;
-const DECISIVE_VOTE_TX_TIMEOUT_MS = 10_000;
+const DECISIVE_VOTE_TX_MAX_WAIT_MS = 750;
+const DECISIVE_VOTE_TX_TIMEOUT_MS = 2_500;
 
 const reqSchema = z.object({
   matchupId: z.string().min(1),

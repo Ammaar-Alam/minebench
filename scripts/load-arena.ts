@@ -342,12 +342,15 @@ function parseServerTiming(header: string) {
     .filter((entry): entry is { name: string; dur: number } => entry != null);
 }
 
-async function fetchWithTimeout(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-  jar: CookieJar,
-) {
+async function fetchWithTimeout<T>(params: {
+  url: string;
+  init: RequestInit;
+  timeoutMs: number;
+  jar: CookieJar;
+  stage: string;
+  read: (response: Response) => Promise<T>;
+}): Promise<{ value: T; durationMs: number; headers: Headers }> {
+  const { url, init, timeoutMs, jar, stage, read } = params;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const headers = new Headers(init.headers);
@@ -363,12 +366,13 @@ async function fetchWithTimeout(
     });
     jar.apply(response.headers);
     return {
-      response,
+      value: await read(response),
       durationMs: performance.now() - startedAt,
+      headers: response.headers,
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new RequestError("network", `timed out after ${timeoutMs}ms`, true);
+      throw new RequestError(stage, `timed out after ${timeoutMs}ms`, true);
     }
     throw error;
   } finally {
@@ -387,12 +391,9 @@ async function requestJson<T>(params: {
   metrics: Metrics;
 }) {
   const { url, method, timeoutMs, jar, body, headers, stage, metrics } = params;
-  let response: Response;
-  let durationMs: number;
-  try {
-    const result = await fetchWithTimeout(
-      url,
-      {
+  const result = await fetchWithTimeout({
+    url,
+    init: {
         method,
         headers: {
           ...(body ? { "Content-Type": "application/json" } : {}),
@@ -400,30 +401,26 @@ async function requestJson<T>(params: {
         },
         body: body ? JSON.stringify(body) : undefined,
       },
-      timeoutMs,
-      jar,
-    );
-    response = result.response;
-    durationMs = result.durationMs;
-  } catch (error) {
-    if (error instanceof RequestError && error.timeout) {
-      throw new RequestError(stage, error.message, true);
-    }
-    throw error;
-  }
+    timeoutMs,
+    jar,
+    stage,
+    read: async (response) => {
+      if (!response.ok) {
+        const text = await response.text().catch(() => `HTTP ${response.status}`);
+        throw new RequestError(stage, `HTTP ${response.status}: ${truncate(text, 220)}`);
+      }
 
-  metrics.addTiming(stage, durationMs);
-  metrics.recordServerTiming(stage, response.headers.get("server-timing"));
+      return (await response.json()) as T;
+    },
+  });
 
-  if (!response.ok) {
-    const text = await response.text().catch(() => `HTTP ${response.status}`);
-    throw new RequestError(stage, `HTTP ${response.status}: ${truncate(text, 220)}`);
-  }
+  metrics.addTiming(stage, result.durationMs);
+  metrics.recordServerTiming(stage, result.headers.get("server-timing"));
 
   return {
-    body: (await response.json()) as T,
-    headers: response.headers,
-    durationMs,
+    body: result.value,
+    headers: result.headers,
+    durationMs: result.durationMs,
   };
 }
 
@@ -566,38 +563,30 @@ async function hydrateFullBuild(params: {
   for (let index = 0; index < attempts.length; index += 1) {
     const attempt = attempts[index];
     try {
-      let response: Response;
-      let durationMs: number;
-      try {
-        const result = await fetchWithTimeout(
-          attempt.url,
-          { method: "GET", headers },
-          timeoutMs,
-          jar,
-        );
-        response = result.response;
-        durationMs = result.durationMs;
-      } catch (error) {
-        if (error instanceof RequestError && error.timeout) {
-          throw new RequestError(attempt.stage, error.message, true);
-        }
-        throw error;
-      }
+      const result = await fetchWithTimeout({
+        url: attempt.url,
+        init: { method: "GET", headers },
+        timeoutMs,
+        jar,
+        stage: attempt.stage,
+        read: async (response) => {
+          if (!response.ok) {
+            const text = await response.text().catch(() => `HTTP ${response.status}`);
+            throw new RequestError(attempt.stage, `HTTP ${response.status}: ${truncate(text, 220)}`);
+          }
 
-      metrics.addTiming(attempt.stage, durationMs);
-      metrics.recordServerTiming(attempt.stage, response.headers.get("server-timing"));
+          await readBuildStream(response, attempt.stage);
+          return null;
+        },
+      });
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => `HTTP ${response.status}`);
-        throw new RequestError(attempt.stage, `HTTP ${response.status}: ${truncate(text, 220)}`);
-      }
-
-      await readBuildStream(response, attempt.stage);
+      metrics.addTiming(attempt.stage, result.durationMs);
+      metrics.recordServerTiming(attempt.stage, result.headers.get("server-timing"));
 
       metrics.addTiming("build_total", performance.now() - startedAt);
       metrics.increment("full_hydrations");
       metrics.increment(`build_source_${attempt.source}`);
-      const streamSource = response.headers.get("x-build-stream-source");
+      const streamSource = result.headers.get("x-build-stream-source");
       if (streamSource) {
         metrics.increment(`build_header_source_${streamSource}`);
       }
