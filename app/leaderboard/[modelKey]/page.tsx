@@ -17,7 +17,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   const readableModelKey = decodeURIComponent(modelKey).replace(/[-_]+/g, " ").trim();
   const modelLabel = readableModelKey.length > 0 ? readableModelKey : "model";
   const title = `${modelLabel} stats`;
-  const description = `Detailed MineBench profile for ${modelLabel}, including consistency, spread, and prompt-level performance.`;
+  const description = `Detailed MineBench profile for ${modelLabel}, including consistency, spread, and prompt strength across the benchmark.`;
 
   return {
     title,

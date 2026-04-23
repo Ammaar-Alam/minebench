@@ -30,6 +30,7 @@ import {
   SandboxGifExportButton,
   type SandboxGifExportTarget,
 } from "@/components/sandbox/SandboxGifExportButton";
+import { getConsistencyBand, getConsistencyLabel } from "@/lib/arena/consistencyBands";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -388,30 +389,47 @@ function formatPercent(value: number | null, digits = 0): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
+function formatPercentile(value: number | null, digits = 1): string {
+  if (value == null) return "-";
+  const rounded = Number(value.toFixed(digits));
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(digits)}%`;
+}
+
+function formatMetricValue(value: number | null, digits = 1): string {
+  if (value == null) return "-";
+  const rounded = Number(value.toFixed(digits));
+  return Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(digits);
+}
+
 function formatSignedPercent(value: number | null, digits = 1): string {
   if (value == null) return "-";
   const pct = (value * 100).toFixed(digits);
   return `${value > 0 ? "+" : ""}${pct}%`;
 }
 
-function consistencyLabel(consistency: number | null): string {
-  if (consistency == null) return "Insufficient data";
-  if (consistency >= 78) return "Very steady";
-  if (consistency >= 58) return "Balanced";
-  return "High swing";
-}
-
 function consistencyTone(consistency: number | null): string {
-  if (consistency == null) return "text-muted";
-  if (consistency >= 78) return "text-success";
-  if (consistency >= 58) return "text-accent";
-  return "text-warn";
+  const band = getConsistencyBand(consistency);
+  if (band === "very-steady") return "text-success";
+  if (band === "steady") return "text-accent";
+  if (band === "mixed") return "text-warn";
+  if (band === "high-swing") return "text-danger";
+  return "text-muted";
 }
 
-function scoreBarClass(score: number): string {
-  if (score >= 0.66) return "bg-success/75";
-  if (score >= 0.5) return "bg-accent/75";
-  if (score >= 0.35) return "bg-warn/75";
+function consistencyStroke(consistency: number | null): string {
+  const band = getConsistencyBand(consistency);
+  if (band === "very-steady") return "hsl(var(--success) / 0.94)";
+  if (band === "steady") return "hsl(var(--accent) / 0.92)";
+  if (band === "mixed") return "hsl(var(--warn) / 0.92)";
+  if (band === "high-swing") return "hsl(var(--danger) / 0.92)";
+  return "hsl(var(--muted) / 0.72)";
+}
+
+function strengthBarClass(percentile: number | null): string {
+  if (percentile == null) return "bg-muted/50";
+  if (percentile >= 66) return "bg-success/75";
+  if (percentile >= 50) return "bg-accent/75";
+  if (percentile >= 35) return "bg-warn/75";
   return "bg-danger/75";
 }
 
@@ -527,15 +545,23 @@ function MomentumArrow({ delta }: { delta: number | null }) {
 
 function topStrongest(prompts: ModelPromptBreakdown[]) {
   return [...prompts]
-    .filter((p) => p.votes >= 2)
-    .sort((a, b) => b.averageScore - a.averageScore || b.votes - a.votes)
+    .filter((p) => p.votes >= 2 && p.promptStrengthPercentile != null)
+    .sort(
+      (a, b) =>
+        (b.promptStrengthPercentile ?? -1) - (a.promptStrengthPercentile ?? -1) ||
+        b.votes - a.votes,
+    )
     .slice(0, 6);
 }
 
 function topWeakest(prompts: ModelPromptBreakdown[]) {
   return [...prompts]
-    .filter((p) => p.votes >= 2)
-    .sort((a, b) => a.averageScore - b.averageScore || b.votes - a.votes)
+    .filter((p) => p.votes >= 2 && p.promptStrengthPercentile != null)
+    .sort(
+      (a, b) =>
+        (a.promptStrengthPercentile ?? Number.POSITIVE_INFINITY) -
+          (b.promptStrengthPercentile ?? Number.POSITIVE_INFINITY) || b.votes - a.votes,
+    )
     .slice(0, 6);
 }
 
@@ -663,7 +689,7 @@ function ConsistencyGauge({
           cy={center}
           r={radius}
           fill="none"
-          stroke="hsl(var(--accent) / 0.9)"
+          stroke={consistencyStroke(value)}
           strokeWidth={strokeWidth}
           strokeLinecap="round"
           strokeDasharray={`${circumference.toFixed(2)} ${circumference.toFixed(2)}`}
@@ -676,7 +702,7 @@ function ConsistencyGauge({
         <div
           className={`${numberSize} font-semibold leading-none tabular-nums ${consistencyTone(value)}`}
         >
-          {value != null ? Math.round(animated) : "-"}
+          {value != null ? formatMetricValue(animated) : "-"}
         </div>
       </div>
     </div>
@@ -740,7 +766,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
   error?: string | null;
   heightClass?: string;
   /** when provided, replaces the default blocks pill with caller-supplied
-      overlay content (typically the combined votes · score · blocks chip
+      overlay content (typically the combined votes · strength · observed chip
       used in the prompt modal). rendered absolute-positioned inside the
       preview container, so callers should include their own positioning. */
   overlay?: ReactNode;
@@ -858,7 +884,7 @@ function PromptEdgeRow({
   tone: "strong" | "weak";
   delayMs?: number;
 }) {
-  const scorePct = Math.max(0, Math.min(100, prompt.averageScore * 100));
+  const strengthPct = Math.max(0, Math.min(100, prompt.promptStrengthPercentile ?? 0));
   const toneTextClass = tone === "strong" ? "text-success" : "text-danger";
   const toneBarClass =
     tone === "strong" ? "from-success/85 via-accent/72 to-accent2/55" : "from-danger/88 via-warn/72 to-accent2/55";
@@ -876,14 +902,23 @@ function PromptEdgeRow({
           <div className="mt-2 mb-clamp-prompt-tight text-sm text-fg/92">{prompt.promptText}</div>
         </div>
         <div className="shrink-0 text-right">
-          <div className={`font-mono text-base ${toneTextClass}`}>{formatPercent(prompt.averageScore)}</div>
-          <div className="mt-0.5 text-xs text-muted">{prompt.votes} votes</div>
+          <div className={`font-mono text-base ${toneTextClass}`}>
+            {formatPercentile(prompt.promptStrengthPercentile)}
+          </div>
+          <div className="mt-0.5 text-xs text-muted">
+            {prompt.promptStrengthRank != null && prompt.promptStrengthTotal != null
+              ? `#${prompt.promptStrengthRank}/${prompt.promptStrengthTotal}`
+              : `${prompt.votes} votes`}
+          </div>
+          <div className="mt-0.5 text-xs text-muted">
+            obs {formatPercent(prompt.averageScore)}
+          </div>
         </div>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border/35">
         <div
           className={`h-full rounded-full bg-gradient-to-r ${toneBarClass}`}
-          style={{ width: `${scorePct.toFixed(1)}%` }}
+          style={{ width: `${strengthPct.toFixed(1)}%` }}
         />
       </div>
     </article>
@@ -937,19 +972,25 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const promptCurveSource = useMemo(
     () =>
       data.prompts
-        .filter((prompt) => prompt.votes >= 2)
-        .sort((a, b) => b.averageScore - a.averageScore)
-        .slice(0, 36),
+        .filter((prompt) => prompt.votes >= 2 && prompt.promptStrengthPercentile != null)
+        .sort(
+          (a, b) =>
+            (b.promptStrengthPercentile ?? -1) - (a.promptStrengthPercentile ?? -1) ||
+            b.votes - a.votes,
+        ),
     [data.prompts],
   );
 
-  const promptCurveValues = promptCurveSource.map((prompt) => prompt.averageScore);
+  const promptCurveValues = promptCurveSource.map(
+    (prompt) => (prompt.promptStrengthPercentile ?? 0) / 100,
+  );
   const curve = useMemo(() => buildCurve(promptCurveValues), [promptCurveValues]);
-  const strongestCurveScore = promptCurveValues[0] ?? null;
-  const weakestCurveScore = promptCurveValues[promptCurveValues.length - 1] ?? null;
+  const strongestCurveScore = promptCurveSource[0]?.promptStrengthPercentile ?? null;
+  const weakestCurveScore =
+    promptCurveSource[promptCurveSource.length - 1]?.promptStrengthPercentile ?? null;
 
-  const bestPromptScore = strongest[0]?.averageScore ?? null;
-  const weakPromptScore = weakest[0]?.averageScore ?? null;
+  const bestPromptScore = strongest[0]?.promptStrengthPercentile ?? null;
+  const weakPromptScore = weakest[0]?.promptStrengthPercentile ?? null;
   const voteSummary = summarizeArenaVotes(data.model);
   const decisiveVotes = voteSummary.decisiveVotes;
   const coveragePercent = Math.round((data.summary.promptCoverage ?? 0) * 100);
@@ -962,7 +1003,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     () =>
       [...data.prompts].sort(
         (a, b) =>
-          b.averageScore - a.averageScore ||
+          (b.promptStrengthPercentile ?? -1) - (a.promptStrengthPercentile ?? -1) ||
           b.votes - a.votes ||
           a.promptText.localeCompare(b.promptText),
       ),
@@ -1359,19 +1400,17 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           style={{ animationDelay: "50ms" }}
         >
           <div className="space-y-3.5">
-            {/* Custom header — SectionHeader inlined so the consistency gauge
-               can sit next to it as contextual aside. Gauge here instead of
-               in the hero because consistency is a summary of this curve's
-               flatness; the two belong together, not in separate panels. */}
+            {/* keep the gauge beside the prompt-strength curve so the page's
+               main consistency read and the prompt distribution stay paired */}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
                 <div className="text-[10px] uppercase tracking-[0.14em] text-muted">Distribution</div>
                 <div className="text-[1.12rem] font-semibold leading-tight text-fg">
-                  Prompt spread curve
+                  Prompt strength curve
                 </div>
                 <div className="mt-1 font-mono text-[11px] text-muted2">
                   {promptCurveValues.length > 0
-                    ? `${promptCurveValues.length} prompts · ${formatPercent(strongestCurveScore)} → ${formatPercent(weakestCurveScore)}`
+                    ? `${promptCurveValues.length} prompts · ${formatPercentile(strongestCurveScore)} → ${formatPercentile(weakestCurveScore)}`
                     : "Waiting for prompt data"}
                 </div>
               </div>
@@ -1381,8 +1420,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   <span className="text-[10px] uppercase tracking-[0.14em] text-muted">
                     Consistency
                   </span>
-                  <span className="text-[11px] text-muted2">
-                    {consistencyLabel(data.summary.consistency)}
+                  <span className={`text-[11px] ${consistencyTone(data.summary.consistency)}`}>
+                    {getConsistencyLabel(data.summary.consistency)}
                   </span>
                 </div>
               </div>
@@ -1404,7 +1443,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         preserveAspectRatio="none"
                         className="h-full w-full"
                         role="img"
-                        aria-label="Prompt spread curve from strongest to weakest prompts"
+                        aria-label="Prompt strength curve from strongest to weakest prompts"
                       >
                       <defs>
                         <linearGradient
@@ -1512,7 +1551,9 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                       <button
                         key={`curve-point-${index}`}
                         type="button"
-                        aria-label={`Prompt rank ${index + 1}, score ${formatPercent(point.value)}`}
+                        aria-label={`Prompt rank ${index + 1}, strength ${formatPercentile(
+                          promptCurveSource[index]?.promptStrengthPercentile ?? null,
+                        )}`}
                         onMouseEnter={() => setHoveredCurveIndex(index)}
                         onMouseLeave={() =>
                           setHoveredCurveIndex((current) => (current === index ? null : current))
@@ -1540,23 +1581,31 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         }}
                       >
                         <div className="font-mono text-fg">
-                          {formatPercent(hoveredPrompt.averageScore)}
+                          {formatPercentile(hoveredPrompt.promptStrengthPercentile)}
                         </div>
                         <div className="max-w-[18rem] overflow-hidden text-ellipsis whitespace-nowrap text-muted">
                           {hoveredPrompt.promptText}
                         </div>
                         <div className="mt-0.5 whitespace-nowrap text-[10px] text-muted">
-                          rank #{hoveredCurveIndex != null ? hoveredCurveIndex + 1 : "-"} •{" "}
-                          {hoveredPrompt.votes} votes
+                          {hoveredPrompt.promptStrengthRank != null &&
+                          hoveredPrompt.promptStrengthTotal != null
+                            ? `#${hoveredPrompt.promptStrengthRank}/${hoveredPrompt.promptStrengthTotal}`
+                            : hoveredCurveIndex != null
+                              ? `rank #${hoveredCurveIndex + 1}`
+                              : "rank -"}{" "}
+                          • {hoveredPrompt.votes} votes
+                        </div>
+                        <div className="whitespace-nowrap text-[10px] text-muted">
+                          observed {formatPercent(hoveredPrompt.averageScore)}
                         </div>
                       </div>
                     ) : null}
                     </div>
 
                     <div className="mt-2 flex items-center justify-between text-xs text-muted">
-                      <span>Strongest prompts</span>
+                      <span>Highest-ranked prompts</span>
                       <span>Median</span>
-                      <span>Weakest prompts</span>
+                      <span>Lowest-ranked prompts</span>
                     </div>
                   </div>
                 ) : (
@@ -1580,7 +1629,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                 <div className="flex items-center justify-between border-b border-border/40 pb-2">
                   <span className="text-xs uppercase tracking-[0.12em] text-muted">Strongest</span>
                   <span className="font-mono text-xs text-success">
-                    {formatPercent(bestPromptScore)}
+                    {formatPercentile(bestPromptScore)}
                   </span>
                 </div>
                 <div className="divide-y divide-border/30">
@@ -1600,7 +1649,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                 <div className="flex items-center justify-between border-b border-border/40 pb-2">
                   <span className="text-xs uppercase tracking-[0.12em] text-muted">Weakest</span>
                   <span className="font-mono text-xs text-danger">
-                    {formatPercent(weakPromptScore)}
+                    {formatPercentile(weakPromptScore)}
                   </span>
                 </div>
                 <div className="divide-y divide-border/30">
@@ -1667,7 +1716,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           <SectionHeader
             eyebrow="Per prompt"
             title="Prompt breakdown"
-            meta="Ranked by score"
+            meta="Ranked by prompt strength"
           />
 
           <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
@@ -1702,9 +1751,14 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-sm text-fg">
-                        {formatPercent(prompt.averageScore)}
+                        {formatPercentile(prompt.promptStrengthPercentile)}
                       </div>
-                      <div className="text-xs text-muted">{prompt.votes} votes</div>
+                      <div className="text-xs text-muted">
+                        {prompt.promptStrengthRank != null && prompt.promptStrengthTotal != null
+                          ? `#${prompt.promptStrengthRank}/${prompt.promptStrengthTotal}`
+                          : `${prompt.votes} votes`}
+                      </div>
+                      <div className="text-xs text-muted">obs {formatPercent(prompt.averageScore)}</div>
                     </div>
                   </div>
 
@@ -1712,13 +1766,18 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                     <div className="flex items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
                         <div
-                          className={`h-full rounded-full ${scoreBarClass(prompt.averageScore)}`}
+                          className={`h-full rounded-full ${strengthBarClass(
+                            prompt.promptStrengthPercentile,
+                          )}`}
                           style={{
-                            width: `${Math.max(0, Math.min(100, prompt.averageScore * 100)).toFixed(1)}%`,
+                            width: `${Math.max(
+                              0,
+                              Math.min(100, prompt.promptStrengthPercentile ?? 0),
+                            ).toFixed(1)}%`,
                           }}
                         />
                       </div>
-                      <span className="w-10 text-right text-[11px] text-muted">score</span>
+                      <span className="w-12 text-right text-[11px] text-muted">strength</span>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -1742,6 +1801,9 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                       </span>
                       <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
                         D {prompt.draws}
+                      </span>
+                      <span className="rounded-full bg-bg/55 px-1.5 py-0.5 text-muted">
+                        V {prompt.votes}
                       </span>
                       {prompt.bothBad > 0 ? (
                         <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-danger/85">
@@ -1860,9 +1922,28 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                         <span className="text-muted/40">·</span>
                         <span>
                           <span className="text-fg/85">
+                            {formatPercentile(activePrompt.promptStrengthPercentile)}
+                          </span>{" "}
+                          <span className="text-muted/70">strength</span>
+                        </span>
+                        {activePrompt.promptStrengthRank != null &&
+                        activePrompt.promptStrengthTotal != null ? (
+                          <>
+                            <span className="text-muted/40">·</span>
+                            <span>
+                              <span className="text-fg/85">
+                                #{activePrompt.promptStrengthRank}/{activePrompt.promptStrengthTotal}
+                              </span>{" "}
+                              <span className="text-muted/70">rank</span>
+                            </span>
+                          </>
+                        ) : null}
+                        <span className="text-muted/40">·</span>
+                        <span>
+                          <span className="text-fg/85">
                             {formatPercent(activePrompt.averageScore)}
                           </span>{" "}
-                          <span className="text-muted/70">score</span>
+                          <span className="text-muted/70">observed</span>
                         </span>
                         {activePrompt.build ? (
                           <>
