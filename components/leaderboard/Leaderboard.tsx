@@ -8,7 +8,7 @@ import { ErrorState } from "@/components/ErrorState";
 import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
 import { formatAge, readStale, writeStale } from "@/lib/staleCache";
 
-const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v1";
+const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v3";
 // accept cached data up to 10 min — older than that we prefer "loading…" over shipping stale rankings
 const LEADERBOARD_STALE_MAX_AGE_MS = 10 * 60 * 1000;
 const LEADERBOARD_SLOW_THRESHOLD_MS = 5_000;
@@ -65,6 +65,12 @@ function ChevronRight({ className }: { className?: string }) {
 function formatPercent(value: number | null, digits = 0): string {
   if (value == null) return "—";
   return `${(value * 100).toFixed(digits)}%`;
+}
+
+function formatMetricValue(value: number | null, digits = 1): string {
+  if (value == null) return "—";
+  const rounded = Number(value.toFixed(digits));
+  return Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(digits);
 }
 
 function spreadTone(spread: number | null): string {
@@ -458,10 +464,10 @@ export function Leaderboard() {
                     </span>
                   </div>
 
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <span className="w-9 shrink-0 text-right font-mono text-xs text-fg/95">
-                      {m.consistency != null ? `${m.consistency}` : "—"}
-                    </span>
+	                  <div className="mt-2.5 flex items-center gap-2">
+	                    <span className="w-10 shrink-0 text-right font-mono text-xs text-fg/95">
+	                      {formatMetricValue(m.consistency)}
+	                    </span>
                     <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-border/40">
                       <div
                         className="h-full rounded-full bg-accent transition-[width] duration-500"
@@ -558,33 +564,33 @@ export function Leaderboard() {
                   </th>
                 ) : null}
                 <th
-                  scope="col"
-                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Number and bar show prompt-to-prompt steadiness. Higher means fewer swings."
-                  aria-label="Consistency. How steady performance is across prompts. Higher means fewer swings."
-                  tabIndex={0}
-                >
+	                  scope="col"
+		                  className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
+		                  data-help="Number and bar summarize the shrunk gap between this model's strongest and weakest prompt-strength tails. Higher means it stays in the same quality band across prompts."
+		                  aria-label="Consistency. Higher means the model stays in the same quality band across prompts after prompt-strength shrinkage."
+		                  tabIndex={0}
+		                >
                   <span className="mb-col-help-label">Consistency</span>
                 </th>
                 {showDetailed ? (
-                  <th
-                    scope="col"
-                    className="mb-leaderboard-header mb-leaderboard-col-label mb-leaderboard-detail-col mb-col-help text-center"
-                    data-help="Prompt-to-prompt variability. Lower spread means more stable output."
-                    aria-label="Spread. Prompt-to-prompt variability. Lower spread means more stable output."
-                    tabIndex={0}
-                  >
+	                  <th
+		                    scope="col"
+		                    className="mb-leaderboard-header mb-leaderboard-col-label mb-leaderboard-detail-col mb-col-help text-center"
+		                    data-help="Raw prompt-to-prompt score variability across covered prompts before prompt-strength adjustment. Lower spread means observed scores are more tightly clustered."
+		                    aria-label="Spread. Raw prompt-to-prompt score variability across covered prompts before prompt-strength adjustment."
+		                    tabIndex={0}
+		                  >
                     <span className="mb-col-help-label">Spread</span>
                   </th>
                 ) : null}
                 {showDetailed ? (
-                  <th
-                    scope="col"
-                    className="mb-leaderboard-header mb-leaderboard-col-label mb-leaderboard-detail-col mb-col-help text-center"
-                    data-help="Average prompt score from decisive comparisons. Higher means stronger typical output."
-                    aria-label="Average score. Average prompt score in decisive comparisons. Higher means stronger typical output."
-                    tabIndex={0}
-                  >
+	                  <th
+		                    scope="col"
+		                    className="mb-leaderboard-header mb-leaderboard-col-label mb-leaderboard-detail-col mb-col-help text-center"
+		                    data-help="Unweighted mean of per-prompt observed scores across covered prompts. Higher means the model earned more head-to-head points on an average prompt."
+		                    aria-label="Average score. Unweighted mean of per-prompt observed scores across covered prompts."
+		                    tabIndex={0}
+		                  >
                     <span className="mb-col-help-label">Avg score</span>
                   </th>
                 ) : null}
@@ -681,10 +687,10 @@ export function Leaderboard() {
                       </td>
                     ) : null}
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
-                      <div className="flex w-full items-center justify-center gap-1.5">
-                        <span className="w-8 font-mono text-xs text-fg/95">
-                          {m.consistency != null ? `${m.consistency}` : "—"}
-                        </span>
+	                      <div className="flex w-full items-center justify-center gap-1.5">
+	                        <span className="w-10 font-mono text-xs text-fg/95">
+	                          {formatMetricValue(m.consistency)}
+	                        </span>
                         <div className="h-1.5 w-full max-w-[8.5rem] overflow-hidden rounded-full bg-border/40">
                           <div
                             className="h-full rounded-full bg-accent transition-[width] duration-500"

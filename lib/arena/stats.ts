@@ -10,11 +10,18 @@ import {
 } from "@/lib/arena/eligibility";
 
 const MIN_PROMPTS_FOR_SPREAD = 3;
+const MIN_PROMPTS_FOR_CONSISTENCY = 5;
 const PROMPT_COVERAGE_FLOOR = 2;
-const MAX_SPREAD = 0.5;
+const CONSISTENCY_TAIL_SHARE = 0.2;
+const CONSISTENCY_QUADRATIC_WEIGHT = 0.75;
 const RECENT_FORM_WINDOW = 30;
 const LEADERBOARD_CACHE_TTL_MS = 20_000;
 const MODEL_DETAIL_CACHE_TTL_MS = 20_000;
+const PROMPT_SIGNAL_CACHE_TTL_MS = 20_000;
+const BT_MAX_ITERS = 2_000;
+const BT_CONVERGENCE_EPSILON = 1e-10;
+const BT_PSEUDOINVERSE_RIDGE = 1e-9;
+const BT_VARIANCE_FLOOR = 1e-6;
 
 type NumberLike = number | bigint | string | null;
 
@@ -24,18 +31,25 @@ type CachedValue<T> = {
 };
 
 type PromptScoreSample = {
+  promptId: string;
   averageScore: number;
   votes: number;
+  promptStrengthPercentile: number | null;
 };
 
-type LeaderboardDispersionRow = {
+type PairwiseRow = {
+  modelAId: string;
+  modelBId: string;
+  pointsA: number;
+  pointsB: number;
+  total: number;
+};
+
+type PromptDispersionRow = {
   modelId: string;
-  meanScore: NumberLike;
-  scoreVariance: NumberLike;
-  scoreSpread: NumberLike;
-  coveredPrompts: NumberLike;
-  sampledPrompts: NumberLike;
-  sampledVotes: NumberLike;
+  promptId: string;
+  promptAverage: NumberLike;
+  promptVotes: NumberLike;
 };
 
 type PromptBreakdownRow = {
@@ -64,10 +78,43 @@ type RecentScoreRow = {
   score: NumberLike;
 };
 
+type DecisiveVoteRow = {
+  choice: "A" | "B" | "TIE";
+  matchup: {
+    promptId: string;
+    modelAId: string;
+    modelBId: string;
+  };
+};
+
+type PromptStrengthStats = {
+  rank: number;
+  total: number;
+  percentile: number;
+  theta: number;
+  rawRank: number;
+  rawPercentile: number;
+  rawTheta: number;
+  variance: number | null;
+  shrinkage: number | null;
+};
+
+type PromptSignalSnapshot = {
+  eligiblePromptIds: string[];
+  byPromptModel: Map<string, PromptStrengthStats>;
+};
+
+type RankedPromptStrengthRow = PromptStrengthStats & {
+  id: string;
+  displayName: string;
+};
+
 let leaderboardCache: CachedValue<Map<string, ScoreDispersion>> | null = null;
 let leaderboardInFlight: Promise<Map<string, ScoreDispersion>> | null = null;
 const modelDetailCache = new Map<string, CachedValue<ModelDetailStats | null>>();
 const modelDetailInFlight = new Map<string, Promise<ModelDetailStats | null>>();
+let promptSignalCache: CachedValue<PromptSignalSnapshot> | null = null;
+let promptSignalInFlight: Promise<PromptSignalSnapshot> | null = null;
 
 export type ScoreDispersion = {
   meanScore: number | null;
@@ -86,6 +133,9 @@ export type ModelPromptBreakdown = {
   promptText: string;
   votes: number;
   averageScore: number;
+  promptStrengthPercentile: number | null;
+  promptStrengthRank: number | null;
+  promptStrengthTotal: number | null;
   wins: number;
   losses: number;
   draws: number;
@@ -151,6 +201,12 @@ function average(values: number[]): number | null {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function variance(values: number[]): number | null {
+  const mean = average(values);
+  if (mean == null) return null;
+  return values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+}
+
 function normalizeGridSize(value: number): 64 | 256 | 512 {
   if (value === 64 || value === 256 || value === 512) return value;
   return ARENA_BUILD_GRID_SIZE;
@@ -160,21 +216,400 @@ function normalizePalette(value: string): "simple" | "advanced" {
   return value === "advanced" ? "advanced" : "simple";
 }
 
+function roundMetric(value: number, digits = 1): number {
+  return Number(value.toFixed(digits));
+}
+
+function clampMetric(value: number, lower: number, upper: number): number {
+  return Math.max(lower, Math.min(upper, value));
+}
+
+function promptModelKey(promptId: string, modelId: string): string {
+  return `${promptId}|${modelId}`;
+}
+
+function pairKey(modelAId: string, modelBId: string): string {
+  return modelAId < modelBId ? `${modelAId}|${modelBId}` : `${modelBId}|${modelAId}`;
+}
+
+function percentileFromRank(rank: number, total: number): number {
+  if (total <= 1) return 100;
+  return ((total - rank) / (total - 1)) * 100;
+}
+
+function promptStrengthConsistency(values: number[]): number | null {
+  if (values.length < MIN_PROMPTS_FOR_CONSISTENCY) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const tailCount = Math.max(1, Math.ceil(CONSISTENCY_TAIL_SHARE * sorted.length));
+  const lowTail = average(sorted.slice(0, tailCount));
+  const highTail = average(sorted.slice(-tailCount));
+  if (lowTail == null || highTail == null) return null;
+  const gap = highTail - lowTail;
+  const score = 100 - gap - (CONSISTENCY_QUADRATIC_WEIGHT * gap * gap) / 100;
+  return roundMetric(clampMetric(score, 0, 100));
+}
+
+function invertMatrix(matrix: number[][]): number[][] | null {
+  const size = matrix.length;
+  const augmented = matrix.map((row, rowIndex) => [
+    ...row.map((value) => value),
+    ...Array.from({ length: size }, (_, colIndex) => (rowIndex === colIndex ? 1 : 0)),
+  ]);
+
+  for (let col = 0; col < size; col += 1) {
+    let pivotRow = col;
+    for (let row = col + 1; row < size; row += 1) {
+      if (Math.abs(augmented[row][col]) > Math.abs(augmented[pivotRow][col])) {
+        pivotRow = row;
+      }
+    }
+
+    const pivot = augmented[pivotRow]?.[col] ?? 0;
+    if (Math.abs(pivot) < BT_PSEUDOINVERSE_RIDGE) return null;
+
+    if (pivotRow !== col) {
+      [augmented[col], augmented[pivotRow]] = [augmented[pivotRow], augmented[col]];
+    }
+
+    for (let c = 0; c < size * 2; c += 1) {
+      augmented[col][c] /= pivot;
+    }
+
+    for (let row = 0; row < size; row += 1) {
+      if (row === col) continue;
+      const factor = augmented[row][col];
+      if (factor === 0) continue;
+      for (let c = 0; c < size * 2; c += 1) {
+        augmented[row][c] -= factor * augmented[col][c];
+      }
+    }
+  }
+
+  return augmented.map((row) => row.slice(size));
+}
+
+function buildConnectedComponents(
+  modelIds: Iterable<string>,
+  pairRows: PairwiseRow[],
+): string[][] {
+  const adjacency = new Map<string, Set<string>>();
+  for (const modelId of modelIds) {
+    adjacency.set(modelId, new Set());
+  }
+  for (const row of pairRows) {
+    adjacency.get(row.modelAId)?.add(row.modelBId);
+    adjacency.get(row.modelBId)?.add(row.modelAId);
+  }
+
+  const components: string[][] = [];
+  const seen = new Set<string>();
+
+  for (const modelId of adjacency.keys()) {
+    if (seen.has(modelId)) continue;
+    const stack = [modelId];
+    const component: string[] = [];
+    seen.add(modelId);
+
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      component.push(current);
+      for (const neighbor of adjacency.get(current) ?? []) {
+        if (seen.has(neighbor)) continue;
+        seen.add(neighbor);
+        stack.push(neighbor);
+      }
+    }
+
+    components.push(component);
+  }
+
+  return components;
+}
+
+function varianceFallbackFromTotals(totals: number[][], pi: number[]): number[] {
+  return totals.map((row, index) => {
+    let information = 0;
+    for (let neighbor = 0; neighbor < row.length; neighbor += 1) {
+      if (neighbor === index || row[neighbor] === 0) continue;
+      const prob = pi[index] / (pi[index] + pi[neighbor]);
+      information += row[neighbor] * prob * (1 - prob);
+    }
+    return information > 0 ? 1 / information : 1;
+  });
+}
+
+function computeBradleyTerryVariances(totals: number[][], pi: number[]): number[] {
+  const size = totals.length;
+  if (size <= 1) return [1];
+
+  const laplacian = Array.from({ length: size }, () => Array(size).fill(0));
+  for (let i = 0; i < size; i += 1) {
+    for (let j = i + 1; j < size; j += 1) {
+      const total = totals[i][j];
+      if (total === 0) continue;
+      const prob = pi[i] / (pi[i] + pi[j]);
+      const weight = total * prob * (1 - prob);
+      laplacian[i][i] += weight;
+      laplacian[j][j] += weight;
+      laplacian[i][j] -= weight;
+      laplacian[j][i] -= weight;
+    }
+  }
+
+  const allOnesShare = 1 / size;
+  const stabilized = laplacian.map((row, rowIndex) =>
+    row.map((value, colIndex) => {
+      const ridge = rowIndex === colIndex ? BT_PSEUDOINVERSE_RIDGE : 0;
+      return value + allOnesShare + ridge;
+    }),
+  );
+  const inverted = invertMatrix(stabilized);
+  if (!inverted) {
+    return varianceFallbackFromTotals(totals, pi).map((value) =>
+      Math.max(BT_VARIANCE_FLOOR, value),
+    );
+  }
+
+  return inverted.map((row, index) =>
+    Math.max(BT_VARIANCE_FLOOR, row[index] - allOnesShare),
+  );
+}
+
+function aggregatePairRow(
+  pairRows: Map<string, PairwiseRow>,
+  modelAId: string,
+  modelBId: string,
+  pointsA: number,
+  pointsB: number,
+) {
+  if (modelAId === modelBId) return;
+  const canonicalA = modelAId < modelBId ? modelAId : modelBId;
+  const canonicalB = canonicalA === modelAId ? modelBId : modelAId;
+  const canonicalPointsA = canonicalA === modelAId ? pointsA : pointsB;
+  const canonicalPointsB = canonicalA === modelAId ? pointsB : pointsA;
+  const key = pairKey(canonicalA, canonicalB);
+  const row = pairRows.get(key) ?? {
+    modelAId: canonicalA,
+    modelBId: canonicalB,
+    pointsA: 0,
+    pointsB: 0,
+    total: 0,
+  };
+  row.pointsA += canonicalPointsA;
+  row.pointsB += canonicalPointsB;
+  row.total += 1;
+  pairRows.set(key, row);
+}
+
+type BradleyTerryFitRow = {
+  id: string;
+  theta: number;
+  rawTheta: number;
+  strength: number;
+  variance: number;
+  displayName: string;
+};
+
+function fitBradleyTerryConnectedComponent(
+  modelIds: string[],
+  pairRows: PairwiseRow[],
+  displayNames: Map<string, string>,
+): BradleyTerryFitRow[] {
+  const ids = [...modelIds];
+  if (ids.length === 1) {
+    return [
+      {
+        id: ids[0],
+        theta: 0,
+        rawTheta: 0,
+        strength: 1,
+        variance: 1,
+        displayName: displayNames.get(ids[0]) ?? ids[0],
+      },
+    ];
+  }
+
+  const indexById = new Map(ids.map((id, idx) => [id, idx]));
+  const n = ids.length;
+  const points = Array.from({ length: n }, () => Array(n).fill(0));
+  const totals = Array.from({ length: n }, () => Array(n).fill(0));
+
+  for (const row of pairRows) {
+    const i = indexById.get(row.modelAId);
+    const j = indexById.get(row.modelBId);
+    if (i == null || j == null) continue;
+    points[i][j] += row.pointsA;
+    points[j][i] += row.pointsB;
+    totals[i][j] += row.total;
+    totals[j][i] += row.total;
+  }
+
+  let pi = Array(n).fill(1);
+
+  for (let iter = 0; iter < BT_MAX_ITERS; iter += 1) {
+    const next = Array(n).fill(0);
+    let maxDelta = 0;
+
+    for (let i = 0; i < n; i += 1) {
+      let wins = 0;
+      let denom = 0;
+      for (let j = 0; j < n; j += 1) {
+        if (i === j || totals[i][j] === 0) continue;
+        wins += points[i][j];
+        denom += totals[i][j] / (pi[i] + pi[j]);
+      }
+      next[i] = denom > 0 ? wins / denom : 0;
+    }
+
+    const mean = next.reduce((sum, value) => sum + value, 0) / n || 1;
+    for (let i = 0; i < n; i += 1) {
+      next[i] = next[i] / mean;
+      maxDelta = Math.max(maxDelta, Math.abs(next[i] - pi[i]));
+    }
+
+    pi = next;
+    if (maxDelta < BT_CONVERGENCE_EPSILON) break;
+  }
+
+  const rawThetas = pi.map((strength) => Math.log(Math.max(strength, 1e-12)));
+  const thetaCenter = average(rawThetas) ?? 0;
+  const variances = computeBradleyTerryVariances(totals, pi);
+
+  return ids
+    .map((id, idx) => {
+      const strength = Math.max(pi[idx], 1e-12);
+      return {
+        id,
+        strength,
+        rawTheta: rawThetas[idx],
+        theta: rawThetas[idx] - thetaCenter,
+        variance: variances[idx] ?? 1,
+        displayName: displayNames.get(id) ?? id,
+      };
+    });
+}
+
+function fitBradleyTerry(
+  modelIds: Iterable<string>,
+  pairRows: PairwiseRow[],
+  displayNames: Map<string, string>,
+  alphaByModelId?: Map<string, number>,
+): BradleyTerryFitRow[] {
+  const ids = [...modelIds];
+  const components = buildConnectedComponents(ids, pairRows);
+  const rows: BradleyTerryFitRow[] = [];
+
+  for (const componentIds of components) {
+    const componentIdSet = new Set(componentIds);
+    const componentRows = pairRows.filter(
+      (row) => componentIdSet.has(row.modelAId) && componentIdSet.has(row.modelBId),
+    );
+    const fittedRows = fitBradleyTerryConnectedComponent(componentIds, componentRows, displayNames);
+
+    if (alphaByModelId) {
+      const offset =
+        average(
+          fittedRows.map((row) => row.theta - (alphaByModelId.get(row.id) ?? 0)),
+        ) ?? 0;
+      for (const row of fittedRows) {
+        row.theta -= offset;
+      }
+    }
+
+    rows.push(...fittedRows);
+  }
+
+  return rows.sort((a, b) => b.theta - a.theta || a.displayName.localeCompare(b.displayName));
+}
+
+function shrinkPromptStrengthRows(
+  rows: BradleyTerryFitRow[],
+  displayNames: Map<string, string>,
+  alphaByModelId: Map<string, number>,
+): RankedPromptStrengthRow[] {
+  if (rows.length === 0) return [];
+
+  const rawSorted = [...rows].sort((a, b) => b.theta - a.theta || a.displayName.localeCompare(b.displayName));
+  const rawRankById = new Map(
+    rawSorted.map((row, index) => [
+      row.id,
+      {
+        rank: index + 1,
+        percentile: percentileFromRank(index + 1, rawSorted.length),
+      },
+    ]),
+  );
+
+  const deltas = rows.map((row) => row.theta - (alphaByModelId.get(row.id) ?? 0));
+  const observedVariance = variance(deltas) ?? 0;
+  const meanPosteriorVariance =
+    average(
+      rows
+        .map((row) => row.variance)
+        .filter((value) => Number.isFinite(value) && value > 0),
+    ) ?? 0;
+  const tauSquared = Math.max(0, observedVariance - meanPosteriorVariance);
+
+  const shrunkRows = rows.map((row) => {
+    const alpha = alphaByModelId.get(row.id) ?? 0;
+    const posteriorVariance = Number.isFinite(row.variance)
+      ? Math.max(BT_VARIANCE_FLOOR, row.variance)
+      : Number.POSITIVE_INFINITY;
+    const shrinkage =
+      tauSquared > 0 && Number.isFinite(posteriorVariance)
+        ? tauSquared / (tauSquared + posteriorVariance)
+        : 0;
+
+    return {
+      ...row,
+      theta: alpha + shrinkage * (row.theta - alpha),
+      strength: Math.exp(alpha + shrinkage * (row.theta - alpha)),
+      shrinkage,
+    };
+  });
+
+  const sorted = [...shrunkRows].sort((a, b) => {
+    if (b.theta !== a.theta) return b.theta - a.theta;
+    const aName = displayNames.get(a.id) ?? a.id;
+    const bName = displayNames.get(b.id) ?? b.id;
+    return aName.localeCompare(bName);
+  });
+
+  return sorted.map((row, index) => {
+    const rawRank = rawRankById.get(row.id);
+    const rank = index + 1;
+    return {
+      id: row.id,
+      displayName: row.displayName,
+      rank,
+      total: sorted.length,
+      percentile: percentileFromRank(rank, sorted.length),
+      theta: row.theta,
+      rawRank: rawRank?.rank ?? rank,
+      rawPercentile: rawRank?.percentile ?? percentileFromRank(rank, sorted.length),
+      rawTheta: row.rawTheta,
+      variance: row.variance,
+      shrinkage: row.shrinkage,
+    };
+  });
+}
+
 function summarizeDispersion(samples: PromptScoreSample[], activePromptCount: number): ScoreDispersion {
   const promptAverages: number[] = [];
+  const promptStrengthPercentiles: number[] = [];
   let sampledVotes = 0;
-  let coveredPrompts = 0;
 
   for (const sample of samples) {
-    if (sample.votes <= 0) continue;
+    if (sample.votes < PROMPT_COVERAGE_FLOOR) continue;
     promptAverages.push(sample.averageScore);
     sampledVotes += sample.votes;
-    if (sample.votes >= PROMPT_COVERAGE_FLOOR) {
-      coveredPrompts += 1;
+    if (sample.promptStrengthPercentile != null) {
+      promptStrengthPercentiles.push(sample.promptStrengthPercentile);
     }
   }
 
   const sampledPrompts = promptAverages.length;
+  const coveredPrompts = sampledPrompts;
   const promptCoverage =
     activePromptCount > 0 ? Math.min(1, coveredPrompts / activePromptCount) : 0;
   if (sampledPrompts === 0) {
@@ -210,7 +645,7 @@ function summarizeDispersion(samples: PromptScoreSample[], activePromptCount: nu
   const scoreVariance =
     promptAverages.reduce((sum, value) => sum + (value - meanScore) ** 2, 0) / sampledPrompts;
   const scoreSpread = Math.sqrt(scoreVariance);
-  const consistency = Math.round((1 - Math.min(MAX_SPREAD, scoreSpread) / MAX_SPREAD) * 100);
+  const consistency = promptStrengthConsistency(promptStrengthPercentiles);
 
   return {
     meanScore,
@@ -227,6 +662,7 @@ function summarizeDispersion(samples: PromptScoreSample[], activePromptCount: nu
 
 export function invalidateArenaStatsCache() {
   leaderboardCache = null;
+  promptSignalCache = null;
   modelDetailCache.clear();
 }
 
@@ -237,11 +673,120 @@ function promptFilterSql(promptIds: string[]): Prisma.Sql {
   return Prisma.sql`matchup."promptId" IN (${Prisma.join(promptIds)})`;
 }
 
-async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
+async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
   const eligiblePromptIds = await getArenaEligiblePromptIds();
-  const activePromptCount = eligiblePromptIds.length;
-  const filter = promptFilterSql(eligiblePromptIds);
-  const rows = await prisma.$queryRaw<LeaderboardDispersionRow[]>`
+  if (eligiblePromptIds.length === 0) {
+    return { eligiblePromptIds, byPromptModel: new Map() };
+  }
+
+  const eligiblePromptSet = new Set(eligiblePromptIds);
+  const [models, votes] = await Promise.all([
+    prisma.model.findMany({
+      where: { enabled: true, isBaseline: false },
+      select: { id: true, displayName: true },
+    }),
+    prisma.vote.findMany({
+      where: { choice: { in: ["A", "B", "TIE"] } },
+      select: {
+        choice: true,
+        matchup: {
+          select: {
+            promptId: true,
+            modelAId: true,
+            modelBId: true,
+          },
+        },
+      },
+    }) as Promise<DecisiveVoteRow[]>,
+  ]);
+
+  const activeModelIds = new Set(models.map((model) => model.id));
+  const displayNames = new Map(models.map((model) => [model.id, model.displayName]));
+  const globalPairRows = new Map<string, PairwiseRow>();
+  const pairRowsByPrompt = new Map<string, Map<string, PairwiseRow>>();
+  const modelIdsByPrompt = new Map<string, Set<string>>();
+
+  for (const vote of votes) {
+    const { promptId, modelAId, modelBId } = vote.matchup;
+    if (!eligiblePromptSet.has(promptId)) continue;
+    if (!activeModelIds.has(modelAId) || !activeModelIds.has(modelBId)) continue;
+
+    const pointsA = vote.choice === "A" ? 1 : vote.choice === "B" ? 0 : 0.5;
+    const pointsB = vote.choice === "B" ? 1 : vote.choice === "A" ? 0 : 0.5;
+    aggregatePairRow(globalPairRows, modelAId, modelBId, pointsA, pointsB);
+
+    const promptPairs = pairRowsByPrompt.get(promptId) ?? new Map<string, PairwiseRow>();
+    aggregatePairRow(promptPairs, modelAId, modelBId, pointsA, pointsB);
+    pairRowsByPrompt.set(promptId, promptPairs);
+
+    const promptModelIds = modelIdsByPrompt.get(promptId) ?? new Set<string>();
+    promptModelIds.add(modelAId);
+    promptModelIds.add(modelBId);
+    modelIdsByPrompt.set(promptId, promptModelIds);
+  }
+
+  const alphaRows = fitBradleyTerry(activeModelIds, [...globalPairRows.values()], displayNames);
+  const alphaByModelId = new Map(alphaRows.map((row) => [row.id, row.theta]));
+  const byPromptModel = new Map<string, PromptStrengthStats>();
+
+  for (const promptId of eligiblePromptIds) {
+    const promptModelIds = modelIdsByPrompt.get(promptId);
+    if (!promptModelIds || promptModelIds.size < 2) continue;
+
+    const rows = fitBradleyTerry(
+      promptModelIds,
+      [...(pairRowsByPrompt.get(promptId)?.values() ?? [])],
+      displayNames,
+      alphaByModelId,
+    );
+    const shrunkRows = shrinkPromptStrengthRows(rows, displayNames, alphaByModelId);
+    shrunkRows.forEach((row) => {
+      byPromptModel.set(promptModelKey(promptId, row.id), {
+        rank: row.rank,
+        total: row.total,
+        percentile: row.percentile,
+        theta: row.theta,
+        rawRank: row.rawRank,
+        rawPercentile: row.rawPercentile,
+        rawTheta: row.rawTheta,
+        variance: row.variance,
+        shrinkage: row.shrinkage,
+      });
+    });
+  }
+
+  return { eligiblePromptIds, byPromptModel };
+}
+
+async function getPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
+  const now = Date.now();
+  if (promptSignalCache && promptSignalCache.expiresAt > now) {
+    return promptSignalCache.value;
+  }
+  if (promptSignalInFlight) {
+    return promptSignalInFlight;
+  }
+
+  promptSignalInFlight = queryPromptSignalSnapshot()
+    .then((value) => {
+      promptSignalCache = {
+        value,
+        expiresAt: Date.now() + PROMPT_SIGNAL_CACHE_TTL_MS,
+      };
+      return value;
+    })
+    .finally(() => {
+      promptSignalInFlight = null;
+    });
+
+  return promptSignalInFlight;
+}
+
+async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
+  const promptSignal = await getPromptSignalSnapshot();
+  const activePromptCount = promptSignal.eligiblePromptIds.length;
+  const filter = promptFilterSql(promptSignal.eligiblePromptIds);
+  const rows = await prisma.$queryRaw<PromptDispersionRow[]>`
       WITH model_prompt_scores AS (
         SELECT
           matchup."modelAId" AS model_id,
@@ -282,46 +827,26 @@ async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreD
         FROM model_prompt_scores
         GROUP BY model_prompt_scores.model_id, model_prompt_scores.prompt_id
       )
-      SELECT
-        per_prompt."modelId" AS "modelId",
-        AVG(per_prompt."promptAverage")::double precision AS "meanScore",
-        CASE
-          WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
-          THEN VAR_POP(per_prompt."promptAverage")::double precision
-          ELSE NULL
-        END AS "scoreVariance",
-        CASE
-          WHEN COUNT(*) >= ${MIN_PROMPTS_FOR_SPREAD}
-          THEN SQRT(VAR_POP(per_prompt."promptAverage"))::double precision
-          ELSE NULL
-        END AS "scoreSpread",
-        COUNT(*) FILTER (WHERE per_prompt."promptVotes" >= ${PROMPT_COVERAGE_FLOOR})::int AS "coveredPrompts",
-        COUNT(*)::int AS "sampledPrompts",
-        COALESCE(SUM(per_prompt."promptVotes"), 0)::int AS "sampledVotes"
+      SELECT per_prompt."modelId", per_prompt."promptId", per_prompt."promptAverage", per_prompt."promptVotes"
       FROM per_prompt
-      GROUP BY per_prompt."modelId"
     `;
 
-  const out = new Map<string, ScoreDispersion>();
+  const samplesByModelId = new Map<string, PromptScoreSample[]>();
   for (const row of rows) {
-    const scoreSpreadRaw = row.scoreSpread == null ? null : toNumber(row.scoreSpread);
-    const coveredPrompts = toNumber(row.coveredPrompts);
-    const promptCoverage =
-      activePromptCount > 0 ? Math.min(1, coveredPrompts / activePromptCount) : 0;
-    out.set(row.modelId, {
-      meanScore: row.meanScore == null ? null : toNumber(row.meanScore),
-      scoreVariance: row.scoreVariance == null ? null : toNumber(row.scoreVariance),
-      scoreSpread: scoreSpreadRaw,
-      consistency:
-        scoreSpreadRaw == null
-          ? null
-          : Math.round((1 - Math.min(MAX_SPREAD, scoreSpreadRaw) / MAX_SPREAD) * 100),
-      coveredPrompts,
-      activePrompts: activePromptCount,
-      promptCoverage,
-      sampledPrompts: toNumber(row.sampledPrompts),
-      sampledVotes: toNumber(row.sampledVotes),
+    const samples = samplesByModelId.get(row.modelId) ?? [];
+    const promptStrength = promptSignal.byPromptModel.get(promptModelKey(row.promptId, row.modelId));
+    samples.push({
+      promptId: row.promptId,
+      averageScore: toNumber(row.promptAverage),
+      votes: toNumber(row.promptVotes),
+      promptStrengthPercentile: promptStrength?.percentile ?? null,
     });
+    samplesByModelId.set(row.modelId, samples);
+  }
+
+  const out = new Map<string, ScoreDispersion>();
+  for (const [modelId, samples] of samplesByModelId) {
+    out.set(modelId, summarizeDispersion(samples, activePromptCount));
   }
 
   return out;
@@ -372,9 +897,9 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
 
   if (!model) return null;
 
-  const eligiblePromptIds = await getArenaEligiblePromptIds();
-  const activePromptCount = eligiblePromptIds.length;
-  const filter = promptFilterSql(eligiblePromptIds);
+  const promptSignal = await getPromptSignalSnapshot();
+  const activePromptCount = promptSignal.eligiblePromptIds.length;
+  const filter = promptFilterSql(promptSignal.eligiblePromptIds);
 
   const [promptRows, opponentRows, recentScoreRows, builds] = await Promise.all([
     prisma.$queryRaw<PromptBreakdownRow[]>`
@@ -499,7 +1024,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         gridSize: ARENA_BUILD_GRID_SIZE,
         palette: ARENA_BUILD_PALETTE,
         mode: ARENA_BUILD_MODE,
-        promptId: { in: eligiblePromptIds },
+        promptId: { in: promptSignal.eligiblePromptIds },
       },
       select: {
         id: true,
@@ -522,6 +1047,9 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       promptText: string;
       votes: number;
       averageScore: number;
+      promptStrengthPercentile: number | null;
+      promptStrengthRank: number | null;
+      promptStrengthTotal: number | null;
       wins: number;
       losses: number;
       draws: number;
@@ -532,16 +1060,26 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   for (const row of promptRows) {
     const votes = toNumber(row.votes);
     const averageScore = toNumber(row.averageScore);
+    const promptStrength =
+      promptSignal.byPromptModel.get(promptModelKey(row.promptId, model.id)) ?? null;
     promptStatsById.set(row.promptId, {
       promptText: row.promptText,
       votes,
       averageScore,
+      promptStrengthPercentile: promptStrength?.percentile ?? null,
+      promptStrengthRank: promptStrength?.rank ?? null,
+      promptStrengthTotal: promptStrength?.total ?? null,
       wins: toNumber(row.wins),
       losses: toNumber(row.losses),
       draws: toNumber(row.draws),
       bothBad: toNumber(row.bothBad),
     });
-    promptSamples.push({ averageScore, votes });
+    promptSamples.push({
+      promptId: row.promptId,
+      averageScore,
+      votes,
+      promptStrengthPercentile: promptStrength?.percentile ?? null,
+    });
   }
 
   const dispersion = summarizeDispersion(promptSamples, activePromptCount);
@@ -585,6 +1123,9 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
           promptStats?.promptText ?? buildEntry?.promptText ?? "Untitled prompt",
         votes: promptStats?.votes ?? 0,
         averageScore: promptStats?.averageScore ?? 0,
+        promptStrengthPercentile: promptStats?.promptStrengthPercentile ?? null,
+        promptStrengthRank: promptStats?.promptStrengthRank ?? null,
+        promptStrengthTotal: promptStats?.promptStrengthTotal ?? null,
         wins: promptStats?.wins ?? 0,
         losses: promptStats?.losses ?? 0,
         draws: promptStats?.draws ?? 0,
@@ -594,7 +1135,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
     })
     .sort(
       (a, b) =>
-        b.averageScore - a.averageScore ||
+        (b.promptStrengthPercentile ?? -1) - (a.promptStrengthPercentile ?? -1) ||
         b.votes - a.votes ||
         a.promptText.localeCompare(b.promptText),
     );
