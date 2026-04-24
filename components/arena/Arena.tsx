@@ -354,6 +354,14 @@ function streamFromFirstChunk(
   });
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
+  return [400, 403, 404, 429, 500, 502, 503, 504].includes(status);
+}
+
 async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
@@ -367,32 +375,24 @@ async function fetchBuildVariantSnapshot(
   if (!allowRedirect) url.searchParams.set("redirect", "0");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      credentials: "include",
-      signal: timed.signal,
-      redirect: allowRedirect ? "manual" : "follow",
-    });
-    if (allowRedirect && [301, 302, 303, 307, 308].includes(res.status)) {
-      const location = res.headers.get("location");
-      if (!location) throw new Error("Build redirect was missing a destination.");
-      const redirectUrl = new URL(location, window.location.origin);
-      try {
-        const redirected = await fetch(redirectUrl, {
-          method: "GET",
-          signal: timed.signal,
-        });
-        if (redirected.ok) return await readBuildVariantJson(redirected);
-        if ([400, 429, 500, 502, 503, 504].includes(redirected.status)) {
-          return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
-        }
-        throw new Error(await readErrorResponse(redirected, "Couldn't load build"));
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name === "AbortError") throw err;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        signal: timed.signal,
+        redirect: "follow",
+      });
+    } catch (err: unknown) {
+      if (allowRedirect && !isAbortError(err)) {
         return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
       }
+      throw err;
     }
     if (!res.ok) {
+      if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
+        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+      }
       const message = await readErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }

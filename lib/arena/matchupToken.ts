@@ -25,12 +25,17 @@ export type ArenaMatchupTokenPayload = {
 };
 
 function getArenaMatchupSigningSecret(): string {
-  return (
-    process.env.ARENA_MATCHUP_SIGNING_SECRET ??
-    process.env.ADMIN_TOKEN ??
-    process.env.NEXTAUTH_SECRET ??
-    "dev-arena-matchup-secret"
-  );
+  const secret = [
+    process.env.ARENA_MATCHUP_SIGNING_SECRET,
+    process.env.ADMIN_TOKEN,
+    process.env.NEXTAUTH_SECRET,
+  ].find((value) => value?.trim());
+  if (!secret) {
+    throw new Error(
+      "ARENA_MATCHUP_SIGNING_SECRET, ADMIN_TOKEN, or NEXTAUTH_SECRET must be set for arena matchup tokens.",
+    );
+  }
+  return secret.trim();
 }
 
 function encodeBase64Url(value: string): string {

@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 const MATCHUP_STATE_CACHE_TTL_MS = readIntEnv("ARENA_MATCHUP_STATE_CACHE_TTL_MS", 60_000);
+const PENDING_SHOWN_COUNT_TTL_MS = readIntEnv("ARENA_PENDING_SHOWN_COUNT_TTL_MS", 90_000);
 
 const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
@@ -83,7 +84,7 @@ let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
 let matchupStateVersion = 0;
 let coverageSyncInFlight: Promise<void> | null = null;
 let pendingSamplingStateMutations: SamplingStateMutation[] = [];
-const shownCountDeltas = new Map<string, number>();
+const pendingShownCountDeltas = new Map<string, { count: number; expiresAt: number }>();
 
 const ARENA_COVERAGE_LOCK_KEY = 860101;
 
@@ -140,10 +141,15 @@ function applySamplingStateMutation(mutation: SamplingStateMutation) {
 
 export function recordArenaMatchupShown(modelIds: string[]) {
   const seen = new Set<string>();
+  const expiresAt = Date.now() + PENDING_SHOWN_COUNT_TTL_MS;
   for (const modelId of modelIds) {
     if (!modelId || seen.has(modelId)) continue;
     seen.add(modelId);
-    shownCountDeltas.set(modelId, (shownCountDeltas.get(modelId) ?? 0) + 1);
+    const current = pendingShownCountDeltas.get(modelId);
+    pendingShownCountDeltas.set(modelId, {
+      count: (current?.count ?? 0) + 1,
+      expiresAt: Math.max(current?.expiresAt ?? 0, expiresAt),
+    });
   }
 
   applySamplingStateMutation((state) => {
@@ -159,15 +165,30 @@ export function recordArenaMatchupShown(modelIds: string[]) {
   });
 }
 
+function getPendingShownCountDelta(modelId: string, now = Date.now()): number {
+  const pending = pendingShownCountDeltas.get(modelId);
+  if (!pending) return 0;
+  if (pending.expiresAt <= now) {
+    pendingShownCountDeltas.delete(modelId);
+    return 0;
+  }
+  return pending.count;
+}
+
 export function settleArenaMatchupShown(modelCounts: Map<string, number>) {
+  const now = Date.now();
   for (const [modelId, count] of modelCounts.entries()) {
     if (!modelId || count <= 0) continue;
-    const current = shownCountDeltas.get(modelId) ?? 0;
-    const next = Math.max(0, current - count);
-    if (next > 0) {
-      shownCountDeltas.set(modelId, next);
+    const currentCount = getPendingShownCountDelta(modelId, now);
+    const next = Math.max(0, currentCount - count);
+    const current = pendingShownCountDeltas.get(modelId);
+    if (next > 0 && current) {
+      pendingShownCountDeltas.set(modelId, {
+        count: next,
+        expiresAt: current.expiresAt,
+      });
     } else {
-      shownCountDeltas.delete(modelId);
+      pendingShownCountDeltas.delete(modelId);
     }
   }
 }
@@ -349,6 +370,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
     }),
   ]);
 
+  const now = Date.now();
   const modelsById = new Map<string, EligibleModel>(
     models.map((model) => [
       model.id,
@@ -360,7 +382,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
         eloRating: Number(model.eloRating),
         conservativeRating: Number(model.conservativeRating),
         ratingDeviation: Number(model.glickoRd),
-        shownCount: model.shownCount + (shownCountDeltas.get(model.id) ?? 0),
+        shownCount: model.shownCount + getPendingShownCountDelta(model.id, now),
       },
     ]),
   );
