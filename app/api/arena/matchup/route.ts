@@ -10,6 +10,8 @@ import {
   pickInitialBuild,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
+import { createArenaBuildSnapshotArtifactSignedUrl } from "@/lib/arena/buildSnapshotArtifacts";
+import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
 import { createArenaMatchupToken } from "@/lib/arena/matchupToken";
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
@@ -45,6 +47,8 @@ const MATCHUP_INLINE_MAX_BYTES = Number.parseInt(
   process.env.ARENA_MATCHUP_INLINE_MAX_BYTES ?? "0",
   10,
 );
+const MATCHUP_ARTIFACT_URL_WARMING_ENABLED =
+  (process.env.ARENA_MATCHUP_ARTIFACT_URL_WARMING_ENABLED ?? "1").trim() !== "0";
 
 type MatchupChoice = {
   lane: Lane;
@@ -126,6 +130,21 @@ function pickPersistedInitialBuild(
   previewBuild: unknown | null | undefined,
 ): ArenaMatchup["a"]["build"] {
   return pickPersistedVariantBuild(fullBuild, previewBuild, hints.initialVariant);
+}
+
+async function warmFullBuildArtifactUrl(
+  buildId: string,
+  checksum: string | null,
+  hints: ArenaBuildLoadHints,
+) {
+  if (!checksum) return;
+  if (hints.deliveryClass === "stream-artifact") {
+    await createArenaBuildStreamArtifactSignedUrl(buildId, "full", checksum).catch(() => null);
+    return;
+  }
+  if (hints.deliveryClass === "snapshot" || hints.deliveryClass === "inline") {
+    await createArenaBuildSnapshotArtifactSignedUrl(buildId, "full", checksum).catch(() => null);
+  }
 }
 
 function randomPick<T>(items: T[]): T | null {
@@ -830,6 +849,15 @@ export async function GET(req: Request) {
             .catch(() => undefined),
         ),
       );
+    });
+  }
+
+  if (MATCHUP_ARTIFACT_URL_WARMING_ENABLED) {
+    after(async () => {
+      await Promise.allSettled([
+        warmFullBuildArtifactUrl(buildA.id, checksumA, preparedA?.hints ?? shellHintsA),
+        warmFullBuildArtifactUrl(buildB.id, checksumB, preparedB?.hints ?? shellHintsB),
+      ]);
     });
   }
 

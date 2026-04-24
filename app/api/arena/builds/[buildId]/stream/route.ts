@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "@/lib/arena/types";
 import { isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
 import {
@@ -7,11 +7,14 @@ import {
   estimateArenaBuildVariantBytes,
   encodeArenaBuildStreamEvent,
   iterateArenaBuildChunks,
+  iterateArenaBuildStreamEvents,
   planArenaBuildStream,
+  uploadArenaBuildStreamArtifact,
 } from "@/lib/arena/buildStream";
 import {
   deriveArenaBuildLoadHints,
   getCachedPreparedArenaBuild,
+  getPreparedArenaBuildMetadataUpdate,
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
@@ -31,6 +34,7 @@ const ARTIFACT_SIGN_URL_TTL_SEC = Number.parseInt(
   process.env.ARENA_STREAM_ARTIFACT_SIGN_URL_TTL_SEC ?? "3600",
   10,
 );
+const streamArtifactWarmupInflight = new Set<string>();
 
 function createSignedRedirectCacheControl(ttlSeconds: number): string {
   const ttl = Number.isFinite(ttlSeconds) ? Math.floor(ttlSeconds) : 0;
@@ -111,6 +115,65 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function chunkStreamArtifactBytes(events: Iterable<ArenaBuildStreamEvent>) {
+  const encoded: Uint8Array[] = [];
+  let total = 0;
+  for (const event of events) {
+    const bytes = encodeArenaBuildStreamEvent(event);
+    encoded.push(bytes);
+    total += bytes.length;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of encoded) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function warmStreamArtifactInBackground(opts: {
+  buildId: string;
+  variant: ArenaBuildVariant;
+  checksum: string;
+  build: ReturnType<typeof pickBuildVariant>;
+  buildLoadHints: ReturnType<typeof deriveArenaBuildLoadHints>;
+}) {
+  const warmupKey = `${opts.buildId}:${opts.variant}:${opts.checksum}`;
+  if (streamArtifactWarmupInflight.has(warmupKey)) return;
+  streamArtifactWarmupInflight.add(warmupKey);
+  try {
+    after(async () => {
+      try {
+        const bytes = chunkStreamArtifactBytes(
+          iterateArenaBuildStreamEvents({
+            buildId: opts.buildId,
+            variant: opts.variant,
+            checksum: opts.checksum,
+            build: opts.build,
+            buildLoadHints: opts.buildLoadHints,
+            source: "artifact",
+            serverValidated: true,
+            includePad: true,
+            durationMs: 0,
+          }),
+        );
+        await uploadArenaBuildStreamArtifact(opts.buildId, opts.variant, opts.checksum, bytes);
+      } catch (err) {
+        console.warn("arena stream artifact warmup upload failed", err);
+      } finally {
+        streamArtifactWarmupInflight.delete(warmupKey);
+      }
+    });
+  } catch (err) {
+    streamArtifactWarmupInflight.delete(warmupKey);
+    const message = toErrorMessage(err, "");
+    if (!message.includes("after` was called outside a request scope")) {
+      console.warn("arena stream artifact warmup scheduling skipped", err);
+    }
+  }
+}
+
 async function waitForBackpressure(
   controller: ReadableStreamDefaultController<Uint8Array>,
   shouldContinue: () => boolean,
@@ -167,8 +230,9 @@ export async function GET(
   }
 
   const shellHints = deriveArenaBuildLoadHints(meta);
+  const artifactRequested = url.searchParams.get("artifact") !== "0";
   const artifactFetchAllowed =
-    url.searchParams.get("artifact") !== "0" && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
+    artifactRequested && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
 
   try {
     if (artifactFetchAllowed) {
@@ -231,7 +295,7 @@ export async function GET(
     console.warn("arena stream artifact fetch failed", err);
   }
 
-  if (variant === "full" && shellHints.deliveryClass === "stream-artifact") {
+  if (artifactRequested && variant === "full" && shellHints.deliveryClass === "stream-artifact") {
     timing.end("total", requestStartedAt);
     const headers = new Headers({
       "Cache-Control": "no-store",
@@ -243,7 +307,8 @@ export async function GET(
     return NextResponse.json(
       {
         error: "Full build artifact is still warming. Try again shortly.",
-        retryVia: "stream",
+        retryVia: "stream-live",
+        retryParams: { artifact: "0" },
       },
       { status: 503, headers },
     );
@@ -349,6 +414,17 @@ export async function GET(
           const prepared = cachedPrepared ?? (await prepareArenaBuild(build!, { signal: request.signal }));
           if (closed || request.signal.aborted) return;
 
+          if (!cachedPrepared) {
+            await prisma.build
+              .update({
+                where: { id: buildId },
+                data: getPreparedArenaBuildMetadataUpdate(prepared),
+              })
+              .catch((err) => {
+                console.warn("arena stream metadata update failed", err);
+              });
+          }
+
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {
             send({
               type: "error",
@@ -359,6 +435,19 @@ export async function GET(
           }
 
           const voxelBuild = pickBuildVariant(prepared, variant);
+          if (
+            variant === "full" &&
+            prepared.hints.deliveryClass === "stream-artifact" &&
+            prepared.checksum
+          ) {
+            warmStreamArtifactInBackground({
+              buildId,
+              variant,
+              checksum: prepared.checksum,
+              build: voxelBuild,
+              buildLoadHints: prepared.hints,
+            });
+          }
           const plan = planArenaBuildStream({
             totalBlocks: voxelBuild.blocks.length,
             hints: prepared.hints,

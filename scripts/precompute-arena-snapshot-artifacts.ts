@@ -2,8 +2,10 @@
 
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
-import { prepareArenaBuild } from "../lib/arena/buildArtifacts";
+import { gzipSync } from "node:zlib";
+import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts";
 import { ensureArenaBuildSnapshotArtifacts } from "../lib/arena/buildSnapshotArtifacts";
+import type { ArenaBuildVariant } from "../lib/arena/types";
 
 type Args = {
   dryRun: boolean;
@@ -88,6 +90,25 @@ async function loadBuildPayloadRow(
   return payloadRow;
 }
 
+function estimateSnapshotArtifactBytes(
+  prepared: Awaited<ReturnType<typeof prepareArenaBuild>>,
+  variant: ArenaBuildVariant,
+) {
+  const payload = {
+    buildId: prepared.buildId,
+    variant,
+    checksum: prepared.checksum,
+    serverValidated: true,
+    buildLoadHints: prepared.hints,
+    voxelBuild: pickBuildVariant(prepared, variant),
+  };
+  const raw = Buffer.from(JSON.stringify(payload));
+  return {
+    rawBytes: raw.length,
+    gzipBytes: gzipSync(raw).length,
+  };
+}
+
 async function main() {
   const opts = parseArgs(process.argv);
   const prisma = new PrismaClient();
@@ -155,8 +176,17 @@ async function main() {
         }
 
         if (opts.dryRun) {
+          const variants: ArenaBuildVariant[] = [];
+          if (previewNeeded) variants.push("preview");
+          if (fullNeeded) variants.push("full");
+          const byteSummary = variants
+            .map((variant) => {
+              const size = estimateSnapshotArtifactBytes(prepared, variant);
+              return `${variant}=${(size.rawBytes / (1024 * 1024)).toFixed(2)}MB raw/${(size.gzipBytes / (1024 * 1024)).toFixed(2)}MB gzip`;
+            })
+            .join(" ");
           console.log(
-            `- dry-run ${row.id}: preview=${previewNeeded ? "yes" : "no"} full=${fullNeeded ? "yes" : "no"}`,
+            `- dry-run ${row.id}: preview=${previewNeeded ? "yes" : "no"} full=${fullNeeded ? "yes" : "no"} ${byteSummary}`,
           );
           uploaded += planned;
           continue;

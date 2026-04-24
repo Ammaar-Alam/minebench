@@ -1,6 +1,7 @@
 #!/usr/bin/env npx tsx
 
 import "dotenv/config";
+import { gunzipSync } from "node:zlib";
 
 type BuildPayloadMode = "adaptive" | "inline" | "shell";
 type ArenaBuildVariant = "preview" | "full";
@@ -82,12 +83,16 @@ type Args = {
   isolateUserIp: boolean;
   rampMs: number;
   maxActiveRequests: number;
+  maxActiveBuildRequests: number;
+  maxActiveControlRequests: number;
   thinkMs: number;
   matchupRetries: number;
   matchupTimeoutMs: number;
   voteTimeoutMs: number;
   buildTimeoutMs: number;
   detailUpgradeRate: number;
+  maxErrors: number;
+  minRounds: number;
   help: boolean;
 };
 
@@ -158,12 +163,15 @@ class RequestGate {
 
   constructor(private readonly limit: number) {}
 
-  async run<T>(work: () => Promise<T>): Promise<T> {
+  async run<T>(work: () => Promise<T>, onWait?: (waitMs: number) => void): Promise<T> {
+    const waitStartedAt = performance.now();
     if (this.limit > 0 && this.active >= this.limit) {
       await new Promise<void>((resolve) => {
         this.queue.push(resolve);
       });
     }
+    const waitMs = performance.now() - waitStartedAt;
+    if (waitMs > 0) onWait?.(waitMs);
 
     this.active += 1;
     try {
@@ -175,7 +183,8 @@ class RequestGate {
   }
 }
 
-let requestGate: RequestGate | null = null;
+let buildRequestGate: RequestGate | null = null;
+let controlRequestGate: RequestGate | null = null;
 
 class Metrics {
   private counts = new Map<string, number>();
@@ -185,6 +194,10 @@ class Metrics {
 
   increment(name: string, delta = 1) {
     this.counts.set(name, (this.counts.get(name) ?? 0) + delta);
+  }
+
+  getCount(name: string) {
+    return this.counts.get(name) ?? 0;
   }
 
   addTiming(name: string, value: number) {
@@ -268,6 +281,12 @@ class Metrics {
     lines.push(`- ramp: ${args.rampMs}ms`);
     if (args.maxActiveRequests > 0) {
       lines.push(`- max active requests: ${args.maxActiveRequests}`);
+    }
+    if (args.maxActiveBuildRequests > 0) {
+      lines.push(`- max active build requests: ${args.maxActiveBuildRequests}`);
+    }
+    if (args.maxActiveControlRequests > 0) {
+      lines.push(`- max active control requests: ${args.maxActiveControlRequests}`);
     }
     lines.push(`- detail upgrade rate: ${args.detailUpgradeRate}`);
     if (args.isolateUserIp) {
@@ -451,6 +470,7 @@ function parseArgs(argv: string[]): Args {
   const payload: BuildPayloadMode =
     payloadRaw === "inline" ? "inline" : payloadRaw === "shell" ? "shell" : "adaptive";
 
+  const maxActiveRequests = parseNonNegativeNumberArg(args, "--max-active-requests", 64);
   return {
     baseUrl: normalizeBaseUrl(
       parseStringArg(args, "--base-url") ?? process.env.MINEBENCH_LOAD_BASE_URL ?? "http://localhost:3000",
@@ -466,13 +486,25 @@ function parseArgs(argv: string[]): Args {
       false,
     ),
     rampMs: parseNonNegativeNumberArg(args, "--ramp-ms", 500),
-    maxActiveRequests: parseNonNegativeNumberArg(args, "--max-active-requests", 64),
+    maxActiveRequests,
+    maxActiveBuildRequests: parseNonNegativeNumberArg(
+      args,
+      "--max-active-build-requests",
+      maxActiveRequests,
+    ),
+    maxActiveControlRequests: parseNonNegativeNumberArg(
+      args,
+      "--max-active-control-requests",
+      Math.max(maxActiveRequests, 128),
+    ),
     thinkMs: parseNumberArg(args, "--think-ms", 150),
     matchupRetries: parseNumberArg(args, "--matchup-retries", 0),
     matchupTimeoutMs: parseNumberArg(args, "--matchup-timeout-ms", 12_000),
     voteTimeoutMs: parseNumberArg(args, "--vote-timeout-ms", 12_000),
     buildTimeoutMs: parseNumberArg(args, "--build-timeout-ms", 35_000),
     detailUpgradeRate: parseFloatArg(args, "--detail-upgrade-rate", 0),
+    maxErrors: parseNonNegativeNumberArg(args, "--max-errors", 0),
+    minRounds: parseNonNegativeNumberArg(args, "--min-rounds", 1),
     help,
   };
 }
@@ -496,12 +528,18 @@ Options:
   --isolate-user-ip       Opt in to synthetic per-user x-forwarded-for addresses
   --ramp-ms               Spread virtual-user starts over this window
   --max-active-requests   Cap concurrent HTTP requests from this process; 0 disables
+  --max-active-build-requests
+                          Cap concurrent build hydration requests; defaults to --max-active-requests
+  --max-active-control-requests
+                          Cap concurrent matchup/vote requests; defaults to max(--max-active-requests, 128)
   --think-ms              Wait time after both builds finish before voting
   --matchup-retries       Extra retries for matchup GETs after timeout/network failure
   --matchup-timeout-ms    Timeout per matchup request
   --vote-timeout-ms       Timeout per vote request
   --build-timeout-ms      Timeout per full-build hydration
   --detail-upgrade-rate   Chance of upgrading one preview lane to full (0-1)
+  --max-errors            Fail the command if user-visible errors exceed this value
+  --min-rounds            Fail the command unless at least this many rounds complete
 
 Env:
   MINEBENCH_LOAD_ISOLATE_USER_IP=1 enables --isolate-user-ip by default
@@ -551,9 +589,17 @@ function recordRequestMetrics(
   stage: string,
   durationMs: number,
   responseHeaders?: Headers | null,
+  queueWaitMs = 0,
 ) {
   metrics.addTiming(stage, durationMs);
+  if (queueWaitMs > 0) {
+    metrics.addTiming(`${stage}_queue`, queueWaitMs);
+  }
   metrics.recordServerTiming(stage, responseHeaders?.get("server-timing") ?? null);
+}
+
+function getRequestGate(stage: string): RequestGate | null {
+  return stage.startsWith("build_") ? buildRequestGate : controlRequestGate;
 }
 
 function asRequestError(
@@ -619,54 +665,67 @@ async function fetchWithTimeout<T>(params: {
   jar: CookieJar;
   stage: string;
   read: (response: Response) => Promise<T>;
-}): Promise<{ value: T; durationMs: number; headers: Headers }> {
+}): Promise<{ value: T; durationMs: number; headers: Headers; queueWaitMs: number }> {
   const { url, init, timeoutMs, jar, stage, read } = params;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const headers = new Headers(init.headers);
   const cookie = jar.headerValue();
   if (cookie) headers.set("cookie", cookie);
-  const startedAt = performance.now();
+  const queuedAt = performance.now();
+  let startedAt = queuedAt;
+  let queueWaitMs = 0;
   let responseHeaders: Headers | null = null;
   let response: Response;
 
   const performRequest = async () => {
+    startedAt = performance.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      response = await fetch(url, {
-        ...init,
-        headers,
-        signal: controller.signal,
-      });
-    } catch (error) {
-      const networkCode = error instanceof Error && error.name === "AbortError" ? "timeout" : getNetworkErrorCode(error);
-      if (error instanceof Error && error.name === "AbortError") {
-        throw new RequestError(stage, `timed out after ${timeoutMs}ms`, true, {
+      try {
+        response = await fetch(url, {
+          ...init,
+          headers,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const networkCode = error instanceof Error && error.name === "AbortError" ? "timeout" : getNetworkErrorCode(error);
+        if (error instanceof Error && error.name === "AbortError") {
+          throw new RequestError(stage, `timed out after ${timeoutMs}ms`, true, {
+            durationMs: performance.now() - startedAt,
+            responseHeaders,
+            networkFailure: true,
+            networkCode,
+          });
+        }
+        throw asRequestError(stage, error, {
           durationMs: performance.now() - startedAt,
           responseHeaders,
           networkFailure: true,
           networkCode,
         });
       }
-      throw asRequestError(stage, error, {
+
+      responseHeaders = response.headers;
+      jar.apply(response.headers);
+
+      return {
+        value: await read(response),
         durationMs: performance.now() - startedAt,
-        responseHeaders,
-        networkFailure: true,
-        networkCode,
-      });
+        headers: response.headers,
+        queueWaitMs,
+      };
+    } finally {
+      clearTimeout(timer);
     }
-
-    responseHeaders = response.headers;
-    jar.apply(response.headers);
-
-    return {
-      value: await read(response),
-      durationMs: performance.now() - startedAt,
-      headers: response.headers,
-    };
   };
 
   try {
-    return requestGate ? await requestGate.run(performRequest) : await performRequest();
+    const gate = getRequestGate(stage);
+    return gate
+      ? await gate.run(performRequest, (waitMs) => {
+          queueWaitMs = waitMs;
+        })
+      : await performRequest();
   } catch (error) {
     const transportLike = isTransportLikeError(error);
     const networkCode = error instanceof Error && error.name === "AbortError" ? "timeout" : getNetworkErrorCode(error);
@@ -684,8 +743,6 @@ async function fetchWithTimeout<T>(params: {
       networkFailure: transportLike,
       networkCode: transportLike ? networkCode : null,
     });
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -727,7 +784,7 @@ async function requestJson<T>(params: {
       },
     });
 
-    recordRequestMetrics(metrics, stage, result.durationMs, result.headers);
+    recordRequestMetrics(metrics, stage, result.durationMs, result.headers, result.queueWaitMs);
 
     return {
       body: result.value,
@@ -742,21 +799,21 @@ async function requestJson<T>(params: {
   }
 }
 
-function getInitialHydrationRef(lane: ArenaMatchupLane): ArenaBuildRef | null {
-  if (lane.build) return null;
-  const initialVariant = lane.buildLoadHints?.initialVariant ?? "full";
-  if (initialVariant === "preview") {
-    return lane.previewRef ?? lane.buildRef ?? null;
-  }
-  return lane.buildRef ?? lane.previewRef ?? null;
-}
-
 function getHydratedBuildCacheKey(ref: ArenaBuildRef): string {
   return `${ref.buildId}:${ref.variant}:${ref.checksum ?? "none"}`;
 }
 
-function getInitialDeliveryClass(hints: ArenaBuildLoadHints | undefined): string | undefined {
-  return hints?.initialDeliveryClass ?? hints?.deliveryClass;
+function getHydrationDeliveryClass(lane: ArenaMatchupLane, ref: ArenaBuildRef): string | undefined {
+  const hints = lane.buildLoadHints;
+  if (!hints) return undefined;
+  return ref.variant === "preview" ? hints.initialDeliveryClass ?? hints.deliveryClass : hints.deliveryClass;
+}
+
+function getExpectedHydrationBlocks(lane: ArenaMatchupLane, ref: ArenaBuildRef): number | null {
+  const hints = lane.buildLoadHints;
+  if (!hints) return null;
+  const expected = ref.variant === "preview" ? hints.previewBlockCount : hints.fullBlockCount;
+  return Number.isFinite(expected) && expected > 0 ? expected : null;
 }
 
 function needsDetailUpgrade(lane: ArenaMatchupLane) {
@@ -767,64 +824,62 @@ function needsDetailUpgrade(lane: ArenaMatchupLane) {
   return lane.build.blocks.length < hints.fullBlockCount;
 }
 
+function getInitialHydrationRef(lane: ArenaMatchupLane): ArenaBuildRef | null {
+  if (lane.build) return null;
+  const initialVariant = lane.buildLoadHints?.initialVariant ?? "full";
+  if (initialVariant === "preview") return lane.previewRef ?? lane.buildRef ?? null;
+  return lane.buildRef ?? lane.previewRef ?? null;
+}
+
+function laneNeedsFullAfterBlocks(lane: ArenaMatchupLane, receivedBlocks: number | null): boolean {
+  const hints = lane.buildLoadHints;
+  if (!lane.buildRef || !hints || hints.initialVariant !== "preview") return false;
+  const currentBlocks = receivedBlocks ?? lane.build?.blocks.length ?? 0;
+  return currentBlocks < hints.fullBlockCount;
+}
+
+function maybeGunzipBytes(bytes: Uint8Array): Uint8Array {
+  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+  return gunzipSync(Buffer.from(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength));
+}
+
 async function readBuildStream(
   response: Response,
   stage: string,
-): Promise<{ totalBlocks: number | null }> {
+): Promise<{ receivedBlocks: number | null; announcedTotal: number | null; sawComplete: boolean }> {
+  const bytes = maybeGunzipBytes(new Uint8Array(await response.arrayBuffer()));
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/x-ndjson") || !response.body) {
-    const payload = (await response.json()) as BuildVariantResponse;
+  if (!contentType.includes("application/x-ndjson")) {
+    const payload = JSON.parse(new TextDecoder().decode(bytes)) as BuildVariantResponse;
+    const receivedBlocks = payload.voxelBuild?.blocks.length ?? null;
     return {
-      totalBlocks: payload.voxelBuild?.blocks.length ?? null,
+      receivedBlocks,
+      announcedTotal: receivedBlocks,
+      sawComplete: receivedBlocks != null,
     };
   }
 
-  const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const buffer = decoder.decode(bytes);
   let sawComplete = false;
   let announcedTotal: number | null = null;
   let receivedBlocks = 0;
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const event = JSON.parse(trimmed) as ArenaBuildStreamEvent;
-      if (event.type === "error") {
-        throw new RequestError(stage, event.message || "stream error");
-      }
-      if (event.type === "hello") {
-        announcedTotal = event.totalBlocks;
-        continue;
-      }
-      if (event.type === "chunk") {
-        receivedBlocks += Array.isArray(event.blocks) ? event.blocks.length : 0;
-        announcedTotal = event.totalBlocks;
-        continue;
-      }
-      if (event.type === "complete") {
-        sawComplete = true;
-        announcedTotal = event.totalBlocks;
-      }
-    }
-  }
-
-  buffer += decoder.decode();
-  if (buffer.trim()) {
-    const event = JSON.parse(buffer.trim()) as ArenaBuildStreamEvent;
+  for (const line of buffer.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const event = JSON.parse(trimmed) as ArenaBuildStreamEvent;
     if (event.type === "error") {
       throw new RequestError(stage, event.message || "stream error");
+    }
+    if (event.type === "hello") {
+      announcedTotal = event.totalBlocks;
+      continue;
     }
     if (event.type === "chunk") {
       receivedBlocks += Array.isArray(event.blocks) ? event.blocks.length : 0;
       announcedTotal = event.totalBlocks;
+      continue;
     }
     if (event.type === "complete") {
       sawComplete = true;
@@ -832,12 +887,17 @@ async function readBuildStream(
     }
   }
 
-  if (!sawComplete && announcedTotal != null && receivedBlocks < announcedTotal) {
+  if (!sawComplete) {
     throw new RequestError(stage, "stream ended before complete");
+  }
+  if (announcedTotal != null && receivedBlocks < announcedTotal) {
+    throw new RequestError(stage, `stream received ${receivedBlocks} of ${announcedTotal} blocks`);
   }
 
   return {
-    totalBlocks: announcedTotal ?? receivedBlocks,
+    receivedBlocks,
+    announcedTotal,
+    sawComplete,
   };
 }
 
@@ -845,14 +905,16 @@ async function hydrateFullBuild(params: {
   baseUrl: string;
   ref: ArenaBuildRef;
   deliveryClass?: string;
+  expectedBlocks?: number | null;
   timeoutMs: number;
   jar: CookieJar;
   headers?: HeadersInit;
   metrics: Metrics;
-}) {
-  const { baseUrl, ref, deliveryClass, timeoutMs, jar, headers, metrics } = params;
+}): Promise<number | null> {
+  const { baseUrl, ref, deliveryClass, expectedBlocks, timeoutMs, jar, headers, metrics } = params;
   const snapshotUrl = `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}?variant=${ref.variant}${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`;
   const streamArtifactUrl = `${baseUrl}/api/arena/builds/${encodeURIComponent(ref.buildId)}/stream?variant=${ref.variant}${ref.checksum ? `&checksum=${encodeURIComponent(ref.checksum)}` : ""}`;
+  const streamLiveUrl = `${streamArtifactUrl}&artifact=0`;
 
   const streamAttempts: Array<{
     url: string;
@@ -865,11 +927,18 @@ async function hydrateFullBuild(params: {
       source: "stream_artifact",
     },
     {
+      url: streamLiveUrl,
+      stage: "build_stream",
+      source: "stream_live",
+    },
+  ];
+  if (deliveryClass !== "stream-artifact") {
+    streamAttempts.push({
       url: snapshotUrl,
       stage: "build_snapshot",
       source: "snapshot_primary",
-    },
-  ];
+    });
+  }
   const attempts =
     deliveryClass === "snapshot" || deliveryClass === "inline"
       ? [
@@ -882,6 +951,11 @@ async function hydrateFullBuild(params: {
             url: streamArtifactUrl,
             stage: "build_stream",
             source: "stream_artifact",
+          },
+          {
+            url: streamLiveUrl,
+            stage: "build_stream",
+            source: "stream_live",
           },
         ]
       : streamAttempts;
@@ -912,12 +986,30 @@ async function hydrateFullBuild(params: {
             );
           }
 
-          await readBuildStream(response, attempt.stage);
-          return null;
+          const build = await readBuildStream(response, attempt.stage);
+          const receivedBlocks = build.receivedBlocks;
+          if (
+            typeof expectedBlocks === "number" &&
+            expectedBlocks > 0 &&
+            (receivedBlocks == null || receivedBlocks < expectedBlocks)
+          ) {
+            metrics.increment("build_underfilled");
+            throw new RequestError(
+              attempt.stage,
+              `hydrated ${receivedBlocks ?? 0} blocks, expected at least ${expectedBlocks}`,
+            );
+          }
+          return receivedBlocks;
         },
       });
 
-      recordRequestMetrics(metrics, attempt.stage, result.durationMs, result.headers);
+      recordRequestMetrics(
+        metrics,
+        attempt.stage,
+        result.durationMs,
+        result.headers,
+        result.queueWaitMs,
+      );
 
       metrics.addTiming("build_total", performance.now() - startedAt);
       metrics.increment("full_hydrations");
@@ -933,7 +1025,7 @@ async function hydrateFullBuild(params: {
       if (index > 0) {
         metrics.increment("build_fallback_successes");
       }
-      return;
+      return result.value;
     } catch (error) {
       if (error instanceof RequestError && error.durationMs != null) {
         recordRequestMetrics(metrics, attempt.stage, error.durationMs, error.responseHeaders);
@@ -1063,24 +1155,31 @@ async function runUser(userIndex: number, args: Args, deadlineAt: number, metric
       if (oldest) hydratedBuildSet.delete(oldest);
     }
   };
-  const hydrateBuildOnce = async (lane: ArenaMatchupLane) => {
-    const ref = getInitialHydrationRef(lane);
-    if (!ref) return;
+  const hydrateRefOnce = async (lane: ArenaMatchupLane, ref: ArenaBuildRef): Promise<number | null> => {
     const cacheKey = getHydratedBuildCacheKey(ref);
     if (hydratedBuildSet.has(cacheKey)) {
       metrics.increment("build_cache_hits");
-      return;
+      return null;
     }
-    await hydrateFullBuild({
+    const receivedBlocks = await hydrateFullBuild({
       baseUrl: args.baseUrl,
       ref,
-      deliveryClass: getInitialDeliveryClass(lane.buildLoadHints),
+      deliveryClass: getHydrationDeliveryClass(lane, ref),
+      expectedBlocks: getExpectedHydrationBlocks(lane, ref),
       timeoutMs: args.buildTimeoutMs,
       jar,
       headers,
       metrics,
     });
     rememberHydratedBuild(cacheKey);
+    return receivedBlocks;
+  };
+  const hydrateLaneForVote = async (lane: ArenaMatchupLane) => {
+    const initialRef = getInitialHydrationRef(lane);
+    const initialBlocks = initialRef ? await hydrateRefOnce(lane, initialRef) : (lane.build?.blocks.length ?? null);
+    if (laneNeedsFullAfterBlocks(lane, initialBlocks) && lane.buildRef) {
+      await hydrateRefOnce(lane, lane.buildRef);
+    }
   };
   const rampMs = Math.max(0, args.rampMs);
   if (rampMs > 0 && args.users > 1) {
@@ -1095,7 +1194,7 @@ async function runUser(userIndex: number, args: Args, deadlineAt: number, metric
       const matchup = await fetchMatchup(args, jar, headers, metrics);
 
       const hydrateResults = await Promise.allSettled(
-        (["a", "b"] as const).map((side) => hydrateBuildOnce(matchup[side])),
+        (["a", "b"] as const).map((side) => hydrateLaneForVote(matchup[side])),
       );
 
       const hydrateFailure = hydrateResults.find((result) => result.status === "rejected");
@@ -1126,6 +1225,7 @@ async function runUser(userIndex: number, args: Args, deadlineAt: number, metric
                   baseUrl: args.baseUrl,
                   ref: lane.buildRef,
                   deliveryClass: lane.buildLoadHints?.deliveryClass,
+                  expectedBlocks: getExpectedHydrationBlocks(lane, lane.buildRef),
                   timeoutMs: args.buildTimeoutMs,
                   jar,
                   headers,
@@ -1168,7 +1268,9 @@ async function main() {
 
   const metrics = new Metrics();
   const deadlineAt = Date.now() + args.durationSeconds * 1000;
-  requestGate = args.maxActiveRequests > 0 ? new RequestGate(args.maxActiveRequests) : null;
+  buildRequestGate = args.maxActiveBuildRequests > 0 ? new RequestGate(args.maxActiveBuildRequests) : null;
+  controlRequestGate =
+    args.maxActiveControlRequests > 0 ? new RequestGate(args.maxActiveControlRequests) : null;
 
   console.log("Running arena load test");
   console.log(`- base url: ${args.baseUrl}`);
@@ -1178,6 +1280,12 @@ async function main() {
   console.log(`- ramp: ${args.rampMs}ms`);
   if (args.maxActiveRequests > 0) {
     console.log(`- max active requests: ${args.maxActiveRequests}`);
+  }
+  if (args.maxActiveBuildRequests > 0) {
+    console.log(`- max active build requests: ${args.maxActiveBuildRequests}`);
+  }
+  if (args.maxActiveControlRequests > 0) {
+    console.log(`- max active control requests: ${args.maxActiveControlRequests}`);
   }
   console.log(`- detail upgrade rate: ${args.detailUpgradeRate}`);
   if (args.isolateUserIp) {
@@ -1206,6 +1314,16 @@ async function main() {
   }
 
   metrics.printSummary(args);
+  const completed = metrics.getCount("rounds_completed");
+  const errors = metrics.getCount("errors");
+  if (completed < args.minRounds) {
+    console.error(`error: completed rounds ${completed} below required minimum ${args.minRounds}`);
+    process.exitCode = 1;
+  }
+  if (errors > args.maxErrors) {
+    console.error(`error: user-visible errors ${errors} exceeded maximum ${args.maxErrors}`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

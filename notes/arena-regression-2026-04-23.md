@@ -428,3 +428,195 @@ For production, use the real prod env rather than `.env.localdb.local`. The crit
 - `ARENA_VOTE_JOB_DRAIN_MAX_MS=50000`
 
 The middleware rate limiter is still process-local best-effort. It is no longer needed to make the measured path pass, but if MineBench needs a strict global abuse limit across Vercel instances, add Redis/KV-backed centralized rate buckets as a separate hardening task.
+
+## Full-Build Hydration Regression - 2026-04-23 Evening
+
+User screenshot showed the arena rendering only sampled previews around `3,000` blocks, with full builds never replacing them even after waiting.
+
+Root cause:
+
+- `NEXT_PUBLIC_ARENA_FULL_AUTOFETCH_MAX_BYTES=0` was documented as the default, but the client interpreted `0` as "do not auto-upgrade to full".
+- The vote lock only checked whether the initial build existed or was in `loading-initial`; a rendered preview counted as ready.
+- Full `stream-artifact` misses returned fast `503` and the client never retried the same stream with `artifact=0`, so missing artifacts could leave full scenes unavailable.
+- Full hydration failures were silent when a preview was already visible, and Retry only retried missing initial builds.
+
+Fix:
+
+- `0` now means "no auto-full cap".
+- votes and keyboard vote shortcuts remain disabled while either lane still needs full hydration or is in `loading-full`.
+- stuck-build auto-skip still only applies to missing initial builds, so long full hydration does not auto-skip a valid matchup.
+- failed full hydration now shows `Full build stalled.` and Retry reattempts full hydration.
+- stream full-build hydration now retries live streaming with `artifact=0` after the first artifact attempt fails.
+- live stream fallback schedules a background artifact warmup so the next user can hit the immutable stream artifact.
+
+Verification:
+
+- direct route smoke for `stream-artifact` build `cmmz1vvoo001lii0448cga23c`: `468,085` full blocks streamed via live fallback in `5.7s`.
+- direct route smoke for snapshot build `cmo86gk8a0007kz04yz2pgf3b`: `66,990` full blocks returned via snapshot fallback.
+- browser smoke at `http://127.0.0.1:3000` showed full rendered counts (`19,892` and `266,947` blocks) instead of preview counts, with no browser warnings/errors.
+
+## Corrected Load Harness Finding
+
+The previous zero-error `1000`-user result was not a valid "users can vote only after full builds" measurement. `scripts/load-arena.ts` skipped hydration when a lane already had an inline preview build, so preview-only rounds could vote.
+
+Fix:
+
+- the harness now hydrates the full `buildRef` whenever a lane has a preview or an underfilled build.
+- build hydration now validates the received block count against `fullBlockCount` / `previewBlockCount` and records `build_underfilled` if the payload is incomplete.
+- build and control-plane request gates are split so one load-test process does not make vote/matchup requests wait behind long build downloads.
+
+Corrected local `50` users / `10s`:
+
+- `rounds_completed=98`
+- `full_hydrations=172`
+- `errors=1` local vote `ECONNRESET`
+- `build_total p95=5775.9ms`
+
+Corrected local `1000` users / `30s` before artifact compression:
+
+- `rounds_completed=58`
+- `full_hydrations=1491`
+- `errors=1174`
+- dominant failures were full-build delivery and local load-generator/server transport pressure:
+  - `665x vote timeout`
+  - `449x build_stream timeout`
+  - `32x ECONNRESET`
+- server-timing still showed route logic was not the main bottleneck:
+  - `matchup.total p95=13.0ms`
+  - successful `vote.total p95=2101.5ms`
+
+Interpretation:
+
+- once full-fidelity voting is enforced, the next bottleneck is full-build payload delivery volume.
+- the old zero-error 1000-user result proved the route/control plane could be fast with previews, but it did not prove full-build user readiness.
+
+## Artifact Compression Follow-Up
+
+Snapshot and stream artifacts were being uploaded as raw JSON/NDJSON. Representative payload sizes:
+
+- stream `cmmz1vvoo001lii0448cga23c`: `19.5MB` raw -> `1.49MB` gzip (`7.6%` of raw)
+- snapshot `cmo86gk8a0007kz04yz2pgf3b`: `2.71MB` raw -> `196KB` gzip (`7.2%` of raw)
+
+Fix:
+
+- compressed artifacts use new default namespaces (`arena-snapshot/v2-gzip`, `arena-stream/v3-gzip`) so old immutable raw-object caches are not reused.
+- snapshot artifact uploads now gzip payloads and set `Content-Encoding: gzip`.
+- stream artifact uploads now gzip NDJSON and set `Content-Encoding: gzip`.
+- Supabase signed downloads did not return `Content-Encoding` in a live one-build test, so the client and load harness also detect gzip magic bytes and decompress explicitly.
+- the server-side snapshot artifact fetch path also gunzips magic-byte gzip bodies before returning JSON.
+- `package.json` now exposes `pnpm arena:snapshot:precompute`.
+
+Operational note:
+
+- one representative build (`cmo9hkxki001djv04yn14ud95`) was uploaded compressed to validate storage behavior, then restored to raw JSON/NDJSON so production cannot serve compressed artifacts before this PR deploys.
+
+Updated production artifact prerequisites after deploy:
+
+```bash
+npx tsx scripts/backfill-arena-build-metadata.ts --all
+npx tsx scripts/precompute-arena-snapshot-artifacts.ts --all
+npx tsx scripts/precompute-arena-stream-artifacts.ts --all
+```
+
+Those jobs should be run against the real production DB and storage env so compressed immutable artifacts are generated in the new gzip namespaces.
+
+The precompute shell must match the deployed runtime policy env exactly:
+
+- `ARENA_INLINE_INITIAL_MAX_BYTES`
+- `ARENA_SNAPSHOT_MAX_BYTES`
+- `ARENA_ARTIFACT_MIN_BYTES`
+- `ARENA_PREVIEW_TRIGGER_BYTES`
+- `ARENA_PREVIEW_TARGET_BLOCKS`
+- `ARENA_SNAPSHOT_ARTIFACT_PREFIX`
+- `ARENA_STREAM_ARTIFACT_PREFIX`
+- artifact bucket/env values
+
+Also verify Supabase Storage CORS permits signed artifact `GET` requests from `https://minebench.ai`; otherwise the client will fall back to same-origin live/snapshot hydration instead of using off-origin artifacts.
+
+## Final Verification After Audit Fixes
+
+Validation commands:
+
+- `pnpm exec tsc --pretty false --noEmit --project tsconfig.json`
+- `pnpm lint`
+- `pnpm build`
+- `git diff --check`
+
+Browser verification:
+
+- local Arena showed disabled vote controls while full hydration was active.
+- after hydration, the same matchup rendered complete scenes with full block counts, e.g. `66,990` vs `3,597` blocks.
+- Playwright console check reported `0` errors and `0` warnings.
+
+Corrected local `50` users / `10s` after modeling preview-then-full hydration:
+
+- `rounds_completed=107`
+- `full_hydrations=331`
+- `errors=0`
+- `build_total p95=4489.1ms`
+- `vote.total p95=177.9ms`
+
+Corrected local `1000` users / `30s` with default `64` build / `128` control gates before full gzip precompute:
+
+- `rounds_completed=1415`
+- `full_hydrations=2838`
+- `errors=7` local vote `ECONNRESET`
+- `matchup.total p95=38.9ms`
+- `vote.total p95=263.6ms`
+- `build_total p95=53053.8ms`
+
+Interpretation:
+
+- the foreground matchup/vote backend is no longer the blocker.
+- the remaining 1000-user latency is full-build artifact transfer/queueing, which should improve materially only after the production gzip artifact precompute runs in the new artifact namespaces.
+- increasing local build concurrency to `128` made results worse on a single dev server, confirming that local transport/storage pressure, not route CPU, is the current ceiling.
+
+## Follow-Up: Full-Scene UX Regression Fix
+
+A later browser repro showed the exact user-visible failure: Arena lanes displayed roughly `3,000` sampled blocks and stayed incomplete for minutes.
+
+Additional fixes:
+
+- removed the positive-byte-cap behavior from auto full hydration; because voting now requires full builds, every preview lane must attempt full hydration.
+- replaced the permanent "full hydration failed" skip set with capped retry/backoff (`NEXT_PUBLIC_ARENA_FULL_HYDRATION_RETRY_BASE_MS`, `NEXT_PUBLIC_ARENA_FULL_HYDRATION_RETRY_MAX_MS`), so transient artifact/signing failures cannot leave a lane stuck forever.
+- reset viewer readiness whenever a hydrated/cached/progressive build replaces the current lane build, so voting cannot unlock until the full mesh has actually been placed.
+- persisted prepared build metadata during live stream fallback, preventing artifacts warmed under a computed checksum from becoming undiscoverable by later signed-URL lookups.
+- made the load harness mirror the browser fallback path: artifact stream -> `artifact=0` live stream -> snapshot only when allowed.
+- moved load-test timeouts to start after the client request gate is acquired, and records `*_queue` timings separately so harness queueing is not misreported as backend latency.
+- full `inline` builds now also redirect to precomputed gzip snapshot artifacts; previously only `snapshot` full builds redirected, so many multi-MB inline full builds were still serialized through Next.js.
+- full snapshot artifact redirect misses now return a stream-fallback `503` instead of falling back to large same-origin JSON responses.
+- matchup responses warm full-build signed artifact URLs in `after()` so full hydration is less likely to pay signing latency on the critical path.
+
+Browser verification:
+
+- fresh local Arena load showed Build A blocked at `Retrieving build 1%` with vote buttons disabled while Build B showed a complete `3,597`-block full scene.
+- after waiting, Build A replaced the partial lane with the complete `66,990`-block full scene and voting unlocked.
+- fresh Playwright console check reported `0` errors and `0` warnings.
+
+Post-fix local `50` users / `10s` full-fidelity run after redirecting full inline builds:
+
+- `rounds_completed=106`
+- `votes_ok=106`
+- `full_hydrations=335`
+- `errors=0`
+- `build_total p95=5829.3ms`
+- `vote.total p95=113.6ms`
+
+Post-fix local `1000` users / `10s` with `256` build/control gates:
+
+- `rounds_completed=222`
+- `full_hydrations=2690`
+- `errors=815`
+- dominant failures were local transport saturation, not successful route CPU:
+  - `203x build_stream ETIMEDOUT connect 127.0.0.1:3000`
+  - `161x matchup timed out after 12000ms`
+  - `319x vote timed out after 12000ms`
+- successful route timings remained bounded:
+  - `matchup.total p95=1062.2ms`
+  - `vote.total p95=953.6ms`
+
+Interpretation:
+
+- The full-scene voting regression is fixed locally: users cannot vote on partial previews, and full lanes retry instead of freezing.
+- A single local Next dev server plus one load-generator process still does not prove 1000 fully hydrated concurrent users. The current 1000-user local failures are dominated by local TCP/connect timeouts and full-build transfer pressure.
+- Production capacity still requires a real deployment run after compressed artifact precompute, with either distributed source IPs or a temporary capacity-test bypass for one-IP guardrails.

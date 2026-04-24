@@ -29,7 +29,7 @@ const SNAPSHOT_ARTIFACT_REDIRECT_ENABLED =
 const SNAPSHOT_PREVIEW_ARTIFACT_REDIRECT_ENABLED =
   (process.env.ARENA_SNAPSHOT_PREVIEW_ARTIFACT_REDIRECT_ENABLED ?? "1").trim() !== "0";
 const SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS = Number.parseInt(
-  process.env.ARENA_SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS ?? "1200",
+  process.env.ARENA_SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS ?? "5000",
   10,
 );
 const SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC = Number.parseInt(
@@ -258,7 +258,8 @@ export async function GET(
     url.searchParams.get("artifact") !== "0" &&
     Boolean(storedChecksum) &&
     ((variant === "preview" && SNAPSHOT_PREVIEW_ARTIFACT_REDIRECT_ENABLED) ||
-      (variant === "full" && shellHints.deliveryClass === "snapshot"));
+      (variant === "full" &&
+        (shellHints.deliveryClass === "snapshot" || shellHints.deliveryClass === "inline")));
   if (expectedChecksum && storedChecksum && expectedChecksum !== storedChecksum) {
     return NextResponse.json(
       {
@@ -275,6 +276,7 @@ export async function GET(
     url.searchParams.get("redirect") !== "0" &&
     canServeSnapshotArtifact
   ) {
+    const requireStreamFallbackOnMiss = variant === "full";
     try {
       const signedUrl = await withTimeout(
         (signal) =>
@@ -297,7 +299,25 @@ export async function GET(
         return new Response(null, { status: 307, headers });
       }
     } catch {
-      // Fall through to the DB-backed response. Signing can fail transiently under load.
+      // Full-build JSON serialization is the worst possible fallback under
+      // load; let clients use the chunked stream path instead.
+    }
+    if (requireStreamFallbackOnMiss) {
+      const headers = new Headers({
+        "Cache-Control": "no-store",
+        "Retry-After": "1",
+        "x-build-delivery-class": deliveryClass,
+        "x-build-source": "artifact-redirect-miss",
+      });
+      timing.end("total", requestStartedAt);
+      timing.apply(headers);
+      return NextResponse.json(
+        {
+          error: "Full build artifact is still warming. Use stream fallback.",
+          retryVia: "stream",
+        },
+        { status: 503, headers },
+      );
     }
   }
 

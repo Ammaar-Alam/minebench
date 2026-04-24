@@ -5,6 +5,7 @@ import type {
 } from "@/lib/arena/types";
 import type { VoxelBuild, VoxelBlock } from "@/lib/voxel/types";
 import { getBuildStorageBucketFromEnv, getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
+import { gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
 
@@ -47,14 +48,14 @@ const ARENA_STREAM_HELLO_PAD_BYTES = readIntEnv(
 
 const ARENA_STREAM_ARTIFACTS_ENABLED = readBoolEnv("ARENA_STREAM_ARTIFACTS_ENABLED", true);
 const ARENA_STREAM_ARTIFACT_PREFIX = normalizePrefix(
-  process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v2",
+  process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v3-gzip",
 );
 const ARENA_STREAM_ARTIFACT_BUCKET = (
   process.env.ARENA_STREAM_ARTIFACT_BUCKET ?? getBuildStorageBucketFromEnv()
 ).trim();
 const ARENA_STREAM_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_STREAM_ARTIFACT_MISS_TTL_MS",
-  5 * 60 * 1000,
+  1_000,
   1_000,
   60 * 60 * 1000,
 );
@@ -634,7 +635,7 @@ export async function uploadArenaBuildStreamArtifact(
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(ref.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
-  const payload = Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength);
+  const payload = gzipSync(Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength));
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -642,6 +643,7 @@ export async function uploadArenaBuildStreamArtifact(
       apikey: config.serviceRoleKey,
       "x-upsert": "true",
       "cache-control": ARENA_STREAM_ARTIFACT_CACHE_CONTROL,
+      "Content-Encoding": "gzip",
       "Content-Type": "application/x-ndjson",
     },
     body: payload,

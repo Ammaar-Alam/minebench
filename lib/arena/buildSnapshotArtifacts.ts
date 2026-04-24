@@ -3,12 +3,13 @@ import { getArenaPreviewTargetBlocks, pickBuildVariant } from "@/lib/arena/build
 import { getArenaDeliveryPolicySignature } from "@/lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
 import { getBuildStorageBucketFromEnv, getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
 
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
 const ARENA_SNAPSHOT_ARTIFACT_PREFIX = normalizePrefix(
-  process.env.ARENA_SNAPSHOT_ARTIFACT_PREFIX ?? "arena-snapshot/v1",
+  process.env.ARENA_SNAPSHOT_ARTIFACT_PREFIX ?? "arena-snapshot/v2-gzip",
 );
 const deliveryPolicySignature = getArenaDeliveryPolicySignature();
 const ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY = normalizePrefix(
@@ -30,7 +31,7 @@ const ARENA_SNAPSHOT_ARTIFACT_BUCKET = (
 ).trim();
 const ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS",
-  5 * 60 * 1000,
+  1_000,
   1_000,
   60 * 60 * 1000,
 );
@@ -243,7 +244,12 @@ function createSnapshotArtifactPayload(
 }
 
 function encodeSnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
-  return ENCODER.encode(JSON.stringify(payload));
+  return gzipSync(ENCODER.encode(JSON.stringify(payload)));
+}
+
+function maybeGunzipArtifactBytes(bytes: Uint8Array): Uint8Array {
+  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+  return gunzipSync(Buffer.from(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength));
 }
 
 async function uploadSnapshotArtifactVariant(
@@ -272,6 +278,7 @@ async function uploadSnapshotArtifactVariant(
         apikey: config.serviceRoleKey,
         "x-upsert": "true",
         "cache-control": ARENA_SNAPSHOT_ARTIFACT_CACHE_CONTROL,
+        "Content-Encoding": "gzip",
         "Content-Type": "application/json; charset=utf-8",
       },
       body: Buffer.from(payload.buffer as ArrayBuffer, payload.byteOffset, payload.byteLength),
@@ -364,7 +371,7 @@ export async function fetchArenaBuildSnapshotArtifact(
     });
 
     if (resp.ok) {
-      const bytes = new Uint8Array(await resp.arrayBuffer());
+      const bytes = maybeGunzipArtifactBytes(new Uint8Array(await resp.arrayBuffer()));
       clearSnapshotArtifactMiss(buildId, variant, checksum);
       setCachedSnapshotArtifactBody(cacheKey, bytes);
       return bytes;

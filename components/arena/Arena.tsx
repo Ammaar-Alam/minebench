@@ -34,8 +34,12 @@ const FULL_HYDRATION_SLOW_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_SLOW_MS ?? "2500",
   10,
 );
-const FULL_AUTOFETCH_MAX_BYTES = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_FULL_AUTOFETCH_MAX_BYTES ?? "0",
+const FULL_HYDRATION_RETRY_BASE_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_RETRY_BASE_MS ?? "1200",
+  10,
+);
+const FULL_HYDRATION_RETRY_MAX_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_RETRY_MAX_MS ?? "15000",
   10,
 );
 const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
@@ -205,6 +209,8 @@ const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
   10,
 );
+const GZIP_MAGIC_0 = 0x1f;
+const GZIP_MAGIC_1 = 0x8b;
 const INITIAL_RETRIEVAL_OVERLAY_DELAY_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_INITIAL_RETRIEVAL_OVERLAY_DELAY_MS ?? "420",
   10,
@@ -223,6 +229,11 @@ type CachedHydratedBuild = {
   serverValidated: boolean;
   variant: ArenaBuildVariant;
   buildLoadHints?: ArenaMatchup["a"]["buildLoadHints"];
+};
+
+type AutoFullHydrationRetry = {
+  attempts: number;
+  nextRetryAt: number;
 };
 
 type TimeoutSignal = {
@@ -299,6 +310,50 @@ async function readWithTimeout<T>(
   });
 }
 
+function isGzipChunk(chunk: Uint8Array): boolean {
+  return chunk.length >= 2 && chunk[0] === GZIP_MAGIC_0 && chunk[1] === GZIP_MAGIC_1;
+}
+
+async function gunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("Compressed build artifact is not supported by this browser.");
+  }
+  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const decompressor = new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>;
+  const stream = new Blob([body]).stream().pipeThrough(decompressor);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function readBuildVariantJson(res: Response): Promise<BuildVariantResponse> {
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const body = isGzipChunk(bytes) ? await gunzipBytes(bytes) : bytes;
+  return JSON.parse(new TextDecoder().decode(body)) as BuildVariantResponse;
+}
+
+function streamFromFirstChunk(
+  firstChunk: Uint8Array,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(firstChunk);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) controller.enqueue(value);
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
 async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
@@ -327,7 +382,7 @@ async function fetchBuildVariantSnapshot(
           method: "GET",
           signal: timed.signal,
         });
-        if (redirected.ok) return (await redirected.json()) as BuildVariantResponse;
+        if (redirected.ok) return await readBuildVariantJson(redirected);
         if ([400, 429, 500, 502, 503, 504].includes(redirected.status)) {
           return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
         }
@@ -341,7 +396,7 @@ async function fetchBuildVariantSnapshot(
       const message = await readErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
-    return (await res.json()) as BuildVariantResponse;
+    return await readBuildVariantJson(res);
   } finally {
     timed.cleanup();
   }
@@ -384,7 +439,7 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return (await res.json()) as BuildVariantResponse;
+    return await readBuildVariantJson(res);
   }
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -397,6 +452,22 @@ async function fetchBuildVariantStreamOnce(
 
   try {
     reader = res.body.getReader();
+    const firstRead = await readWithTimeout(
+      () => reader!.read(),
+      STREAM_FIRST_EVENT_TIMEOUT_MS,
+      opts?.signal,
+      cancelReader,
+    );
+    if (firstRead.done || !firstRead.value) {
+      throw new Error("Build stream ended before any data loaded");
+    }
+    const firstChunk = firstRead.value;
+    const stream = streamFromFirstChunk(firstChunk, reader);
+    reader = isGzipChunk(firstChunk)
+      ? stream
+          .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>)
+          .getReader()
+      : stream.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const startedAt = performance.now();
@@ -536,6 +607,9 @@ async function fetchBuildVariantStream(
   const attempts: Array<() => Promise<BuildVariantResponse>> = [
     () => fetchBuildVariantStreamOnce(ref, true, opts),
   ];
+  if (ref.variant === "full") {
+    attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
+  }
   if (opts?.allowSnapshotFallback !== false) {
     attempts.push(() => fetchBuildVariantSnapshot(ref, opts?.signal));
   }
@@ -633,21 +707,25 @@ function laneNeedsFullHydration(lane: ArenaMatchup["a"]): boolean {
 }
 
 function laneShouldAutoUpgradeToFull(lane: ArenaMatchup["a"]): boolean {
-  if (!laneNeedsFullHydration(lane)) return false;
-  if (!Number.isFinite(FULL_AUTOFETCH_MAX_BYTES) || FULL_AUTOFETCH_MAX_BYTES <= 0) return false;
-  const estimated = lane.buildLoadHints?.fullEstimatedBytes;
-  return (
-    typeof estimated === "number" &&
-    Number.isFinite(estimated) &&
-    estimated > 0 &&
-    estimated <= FULL_AUTOFETCH_MAX_BYTES
-  );
+  return laneNeedsFullHydration(lane);
 }
 
-function isMatchupBuildLoading(matchup: ArenaMatchup, sideState: SideLoadState | null): boolean {
+function isMatchupInitialBuildLoading(matchup: ArenaMatchup, sideState: SideLoadState | null): boolean {
   if (!matchup.a.build || !matchup.b.build) return true;
   if (!sideState || sideState.matchupId !== matchup.id) return false;
   return sideState.a === "loading-initial" || sideState.b === "loading-initial";
+}
+
+function isMatchupVoteBlocked(matchup: ArenaMatchup, sideState: SideLoadState | null): boolean {
+  if (!matchup.a.build || !matchup.b.build) return true;
+  if (laneNeedsFullHydration(matchup.a) || laneNeedsFullHydration(matchup.b)) return true;
+  if (!sideState || sideState.matchupId !== matchup.id) return false;
+  return (
+    sideState.a === "loading-initial" ||
+    sideState.b === "loading-initial" ||
+    sideState.a === "loading-full" ||
+    sideState.b === "loading-full"
+  );
 }
 
 function getInitialHydrateRef(matchup: ArenaMatchup, side: "a" | "b"): ArenaBuildRef | null {
@@ -669,6 +747,19 @@ function getAutoFullHydrationFailureKey(
   ref: ArenaBuildRef,
 ): string {
   return `${matchupId}:${side}:${ref.buildId}:${ref.checksum ?? "none"}`;
+}
+
+function getFullHydrationRetryDelayMs(attempts: number): number {
+  const base =
+    Number.isFinite(FULL_HYDRATION_RETRY_BASE_MS) && FULL_HYDRATION_RETRY_BASE_MS > 0
+      ? FULL_HYDRATION_RETRY_BASE_MS
+      : 1200;
+  const max =
+    Number.isFinite(FULL_HYDRATION_RETRY_MAX_MS) && FULL_HYDRATION_RETRY_MAX_MS > 0
+      ? FULL_HYDRATION_RETRY_MAX_MS
+      : 15000;
+  const boundedAttempt = Math.max(0, Math.min(6, attempts - 1));
+  return Math.min(max, base * 2 ** boundedAttempt);
 }
 
 function isHeavyRetrievalDeliveryClass(
@@ -828,6 +919,7 @@ export function Arena() {
   const [transitioning, setTransitioning] = useState(false);
   const [mobileBuildView, setMobileBuildView] = useState<"a" | "b">("a");
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
+  const [fullHydrationRetryTick, setFullHydrationRetryTick] = useState(0);
   const [, forceTick] = useState(0);
   const stateRef = useRef<ArenaState>({ kind: "loading" });
   const submittingRef = useRef(false);
@@ -840,7 +932,8 @@ export function Arena() {
   const hydratedBuildCacheRef = useRef(new Map<string, CachedHydratedBuild>());
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
   const viewerReadyRef = useRef<{ matchupId: string; a: boolean; b: boolean } | null>(null);
-  const autoFullHydrationFailuresRef = useRef(new Set<string>());
+  const autoFullHydrationRetriesRef = useRef(new Map<string, AutoFullHydrationRetry>());
+  const autoFullHydrationRetryTimersRef = useRef(new Map<string, number>());
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
   const advanceNowRequestedAtRef = useRef<number | null>(null);
@@ -919,6 +1012,54 @@ export function Arena() {
     [],
   );
 
+  const markViewerLaneNotReady = useCallback((matchupId: string, side: "a" | "b") => {
+    setViewerReady((prev) => {
+      if (!prev || prev.matchupId !== matchupId) return prev;
+      if (!prev[side]) return prev;
+      return { ...prev, [side]: false };
+    });
+  }, []);
+
+  const clearAutoFullHydrationRetryTimer = useCallback((key: string) => {
+    const timer = autoFullHydrationRetryTimersRef.current.get(key);
+    if (timer == null) return;
+    window.clearTimeout(timer);
+    autoFullHydrationRetryTimersRef.current.delete(key);
+  }, []);
+
+  const scheduleAutoFullHydrationRetryWake = useCallback(
+    (key: string, delayMs: number) => {
+      clearAutoFullHydrationRetryTimer(key);
+      const delay = Math.max(250, Math.ceil(delayMs));
+      const timer = window.setTimeout(() => {
+        autoFullHydrationRetryTimersRef.current.delete(key);
+        setFullHydrationRetryTick((tick) => tick + 1);
+      }, delay);
+      autoFullHydrationRetryTimersRef.current.set(key, timer);
+    },
+    [clearAutoFullHydrationRetryTimer],
+  );
+
+  const clearAutoFullHydrationRetry = useCallback(
+    (key: string) => {
+      autoFullHydrationRetriesRef.current.delete(key);
+      clearAutoFullHydrationRetryTimer(key);
+    },
+    [clearAutoFullHydrationRetryTimer],
+  );
+
+  const registerAutoFullHydrationFailure = useCallback(
+    (key: string) => {
+      const previous = autoFullHydrationRetriesRef.current.get(key);
+      const attempts = (previous?.attempts ?? 0) + 1;
+      const delay = getFullHydrationRetryDelayMs(attempts);
+      const nextRetryAt = Date.now() + delay;
+      autoFullHydrationRetriesRef.current.set(key, { attempts, nextRetryAt });
+      scheduleAutoFullHydrationRetryWake(key, delay);
+    },
+    [scheduleAutoFullHydrationRetryWake],
+  );
+
   const matchup = state.kind === "ready" ? state.matchup : null;
   const revealModels = Boolean(matchup && reveal.kind === "reveal" && reveal.matchupId === matchup.id);
   const revealAction: RevealAction | null = reveal.kind === "reveal" ? reveal.action : null;
@@ -954,8 +1095,11 @@ export function Arena() {
 
   useEffect(() => {
     setPromptDialogOpen(false);
-    autoFullHydrationFailuresRef.current.clear();
-  }, [matchup?.id]);
+    autoFullHydrationRetriesRef.current.clear();
+    for (const key of autoFullHydrationRetryTimersRef.current.keys()) {
+      clearAutoFullHydrationRetryTimer(key);
+    }
+  }, [clearAutoFullHydrationRetryTimer, matchup?.id]);
 
   useEffect(() => {
     const el = cardsScrollRef.current;
@@ -1180,6 +1324,7 @@ export function Arena() {
 
     const cached = readHydratedBuildFromCache(ref);
     if (cached) {
+      markViewerLaneNotReady(matchupValue.id, side);
       setState((prev) => {
         if (prev.kind !== "ready") return prev;
         if (prev.matchup.id !== matchupValue.id) return prev;
@@ -1201,6 +1346,9 @@ export function Arena() {
         totalBlocks: cached.build.blocks.length,
       });
       setLaneLoadError(matchupValue.id, side, null);
+      if (cached.variant === "full") {
+        clearAutoFullHydrationRetry(getAutoFullHydrationFailureKey(matchupValue.id, side, ref));
+      }
       setLaneLoadPhase(matchupValue.id, side, "idle");
       setLaneOverlayVisible(matchupValue.id, side, false);
       return;
@@ -1263,6 +1411,7 @@ export function Arena() {
       lastAppliedAt = now;
       lastAppliedBlocks = progress.receivedBlocks;
 
+      markViewerLaneNotReady(matchupValue.id, side);
       setState((prev) => {
         if (prev.kind !== "ready") return prev;
         if (prev.matchup.id !== matchupValue.id) return prev;
@@ -1308,6 +1457,7 @@ export function Arena() {
         variant: payload.variant ?? ref.variant,
         checksum: payload.checksum ?? ref.checksum ?? null,
       };
+      markViewerLaneNotReady(matchupValue.id, side);
       setState((prev) => {
         if (prev.kind !== "ready") return prev;
         if (prev.matchup.id !== matchupValue.id) return prev;
@@ -1337,6 +1487,10 @@ export function Arena() {
         });
         setLaneLoadError(matchupValue.id, side, null);
       }
+      if (resolvedRef.variant === "full") {
+        clearAutoFullHydrationRetry(getAutoFullHydrationFailureKey(matchupValue.id, side, ref));
+        clearAutoFullHydrationRetry(getAutoFullHydrationFailureKey(matchupValue.id, side, resolvedRef));
+      }
       if (
         target === "full" &&
         Number.isFinite(hydrationMs) &&
@@ -1352,9 +1506,8 @@ export function Arena() {
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError") return;
       if (target === "full") {
-        autoFullHydrationFailuresRef.current.add(
-          getAutoFullHydrationFailureKey(matchupValue.id, side, ref),
-        );
+        registerAutoFullHydrationFailure(getAutoFullHydrationFailureKey(matchupValue.id, side, ref));
+        setLaneLoadError(matchupValue.id, side, "Full build stalled.");
       }
       if (target === "initial" || !lane.build) {
         setLaneLoadError(matchupValue.id, side, "Build stalled.");
@@ -1378,7 +1531,10 @@ export function Arena() {
     }
   }, [
     cacheHydratedBuild,
+    clearAutoFullHydrationRetry,
+    markViewerLaneNotReady,
     readHydratedBuildFromCache,
+    registerAutoFullHydrationFailure,
     setLaneLoadPhase,
     setLaneLoadError,
     setLaneLoadProgress,
@@ -1393,23 +1549,31 @@ export function Arena() {
       if (!laneNeedsFullHydration(current[side])) return;
       const ref = current[side].buildRef;
       if (ref) {
-        autoFullHydrationFailuresRef.current.delete(
-          getAutoFullHydrationFailureKey(current.id, side, ref),
-        );
+        clearAutoFullHydrationRetry(getAutoFullHydrationFailureKey(current.id, side, ref));
       }
       void hydrateMatchupSide(current, side, "full", { silent: true });
     },
-    [hydrateMatchupSide],
+    [clearAutoFullHydrationRetry, hydrateMatchupSide],
   );
 
-  const retryLaneInitialBuild = useCallback(
+  const retryLaneBuild = useCallback(
     (side: "a" | "b") => {
       const current = stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
       if (!current) return;
-      if (current[side].build) return;
-      void hydrateMatchupSide(current, side, "initial", { silent: false });
+      const lane = current[side];
+      if (lane.build && laneNeedsFullHydration(lane)) {
+        const ref = lane.buildRef;
+        if (ref) {
+          clearAutoFullHydrationRetry(getAutoFullHydrationFailureKey(current.id, side, ref));
+        }
+        void hydrateMatchupSide(current, side, "full", { silent: false });
+        return;
+      }
+      if (!lane.build) {
+        void hydrateMatchupSide(current, side, "initial", { silent: false });
+      }
     },
-    [hydrateMatchupSide],
+    [clearAutoFullHydrationRetry, hydrateMatchupSide],
   );
 
   const prefetchMatchupBuilds = useCallback(
@@ -1436,9 +1600,14 @@ export function Arena() {
   }, [reveal.kind, revealModels]);
 
   useEffect(() => {
+    const retryTimers = autoFullHydrationRetryTimersRef.current;
     return () => {
       clearAutoAdvance();
       clearStuckAutoSkip();
+      for (const timer of retryTimers.values()) {
+        window.clearTimeout(timer);
+      }
+      retryTimers.clear();
     };
   }, []);
 
@@ -1510,8 +1679,8 @@ export function Arena() {
     };
   }, [hydrateMatchupSide, matchup?.id]);
 
-  // Small preview lanes can upgrade automatically. Very large scenes stay
-  // judgeable as preview until the user explicitly asks for more detail.
+  // Voting requires full builds, so preview lanes keep retrying full hydration
+  // with capped backoff instead of getting stuck on a transient artifact miss.
   useEffect(() => {
     const current =
       stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
@@ -1522,12 +1691,14 @@ export function Arena() {
       if (!lane.build) continue;
       if (!laneShouldAutoUpgradeToFull(lane)) continue;
       if (!lane.buildRef) continue;
-      if (
-        autoFullHydrationFailuresRef.current.has(
-          getAutoFullHydrationFailureKey(current.id, side, lane.buildRef),
-        )
-      ) {
-        continue;
+      const retryKey = getAutoFullHydrationFailureKey(current.id, side, lane.buildRef);
+      const retry = autoFullHydrationRetriesRef.current.get(retryKey);
+      if (retry) {
+        const waitMs = retry.nextRetryAt - Date.now();
+        if (waitMs > 0) {
+          scheduleAutoFullHydrationRetryWake(retryKey, waitMs);
+          continue;
+        }
       }
 
       // Wait until the preview lane is idle so we don't compete with initial hydration.
@@ -1541,6 +1712,8 @@ export function Arena() {
   }, [
     hydrateMatchupSide,
     matchup?.id,
+    fullHydrationRetryTick,
+    scheduleAutoFullHydrationRetryWake,
     sideStateMatchupId,
     sideStatePhaseA,
     sideStatePhaseB,
@@ -1553,7 +1726,7 @@ export function Arena() {
   useEffect(() => {
     clearStuckAutoSkip();
     if (!matchup) return;
-    if (!isMatchupBuildLoading(matchup, sideLoadState)) return;
+    if (!isMatchupInitialBuildLoading(matchup, sideLoadState)) return;
     if (!Number.isFinite(BUILD_STUCK_AUTOSKIP_MS) || BUILD_STUCK_AUTOSKIP_MS <= 0) return;
     if (submittingRef.current) return;
 
@@ -1561,7 +1734,7 @@ export function Arena() {
       const current = stateRef.current;
       if (current.kind !== "ready") return;
       if (current.matchup.id !== matchup.id) return;
-      if (!isMatchupBuildLoading(current.matchup, sideLoadStateRef.current)) return;
+      if (!isMatchupInitialBuildLoading(current.matchup, sideLoadStateRef.current)) return;
       if (submittingRef.current) return;
       void handleSkipRef.current();
     }, BUILD_STUCK_AUTOSKIP_MS);
@@ -1671,7 +1844,7 @@ export function Arena() {
 
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
-    if (isMatchupBuildLoading(matchup, sideLoadStateRef.current)) return;
+    if (isMatchupVoteBlocked(matchup, sideLoadStateRef.current)) return;
     const viewer = viewerReadyRef.current;
     if (!viewer || viewer.matchupId !== matchup.id || !viewer.a || !viewer.b) return;
     flashVoteConfirm(choice);
@@ -1794,7 +1967,7 @@ export function Arena() {
       const viewersReady =
         Boolean(viewer && viewer.matchupId === currentMatchup.id && viewer.a && viewer.b);
       const votesLocked =
-        !viewersReady || isMatchupBuildLoading(currentMatchup, sideLoadStateRef.current);
+        !viewersReady || isMatchupVoteBlocked(currentMatchup, sideLoadStateRef.current);
 
       const current = revealRef.current;
       const isRevealingCurrent =
@@ -1878,7 +2051,7 @@ export function Arena() {
   const buildBUpgradePending = laneLoadB === "loading-full";
 
   const matchupBuildLoading = Boolean(
-    matchup && (isMatchupBuildLoading(matchup, sideLoadState) || !viewerReadyA || !viewerReadyB),
+    matchup && (isMatchupVoteBlocked(matchup, sideLoadState) || !viewerReadyA || !viewerReadyB),
   );
 
   const buildARetrieving =
@@ -2222,8 +2395,8 @@ export function Arena() {
 	                  type="button"
 	                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
 	                  onClick={() => {
-	                    if (laneErrorA) retryLaneInitialBuild("a");
-	                    if (laneErrorB) retryLaneInitialBuild("b");
+	                    if (laneErrorA) retryLaneBuild("a");
+	                    if (laneErrorB) retryLaneBuild("b");
 	                  }}
 	                >
 	                  Retry
