@@ -16,6 +16,8 @@ import { xaiGenerateText } from "@/lib/ai/providers/xai";
 import {
   AnthropicAdaptiveEffort,
   anthropicAdaptiveEffortAttempts,
+  DeepSeekThinkingConfig,
+  deepseekThinkingConfigForModel,
   GeminiThinkingConfig,
   geminiThinkingConfigForModel,
   MoonshotThinkingConfig,
@@ -39,12 +41,24 @@ import {
 
 const INT_ENV_MAX_OUTPUT_TOKENS = "MINEBENCH_MAX_OUTPUT_TOKENS";
 
-function parseIntEnvVar(name: string, fallback: number): number {
+function parseOptionalIntEnvVar(name: string): number | undefined {
   const raw = process.env[name];
-  if (!raw) return fallback;
+  if (!raw) return undefined;
   const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed <= 0) return fallback;
+  if (!Number.isFinite(parsed) || Number.isNaN(parsed) || parsed <= 0) return undefined;
   return Math.floor(parsed);
+}
+
+function defaultOutputTokenRequestForModel(modelId: string): number | undefined {
+  if (
+    modelId === "deepseek-v4-pro" ||
+    modelId === "deepseek-v4-flash" ||
+    modelId === "deepseek/deepseek-v4-pro" ||
+    modelId === "deepseek/deepseek-v4-flash"
+  ) {
+    return 384_000;
+  }
+  return undefined;
 }
 
 function maxOutputTokenCapForModel(modelId: string): number | undefined {
@@ -54,6 +68,15 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   // gpt-5-pro alias remaining at 272k.
   if (modelId === "gpt-5-pro") return 272_000;
   if (modelId.startsWith("gpt-5")) return 128_000;
+  if (
+    modelId === "deepseek-v4-pro" ||
+    modelId === "deepseek-v4-flash" ||
+    modelId === "deepseek/deepseek-v4-pro" ||
+    modelId === "deepseek/deepseek-v4-flash"
+  ) {
+    return 384_000;
+  }
+  if (modelId === "deepseek/deepseek-v3.2") return 65_536;
   if (modelId === "glm-5.1" || modelId === "glm-5") return 131_072;
   if (
     modelId.startsWith("claude-opus-4-7") ||
@@ -76,7 +99,10 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
 }
 
 function defaultMaxOutputTokens(_gridSize: 64 | 256 | 512, modelId: string): number {
-  const requested = parseIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS);
+  const requested =
+    parseOptionalIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS) ??
+    defaultOutputTokenRequestForModel(modelId) ??
+    DEFAULT_MAX_OUTPUT_TOKENS;
   const cap = maxOutputTokenCapForModel(modelId);
   return typeof cap === "number" ? Math.min(requested, cap) : requested;
 }
@@ -116,6 +142,7 @@ function describeRequestedThinkingMode(opts: {
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
   moonshotThinkingConfig?: MoonshotThinkingConfig;
+  deepseekThinkingConfig?: DeepSeekThinkingConfig;
 }): string {
   if (opts.route === "openrouter") {
     if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
@@ -137,7 +164,11 @@ function describeRequestedThinkingMode(opts: {
     return "default";
   }
 
-  if (opts.provider === "deepseek") return "thinking=enabled";
+  if (opts.provider === "deepseek") {
+    if (!opts.deepseekThinkingConfig) return "default";
+    if (opts.deepseekThinkingConfig.type === "disabled") return "thinking=disabled";
+    return `thinking=${opts.deepseekThinkingConfig.reasoningEffort ?? "high"}`;
+  }
   if (opts.provider === "xai") return "automatic";
   if (opts.provider === "moonshot") {
     return opts.moonshotThinkingConfig
@@ -185,13 +216,18 @@ function providerRequestTraceLine(opts: {
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
   moonshotThinkingConfig?: MoonshotThinkingConfig;
+  deepseekThinkingConfig?: DeepSeekThinkingConfig;
 }): string {
   const thinkingMode =
     opts.route === "openrouter" && opts.openRouterReasoningEnabled
       ? "enabled"
       : describeRequestedThinkingMode(opts);
   const temperature =
-    opts.route === "direct" && opts.provider === "moonshot"
+    opts.route === "direct" &&
+    opts.provider === "deepseek" &&
+    opts.deepseekThinkingConfig?.type === "enabled"
+      ? "n/a"
+      : opts.route === "direct" && opts.provider === "moonshot"
       ? opts.modelId === "kimi-k2.6" || opts.modelId === "kimi-k2.5"
         ? opts.moonshotThinkingConfig?.type === "disabled"
           ? 0.6
@@ -421,6 +457,7 @@ async function callDirectProvider(args: {
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
   moonshotThinkingConfig?: MoonshotThinkingConfig;
+  deepseekThinkingConfig?: DeepSeekThinkingConfig;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
@@ -496,7 +533,9 @@ async function callDirectProvider(args: {
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
+      thinkingConfig: args.deepseekThinkingConfig,
       temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
@@ -652,6 +691,10 @@ async function providerGenerateText(args: {
       model.provider === "moonshot"
         ? moonshotThinkingConfigForModel(model.modelId, args.reasoning)
         : undefined;
+    const directDeepSeekThinkingConfig =
+      model.provider === "deepseek"
+        ? deepseekThinkingConfigForModel(model.modelId, args.reasoning)
+        : undefined;
     if (model.provider === "xai") {
       xaiAutomaticReasoningForModel(model.modelId, args.reasoning);
     }
@@ -667,6 +710,7 @@ async function providerGenerateText(args: {
           adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
           geminiThinkingConfig: directGeminiThinkingConfig,
           moonshotThinkingConfig: directMoonshotThinkingConfig,
+          deepseekThinkingConfig: directDeepSeekThinkingConfig,
         }),
     );
     try {
@@ -684,6 +728,7 @@ async function providerGenerateText(args: {
         adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
         geminiThinkingConfig: directGeminiThinkingConfig,
         moonshotThinkingConfig: directMoonshotThinkingConfig,
+        deepseekThinkingConfig: directDeepSeekThinkingConfig,
         signal: args.signal,
         onDelta: args.onDelta,
         onTrace: args.onProviderTrace,

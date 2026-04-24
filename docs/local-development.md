@@ -108,6 +108,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
+- DeepSeek V4 Pro uses the native DeepSeek API with JSON Output mode, defaults to `thinking=max` and `max_tokens=384000`; use `pnpm batch:generate --reasoning high` only when intentionally lowering effort.
 - `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`, `MINIMAX_BASE_URL`, `XAI_BASE_URL`
 - `AI_DEBUG=1` (logs raw model output on failures)
 - `MINEBENCH_TOOL_OUTPUT_DIR`, `MINEBENCH_TOOL_TIMEOUT_MS`, `MINEBENCH_TOOL_MAX_*` (advanced `voxel.exec` controls)

@@ -38,6 +38,7 @@ export type ModelKey =
   | "moonshot_kimi_k2"
   | "moonshot_kimi_k2_6"
   | "moonshot_kimi_k2_5"
+  | "deepseek_v4_pro"
   | "deepseek_v3_2"
   | "xai_grok_4_1"
   | "xai_grok_4_20"
@@ -281,12 +282,20 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     forceOpenRouter: true,
   },
   {
+    key: "deepseek_v4_pro",
+    provider: "deepseek",
+    modelId: "deepseek-v4-pro",
+    displayName: "DeepSeek V4 Pro",
+    enabled: true,
+  },
+  {
     key: "deepseek_v3_2",
     provider: "deepseek",
-    modelId: "deepseek-reasoner",
+    modelId: "deepseek/deepseek-v3.2",
     displayName: "DeepSeek V3.2",
     enabled: true,
     openRouterModelId: "deepseek/deepseek-v3.2",
+    forceOpenRouter: true,
   },
   {
     key: "xai_grok_4_1",
