@@ -46,6 +46,13 @@ const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_PREFETCH_INITIAL_MAX_BYTES ?? "524288",
   10,
 );
+const PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS ?? "12000",
+  10,
+);
+
+let snapshotStorageRedirectBlocked = false;
+let streamStorageRedirectBlocked = false;
 
 async function readErrorResponse(res: Response, fallback: string): Promise<string> {
   // Categorize common statuses so the UI isn't showing a raw HTML error page.
@@ -362,6 +369,38 @@ function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
   return [400, 403, 404, 429, 500, 502, 503, 504].includes(status);
 }
 
+function markStorageRedirectBlocked(kind: "snapshot" | "stream") {
+  if (kind === "snapshot") {
+    if (snapshotStorageRedirectBlocked) return;
+    snapshotStorageRedirectBlocked = true;
+  } else {
+    if (streamStorageRedirectBlocked) return;
+    streamStorageRedirectBlocked = true;
+  }
+  trackEvent("arena_storage_redirect_blocked", { kind });
+}
+
+function shouldUseProgressiveBuildUpdates(
+  lane: ArenaMatchup["a"] | ArenaMatchup["b"],
+  target: "initial" | "full",
+  deliveryClass: ArenaBuildDeliveryClass | undefined,
+): boolean {
+  if (!isHeavyRetrievalDeliveryClass(deliveryClass)) return false;
+  if (target !== "initial" && lane.build) return false;
+  if (!Number.isFinite(PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS) || PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS <= 0) {
+    return true;
+  }
+  const hints = lane.buildLoadHints;
+  const expectedBlocks =
+    target === "initial"
+      ? hints?.initialVariant === "preview"
+        ? hints.previewBlockCount
+        : hints?.fullBlockCount
+      : hints?.fullBlockCount;
+  if (typeof expectedBlocks !== "number" || !Number.isFinite(expectedBlocks)) return true;
+  return expectedBlocks >= PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS;
+}
+
 async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
@@ -371,7 +410,7 @@ async function fetchBuildVariantSnapshot(
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
-  const allowRedirect = opts?.redirect !== false;
+  const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
@@ -385,6 +424,7 @@ async function fetchBuildVariantSnapshot(
       });
     } catch (err: unknown) {
       if (allowRedirect && !isAbortError(err)) {
+        markStorageRedirectBlocked("snapshot");
         return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
       }
       throw err;
@@ -432,6 +472,11 @@ async function fetchBuildVariantStreamOnce(
       credentials: "include",
       signal: requestTimed.signal,
     });
+  } catch (err: unknown) {
+    if (useArtifact && !isAbortError(err)) {
+      markStorageRedirectBlocked("stream");
+    }
+    throw err;
   } finally {
     requestTimed.cleanup();
   }
@@ -604,10 +649,14 @@ async function fetchBuildVariantStream(
   opts?: FetchBuildVariantStreamOptions,
 ): Promise<BuildVariantResponse> {
   let lastError: unknown = null;
-  const attempts: Array<() => Promise<BuildVariantResponse>> = [
-    () => fetchBuildVariantStreamOnce(ref, true, opts),
-  ];
+  const attempts: Array<() => Promise<BuildVariantResponse>> = [];
+  if (!streamStorageRedirectBlocked) {
+    attempts.push(() => fetchBuildVariantStreamOnce(ref, true, opts));
+  }
   if (ref.variant === "full") {
+    attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
+  }
+  if (attempts.length === 0) {
     attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
   }
   if (opts?.allowSnapshotFallback !== false) {
@@ -1384,25 +1433,34 @@ export function Arena() {
       }, INITIAL_RETRIEVAL_OVERLAY_DELAY_MS);
     }
 
+    const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, target);
     const APPLY_PROGRESS_MIN_MS = 90;
     const APPLY_PROGRESS_MIN_BLOCKS = 12_000;
-    const enableProgressiveUpdates = target === "initial" || !lane.build;
+    const PROGRESS_UI_MIN_MS = target === "full" ? 300 : 90;
+    const enableProgressiveUpdates = shouldUseProgressiveBuildUpdates(lane, target, deliveryClass);
     let lastAppliedAt = 0;
     let lastAppliedBlocks = 0;
+    let lastProgressUiAt = 0;
 
     const applyProgressiveBuild = (
       progressiveBuild: ArenaMatchup["a"]["build"],
       progress: BuildStreamProgress,
     ) => {
-      setLaneLoadProgress(matchupValue.id, side, {
-        receivedBlocks: progress.receivedBlocks,
-        totalBlocks: progress.totalBlocks,
-      });
+      const now = performance.now();
+      const reachedComplete =
+        progress.totalBlocks != null && progress.receivedBlocks >= progress.totalBlocks;
+      const shouldReportProgress = reachedComplete || now - lastProgressUiAt >= PROGRESS_UI_MIN_MS;
+      if (shouldReportProgress) {
+        lastProgressUiAt = now;
+        setLaneLoadProgress(matchupValue.id, side, {
+          receivedBlocks: progress.receivedBlocks,
+          totalBlocks: progress.totalBlocks,
+        });
+      }
       if (progress.receivedBlocks <= 0) return;
       if (!enableProgressiveUpdates) return;
-      const now = performance.now();
       const shouldApply =
-        progress.totalBlocks != null && progress.receivedBlocks >= progress.totalBlocks
+        reachedComplete
           ? true
           : now - lastAppliedAt >= APPLY_PROGRESS_MIN_MS ||
             progress.receivedBlocks - lastAppliedBlocks >= APPLY_PROGRESS_MIN_BLOCKS;
@@ -1432,7 +1490,6 @@ export function Arena() {
     try {
       const hydrationStartedAt = performance.now();
       let payload: BuildVariantResponse;
-      const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, target);
       const allowSnapshotFallback = deliveryClass !== "stream-artifact";
       if (shouldHydrateViaSnapshot(deliveryClass)) {
         try {

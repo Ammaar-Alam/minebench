@@ -24,6 +24,15 @@ type CreateVoxelGroupAsyncOpts = {
   cacheKey?: string | null;
 };
 
+const LOCAL_MESH_MAX_BLOCKS = Number.parseInt(
+  process.env.NEXT_PUBLIC_VOXEL_LOCAL_MESH_MAX_BLOCKS ?? "8000",
+  10,
+);
+const MESH_WORKER_TIMEOUT_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_VOXEL_MESH_WORKER_TIMEOUT_MS ?? "45000",
+  10,
+);
+
 export type SerializedMeshBucket = {
   positions: Float32Array;
   normals: Float32Array;
@@ -1119,7 +1128,17 @@ async function createVoxelMeshPayloadInWorker(
 
   return await new Promise<VoxelMeshPayload>((resolve, reject) => {
     let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | null =
+      Number.isFinite(MESH_WORKER_TIMEOUT_MS) && MESH_WORKER_TIMEOUT_MS > 0
+        ? setTimeout(() => {
+            finishReject(new Error(`Mesh worker timed out after ${MESH_WORKER_TIMEOUT_MS}ms`));
+          }, MESH_WORKER_TIMEOUT_MS)
+        : null;
     const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
       if (opts?.signal) {
         opts.signal.removeEventListener("abort", onAbort);
       }
@@ -1325,6 +1344,18 @@ export async function createVoxelGroupAsync(
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelGroup> {
+  const blockLimit =
+    typeof opts?.blockLimit === "number" && Number.isFinite(opts.blockLimit)
+      ? Math.max(0, Math.floor(opts.blockLimit))
+      : build.blocks.length;
+  if (
+    Number.isFinite(LOCAL_MESH_MAX_BLOCKS) &&
+    LOCAL_MESH_MAX_BLOCKS > 0 &&
+    blockLimit <= LOCAL_MESH_MAX_BLOCKS
+  ) {
+    return createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts);
+  }
+
   try {
     const payload = await createVoxelMeshPayloadInWorker(build, palette, opts);
     throwIfAborted(opts?.signal);

@@ -24,6 +24,7 @@ type ViewerProps = {
   showControls?: boolean;
   onBuildReadyChange?: (ready: boolean) => void;
   onBuildProgressChange?: (progress: VoxelViewerBuildProgress | null) => void;
+  onBuildErrorChange?: (message: string | null) => void;
 };
 
 export type VoxelViewerHandle = {
@@ -35,6 +36,10 @@ let atlasPromise: Promise<THREE.Texture> | null = null;
 const EXPORT_RENDER_OVERSCAN = 1;
 
 type ViewerTheme = "light" | "dark";
+const REVEAL_ANIMATION_MIN_BLOCKS = Number.parseInt(
+  process.env.NEXT_PUBLIC_VOXEL_REVEAL_ANIMATION_MIN_BLOCKS ?? "12000",
+  10,
+);
 
 function getViewerTheme(): ViewerTheme {
   const t = document.documentElement.dataset.theme;
@@ -218,6 +223,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     showControls = true,
     onBuildReadyChange,
     onBuildProgressChange,
+    onBuildErrorChange,
   },
   ref
 ) {
@@ -233,6 +239,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const onBuildProgressChangeRef = useRef<((progress: VoxelViewerBuildProgress | null) => void) | undefined>(
     undefined,
   );
+  const onBuildErrorChangeRef = useRef<((message: string | null) => void) | undefined>(undefined);
   const requestRenderRef = useRef<(() => void) | null>(null);
   const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const exportCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -328,6 +335,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     onBuildProgressChangeRef.current = onBuildProgressChange;
   }, [onBuildProgressChange]);
 
+  useEffect(() => {
+    onBuildErrorChangeRef.current = onBuildErrorChange;
+  }, [onBuildErrorChange]);
+
   const fitView = useCallback(() => {
     const three = threeRef.current;
     const vg = voxelGroupRef.current;
@@ -385,6 +396,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       activeJobRef.current.controller?.abort();
       activeJobRef.current.controller = null;
       activeJobRef.current.identity = null;
+      onBuildErrorChangeRef.current?.(null);
       onBuildProgressChangeRef.current?.(null);
       clearVoxelGroup(three);
       return;
@@ -431,6 +443,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
     buildInProgressRef.current = true;
     reportReady(false);
+    onBuildErrorChangeRef.current?.(null);
     onBuildProgressChangeRef.current?.({
       processedBlocks: 0,
       totalBlocks: Math.max(1, desiredBlocks),
@@ -519,8 +532,17 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         startHadGroup && blockLimit > lastBuiltBlocks
           ? THREE.MathUtils.clamp(lastBuiltBlocks / Math.max(1, blockLimit), 0.25, 0.94)
           : 0;
+      const allowRevealAnimation =
+        !Number.isFinite(REVEAL_ANIMATION_MIN_BLOCKS) ||
+        REVEAL_ANIMATION_MIN_BLOCKS <= 0 ||
+        blockLimit >= REVEAL_ANIMATION_MIN_BLOCKS;
+      const reachedExplicitTarget =
+        expectedNow != null && blockLimit >= expectedNow && desiredNow >= expectedNow;
       const shouldAnimateReveal =
-        (startHadGroup && blockLimit > lastBuiltBlocks) || (!startHadGroup && animate);
+        animate &&
+        !reachedExplicitTarget &&
+        allowRevealAnimation &&
+        ((startHadGroup && blockLimit > lastBuiltBlocks) || (!startHadGroup && animate));
 
       if (shouldAnimateReveal) {
         const geometries = collectRevealGeometries(vg.group);
@@ -569,11 +591,16 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
 
       onBuildProgressChangeRef.current?.(null);
+      onBuildErrorChangeRef.current?.(null);
       reportReady(Boolean(requiredNow <= 0 || (blockLimit >= requiredNow && desiredNow >= requiredNow)));
       requestRenderRef.current?.();
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       console.warn("VoxelViewer build failed", err);
+      onBuildErrorChangeRef.current?.(
+        err instanceof Error && err.message.trim() ? err.message.trim() : "Build placement failed.",
+      );
+      reportReady(false);
     } finally {
       buildInProgressRef.current = false;
       if (activeJobRef.current.controller === controller) {

@@ -108,11 +108,12 @@ export function VoxelViewerCard({
   const warnings = metrics?.warnings ?? rendered.warnings;
   const blockCount = metrics?.blockCount ?? build?.blocks.length ?? 0;
   const isThinking = Boolean(isLoading && attempt && attempt > 0 && !debugRawText);
-  const combinedError = error ?? rendered.error ?? undefined;
   const [preferredView, setPreferredView] = useState<"build" | "json">("build");
   const [showRawBuildJson, setShowRawBuildJson] = useState(false);
   const [viewerReady, setViewerReady] = useState(false);
   const [placementProgress, setPlacementProgress] = useState<PlacementProgressState | null>(null);
+  const [placementError, setPlacementError] = useState<string | null>(null);
+  const combinedError = error ?? placementError ?? rendered.error ?? undefined;
 
   const modelOutputText = useMemo(() => {
     const explicitText =
@@ -199,6 +200,7 @@ export function VoxelViewerCard({
   useEffect(() => {
     setViewerReady(false);
     setPlacementProgress(null);
+    setPlacementError(null);
   }, [build?.blocks, palette]);
 
   const handleBuildReadyChange = useCallback(
@@ -206,6 +208,7 @@ export function VoxelViewerCard({
       setViewerReady(ready);
       if (ready) {
         setPlacementProgress(null);
+        setPlacementError(null);
       }
       onBuildReadyChange?.(ready);
     },
@@ -226,6 +229,14 @@ export function VoxelViewerCard({
     },
     [],
   );
+
+  const handleBuildErrorChange = useCallback((message: string | null) => {
+    setPlacementError(message);
+    if (message) {
+      setPlacementProgress(null);
+      setViewerReady(false);
+    }
+  }, []);
 
   return (
     <div className="mb-panel">
@@ -319,6 +330,7 @@ export function VoxelViewerCard({
               animateIn={Boolean(animateIn && !isLoading)}
               onBuildReadyChange={handleBuildReadyChange}
               onBuildProgressChange={handleBuildProgressChange}
+              onBuildErrorChange={handleBuildErrorChange}
             />
           ) : null}
 
