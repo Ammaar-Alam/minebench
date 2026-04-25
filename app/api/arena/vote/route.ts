@@ -182,9 +182,7 @@ export async function POST(req: Request) {
     timing.end("tx", txStartedAt);
     if (insertedRows.length > 0) {
       if (VOTE_JOB_DRAIN_AFTER_RESPONSE) {
-        after(() => {
-          void scheduleArenaVoteJobDrain();
-        });
+        after(() => scheduleArenaVoteJobDrain());
       }
     }
   } catch (err) {

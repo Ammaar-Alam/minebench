@@ -931,7 +931,7 @@ export async function GET(req: Request) {
   recordArenaMatchupShown([leftModel.id, rightModel.id]);
   after(() => {
     // db count follows the shown impression
-    void persistArenaMatchupShown([leftModel.id, rightModel.id]).catch(() => undefined);
+    return persistArenaMatchupShown([leftModel.id, rightModel.id]).catch(() => undefined);
   });
 
   const totalMs = performance.now() - requestStartedAt;
