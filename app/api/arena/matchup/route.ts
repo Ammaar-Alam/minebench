@@ -16,12 +16,12 @@ import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/are
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
   getArenaMatchupSamplingStateWithMeta,
-  persistArenaMatchupShown,
   recordArenaMatchupShown,
   type CoverageState,
   type EligibleModel,
   type EligiblePrompt,
 } from "@/lib/arena/coverage";
+import { persistArenaMatchupShownDurably } from "@/lib/arena/shownJobs";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
 
@@ -932,8 +932,10 @@ export async function GET(req: Request) {
   };
   recordArenaMatchupShown([leftModel.id, rightModel.id]);
   after(() => {
-    // db count follows the shown impression
-    return persistArenaMatchupShown([leftModel.id, rightModel.id]).catch(() => undefined);
+    // queued so async db pressure cannot drop impressions
+    return persistArenaMatchupShownDurably([leftModel.id, rightModel.id]).catch((error) => {
+      console.warn("arena shown-count persist failed", error);
+    });
   });
 
   const totalMs = performance.now() - requestStartedAt;

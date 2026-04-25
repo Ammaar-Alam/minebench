@@ -5,6 +5,7 @@ import {
   estimateArenaBuildBytes,
   getArenaArtifactMinBytes,
 } from "@/lib/arena/buildDeliveryPolicy";
+import { getArenaShownJobStatus } from "@/lib/arena/shownJobs";
 import { getArenaBuildStreamArtifactFetchRefs } from "@/lib/arena/buildStream";
 import { ServerTiming } from "@/lib/serverTiming";
 
@@ -205,6 +206,7 @@ export async function GET(req: Request) {
       voteTotal,
       artifactCoverage,
       voteJobs,
+      shownJobs,
     ] = await Promise.all([
       prisma.prompt.count(),
       prisma.prompt.count({ where: { active: true } }),
@@ -215,6 +217,7 @@ export async function GET(req: Request) {
       prisma.vote.count(),
       getArenaArtifactCoverage(),
       getArenaVoteJobStatus(),
+      getArenaShownJobStatus(),
     ]);
     timing.end("artifact_status", artifactStartedAt);
     timing.end("total", requestStartedAt);
@@ -235,6 +238,7 @@ export async function GET(req: Request) {
         },
         artifacts: artifactCoverage,
         voteJobs,
+        shownJobs,
       },
       { headers }
     );

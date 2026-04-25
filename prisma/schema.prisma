@@ -36,6 +36,7 @@ model Model {
   coveragePairsHigh ArenaCoveragePair[] @relation("ArenaCoveragePairHigh")
   coveragePairPromptsLow ArenaCoveragePairPrompt[] @relation("ArenaCoveragePairPromptLow")
   coveragePairPromptsHigh ArenaCoveragePairPrompt[] @relation("ArenaCoveragePairPromptHigh")
+  shownJobs ArenaShownJob[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -172,6 +173,19 @@ model ArenaVoteJob {
   choice    String
 
   @@index([matchupId])
+}
+
+model ArenaShownJob {
+  id          String    @id @default(cuid())
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+
+  modelId String
+  model   Model @relation(fields: [modelId], references: [id], onDelete: Cascade)
+
+  count Int @default(1)
+
+  @@index([modelId])
 }
 
 model ArenaCoverageModelPrompt {
