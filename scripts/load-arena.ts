@@ -495,7 +495,7 @@ function parseArgs(argv: string[]): Args {
     maxActiveControlRequests: parseNonNegativeNumberArg(
       args,
       "--max-active-control-requests",
-      Math.max(maxActiveRequests, 128),
+      maxActiveRequests,
     ),
     thinkMs: parseNumberArg(args, "--think-ms", 150),
     matchupRetries: parseNumberArg(args, "--matchup-retries", 0),
@@ -531,7 +531,7 @@ Options:
   --max-active-build-requests
                           Cap concurrent build hydration requests; defaults to --max-active-requests
   --max-active-control-requests
-                          Cap concurrent matchup/vote requests; defaults to max(--max-active-requests, 128)
+                          Cap concurrent matchup/vote requests; defaults to --max-active-requests
   --think-ms              Wait time after both builds finish before voting
   --matchup-retries       Extra retries for matchup GETs after timeout/network failure
   --matchup-timeout-ms    Timeout per matchup request
