@@ -366,7 +366,7 @@ function isAbortError(err: unknown): boolean {
 }
 
 function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
-  return [400, 403, 404, 429, 500, 502, 503, 504].includes(status);
+  return [400, 403, 404, 500, 502, 504].includes(status);
 }
 
 function markStorageRedirectBlocked(kind: "snapshot" | "stream") {
@@ -977,6 +977,7 @@ export function Arena() {
   const revealRef = useRef<RevealState>({ kind: "none" });
   const transitionRef = useRef(false);
   const hydrateInFlightRef = useRef(new Set<string>());
+  const initialHydrationControllersRef = useRef(new Map<string, AbortController>());
   const fullHydrationControllersRef = useRef(new Map<string, AbortController>());
   const hydratedBuildCacheRef = useRef(new Map<string, CachedHydratedBuild>());
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
@@ -1359,6 +1360,14 @@ export function Arena() {
     }
   }, []);
 
+  const abortInitialHydrations = useCallback((matchupId?: string) => {
+    for (const [key, controller] of initialHydrationControllersRef.current) {
+      if (matchupId && key !== matchupId) continue;
+      controller.abort();
+      initialHydrationControllersRef.current.delete(key);
+    }
+  }, []);
+
   const hydrateMatchupSide = useCallback(async (
     matchupValue: ArenaMatchup,
     side: "a" | "b",
@@ -1490,7 +1499,7 @@ export function Arena() {
     try {
       const hydrationStartedAt = performance.now();
       let payload: BuildVariantResponse;
-      const allowSnapshotFallback = deliveryClass !== "stream-artifact";
+      const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
       if (shouldHydrateViaSnapshot(deliveryClass)) {
         try {
           payload = await fetchBuildVariantSnapshot(ref, effectiveSignal);
@@ -1647,8 +1656,9 @@ export function Arena() {
   useEffect(() => {
     return () => {
       if (matchup?.id) abortFullHydrations(matchup.id);
+      if (matchup?.id) abortInitialHydrations(matchup.id);
     };
-  }, [abortFullHydrations, matchup?.id]);
+  }, [abortFullHydrations, abortInitialHydrations, matchup?.id]);
 
   useEffect(() => {
     if (reveal.kind !== "reveal") return;
@@ -1725,7 +1735,10 @@ export function Arena() {
 
     if (hydrateSides.length === 0) return;
 
+    abortInitialHydrations(current.id);
     const controller = new AbortController();
+    const initialHydrationControllers = initialHydrationControllersRef.current;
+    initialHydrationControllers.set(current.id, controller);
 
     for (const side of hydrateSides) {
       void hydrateMatchupSide(current, side, "initial", { signal: controller.signal, silent: true });
@@ -1733,8 +1746,11 @@ export function Arena() {
 
     return () => {
       controller.abort();
+      if (initialHydrationControllers.get(current.id) === controller) {
+        initialHydrationControllers.delete(current.id);
+      }
     };
-  }, [hydrateMatchupSide, matchup?.id]);
+  }, [abortInitialHydrations, hydrateMatchupSide, matchup?.id]);
 
   // Voting requires full builds, so preview lanes keep retrying full hydration
   // with capped backoff instead of getting stuck on a transient artifact miss.
@@ -1843,6 +1859,7 @@ export function Arena() {
 
     setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(next) });
     abortFullHydrations(matchupId);
+    abortInitialHydrations(matchupId);
     setReveal({ kind: "none" });
     setSubmitting(false);
 
@@ -1968,6 +1985,8 @@ export function Arena() {
     setSubmitting(true);
     try {
       clearAutoAdvance();
+      abortInitialHydrations(matchup.id);
+      abortFullHydrations(matchup.id);
       advanceNowRequestedAtRef.current = null;
       const startedAt = Date.now();
       const advanceAt = startedAt + REVEAL_MS_AFTER_SKIP;

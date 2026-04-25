@@ -526,7 +526,7 @@ Options:
   --duration              Test duration in seconds
   --payload               Matchup payload mode: adaptive, inline, or shell
   --prompt-id             Force a single seeded prompt
-  --isolate-user-ip       Opt in to synthetic per-user x-forwarded-for addresses
+  --isolate-user-ip       Send synthetic per-user proxy IP headers; target must trust forwarded headers
   --ramp-ms               Spread virtual-user starts over this window
   --max-active-requests   Cap concurrent HTTP requests from this process; 0 disables
   --max-active-build-requests
@@ -1150,7 +1150,11 @@ async function runUser(userIndex: number, args: Args, deadlineAt: number, metric
   const jar = new CookieJar();
   const headers: Record<string, string> = {};
   if (args.isolateUserIp) {
-    headers["x-forwarded-for"] = forwardedIpForUser(userIndex);
+    const forwardedIp = forwardedIpForUser(userIndex);
+    headers["x-forwarded-for"] = forwardedIp;
+    headers["x-real-ip"] = forwardedIp;
+    headers["cf-connecting-ip"] = forwardedIp;
+    headers["x-vercel-forwarded-for"] = forwardedIp;
   }
   const hydratedBuildOrder: string[] = [];
   const hydratedBuildSet = new Set<string>();

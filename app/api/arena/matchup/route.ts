@@ -16,6 +16,7 @@ import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/are
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
   getArenaMatchupSamplingStateWithMeta,
+  recordArenaMatchupShown,
   type CoverageState,
   type EligibleModel,
   type EligiblePrompt,
@@ -925,6 +926,7 @@ export async function GET(req: Request) {
       buildLoadHints: preparedB?.hints ?? shellHintsB,
     },
   };
+  recordArenaMatchupShown([leftModel.id, rightModel.id]);
 
   const totalMs = performance.now() - requestStartedAt;
   if (Number.isFinite(totalMs) && totalMs >= MATCHUP_SLOW_EVENT_MS) {

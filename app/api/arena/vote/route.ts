@@ -3,8 +3,7 @@ import { z } from "zod";
 import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { VoteChoice } from "@/lib/arena/types";
-import { recordArenaMatchupShown } from "@/lib/arena/coverage";
-import { parseArenaMatchupToken } from "@/lib/arena/matchupToken";
+import { hasArenaMatchupSigningSecret, parseArenaMatchupToken } from "@/lib/arena/matchupToken";
 import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { scheduleArenaVoteJobDrain } from "@/lib/arena/voteJobs";
 import { ServerTiming } from "@/lib/serverTiming";
@@ -75,6 +74,12 @@ export async function POST(req: Request) {
 
   try {
     const lookupStartedAt = timing.start();
+    if (matchupId.includes(".") && !hasArenaMatchupSigningSecret()) {
+      return respondJson(
+        { error: "Arena matchup token signing is not configured." },
+        { status: 503, headers: { "Retry-After": "1" } },
+      );
+    }
     const tokenMatchup = parseArenaMatchupToken(matchupId);
     const dbMatchupId = tokenMatchup?.id ?? matchupId;
     const matchup = tokenMatchup
@@ -169,7 +174,6 @@ export async function POST(req: Request) {
     });
     timing.end("tx", txStartedAt);
     if (insertedRows.length > 0) {
-      recordArenaMatchupShown([matchup.modelAId, matchup.modelBId]);
       if (VOTE_JOB_DRAIN_AFTER_RESPONSE) {
         after(() => {
           void scheduleArenaVoteJobDrain();
