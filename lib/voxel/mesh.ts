@@ -309,6 +309,7 @@ const TINT_GRASS = hexToLinearRgb(0x7fb238);
 const TINT_WATER = hexToLinearRgb(0x3f76e4);
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
 const WATER_TEXTURE_KEY = "water_still";
+const WATER_SURFACE_OPACITY = 0.42;
 
 let cachedWaterTexture: { atlasTexture: THREE.Texture; texture: THREE.Texture } | null = null;
 
@@ -982,7 +983,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
     map: waterTexture ?? undefined,
     color: 0xffffff,
     transparent: true,
-    opacity: 0.82,
+    opacity: WATER_SURFACE_OPACITY,
     depthWrite: false,
     side: THREE.DoubleSide,
     emissive: new THREE.Color(0x0b214f),
@@ -1058,7 +1059,7 @@ function createVoxelGroupFromMeshPayload(
     map: waterTexture ?? undefined,
     color: 0xffffff,
     transparent: true,
-    opacity: 0.82,
+    opacity: WATER_SURFACE_OPACITY,
     depthWrite: false,
     side: THREE.DoubleSide,
     emissive: new THREE.Color(0x0b214f),
@@ -1255,7 +1256,7 @@ async function createVoxelGroupAsyncLocal(
     map: waterTexture ?? undefined,
     color: 0xffffff,
     transparent: true,
-    opacity: 0.82,
+    opacity: WATER_SURFACE_OPACITY,
     depthWrite: false,
     side: THREE.DoubleSide,
     emissive: new THREE.Color(0x0b214f),
