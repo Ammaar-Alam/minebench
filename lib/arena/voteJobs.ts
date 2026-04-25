@@ -8,11 +8,18 @@ import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { prisma } from "@/lib/prisma";
 import { ARENA_WRITE_RETRY_MAX_ATTEMPTS, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 
-const JOB_TX_MAX_WAIT_MS = Number.parseInt(process.env.ARENA_VOTE_JOB_TX_MAX_WAIT_MS ?? "1000", 10);
-const JOB_TX_TIMEOUT_MS = Number.parseInt(process.env.ARENA_VOTE_JOB_TX_TIMEOUT_MS ?? "8000", 10);
-const JOB_BATCH_LIMIT = Number.parseInt(process.env.ARENA_VOTE_JOB_BATCH_LIMIT ?? "128", 10);
-const JOB_DRAIN_MAX_JOBS = Number.parseInt(process.env.ARENA_VOTE_JOB_DRAIN_MAX_JOBS ?? "10000", 10);
-const JOB_DRAIN_MAX_MS = Number.parseInt(process.env.ARENA_VOTE_JOB_DRAIN_MAX_MS ?? "50000", 10);
+function readPositiveIntEnv(name: string, fallback: number, max: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  // bad env should not stall the drainer
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+const JOB_TX_MAX_WAIT_MS = readPositiveIntEnv("ARENA_VOTE_JOB_TX_MAX_WAIT_MS", 1000, 10000);
+const JOB_TX_TIMEOUT_MS = readPositiveIntEnv("ARENA_VOTE_JOB_TX_TIMEOUT_MS", 8000, 30000);
+const JOB_BATCH_LIMIT = readPositiveIntEnv("ARENA_VOTE_JOB_BATCH_LIMIT", 128, 512);
+const JOB_DRAIN_MAX_JOBS = readPositiveIntEnv("ARENA_VOTE_JOB_DRAIN_MAX_JOBS", 10000, 50000);
+const JOB_DRAIN_MAX_MS = readPositiveIntEnv("ARENA_VOTE_JOB_DRAIN_MAX_MS", 50000, 300000);
 const JOB_DRAIN_MIN_BATCH_BUDGET_MS =
   (JOB_TX_MAX_WAIT_MS + JOB_TX_TIMEOUT_MS + 250) * ARENA_WRITE_RETRY_MAX_ATTEMPTS;
 const JOB_CONTINUE_DELAY_MS = 75;
@@ -467,7 +474,8 @@ export async function drainArenaVoteJobs(opts?: {
 
   while (processedCount < maxJobs) {
     const remainingMs = deadlineAt - Date.now();
-    if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS) break;
+    // always let a fresh drain try one batch
+    if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
     const remainingJobs = maxJobs - processedCount;
     const result = await processArenaVoteJobBatch(remainingJobs);
     if (result.lockSkipped) {
