@@ -134,12 +134,12 @@ function rateLimitedResponse(retryAfterSeconds: number) {
   });
 }
 
-function getArenaRateLimitSession(req: NextRequest) {
+function getArenaRateLimitSession(req: NextRequest, stableFallbackBucketId: string | null) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
   if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
   return {
-    bucketId: id,
+    bucketId: stableFallbackBucketId ?? id,
     cookieValue: id,
     isNew: true,
   };
@@ -161,7 +161,7 @@ export function middleware(req: NextRequest) {
   const now = Date.now();
   maybePruneExpiredBuckets(now);
   const arenaSession = isArenaApi
-    ? getArenaRateLimitSession(req)
+    ? getArenaRateLimitSession(req, ip ? null : "anon:unknown")
     : null;
   const arenaIpRules = ip
     ? [
