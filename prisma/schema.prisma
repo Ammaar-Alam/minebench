@@ -99,7 +99,9 @@ model Build {
   voxelSha256        String?
   arenaBuildHints    Json?
   arenaSnapshotPreview Json?
+  arenaSnapshotPreviewChecksum String?
   arenaSnapshotFull  Json?
+  arenaSnapshotFullChecksum String?
   blockCount        Int
   generationTimeMs  Int
 

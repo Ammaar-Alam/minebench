@@ -120,19 +120,35 @@ async function prepareArenaBuildById(buildId: string) {
 
 function pickPersistedVariantBuild(
   fullBuild: unknown | null | undefined,
+  fullChecksum: string | null | undefined,
   previewBuild: unknown | null | undefined,
+  previewChecksum: string | null | undefined,
   variant: "full" | "preview",
+  storedChecksum: string | null,
 ): ArenaMatchup["a"]["build"] {
+  const snapshot = variant === "preview" ? previewBuild : fullBuild;
+  const snapshotChecksum = (variant === "preview" ? previewChecksum : fullChecksum)?.trim();
+  if (!snapshot || !snapshotChecksum || !storedChecksum || snapshotChecksum !== storedChecksum) return null;
   // exact variant only, no partial-backfill promotion
-  return (variant === "preview" ? previewBuild : fullBuild) as ArenaMatchup["a"]["build"];
+  return snapshot as ArenaMatchup["a"]["build"];
 }
 
 function pickPersistedInitialBuild(
   hints: ArenaBuildLoadHints,
   fullBuild: unknown | null | undefined,
+  fullChecksum: string | null | undefined,
   previewBuild: unknown | null | undefined,
+  previewChecksum: string | null | undefined,
+  storedChecksum: string | null,
 ): ArenaMatchup["a"]["build"] {
-  return pickPersistedVariantBuild(fullBuild, previewBuild, hints.initialVariant);
+  return pickPersistedVariantBuild(
+    fullBuild,
+    fullChecksum,
+    previewBuild,
+    previewChecksum,
+    hints.initialVariant,
+    storedChecksum,
+  );
 }
 
 async function warmFullBuildArtifactUrl(
@@ -764,12 +780,14 @@ export async function GET(req: Request) {
 	                palette: true,
 	                blockCount: true,
 	                voxelByteSize: true,
-	                voxelCompressedByteSize: true,
-	                voxelSha256: true,
-	                arenaSnapshotPreview: true,
-	                arenaSnapshotFull: true,
-	              },
-	            })
+                  voxelCompressedByteSize: true,
+                  voxelSha256: true,
+                  arenaSnapshotPreview: true,
+                  arenaSnapshotPreviewChecksum: true,
+                  arenaSnapshotFull: true,
+                  arenaSnapshotFullChecksum: true,
+                },
+              })
           : Promise.resolve(null),
         shouldPrepareB && !preparedB
           ? prisma.build.findUnique({
@@ -780,12 +798,14 @@ export async function GET(req: Request) {
 	                palette: true,
 	                blockCount: true,
 	                voxelByteSize: true,
-	                voxelCompressedByteSize: true,
-	                voxelSha256: true,
-	                arenaSnapshotPreview: true,
-	                arenaSnapshotFull: true,
-	              },
-	            })
+                  voxelCompressedByteSize: true,
+                  voxelSha256: true,
+                  arenaSnapshotPreview: true,
+                  arenaSnapshotPreviewChecksum: true,
+                  arenaSnapshotFull: true,
+                  arenaSnapshotFullChecksum: true,
+                },
+              })
           : Promise.resolve(null),
       ]);
 
@@ -797,14 +817,20 @@ export async function GET(req: Request) {
         persistedInitialBuildA = pickPersistedInitialBuild(
           shellHintsA,
           buildAForPrepare.arenaSnapshotFull,
+          buildAForPrepare.arenaSnapshotFullChecksum,
           buildAForPrepare.arenaSnapshotPreview,
+          buildAForPrepare.arenaSnapshotPreviewChecksum,
+          buildAForPrepare.voxelSha256?.trim() || null,
         );
       }
       if (shouldPrepareB && !preparedB && buildBForPrepare) {
         persistedInitialBuildB = pickPersistedInitialBuild(
           shellHintsB,
           buildBForPrepare.arenaSnapshotFull,
+          buildBForPrepare.arenaSnapshotFullChecksum,
           buildBForPrepare.arenaSnapshotPreview,
+          buildBForPrepare.arenaSnapshotPreviewChecksum,
+          buildBForPrepare.voxelSha256?.trim() || null,
         );
       }
 

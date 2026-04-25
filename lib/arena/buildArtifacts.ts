@@ -216,7 +216,9 @@ export function getPreparedArenaBuildMetadataUpdate(prepared: PreparedArenaBuild
     voxelSha256: prepared.checksum,
     arenaBuildHints: serializeArenaBuildLoadHints(prepared.hints),
     arenaSnapshotPreview: snapshotPreview,
+    arenaSnapshotPreviewChecksum: snapshotPreview ? prepared.checksum : null,
     arenaSnapshotFull: snapshotFull,
+    arenaSnapshotFullChecksum: snapshotFull ? prepared.checksum : null,
   };
 }
 

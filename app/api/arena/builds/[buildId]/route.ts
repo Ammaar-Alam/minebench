@@ -60,6 +60,42 @@ function parseVariant(value: string | null): ArenaBuildVariant {
   return value === "preview" ? "preview" : "full";
 }
 
+function isCurrentPersistedSnapshot(
+  snapshot: unknown | null | undefined,
+  snapshotChecksum: string | null | undefined,
+  storedChecksum: string | null,
+): boolean {
+  if (!snapshot) return false;
+  const normalizedSnapshotChecksum = snapshotChecksum?.trim();
+  // db snapshots need their own checksum marker
+  return Boolean(normalizedSnapshotChecksum && storedChecksum && normalizedSnapshotChecksum === storedChecksum);
+}
+
+function pickCurrentPersistedSnapshot(
+  row: {
+    arenaSnapshotPreview: unknown | null;
+    arenaSnapshotPreviewChecksum: string | null;
+    arenaSnapshotFull: unknown | null;
+    arenaSnapshotFullChecksum: string | null;
+  } | null,
+  variant: ArenaBuildVariant,
+  storedChecksum: string | null,
+): unknown | null {
+  if (!row) return null;
+  if (variant === "preview") {
+    return isCurrentPersistedSnapshot(
+      row.arenaSnapshotPreview,
+      row.arenaSnapshotPreviewChecksum,
+      storedChecksum,
+    )
+      ? row.arenaSnapshotPreview
+      : null;
+  }
+  return isCurrentPersistedSnapshot(row.arenaSnapshotFull, row.arenaSnapshotFullChecksum, storedChecksum)
+    ? row.arenaSnapshotFull
+    : null;
+}
+
 function acceptsGzip(request: Request): boolean {
   return /\bgzip\b/i.test(request.headers.get("accept-encoding") ?? "");
 }
@@ -333,20 +369,16 @@ export async function GET(
   const persistedResponseBytes = jsonCacheKey
     ? await getOrCreateJsonResponse(jsonCacheKey, async () => {
         // persisted snapshots beat raw payload parse on hot paths
-        const persistedSnapshot =
-          variant === "preview"
-            ? (
-                await prisma.build.findUnique({
-                  where: { id: buildId },
-                  select: { arenaSnapshotPreview: true },
-                })
-              )?.arenaSnapshotPreview
-            : (
-                await prisma.build.findUnique({
-                  where: { id: buildId },
-                  select: { arenaSnapshotFull: true },
-                })
-              )?.arenaSnapshotFull;
+        const persistedBuild = await prisma.build.findUnique({
+          where: { id: buildId },
+          select: {
+            arenaSnapshotPreview: true,
+            arenaSnapshotPreviewChecksum: true,
+            arenaSnapshotFull: true,
+            arenaSnapshotFullChecksum: true,
+          },
+        });
+        const persistedSnapshot = pickCurrentPersistedSnapshot(persistedBuild, variant, storedChecksum);
         if (!persistedSnapshot) return null;
         return jsonBytes(
           {
