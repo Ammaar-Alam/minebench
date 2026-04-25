@@ -128,10 +128,7 @@ function getArenaRateLimitSession(req: NextRequest, stableFallbackBucketId: stri
   if (existing) return { bucketId: existing, cookieValue: null };
   const id = crypto.randomUUID();
   return {
-    // Use the newly assigned session for the current request too. Otherwise the
-    // first request from every fresh browser behind one NAT shares the fallback
-    // bucket and legitimate bursts are throttled before cookies can stick.
-    bucketId: id || stableFallbackBucketId,
+    bucketId: stableFallbackBucketId,
     cookieValue: id,
   };
 }

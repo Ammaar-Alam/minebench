@@ -360,9 +360,16 @@ export async function GET(
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        if (ping) clearInterval(ping);
+        request.signal.removeEventListener("abort", abort);
+      };
       const abort = () => {
         closed = true;
-        if (ping) clearInterval(ping);
+        cleanup();
       };
       if (request.signal.aborted) {
         abort();
@@ -371,10 +378,12 @@ export async function GET(
       }
 
       const safeClose = () => {
-        if (closed) return;
+        if (closed) {
+          cleanup();
+          return;
+        }
         closed = true;
-        if (ping) clearInterval(ping);
-        request.signal.removeEventListener("abort", abort);
+        cleanup();
         try {
           controller.close();
         } catch {
