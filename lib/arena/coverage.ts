@@ -1,4 +1,8 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import {
+  ARENA_COVERAGE_LOCK_KEY,
+  ARENA_VOTE_JOB_DRAIN_LOCK_KEY,
+} from "@/lib/arena/advisoryLocks";
 import { prisma } from "@/lib/prisma";
 
 const MATCHUP_STATE_CACHE_TTL_MS = readIntEnv("ARENA_MATCHUP_STATE_CACHE_TTL_MS", 60_000);
@@ -85,8 +89,6 @@ let matchupStateVersion = 0;
 let coverageSyncInFlight: Promise<void> | null = null;
 let pendingSamplingStateMutations: SamplingStateMutation[] = [];
 const pendingShownCountDeltas = new Map<string, { count: number; expiresAt: number }>();
-
-const ARENA_COVERAGE_LOCK_KEY = 860101;
 
 function readIntEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -640,15 +642,19 @@ async function acquireArenaCoverageLock(tx: Prisma.TransactionClient) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ARENA_COVERAGE_LOCK_KEY})`;
 }
 
+async function acquireArenaVoteJobDrainLock(tx: Prisma.TransactionClient) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${ARENA_VOTE_JOB_DRAIN_LOCK_KEY})`;
+}
+
 async function readCoverageDriftCounts(client: PrismaClient = prisma) {
   const [decisiveVoteCount, pairAggregate] = await Promise.all([
-    client.vote.count({
-      where: {
-        choice: {
-          in: ["A", "B"],
-        },
-      },
-    }),
+    client.$queryRaw<Array<{ count: NumberLike }>>`
+      SELECT COUNT(*)::int AS "count"
+      FROM "Vote" vote
+      LEFT JOIN "ArenaVoteJob" job ON job."voteId" = vote.id
+      WHERE vote.choice IN ('A', 'B')
+        AND (job.id IS NULL OR job."processedAt" IS NOT NULL)
+    `,
     client.arenaCoveragePair.aggregate({
       _sum: {
         decisiveVotes: true,
@@ -657,7 +663,7 @@ async function readCoverageDriftCounts(client: PrismaClient = prisma) {
   ]);
 
   return {
-    decisiveVoteCount,
+    decisiveVoteCount: toNumber(decisiveVoteCount[0]?.count),
     derivedPairVoteCount: pairAggregate._sum.decisiveVotes ?? 0,
   };
 }
@@ -685,6 +691,8 @@ export async function rebuildArenaCoverageTables(client: PrismaClient = prisma):
 }> {
   return client.$transaction(async (tx) => {
     await acquireArenaCoverageLock(tx);
+    // share the drain lock so rebuilds cannot race job increments
+    await acquireArenaVoteJobDrainLock(tx);
     const seedRows = await tx.$queryRaw<CoverageRebuildSeedRow[]>`
       SELECT
         matchup."modelAId" AS "modelAId",
@@ -693,7 +701,9 @@ export async function rebuildArenaCoverageTables(client: PrismaClient = prisma):
         COUNT(*)::int AS "decisiveVotes"
       FROM "Vote" vote
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
+      LEFT JOIN "ArenaVoteJob" job ON job."voteId" = vote.id
       WHERE vote.choice IN ('A', 'B')
+        AND (job.id IS NULL OR job."processedAt" IS NOT NULL)
       GROUP BY matchup."modelAId", matchup."modelBId", matchup."promptId"
     `;
 

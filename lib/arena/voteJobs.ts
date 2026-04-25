@@ -6,6 +6,7 @@ import {
 } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { prisma } from "@/lib/prisma";
+import { ARENA_VOTE_JOB_DRAIN_LOCK_KEY } from "@/lib/arena/advisoryLocks";
 import { ARENA_WRITE_RETRY_MAX_ATTEMPTS, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 
 function readPositiveIntEnv(name: string, fallback: number, max: number): number {
@@ -24,7 +25,6 @@ const JOB_DRAIN_MIN_BATCH_BUDGET_MS =
   (JOB_TX_MAX_WAIT_MS + JOB_TX_TIMEOUT_MS + 250) * ARENA_WRITE_RETRY_MAX_ATTEMPTS;
 const JOB_CONTINUE_DELAY_MS = 75;
 const JOB_RETRY_DELAY_MS = 250;
-const VOTE_JOB_DRAIN_LOCK_KEY = 860103;
 
 type PendingArenaVoteJob = {
   id: string;
@@ -170,7 +170,7 @@ async function loadModelsForVoteJobs(
 
 async function tryAcquireVoteJobDrainLock(tx: Prisma.TransactionClient): Promise<boolean> {
   const rows = await tx.$queryRaw<Array<{ locked: boolean }>>(Prisma.sql`
-    SELECT pg_try_advisory_xact_lock(${VOTE_JOB_DRAIN_LOCK_KEY}) AS "locked"
+    SELECT pg_try_advisory_xact_lock(${ARENA_VOTE_JOB_DRAIN_LOCK_KEY}) AS "locked"
   `);
   return rows[0]?.locked === true;
 }
