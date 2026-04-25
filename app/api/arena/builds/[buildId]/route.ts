@@ -51,6 +51,7 @@ type CachedJsonResponse = {
   touchedAt: number;
 };
 
+// short process cache avoids rebuilding the same snapshot json
 const jsonResponseCache = new Map<string, CachedJsonResponse>();
 const jsonResponseInflight = new Map<string, Promise<Uint8Array | null>>();
 let jsonResponseCacheWeight = 0;
@@ -169,6 +170,7 @@ async function getOrCreateJsonResponse(
   if (cached) return cached;
 
   const existing = jsonResponseInflight.get(key);
+  // share db snapshot serialization across concurrent clients
   if (existing) return existing;
 
   const promise = (async () => {
@@ -277,6 +279,7 @@ export async function GET(
     url.searchParams.get("redirect") !== "0" &&
     canServeSnapshotArtifact
   ) {
+    // redirect first so node does not proxy large immutable snapshots
     const requireStreamFallbackOnMiss = variant === "full";
     try {
       const signedUrl = await withTimeout(
@@ -329,6 +332,7 @@ export async function GET(
 
   const persistedResponseBytes = jsonCacheKey
     ? await getOrCreateJsonResponse(jsonCacheKey, async () => {
+        // persisted snapshots beat raw payload parse on hot paths
         const persistedSnapshot =
           variant === "preview"
             ? (
@@ -370,6 +374,7 @@ export async function GET(
   }
 
   if (shouldRequireStreamFallbackOnSnapshotMiss) {
+    // full snapshot misses should switch to stream, not rebuild inline
     const headers = new Headers({
       "Cache-Control": "no-store",
       "Retry-After": "1",
@@ -478,6 +483,7 @@ export async function GET(
 
   const voxelBuild = pickBuildVariant(prepared, variant);
   after(async () => {
+    // write metadata and artifacts off the response path
     await prisma.build
       .update({
         where: { id: prepared.buildId },

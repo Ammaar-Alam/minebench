@@ -122,6 +122,7 @@ export async function POST(req: Request) {
     const txStartedAt = timing.start();
     const voteId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
+    // keep vote writes small; rating and coverage drain after response
     const insertedRows = await withArenaWriteRetry(async () => {
       return prisma.$queryRaw<Array<{ voteId: string }>>(Prisma.sql`
         WITH inserted_matchup AS (
@@ -182,6 +183,7 @@ export async function POST(req: Request) {
     timing.end("tx", txStartedAt);
     if (insertedRows.length > 0) {
       if (VOTE_JOB_DRAIN_AFTER_RESPONSE) {
+        // return the promise so serverless tracks the drain
         after(() => scheduleArenaVoteJobDrain());
       }
     }

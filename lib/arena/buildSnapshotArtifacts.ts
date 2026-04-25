@@ -12,6 +12,7 @@ const ARENA_SNAPSHOT_ARTIFACT_PREFIX = normalizePrefix(
   process.env.ARENA_SNAPSHOT_ARTIFACT_PREFIX ?? "arena-snapshot/v2-gzip",
 );
 const deliveryPolicySignature = getArenaDeliveryPolicySignature();
+// policy key invalidates old artifacts when delivery thresholds change
 const ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY = normalizePrefix(
   [
     "inline",
@@ -117,6 +118,7 @@ function getArtifactCacheKey(buildId: string, variant: ArenaBuildVariant, checks
 }
 
 function maybePruneArtifactCaches(now: number): void {
+  // prune lazily so hot artifact checks stay cheap
   artifactMissCacheTouches += 1;
   if (artifactMissCacheTouches < ARTIFACT_MISS_CACHE_PRUNE_INTERVAL) return;
   artifactMissCacheTouches = 0;
@@ -262,6 +264,7 @@ async function uploadSnapshotArtifactVariant(
   const uploadKey = `${prepared.buildId}:${variant}:${prepared.checksum}`;
   const existing = snapshotArtifactUploadInflight.get(uploadKey);
   if (existing) {
+    // one upload per build variant is enough
     await existing;
     return;
   }
@@ -308,9 +311,11 @@ export async function ensureArenaBuildSnapshotArtifacts(
   }
 
   const variants: ArenaBuildVariant[] = [];
+  // previews only matter when they are smaller than the full build
   if (prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length) {
     variants.push("preview");
   }
+  // stream-artifact full builds stay on the ndjson stream path
   if (prepared.hints.deliveryClass === "snapshot" || prepared.hints.deliveryClass === "inline") {
     variants.push("full");
   }
@@ -337,6 +342,7 @@ export async function fetchArenaBuildSnapshotArtifact(
   const now = Date.now();
   maybePruneArtifactCaches(now);
   if (hasFreshArtifactMiss(cacheKey)) {
+    // recent miss means the db snapshot path should win immediately
     return null;
   }
 
@@ -347,6 +353,7 @@ export async function fetchArenaBuildSnapshotArtifact(
 
   const inflight = artifactBodyInflight.get(cacheKey);
   if (inflight) {
+    // share supabase reads across concurrent requests
     return inflight;
   }
 
@@ -424,6 +431,7 @@ export async function createArenaBuildSnapshotArtifactSignedUrl(
 
   const inflight = artifactSignedUrlInflight.get(cacheKey);
   if (inflight) {
+    // signing the same object repeatedly burns latency
     return inflight;
   }
 

@@ -736,6 +736,7 @@ export async function GET(req: Request) {
   const shellHintsB = deriveArenaBuildLoadHints(buildB);
   const shouldProbeA = payloadMode === "adaptive" && shellHintsA.initialEstimatedBytes == null;
   const shouldProbeB = payloadMode === "adaptive" && shellHintsB.initialEstimatedBytes == null;
+  // adaptive mode keeps huge builds out of the matchup response
   const shouldPrepareA =
     payloadMode === "inline" ||
     (payloadMode === "adaptive" && (shouldInlineInitialInAdaptiveMode(shellHintsA) || shouldProbeA));
@@ -863,6 +864,7 @@ export async function GET(req: Request) {
   }
 
   if (MATCHUP_ARTIFACT_URL_WARMING_ENABLED) {
+    // warm signing caches after the matchup is already ready
     after(async () => {
       await Promise.allSettled([
         warmFullBuildArtifactUrl(buildA.id, checksumA, preparedA?.hints ?? shellHintsA),

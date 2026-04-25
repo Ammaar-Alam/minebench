@@ -144,6 +144,7 @@ export function planArenaBuildStream(opts: {
   hints?: ArenaBuildLoadHints;
   variant?: ArenaBuildVariant;
 }): ArenaBuildStreamPlan {
+  // chunk by estimated bytes so progress feels steady across block counts
   const totalBlocks = Math.max(0, Math.floor(opts.totalBlocks));
   if (totalBlocks === 0) {
     return {
@@ -366,6 +367,7 @@ async function discoverLegacyArenaBuildStreamArtifactRef(
 ): Promise<ArenaBuildStreamArtifactRef | null> {
   const cacheKey = `${buildId}:${variant}`;
   if (legacyArtifactDiscoveryCache.has(cacheKey)) {
+    // old artifact names are a migration fallback, not a hot lookup
     return legacyArtifactDiscoveryCache.get(cacheKey) ?? null;
   }
   if (!isArenaBuildStreamArtifactEnabled()) {
@@ -445,6 +447,7 @@ export type ArenaBuildStreamEventSequenceInput = {
 export function* iterateArenaBuildStreamEvents(
   input: ArenaBuildStreamEventSequenceInput,
 ): Generator<ArenaBuildStreamEvent> {
+  // artifacts and live streams use the same event shape
   const plan = planArenaBuildStream({
     totalBlocks: input.build.blocks.length,
     hints: input.buildLoadHints,
@@ -488,6 +491,7 @@ export async function fetchArenaBuildStreamArtifact(
 ): Promise<Response | null> {
   const missCacheKey = getArtifactMissCacheKey(buildId, variant, checksum);
   if (hasFreshArtifactMiss(missCacheKey)) {
+    // live stream is faster than repeating a known miss
     return null;
   }
 
@@ -552,6 +556,7 @@ export async function createArenaBuildStreamArtifactSignedUrl(
   }
   const existing = artifactSignedUrlInflight.get(missCacheKey);
   if (existing) {
+    // coalesce identical sign requests during arena bursts
     return existing;
   }
 

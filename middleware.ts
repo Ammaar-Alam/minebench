@@ -115,6 +115,7 @@ function consumeBuckets(rules: RateLimitRule[], now: number) {
     previews.push({ key: rule.key, resetAt, nextCount });
   }
 
+  // commit all buckets together so partial limits cannot leak counts
   for (const preview of previews) {
     buckets.set(preview.key, { resetAt: preview.resetAt, count: preview.nextCount });
   }
@@ -139,6 +140,7 @@ function getArenaRateLimitSession(req: NextRequest, stableFallbackBucketId: stri
   if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
   return {
+    // fallback prevents all unknown-ip users sharing one bucket
     bucketId: stableFallbackBucketId ?? id,
     cookieValue: id,
     isNew: true,
@@ -186,6 +188,7 @@ export function middleware(req: NextRequest) {
     ? isArenaBuildAsset
       ? ip
         ? [
+            // build fetches are heavy but numerous during one arena page
             {
               key: `ip:${ip}:${bucketPath}`,
               maxPerWindow: maxPerWindow * ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER,

@@ -124,6 +124,7 @@ export function pairPromptKey(modelAId: string, modelBId: string, promptId: stri
 }
 
 export function invalidateArenaCoverageCache() {
+  // version bump stops stale in-flight refreshes from becoming cache
   matchupStateVersion += 1;
   matchupStateCache = null;
   matchupStateInFlight = null;
@@ -137,11 +138,13 @@ function applySamplingStateMutation(mutation: SamplingStateMutation) {
     mutation(cache.value);
   }
   if (matchupStateInFlight) {
+    // in-flight refreshes replay mutations before caching
     pendingSamplingStateMutations.push(mutation);
   }
 }
 
 export function recordArenaMatchupShown(modelIds: string[]) {
+  // optimistic shown counts keep sampling fair before the db write lands
   const seen = new Set<string>();
   const expiresAt = Date.now() + PENDING_SHOWN_COUNT_TTL_MS;
   for (const modelId of modelIds) {
@@ -548,6 +551,7 @@ export async function getArenaMatchupSamplingStateWithMeta(): Promise<ArenaMatch
     };
   }
   if (matchupStateInFlight) {
+    // one db refresh serves a burst of matchup requests
     const result = await matchupStateInFlight;
     return {
       state: result.state,
@@ -562,6 +566,7 @@ export async function getArenaMatchupSamplingStateWithMeta(): Promise<ArenaMatch
   let inFlight: Promise<ArenaMatchupSamplingResult>;
   inFlight = queryArenaMatchupSamplingState()
     .then((result) => {
+      // apply vote and shown deltas that happened during the refresh
       const queuedMutations = pendingSamplingStateMutations;
       pendingSamplingStateMutations = [];
       for (const mutation of queuedMutations) {
@@ -653,6 +658,7 @@ async function readCoverageDriftCounts(client: PrismaClient = prisma) {
       FROM "Vote" vote
       LEFT JOIN "ArenaVoteJob" job ON job."voteId" = vote.id
       WHERE vote.choice IN ('A', 'B')
+        -- pending jobs are not in coverage tables yet
         AND (job.id IS NULL OR job."processedAt" IS NOT NULL)
     `,
     client.arenaCoveragePair.aggregate({
@@ -670,6 +676,7 @@ async function readCoverageDriftCounts(client: PrismaClient = prisma) {
 
 async function ensureArenaCoverageTablesCurrent(client: PrismaClient = prisma) {
   if (coverageSyncInFlight) {
+    // drift checks are shared because rebuilds are expensive
     return coverageSyncInFlight;
   }
 
@@ -703,6 +710,7 @@ export async function rebuildArenaCoverageTables(client: PrismaClient = prisma):
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
       LEFT JOIN "ArenaVoteJob" job ON job."voteId" = vote.id
       WHERE vote.choice IN ('A', 'B')
+        -- pending jobs will add themselves when drained
         AND (job.id IS NULL OR job."processedAt" IS NOT NULL)
       GROUP BY matchup."modelAId", matchup."modelBId", matchup."promptId"
     `;

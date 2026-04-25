@@ -205,6 +205,7 @@ export function serializeArenaBuildLoadHints(hints: ArenaBuildLoadHints): Record
 }
 
 export function getPreparedArenaBuildMetadataUpdate(prepared: PreparedArenaBuild): Record<string, unknown> {
+  // persisted snapshots cover inline and snapshot routes only
   const shouldPersistPreparedPayload = prepared.hints.deliveryClass !== "stream-artifact";
   const snapshotPreview =
     shouldPersistPreparedPayload && prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length
@@ -293,6 +294,7 @@ function hashBlock(block: VoxelBlock): number {
 }
 
 function extractSurfaceBlocks(blocks: VoxelBlock[]): VoxelBlock[] {
+  // previews should show visible shape, not hidden interior volume
   const occupied = new Set<number>();
   for (const block of blocks) {
     occupied.add(encodePosition(block.x, block.y, block.z));
@@ -321,6 +323,7 @@ function deterministicSampleBlocks(blocks: VoxelBlock[], targetBlockCount: numbe
   if (blocks.length <= targetBlockCount) return blocks;
   if (targetBlockCount <= 0) return [];
 
+  // stable sampling avoids preview churn between requests
   const keepRatio = targetBlockCount / blocks.length;
   const sampled = blocks.filter((block) => hashBlock(block) / 0xffffffff <= keepRatio);
   if (sampled.length >= targetBlockCount) {
@@ -443,6 +446,7 @@ export function prepareArenaBuildFromBuild(
 function pruneCache() {
   if (artifactCache.size === 0) return;
 
+  // cache weight is an estimate because full builds stay shared in memory
   let totalWeight = 0;
   for (const entry of artifactCache.values()) {
     totalWeight += entry.byteWeight;
@@ -572,6 +576,7 @@ export async function prepareArenaBuild(
   throwIfAborted(opts?.signal);
 
   if (!ARENA_ARTIFACTS_ENABLED) {
+    // debug path keeps behavior simple when artifact prep is disabled
     const parsed = await parseAndValidateBuild(source, opts);
     const prepared = createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
     prepared.hints.initialVariant = "full";
@@ -589,6 +594,7 @@ export async function prepareArenaBuild(
   if (cached) return cached;
 
   const existing = inflight.get(cacheKey);
+  // concurrent requests should share one parse and validation pass
   if (existing) return existing;
 
   const promise = (async () => {

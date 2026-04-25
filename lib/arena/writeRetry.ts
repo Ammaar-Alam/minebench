@@ -9,6 +9,7 @@ function getErrorMessage(error: unknown): string {
 }
 
 export function isArenaCapacityError(error: unknown): boolean {
+  // retry only transient db pressure and lock conflicts
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === "P2034" || error.code === "P2028" || error.code === "P2024") {
       return true;
@@ -52,6 +53,7 @@ export async function withArenaWriteRetry<T>(run: () => Promise<T>): Promise<T> 
         throw error;
       }
 
+      // small jitter keeps concurrent writers from retrying together
       const backoffMs = BASE_DELAY_MS * 2 ** attempt;
       const jitterMs = Math.floor(Math.random() * BASE_DELAY_MS);
       await sleep(backoffMs + jitterMs);

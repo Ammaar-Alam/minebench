@@ -143,6 +143,7 @@ function warmStreamArtifactInBackground(opts: {
   if (streamArtifactWarmupInflight.has(warmupKey)) return;
   streamArtifactWarmupInflight.add(warmupKey);
   try {
+    // upload the artifact after serving this live stream
     after(async () => {
       try {
         const bytes = chunkStreamArtifactBytes(
@@ -180,6 +181,7 @@ async function waitForBackpressure(
 ): Promise<boolean> {
   let waits = 0;
   while (shouldContinue()) {
+    // slow readers should not make us buffer the whole build
     const desiredSize = controller.desiredSize;
     if (desiredSize == null || desiredSize > 0) return true;
     waits += 1;
@@ -296,6 +298,7 @@ export async function GET(
   }
 
   if (artifactRequested && variant === "full" && shellHints.deliveryClass === "stream-artifact") {
+    // artifact-class builds should not silently fall back to heavy live streams
     timing.end("total", requestStartedAt);
     const headers = new Headers({
       "Cache-Control": "no-store",
@@ -399,6 +402,7 @@ export async function GET(
       };
 
       send({
+        // early hello lets the client show progress before prepare finishes
         type: "hello",
         buildId,
         variant,
@@ -420,6 +424,7 @@ export async function GET(
       void (async () => {
         try {
           if (closed || request.signal.aborted) return;
+          // heavy parse starts after the response stream is open
           const prepared = cachedPrepared ?? (await prepareArenaBuild(build!, { signal: request.signal }));
           if (closed || request.signal.aborted) return;
 

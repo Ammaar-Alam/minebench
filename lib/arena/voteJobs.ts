@@ -169,6 +169,7 @@ async function loadModelsForVoteJobs(
 }
 
 async function tryAcquireVoteJobDrainLock(tx: Prisma.TransactionClient): Promise<boolean> {
+  // one drain owns rating and coverage writes at a time
   const rows = await tx.$queryRaw<Array<{ locked: boolean }>>(Prisma.sql`
     SELECT pg_try_advisory_xact_lock(${ARENA_VOTE_JOB_DRAIN_LOCK_KEY}) AS "locked"
   `);
@@ -286,6 +287,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           };
         }
 
+        // skip locked lets another worker finish its batch without blocking this one
         const jobs = await tx.$queryRaw<PendingArenaVoteJob[]>(Prisma.sql`
           SELECT
             "id",
@@ -324,6 +326,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
         const cacheUpdates: VoteCacheUpdate[] = [];
         const coveragePersistUpdates = new Map<string, CoveragePersistUpdate>();
 
+        // batch repeated pair and prompt increments into one write
         const countersForModel = (modelId: string) => {
           let counters = counterIncrements.get(modelId);
           if (!counters) {
@@ -435,6 +438,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
         });
 
         await applyOrderedModelUpdates(tx, modelUpdatePlans);
+        // coverage rows update in the same tx as processedAt
         await applyCoveragePersistUpdates(tx, Array.from(coveragePersistUpdates.values()));
         await tx.$executeRaw(Prisma.sql`
           UPDATE "ArenaVoteJob"
@@ -465,6 +469,7 @@ export async function drainArenaVoteJobs(opts?: {
   maxJobs?: number;
   maxMs?: number;
 }): Promise<ArenaVoteJobDrainResult> {
+  // bounded drains keep after hooks from turning into long requests
   let processedCount = 0;
   let batches = 0;
   let lockSkipped = false;
@@ -494,6 +499,7 @@ export async function drainArenaVoteJobs(opts?: {
 
 export async function scheduleArenaVoteJobDrain(): Promise<void> {
   if (globalForArenaVoteJobs.arenaVoteJobDrainPromise) {
+    // collapse overlapping after hooks into one follow-up drain
     globalForArenaVoteJobs.arenaVoteJobDrainRequestedDuringRun = true;
     await globalForArenaVoteJobs.arenaVoteJobDrainPromise;
     return;
@@ -504,6 +510,7 @@ export async function scheduleArenaVoteJobDrain(): Promise<void> {
   let scheduleRetry = false;
   globalForArenaVoteJobs.arenaVoteJobDrainPromise = (async () => {
     try {
+      // scheduled drains take one batch and reschedule when backlog remains
       const result = await drainArenaVoteJobs({ maxJobs: JOB_BATCH_LIMIT });
       scheduleImmediateFollowup = result.processedCount >= Math.max(1, JOB_BATCH_LIMIT);
     } catch (error) {
