@@ -360,6 +360,51 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
+class BuildRetryAfterError extends Error {
+  retryAfterMs: number;
+
+  constructor(message: string, retryAfterMs: number) {
+    super(message);
+    this.name = "BuildRetryAfterError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+function readRetryAfterMs(res: Response, fallbackMs: number): number {
+  const raw = res.headers.get("Retry-After")?.trim();
+  if (!raw) return fallbackMs;
+  const seconds = Number.parseFloat(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.max(250, Math.min(5000, seconds * 1000));
+  }
+  const dateMs = Date.parse(raw);
+  if (Number.isFinite(dateMs)) {
+    return Math.max(250, Math.min(5000, dateMs - Date.now()));
+  }
+  return fallbackMs;
+}
+
+async function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  await new Promise<void>((resolve, reject) => {
+    let timer: number | null = null;
+    let cleanup = () => {};
+    const onAbort = () => {
+      cleanup();
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    cleanup = () => {
+      if (timer != null) window.clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    timer = window.setTimeout(() => {
+      cleanup();
+      resolve();
+    }, Math.max(0, ms));
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
   // 429 and 503 mean back off or stream
   return [400, 403, 404, 500, 502, 504].includes(status);
@@ -455,7 +500,14 @@ async function fetchBuildVariantStreamOnce(
   } finally {
     requestTimed.cleanup();
   }
-  if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't load build"));
+  if (!res.ok) {
+    const retryAfterMs = readRetryAfterMs(res, 1000);
+    const message = await readErrorResponse(res, "Couldn't load build");
+    if (useArtifact && ref.variant === "full" && res.status === 503) {
+      throw new BuildRetryAfterError(message, retryAfterMs);
+    }
+    throw new Error(message);
+  }
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
@@ -644,6 +696,11 @@ async function fetchBuildVariantStream(
     } catch (err: unknown) {
       if (err instanceof Error && err.name === "AbortError" && opts?.signal?.aborted) {
         throw err;
+      }
+      if (err instanceof BuildRetryAfterError) {
+        lastError = err;
+        await sleepWithSignal(err.retryAfterMs, opts?.signal);
+        continue;
       }
       lastError = err;
     }
