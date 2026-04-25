@@ -229,6 +229,7 @@ const CLIENT_BUILD_CACHE_MAX_EST_BYTES = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_EST_BYTES ?? "60000000",
   10,
 );
+// client caps keep prefetch from eating renderer memory
 const CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES ?? "90000000",
   10,
@@ -982,6 +983,7 @@ function shouldPrefetchFullLane(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): bo
     ? Math.floor(CLIENT_FULL_PREFETCH_MAX_EST_BYTES)
     : 30_000_000;
   if (maxBytes <= 0) return false;
+  // only hold offscreen full builds when they are small enough
   const estimated = estimateLaneFullBuildBytes(lane);
   return estimated != null && estimated <= maxBytes;
 }
@@ -1616,6 +1618,7 @@ export function Arena() {
       const prefetchEntry = prefetchKey ? fullBuildPrefetchRef.current.get(prefetchKey) ?? null : null;
       const prefetched = prefetchEntry?.promise ?? null;
       if (prefetched && prefetchEntry) {
+        // show progress for reveal-time prefetches once they become visible
         const applyPrefetchProgress = (progress: BuildStreamProgress) => {
           applyProgressiveBuild(null, progress);
         };
@@ -1788,6 +1791,7 @@ export function Arena() {
 
       const cacheKey = getHydratedBuildCacheKey(ref);
       if (fullBuildPrefetchRef.current.has(cacheKey)) return;
+      // keep json parse + block arrays from stacking across cards
       const maxInFlight =
         Number.isFinite(CLIENT_FULL_PREFETCH_MAX_IN_FLIGHT)
           ? Math.floor(CLIENT_FULL_PREFETCH_MAX_IN_FLIGHT)
