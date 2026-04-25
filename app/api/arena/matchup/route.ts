@@ -123,7 +123,8 @@ function pickPersistedVariantBuild(
   previewBuild: unknown | null | undefined,
   variant: "full" | "preview",
 ): ArenaMatchup["a"]["build"] {
-  return (variant === "preview" ? previewBuild : fullBuild ?? previewBuild) as ArenaMatchup["a"]["build"];
+  // exact variant only, no partial-backfill promotion
+  return (variant === "preview" ? previewBuild : fullBuild) as ArenaMatchup["a"]["build"];
 }
 
 function pickPersistedInitialBuild(
