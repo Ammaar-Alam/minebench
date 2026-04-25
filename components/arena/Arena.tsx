@@ -46,11 +46,6 @@ const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_PREFETCH_INITIAL_MAX_BYTES ?? "524288",
   10,
 );
-const PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS ?? "12000",
-  10,
-);
-
 let snapshotStorageRedirectBlocked = false;
 let streamStorageRedirectBlocked = false;
 
@@ -379,27 +374,6 @@ function markStorageRedirectBlocked(kind: "snapshot" | "stream") {
     streamStorageRedirectBlocked = true;
   }
   trackEvent("arena_storage_redirect_blocked", { kind });
-}
-
-function shouldUseProgressiveBuildUpdates(
-  lane: ArenaMatchup["a"] | ArenaMatchup["b"],
-  target: "initial" | "full",
-  deliveryClass: ArenaBuildDeliveryClass | undefined,
-): boolean {
-  if (!isHeavyRetrievalDeliveryClass(deliveryClass)) return false;
-  if (target !== "initial" && lane.build) return false;
-  if (!Number.isFinite(PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS) || PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS <= 0) {
-    return true;
-  }
-  const hints = lane.buildLoadHints;
-  const expectedBlocks =
-    target === "initial"
-      ? hints?.initialVariant === "preview"
-        ? hints.previewBlockCount
-        : hints?.fullBlockCount
-      : hints?.fullBlockCount;
-  if (typeof expectedBlocks !== "number" || !Number.isFinite(expectedBlocks)) return true;
-  return expectedBlocks >= PROGRESSIVE_BUILD_UPDATE_MIN_BLOCKS;
 }
 
 async function fetchBuildVariantSnapshot(
@@ -1444,16 +1418,11 @@ export function Arena() {
     }
 
     const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, target);
-    const APPLY_PROGRESS_MIN_MS = 90;
-    const APPLY_PROGRESS_MIN_BLOCKS = 12_000;
     const PROGRESS_UI_MIN_MS = target === "full" ? 300 : 90;
-    const enableProgressiveUpdates = shouldUseProgressiveBuildUpdates(lane, target, deliveryClass);
-    let lastAppliedAt = 0;
-    let lastAppliedBlocks = 0;
     let lastProgressUiAt = 0;
 
     const applyProgressiveBuild = (
-      progressiveBuild: ArenaMatchup["a"]["build"],
+      _progressiveBuild: ArenaMatchup["a"]["build"],
       progress: BuildStreamProgress,
     ) => {
       const now = performance.now();
@@ -1467,34 +1436,7 @@ export function Arena() {
           totalBlocks: progress.totalBlocks,
         });
       }
-      if (progress.receivedBlocks <= 0) return;
-      if (!enableProgressiveUpdates) return;
-      const shouldApply =
-        reachedComplete
-          ? true
-          : now - lastAppliedAt >= APPLY_PROGRESS_MIN_MS ||
-            progress.receivedBlocks - lastAppliedBlocks >= APPLY_PROGRESS_MIN_BLOCKS;
-      if (!shouldApply) return;
-
-      lastAppliedAt = now;
-      lastAppliedBlocks = progress.receivedBlocks;
-
-      markViewerLaneNotReady(matchupValue.id, side);
-      setState((prev) => {
-        if (prev.kind !== "ready") return prev;
-        if (prev.matchup.id !== matchupValue.id) return prev;
-        return {
-          kind: "ready",
-          matchup: withHydratedBuild(
-            prev.matchup,
-            side,
-            progressiveBuild,
-            true,
-            ref.variant,
-            ref,
-          ),
-        };
-      });
+      // progress only here; final payload flips voting state
     };
 
     try {
