@@ -12,6 +12,12 @@ const ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER = readIntEnv(
   1,
   5000,
 );
+const ARENA_NEW_SESSION_IP_GUARDRAIL_MULTIPLIER = readIntEnv(
+  "ARENA_NEW_SESSION_IP_GUARDRAIL_MULTIPLIER",
+  10,
+  1,
+  100,
+);
 const BUCKET_PRUNE_INTERVAL = 256;
 
 type Bucket = { resetAt: number; count: number };
@@ -130,11 +136,12 @@ function rateLimitedResponse(retryAfterSeconds: number) {
 
 function getArenaRateLimitSession(req: NextRequest) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
-  if (existing) return { bucketId: existing, cookieValue: null };
+  if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
   return {
     bucketId: id,
     cookieValue: id,
+    isNew: true,
   };
 }
 
@@ -165,6 +172,16 @@ export function middleware(req: NextRequest) {
         },
       ]
     : [];
+  const arenaNewSessionIpRules =
+    arenaSession?.isNew && ip && !isArenaBuildAsset
+      ? [
+          // cookie-drop guardrail, looser than per-session
+          {
+            key: `anon:${ip}:${bucketPath}`,
+            maxPerWindow: maxPerWindow * ARENA_NEW_SESSION_IP_GUARDRAIL_MULTIPLIER,
+          },
+        ]
+      : [];
   const rules: RateLimitRule[] = isArenaApi
     ? isArenaBuildAsset
       ? ip
@@ -185,6 +202,7 @@ export function middleware(req: NextRequest) {
           : []
       : [
           ...arenaIpRules,
+          ...arenaNewSessionIpRules,
           { key: `session:${arenaSession?.bucketId}:${bucketPath}`, maxPerWindow },
         ]
     : [{ key: `${ipBucket}:${bucketPath}`, maxPerWindow }];
