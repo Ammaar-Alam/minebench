@@ -185,6 +185,7 @@ class RequestGate {
 
 let buildRequestGate: RequestGate | null = null;
 let controlRequestGate: RequestGate | null = null;
+let globalRequestGate: RequestGate | null = null;
 
 class Metrics {
   private counts = new Map<string, number>();
@@ -598,8 +599,18 @@ function recordRequestMetrics(
   metrics.recordServerTiming(stage, responseHeaders?.get("server-timing") ?? null);
 }
 
-function getRequestGate(stage: string): RequestGate | null {
+function getStageRequestGate(stage: string): RequestGate | null {
   return stage.startsWith("build_") ? buildRequestGate : controlRequestGate;
+}
+
+async function runWithRequestGates<T>(
+  stage: string,
+  work: () => Promise<T>,
+  onWait?: (waitMs: number) => void,
+): Promise<T> {
+  const stageGate = getStageRequestGate(stage);
+  const runGlobalGate = () => (globalRequestGate ? globalRequestGate.run(work, onWait) : work());
+  return stageGate ? stageGate.run(runGlobalGate, onWait) : runGlobalGate();
 }
 
 function asRequestError(
@@ -720,12 +731,9 @@ async function fetchWithTimeout<T>(params: {
   };
 
   try {
-    const gate = getRequestGate(stage);
-    return gate
-      ? await gate.run(performRequest, (waitMs) => {
-          queueWaitMs = waitMs;
-        })
-      : await performRequest();
+    return await runWithRequestGates(stage, performRequest, (waitMs) => {
+      queueWaitMs += waitMs;
+    });
   } catch (error) {
     const transportLike = isTransportLikeError(error);
     const networkCode = error instanceof Error && error.name === "AbortError" ? "timeout" : getNetworkErrorCode(error);
@@ -1268,6 +1276,7 @@ async function main() {
 
   const metrics = new Metrics();
   const deadlineAt = Date.now() + args.durationSeconds * 1000;
+  globalRequestGate = args.maxActiveRequests > 0 ? new RequestGate(args.maxActiveRequests) : null;
   buildRequestGate = args.maxActiveBuildRequests > 0 ? new RequestGate(args.maxActiveBuildRequests) : null;
   controlRequestGate =
     args.maxActiveControlRequests > 0 ? new RequestGate(args.maxActiveControlRequests) : null;
