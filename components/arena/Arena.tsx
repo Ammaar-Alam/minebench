@@ -16,8 +16,6 @@ import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
 import { ErrorState } from "@/components/ErrorState";
 import { trackEvent } from "@/lib/analytics";
-import { getPalette } from "@/lib/blocks/palettes";
-import { warmVoxelMeshPayload } from "@/lib/voxel/mesh";
 
 type ArenaState =
   | { kind: "loading" }
@@ -231,6 +229,18 @@ const CLIENT_BUILD_CACHE_MAX_EST_BYTES = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_EST_BYTES ?? "60000000",
   10,
 );
+const CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES ?? "90000000",
+  10,
+);
+const CLIENT_FULL_PREFETCH_MAX_EST_BYTES = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_PREFETCH_MAX_EST_BYTES ?? "30000000",
+  10,
+);
+const CLIENT_FULL_PREFETCH_MAX_IN_FLIGHT = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_PREFETCH_MAX_IN_FLIGHT ?? "2",
+  10,
+);
 
 type CachedHydratedBuild = {
   build: NonNullable<ArenaMatchup["a"]["build"]>;
@@ -242,7 +252,9 @@ type CachedHydratedBuild = {
 type FullBuildPrefetch = {
   matchupId: string;
   controller: AbortController;
-  promise: Promise<BuildVariantResponse>;
+  promise: Promise<BuildVariantResponse> | null;
+  progress: BuildStreamProgress | null;
+  listeners: Set<(progress: BuildStreamProgress) => void>;
 };
 
 type AutoFullHydrationRetry = {
@@ -934,16 +946,6 @@ function getLaneMeshCacheKey(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): strin
   return `${ref.buildId}:${variant}:${checksum}:${lane.build.blocks.length}`;
 }
 
-function getHydratedMeshCacheKey(
-  ref: ArenaBuildRef,
-  variant: ArenaBuildVariant,
-  blockCount: number,
-): string | null {
-  const checksum = ref.checksum?.trim();
-  if (!ref.buildId || !checksum || blockCount <= 0) return null;
-  return `${ref.buildId}:${variant}:${checksum}:${blockCount}`;
-}
-
 function estimateCachedHydratedBuildBytes(entry: CachedHydratedBuild): number {
   if (entry.variant === "preview") {
     return Math.max(1, entry.build.blocks.length * 34);
@@ -953,6 +955,35 @@ function estimateCachedHydratedBuildBytes(entry: CachedHydratedBuild): number {
     return Math.floor(estimated);
   }
   return Math.max(1, entry.build.blocks.length * 34);
+}
+
+function getPositiveByteLimit(value: number, fallback: number): number {
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return Math.floor(value);
+}
+
+function estimateLaneFullBuildBytes(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): number | null {
+  const estimated = lane.buildLoadHints?.fullEstimatedBytes;
+  if (typeof estimated === "number" && Number.isFinite(estimated) && estimated > 0) {
+    return Math.floor(estimated);
+  }
+  const fullBlockCount = lane.buildLoadHints?.fullBlockCount;
+  if (typeof fullBlockCount === "number" && Number.isFinite(fullBlockCount) && fullBlockCount > 0) {
+    return Math.floor(fullBlockCount * 34);
+  }
+  if (lane.build?.blocks.length) {
+    return Math.floor(lane.build.blocks.length * 34);
+  }
+  return null;
+}
+
+function shouldPrefetchFullLane(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): boolean {
+  const maxBytes = Number.isFinite(CLIENT_FULL_PREFETCH_MAX_EST_BYTES)
+    ? Math.floor(CLIENT_FULL_PREFETCH_MAX_EST_BYTES)
+    : 30_000_000;
+  if (maxBytes <= 0) return false;
+  const estimated = estimateLaneFullBuildBytes(lane);
+  return estimated != null && estimated <= maxBytes;
 }
 
 function formatBuildLoadingMessage(
@@ -1047,6 +1078,8 @@ export function Arena() {
   const initialHydrationControllersRef = useRef(new Map<string, AbortController>());
   const fullHydrationControllersRef = useRef(new Map<string, AbortController>());
   const hydratedBuildCacheRef = useRef(new Map<string, CachedHydratedBuild>());
+  const hydratedBuildCacheWeightsRef = useRef(new Map<string, number>());
+  const hydratedBuildCacheBytesRef = useRef(0);
   const fullBuildPrefetchRef = useRef(new Map<string, FullBuildPrefetch>());
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
   const viewerReadyRef = useRef<{ matchupId: string; a: boolean; b: boolean } | null>(null);
@@ -1346,24 +1379,43 @@ export function Arena() {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 
-  const cacheHydratedBuild = useCallback((ref: ArenaBuildRef, entry: CachedHydratedBuild, opts?: { force?: boolean }) => {
-    if (!opts?.force && estimateCachedHydratedBuildBytes(entry) > CLIENT_BUILD_CACHE_MAX_EST_BYTES) {
+  const cacheHydratedBuild = useCallback((ref: ArenaBuildRef, entry: CachedHydratedBuild) => {
+    const byteWeight = estimateCachedHydratedBuildBytes(entry);
+    const maxEntryBytes = getPositiveByteLimit(CLIENT_BUILD_CACHE_MAX_EST_BYTES, 60_000_000);
+    if (!Number.isFinite(byteWeight) || byteWeight <= 0 || byteWeight > maxEntryBytes) {
       return;
     }
 
     const cache = hydratedBuildCacheRef.current;
+    const weights = hydratedBuildCacheWeightsRef.current;
     const key = getHydratedBuildCacheKey(ref);
-    if (cache.has(key)) cache.delete(key);
+    if (cache.has(key)) {
+      cache.delete(key);
+      hydratedBuildCacheBytesRef.current = Math.max(
+        0,
+        hydratedBuildCacheBytesRef.current - Math.max(0, weights.get(key) ?? 0),
+      );
+      weights.delete(key);
+    }
     cache.set(key, entry);
+    weights.set(key, byteWeight);
+    hydratedBuildCacheBytesRef.current += byteWeight;
 
     const maxEntries =
       Number.isFinite(CLIENT_BUILD_CACHE_MAX_ENTRIES) && CLIENT_BUILD_CACHE_MAX_ENTRIES > 0
         ? CLIENT_BUILD_CACHE_MAX_ENTRIES
         : 8;
-    while (cache.size > maxEntries) {
+    const maxTotalBytes = getPositiveByteLimit(CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES, 90_000_000);
+    // keep hidden hydrated builds from piling up behind the current cards
+    while (cache.size > maxEntries || hydratedBuildCacheBytesRef.current > maxTotalBytes) {
       const oldest = cache.keys().next().value as string | undefined;
       if (!oldest) break;
+      hydratedBuildCacheBytesRef.current = Math.max(
+        0,
+        hydratedBuildCacheBytesRef.current - Math.max(0, weights.get(oldest) ?? 0),
+      );
       cache.delete(oldest);
+      weights.delete(oldest);
     }
   }, []);
 
@@ -1372,8 +1424,13 @@ export function Arena() {
     const touch = (key: string) => {
       const hit = cache.get(key) ?? null;
       if (!hit) return null;
+      const byteWeight = hydratedBuildCacheWeightsRef.current.get(key);
       cache.delete(key);
       cache.set(key, hit);
+      if (byteWeight != null) {
+        hydratedBuildCacheWeightsRef.current.delete(key);
+        hydratedBuildCacheWeightsRef.current.set(key, byteWeight);
+      }
       return hit;
     };
 
@@ -1551,12 +1608,24 @@ export function Arena() {
       // progress only here; final payload flips voting state
     };
 
+    let unsubscribePrefetchProgress: (() => void) | null = null;
     try {
       const hydrationStartedAt = performance.now();
       let payload: BuildVariantResponse;
       const prefetchKey = target === "full" ? getHydratedBuildCacheKey(ref) : null;
-      const prefetched = prefetchKey ? fullBuildPrefetchRef.current.get(prefetchKey)?.promise : null;
-      if (prefetched) {
+      const prefetchEntry = prefetchKey ? fullBuildPrefetchRef.current.get(prefetchKey) ?? null : null;
+      const prefetched = prefetchEntry?.promise ?? null;
+      if (prefetched && prefetchEntry) {
+        const applyPrefetchProgress = (progress: BuildStreamProgress) => {
+          applyProgressiveBuild(null, progress);
+        };
+        if (prefetchEntry.progress) {
+          applyPrefetchProgress(prefetchEntry.progress);
+        }
+        prefetchEntry.listeners.add(applyPrefetchProgress);
+        unsubscribePrefetchProgress = () => {
+          prefetchEntry.listeners.delete(applyPrefetchProgress);
+        };
         payload = await prefetched;
       } else {
         // stream classes stay on stream paths
@@ -1644,6 +1713,7 @@ export function Arena() {
         console.warn("arena full build hydration failed", err);
       }
     } finally {
+      unsubscribePrefetchProgress?.();
       if (overlayTimer != null) window.clearTimeout(overlayTimer);
       hydrateInFlightRef.current.delete(key);
       if (
@@ -1710,35 +1780,51 @@ export function Arena() {
       const ref = lane.buildRef;
       if (!ref || !laneExpectsFullHydration(lane)) return;
 
-      const warmCachedMesh = (
-        entry: CachedHydratedBuild,
-        meshRef: ArenaBuildRef = ref,
-        signal?: AbortSignal,
-      ) => {
-        if (entry.variant !== "full") return;
-        const meshKey = getHydratedMeshCacheKey(meshRef, entry.variant, entry.build.blocks.length);
-        if (!meshKey) return;
-        void warmVoxelMeshPayload(entry.build, getPalette("simple"), { cacheKey: meshKey, signal });
-      };
-
       const cached = readHydratedBuildFromCache(ref);
       if (cached?.variant === "full") {
-        warmCachedMesh(cached);
         return;
       }
+      if (!shouldPrefetchFullLane(lane)) return;
 
       const cacheKey = getHydratedBuildCacheKey(ref);
       if (fullBuildPrefetchRef.current.has(cacheKey)) return;
+      const maxInFlight =
+        Number.isFinite(CLIENT_FULL_PREFETCH_MAX_IN_FLIGHT)
+          ? Math.floor(CLIENT_FULL_PREFETCH_MAX_IN_FLIGHT)
+          : 2;
+      if (maxInFlight <= 0) return;
+      if (fullBuildPrefetchRef.current.size >= maxInFlight) return;
       const controller = new AbortController();
+      const prefetchEntry: FullBuildPrefetch = {
+        matchupId: matchupValue.id,
+        controller,
+        promise: null,
+        progress: null,
+        listeners: new Set(),
+      };
+      const emitPrefetchProgress = (progress: BuildStreamProgress) => {
+        prefetchEntry.progress = progress;
+        for (const listener of prefetchEntry.listeners) {
+          listener(progress);
+        }
+      };
 
       const promise = (async () => {
         const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, "full");
         const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
         const payload = shouldHydrateViaSnapshot(deliveryClass)
           ? await fetchBuildVariantSnapshot(ref, controller.signal).catch(() =>
-              fetchBuildVariantStream(ref, { signal: controller.signal, allowSnapshotFallback }),
+              fetchBuildVariantStream(ref, {
+                signal: controller.signal,
+                allowSnapshotFallback,
+                onProgress: (_build, progress) => emitPrefetchProgress(progress),
+              }),
             )
-          : await fetchBuildVariantStream(ref, { signal: controller.signal, allowSnapshotFallback });
+          : await fetchBuildVariantStream(ref, {
+              signal: controller.signal,
+              allowSnapshotFallback,
+              onProgress: (_build, progress) => emitPrefetchProgress(progress),
+            });
         const resolvedRef: ArenaBuildRef = {
           buildId: payload.buildId === ref.buildId ? payload.buildId : ref.buildId,
           variant: payload.variant ?? ref.variant,
@@ -1753,19 +1839,16 @@ export function Arena() {
           variant: resolvedRef.variant,
           buildLoadHints: payload.buildLoadHints,
         };
-        cacheHydratedBuild(resolvedRef, entry, { force: true });
-        warmCachedMesh(entry, resolvedRef, controller.signal);
+        cacheHydratedBuild(resolvedRef, entry);
         return payload;
       })();
 
-      fullBuildPrefetchRef.current.set(cacheKey, {
-        matchupId: matchupValue.id,
-        controller,
-        promise,
-      });
+      prefetchEntry.promise = promise;
+      fullBuildPrefetchRef.current.set(cacheKey, prefetchEntry);
       void promise
         .catch(() => undefined)
         .finally(() => {
+          prefetchEntry.listeners.clear();
           if (fullBuildPrefetchRef.current.get(cacheKey)?.promise === promise) {
             fullBuildPrefetchRef.current.delete(cacheKey);
           }
@@ -1859,14 +1942,6 @@ export function Arena() {
     setRetrying(true);
     setReloadToken((n) => n + 1);
   }, []);
-
-  useEffect(() => {
-    const current =
-      stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
-    if (!current) return;
-    prefetchFullLaneForVote(current, "a");
-    prefetchFullLaneForVote(current, "b");
-  }, [matchup?.id, prefetchFullLaneForVote]);
 
   useEffect(() => {
     const current =
