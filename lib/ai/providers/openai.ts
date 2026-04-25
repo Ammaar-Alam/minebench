@@ -447,18 +447,24 @@ export async function openaiGenerateText(params: {
   const isGptOssFamily = params.modelId.startsWith("gpt-oss-");
   // Some models are Responses-only (or otherwise not supported in chat/completions).
   // For these, don't fall back to chat/completions because it hides the real failure cause.
+  const isGpt55Pro = params.modelId.startsWith("gpt-5.5-pro");
   const isResponsesOnlyModel =
     params.modelId === "gpt-5.2-pro" ||
+    isGpt55Pro ||
     params.modelId.startsWith("gpt-5.4-pro") ||
     params.modelId === "gpt-5-pro" ||
     params.modelId === "gpt-5.2-codex" ||
     params.modelId === "gpt-5.3-codex";
   const defaultReasoningEffortAttempts: string[] = isGpt5Family
-    ? params.modelId.startsWith("gpt-5.4-pro")
+    ? isGpt55Pro
       ? ["xhigh", "high", "medium"]
-      : params.modelId === "gpt-5-pro"
-        ? ["high"]
-        : ["xhigh", "high"]
+      : params.modelId.startsWith("gpt-5.5")
+        ? ["xhigh", "high", "medium", "low", "none"]
+        : params.modelId.startsWith("gpt-5.4-pro")
+          ? ["xhigh", "high", "medium"]
+          : params.modelId === "gpt-5-pro"
+            ? ["high"]
+            : ["xhigh", "high"]
     : isGptOssFamily
       ? ["xhigh", "high", "medium", "low"]
       : [];
@@ -478,9 +484,9 @@ export async function openaiGenerateText(params: {
   // For non-interactive callers (e.g. batch generation), use non-streaming
   // Responses JSON to avoid SSE event-shape drift causing empty text payloads.
   const streamResponses =
-    Boolean(params.onDelta) && parseBooleanEnv("OPENAI_STREAM_RESPONSES", true);
+    !isGpt55Pro && Boolean(params.onDelta) && parseBooleanEnv("OPENAI_STREAM_RESPONSES", true);
   const useBackgroundMode =
-    !params.onDelta &&
+    (isGpt55Pro || !params.onDelta) &&
     parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", isGpt5Family);
   const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 15_000);
   const streamForRequest = useBackgroundMode ? false : streamResponses;

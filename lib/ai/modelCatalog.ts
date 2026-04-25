@@ -11,6 +11,8 @@ export type Provider =
   | "meta";
 
 export type ModelKey =
+  | "openai_gpt_5_5"
+  | "openai_gpt_5_5_pro"
   | "openai_gpt_5_4"
   | "openai_gpt_5_4_pro"
   | "openai_gpt_5_4_mini"
@@ -63,6 +65,22 @@ export type ModelCatalogEntry = {
 };
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
+  {
+    key: "openai_gpt_5_5",
+    provider: "openai",
+    modelId: "gpt-5.5-2026-04-23",
+    displayName: "GPT 5.5",
+    enabled: true,
+    openRouterModelId: "openai/gpt-5.5",
+  },
+  {
+    key: "openai_gpt_5_5_pro",
+    provider: "openai",
+    modelId: "gpt-5.5-pro-2026-04-23",
+    displayName: "GPT 5.5 Pro",
+    enabled: true,
+    openRouterModelId: "openai/gpt-5.5-pro",
+  },
   {
     key: "openai_gpt_5_4",
     provider: "openai",

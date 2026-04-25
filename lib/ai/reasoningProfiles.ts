@@ -37,6 +37,12 @@ export function openAiReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `OpenAI model ${modelId}`;
+  if (modelId.startsWith("gpt-5.5-pro")) {
+    return descendingAttempts(label, ["xhigh", "high", "medium"], override);
+  }
+  if (modelId.startsWith("gpt-5.5")) {
+    return descendingAttempts(label, ["xhigh", "high", "medium", "low", "none"], override);
+  }
   if (modelId.startsWith("gpt-5.4-pro")) {
     return descendingAttempts(label, ["xhigh", "high", "medium"], override);
   }
@@ -187,6 +193,12 @@ export function openRouterReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `OpenRouter model ${modelId}`;
+  if (modelId === "openai/gpt-5.5-pro") {
+    return descendingAttempts(label, ["xhigh", "high", "medium"], override);
+  }
+  if (modelId === "openai/gpt-5.5") {
+    return descendingAttempts(label, ["xhigh", "high", "medium", "low", "none"], override);
+  }
   if (modelId === "openai/gpt-5.4-pro") {
     return descendingAttempts(label, ["xhigh", "high", "medium"], override);
   }
