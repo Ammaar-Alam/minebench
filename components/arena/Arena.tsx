@@ -42,6 +42,10 @@ const FULL_HYDRATION_RETRY_MAX_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_RETRY_MAX_MS ?? "15000",
   10,
 );
+const FULL_HYDRATION_AUTO_RETRY_MAX_ATTEMPTS = Number.parseInt(
+  process.env.NEXT_PUBLIC_ARENA_FULL_HYDRATION_AUTO_RETRY_MAX_ATTEMPTS ?? "4",
+  10,
+);
 const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_PREFETCH_INITIAL_MAX_BYTES ?? "524288",
   10,
@@ -236,6 +240,7 @@ type CachedHydratedBuild = {
 type AutoFullHydrationRetry = {
   attempts: number;
   nextRetryAt: number;
+  exhausted?: boolean;
 };
 
 type TimeoutSignal = {
@@ -843,6 +848,11 @@ function getFullHydrationRetryDelayMs(attempts: number): number {
   return Math.min(max, base * 2 ** boundedAttempt);
 }
 
+function getFullHydrationAutoRetryMaxAttempts(): number {
+  if (!Number.isFinite(FULL_HYDRATION_AUTO_RETRY_MAX_ATTEMPTS)) return 4;
+  return Math.max(1, Math.min(10, Math.floor(FULL_HYDRATION_AUTO_RETRY_MAX_ATTEMPTS)));
+}
+
 function isHeavyRetrievalDeliveryClass(
   deliveryClass: ArenaBuildDeliveryClass | undefined,
 ): boolean {
@@ -1134,12 +1144,23 @@ export function Arena() {
     (key: string) => {
       const previous = autoFullHydrationRetriesRef.current.get(key);
       const attempts = (previous?.attempts ?? 0) + 1;
+      const maxAttempts = getFullHydrationAutoRetryMaxAttempts();
+      if (attempts >= maxAttempts) {
+        // manual retry stays available after the cap
+        autoFullHydrationRetriesRef.current.set(key, {
+          attempts,
+          nextRetryAt: Number.POSITIVE_INFINITY,
+          exhausted: true,
+        });
+        clearAutoFullHydrationRetryTimer(key);
+        return;
+      }
       const delay = getFullHydrationRetryDelayMs(attempts);
       const nextRetryAt = Date.now() + delay;
       autoFullHydrationRetriesRef.current.set(key, { attempts, nextRetryAt });
       scheduleAutoFullHydrationRetryWake(key, delay);
     },
-    [scheduleAutoFullHydrationRetryWake],
+    [clearAutoFullHydrationRetryTimer, scheduleAutoFullHydrationRetryWake],
   );
 
   const matchup = state.kind === "ready" ? state.matchup : null;
@@ -1767,6 +1788,7 @@ export function Arena() {
       if (!lane.buildRef) continue;
       const retryKey = getAutoFullHydrationFailureKey(current.id, side, lane.buildRef);
       const retry = autoFullHydrationRetriesRef.current.get(retryKey);
+      if (retry?.exhausted) continue;
       if (retry) {
         const waitMs = retry.nextRetryAt - Date.now();
         if (waitMs > 0) {
