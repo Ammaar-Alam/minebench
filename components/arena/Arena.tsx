@@ -366,6 +366,7 @@ function isAbortError(err: unknown): boolean {
 }
 
 function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
+  // 429 and 503 mean back off or stream
   return [400, 403, 404, 500, 502, 504].includes(status);
 }
 
@@ -1499,6 +1500,7 @@ export function Arena() {
     try {
       const hydrationStartedAt = performance.now();
       let payload: BuildVariantResponse;
+      // stream classes stay on stream paths
       const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
       if (shouldHydrateViaSnapshot(deliveryClass)) {
         try {
@@ -1985,6 +1987,7 @@ export function Arena() {
     setSubmitting(true);
     try {
       clearAutoAdvance();
+      // old hydration should not overlap the next matchup
       abortInitialHydrations(matchup.id);
       abortFullHydrations(matchup.id);
       advanceNowRequestedAtRef.current = null;

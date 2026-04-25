@@ -37,19 +37,22 @@ function readBoolEnv(name: string, fallback: boolean) {
   return fallback;
 }
 
-function getIp(req: NextRequest) {
+function getIp(req: NextRequest): string | null {
+  const requestIp = (req as NextRequest & { ip?: string | null }).ip?.trim();
+  if (requestIp) return requestIp;
+
   const trustForwardedFor = readBoolEnv("ARENA_TRUST_X_FORWARDED_FOR", process.env.VERCEL === "1");
-  if (!trustForwardedFor) return "unknown";
+  if (!trustForwardedFor) return null;
 
   const direct =
     req.headers.get("x-real-ip") ??
     req.headers.get("cf-connecting-ip") ??
     req.headers.get("x-vercel-forwarded-for");
-  if (direct) return direct.split(",")[0]?.trim() || "unknown";
+  if (direct) return direct.split(",")[0]?.trim() || null;
 
   const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
-  return "unknown";
+  if (forwarded) return forwarded.split(",")[0]?.trim() || null;
+  return null;
 }
 
 function maybeRedirectToCanonicalHost(req: NextRequest) {
@@ -125,12 +128,12 @@ function rateLimitedResponse(retryAfterSeconds: number) {
   });
 }
 
-function getArenaRateLimitSession(req: NextRequest, stableFallbackBucketId: string) {
+function getArenaRateLimitSession(req: NextRequest, stableFallbackBucketId: string | null) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
   if (existing) return { bucketId: existing, cookieValue: null };
   const id = crypto.randomUUID();
   return {
-    bucketId: stableFallbackBucketId,
+    bucketId: stableFallbackBucketId ?? id,
     cookieValue: id,
   };
 }
@@ -147,29 +150,44 @@ export function middleware(req: NextRequest) {
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
   const bucketPath = normalizeRateLimitPath(pathname);
   const ip = getIp(req);
+  const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);
-  const arenaSession = isArenaApi && !isArenaBuildAsset
-    ? getArenaRateLimitSession(req, `anon:${ip}`)
+  const arenaSession = isArenaApi
+    ? getArenaRateLimitSession(req, ip ? `anon:${ip}` : null)
     : null;
-  const rules: RateLimitRule[] = isArenaApi
-    ? isArenaBuildAsset
-      ? [
-          {
-            key: `ip:${ip}:${bucketPath}`,
-            maxPerWindow: maxPerWindow * ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER,
-          },
-        ]
-      : [
-        // Keep arena primarily session-scoped, but retain a wider IP guardrail so
-        // clients cannot disable throttling by dropping or rotating cookies.
+  const arenaIpRules = ip
+    ? [
+        // wide ip guardrail when a trusted ip exists
         {
           key: `ip:${ip}:${bucketPath}`,
           maxPerWindow: maxPerWindow * ARENA_IP_GUARDRAIL_MULTIPLIER,
         },
-        { key: `session:${arenaSession?.bucketId}:${bucketPath}`, maxPerWindow },
       ]
-    : [{ key: `${ip}:${bucketPath}`, maxPerWindow }];
+    : [];
+  const rules: RateLimitRule[] = isArenaApi
+    ? isArenaBuildAsset
+      ? ip
+        ? [
+            {
+              key: `ip:${ip}:${bucketPath}`,
+              maxPerWindow: maxPerWindow * ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER,
+            },
+          ]
+        : arenaSession
+          ? [
+            // no trusted ip, avoid one shared unknown bucket
+            {
+              key: `session:${arenaSession.bucketId}:${bucketPath}`,
+              maxPerWindow: maxPerWindow * ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER,
+            },
+          ]
+          : []
+      : [
+          ...arenaIpRules,
+          { key: `session:${arenaSession?.bucketId}:${bucketPath}`, maxPerWindow },
+        ]
+    : [{ key: `${ipBucket}:${bucketPath}`, maxPerWindow }];
 
   const rateLimit = consumeBuckets(rules, now);
   if (!rateLimit.allowed) {

@@ -165,6 +165,32 @@ export function recordArenaMatchupShown(modelIds: string[]) {
   });
 }
 
+function shownCountIncrementsForModels(modelIds: string[]): Map<string, number> {
+  const increments = new Map<string, number>();
+  for (const modelId of modelIds) {
+    if (!modelId) continue;
+    increments.set(modelId, (increments.get(modelId) ?? 0) + 1);
+  }
+  return increments;
+}
+
+export async function persistArenaMatchupShown(modelIds: string[], client: PrismaClient = prisma) {
+  const increments = shownCountIncrementsForModels(modelIds);
+  const rows = Array.from(increments.entries());
+  if (rows.length === 0) return;
+
+  // impressions persist outside vote jobs
+  await client.$executeRaw(Prisma.sql`
+    UPDATE "Model" AS model
+    SET "shownCount" = model."shownCount" + shown."count"
+    FROM (
+      VALUES ${Prisma.join(rows.map(([modelId, count]) => Prisma.sql`(${modelId}, ${count})`))}
+    ) AS shown("id", "count")
+    WHERE model."id" = shown."id"
+  `);
+  settleArenaMatchupShown(increments);
+}
+
 function getPendingShownCountDelta(modelId: string, now = Date.now()): number {
   const pending = pendingShownCountDeltas.get(modelId);
   if (!pending) return 0;

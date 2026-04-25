@@ -16,6 +16,7 @@ import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/are
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
   getArenaMatchupSamplingStateWithMeta,
+  persistArenaMatchupShown,
   recordArenaMatchupShown,
   type CoverageState,
   type EligibleModel,
@@ -927,6 +928,10 @@ export async function GET(req: Request) {
     },
   };
   recordArenaMatchupShown([leftModel.id, rightModel.id]);
+  after(() => {
+    // db count follows the shown impression
+    void persistArenaMatchupShown([leftModel.id, rightModel.id]).catch(() => undefined);
+  });
 
   const totalMs = performance.now() - requestStartedAt;
   if (Number.isFinite(totalMs) && totalMs >= MATCHUP_SLOW_EVENT_MS) {

@@ -3,7 +3,6 @@ import { conservativeScore, updateRatingPair } from "@/lib/arena/rating";
 import {
   isDecisiveChoice,
   recordArenaVoteInSamplingCache,
-  settleArenaMatchupShown,
 } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { prisma } from "@/lib/prisma";
@@ -78,7 +77,6 @@ type CoveragePersistUpdate = {
 type VoteJobBatchResult = {
   processedCount: number;
   cacheUpdates: VoteCacheUpdate[];
-  shownCountIncrements: Map<string, number>;
   lockSkipped?: boolean;
 };
 
@@ -277,7 +275,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           return {
             processedCount: 0,
             cacheUpdates: [],
-            shownCountIncrements: new Map<string, number>(),
             lockSkipped: true,
           };
         }
@@ -300,7 +297,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           return {
             processedCount: 0,
             cacheUpdates: [],
-            shownCountIncrements: new Map<string, number>(),
           };
         }
 
@@ -318,7 +314,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           ]),
         );
         const counterIncrements = new Map<string, CounterIncrements>();
-        const shownCountIncrements = new Map<string, number>();
         const cacheUpdates: VoteCacheUpdate[] = [];
         const coveragePersistUpdates = new Map<string, CoveragePersistUpdate>();
 
@@ -346,19 +341,12 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           });
         };
 
-        const addShownCount = (modelId: string) => {
-          shownCountIncrements.set(modelId, (shownCountIncrements.get(modelId) ?? 0) + 1);
-        };
-
         for (const job of jobs) {
           const modelA = modelStates.get(job.modelAId);
           const modelB = modelStates.get(job.modelBId);
           if (!modelA || !modelB) {
             throw new Error("Vote models not found");
           }
-
-          addShownCount(job.modelAId);
-          addShownCount(job.modelBId);
 
           if (job.choice === "BOTH_BAD") {
             countersForModel(job.modelAId).bothBadCount += 1;
@@ -432,8 +420,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
             glickoVolatility: model.glickoVolatility,
             conservativeRating: model.conservativeRating,
           };
-          const shownCount = shownCountIncrements.get(model.id) ?? 0;
-          if (shownCount > 0) data.shownCount = { increment: shownCount };
           if (counters.winCount > 0) data.winCount = { increment: counters.winCount };
           if (counters.lossCount > 0) data.lossCount = { increment: counters.lossCount };
           if (counters.drawCount > 0) data.drawCount = { increment: counters.drawCount };
@@ -449,7 +435,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           WHERE "id" IN (${Prisma.join(jobs.map((job) => job.id))})
         `);
 
-        return { processedCount: jobs.length, cacheUpdates, shownCountIncrements };
+        return { processedCount: jobs.length, cacheUpdates };
       },
       {
         maxWait: JOB_TX_MAX_WAIT_MS,
@@ -462,7 +448,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
   if (result.processedCount <= 0) return result;
 
   invalidateArenaStatsCache();
-  settleArenaMatchupShown(result.shownCountIncrements);
   for (const cacheUpdate of result.cacheUpdates) {
     recordArenaVoteInSamplingCache(cacheUpdate);
   }
