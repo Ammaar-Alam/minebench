@@ -90,6 +90,7 @@ export type ArenaVoteJobDrainResult = {
 
 const globalForArenaVoteJobs = globalThis as typeof globalThis & {
   arenaVoteJobDrainPromise?: Promise<void> | null;
+  arenaVoteJobDrainRequestedDuringRun?: boolean;
 };
 
 function orderPairIds(modelAId: string, modelBId: string): [string, string] {
@@ -500,10 +501,12 @@ export async function drainArenaVoteJobs(opts?: {
 
 export async function scheduleArenaVoteJobDrain(): Promise<void> {
   if (globalForArenaVoteJobs.arenaVoteJobDrainPromise) {
+    globalForArenaVoteJobs.arenaVoteJobDrainRequestedDuringRun = true;
     await globalForArenaVoteJobs.arenaVoteJobDrainPromise;
     return;
   }
 
+  globalForArenaVoteJobs.arenaVoteJobDrainRequestedDuringRun = false;
   let scheduleImmediateFollowup = false;
   let scheduleRetry = false;
   globalForArenaVoteJobs.arenaVoteJobDrainPromise = (async () => {
@@ -514,8 +517,10 @@ export async function scheduleArenaVoteJobDrain(): Promise<void> {
       console.warn("arena vote job drain failed", error);
       scheduleRetry = true;
     } finally {
+      const requestedDuringRun = globalForArenaVoteJobs.arenaVoteJobDrainRequestedDuringRun === true;
+      globalForArenaVoteJobs.arenaVoteJobDrainRequestedDuringRun = false;
       globalForArenaVoteJobs.arenaVoteJobDrainPromise = null;
-      if (scheduleImmediateFollowup) {
+      if (scheduleImmediateFollowup || requestedDuringRun) {
         setTimeout(() => {
           void scheduleArenaVoteJobDrain();
         }, JOB_CONTINUE_DELAY_MS);

@@ -38,14 +38,16 @@ function readBoolEnv(name: string, fallback: boolean) {
 }
 
 function getIp(req: NextRequest) {
+  const trustForwardedFor = readBoolEnv("ARENA_TRUST_X_FORWARDED_FOR", process.env.VERCEL === "1");
+  if (!trustForwardedFor) return "unknown";
+
   const direct =
     req.headers.get("x-real-ip") ??
     req.headers.get("cf-connecting-ip") ??
     req.headers.get("x-vercel-forwarded-for");
   if (direct) return direct.split(",")[0]?.trim() || "unknown";
 
-  const trustForwardedFor = readBoolEnv("ARENA_TRUST_X_FORWARDED_FOR", process.env.VERCEL === "1");
-  const forwarded = trustForwardedFor ? req.headers.get("x-forwarded-for") : null;
+  const forwarded = req.headers.get("x-forwarded-for");
   if (forwarded) return forwarded.split(",")[0]?.trim() || "unknown";
   return "unknown";
 }
