@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
 const VOTE_JOB_DRAIN_AFTER_RESPONSE =
-  (process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE ?? "0").trim() === "1";
+  (process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE ?? "1").trim() !== "0";
 
 const reqSchema = z.object({
   matchupId: z.string().min(1).max(2048),

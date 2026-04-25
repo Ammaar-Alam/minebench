@@ -12,7 +12,7 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import { createArenaBuildSnapshotArtifactSignedUrl } from "@/lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
-import { createArenaMatchupToken } from "@/lib/arena/matchupToken";
+import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/arena/matchupToken";
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
   getArenaMatchupSamplingStateWithMeta,
@@ -662,6 +662,13 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const payloadMode = parseBuildPayloadMode(url.searchParams.get("payload"));
   const requestedPromptId = url.searchParams.get("promptId") ?? undefined;
+  if (!hasArenaMatchupSigningSecret()) {
+    return respondJson(
+      { error: "Arena matchup token signing is not configured." },
+      { status: 503 },
+    );
+  }
+
   let sampling: Awaited<ReturnType<typeof getArenaMatchupSamplingStateWithMeta>>;
   try {
     sampling = await getArenaMatchupSamplingStateWithMeta();

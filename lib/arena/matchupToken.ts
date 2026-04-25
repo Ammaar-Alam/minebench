@@ -24,18 +24,36 @@ export type ArenaMatchupTokenPayload = {
   issuedAt: number;
 };
 
+const globalForArenaMatchupTokens = globalThis as typeof globalThis & {
+  arenaMatchupDevSigningSecret?: string;
+};
+
+function configuredArenaMatchupSigningSecret(): string | null {
+  return (
+    [
+      process.env.ARENA_MATCHUP_SIGNING_SECRET,
+      process.env.ADMIN_TOKEN,
+      process.env.NEXTAUTH_SECRET,
+    ].find((value) => value?.trim())?.trim() ?? null
+  );
+}
+
+export function hasArenaMatchupSigningSecret(): boolean {
+  return configuredArenaMatchupSigningSecret() != null || process.env.NODE_ENV !== "production";
+}
+
 function getArenaMatchupSigningSecret(): string {
-  const secret = [
-    process.env.ARENA_MATCHUP_SIGNING_SECRET,
-    process.env.ADMIN_TOKEN,
-    process.env.NEXTAUTH_SECRET,
-  ].find((value) => value?.trim());
-  if (!secret) {
-    throw new Error(
-      "ARENA_MATCHUP_SIGNING_SECRET, ADMIN_TOKEN, or NEXTAUTH_SECRET must be set for arena matchup tokens.",
-    );
+  const secret = configuredArenaMatchupSigningSecret();
+  if (secret) return secret;
+
+  if (process.env.NODE_ENV !== "production") {
+    globalForArenaMatchupTokens.arenaMatchupDevSigningSecret ??= randomUUID();
+    return globalForArenaMatchupTokens.arenaMatchupDevSigningSecret;
   }
-  return secret.trim();
+
+  throw new Error(
+    "ARENA_MATCHUP_SIGNING_SECRET, ADMIN_TOKEN, or NEXTAUTH_SECRET must be set for arena matchup tokens.",
+  );
 }
 
 function encodeBase64Url(value: string): string {
