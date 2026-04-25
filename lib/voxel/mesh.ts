@@ -1200,6 +1200,20 @@ async function createVoxelMeshPayloadInWorker(
   });
 }
 
+export async function warmVoxelMeshPayload(
+  build: VoxelBuild,
+  palette: BlockDefinition[],
+  opts?: CreateVoxelGroupAsyncOpts,
+): Promise<void> {
+  const cacheKey = opts?.cacheKey?.trim();
+  if (!cacheKey) return;
+  try {
+    await createVoxelMeshPayloadInWorker(build, palette, opts);
+  } catch {
+    // best effort only
+  }
+}
+
 // Async variant that periodically yields to keep the main thread responsive during huge builds.
 async function createVoxelGroupAsyncLocal(
   build: VoxelBuild,

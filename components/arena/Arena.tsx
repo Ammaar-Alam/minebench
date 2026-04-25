@@ -16,6 +16,8 @@ import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
 import { ErrorState } from "@/components/ErrorState";
 import { trackEvent } from "@/lib/analytics";
+import { getPalette } from "@/lib/blocks/palettes";
+import { warmVoxelMeshPayload } from "@/lib/voxel/mesh";
 
 type ArenaState =
   | { kind: "loading" }
@@ -235,6 +237,12 @@ type CachedHydratedBuild = {
   serverValidated: boolean;
   variant: ArenaBuildVariant;
   buildLoadHints?: ArenaMatchup["a"]["buildLoadHints"];
+};
+
+type FullBuildPrefetch = {
+  matchupId: string;
+  controller: AbortController;
+  promise: Promise<BuildVariantResponse>;
 };
 
 type AutoFullHydrationRetry = {
@@ -784,12 +792,19 @@ type SideLoadState = {
 };
 
 function laneNeedsFullHydration(lane: ArenaMatchup["a"]): boolean {
-  if (!lane.buildLoadHints || lane.buildLoadHints.initialVariant !== "preview") return false;
-  // Before the preview payload is present, we're still doing the initial retrieval (not the "upgrade to full").
+  if (!laneExpectsFullHydration(lane)) return false;
   if (!lane.build) return false;
-  const full = lane.buildLoadHints.fullBlockCount ?? 0;
-  if (!Number.isFinite(full) || full <= 0) return false;
+  const full = lane.buildLoadHints?.fullBlockCount ?? 0;
   return lane.build.blocks.length < full;
+}
+
+function laneExpectsFullHydration(lane: ArenaMatchup["a"]): boolean {
+  const hints = lane.buildLoadHints;
+  if (!hints || hints.initialVariant !== "preview") return false;
+  const full = hints.fullBlockCount ?? 0;
+  const preview = hints.previewBlockCount ?? 0;
+  if (!Number.isFinite(full) || full <= 0) return false;
+  return !Number.isFinite(preview) || preview < full;
 }
 
 function laneShouldAutoUpgradeToFull(lane: ArenaMatchup["a"]): boolean {
@@ -919,6 +934,16 @@ function getLaneMeshCacheKey(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): strin
   return `${ref.buildId}:${variant}:${checksum}:${lane.build.blocks.length}`;
 }
 
+function getHydratedMeshCacheKey(
+  ref: ArenaBuildRef,
+  variant: ArenaBuildVariant,
+  blockCount: number,
+): string | null {
+  const checksum = ref.checksum?.trim();
+  if (!ref.buildId || !checksum || blockCount <= 0) return null;
+  return `${ref.buildId}:${variant}:${checksum}:${blockCount}`;
+}
+
 function estimateCachedHydratedBuildBytes(entry: CachedHydratedBuild): number {
   if (entry.variant === "preview") {
     return Math.max(1, entry.build.blocks.length * 34);
@@ -1022,6 +1047,7 @@ export function Arena() {
   const initialHydrationControllersRef = useRef(new Map<string, AbortController>());
   const fullHydrationControllersRef = useRef(new Map<string, AbortController>());
   const hydratedBuildCacheRef = useRef(new Map<string, CachedHydratedBuild>());
+  const fullBuildPrefetchRef = useRef(new Map<string, FullBuildPrefetch>());
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
   const viewerReadyRef = useRef<{ matchupId: string; a: boolean; b: boolean } | null>(null);
   const autoFullHydrationRetriesRef = useRef(new Map<string, AutoFullHydrationRetry>());
@@ -1320,8 +1346,8 @@ export function Arena() {
     return new Promise<void>((resolve) => setTimeout(resolve, ms));
   }
 
-  const cacheHydratedBuild = useCallback((ref: ArenaBuildRef, entry: CachedHydratedBuild) => {
-    if (estimateCachedHydratedBuildBytes(entry) > CLIENT_BUILD_CACHE_MAX_EST_BYTES) {
+  const cacheHydratedBuild = useCallback((ref: ArenaBuildRef, entry: CachedHydratedBuild, opts?: { force?: boolean }) => {
+    if (!opts?.force && estimateCachedHydratedBuildBytes(entry) > CLIENT_BUILD_CACHE_MAX_EST_BYTES) {
       return;
     }
 
@@ -1418,6 +1444,14 @@ export function Arena() {
       if (matchupId && key !== matchupId) continue;
       controller.abort();
       initialHydrationControllersRef.current.delete(key);
+    }
+  }, []);
+
+  const abortFullPrefetches = useCallback((matchupId?: string) => {
+    for (const [key, entry] of fullBuildPrefetchRef.current) {
+      if (matchupId && entry.matchupId !== matchupId) continue;
+      entry.controller.abort();
+      fullBuildPrefetchRef.current.delete(key);
     }
   }, []);
 
@@ -1520,24 +1554,30 @@ export function Arena() {
     try {
       const hydrationStartedAt = performance.now();
       let payload: BuildVariantResponse;
-      // stream classes stay on stream paths
-      const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
-      if (shouldHydrateViaSnapshot(deliveryClass)) {
-        try {
-          payload = await fetchBuildVariantSnapshot(ref, effectiveSignal);
-        } catch {
+      const prefetchKey = target === "full" ? getHydratedBuildCacheKey(ref) : null;
+      const prefetched = prefetchKey ? fullBuildPrefetchRef.current.get(prefetchKey)?.promise : null;
+      if (prefetched) {
+        payload = await prefetched;
+      } else {
+        // stream classes stay on stream paths
+        const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
+        if (shouldHydrateViaSnapshot(deliveryClass)) {
+          try {
+            payload = await fetchBuildVariantSnapshot(ref, effectiveSignal);
+          } catch {
+            payload = await fetchBuildVariantStream(ref, {
+              signal: effectiveSignal,
+              onProgress: applyProgressiveBuild,
+              allowSnapshotFallback,
+            });
+          }
+        } else {
           payload = await fetchBuildVariantStream(ref, {
             signal: effectiveSignal,
             onProgress: applyProgressiveBuild,
             allowSnapshotFallback,
           });
         }
-      } else {
-        payload = await fetchBuildVariantStream(ref, {
-          signal: effectiveSignal,
-          onProgress: applyProgressiveBuild,
-          allowSnapshotFallback,
-        });
       }
       const hydrationMs = performance.now() - hydrationStartedAt;
       const resolvedRef: ArenaBuildRef = {
@@ -1664,23 +1704,96 @@ export function Arena() {
     [clearAutoFullHydrationRetry, hydrateMatchupSide],
   );
 
+  const prefetchFullLaneForVote = useCallback(
+    (matchupValue: ArenaMatchup, side: "a" | "b") => {
+      const lane = matchupValue[side];
+      const ref = lane.buildRef;
+      if (!ref || !laneExpectsFullHydration(lane)) return;
+
+      const warmCachedMesh = (
+        entry: CachedHydratedBuild,
+        meshRef: ArenaBuildRef = ref,
+        signal?: AbortSignal,
+      ) => {
+        if (entry.variant !== "full") return;
+        const meshKey = getHydratedMeshCacheKey(meshRef, entry.variant, entry.build.blocks.length);
+        if (!meshKey) return;
+        void warmVoxelMeshPayload(entry.build, getPalette("simple"), { cacheKey: meshKey, signal });
+      };
+
+      const cached = readHydratedBuildFromCache(ref);
+      if (cached?.variant === "full") {
+        warmCachedMesh(cached);
+        return;
+      }
+
+      const cacheKey = getHydratedBuildCacheKey(ref);
+      if (fullBuildPrefetchRef.current.has(cacheKey)) return;
+      const controller = new AbortController();
+
+      const promise = (async () => {
+        const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, "full");
+        const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
+        const payload = shouldHydrateViaSnapshot(deliveryClass)
+          ? await fetchBuildVariantSnapshot(ref, controller.signal).catch(() =>
+              fetchBuildVariantStream(ref, { signal: controller.signal, allowSnapshotFallback }),
+            )
+          : await fetchBuildVariantStream(ref, { signal: controller.signal, allowSnapshotFallback });
+        const resolvedRef: ArenaBuildRef = {
+          buildId: payload.buildId === ref.buildId ? payload.buildId : ref.buildId,
+          variant: payload.variant ?? ref.variant,
+          checksum: payload.checksum ?? ref.checksum ?? null,
+        };
+        if (!payload.voxelBuild) {
+          throw new Error("Prefetched build response was empty");
+        }
+        const entry: CachedHydratedBuild = {
+          build: payload.voxelBuild,
+          serverValidated: payload.serverValidated,
+          variant: resolvedRef.variant,
+          buildLoadHints: payload.buildLoadHints,
+        };
+        cacheHydratedBuild(resolvedRef, entry, { force: true });
+        warmCachedMesh(entry, resolvedRef, controller.signal);
+        return payload;
+      })();
+
+      fullBuildPrefetchRef.current.set(cacheKey, {
+        matchupId: matchupValue.id,
+        controller,
+        promise,
+      });
+      void promise
+        .catch(() => undefined)
+        .finally(() => {
+          if (fullBuildPrefetchRef.current.get(cacheKey)?.promise === promise) {
+            fullBuildPrefetchRef.current.delete(cacheKey);
+          }
+        });
+    },
+    [cacheHydratedBuild, readHydratedBuildFromCache],
+  );
+
   const prefetchMatchupBuilds = useCallback(
     (matchupValue: ArenaMatchup) => {
       for (const side of ["a", "b"] as const) {
         const lane = matchupValue[side];
-        if (!shouldPrefetchInitialBuild(lane.buildLoadHints)) continue;
-        void hydrateMatchupSide(matchupValue, side, "initial", { silent: true });
+        if (shouldPrefetchInitialBuild(lane.buildLoadHints)) {
+          void hydrateMatchupSide(matchupValue, side, "initial", { silent: true });
+        }
+        prefetchFullLaneForVote(matchupValue, side);
       }
     },
-    [hydrateMatchupSide],
+    [hydrateMatchupSide, prefetchFullLaneForVote],
   );
 
   useEffect(() => {
     return () => {
       if (matchup?.id) abortFullHydrations(matchup.id);
       if (matchup?.id) abortInitialHydrations(matchup.id);
+      if (matchup?.id) abortFullPrefetches(matchup.id);
     };
-  }, [abortFullHydrations, abortInitialHydrations, matchup?.id]);
+  }, [abortFullHydrations, abortFullPrefetches, abortInitialHydrations, matchup?.id]);
 
   useEffect(() => {
     if (reveal.kind !== "reveal") return;
@@ -1746,6 +1859,14 @@ export function Arena() {
     setRetrying(true);
     setReloadToken((n) => n + 1);
   }, []);
+
+  useEffect(() => {
+    const current =
+      stateRef.current.kind === "ready" ? stateRef.current.matchup : null;
+    if (!current) return;
+    prefetchFullLaneForVote(current, "a");
+    prefetchFullLaneForVote(current, "b");
+  }, [matchup?.id, prefetchFullLaneForVote]);
 
   useEffect(() => {
     const current =
@@ -2011,6 +2132,7 @@ export function Arena() {
       // old hydration should not overlap the next matchup
       abortInitialHydrations(matchup.id);
       abortFullHydrations(matchup.id);
+      abortFullPrefetches(matchup.id);
       advanceNowRequestedAtRef.current = null;
       const startedAt = Date.now();
       const advanceAt = startedAt + REVEAL_MS_AFTER_SKIP;
