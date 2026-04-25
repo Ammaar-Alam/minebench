@@ -11,13 +11,20 @@ import { ServerTiming } from "@/lib/serverTiming";
 export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
-const VOTE_JOB_DRAIN_AFTER_RESPONSE =
-  (process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE ?? "1").trim() !== "0";
+const VOTE_JOB_DRAIN_AFTER_RESPONSE = readBoolEnv("ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE", true);
 
 const reqSchema = z.object({
   matchupId: z.string().min(1).max(2048),
   choice: z.union([z.literal("A"), z.literal("B"), z.literal("TIE"), z.literal("BOTH_BAD")]),
 });
+
+function readBoolEnv(name: string, fallback: boolean): boolean {
+  const normalized = process.env[name]?.trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
 
 function getOrSetSessionId(res: NextResponse, req: Request) {
   const cookieHeader = req.headers.get("cookie") ?? "";
