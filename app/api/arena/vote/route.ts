@@ -71,41 +71,42 @@ export async function POST(req: Request) {
 
   const { matchupId, choice } = parsed.data as { matchupId: string; choice: VoteChoice };
 
-  const lookupStartedAt = timing.start();
-  const tokenMatchup = parseArenaMatchupToken(matchupId);
-  const dbMatchupId = tokenMatchup?.id ?? matchupId;
-  const matchup = tokenMatchup
-    ? {
-        id: tokenMatchup.id,
-        promptId: tokenMatchup.promptId,
-        modelAId: tokenMatchup.modelAId,
-        modelBId: tokenMatchup.modelBId,
-        buildAId: tokenMatchup.buildAId,
-        buildBId: tokenMatchup.buildBId,
-        samplingLane: tokenMatchup.samplingLane ?? null,
-        samplingReason: tokenMatchup.samplingReason ?? null,
-      }
-    : await prisma.matchup.findUnique({
-        where: { id: dbMatchupId },
-        select: {
-          id: true,
-          promptId: true,
-          modelAId: true,
-          modelBId: true,
-          buildAId: true,
-          buildBId: true,
-          samplingLane: true,
-          samplingReason: true,
-        },
-      });
-  timing.end("lookup", lookupStartedAt);
-
-  if (!matchup) return respondJson({ error: "Matchup not found" }, { status: 404 });
-
-  const res = NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
-  const sessionId = getOrSetSessionId(res, req);
+  let res: NextResponse | null = null;
 
   try {
+    const lookupStartedAt = timing.start();
+    const tokenMatchup = parseArenaMatchupToken(matchupId);
+    const dbMatchupId = tokenMatchup?.id ?? matchupId;
+    const matchup = tokenMatchup
+      ? {
+          id: tokenMatchup.id,
+          promptId: tokenMatchup.promptId,
+          modelAId: tokenMatchup.modelAId,
+          modelBId: tokenMatchup.modelBId,
+          buildAId: tokenMatchup.buildAId,
+          buildBId: tokenMatchup.buildBId,
+          samplingLane: tokenMatchup.samplingLane ?? null,
+          samplingReason: tokenMatchup.samplingReason ?? null,
+        }
+      : await prisma.matchup.findUnique({
+          where: { id: dbMatchupId },
+          select: {
+            id: true,
+            promptId: true,
+            modelAId: true,
+            modelBId: true,
+            buildAId: true,
+            buildBId: true,
+            samplingLane: true,
+            samplingReason: true,
+          },
+        });
+    timing.end("lookup", lookupStartedAt);
+
+    if (!matchup) return respondJson({ error: "Matchup not found" }, { status: 404 });
+
+    res = NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
+    const sessionId = getOrSetSessionId(res, req);
     const txStartedAt = timing.start();
     const voteId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
@@ -176,7 +177,7 @@ export async function POST(req: Request) {
       }
     }
   } catch (err) {
-    if (isDuplicateVoteError(err)) {
+    if (res && isDuplicateVoteError(err)) {
       if (!finalized) {
         timing.end("total", requestStartedAt);
         finalized = true;
@@ -198,6 +199,9 @@ export async function POST(req: Request) {
   if (!finalized) {
     timing.end("total", requestStartedAt);
     finalized = true;
+  }
+  if (!res) {
+    return respondJson({ error: "Vote failed" }, { status: 409 });
   }
   timing.apply(res.headers);
   return res;
