@@ -360,8 +360,8 @@ async function fetchBuildVariantStream(
 ): Promise<BuildVariantResponse> {
   let lastError: unknown = null;
   const attempts: Array<() => Promise<BuildVariantResponse>> = [
-    () => fetchBuildVariantStreamOnce(ref, true, opts),
     () => fetchBuildVariantSnapshot(ref, opts?.signal),
+    () => fetchBuildVariantStreamOnce(ref, true, opts),
     () => fetchBuildVariantStreamOnce(ref, false, opts),
     () => fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS * 2),
   ];

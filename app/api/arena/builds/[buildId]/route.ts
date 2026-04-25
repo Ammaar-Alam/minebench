@@ -260,6 +260,7 @@ export async function GET(
     ((variant === "preview" && SNAPSHOT_PREVIEW_ARTIFACT_REDIRECT_ENABLED) ||
       (variant === "full" &&
         (shellHints.deliveryClass === "snapshot" || shellHints.deliveryClass === "inline")));
+  let shouldRequireStreamFallbackOnSnapshotMiss = false;
   if (expectedChecksum && storedChecksum && expectedChecksum !== storedChecksum) {
     return NextResponse.json(
       {
@@ -299,25 +300,10 @@ export async function GET(
         return new Response(null, { status: 307, headers });
       }
     } catch {
-      // Full-build JSON serialization is the worst possible fallback under
-      // load; let clients use the chunked stream path instead.
+      // snapshot miss can still use the db snapshot
     }
     if (requireStreamFallbackOnMiss) {
-      const headers = new Headers({
-        "Cache-Control": "no-store",
-        "Retry-After": "1",
-        "x-build-delivery-class": deliveryClass,
-        "x-build-source": "artifact-redirect-miss",
-      });
-      timing.end("total", requestStartedAt);
-      timing.apply(headers);
-      return NextResponse.json(
-        {
-          error: "Full build artifact is still warming. Use stream fallback.",
-          retryVia: "stream",
-        },
-        { status: 503, headers },
-      );
+      shouldRequireStreamFallbackOnSnapshotMiss = true;
     }
   }
 
@@ -381,6 +367,24 @@ export async function GET(
     });
     timing.apply(headers);
     return new Response(Buffer.from(persistedResponseBytes), { headers });
+  }
+
+  if (shouldRequireStreamFallbackOnSnapshotMiss) {
+    const headers = new Headers({
+      "Cache-Control": "no-store",
+      "Retry-After": "1",
+      "x-build-delivery-class": deliveryClass,
+      "x-build-source": "artifact-redirect-miss",
+    });
+    timing.end("total", requestStartedAt);
+    timing.apply(headers);
+    return NextResponse.json(
+      {
+        error: "Full build artifact is still warming. Use stream fallback.",
+        retryVia: "stream",
+      },
+      { status: 503, headers },
+    );
   }
 
   try {
