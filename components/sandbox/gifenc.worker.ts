@@ -25,74 +25,24 @@ type OutMessage = OutReady | OutAck | OutResult | OutError;
 type Encoder = ReturnType<typeof createOffsetGifEncoder>;
 type Palette = number[][];
 
+const RESERVED_TRANSPARENT_COLOR: [number, number, number] = [11, 18, 32];
+
 let encoder: Encoder | null = null;
 let globalPalette: Palette | null = null;
+let opaquePalette: Palette | null = null;
 let expectedWidth = 0;
 let expectedHeight = 0;
 let transparentIndex = -1;
-let previousPixels: Uint8ClampedArray | null = null;
+let previousIndex: Uint8Array | null = null;
 
 function reset() {
   encoder = null;
   globalPalette = null;
+  opaquePalette = null;
   expectedWidth = 0;
   expectedHeight = 0;
   transparentIndex = -1;
-  previousPixels = null;
-}
-
-function pickLeastUsedPaletteIndex(indexed: Uint8Array, paletteSize: number): number {
-  if (paletteSize < 2) return -1;
-  const counts = new Uint32Array(paletteSize);
-  for (let i = 0; i < indexed.length; i += 1) {
-    counts[indexed[i] ?? 0] += 1;
-  }
-
-  let best = 0;
-  let bestCount = counts[0] ?? 0;
-  for (let i = 1; i < counts.length; i += 1) {
-    const n = counts[i] ?? 0;
-    if (n < bestCount) {
-      best = i;
-      bestCount = n;
-    }
-  }
-  return best;
-}
-
-function nearestOpaqueIndex(
-  palette: Palette,
-  excluded: number,
-  r: number,
-  g: number,
-  b: number,
-  cache: Map<number, number>,
-): number {
-  const key = (r << 16) | (g << 8) | b;
-  const cached = cache.get(key);
-  if (typeof cached === "number") return cached;
-
-  let best = excluded === 0 ? 1 : 0;
-  if (best >= palette.length) best = 0;
-  let bestDist = Number.POSITIVE_INFINITY;
-
-  for (let i = 0; i < palette.length; i += 1) {
-    if (i === excluded) continue;
-    const color = palette[i];
-    if (!color) continue;
-    const dr = (color[0] ?? 0) - r;
-    const dg = (color[1] ?? 0) - g;
-    const db = (color[2] ?? 0) - b;
-    const dist = dr * dr + dg * dg + db * db;
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = i;
-      if (dist === 0) break;
-    }
-  }
-
-  cache.set(key, best);
-  return best;
+  previousIndex = null;
 }
 
 function post(msg: OutMessage, transfer?: Transferable[]) {
@@ -118,12 +68,20 @@ function buildPaletteFromSamples(samples: ArrayBuffer[]) {
     offset += view.length;
   }
 
-  return quantize(merged, 256) as Palette;
+  return quantize(merged, 255) as Palette;
+}
+
+function installPalette(palette: Palette | null) {
+  const opaque = palette && palette.length > 0 ? palette.slice(0, 255) : [[0, 0, 0]];
+  // reserve one transparent slot so real pixels never get remapped into trails
+  globalPalette = [...opaque, RESERVED_TRANSPARENT_COLOR];
+  opaquePalette = opaque;
+  transparentIndex = opaque.length;
 }
 
 function findDirtyRect(
-  pixels: Uint8ClampedArray,
-  previous: Uint8ClampedArray,
+  indexed: Uint8Array,
+  previous: Uint8Array,
   width: number,
   height: number,
 ) {
@@ -133,13 +91,8 @@ function findDirtyRect(
   let maxY = -1;
 
   for (let y = 0, px = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1, px += 4) {
-      const changed =
-        pixels[px] !== previous[px] ||
-        pixels[px + 1] !== previous[px + 1] ||
-        pixels[px + 2] !== previous[px + 2] ||
-        pixels[px + 3] !== previous[px + 3];
-      if (!changed) continue;
+    for (let x = 0; x < width; x += 1, px += 1) {
+      if (indexed[px] === previous[px]) continue;
       if (x < minX) minX = x;
       if (y < minY) minY = y;
       if (x > maxX) maxX = x;
@@ -157,18 +110,18 @@ function findDirtyRect(
   };
 }
 
-function extractSubPixels(
-  pixels: Uint8ClampedArray,
+function extractSubIndex(
+  indexed: Uint8Array,
   frameWidth: number,
   rect: { x: number; y: number; width: number; height: number },
 ) {
-  const subPixels = new Uint8ClampedArray(rect.width * rect.height * 4);
+  const subIndex = new Uint8Array(rect.width * rect.height);
   for (let y = 0; y < rect.height; y += 1) {
-    const srcStart = ((rect.y + y) * frameWidth + rect.x) * 4;
-    const srcEnd = srcStart + rect.width * 4;
-    subPixels.set(pixels.subarray(srcStart, srcEnd), y * rect.width * 4);
+    const srcStart = (rect.y + y) * frameWidth + rect.x;
+    const srcEnd = srcStart + rect.width;
+    subIndex.set(indexed.subarray(srcStart, srcEnd), y * rect.width);
   }
-  return subPixels;
+  return subIndex;
 }
 
 self.onmessage = (event: MessageEvent<InMessage>) => {
@@ -188,7 +141,7 @@ self.onmessage = (event: MessageEvent<InMessage>) => {
     }
 
     if (msg.type === "palette") {
-      globalPalette = buildPaletteFromSamples(msg.samples);
+      installPalette(buildPaletteFromSamples(msg.samples));
       return;
     }
 
@@ -201,26 +154,27 @@ self.onmessage = (event: MessageEvent<InMessage>) => {
       }
 
       const pixels = new Uint8ClampedArray(msg.pixels);
-      if (!globalPalette) {
-        globalPalette = quantize(pixels, 256) as Palette;
+      if (!globalPalette || !opaquePalette) {
+        installPalette(quantize(pixels, 255) as Palette);
       }
+      const palette = globalPalette;
+      const colorPalette = opaquePalette;
+      if (!palette || !colorPalette) throw new Error("Palette not initialized");
 
-      if (msg.frameIndex === 0 || !previousPixels || previousPixels.length !== pixels.length) {
-        const firstIndex = applyPalette(pixels, globalPalette);
-        if (transparentIndex < 0) {
-          transparentIndex = pickLeastUsedPaletteIndex(firstIndex, globalPalette.length);
-        }
-        encoder.writeFrame(firstIndex, msg.width, msg.height, {
-          palette: globalPalette,
+      const indexed = applyPalette(pixels, colorPalette);
+
+      if (msg.frameIndex === 0 || !previousIndex || previousIndex.length !== indexed.length) {
+        encoder.writeFrame(indexed, msg.width, msg.height, {
+          palette,
           delay: msg.delay,
           repeat: msg.frameIndex === 0 ? 0 : undefined,
         });
-        previousPixels = pixels.slice();
+        previousIndex = indexed.slice();
         post({ type: "ack", frameIndex: msg.frameIndex });
         return;
       }
 
-      const dirtyRect = findDirtyRect(pixels, previousPixels, expectedWidth, expectedHeight);
+      const dirtyRect = findDirtyRect(indexed, previousIndex, expectedWidth, expectedHeight);
       if (!dirtyRect) {
         const idleIndex = new Uint8Array([Math.max(0, transparentIndex)]);
         encoder.writeFrame(idleIndex, 1, 1, {
@@ -231,43 +185,22 @@ self.onmessage = (event: MessageEvent<InMessage>) => {
           transparentIndex: transparentIndex >= 0 ? transparentIndex : undefined,
           dispose: transparentIndex >= 0 ? 1 : undefined,
         });
-        previousPixels = pixels.slice();
+        previousIndex = indexed.slice();
         post({ type: "ack", frameIndex: msg.frameIndex });
         return;
       }
 
-      const subPixels = extractSubPixels(pixels, expectedWidth, dirtyRect);
-      const index = applyPalette(subPixels, globalPalette);
+      const index = extractSubIndex(indexed, expectedWidth, dirtyRect);
       let hasTransparentPixels = false;
 
-      if (transparentIndex >= 0 && globalPalette.length > 1) {
-        const remapCache = new Map<number, number>();
+      if (transparentIndex >= 0) {
         for (let y = 0, idx = 0; y < dirtyRect.height; y += 1) {
-          const subRowStart = y * dirtyRect.width * 4;
-          const prevRowStart = ((dirtyRect.y + y) * expectedWidth + dirtyRect.x) * 4;
+          const prevRowStart = (dirtyRect.y + y) * expectedWidth + dirtyRect.x;
           for (let x = 0; x < dirtyRect.width; x += 1, idx += 1) {
-            const subOffset = subRowStart + x * 4;
-            const prevOffset = prevRowStart + x * 4;
-            const unchanged =
-              subPixels[subOffset] === previousPixels[prevOffset] &&
-              subPixels[subOffset + 1] === previousPixels[prevOffset + 1] &&
-              subPixels[subOffset + 2] === previousPixels[prevOffset + 2] &&
-              subPixels[subOffset + 3] === previousPixels[prevOffset + 3];
-            if (unchanged) {
+            const prevOffset = prevRowStart + x;
+            if (indexed[prevOffset] === previousIndex[prevOffset]) {
               index[idx] = transparentIndex;
               hasTransparentPixels = true;
-              continue;
-            }
-
-            if (index[idx] === transparentIndex) {
-              index[idx] = nearestOpaqueIndex(
-                globalPalette,
-                transparentIndex,
-                subPixels[subOffset] ?? 0,
-                subPixels[subOffset + 1] ?? 0,
-                subPixels[subOffset + 2] ?? 0,
-                remapCache,
-              );
             }
           }
         }
@@ -281,7 +214,7 @@ self.onmessage = (event: MessageEvent<InMessage>) => {
         transparentIndex: hasTransparentPixels ? transparentIndex : undefined,
         dispose: hasTransparentPixels ? 1 : undefined,
       });
-      previousPixels = pixels.slice();
+      previousIndex = indexed.slice();
       post({ type: "ack", frameIndex: msg.frameIndex });
       return;
     }

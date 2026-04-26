@@ -26,8 +26,8 @@ const GIF_DELAY_TICK_MS = 10;
 const ROTATION_SLOWDOWN_FACTOR = 1.25;
 const MAX_IN_FLIGHT_FRAMES = 6;
 const YIELD_EVERY_FRAMES = 50;
-const PALETTE_SAMPLE_COUNT = 8;
-const PALETTE_SAMPLE_SIZE = { width: 480, height: 270 };
+const PALETTE_SAMPLE_COUNT = 12;
+const PALETTE_SAMPLE_SIZE = { width: 640, height: 360 };
 const EXPORT_SIZE_SINGLE = { width: 1920, height: 1080 };
 const EXPORT_SIZE_COMPARE = { width: 1920, height: 1080 };
 const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * 1024 * 1024;
@@ -44,6 +44,8 @@ const PANEL_PAD = 12;
 const PANEL_META_HEIGHT = 62;
 const PANEL_RADIUS = 18;
 const CAPTURE_RADIUS = 14;
+const HEADER_PROMPT_FONT = '600 18px "IBM Plex Sans", "Segoe UI", sans-serif';
+const HEADER_PROMPT_LINE_HEIGHT = 23;
 
 type ExportLayout = {
   width: number;
@@ -173,7 +175,7 @@ function buildExportLayout(
 ): ExportLayout {
   const panelGap = count === 1 ? 0 : PANEL_GAP;
   const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
-  ctx.font = '500 13px "IBM Plex Sans", "Segoe UI", sans-serif';
+  ctx.font = HEADER_PROMPT_FONT;
   const normalizedPrompt = promptText.replace(/\s+/g, " ").trim();
   const promptLines = wrapTextLines(
     ctx,
@@ -181,7 +183,7 @@ function buildExportLayout(
     width - 56,
     2,
   );
-  const panelTop = Math.max(86, 54 + promptLines.length * 16 + 22);
+  const panelTop = Math.max(104, 60 + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24);
   const panelHeight = height - panelTop - EXPORT_MARGIN_BOTTOM;
 
   return {
@@ -297,12 +299,11 @@ function drawBaseBackdrop(
   ctx.textBaseline = "top";
   ctx.fillText(opts.title, 28, 18);
 
-  ctx.fillStyle = "rgba(148, 163, 184, 0.95)";
-  ctx.font = '500 13px "IBM Plex Sans", "Segoe UI", sans-serif';
-  const promptY = 54;
-  const lineHeight = 16;
+  ctx.fillStyle = "rgba(203, 213, 225, 0.95)";
+  ctx.font = HEADER_PROMPT_FONT;
+  const promptY = 60;
   for (let i = 0; i < opts.promptLines.length; i += 1) {
-    ctx.fillText(opts.promptLines[i] ?? "", 28, promptY + i * lineHeight);
+    ctx.fillText(opts.promptLines[i] ?? "", 28, promptY + i * HEADER_PROMPT_LINE_HEIGHT);
   }
 
   ctx.fillStyle = "rgba(100, 116, 139, 0.85)";
