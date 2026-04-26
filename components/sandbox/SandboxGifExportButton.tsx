@@ -19,6 +19,8 @@ type Props = {
   className?: string;
 };
 
+type GifExportFormat = "wide" | "vertical";
+
 const TARGET_FPS = 60;
 const FRAME_DELAY_MS = Math.round(1000 / TARGET_FPS);
 const FRAME_COUNT = 160;
@@ -28,14 +30,14 @@ const MAX_IN_FLIGHT_FRAMES = 6;
 const YIELD_EVERY_FRAMES = 50;
 const PALETTE_SAMPLE_COUNT = 12;
 const PALETTE_SAMPLE_SIZE = { width: 640, height: 360 };
-const EXPORT_SIZE_SINGLE = { width: 1920, height: 1080 };
-const EXPORT_SIZE_COMPARE = { width: 1920, height: 1080 };
+const EXPORT_SIZE_WIDE = { width: 1920, height: 1080 };
+const EXPORT_SIZE_VERTICAL = { width: 1080, height: 1920 };
 const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * 1024 * 1024;
 const LOSSLESS_OPT_LARGE_INPUT_BYTES = 10 * 1024 * 1024;
 const LOSSLESS_OPT_ALWAYS_KEEP_BYTES = 15 * 1024 * 1024;
 const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
 const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
-const LOSSLESS_OPT_TARGET_MAX_BYTES = 30 * 1024 * 1024;
+const LOSSLESS_OPT_TARGET_MAX_BYTES = 15 * 1024 * 1024;
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
@@ -50,10 +52,7 @@ const HEADER_PROMPT_LINE_HEIGHT = 23;
 type ExportLayout = {
   width: number;
   height: number;
-  panelWidth: number;
-  panelHeight: number;
-  panelGap: number;
-  panelTop: number;
+  panelRects: Array<{ x: number; y: number; width: number; height: number }>;
   header: {
     title: string;
     promptLines: string[];
@@ -172,9 +171,9 @@ function buildExportLayout(
   width: number,
   height: number,
   promptText: string,
+  format: GifExportFormat,
 ): ExportLayout {
   const panelGap = count === 1 ? 0 : PANEL_GAP;
-  const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
   ctx.font = HEADER_PROMPT_FONT;
   const normalizedPrompt = promptText.replace(/\s+/g, " ").trim();
   const promptLines = wrapTextLines(
@@ -184,15 +183,34 @@ function buildExportLayout(
     2,
   );
   const panelTop = Math.max(104, 60 + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24);
-  const panelHeight = height - panelTop - EXPORT_MARGIN_BOTTOM;
+  const panelRects =
+    format === "vertical"
+      ? Array.from({ length: count }, (_, idx) => {
+          const panelWidth = width - EXPORT_MARGIN_X * 2;
+          const panelHeight =
+            (height - panelTop - EXPORT_MARGIN_BOTTOM - panelGap * (count - 1)) / count;
+          return {
+            x: EXPORT_MARGIN_X,
+            y: panelTop + idx * (panelHeight + panelGap),
+            width: panelWidth,
+            height: panelHeight,
+          };
+        })
+      : Array.from({ length: count }, (_, idx) => {
+          const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
+          const panelHeight = height - panelTop - EXPORT_MARGIN_BOTTOM;
+          return {
+            x: EXPORT_MARGIN_X + idx * (panelWidth + panelGap),
+            y: panelTop,
+            width: panelWidth,
+            height: panelHeight,
+          };
+        });
 
   return {
     width,
     height,
-    panelWidth,
-    panelHeight,
-    panelGap,
-    panelTop,
+    panelRects,
     header: {
       title: count === 2 ? "MineBench Comparison" : "MineBench Build",
       promptLines,
@@ -385,10 +403,10 @@ function renderCompositeFrame(
 
   for (let idx = 0; idx < targets.length; idx += 1) {
     const target = targets[idx];
-    const panelX = EXPORT_MARGIN_X + idx * (layout.panelWidth + layout.panelGap);
-    const panelY = layout.panelTop;
-    const captureWidth = Math.max(1, Math.round(layout.panelWidth - PANEL_PAD * 2));
-    const captureHeight = Math.max(1, Math.round(layout.panelHeight - PANEL_PAD * 2 - PANEL_META_HEIGHT));
+    const panel = layout.panelRects[idx];
+    if (!panel) continue;
+    const captureWidth = Math.max(1, Math.round(panel.width - PANEL_PAD * 2));
+    const captureHeight = Math.max(1, Math.round(panel.height - PANEL_PAD * 2 - PANEL_META_HEIGHT));
     const capture = target.viewerRef.current?.captureFrame({
       rotationY: angle,
       width: captureWidth,
@@ -399,17 +417,21 @@ function renderCompositeFrame(
     }
 
     drawPanel(ctx, {
-      x: panelX,
-      y: panelY,
-      width: layout.panelWidth,
-      height: layout.panelHeight,
+      x: panel.x,
+      y: panel.y,
+      width: panel.width,
+      height: panel.height,
       target,
       capture,
     });
   }
 }
 
-async function buildPaletteSamples(targets: SandboxGifExportTarget[], promptText: string) {
+async function buildPaletteSamples(
+  targets: SandboxGifExportTarget[],
+  promptText: string,
+  format: GifExportFormat,
+) {
   const sampleCanvas = document.createElement("canvas");
   sampleCanvas.width = PALETTE_SAMPLE_SIZE.width;
   sampleCanvas.height = PALETTE_SAMPLE_SIZE.height;
@@ -424,6 +446,7 @@ async function buildPaletteSamples(targets: SandboxGifExportTarget[], promptText
     sampleCanvas.width,
     sampleCanvas.height,
     promptText,
+    format,
   );
   const samples: ArrayBuffer[] = [];
   const sampleFrames = buildPaletteSampleFrames(FRAME_COUNT, PALETTE_SAMPLE_COUNT);
@@ -443,11 +466,10 @@ async function buildPaletteSamples(targets: SandboxGifExportTarget[], promptText
 async function buildGifBlob(
   targets: SandboxGifExportTarget[],
   promptText: string,
+  format: GifExportFormat,
   onProgress?: (done: number, total: number) => void,
 ) {
-  const count = targets.length;
-  const width = count === 1 ? EXPORT_SIZE_SINGLE.width : EXPORT_SIZE_COMPARE.width;
-  const height = count === 1 ? EXPORT_SIZE_SINGLE.height : EXPORT_SIZE_COMPARE.height;
+  const { width, height } = format === "vertical" ? EXPORT_SIZE_VERTICAL : EXPORT_SIZE_WIDE;
 
   const frameCanvas = document.createElement("canvas");
   frameCanvas.width = width;
@@ -521,12 +543,12 @@ async function buildGifBlob(
   worker.postMessage({ type: "start" });
   await readyPromise;
 
-  const paletteSamples = await buildPaletteSamples(targets, promptText);
+  const paletteSamples = await buildPaletteSamples(targets, promptText, format);
   if (paletteSamples.length > 0) {
     worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
   }
 
-  const layout = buildExportLayout(frameCtx, count, width, height, promptText);
+  const layout = buildExportLayout(frameCtx, targets.length, width, height, promptText, format);
 
   try {
     const inFlight: Promise<void>[] = [];
@@ -583,10 +605,14 @@ function triggerDownload(blob: Blob, fileName: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = fileName;
+  a.rel = "noopener";
+  a.style.display = "none";
   document.body.appendChild(a);
   a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 60_000);
 }
 
 export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className }: Props) {
@@ -595,6 +621,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [format, setFormat] = useState<GifExportFormat>("wide");
 
   const hasTargets = targets.length > 0;
 
@@ -611,7 +638,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     setProgress({ done: 0, total: FRAME_COUNT });
     await waitForNextPaint();
     try {
-      const blob = await buildGifBlob(targets, promptText ?? "", (done, total) => {
+      const blob = await buildGifBlob(targets, promptText ?? "", format, (done, total) => {
         if (done === total || done % 2 === 0) setProgress({ done, total });
       });
       setOptimizing(true);
@@ -621,7 +648,8 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const typeToken = targets.length === 2 ? "compare" : "build";
-      const fileName = `minebench-${typeToken}-${modelToken}-${promptToken}-${stamp}.gif`;
+      const formatToken = format === "vertical" ? "vertical" : "wide";
+      const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.gif`;
       triggerDownload(finalBlob, fileName);
     } catch (err) {
       const message = err instanceof Error ? err.message : "GIF export failed";
@@ -645,6 +673,70 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const busy = exporting || optimizing;
   const isUnavailable = !hasTargets;
   const shouldKeepTooltipVisible = Boolean(iconOnly && (busy || error));
+  const nextFormat = format === "wide" ? "vertical" : "wide";
+  const formatTitle =
+    format === "wide" ? "Wide GIF selected. Switch to vertical." : "Vertical GIF selected. Switch to wide.";
+
+  const formatToggle = (
+    <button
+      type="button"
+      aria-label={formatTitle}
+      title={formatTitle}
+      disabled={busy}
+      onClick={() => setFormat(nextFormat)}
+      className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+    >
+      <span className="sr-only">{formatTitle}</span>
+      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+        {format === "wide" ? (
+          <rect
+            x="3.5"
+            y="7"
+            width="17"
+            height="10"
+            rx="2.2"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.7"
+          />
+        ) : (
+          <rect
+            x="7"
+            y="3.5"
+            width="10"
+            height="17"
+            rx="2.2"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.7"
+          />
+        )}
+      </svg>
+    </button>
+  );
+
+  const formatSegment = (
+    <div
+      role="group"
+      aria-label="GIF format"
+      className="inline-flex h-9 overflow-hidden rounded-full border border-border/70 bg-bg/55 p-0.5 text-[11px] text-muted backdrop-blur-sm"
+    >
+      {(["wide", "vertical"] as const).map((value) => (
+        <button
+          key={value}
+          type="button"
+          disabled={busy}
+          aria-pressed={format === value}
+          onClick={() => setFormat(value)}
+          className={`rounded-full px-2.5 transition disabled:cursor-not-allowed disabled:opacity-45 ${
+            format === value ? "bg-fg/12 text-fg" : "hover:text-fg"
+          }`}
+        >
+          {value === "wide" ? "16:9" : "9:16"}
+        </button>
+      ))}
+    </div>
+  );
 
   const button = (
     <button
@@ -677,10 +769,17 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     </button>
   );
 
-  if (!iconOnly) return button;
+  if (!iconOnly) {
+    return (
+      <div className="inline-flex items-center gap-1.5">
+        {formatSegment}
+        {button}
+      </div>
+    );
+  }
 
   return (
-    <div className="group/gif-export relative inline-flex items-center">
+    <div className="group/gif-export relative inline-flex items-center gap-1">
       <div
         id={tooltipId}
         role="status"
@@ -689,6 +788,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       >
         <span className="block truncate">{buttonTitle}</span>
       </div>
+      {formatToggle}
       {button}
     </div>
   );
