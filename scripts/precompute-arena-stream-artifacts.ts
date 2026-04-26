@@ -2,6 +2,7 @@
 
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
+import { gzipSync } from "node:zlib";
 import { estimateArenaBuildBytes, getArenaArtifactMinBytes } from "../lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
 import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts";
@@ -251,8 +252,9 @@ async function main() {
           );
 
           if (opts.dryRun) {
+            const compressedBytes = gzipSync(bytes).length;
             console.log(
-              `- dry-run ${row.id} (${variant}): source ${(effectiveBytes / (1024 * 1024)).toFixed(2)} MB, stream ${(bytes.length / (1024 * 1024)).toFixed(2)} MB`,
+              `- dry-run ${row.id} (${variant}): source ${(effectiveBytes / (1024 * 1024)).toFixed(2)} MB, stream ${(bytes.length / (1024 * 1024)).toFixed(2)} MB, gzip ${(compressedBytes / (1024 * 1024)).toFixed(2)} MB`,
             );
             continue;
           }

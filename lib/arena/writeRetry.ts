@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 
-const MAX_ATTEMPTS = 3;
+export const ARENA_WRITE_RETRY_MAX_ATTEMPTS = 3;
 const BASE_DELAY_MS = 40;
 
 function getErrorMessage(error: unknown): string {
@@ -8,19 +8,32 @@ function getErrorMessage(error: unknown): string {
   return String(error ?? "");
 }
 
-function isRetryableArenaWriteError(error: unknown): boolean {
+export function isArenaCapacityError(error: unknown): boolean {
+  // retry only transient db pressure and lock conflicts
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    if (error.code === "P2028" || error.code === "P2034") return true;
+    if (error.code === "P2034" || error.code === "P2028" || error.code === "P2024") {
+      return true;
+    }
   }
 
-  const message = getErrorMessage(error);
+  const message = getErrorMessage(error).toLowerCase();
   return (
     message.includes("deadlock detected") ||
-    message.includes("40P01") ||
+    message.includes("55p03") ||
+    message.includes("40p01") ||
+    message.includes("could not obtain lock") ||
     message.includes("could not serialize access due to") ||
     message.includes("serialization failure") ||
-    message.includes("Please retry your transaction") ||
-    message.includes("Transaction already closed") ||
+    message.includes("please retry your transaction") ||
+    message.includes("unable to start a transaction") ||
+    message.includes("transaction already closed") ||
+    message.includes("timed out after") ||
+    message.includes("timed out, please try again") ||
+    message.includes("timed out fetching a new connection") ||
+    message.includes("connection pool") ||
+    message.includes("pool_timeout") ||
+    message.includes("too many connections") ||
+    message.includes("arena optimistic model conflict") ||
     message.includes("write conflict")
   );
 }
@@ -36,10 +49,11 @@ export async function withArenaWriteRetry<T>(run: () => Promise<T>): Promise<T> 
     try {
       return await run();
     } catch (error) {
-      if (!isRetryableArenaWriteError(error) || attempt >= MAX_ATTEMPTS - 1) {
+      if (!isArenaCapacityError(error) || attempt >= ARENA_WRITE_RETRY_MAX_ATTEMPTS - 1) {
         throw error;
       }
 
+      // small jitter keeps concurrent writers from retrying together
       const backoffMs = BASE_DELAY_MS * 2 ** attempt;
       const jitterMs = Math.floor(Math.random() * BASE_DELAY_MS);
       await sleep(backoffMs + jitterMs);

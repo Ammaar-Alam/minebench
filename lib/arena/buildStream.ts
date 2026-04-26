@@ -5,6 +5,7 @@ import type {
 } from "@/lib/arena/types";
 import type { VoxelBuild, VoxelBlock } from "@/lib/voxel/types";
 import { getBuildStorageBucketFromEnv, getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
+import { gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
 
@@ -47,17 +48,29 @@ const ARENA_STREAM_HELLO_PAD_BYTES = readIntEnv(
 
 const ARENA_STREAM_ARTIFACTS_ENABLED = readBoolEnv("ARENA_STREAM_ARTIFACTS_ENABLED", true);
 const ARENA_STREAM_ARTIFACT_PREFIX = normalizePrefix(
-  process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v2",
+  process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v3-gzip",
 );
 const ARENA_STREAM_ARTIFACT_BUCKET = (
   process.env.ARENA_STREAM_ARTIFACT_BUCKET ?? getBuildStorageBucketFromEnv()
 ).trim();
 const ARENA_STREAM_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_STREAM_ARTIFACT_MISS_TTL_MS",
-  5 * 60 * 1000,
+  1_000,
   1_000,
   60 * 60 * 1000,
 );
+const ARENA_STREAM_ARTIFACT_SIGN_REDIRECTS_ENABLED = readBoolEnv(
+  "ARENA_STREAM_ARTIFACT_SIGN_REDIRECTS_ENABLED",
+  true,
+);
+const ARENA_STREAM_ARTIFACT_SIGN_URL_TTL_SEC = readIntEnv(
+  "ARENA_STREAM_ARTIFACT_SIGN_URL_TTL_SEC",
+  3600,
+  15,
+  3600,
+);
+const ARENA_STREAM_ARTIFACT_CACHE_CONTROL =
+  process.env.ARENA_STREAM_ARTIFACT_CACHE_CONTROL ?? "public, max-age=31536000, immutable";
 
 function readBoolEnv(name: string, fallback: boolean): boolean {
   const raw = process.env[name];
@@ -109,10 +122,29 @@ export type ArenaBuildStreamPlan = {
   chunkBlockCount: number;
 };
 
+export function estimateArenaBuildVariantBytes(
+  hints: ArenaBuildLoadHints | undefined,
+  variant: ArenaBuildVariant,
+  totalBlocks: number,
+): number | null {
+  if (!hints) return estimateBytesFromBlockCount(totalBlocks);
+  if (variant === "preview") {
+    if (hints.initialVariant === "preview") {
+      return normalizeEstimatedBytes(hints.initialEstimatedBytes) ?? estimateBytesFromBlockCount(totalBlocks);
+    }
+    if (hints.previewBlockCount > 0) {
+      return estimateBytesFromBlockCount(hints.previewBlockCount);
+    }
+  }
+  return normalizeEstimatedBytes(hints.fullEstimatedBytes) ?? estimateBytesFromBlockCount(totalBlocks);
+}
+
 export function planArenaBuildStream(opts: {
   totalBlocks: number;
   hints?: ArenaBuildLoadHints;
+  variant?: ArenaBuildVariant;
 }): ArenaBuildStreamPlan {
+  // chunk by estimated bytes so progress feels steady across block counts
   const totalBlocks = Math.max(0, Math.floor(opts.totalBlocks));
   if (totalBlocks === 0) {
     return {
@@ -124,7 +156,8 @@ export function planArenaBuildStream(opts: {
   }
 
   const estimatedBytes =
-    normalizeEstimatedBytes(opts.hints?.fullEstimatedBytes) ?? estimateBytesFromBlockCount(totalBlocks);
+    estimateArenaBuildVariantBytes(opts.hints, opts.variant ?? "full", totalBlocks) ??
+    estimateBytesFromBlockCount(totalBlocks);
 
   if (totalBlocks < ARENA_STREAM_MIN_BLOCKS || estimatedBytes <= ARENA_STREAM_TARGET_CHUNK_BYTES) {
     return {
@@ -205,6 +238,8 @@ type StorageListItem = {
 const legacyArtifactDiscoveryCache = new Map<string, ArenaBuildStreamArtifactRef | null>();
 // Repeated missing-artifact lookups are pure latency; cache misses briefly and fall back immediately.
 const artifactMissCache = new Map<string, number>();
+const artifactSignedUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const artifactSignedUrlInflight = new Map<string, Promise<string | null>>();
 const ARTIFACT_MISS_CACHE_PRUNE_INTERVAL = 256;
 let artifactMissCacheTouches = 0;
 
@@ -240,6 +275,11 @@ function maybePruneArtifactMissCache(now: number): void {
   for (const [key, expiresAt] of artifactMissCache) {
     if (expiresAt <= now) {
       artifactMissCache.delete(key);
+    }
+  }
+  for (const [key, entry] of artifactSignedUrlCache) {
+    if (entry.expiresAt <= now) {
+      artifactSignedUrlCache.delete(key);
     }
   }
 }
@@ -327,6 +367,7 @@ async function discoverLegacyArenaBuildStreamArtifactRef(
 ): Promise<ArenaBuildStreamArtifactRef | null> {
   const cacheKey = `${buildId}:${variant}`;
   if (legacyArtifactDiscoveryCache.has(cacheKey)) {
+    // old artifact names are a migration fallback, not a hot lookup
     return legacyArtifactDiscoveryCache.get(cacheKey) ?? null;
   }
   if (!isArenaBuildStreamArtifactEnabled()) {
@@ -406,9 +447,11 @@ export type ArenaBuildStreamEventSequenceInput = {
 export function* iterateArenaBuildStreamEvents(
   input: ArenaBuildStreamEventSequenceInput,
 ): Generator<ArenaBuildStreamEvent> {
+  // artifacts and live streams use the same event shape
   const plan = planArenaBuildStream({
     totalBlocks: input.build.blocks.length,
     hints: input.buildLoadHints,
+    variant: input.variant,
   });
 
   yield {
@@ -448,6 +491,7 @@ export async function fetchArenaBuildStreamArtifact(
 ): Promise<Response | null> {
   const missCacheKey = getArtifactMissCacheKey(buildId, variant, checksum);
   if (hasFreshArtifactMiss(missCacheKey)) {
+    // live stream is faster than repeating a known miss
     return null;
   }
 
@@ -487,33 +531,101 @@ export async function fetchArenaBuildStreamArtifact(
     return resp;
   }
 
-  const discoveredLegacy = await discoverLegacyArenaBuildStreamArtifactRef(buildId, variant, opts);
-  if (discoveredLegacy) {
-    const encodedPath = encodeStoragePath(discoveredLegacy.path);
-    const url = `${config.url}/storage/v1/object/${encodeURIComponent(discoveredLegacy.bucket)}/${encodedPath}`;
-    const resp = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${config.serviceRoleKey}`,
-        apikey: config.serviceRoleKey,
-      },
-      cache: "no-store",
-      signal: opts?.signal,
-    });
-
-    if (resp.ok) {
-      artifactMissCache.delete(missCacheKey);
-      return resp;
-    }
-    if (resp.status !== 404) {
-      const text = await resp.text().catch(() => "");
-      throw new Error(`Legacy stream artifact fetch failed (${resp.status}): ${text || "empty response"}`);
-    }
-    legacyArtifactDiscoveryCache.set(`${buildId}:${variant}`, null);
-  }
-
   rememberArenaBuildStreamArtifactMiss(buildId, variant, checksum);
   return null;
+}
+
+export async function createArenaBuildStreamArtifactSignedUrl(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string | null,
+  opts?: { signal?: AbortSignal; expiresInSec?: number },
+): Promise<string | null> {
+  if (!ARENA_STREAM_ARTIFACT_SIGN_REDIRECTS_ENABLED) return null;
+
+  const missCacheKey = getArtifactMissCacheKey(buildId, variant, checksum);
+  const now = Date.now();
+  maybePruneArtifactMissCache(now);
+  if (hasFreshArtifactMiss(missCacheKey)) {
+    return null;
+  }
+
+  const cachedSignedUrl = artifactSignedUrlCache.get(missCacheKey);
+  if (cachedSignedUrl && cachedSignedUrl.expiresAt > now) {
+    return cachedSignedUrl.url;
+  }
+  const existing = artifactSignedUrlInflight.get(missCacheKey);
+  if (existing) {
+    // coalesce identical sign requests during arena bursts
+    return existing;
+  }
+
+  const promise = (async () => {
+    let config: ReturnType<typeof getSupabaseStorageConfig>;
+    try {
+      config = getSupabaseStorageConfig();
+    } catch {
+      return null;
+    }
+
+    const expiresInSec =
+      typeof opts?.expiresInSec === "number" && Number.isFinite(opts.expiresInSec) && opts.expiresInSec > 0
+        ? Math.floor(opts.expiresInSec)
+        : ARENA_STREAM_ARTIFACT_SIGN_URL_TTL_SEC;
+
+    for (const ref of getArenaBuildStreamArtifactFetchRefs(buildId, variant, checksum)) {
+      const encodedPath = encodeStoragePath(ref.path);
+      const url = `${config.url}/storage/v1/object/sign/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          apikey: config.serviceRoleKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ expiresIn: expiresInSec }),
+        cache: "no-store",
+        signal: opts?.signal,
+      });
+
+      if (resp.ok) {
+        const body = (await resp.json()) as { signedURL?: string | null };
+        const signedURL = body.signedURL?.trim();
+        if (!signedURL) {
+          throw new Error("Stream artifact signed URL response was missing signedURL");
+        }
+        const fullUrl = signedURL.startsWith("http") ? signedURL : `${config.url}/storage/v1${signedURL}`;
+        artifactMissCache.delete(missCacheKey);
+        artifactSignedUrlCache.set(missCacheKey, {
+          url: fullUrl,
+          expiresAt: now + Math.max(5_000, (expiresInSec - 5) * 1000),
+        });
+        return fullUrl;
+      }
+
+      const text = await resp.text().catch(() => "");
+      const normalized = text.toLowerCase();
+      const objectMissing =
+        normalized.includes("not_found") ||
+        normalized.includes("object not found") ||
+        normalized.includes("\"error\":\"not_found\"");
+      if (resp.status === 404 || (resp.status === 400 && objectMissing)) {
+        continue;
+      }
+
+      throw new Error(`Stream artifact sign failed (${resp.status}): ${text || "empty response"}`);
+    }
+
+    rememberArenaBuildStreamArtifactMiss(buildId, variant, checksum);
+    return null;
+  })();
+
+  artifactSignedUrlInflight.set(missCacheKey, promise);
+  try {
+    return await promise;
+  } finally {
+    artifactSignedUrlInflight.delete(missCacheKey);
+  }
 }
 
 export async function uploadArenaBuildStreamArtifact(
@@ -528,13 +640,15 @@ export async function uploadArenaBuildStreamArtifact(
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(ref.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
-  const payload = Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength);
+  const payload = gzipSync(Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength));
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${config.serviceRoleKey}`,
       apikey: config.serviceRoleKey,
       "x-upsert": "true",
+      "cache-control": ARENA_STREAM_ARTIFACT_CACHE_CONTROL,
+      "Content-Encoding": "gzip",
       "Content-Type": "application/x-ndjson",
     },
     body: payload,

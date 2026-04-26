@@ -24,6 +24,10 @@ export type BuildPayloadSource = {
   voxelStorageEncoding: string | null;
 };
 
+type LoadBuildPayloadOptions = {
+  signal?: AbortSignal;
+};
+
 type SupabaseStorageConfig = {
   url: string;
   serviceRoleKey: string;
@@ -81,6 +85,12 @@ export function getSupabaseStorageConfig(): SupabaseStorageConfig {
   return { url: trimTrailingSlashes(url), serviceRoleKey };
 }
 
+export function hasSupabaseStorageConfig(): boolean {
+  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  return Boolean(url && serviceRoleKey);
+}
+
 export function getBuildStorageBucketFromEnv(): string {
   return (process.env.SUPABASE_STORAGE_BUCKET ?? DEFAULT_BUILD_STORAGE_BUCKET).trim();
 }
@@ -89,7 +99,14 @@ export function normalizeBuildStoragePath(rawPath: string): string {
   return rawPath.replace(/^\/+/, "");
 }
 
-export async function fetchStoredBuildBytes(ref: BuildStorageRef): Promise<Uint8Array> {
+export async function fetchStoredBuildBytes(
+  ref: BuildStorageRef,
+  opts?: LoadBuildPayloadOptions,
+): Promise<Uint8Array> {
+  if (opts?.signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+
   if ((ref.bucket ?? "").trim() === LOCAL_BUILD_STORAGE_BUCKET) {
     const absolutePath = resolveLocalStorageAbsolutePath(ref.path);
     return new Uint8Array(await readFile(absolutePath));
@@ -110,6 +127,7 @@ export async function fetchStoredBuildBytes(ref: BuildStorageRef): Promise<Uint8
       apikey: config.serviceRoleKey,
     },
     cache: "no-store",
+    signal: opts?.signal,
   });
 
   if (!resp.ok) {
@@ -136,8 +154,14 @@ export function decodeStoredBuildText(bytes: Uint8Array, encoding?: string | nul
   return Buffer.from(bytes).toString("utf-8");
 }
 
-export async function loadBuildJsonFromStorage(ref: BuildStorageRef): Promise<unknown> {
-  const bytes = await fetchStoredBuildBytes(ref);
+export async function loadBuildJsonFromStorage(
+  ref: BuildStorageRef,
+  opts?: LoadBuildPayloadOptions,
+): Promise<unknown> {
+  const bytes = await fetchStoredBuildBytes(ref, opts);
+  if (opts?.signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
   const text = decodeStoredBuildText(bytes, ref.encoding);
   try {
     return JSON.parse(text) as unknown;
@@ -152,7 +176,13 @@ export async function loadBuildJsonFromStorage(ref: BuildStorageRef): Promise<un
   return extracted;
 }
 
-export async function resolveBuildPayload(source: BuildPayloadSource): Promise<unknown> {
+export async function resolveBuildPayload(
+  source: BuildPayloadSource,
+  opts?: LoadBuildPayloadOptions,
+): Promise<unknown> {
+  if (opts?.signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
   if (source.voxelData) return source.voxelData;
 
   const bucket = source.voxelStorageBucket ?? "";
@@ -165,11 +195,11 @@ export async function resolveBuildPayload(source: BuildPayloadSource): Promise<u
     bucket,
     path,
     encoding: source.voxelStorageEncoding,
-  });
+  }, opts);
 }
 
-export async function resolveBuildSpec(source: BuildPayloadSource) {
-  const payload = await resolveBuildPayload(source);
+export async function resolveBuildSpec(source: BuildPayloadSource, opts?: LoadBuildPayloadOptions) {
+  const payload = await resolveBuildPayload(source, opts);
   const spec = parseVoxelBuildSpec(payload);
   if (!spec.ok) {
     throw new Error(`Build payload is invalid: ${spec.error}`);

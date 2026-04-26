@@ -4,7 +4,7 @@ import { CURATED_PROMPTS } from "@/lib/arena/curatedPrompts";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { createHash } from "node:crypto";
-import { maybePrecomputeArenaStreamArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
+import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 
 export const runtime = "nodejs";
@@ -378,7 +378,7 @@ export async function POST(req: Request) {
     });
 
     try {
-      await maybePrecomputeArenaStreamArtifactsForBuild({
+      await maybePrecomputeArenaArtifactsForBuild({
         id: saved.id,
         gridSize: saved.gridSize,
         palette: saved.palette,

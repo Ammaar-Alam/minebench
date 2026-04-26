@@ -1,14 +1,23 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "@/lib/arena/types";
 import { isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
 import {
   ARENA_BUILD_STREAM_HELLO_PAD,
+  createArenaBuildStreamArtifactSignedUrl,
+  estimateArenaBuildVariantBytes,
   encodeArenaBuildStreamEvent,
-  fetchArenaBuildStreamArtifact,
   iterateArenaBuildChunks,
+  iterateArenaBuildStreamEvents,
   planArenaBuildStream,
+  uploadArenaBuildStreamArtifact,
 } from "@/lib/arena/buildStream";
-import { deriveArenaBuildLoadHints, pickBuildVariant, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
+import {
+  deriveArenaBuildLoadHints,
+  getCachedPreparedArenaBuild,
+  getPreparedArenaBuildMetadataUpdate,
+  pickBuildVariant,
+  prepareArenaBuild,
+} from "@/lib/arena/buildArtifacts";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
@@ -21,6 +30,18 @@ const ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
   process.env.ARENA_STREAM_ARTIFACT_FETCH_TIMEOUT_MS ?? "3500",
   10,
 );
+const ARTIFACT_SIGN_URL_TTL_SEC = Number.parseInt(
+  process.env.ARENA_STREAM_ARTIFACT_SIGN_URL_TTL_SEC ?? "3600",
+  10,
+);
+const streamArtifactWarmupInflight = new Set<string>();
+
+function createSignedRedirectCacheControl(ttlSeconds: number): string {
+  const ttl = Number.isFinite(ttlSeconds) ? Math.floor(ttlSeconds) : 0;
+  const sharedMaxAge = Math.max(0, Math.min(300, ttl - 30));
+  if (sharedMaxAge <= 0) return "no-store, no-transform";
+  return `public, max-age=0, s-maxage=${sharedMaxAge}, no-transform`;
+}
 
 function parseVariant(value: string | null): ArenaBuildVariant {
   return value === "preview" ? "preview" : "full";
@@ -39,7 +60,7 @@ function createStreamHeaders(
     "Content-Type": "application/x-ndjson; charset=utf-8",
     "Cache-Control":
       source === "artifact"
-        ? "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform"
+        ? createSignedRedirectCacheControl(ARTIFACT_SIGN_URL_TTL_SEC)
         : "no-store, no-transform",
     Connection: "keep-alive",
     "X-Accel-Buffering": "no",
@@ -90,6 +111,85 @@ function sendEvent(
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function chunkStreamArtifactBytes(events: Iterable<ArenaBuildStreamEvent>) {
+  const encoded: Uint8Array[] = [];
+  let total = 0;
+  for (const event of events) {
+    const bytes = encodeArenaBuildStreamEvent(event);
+    encoded.push(bytes);
+    total += bytes.length;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const part of encoded) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+function warmStreamArtifactInBackground(opts: {
+  buildId: string;
+  variant: ArenaBuildVariant;
+  checksum: string;
+  build: ReturnType<typeof pickBuildVariant>;
+  buildLoadHints: ReturnType<typeof deriveArenaBuildLoadHints>;
+}) {
+  const warmupKey = `${opts.buildId}:${opts.variant}:${opts.checksum}`;
+  if (streamArtifactWarmupInflight.has(warmupKey)) return;
+  streamArtifactWarmupInflight.add(warmupKey);
+  try {
+    // upload the artifact after serving this live stream
+    after(async () => {
+      try {
+        const bytes = chunkStreamArtifactBytes(
+          iterateArenaBuildStreamEvents({
+            buildId: opts.buildId,
+            variant: opts.variant,
+            checksum: opts.checksum,
+            build: opts.build,
+            buildLoadHints: opts.buildLoadHints,
+            source: "artifact",
+            serverValidated: true,
+            includePad: true,
+            durationMs: 0,
+          }),
+        );
+        await uploadArenaBuildStreamArtifact(opts.buildId, opts.variant, opts.checksum, bytes);
+      } catch (err) {
+        console.warn("arena stream artifact warmup upload failed", err);
+      } finally {
+        streamArtifactWarmupInflight.delete(warmupKey);
+      }
+    });
+  } catch (err) {
+    streamArtifactWarmupInflight.delete(warmupKey);
+    const message = toErrorMessage(err, "");
+    if (!message.includes("after` was called outside a request scope")) {
+      console.warn("arena stream artifact warmup scheduling skipped", err);
+    }
+  }
+}
+
+async function waitForBackpressure(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  shouldContinue: () => boolean,
+): Promise<boolean> {
+  let waits = 0;
+  while (shouldContinue()) {
+    // slow readers should not make us buffer the whole build
+    const desiredSize = controller.desiredSize;
+    if (desiredSize == null || desiredSize > 0) return true;
+    waits += 1;
+    await sleep(Math.min(32, 4 + waits * 2));
+  }
+  return false;
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ buildId: string }> },
@@ -111,6 +211,7 @@ export async function GET(
       voxelByteSize: true,
       voxelCompressedByteSize: true,
       voxelSha256: true,
+      arenaBuildHints: true,
     },
   });
 
@@ -131,73 +232,122 @@ export async function GET(
   }
 
   const shellHints = deriveArenaBuildLoadHints(meta);
+  const artifactRequested = url.searchParams.get("artifact") !== "0";
   const artifactFetchAllowed =
-    url.searchParams.get("artifact") !== "0" && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
+    artifactRequested && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
 
   try {
     if (artifactFetchAllowed) {
       const artifactStartedAt = timing.start();
-      const artifact = await withTimeout(
-        (signal) => fetchArenaBuildStreamArtifact(buildId, variant, storedChecksum, { signal }),
+      const artifactSignedUrl = await withTimeout(
+        (signal) =>
+          createArenaBuildStreamArtifactSignedUrl(buildId, variant, storedChecksum, {
+            signal,
+            expiresInSec: ARTIFACT_SIGN_URL_TTL_SEC,
+          }),
         ARTIFACT_FETCH_TIMEOUT_MS,
-        "artifact fetch",
+        "artifact sign",
       );
-      if (artifact?.body) {
+      if (artifactSignedUrl) {
         timing.end("artifact_hit", artifactStartedAt);
         timing.end("total", requestStartedAt);
+        const shellEstimatedBytes =
+          estimateArenaBuildVariantBytes(
+            shellHints,
+            variant,
+            variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount,
+          ) ?? shellHints.fullEstimatedBytes;
         const headers = createStreamHeaders("artifact", {
-          deliveryClass: shellHints.deliveryClass,
-          estimatedBytes: shellHints.fullEstimatedBytes,
+          deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
+          estimatedBytes: shellEstimatedBytes,
         });
+        headers.set("Location", artifactSignedUrl);
         timing.apply(headers);
-        return new Response(artifact.body, { headers });
+        return new Response(null, {
+          status: 307,
+          headers,
+        });
       }
       timing.end("artifact_miss", artifactStartedAt);
       trackServerEventInBackground("arena_artifact_miss", {
         variant,
-        deliveryClass: shellHints.deliveryClass,
-        estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
+        deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
+        estimatedBytes:
+          estimateArenaBuildVariantBytes(
+            shellHints,
+            variant,
+            variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount,
+          ) ?? 0,
       });
     }
   } catch (err) {
     if (artifactFetchAllowed) {
       trackServerEventInBackground("arena_artifact_fetch_error", {
         variant,
-        deliveryClass: shellHints.deliveryClass,
-        estimatedBytes: shellHints.fullEstimatedBytes ?? 0,
+        deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
+        estimatedBytes:
+          estimateArenaBuildVariantBytes(
+            shellHints,
+            variant,
+            variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount,
+          ) ?? 0,
       });
       timing.add("artifact_error", ARTIFACT_FETCH_TIMEOUT_MS);
     }
     console.warn("arena stream artifact fetch failed", err);
   }
 
-  const build = await prisma.build.findUnique({
-    where: { id: buildId },
-    select: {
-      id: true,
-      gridSize: true,
-      palette: true,
-      blockCount: true,
-      voxelByteSize: true,
-      voxelCompressedByteSize: true,
-      voxelSha256: true,
-      voxelData: true,
-      voxelStorageBucket: true,
-      voxelStoragePath: true,
-      voxelStorageEncoding: true,
-    },
-  });
+  if (artifactRequested && variant === "full" && shellHints.deliveryClass === "stream-artifact") {
+    // artifact-class builds should not silently fall back to heavy live streams
+    timing.end("total", requestStartedAt);
+    const headers = new Headers({
+      "Cache-Control": "no-store",
+      "Retry-After": "1",
+      "x-build-delivery-class": shellHints.deliveryClass,
+      "x-build-stream-source": "artifact-required",
+    });
+    timing.apply(headers);
+    return NextResponse.json(
+      {
+        error: "Full build artifact is still warming. Try again shortly.",
+        retryVia: "stream-live",
+        retryParams: { artifact: "0" },
+      },
+      { status: 503, headers },
+    );
+  }
 
-  if (!build) {
+  const cachedPrepared = getCachedPreparedArenaBuild(buildId, storedChecksum);
+  const build = cachedPrepared
+    ? null
+    : await prisma.build.findUnique({
+        where: { id: buildId },
+        select: {
+          id: true,
+          gridSize: true,
+          palette: true,
+          blockCount: true,
+          voxelByteSize: true,
+          voxelCompressedByteSize: true,
+          voxelSha256: true,
+          voxelData: true,
+          voxelStorageBucket: true,
+          voxelStoragePath: true,
+          voxelStorageEncoding: true,
+        },
+      });
+
+  if (!cachedPrepared && !build) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });
   }
 
-  const initialHints = deriveArenaBuildLoadHints(build);
+  const initialHints = cachedPrepared?.hints ?? deriveArenaBuildLoadHints(build!);
   const initialBlockCount =
     variant === "preview" ? initialHints.previewBlockCount : initialHints.fullBlockCount;
   const initialPlan = planArenaBuildStream({
     totalBlocks: initialBlockCount,
     hints: initialHints,
+    variant,
   });
   const startedAt = performance.now();
 
@@ -206,17 +356,37 @@ export async function GET(
 
   timing.end("total", requestStartedAt);
   const responseHeaders = createStreamHeaders("live", {
-    deliveryClass: initialHints.deliveryClass,
-    estimatedBytes: initialHints.fullEstimatedBytes,
+    deliveryClass: variant === "preview" ? initialHints.initialDeliveryClass : initialHints.deliveryClass,
+    estimatedBytes: estimateArenaBuildVariantBytes(initialHints, variant, initialBlockCount),
   });
   timing.apply(responseHeaders);
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const safeClose = () => {
-        if (closed) return;
-        closed = true;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
         if (ping) clearInterval(ping);
+        request.signal.removeEventListener("abort", abort);
+      };
+      const abort = () => {
+        closed = true;
+        cleanup();
+      };
+      if (request.signal.aborted) {
+        abort();
+      } else {
+        request.signal.addEventListener("abort", abort, { once: true });
+      }
+
+      const safeClose = () => {
+        if (closed) {
+          cleanup();
+          return;
+        }
+        closed = true;
+        cleanup();
         try {
           controller.close();
         } catch {
@@ -232,6 +402,7 @@ export async function GET(
       };
 
       send({
+        // early hello lets the client show progress before prepare finishes
         type: "hello",
         buildId,
         variant,
@@ -252,7 +423,21 @@ export async function GET(
 
       void (async () => {
         try {
-          const prepared = await prepareArenaBuild(build);
+          if (closed || request.signal.aborted) return;
+          // heavy parse starts after the response stream is open
+          const prepared = cachedPrepared ?? (await prepareArenaBuild(build!, { signal: request.signal }));
+          if (closed || request.signal.aborted) return;
+
+          if (!cachedPrepared) {
+            await prisma.build
+              .update({
+                where: { id: buildId },
+                data: getPreparedArenaBuildMetadataUpdate(prepared),
+              })
+              .catch((err) => {
+                console.warn("arena stream metadata update failed", err);
+              });
+          }
 
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {
             send({
@@ -264,9 +449,23 @@ export async function GET(
           }
 
           const voxelBuild = pickBuildVariant(prepared, variant);
+          if (
+            variant === "full" &&
+            prepared.hints.deliveryClass === "stream-artifact" &&
+            prepared.checksum
+          ) {
+            warmStreamArtifactInBackground({
+              buildId,
+              variant,
+              checksum: prepared.checksum,
+              build: voxelBuild,
+              buildLoadHints: prepared.hints,
+            });
+          }
           const plan = planArenaBuildStream({
             totalBlocks: voxelBuild.blocks.length,
             hints: prepared.hints,
+            variant,
           });
 
           send({
@@ -295,12 +494,17 @@ export async function GET(
 
           let yieldedAt = performance.now();
           for (const chunk of iterateArenaBuildChunks(voxelBuild, plan.chunkBlockCount)) {
+            const canSend = await waitForBackpressure(
+              controller,
+              () => !closed && !request.signal.aborted,
+            );
+            if (!canSend) return;
             if (!send({ type: "chunk", ...chunk })) return;
 
             const now = performance.now();
             if (now - yieldedAt >= YIELD_EVERY_MS) {
               yieldedAt = now;
-              await new Promise<void>((resolve) => setTimeout(resolve, 0));
+              await sleep(0);
             }
           }
 

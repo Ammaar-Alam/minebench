@@ -1,5 +1,9 @@
 import type { ArenaBuildSource } from "@/lib/arena/buildArtifacts";
-import { pickBuildVariant, prepareArenaBuild } from "@/lib/arena/buildArtifacts";
+import {
+  getPreparedArenaBuildMetadataUpdate,
+  pickBuildVariant,
+  prepareArenaBuild,
+} from "@/lib/arena/buildArtifacts";
 import { estimateArenaBuildBytes, isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildStreamEvent } from "@/lib/arena/types";
 import {
@@ -7,6 +11,8 @@ import {
   iterateArenaBuildStreamEvents,
   uploadArenaBuildStreamArtifact,
 } from "@/lib/arena/buildStream";
+import { ensureArenaBuildSnapshotArtifacts } from "@/lib/arena/buildSnapshotArtifacts";
+import { prisma } from "@/lib/prisma";
 
 function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
   const encoded: Uint8Array[] = [];
@@ -51,6 +57,33 @@ export async function maybePrecomputeArenaStreamArtifactsForBuild(
   }
 
   const prepared = await prepareArenaBuild(source);
+  return maybePrecomputeArenaStreamArtifactsForPrepared(prepared);
+}
+
+export async function maybePrecomputeArenaArtifactsForBuild(
+  source: ArenaBuildSource,
+): Promise<{ streamUploaded: number; snapshotUploaded: boolean; streamSkipped: boolean; reason?: string }> {
+  const prepared = await prepareArenaBuild(source);
+  await prisma.build.update({
+    where: { id: source.id },
+    data: getPreparedArenaBuildMetadataUpdate(prepared),
+  });
+  const stream = isArtifactEligibleBuild(resolveSourceBytes(source))
+    ? await maybePrecomputeArenaStreamArtifactsForPrepared(prepared)
+    : { uploaded: 0, skipped: true, reason: "below_threshold" as const };
+
+  await ensureArenaBuildSnapshotArtifacts(prepared);
+  return {
+    streamUploaded: stream.uploaded,
+    snapshotUploaded: true,
+    streamSkipped: stream.skipped,
+    reason: stream.reason,
+  };
+}
+
+async function maybePrecomputeArenaStreamArtifactsForPrepared(
+  prepared: Awaited<ReturnType<typeof prepareArenaBuild>>,
+): Promise<{ uploaded: number; skipped: boolean; reason?: string }> {
   if (!prepared.checksum) {
     return { uploaded: 0, skipped: true, reason: "missing_checksum" };
   }
@@ -60,7 +93,7 @@ export async function maybePrecomputeArenaStreamArtifactsForBuild(
     const variantBuild = pickBuildVariant(prepared, variant);
     const bytes = chunkBytes(
       iterateArenaBuildStreamEvents({
-        buildId: source.id,
+        buildId: prepared.buildId,
         variant,
         checksum: prepared.checksum,
         build: variantBuild,
@@ -71,7 +104,7 @@ export async function maybePrecomputeArenaStreamArtifactsForBuild(
         durationMs: 0,
       }),
     );
-    await uploadArenaBuildStreamArtifact(source.id, variant, prepared.checksum, bytes);
+    await uploadArenaBuildStreamArtifact(prepared.buildId, variant, prepared.checksum, bytes);
     uploaded += 1;
   }
 

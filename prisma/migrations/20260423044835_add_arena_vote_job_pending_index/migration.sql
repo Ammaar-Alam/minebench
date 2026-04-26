@@ -1,0 +1,2 @@
+-- Moved into 20260423093000_add_arena_vote_jobs so fresh databases
+-- do not try to index ArenaVoteJob before the table exists.
