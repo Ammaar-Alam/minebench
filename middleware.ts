@@ -162,18 +162,18 @@ function getHeaderFingerprint(req: NextRequest): string {
   return parts.join("|") || "unknown";
 }
 
-function getArenaAnonymousBucketId(req: NextRequest): string {
-  // header shape keeps no-ip fallback stable
-  return `anon:${stableHash(getHeaderFingerprint(req))}`;
+function getArenaAnonymousBucketId(req: NextRequest, ip: string | null): string {
+  // stable fallback for clients that block cookies
+  return `anon:${stableHash(`${ip ?? "no-ip"}|${getHeaderFingerprint(req)}`)}`;
 }
 
-function getArenaRateLimitSession(req: NextRequest, fallbackBucketId: string | null) {
+function getArenaRateLimitSession(req: NextRequest, fallbackBucketId: string) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
   if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
   return {
     // fallback catches clients that drop the cookie
-    bucketId: fallbackBucketId ?? id,
+    bucketId: fallbackBucketId,
     cookieValue: id,
     isNew: true,
   };
@@ -195,7 +195,7 @@ export function middleware(req: NextRequest) {
   const now = Date.now();
   maybePruneExpiredBuckets(now);
   const arenaSession = isArenaApi
-    ? getArenaRateLimitSession(req, ip ? null : getArenaAnonymousBucketId(req))
+    ? getArenaRateLimitSession(req, getArenaAnonymousBucketId(req, ip))
     : null;
   const arenaIpRules = ip
     ? [
