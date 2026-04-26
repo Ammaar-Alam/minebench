@@ -47,17 +47,21 @@ function getIp(req: NextRequest): string | null {
   const requestIp = (req as NextRequest & { ip?: string | null }).ip?.trim();
   if (requestIp) return requestIp;
 
+  const trustForwardedRaw = process.env.ARENA_TRUST_X_FORWARDED_FOR;
   const trustForwardedFor = readBoolEnv("ARENA_TRUST_X_FORWARDED_FOR", process.env.VERCEL === "1");
-  if (!trustForwardedFor) return null;
-
-  const direct =
-    req.headers.get("x-real-ip") ??
-    req.headers.get("cf-connecting-ip") ??
-    req.headers.get("x-vercel-forwarded-for");
-  if (direct) return direct.split(",")[0]?.trim() || null;
+  if (trustForwardedFor) {
+    const direct =
+      req.headers.get("x-real-ip") ??
+      req.headers.get("cf-connecting-ip") ??
+      req.headers.get("x-vercel-forwarded-for");
+    if (direct) return direct.split(",")[0]?.trim() || null;
+  }
 
   const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]?.trim() || null;
+  const allowForwardedFallback =
+    trustForwardedFor || (!trustForwardedRaw && readBoolEnv("ARENA_FORWARDED_IP_FALLBACK", true));
+  // fallback for non vercel reverse proxies without next ip
+  if (allowForwardedFallback && forwarded) return forwarded.split(",")[0]?.trim() || null;
   return null;
 }
 
@@ -135,13 +139,13 @@ function rateLimitedResponse(retryAfterSeconds: number) {
   });
 }
 
-function getArenaRateLimitSession(req: NextRequest, stableFallbackBucketId: string | null) {
+function getArenaRateLimitSession(req: NextRequest) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
   if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
   return {
-    // fallback prevents all unknown-ip users sharing one bucket
-    bucketId: stableFallbackBucketId ?? id,
+    // new unknown-ip users need separate first request buckets
+    bucketId: id,
     cookieValue: id,
     isNew: true,
   };
@@ -162,12 +166,10 @@ export function middleware(req: NextRequest) {
   const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);
-  const arenaSession = isArenaApi
-    ? getArenaRateLimitSession(req, ip ? null : "anon:unknown")
-    : null;
+  const arenaSession = isArenaApi ? getArenaRateLimitSession(req) : null;
   const arenaIpRules = ip
     ? [
-        // wide ip guardrail when a trusted ip exists
+        // wide client guardrail when an ip signal exists
         {
           key: `ip:${ip}:${bucketPath}`,
           maxPerWindow: maxPerWindow * ARENA_IP_GUARDRAIL_MULTIPLIER,
