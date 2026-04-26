@@ -85,6 +85,12 @@ export function getSupabaseStorageConfig(): SupabaseStorageConfig {
   return { url: trimTrailingSlashes(url), serviceRoleKey };
 }
 
+export function hasSupabaseStorageConfig(): boolean {
+  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
+  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  return Boolean(url && serviceRoleKey);
+}
+
 export function getBuildStorageBucketFromEnv(): string {
   return (process.env.SUPABASE_STORAGE_BUCKET ?? DEFAULT_BUILD_STORAGE_BUCKET).trim();
 }

@@ -2,7 +2,11 @@ import type { PreparedArenaBuild } from "@/lib/arena/buildArtifacts";
 import { getArenaPreviewTargetBlocks, pickBuildVariant } from "@/lib/arena/buildArtifacts";
 import { getArenaDeliveryPolicySignature } from "@/lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
-import { getBuildStorageBucketFromEnv, getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
+import {
+  getBuildStorageBucketFromEnv,
+  getSupabaseStorageConfig,
+  hasSupabaseStorageConfig,
+} from "@/lib/storage/buildPayload";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
@@ -212,7 +216,8 @@ function isSnapshotArtifactEnabled(): boolean {
   return Boolean(
     ARENA_SNAPSHOT_ARTIFACTS_ENABLED &&
       ARENA_SNAPSHOT_ARTIFACT_PREFIX &&
-      ARENA_SNAPSHOT_ARTIFACT_BUCKET,
+      ARENA_SNAPSHOT_ARTIFACT_BUCKET &&
+      hasSupabaseStorageConfig(),
   );
 }
 
