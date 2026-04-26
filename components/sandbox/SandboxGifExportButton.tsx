@@ -58,17 +58,21 @@ const RESIZE_OPT_STEPS: Record<
     { dimensions: "540x960", lossy: 120 },
   ],
 };
-const FINAL_RESIZE_OPT_STEPS: Record<
+const HARD_CAP_RESIZE_OPT_STEPS: Record<
   GifExportFormat,
-  ReadonlyArray<{ dimensions: string; lossy: number }>
+  ReadonlyArray<{ dimensions: string; lossy: number; colors?: number }>
 > = {
   wide: [
     { dimensions: "854x480", lossy: 160 },
-    { dimensions: "720x405", lossy: 200 },
+    { dimensions: "720x405", lossy: 200, colors: 192 },
+    { dimensions: "640x360", lossy: 240, colors: 160 },
+    { dimensions: "480x270", lossy: 280, colors: 128 },
   ],
   vertical: [
     { dimensions: "480x854", lossy: 160 },
-    { dimensions: "405x720", lossy: 200 },
+    { dimensions: "405x720", lossy: 200, colors: 192 },
+    { dimensions: "360x640", lossy: 240, colors: 160 },
+    { dimensions: "270x480", lossy: 280, colors: 128 },
   ],
 };
 
@@ -127,58 +131,46 @@ function waitForNextPaint() {
   });
 }
 
-function fitTextWithEllipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (!clean) return "";
-  if (ctx.measureText(clean).width <= maxWidth) return clean;
-  const ellipsis = "...";
-  let lo = 0;
-  let hi = clean.length;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    const candidate = `${clean.slice(0, mid).replace(/\s+$/g, "")}${ellipsis}`;
-    if (ctx.measureText(candidate).width <= maxWidth) lo = mid;
-    else hi = mid - 1;
-  }
-  return `${clean.slice(0, lo).replace(/\s+$/g, "")}${ellipsis}`;
-}
-
-function wrapTextLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  maxLines: number,
-): string[] {
+function wrapTextLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return [];
   const words = clean.split(" ");
   const lines: string[] = [];
 
   let current = "";
-  let idx = 0;
-  while (idx < words.length) {
-    const next = current ? `${current} ${words[idx]}` : words[idx];
+  for (const word of words) {
+    if (ctx.measureText(word).width > maxWidth) {
+      if (current) {
+        lines.push(current);
+        current = "";
+      }
+
+      let chunk = "";
+      for (const char of word) {
+        const nextChunk = `${chunk}${char}`;
+        if (chunk && ctx.measureText(nextChunk).width > maxWidth) {
+          lines.push(chunk);
+          chunk = char;
+        } else {
+          chunk = nextChunk;
+        }
+      }
+      current = chunk;
+      continue;
+    }
+
+    const next = current ? `${current} ${word}` : word;
     if (ctx.measureText(next).width <= maxWidth || current === "") {
       current = next;
-      idx += 1;
       continue;
     }
 
     lines.push(current);
-    current = "";
-    if (lines.length >= Math.max(1, maxLines - 1)) break;
+    current = word;
   }
 
-  if (current && lines.length < maxLines) lines.push(current);
-
-  if (idx < words.length && lines.length > 0) {
-    const remainder = words.slice(idx).join(" ");
-    const last = lines.pop() ?? "";
-    const combined = last ? `${last} ${remainder}` : remainder;
-    lines.push(fitTextWithEllipsis(ctx, combined, maxWidth));
-  }
-
-  return lines.slice(0, maxLines);
+  if (current) lines.push(current);
+  return lines;
 }
 
 function roundedRectPath(
@@ -214,7 +206,6 @@ function buildExportLayout(
     ctx,
     `Prompt: ${normalizedPrompt || "sandbox prompt"}`,
     width - 56,
-    2,
   );
   const panelTop = Math.max(104, 60 + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24);
   const panelRects =
@@ -321,15 +312,18 @@ async function optimizeGifBlobForSize(input: Blob, format: GifExportFormat): Pro
         if (lossy && lossy.size <= GIF_OPT_TARGET_MAX_BYTES) return lossy;
       }
 
-      for (const step of FINAL_RESIZE_OPT_STEPS[format]) {
+      for (const step of HARD_CAP_RESIZE_OPT_STEPS[format]) {
+        const colorsArg = step.colors ? ` --colors ${step.colors}` : "";
         const resized = await runOptimize(
-          `${lossyOptimizeLevel} --lossy=${step.lossy} --resize-fit ${step.dimensions}`,
+          `${lossyOptimizeLevel} --lossy=${step.lossy}${colorsArg} --resize-fit ${step.dimensions}`,
         );
         if (resized && resized.size < best.size) best = resized;
         if (resized && resized.size <= GIF_OPT_TARGET_MAX_BYTES) return resized;
       }
 
-      return best;
+      throw new Error(
+        `GIF stayed above 15 MB after optimization (${(best.size / 1024 / 1024).toFixed(1)} MB)`,
+      );
     }
 
     if (input.size >= LOSSLESS_OPT_ALWAYS_KEEP_BYTES) {
@@ -344,6 +338,11 @@ async function optimizeGifBlobForSize(input: Blob, format: GifExportFormat): Pro
     return meaningful ? best : input;
   } catch (err) {
     console.warn("[gif-export] optimize skipped", err);
+    if (input.size > GIF_OPT_TARGET_MAX_BYTES) {
+      throw err instanceof Error
+        ? err
+        : new Error("GIF optimization failed before it could fit under 15 MB");
+    }
     return input;
   }
 }
@@ -414,8 +413,8 @@ function drawPanel(
   const { x, y, width, height, target, capture } = opts;
   const captureX = x + PANEL_PAD;
   const captureY = y + PANEL_PAD + PANEL_META_HEIGHT;
-  const captureWidth = width - PANEL_PAD * 2;
-  const captureHeight = height - PANEL_PAD * 2 - PANEL_META_HEIGHT;
+  const captureWidth = Math.max(1, width - PANEL_PAD * 2);
+  const captureHeight = Math.max(1, height - PANEL_PAD * 2 - PANEL_META_HEIGHT);
 
   ctx.save();
   roundedRectPath(ctx, x, y, width, height, PANEL_RADIUS);
