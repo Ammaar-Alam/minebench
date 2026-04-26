@@ -37,7 +37,40 @@ const LOSSLESS_OPT_LARGE_INPUT_BYTES = 10 * 1024 * 1024;
 const LOSSLESS_OPT_ALWAYS_KEEP_BYTES = 15 * 1024 * 1024;
 const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
 const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
-const LOSSLESS_OPT_TARGET_MAX_BYTES = 15 * 1024 * 1024;
+const GIF_OPT_TARGET_MAX_BYTES = 15 * 1024 * 1024;
+// try cheaper loss first then resize only when size still blows past target
+const LOSSY_OPT_LEVELS = [20, 35, 50, 70, 90, 120] as const;
+const FINAL_LOSSY_OPT_LEVELS = [160, 200] as const;
+const RESIZE_OPT_STEPS: Record<
+  GifExportFormat,
+  ReadonlyArray<{ dimensions: string; lossy: number }>
+> = {
+  wide: [
+    { dimensions: "1600x900", lossy: 50 },
+    { dimensions: "1440x810", lossy: 70 },
+    { dimensions: "1280x720", lossy: 90 },
+    { dimensions: "960x540", lossy: 120 },
+  ],
+  vertical: [
+    { dimensions: "900x1600", lossy: 50 },
+    { dimensions: "810x1440", lossy: 70 },
+    { dimensions: "720x1280", lossy: 90 },
+    { dimensions: "540x960", lossy: 120 },
+  ],
+};
+const FINAL_RESIZE_OPT_STEPS: Record<
+  GifExportFormat,
+  ReadonlyArray<{ dimensions: string; lossy: number }>
+> = {
+  wide: [
+    { dimensions: "854x480", lossy: 160 },
+    { dimensions: "720x405", lossy: 200 },
+  ],
+  vertical: [
+    { dimensions: "480x854", lossy: 160 },
+    { dimensions: "405x720", lossy: 200 },
+  ],
+};
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
@@ -231,7 +264,7 @@ function buildPaletteSampleFrames(frameCount: number, sampleCount: number): numb
   return Array.from(frames).sort((a, b) => a - b);
 }
 
-async function optimizeGifBlobLossless(input: Blob): Promise<Blob> {
+async function optimizeGifBlobForSize(input: Blob, format: GifExportFormat): Promise<Blob> {
   if (input.size < LOSSLESS_OPT_MIN_INPUT_BYTES) return input;
 
   try {
@@ -240,41 +273,77 @@ async function optimizeGifBlobLossless(input: Blob): Promise<Blob> {
       input.arrayBuffer(),
     ]);
 
-    const runOptimize = async (level: "-O2" | "-O3") => {
+    const runOptimize = async (command: string) => {
       const outputs = await gifsicle.run({
         input: [{ file: inputBytes.slice(0), name: "in.gif" }],
-        command: [`${level} in.gif -o /out/out.gif`],
+        command: [`${command} in.gif -o /out/out.gif`],
         isStrict: true,
       });
       return outputs.find((file) => file.name.toLowerCase().endsWith(".gif")) ?? null;
     };
 
     const primaryLevel = input.size >= LOSSLESS_OPT_LARGE_INPUT_BYTES ? "-O2" : "-O3";
+    const lossyOptimizeLevel = input.size >= LOSSLESS_OPT_LARGE_INPUT_BYTES ? "-O2" : "-O3";
     let optimized = await runOptimize(primaryLevel);
+    let best = optimized && optimized.size < input.size ? optimized : input;
 
     if (
       primaryLevel === "-O2" &&
       optimized &&
-      optimized.size > LOSSLESS_OPT_TARGET_MAX_BYTES &&
+      optimized.size > GIF_OPT_TARGET_MAX_BYTES &&
       optimized.size < input.size
     ) {
       const tighter = await runOptimize("-O3");
       if (tighter && tighter.size < optimized.size) optimized = tighter;
+      if (tighter && tighter.size < best.size) best = tighter;
     }
 
-    if (!optimized) return input;
+    if (!optimized && best === input) return input;
+    if (best.size > GIF_OPT_TARGET_MAX_BYTES) {
+      for (const lossyLevel of LOSSY_OPT_LEVELS) {
+        // use the least lossy setting that gets under the target
+        const lossy = await runOptimize(`${lossyOptimizeLevel} --lossy=${lossyLevel}`);
+        if (lossy && lossy.size < best.size) best = lossy;
+        if (lossy && lossy.size <= GIF_OPT_TARGET_MAX_BYTES) return lossy;
+      }
+
+      for (const step of RESIZE_OPT_STEPS[format]) {
+        const resized = await runOptimize(
+          `${lossyOptimizeLevel} --lossy=${step.lossy} --resize-fit ${step.dimensions}`,
+        );
+        if (resized && resized.size < best.size) best = resized;
+        if (resized && resized.size <= GIF_OPT_TARGET_MAX_BYTES) return resized;
+      }
+
+      for (const lossyLevel of FINAL_LOSSY_OPT_LEVELS) {
+        const lossy = await runOptimize(`${lossyOptimizeLevel} --lossy=${lossyLevel}`);
+        if (lossy && lossy.size < best.size) best = lossy;
+        if (lossy && lossy.size <= GIF_OPT_TARGET_MAX_BYTES) return lossy;
+      }
+
+      for (const step of FINAL_RESIZE_OPT_STEPS[format]) {
+        const resized = await runOptimize(
+          `${lossyOptimizeLevel} --lossy=${step.lossy} --resize-fit ${step.dimensions}`,
+        );
+        if (resized && resized.size < best.size) best = resized;
+        if (resized && resized.size <= GIF_OPT_TARGET_MAX_BYTES) return resized;
+      }
+
+      return best;
+    }
+
     if (input.size >= LOSSLESS_OPT_ALWAYS_KEEP_BYTES) {
-      return optimized.size < input.size ? optimized : input;
+      return best.size < input.size ? best : input;
     }
 
-    const savings = input.size - optimized.size;
+    const savings = input.size - best.size;
     const relativeSavings = savings / Math.max(1, input.size);
     const meaningful =
       savings >= LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES &&
       relativeSavings >= LOSSLESS_OPT_MIN_RELATIVE_SAVINGS;
-    return meaningful ? optimized : input;
+    return meaningful ? best : input;
   } catch (err) {
-    console.warn("[gif-export] lossless optimize skipped", err);
+    console.warn("[gif-export] optimize skipped", err);
     return input;
   }
 }
@@ -648,19 +717,25 @@ function GifFormatSelector({
   format,
   disabled,
   compact,
+  embedded,
   onChange,
 }: {
   format: GifExportFormat;
   disabled: boolean;
   compact?: boolean;
+  embedded?: boolean;
   onChange: (format: GifExportFormat) => void;
 }) {
   return (
     <div
       role="group"
       aria-label="GIF format"
-      className={`inline-flex shrink-0 items-center rounded-full border border-border/70 bg-bg/45 p-0.5 text-muted shadow-[0_12px_30px_-24px_rgba(4,11,31,0.9)] backdrop-blur-sm ${
-        compact ? "h-8" : "h-9"
+      className={`inline-flex shrink-0 items-center rounded-full text-muted ${
+        embedded
+          ? "p-0"
+          : "border border-border/70 bg-bg/45 p-0.5 shadow-[0_12px_30px_-24px_rgba(4,11,31,0.9)] backdrop-blur-sm"
+      } ${
+        compact ? "h-7" : "h-8"
       }`}
     >
       {GIF_FORMATS.map((value) => {
@@ -675,12 +750,12 @@ function GifFormatSelector({
             aria-pressed={active}
             title={label}
             onClick={() => onChange(value)}
-            className={`grid place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-45 ${
+            className={`grid place-items-center rounded-full transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/55 disabled:cursor-not-allowed disabled:opacity-45 ${
               compact ? "h-7 w-7" : "h-8 w-8"
             } ${
               active
-                ? "bg-fg/14 text-fg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
-                : "hover:bg-fg/7 hover:text-fg"
+                ? "bg-accent/15 text-accent ring-1 ring-accent/40 shadow-[0_8px_20px_-16px_hsl(var(--accent)_/_0.7)]"
+                : "text-muted/75 hover:bg-fg/7 hover:text-fg"
             }`}
           >
             <FormatIcon format={value} />
@@ -719,7 +794,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       });
       setOptimizing(true);
       setProgress(null);
-      const finalBlob = await optimizeGifBlobLossless(blob);
+      const finalBlob = await optimizeGifBlobForSize(blob, format);
       const modelToken = targets.map((t) => sanitizeFilePart(t.modelName) || "model").join("-vs-");
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -750,7 +825,13 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const isUnavailable = !hasTargets;
   const shouldKeepTooltipVisible = Boolean(iconOnly && (busy || error));
   const formatSelector = (
-    <GifFormatSelector format={format} disabled={busy} compact={iconOnly} onChange={setFormat} />
+    <GifFormatSelector
+      format={format}
+      disabled={busy}
+      compact={iconOnly}
+      embedded
+      onChange={setFormat}
+    />
   );
 
   const button = (
@@ -763,7 +844,11 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       title={iconOnly ? undefined : buttonTitle}
       onClick={() => void handleExport()}
       disabled={isUnavailable}
-      className={`${iconOnly ? "mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg" : "mb-btn mb-btn-ghost h-9 rounded-full border border-border/70 bg-bg/55 px-3 text-xs tracking-[0.01em] backdrop-blur-sm sm:text-sm"} ${busy ? "cursor-progress opacity-75" : ""} disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
+      className={`inline-flex select-none items-center justify-center rounded-full font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${
+        iconOnly
+          ? "h-7 w-7 p-0 text-muted hover:bg-fg/7 hover:text-fg"
+          : `h-8 gap-1.5 px-3 text-xs tracking-[0.01em] hover:bg-fg/7 sm:px-3.5 sm:text-sm ${className ?? ""}`
+      } ${busy ? "cursor-progress opacity-75" : ""} disabled:cursor-not-allowed disabled:opacity-40`}
     >
       <span className={`inline-flex items-center ${iconOnly ? "justify-center" : "gap-1.5"}`}>
         <svg
@@ -786,15 +871,16 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
 
   if (!iconOnly) {
     return (
-      <div className="inline-flex items-center gap-1.5">
+      <div className="inline-flex h-9 items-center rounded-full border border-border/70 bg-bg/55 p-0.5 shadow-[0_18px_44px_-28px_rgba(4,11,31,0.95)] backdrop-blur-sm">
         {formatSelector}
+        <span className="mx-1 h-4 w-px bg-border/45" aria-hidden="true" />
         {button}
       </div>
     );
   }
 
   return (
-    <div className="group/gif-export relative inline-flex items-center gap-1">
+    <div className="group/gif-export relative inline-flex h-8 items-center rounded-full border border-border/70 bg-bg/55 p-0.5 shadow-[0_18px_44px_-28px_rgba(4,11,31,0.95)] backdrop-blur-sm">
       <div
         id={tooltipId}
         role="status"
@@ -804,6 +890,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
         <span className="block truncate">{buttonTitle}</span>
       </div>
       {formatSelector}
+      <span className="mx-1 h-3.5 w-px bg-border/45" aria-hidden="true" />
       {button}
     </div>
   );
