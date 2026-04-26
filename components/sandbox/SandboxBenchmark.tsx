@@ -112,6 +112,7 @@ type SlotHydrationState = {
 type CachedBuild = {
   build: unknown;
   serverValidated: boolean;
+  variant: ArenaBuildVariant;
 };
 
 const DEFAULT_MODEL_A = "openai_gpt_5_4";
@@ -523,6 +524,16 @@ function getInitialDeliveryClass(hints: ArenaBuildLoadHints | undefined): ArenaB
   return hints?.initialDeliveryClass ?? hints?.deliveryClass;
 }
 
+function getBuildCacheKey(ref: ArenaBuildRef): string {
+  return `${ref.buildId}:${ref.variant}:${ref.checksum ?? "none"}`;
+}
+
+function getVoxelBlockCount(build: unknown): number {
+  if (!build || typeof build !== "object") return 0;
+  const blocks = (build as { blocks?: unknown }).blocks;
+  return Array.isArray(blocks) ? blocks.length : 0;
+}
+
 export function SandboxBenchmark() {
   const [promptId, setPromptId] = useState("");
   const [modelPair, setModelPair] = useState({ a: DEFAULT_MODEL_A, b: DEFAULT_MODEL_B });
@@ -543,15 +554,20 @@ export function SandboxBenchmark() {
   const viewerARef = useRef<VoxelViewerHandle | null>(null);
   const viewerBRef = useRef<VoxelViewerHandle | null>(null);
 
-  const setCachedBuild = useCallback((buildId: string, value: CachedBuild) => {
+  const setCachedBuild = useCallback((ref: ArenaBuildRef, value: CachedBuild) => {
     const cache = buildCacheRef.current;
-    if (cache.has(buildId)) cache.delete(buildId);
-    cache.set(buildId, value);
+    const cacheKey = getBuildCacheKey(ref);
+    if (cache.has(cacheKey)) cache.delete(cacheKey);
+    cache.set(cacheKey, value);
     while (cache.size > 8) {
       const oldestKey = cache.keys().next().value as string | undefined;
       if (!oldestKey) break;
       cache.delete(oldestKey);
     }
+  }, []);
+
+  const getCachedBuild = useCallback((ref: ArenaBuildRef): CachedBuild | null => {
+    return buildCacheRef.current.get(getBuildCacheKey(ref)) ?? null;
   }, []);
 
   const runLoad = useCallback(
@@ -636,28 +652,8 @@ export function SandboxBenchmark() {
         continue;
       }
 
-      const cached = buildCacheRef.current.get(lane.buildId);
-      if (lane.voxelBuild) {
-        const serverValidated = Boolean(lane.serverValidated);
-        setCachedBuild(lane.buildId, {
-          build: lane.voxelBuild,
-          serverValidated,
-        });
-        nextState[slot] = {
-          buildId: lane.buildId,
-          build: lane.voxelBuild,
-          phase: "ready",
-          progress: {
-            receivedBlocks: lane.metrics.blockCount,
-            totalBlocks: lane.metrics.blockCount,
-          },
-          error: null,
-          serverValidated,
-        };
-        continue;
-      }
-
-      if (cached) {
+      const cached = getCachedBuild(lane.buildRef);
+      if (cached?.variant === "full") {
         nextState[slot] = {
           buildId: lane.buildId,
           build: cached.build,
@@ -669,6 +665,45 @@ export function SandboxBenchmark() {
           error: null,
           serverValidated: cached.serverValidated,
         };
+        continue;
+      }
+
+      if (lane.voxelBuild) {
+        const serverValidated = Boolean(lane.serverValidated);
+        if (lane.buildLoadHints.initialVariant === "full") {
+          setCachedBuild(lane.buildRef, {
+            build: lane.voxelBuild,
+            serverValidated,
+            variant: "full",
+          });
+          nextState[slot] = {
+            buildId: lane.buildId,
+            build: lane.voxelBuild,
+            phase: "ready",
+            progress: {
+              receivedBlocks: lane.metrics.blockCount,
+              totalBlocks: lane.metrics.blockCount,
+            },
+            error: null,
+            serverValidated,
+          };
+          continue;
+        }
+
+        // preview payloads are just placeholders so always hydrate the full ref
+        nextState[slot] = {
+          buildId: lane.buildId,
+          build: lane.voxelBuild,
+          phase: "loading",
+          progress: {
+            receivedBlocks:
+              getVoxelBlockCount(lane.voxelBuild) || lane.buildLoadHints.previewBlockCount || 0,
+            totalBlocks: toSlotProgressTotal(lane),
+          },
+          error: null,
+          serverValidated,
+        };
+        hydrateQueue.push({ slot, lane });
         continue;
       }
 
@@ -712,12 +747,16 @@ export function SandboxBenchmark() {
                     return prev;
                   }
 
+                  const currentBlockCount = getVoxelBlockCount(current.build);
+                  const nextBuild =
+                    progress.receivedBlocks > currentBlockCount ? progressiveBuild : current.build;
+
                   return {
                     ...prev,
                     [slot]: {
                       ...current,
                       phase: "loading",
-                      build: progressiveBuild,
+                      build: nextBuild,
                       progress: {
                         receivedBlocks: progress.receivedBlocks,
                         totalBlocks: progress.totalBlocks,
@@ -737,9 +776,10 @@ export function SandboxBenchmark() {
 
           if (hydrationRunIdRef.current !== runId) return;
 
-          setCachedBuild(lane.buildId, {
+          setCachedBuild(lane.buildRef, {
             build: payload.voxelBuild,
             serverValidated: payload.serverValidated,
+            variant: payload.variant ?? lane.buildRef.variant,
           });
 
           setSlotState((prev) => {
@@ -788,7 +828,7 @@ export function SandboxBenchmark() {
         }
       }
     };
-  }, [data, setCachedBuild]);
+  }, [data, getCachedBuild, setCachedBuild]);
 
   const modelGroups = useMemo(() => {
     const groups = new Map<string, BenchmarkModelOption[]>();
