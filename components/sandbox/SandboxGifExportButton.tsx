@@ -19,6 +19,8 @@ type Props = {
   className?: string;
 };
 
+type GifExportFormat = "wide" | "vertical";
+
 const TARGET_FPS = 60;
 const FRAME_DELAY_MS = Math.round(1000 / TARGET_FPS);
 const FRAME_COUNT = 160;
@@ -26,16 +28,38 @@ const GIF_DELAY_TICK_MS = 10;
 const ROTATION_SLOWDOWN_FACTOR = 1.25;
 const MAX_IN_FLIGHT_FRAMES = 6;
 const YIELD_EVERY_FRAMES = 50;
-const PALETTE_SAMPLE_COUNT = 8;
-const PALETTE_SAMPLE_SIZE = { width: 480, height: 270 };
-const EXPORT_SIZE_SINGLE = { width: 1920, height: 1080 };
-const EXPORT_SIZE_COMPARE = { width: 1920, height: 1080 };
+const PALETTE_SAMPLE_COUNT = 18;
+const PALETTE_SAMPLE_LONG_EDGE = 720;
+const EXPORT_SIZE_WIDE = { width: 1920, height: 1080 };
+const EXPORT_SIZE_VERTICAL = { width: 1080, height: 1920 };
 const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * 1024 * 1024;
 const LOSSLESS_OPT_LARGE_INPUT_BYTES = 10 * 1024 * 1024;
 const LOSSLESS_OPT_ALWAYS_KEEP_BYTES = 15 * 1024 * 1024;
 const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
 const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
-const LOSSLESS_OPT_TARGET_MAX_BYTES = 30 * 1024 * 1024;
+const GIF_OPT_TARGET_MAX_BYTES = 15 * 1024 * 1024;
+// keep post-processing light so color and motion stay stable
+const LOSSY_OPT_LEVELS = [12, 20, 28, 35] as const;
+const EXPORT_RENDER_PROFILES: Record<
+  GifExportFormat,
+  ReadonlyArray<{ width: number; height: number }>
+> = {
+  wide: [
+    EXPORT_SIZE_WIDE,
+    { width: 1600, height: 900 },
+    { width: 1440, height: 810 },
+    { width: 1280, height: 720 },
+    { width: 960, height: 540 },
+  ],
+  vertical: [
+    EXPORT_SIZE_VERTICAL,
+    { width: 900, height: 1600 },
+    { width: 810, height: 1440 },
+    { width: 720, height: 1280 },
+    { width: 640, height: 1138 },
+    { width: 540, height: 960 },
+  ],
+};
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
@@ -44,20 +68,23 @@ const PANEL_PAD = 12;
 const PANEL_META_HEIGHT = 62;
 const PANEL_RADIUS = 18;
 const CAPTURE_RADIUS = 14;
+const MIN_EXPORT_PANEL_HEIGHT = 220;
+const HEADER_PROMPT_FONT = '600 18px "IBM Plex Sans", "Segoe UI", sans-serif';
+const HEADER_PROMPT_LINE_HEIGHT = 23;
+const GIF_FORMATS: GifExportFormat[] = ["wide", "vertical"];
 
 type ExportLayout = {
   width: number;
   height: number;
-  panelWidth: number;
-  panelHeight: number;
-  panelGap: number;
-  panelTop: number;
+  panelRects: Array<{ x: number; y: number; width: number; height: number }>;
   header: {
     title: string;
     promptLines: string[];
     urlText: string;
   };
 };
+
+type GifRenderProfile = (typeof EXPORT_RENDER_PROFILES)[GifExportFormat][number];
 
 function buildFrameDelaySchedule(frameCount: number, slowdownFactor: number): number[] {
   const baseDelayTicks = Math.max(1, Math.round(FRAME_DELAY_MS / GIF_DELAY_TICK_MS));
@@ -92,58 +119,78 @@ function waitForNextPaint() {
   });
 }
 
-function fitTextWithEllipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const clean = text.replace(/\s+/g, " ").trim();
-  if (!clean) return "";
-  if (ctx.measureText(clean).width <= maxWidth) return clean;
-  const ellipsis = "...";
-  let lo = 0;
-  let hi = clean.length;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    const candidate = `${clean.slice(0, mid).replace(/\s+$/g, "")}${ellipsis}`;
-    if (ctx.measureText(candidate).width <= maxWidth) lo = mid;
-    else hi = mid - 1;
-  }
-  return `${clean.slice(0, lo).replace(/\s+$/g, "")}${ellipsis}`;
-}
-
-function wrapTextLines(
-  ctx: CanvasRenderingContext2D,
-  text: string,
-  maxWidth: number,
-  maxLines: number,
-): string[] {
+function wrapTextLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean) return [];
   const words = clean.split(" ");
   const lines: string[] = [];
 
   let current = "";
-  let idx = 0;
-  while (idx < words.length) {
-    const next = current ? `${current} ${words[idx]}` : words[idx];
+  for (const word of words) {
+    if (ctx.measureText(word).width > maxWidth) {
+      if (current) {
+        lines.push(current);
+        current = "";
+      }
+
+      let chunk = "";
+      for (const char of word) {
+        const nextChunk = `${chunk}${char}`;
+        if (chunk && ctx.measureText(nextChunk).width > maxWidth) {
+          lines.push(chunk);
+          chunk = char;
+        } else {
+          chunk = nextChunk;
+        }
+      }
+      current = chunk;
+      continue;
+    }
+
+    const next = current ? `${current} ${word}` : word;
     if (ctx.measureText(next).width <= maxWidth || current === "") {
       current = next;
-      idx += 1;
       continue;
     }
 
     lines.push(current);
-    current = "";
-    if (lines.length >= Math.max(1, maxLines - 1)) break;
+    current = word;
   }
 
-  if (current && lines.length < maxLines) lines.push(current);
+  if (current) lines.push(current);
+  return lines;
+}
 
-  if (idx < words.length && lines.length > 0) {
-    const remainder = words.slice(idx).join(" ");
-    const last = lines.pop() ?? "";
-    const combined = last ? `${last} ${remainder}` : remainder;
-    lines.push(fitTextWithEllipsis(ctx, combined, maxWidth));
+function fitTextWithEllipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean || ctx.measureText(clean).width <= maxWidth) return clean;
+
+  const suffix = "...";
+  let lo = 0;
+  let hi = clean.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate = `${clean.slice(0, mid).replace(/\s+$/g, "")}${suffix}`;
+    if (ctx.measureText(candidate).width <= maxWidth) lo = mid;
+    else hi = mid - 1;
   }
 
-  return lines.slice(0, maxLines);
+  return `${clean.slice(0, lo).replace(/\s+$/g, "")}${suffix}`;
+}
+
+function capPromptLines(
+  ctx: CanvasRenderingContext2D,
+  lines: string[],
+  maxLines: number,
+  maxWidth: number,
+) {
+  const lineLimit = Math.max(1, maxLines);
+  if (lines.length <= lineLimit) return lines;
+
+  const visible = lines.slice(0, lineLimit);
+  const overflowText = lines.slice(lineLimit - 1).join(" ");
+  visible[lineLimit - 1] = fitTextWithEllipsis(ctx, overflowText, maxWidth);
+  return visible;
 }
 
 function roundedRectPath(
@@ -170,27 +217,49 @@ function buildExportLayout(
   width: number,
   height: number,
   promptText: string,
+  format: GifExportFormat,
 ): ExportLayout {
   const panelGap = count === 1 ? 0 : PANEL_GAP;
-  const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
-  ctx.font = '500 13px "IBM Plex Sans", "Segoe UI", sans-serif';
+  ctx.font = HEADER_PROMPT_FONT;
   const normalizedPrompt = promptText.replace(/\s+/g, " ").trim();
-  const promptLines = wrapTextLines(
-    ctx,
-    `Prompt: ${normalizedPrompt || "sandbox prompt"}`,
-    width - 56,
-    2,
-  );
-  const panelTop = Math.max(86, 54 + promptLines.length * 16 + 22);
-  const panelHeight = height - panelTop - EXPORT_MARGIN_BOTTOM;
+  const promptMaxWidth = width - 56;
+  const allPromptLines = wrapTextLines(ctx, `Prompt: ${normalizedPrompt || "sandbox prompt"}`, promptMaxWidth);
+  const maxPanelTop =
+    format === "vertical"
+      ? height - EXPORT_MARGIN_BOTTOM - panelGap * (count - 1) - MIN_EXPORT_PANEL_HEIGHT * count
+      : height - EXPORT_MARGIN_BOTTOM - MIN_EXPORT_PANEL_HEIGHT;
+  // free-form prompts still need room for viewers
+  const maxPromptLines = Math.floor((maxPanelTop - 84) / HEADER_PROMPT_LINE_HEIGHT);
+  const promptLines = capPromptLines(ctx, allPromptLines, maxPromptLines, promptMaxWidth);
+  const panelTop = Math.max(104, 60 + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24);
+  const panelRects =
+    format === "vertical"
+      ? Array.from({ length: count }, (_, idx) => {
+          const panelWidth = width - EXPORT_MARGIN_X * 2;
+          const panelHeight =
+            (height - panelTop - EXPORT_MARGIN_BOTTOM - panelGap * (count - 1)) / count;
+          return {
+            x: EXPORT_MARGIN_X,
+            y: panelTop + idx * (panelHeight + panelGap),
+            width: panelWidth,
+            height: panelHeight,
+          };
+        })
+      : Array.from({ length: count }, (_, idx) => {
+          const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
+          const panelHeight = height - panelTop - EXPORT_MARGIN_BOTTOM;
+          return {
+            x: EXPORT_MARGIN_X + idx * (panelWidth + panelGap),
+            y: panelTop,
+            width: panelWidth,
+            height: panelHeight,
+          };
+        });
 
   return {
     width,
     height,
-    panelWidth,
-    panelHeight,
-    panelGap,
-    panelTop,
+    panelRects,
     header: {
       title: count === 2 ? "MineBench Comparison" : "MineBench Build",
       promptLines,
@@ -210,7 +279,15 @@ function buildPaletteSampleFrames(frameCount: number, sampleCount: number): numb
   return Array.from(frames).sort((a, b) => a - b);
 }
 
-async function optimizeGifBlobLossless(input: Blob): Promise<Blob> {
+function getPaletteSampleSize(profile: GifRenderProfile) {
+  const scale = PALETTE_SAMPLE_LONG_EDGE / Math.max(profile.width, profile.height);
+  return {
+    width: Math.max(1, Math.round(profile.width * scale)),
+    height: Math.max(1, Math.round(profile.height * scale)),
+  };
+}
+
+async function optimizeGifBlobForSize(input: Blob): Promise<Blob> {
   if (input.size < LOSSLESS_OPT_MIN_INPUT_BYTES) return input;
 
   try {
@@ -219,41 +296,69 @@ async function optimizeGifBlobLossless(input: Blob): Promise<Blob> {
       input.arrayBuffer(),
     ]);
 
-    const runOptimize = async (level: "-O2" | "-O3") => {
+    const runOptimize = async (command: string) => {
       const outputs = await gifsicle.run({
         input: [{ file: inputBytes.slice(0), name: "in.gif" }],
-        command: [`${level} in.gif -o /out/out.gif`],
+        command: [`${command} in.gif -o /out/out.gif`],
         isStrict: true,
       });
       return outputs.find((file) => file.name.toLowerCase().endsWith(".gif")) ?? null;
     };
 
     const primaryLevel = input.size >= LOSSLESS_OPT_LARGE_INPUT_BYTES ? "-O2" : "-O3";
+    const lossyOptimizeLevel = input.size >= LOSSLESS_OPT_LARGE_INPUT_BYTES ? "-O2" : "-O3";
     let optimized = await runOptimize(primaryLevel);
+    let best = optimized && optimized.size < input.size ? optimized : input;
 
     if (
       primaryLevel === "-O2" &&
       optimized &&
-      optimized.size > LOSSLESS_OPT_TARGET_MAX_BYTES &&
+      optimized.size > GIF_OPT_TARGET_MAX_BYTES &&
       optimized.size < input.size
     ) {
       const tighter = await runOptimize("-O3");
       if (tighter && tighter.size < optimized.size) optimized = tighter;
+      if (tighter && tighter.size < best.size) best = tighter;
     }
 
-    if (!optimized) return input;
+    if (!optimized && best === input) {
+      if (input.size > GIF_OPT_TARGET_MAX_BYTES) {
+        throw new Error(
+          `GIF stayed above 15 MB after optimization (${(input.size / 1024 / 1024).toFixed(1)} MB)`,
+        );
+      }
+      return input;
+    }
+    if (best.size > GIF_OPT_TARGET_MAX_BYTES) {
+      for (const lossyLevel of LOSSY_OPT_LEVELS) {
+        // use the least lossy setting that gets under the target
+        const lossy = await runOptimize(`${lossyOptimizeLevel} --lossy=${lossyLevel}`);
+        if (lossy && lossy.size < best.size) best = lossy;
+        if (lossy && lossy.size <= GIF_OPT_TARGET_MAX_BYTES) return lossy;
+      }
+
+      throw new Error(
+        `GIF stayed above 15 MB after optimization (${(best.size / 1024 / 1024).toFixed(1)} MB)`,
+      );
+    }
+
     if (input.size >= LOSSLESS_OPT_ALWAYS_KEEP_BYTES) {
-      return optimized.size < input.size ? optimized : input;
+      return best.size < input.size ? best : input;
     }
 
-    const savings = input.size - optimized.size;
+    const savings = input.size - best.size;
     const relativeSavings = savings / Math.max(1, input.size);
     const meaningful =
       savings >= LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES &&
       relativeSavings >= LOSSLESS_OPT_MIN_RELATIVE_SAVINGS;
-    return meaningful ? optimized : input;
+    return meaningful ? best : input;
   } catch (err) {
-    console.warn("[gif-export] lossless optimize skipped", err);
+    console.warn("[gif-export] optimize skipped", err);
+    if (input.size > GIF_OPT_TARGET_MAX_BYTES) {
+      throw err instanceof Error
+        ? err
+        : new Error("GIF optimization failed before it could fit under 15 MB");
+    }
     return input;
   }
 }
@@ -297,12 +402,11 @@ function drawBaseBackdrop(
   ctx.textBaseline = "top";
   ctx.fillText(opts.title, 28, 18);
 
-  ctx.fillStyle = "rgba(148, 163, 184, 0.95)";
-  ctx.font = '500 13px "IBM Plex Sans", "Segoe UI", sans-serif';
-  const promptY = 54;
-  const lineHeight = 16;
+  ctx.fillStyle = "rgba(203, 213, 225, 0.95)";
+  ctx.font = HEADER_PROMPT_FONT;
+  const promptY = 60;
   for (let i = 0; i < opts.promptLines.length; i += 1) {
-    ctx.fillText(opts.promptLines[i] ?? "", 28, promptY + i * lineHeight);
+    ctx.fillText(opts.promptLines[i] ?? "", 28, promptY + i * HEADER_PROMPT_LINE_HEIGHT);
   }
 
   ctx.fillStyle = "rgba(100, 116, 139, 0.85)";
@@ -325,8 +429,8 @@ function drawPanel(
   const { x, y, width, height, target, capture } = opts;
   const captureX = x + PANEL_PAD;
   const captureY = y + PANEL_PAD + PANEL_META_HEIGHT;
-  const captureWidth = width - PANEL_PAD * 2;
-  const captureHeight = height - PANEL_PAD * 2 - PANEL_META_HEIGHT;
+  const captureWidth = Math.max(1, width - PANEL_PAD * 2);
+  const captureHeight = Math.max(1, height - PANEL_PAD * 2 - PANEL_META_HEIGHT);
 
   ctx.save();
   roundedRectPath(ctx, x, y, width, height, PANEL_RADIUS);
@@ -384,10 +488,10 @@ function renderCompositeFrame(
 
   for (let idx = 0; idx < targets.length; idx += 1) {
     const target = targets[idx];
-    const panelX = EXPORT_MARGIN_X + idx * (layout.panelWidth + layout.panelGap);
-    const panelY = layout.panelTop;
-    const captureWidth = Math.max(1, Math.round(layout.panelWidth - PANEL_PAD * 2));
-    const captureHeight = Math.max(1, Math.round(layout.panelHeight - PANEL_PAD * 2 - PANEL_META_HEIGHT));
+    const panel = layout.panelRects[idx];
+    if (!panel) continue;
+    const captureWidth = Math.max(1, Math.round(panel.width - PANEL_PAD * 2));
+    const captureHeight = Math.max(1, Math.round(panel.height - PANEL_PAD * 2 - PANEL_META_HEIGHT));
     const capture = target.viewerRef.current?.captureFrame({
       rotationY: angle,
       width: captureWidth,
@@ -398,31 +502,38 @@ function renderCompositeFrame(
     }
 
     drawPanel(ctx, {
-      x: panelX,
-      y: panelY,
-      width: layout.panelWidth,
-      height: layout.panelHeight,
+      x: panel.x,
+      y: panel.y,
+      width: panel.width,
+      height: panel.height,
       target,
       capture,
     });
   }
 }
 
-async function buildPaletteSamples(targets: SandboxGifExportTarget[], promptText: string) {
+async function buildPaletteSamples(
+  targets: SandboxGifExportTarget[],
+  format: GifExportFormat,
+  profile: GifRenderProfile,
+) {
+  const sampleSize = getPaletteSampleSize(profile);
   const sampleCanvas = document.createElement("canvas");
-  sampleCanvas.width = PALETTE_SAMPLE_SIZE.width;
-  sampleCanvas.height = PALETTE_SAMPLE_SIZE.height;
+  sampleCanvas.width = sampleSize.width;
+  sampleCanvas.height = sampleSize.height;
   const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
   if (!sampleCtx) throw new Error("Unable to initialize palette sampler");
   sampleCtx.imageSmoothingEnabled = true;
   sampleCtx.imageSmoothingQuality = "high";
 
+  // palette pass uses short prompt so model colors stay dominant
   const layout = buildExportLayout(
     sampleCtx,
     targets.length,
     sampleCanvas.width,
     sampleCanvas.height,
-    promptText,
+    "",
+    format,
   );
   const samples: ArrayBuffer[] = [];
   const sampleFrames = buildPaletteSampleFrames(FRAME_COUNT, PALETTE_SAMPLE_COUNT);
@@ -442,11 +553,11 @@ async function buildPaletteSamples(targets: SandboxGifExportTarget[], promptText
 async function buildGifBlob(
   targets: SandboxGifExportTarget[],
   promptText: string,
+  format: GifExportFormat,
+  profile: GifRenderProfile,
   onProgress?: (done: number, total: number) => void,
 ) {
-  const count = targets.length;
-  const width = count === 1 ? EXPORT_SIZE_SINGLE.width : EXPORT_SIZE_COMPARE.width;
-  const height = count === 1 ? EXPORT_SIZE_SINGLE.height : EXPORT_SIZE_COMPARE.height;
+  const { width, height } = profile;
 
   const frameCanvas = document.createElement("canvas");
   frameCanvas.width = width;
@@ -520,12 +631,12 @@ async function buildGifBlob(
   worker.postMessage({ type: "start" });
   await readyPromise;
 
-  const paletteSamples = await buildPaletteSamples(targets, promptText);
+  const paletteSamples = await buildPaletteSamples(targets, format, profile);
   if (paletteSamples.length > 0) {
     worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
   }
 
-  const layout = buildExportLayout(frameCtx, count, width, height, promptText);
+  const layout = buildExportLayout(frameCtx, targets.length, width, height, promptText, format);
 
   try {
     const inFlight: Promise<void>[] = [];
@@ -582,10 +693,95 @@ function triggerDownload(blob: Blob, fileName: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = fileName;
+  a.rel = "noopener";
+  a.style.display = "none";
   document.body.appendChild(a);
   a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 60_000);
+}
+
+function FormatIcon({ format }: { format: GifExportFormat }) {
+  const rect =
+    format === "wide"
+      ? { x: 3.5, y: 7, width: 17, height: 10, rx: 2.2 }
+      : { x: 7, y: 3.5, width: 10, height: 17, rx: 2.2 };
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+      <rect
+        x={rect.x}
+        y={rect.y}
+        width={rect.width}
+        height={rect.height}
+        rx={rect.rx}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d={format === "wide" ? "M7 10h10M7 14h6" : "M10 7h4M10 11h4M10 15h3"}
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.45"
+      />
+    </svg>
+  );
+}
+
+function GifFormatSelector({
+  format,
+  disabled,
+  compact,
+  embedded,
+  onChange,
+}: {
+  format: GifExportFormat;
+  disabled: boolean;
+  compact?: boolean;
+  embedded?: boolean;
+  onChange: (format: GifExportFormat) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="GIF format"
+      className={`inline-flex shrink-0 items-center rounded-full text-muted ${
+        embedded
+          ? "p-0"
+          : "border border-border/70 bg-bg/45 p-0.5 shadow-[0_12px_30px_-24px_rgba(4,11,31,0.9)] backdrop-blur-sm"
+      } ${
+        compact ? "h-7" : "h-8"
+      }`}
+    >
+      {GIF_FORMATS.map((value) => {
+        const active = format === value;
+        const label = value === "wide" ? "Wide GIF" : "Vertical GIF";
+        return (
+          <button
+            key={value}
+            type="button"
+            disabled={disabled}
+            aria-label={label}
+            aria-pressed={active}
+            title={label}
+            onClick={() => onChange(value)}
+            className={`grid place-items-center rounded-full transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/55 disabled:cursor-not-allowed disabled:opacity-45 ${
+              compact ? "h-7 w-7" : "h-8 w-8"
+            } ${
+              active
+                ? "bg-accent/15 text-accent ring-1 ring-accent/40 shadow-[0_8px_20px_-16px_hsl(var(--accent)_/_0.7)]"
+                : "text-muted/75 hover:bg-fg/7 hover:text-fg"
+            }`}
+          >
+            <FormatIcon format={value} />
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className }: Props) {
@@ -594,6 +790,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [format, setFormat] = useState<GifExportFormat>("wide");
 
   const hasTargets = targets.length > 0;
 
@@ -610,17 +807,47 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     setProgress({ done: 0, total: FRAME_COUNT });
     await waitForNextPaint();
     try {
-      const blob = await buildGifBlob(targets, promptText ?? "", (done, total) => {
-        if (done === total || done % 2 === 0) setProgress({ done, total });
-      });
-      setOptimizing(true);
-      setProgress(null);
-      const finalBlob = await optimizeGifBlobLossless(blob);
+      const profiles = EXPORT_RENDER_PROFILES[format];
+      let finalBlob: Blob | null = null;
+      let lastError: unknown = null;
+
+      for (let idx = 0; idx < profiles.length; idx += 1) {
+        const profile = profiles[idx] ?? profiles[profiles.length - 1];
+        setOptimizing(false);
+        setProgress({ done: 0, total: FRAME_COUNT });
+
+        const blob = await buildGifBlob(
+          targets,
+          promptText ?? "",
+          format,
+          profile,
+          (done, total) => {
+            if (done === total || done % 2 === 0) setProgress({ done, total });
+          },
+        );
+
+        setOptimizing(true);
+        setProgress(null);
+        try {
+          finalBlob = await optimizeGifBlobForSize(blob);
+          break;
+        } catch (err) {
+          lastError = err;
+          if (idx === profiles.length - 1) throw err;
+          await waitForNextPaint();
+        }
+      }
+
+      if (!finalBlob) {
+        throw lastError instanceof Error ? lastError : new Error("GIF export failed");
+      }
+
       const modelToken = targets.map((t) => sanitizeFilePart(t.modelName) || "model").join("-vs-");
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const typeToken = targets.length === 2 ? "compare" : "build";
-      const fileName = `minebench-${typeToken}-${modelToken}-${promptToken}-${stamp}.gif`;
+      const formatToken = format === "vertical" ? "vertical" : "wide";
+      const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.gif`;
       triggerDownload(finalBlob, fileName);
     } catch (err) {
       const message = err instanceof Error ? err.message : "GIF export failed";
@@ -644,6 +871,15 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const busy = exporting || optimizing;
   const isUnavailable = !hasTargets;
   const shouldKeepTooltipVisible = Boolean(iconOnly && (busy || error));
+  const formatSelector = (
+    <GifFormatSelector
+      format={format}
+      disabled={busy}
+      compact={iconOnly}
+      embedded
+      onChange={setFormat}
+    />
+  );
 
   const button = (
     <button
@@ -655,7 +891,11 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       title={iconOnly ? undefined : buttonTitle}
       onClick={() => void handleExport()}
       disabled={isUnavailable}
-      className={`${iconOnly ? "mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg" : "mb-btn mb-btn-ghost h-9 rounded-full border border-border/70 bg-bg/55 px-3 text-xs tracking-[0.01em] backdrop-blur-sm sm:text-sm"} ${busy ? "cursor-progress opacity-75" : ""} disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
+      className={`inline-flex select-none items-center justify-center rounded-full font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${
+        iconOnly
+          ? "h-7 w-7 p-0 text-muted hover:bg-fg/7 hover:text-fg"
+          : "h-8 gap-1.5 px-3 text-xs tracking-[0.01em] hover:bg-fg/7 sm:px-3.5 sm:text-sm"
+      } ${busy ? "cursor-progress opacity-75" : ""} disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
     >
       <span className={`inline-flex items-center ${iconOnly ? "justify-center" : "gap-1.5"}`}>
         <svg
@@ -676,10 +916,18 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     </button>
   );
 
-  if (!iconOnly) return button;
+  if (!iconOnly) {
+    return (
+      <div className="inline-flex h-9 items-center rounded-full border border-border/70 bg-bg/55 p-0.5 shadow-[0_18px_44px_-28px_rgba(4,11,31,0.95)] backdrop-blur-sm">
+        {formatSelector}
+        <span className="mx-1 h-4 w-px bg-border/45" aria-hidden="true" />
+        {button}
+      </div>
+    );
+  }
 
   return (
-    <div className="group/gif-export relative inline-flex items-center">
+    <div className="group/gif-export relative inline-flex h-8 items-center rounded-full border border-border/70 bg-bg/55 p-0.5 shadow-[0_18px_44px_-28px_rgba(4,11,31,0.95)] backdrop-blur-sm">
       <div
         id={tooltipId}
         role="status"
@@ -688,6 +936,8 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       >
         <span className="block truncate">{buttonTitle}</span>
       </div>
+      {formatSelector}
+      <span className="mx-1 h-3.5 w-px bg-border/45" aria-hidden="true" />
       {button}
     </div>
   );
