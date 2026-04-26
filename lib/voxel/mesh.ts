@@ -309,7 +309,7 @@ const TINT_GRASS = hexToLinearRgb(0x7fb238);
 const TINT_WATER = hexToLinearRgb(0x3f76e4);
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
 const WATER_TEXTURE_KEY = "water_still";
-const WATER_SURFACE_OPACITY = 0.42;
+const WATER_SURFACE_OPACITY = 0.60;
 
 let cachedWaterTexture: { atlasTexture: THREE.Texture; texture: THREE.Texture } | null = null;
 
