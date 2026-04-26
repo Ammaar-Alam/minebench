@@ -28,8 +28,8 @@ const GIF_DELAY_TICK_MS = 10;
 const ROTATION_SLOWDOWN_FACTOR = 1.25;
 const MAX_IN_FLIGHT_FRAMES = 6;
 const YIELD_EVERY_FRAMES = 50;
-const PALETTE_SAMPLE_COUNT = 12;
-const PALETTE_SAMPLE_SIZE = { width: 640, height: 360 };
+const PALETTE_SAMPLE_COUNT = 18;
+const PALETTE_SAMPLE_LONG_EDGE = 720;
 const EXPORT_SIZE_WIDE = { width: 1920, height: 1080 };
 const EXPORT_SIZE_VERTICAL = { width: 1080, height: 1920 };
 const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * 1024 * 1024;
@@ -38,41 +38,26 @@ const LOSSLESS_OPT_ALWAYS_KEEP_BYTES = 15 * 1024 * 1024;
 const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
 const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
 const GIF_OPT_TARGET_MAX_BYTES = 15 * 1024 * 1024;
-// try cheaper loss first then resize only when size still blows past target
-const LOSSY_OPT_LEVELS = [20, 35, 50, 70, 90, 120] as const;
-const FINAL_LOSSY_OPT_LEVELS = [160, 200] as const;
-const RESIZE_OPT_STEPS: Record<
+// keep post-processing light so color and motion stay stable
+const LOSSY_OPT_LEVELS = [12, 20, 28, 35] as const;
+const EXPORT_RENDER_PROFILES: Record<
   GifExportFormat,
-  ReadonlyArray<{ dimensions: string; lossy: number }>
+  ReadonlyArray<{ width: number; height: number }>
 > = {
   wide: [
-    { dimensions: "1600x900", lossy: 50 },
-    { dimensions: "1440x810", lossy: 70 },
-    { dimensions: "1280x720", lossy: 90 },
-    { dimensions: "960x540", lossy: 120 },
+    EXPORT_SIZE_WIDE,
+    { width: 1600, height: 900 },
+    { width: 1440, height: 810 },
+    { width: 1280, height: 720 },
+    { width: 960, height: 540 },
   ],
   vertical: [
-    { dimensions: "900x1600", lossy: 50 },
-    { dimensions: "810x1440", lossy: 70 },
-    { dimensions: "720x1280", lossy: 90 },
-    { dimensions: "540x960", lossy: 120 },
-  ],
-};
-const HARD_CAP_RESIZE_OPT_STEPS: Record<
-  GifExportFormat,
-  ReadonlyArray<{ dimensions: string; lossy: number; colors?: number }>
-> = {
-  wide: [
-    { dimensions: "854x480", lossy: 160 },
-    { dimensions: "720x405", lossy: 200, colors: 192 },
-    { dimensions: "640x360", lossy: 240, colors: 160 },
-    { dimensions: "480x270", lossy: 280, colors: 128 },
-  ],
-  vertical: [
-    { dimensions: "480x854", lossy: 160 },
-    { dimensions: "405x720", lossy: 200, colors: 192 },
-    { dimensions: "360x640", lossy: 240, colors: 160 },
-    { dimensions: "270x480", lossy: 280, colors: 128 },
+    EXPORT_SIZE_VERTICAL,
+    { width: 900, height: 1600 },
+    { width: 810, height: 1440 },
+    { width: 720, height: 1280 },
+    { width: 640, height: 1138 },
+    { width: 540, height: 960 },
   ],
 };
 
@@ -97,6 +82,8 @@ type ExportLayout = {
     urlText: string;
   };
 };
+
+type GifRenderProfile = (typeof EXPORT_RENDER_PROFILES)[GifExportFormat][number];
 
 function buildFrameDelaySchedule(frameCount: number, slowdownFactor: number): number[] {
   const baseDelayTicks = Math.max(1, Math.round(FRAME_DELAY_MS / GIF_DELAY_TICK_MS));
@@ -255,7 +242,15 @@ function buildPaletteSampleFrames(frameCount: number, sampleCount: number): numb
   return Array.from(frames).sort((a, b) => a - b);
 }
 
-async function optimizeGifBlobForSize(input: Blob, format: GifExportFormat): Promise<Blob> {
+function getPaletteSampleSize(profile: GifRenderProfile) {
+  const scale = PALETTE_SAMPLE_LONG_EDGE / Math.max(profile.width, profile.height);
+  return {
+    width: Math.max(1, Math.round(profile.width * scale)),
+    height: Math.max(1, Math.round(profile.height * scale)),
+  };
+}
+
+async function optimizeGifBlobForSize(input: Blob): Promise<Blob> {
   if (input.size < LOSSLESS_OPT_MIN_INPUT_BYTES) return input;
 
   try {
@@ -289,36 +284,20 @@ async function optimizeGifBlobForSize(input: Blob, format: GifExportFormat): Pro
       if (tighter && tighter.size < best.size) best = tighter;
     }
 
-    if (!optimized && best === input) return input;
+    if (!optimized && best === input) {
+      if (input.size > GIF_OPT_TARGET_MAX_BYTES) {
+        throw new Error(
+          `GIF stayed above 15 MB after optimization (${(input.size / 1024 / 1024).toFixed(1)} MB)`,
+        );
+      }
+      return input;
+    }
     if (best.size > GIF_OPT_TARGET_MAX_BYTES) {
       for (const lossyLevel of LOSSY_OPT_LEVELS) {
         // use the least lossy setting that gets under the target
         const lossy = await runOptimize(`${lossyOptimizeLevel} --lossy=${lossyLevel}`);
         if (lossy && lossy.size < best.size) best = lossy;
         if (lossy && lossy.size <= GIF_OPT_TARGET_MAX_BYTES) return lossy;
-      }
-
-      for (const step of RESIZE_OPT_STEPS[format]) {
-        const resized = await runOptimize(
-          `${lossyOptimizeLevel} --lossy=${step.lossy} --resize-fit ${step.dimensions}`,
-        );
-        if (resized && resized.size < best.size) best = resized;
-        if (resized && resized.size <= GIF_OPT_TARGET_MAX_BYTES) return resized;
-      }
-
-      for (const lossyLevel of FINAL_LOSSY_OPT_LEVELS) {
-        const lossy = await runOptimize(`${lossyOptimizeLevel} --lossy=${lossyLevel}`);
-        if (lossy && lossy.size < best.size) best = lossy;
-        if (lossy && lossy.size <= GIF_OPT_TARGET_MAX_BYTES) return lossy;
-      }
-
-      for (const step of HARD_CAP_RESIZE_OPT_STEPS[format]) {
-        const colorsArg = step.colors ? ` --colors ${step.colors}` : "";
-        const resized = await runOptimize(
-          `${lossyOptimizeLevel} --lossy=${step.lossy}${colorsArg} --resize-fit ${step.dimensions}`,
-        );
-        if (resized && resized.size < best.size) best = resized;
-        if (resized && resized.size <= GIF_OPT_TARGET_MAX_BYTES) return resized;
       }
 
       throw new Error(
@@ -498,23 +477,25 @@ function renderCompositeFrame(
 
 async function buildPaletteSamples(
   targets: SandboxGifExportTarget[],
-  promptText: string,
   format: GifExportFormat,
+  profile: GifRenderProfile,
 ) {
+  const sampleSize = getPaletteSampleSize(profile);
   const sampleCanvas = document.createElement("canvas");
-  sampleCanvas.width = PALETTE_SAMPLE_SIZE.width;
-  sampleCanvas.height = PALETTE_SAMPLE_SIZE.height;
+  sampleCanvas.width = sampleSize.width;
+  sampleCanvas.height = sampleSize.height;
   const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
   if (!sampleCtx) throw new Error("Unable to initialize palette sampler");
   sampleCtx.imageSmoothingEnabled = true;
   sampleCtx.imageSmoothingQuality = "high";
 
+  // palette pass uses short prompt so model colors stay dominant
   const layout = buildExportLayout(
     sampleCtx,
     targets.length,
     sampleCanvas.width,
     sampleCanvas.height,
-    promptText,
+    "",
     format,
   );
   const samples: ArrayBuffer[] = [];
@@ -536,9 +517,10 @@ async function buildGifBlob(
   targets: SandboxGifExportTarget[],
   promptText: string,
   format: GifExportFormat,
+  profile: GifRenderProfile,
   onProgress?: (done: number, total: number) => void,
 ) {
-  const { width, height } = format === "vertical" ? EXPORT_SIZE_VERTICAL : EXPORT_SIZE_WIDE;
+  const { width, height } = profile;
 
   const frameCanvas = document.createElement("canvas");
   frameCanvas.width = width;
@@ -612,7 +594,7 @@ async function buildGifBlob(
   worker.postMessage({ type: "start" });
   await readyPromise;
 
-  const paletteSamples = await buildPaletteSamples(targets, promptText, format);
+  const paletteSamples = await buildPaletteSamples(targets, format, profile);
   if (paletteSamples.length > 0) {
     worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
   }
@@ -771,6 +753,9 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [profileAttempt, setProfileAttempt] = useState<{ index: number; total: number } | null>(
+    null,
+  );
   const [format, setFormat] = useState<GifExportFormat>("wide");
 
   const hasTargets = targets.length > 0;
@@ -786,14 +771,45 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     setOptimizing(false);
     setError(null);
     setProgress({ done: 0, total: FRAME_COUNT });
+    setProfileAttempt(null);
     await waitForNextPaint();
     try {
-      const blob = await buildGifBlob(targets, promptText ?? "", format, (done, total) => {
-        if (done === total || done % 2 === 0) setProgress({ done, total });
-      });
-      setOptimizing(true);
-      setProgress(null);
-      const finalBlob = await optimizeGifBlobForSize(blob, format);
+      const profiles = EXPORT_RENDER_PROFILES[format];
+      let finalBlob: Blob | null = null;
+      let lastError: unknown = null;
+
+      for (let idx = 0; idx < profiles.length; idx += 1) {
+        const profile = profiles[idx] ?? profiles[profiles.length - 1];
+        setProfileAttempt({ index: idx + 1, total: profiles.length });
+        setOptimizing(false);
+        setProgress({ done: 0, total: FRAME_COUNT });
+
+        const blob = await buildGifBlob(
+          targets,
+          promptText ?? "",
+          format,
+          profile,
+          (done, total) => {
+            if (done === total || done % 2 === 0) setProgress({ done, total });
+          },
+        );
+
+        setOptimizing(true);
+        setProgress(null);
+        try {
+          finalBlob = await optimizeGifBlobForSize(blob);
+          break;
+        } catch (err) {
+          lastError = err;
+          if (idx === profiles.length - 1) throw err;
+          await waitForNextPaint();
+        }
+      }
+
+      if (!finalBlob) {
+        throw lastError instanceof Error ? lastError : new Error("GIF export failed");
+      }
+
       const modelToken = targets.map((t) => sanitizeFilePart(t.modelName) || "model").join("-vs-");
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -809,14 +825,19 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       setOptimizing(false);
       setExporting(false);
       setProgress(null);
+      setProfileAttempt(null);
     }
   }
 
+  const passLabel =
+    profileAttempt && profileAttempt.total > 1
+      ? ` pass ${profileAttempt.index}/${profileAttempt.total}`
+      : "";
   const displayLabel = exporting
     ? optimizing
-      ? "Optimizing..."
+      ? `Optimizing${passLabel}...`
       : progress
-        ? `Rendering ${Math.max(0, progress.done)}/${progress.total}`
+        ? `Rendering ${Math.max(0, progress.done)}/${progress.total}${passLabel}`
         : "Rendering..."
     : (label ?? (targets.length === 2 ? "Export comparison GIF" : "Export GIF"));
   const buttonTitle = error ?? displayLabel;
