@@ -753,9 +753,6 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [profileAttempt, setProfileAttempt] = useState<{ index: number; total: number } | null>(
-    null,
-  );
   const [format, setFormat] = useState<GifExportFormat>("wide");
 
   const hasTargets = targets.length > 0;
@@ -771,7 +768,6 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     setOptimizing(false);
     setError(null);
     setProgress({ done: 0, total: FRAME_COUNT });
-    setProfileAttempt(null);
     await waitForNextPaint();
     try {
       const profiles = EXPORT_RENDER_PROFILES[format];
@@ -780,7 +776,6 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
 
       for (let idx = 0; idx < profiles.length; idx += 1) {
         const profile = profiles[idx] ?? profiles[profiles.length - 1];
-        setProfileAttempt({ index: idx + 1, total: profiles.length });
         setOptimizing(false);
         setProgress({ done: 0, total: FRAME_COUNT });
 
@@ -825,19 +820,14 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       setOptimizing(false);
       setExporting(false);
       setProgress(null);
-      setProfileAttempt(null);
     }
   }
 
-  const passLabel =
-    profileAttempt && profileAttempt.total > 1
-      ? ` pass ${profileAttempt.index}/${profileAttempt.total}`
-      : "";
   const displayLabel = exporting
     ? optimizing
-      ? `Optimizing${passLabel}...`
+      ? "Optimizing..."
       : progress
-        ? `Rendering ${Math.max(0, progress.done)}/${progress.total}${passLabel}`
+        ? `Rendering ${Math.max(0, progress.done)}/${progress.total}`
         : "Rendering..."
     : (label ?? (targets.length === 2 ? "Export comparison GIF" : "Export GIF"));
   const buttonTitle = error ?? displayLabel;
