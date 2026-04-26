@@ -68,6 +68,7 @@ const PANEL_PAD = 12;
 const PANEL_META_HEIGHT = 62;
 const PANEL_RADIUS = 18;
 const CAPTURE_RADIUS = 14;
+const MIN_EXPORT_PANEL_HEIGHT = 220;
 const HEADER_PROMPT_FONT = '600 18px "IBM Plex Sans", "Segoe UI", sans-serif';
 const HEADER_PROMPT_LINE_HEIGHT = 23;
 const GIF_FORMATS: GifExportFormat[] = ["wide", "vertical"];
@@ -160,6 +161,38 @@ function wrapTextLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: nu
   return lines;
 }
 
+function fitTextWithEllipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean || ctx.measureText(clean).width <= maxWidth) return clean;
+
+  const suffix = "...";
+  let lo = 0;
+  let hi = clean.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    const candidate = `${clean.slice(0, mid).replace(/\s+$/g, "")}${suffix}`;
+    if (ctx.measureText(candidate).width <= maxWidth) lo = mid;
+    else hi = mid - 1;
+  }
+
+  return `${clean.slice(0, lo).replace(/\s+$/g, "")}${suffix}`;
+}
+
+function capPromptLines(
+  ctx: CanvasRenderingContext2D,
+  lines: string[],
+  maxLines: number,
+  maxWidth: number,
+) {
+  const lineLimit = Math.max(1, maxLines);
+  if (lines.length <= lineLimit) return lines;
+
+  const visible = lines.slice(0, lineLimit);
+  const overflowText = lines.slice(lineLimit - 1).join(" ");
+  visible[lineLimit - 1] = fitTextWithEllipsis(ctx, overflowText, maxWidth);
+  return visible;
+}
+
 function roundedRectPath(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -189,11 +222,15 @@ function buildExportLayout(
   const panelGap = count === 1 ? 0 : PANEL_GAP;
   ctx.font = HEADER_PROMPT_FONT;
   const normalizedPrompt = promptText.replace(/\s+/g, " ").trim();
-  const promptLines = wrapTextLines(
-    ctx,
-    `Prompt: ${normalizedPrompt || "sandbox prompt"}`,
-    width - 56,
-  );
+  const promptMaxWidth = width - 56;
+  const allPromptLines = wrapTextLines(ctx, `Prompt: ${normalizedPrompt || "sandbox prompt"}`, promptMaxWidth);
+  const maxPanelTop =
+    format === "vertical"
+      ? height - EXPORT_MARGIN_BOTTOM - panelGap * (count - 1) - MIN_EXPORT_PANEL_HEIGHT * count
+      : height - EXPORT_MARGIN_BOTTOM - MIN_EXPORT_PANEL_HEIGHT;
+  // free-form prompts still need room for viewers
+  const maxPromptLines = Math.floor((maxPanelTop - 84) / HEADER_PROMPT_LINE_HEIGHT);
+  const promptLines = capPromptLines(ctx, allPromptLines, maxPromptLines, promptMaxWidth);
   const panelTop = Math.max(104, 60 + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24);
   const panelRects =
     format === "vertical"
@@ -857,8 +894,8 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       className={`inline-flex select-none items-center justify-center rounded-full font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${
         iconOnly
           ? "h-7 w-7 p-0 text-muted hover:bg-fg/7 hover:text-fg"
-          : `h-8 gap-1.5 px-3 text-xs tracking-[0.01em] hover:bg-fg/7 sm:px-3.5 sm:text-sm ${className ?? ""}`
-      } ${busy ? "cursor-progress opacity-75" : ""} disabled:cursor-not-allowed disabled:opacity-40`}
+          : "h-8 gap-1.5 px-3 text-xs tracking-[0.01em] hover:bg-fg/7 sm:px-3.5 sm:text-sm"
+      } ${busy ? "cursor-progress opacity-75" : ""} disabled:cursor-not-allowed disabled:opacity-40 ${className ?? ""}`}
     >
       <span className={`inline-flex items-center ${iconOnly ? "justify-center" : "gap-1.5"}`}>
         <svg
