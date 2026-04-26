@@ -48,6 +48,7 @@ const PANEL_RADIUS = 18;
 const CAPTURE_RADIUS = 14;
 const HEADER_PROMPT_FONT = '600 18px "IBM Plex Sans", "Segoe UI", sans-serif';
 const HEADER_PROMPT_LINE_HEIGHT = 23;
+const GIF_FORMATS: GifExportFormat[] = ["wide", "vertical"];
 
 type ExportLayout = {
   width: number;
@@ -615,6 +616,81 @@ function triggerDownload(blob: Blob, fileName: string) {
   }, 60_000);
 }
 
+function FormatIcon({ format }: { format: GifExportFormat }) {
+  const rect =
+    format === "wide"
+      ? { x: 3.5, y: 7, width: 17, height: 10, rx: 2.2 }
+      : { x: 7, y: 3.5, width: 10, height: 17, rx: 2.2 };
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+      <rect
+        x={rect.x}
+        y={rect.y}
+        width={rect.width}
+        height={rect.height}
+        rx={rect.rx}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+      />
+      <path
+        d={format === "wide" ? "M7 10h10M7 14h6" : "M10 7h4M10 11h4M10 15h3"}
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.45"
+      />
+    </svg>
+  );
+}
+
+function GifFormatSelector({
+  format,
+  disabled,
+  compact,
+  onChange,
+}: {
+  format: GifExportFormat;
+  disabled: boolean;
+  compact?: boolean;
+  onChange: (format: GifExportFormat) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="GIF format"
+      className={`inline-flex shrink-0 items-center rounded-full border border-border/70 bg-bg/45 p-0.5 text-muted shadow-[0_12px_30px_-24px_rgba(4,11,31,0.9)] backdrop-blur-sm ${
+        compact ? "h-8" : "h-9"
+      }`}
+    >
+      {GIF_FORMATS.map((value) => {
+        const active = format === value;
+        const label = value === "wide" ? "Wide GIF" : "Vertical GIF";
+        return (
+          <button
+            key={value}
+            type="button"
+            disabled={disabled}
+            aria-label={label}
+            aria-pressed={active}
+            title={label}
+            onClick={() => onChange(value)}
+            className={`grid place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-45 ${
+              compact ? "h-7 w-7" : "h-8 w-8"
+            } ${
+              active
+                ? "bg-fg/14 text-fg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]"
+                : "hover:bg-fg/7 hover:text-fg"
+            }`}
+          >
+            <FormatIcon format={value} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className }: Props) {
   const tooltipId = useId();
   const [exporting, setExporting] = useState(false);
@@ -673,69 +749,8 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const busy = exporting || optimizing;
   const isUnavailable = !hasTargets;
   const shouldKeepTooltipVisible = Boolean(iconOnly && (busy || error));
-  const nextFormat = format === "wide" ? "vertical" : "wide";
-  const formatTitle =
-    format === "wide" ? "Wide GIF selected. Switch to vertical." : "Vertical GIF selected. Switch to wide.";
-
-  const formatToggle = (
-    <button
-      type="button"
-      aria-label={formatTitle}
-      title={formatTitle}
-      disabled={busy}
-      onClick={() => setFormat(nextFormat)}
-      className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-    >
-      <span className="sr-only">{formatTitle}</span>
-      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-        {format === "wide" ? (
-          <rect
-            x="3.5"
-            y="7"
-            width="17"
-            height="10"
-            rx="2.2"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.7"
-          />
-        ) : (
-          <rect
-            x="7"
-            y="3.5"
-            width="10"
-            height="17"
-            rx="2.2"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.7"
-          />
-        )}
-      </svg>
-    </button>
-  );
-
-  const formatSegment = (
-    <div
-      role="group"
-      aria-label="GIF format"
-      className="inline-flex h-9 overflow-hidden rounded-full border border-border/70 bg-bg/55 p-0.5 text-[11px] text-muted backdrop-blur-sm"
-    >
-      {(["wide", "vertical"] as const).map((value) => (
-        <button
-          key={value}
-          type="button"
-          disabled={busy}
-          aria-pressed={format === value}
-          onClick={() => setFormat(value)}
-          className={`rounded-full px-2.5 transition disabled:cursor-not-allowed disabled:opacity-45 ${
-            format === value ? "bg-fg/12 text-fg" : "hover:text-fg"
-          }`}
-        >
-          {value === "wide" ? "16:9" : "9:16"}
-        </button>
-      ))}
-    </div>
+  const formatSelector = (
+    <GifFormatSelector format={format} disabled={busy} compact={iconOnly} onChange={setFormat} />
   );
 
   const button = (
@@ -772,7 +787,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   if (!iconOnly) {
     return (
       <div className="inline-flex items-center gap-1.5">
-        {formatSegment}
+        {formatSelector}
         {button}
       </div>
     );
@@ -788,7 +803,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       >
         <span className="block truncate">{buttonTitle}</span>
       </div>
-      {formatToggle}
+      {formatSelector}
       {button}
     </div>
   );
