@@ -139,13 +139,41 @@ function rateLimitedResponse(retryAfterSeconds: number) {
   });
 }
 
-function getArenaRateLimitSession(req: NextRequest) {
+function stableHash(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function getHeaderFingerprint(req: NextRequest): string {
+  const parts = [
+    req.headers.get("user-agent"),
+    req.headers.get("accept-language"),
+    req.headers.get("sec-ch-ua"),
+    req.headers.get("sec-ch-ua-platform"),
+    req.headers.get("sec-ch-ua-mobile"),
+    req.headers.get("accept"),
+  ]
+    .map((value) => value?.trim().slice(0, 256) ?? "")
+    .filter(Boolean);
+  return parts.join("|") || "unknown";
+}
+
+function getArenaAnonymousBucketId(req: NextRequest): string {
+  // header shape keeps no-ip fallback stable
+  return `anon:${stableHash(getHeaderFingerprint(req))}`;
+}
+
+function getArenaRateLimitSession(req: NextRequest, fallbackBucketId: string | null) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
   if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
   return {
-    // new unknown-ip users need separate first request buckets
-    bucketId: id,
+    // fallback catches clients that drop the cookie
+    bucketId: fallbackBucketId ?? id,
     cookieValue: id,
     isNew: true,
   };
@@ -166,7 +194,9 @@ export function middleware(req: NextRequest) {
   const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);
-  const arenaSession = isArenaApi ? getArenaRateLimitSession(req) : null;
+  const arenaSession = isArenaApi
+    ? getArenaRateLimitSession(req, ip ? null : getArenaAnonymousBucketId(req))
+    : null;
   const arenaIpRules = ip
     ? [
         // wide client guardrail when an ip signal exists
