@@ -539,6 +539,28 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
+async function awaitPreparedWithCallerAbort(
+  promise: Promise<PreparedArenaBuild>,
+  signal: AbortSignal | undefined,
+): Promise<PreparedArenaBuild> {
+  if (!signal) return promise;
+  throwIfAborted(signal);
+
+  let cleanup: () => void = () => {};
+  const abortPromise = new Promise<never>((_, reject) => {
+    const abort = () => reject(new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", abort, { once: true });
+    cleanup = () => signal.removeEventListener("abort", abort);
+  });
+
+  try {
+    // caller aborts should not cancel shared parse work
+    return await Promise.race([promise, abortPromise]);
+  } finally {
+    cleanup();
+  }
+}
+
 async function parseAndValidateBuild(
   source: ArenaBuildSource,
   opts?: PrepareArenaBuildOptions,
@@ -597,22 +619,25 @@ export async function prepareArenaBuild(
 
   const existing = inflight.get(cacheKey);
   // concurrent requests should share one parse and validation pass
-  if (existing) return existing;
+  if (existing) return awaitPreparedWithCallerAbort(existing, opts?.signal);
 
   const promise = (async () => {
-    const parsed = await parseAndValidateBuild(source, opts);
-    throwIfAborted(opts?.signal);
+    const parsed = await parseAndValidateBuild(source);
     const prepared = createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
     setCachedPrepared(cacheKey, prepared);
     return prepared;
   })();
 
   inflight.set(cacheKey, promise);
-  try {
-    return await promise;
-  } finally {
-    inflight.delete(cacheKey);
-  }
+  promise.then(
+    () => {
+      if (inflight.get(cacheKey) === promise) inflight.delete(cacheKey);
+    },
+    () => {
+      if (inflight.get(cacheKey) === promise) inflight.delete(cacheKey);
+    },
+  );
+  return awaitPreparedWithCallerAbort(promise, opts?.signal);
 }
 
 export function pickInitialBuild(prepared: PreparedArenaBuild): VoxelBuild {
