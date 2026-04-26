@@ -194,7 +194,22 @@ export function SiteHeader() {
             </div>
           </Link>
 
-          <div className="flex items-center gap-0.5 rounded-full bg-bg/50 px-0.5 ring-1 ring-border/70 sm:bg-transparent sm:px-0 sm:ring-0">
+          <div
+            className="flex items-center gap-0.5 rounded-full bg-bg/50 px-0.5 ring-1 ring-border/70 sm:bg-transparent sm:px-0 sm:ring-0"
+            role="group"
+            aria-label="Social links"
+          >
+            <SocialIconLink href="https://github.com/Ammaar-Alam/minebench" label="MineBench on GitHub">
+              <svg aria-hidden="true" className="h-[22px] w-[22px]" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2a10 10 0 0 0-3.162 19.492c.5.092.682-.217.682-.482 0-.237-.009-.866-.014-1.699-2.776.603-3.362-1.339-3.362-1.339-.455-1.156-1.11-1.465-1.11-1.465-.908-.62.069-.607.069-.607 1.004.07 1.532 1.031 1.532 1.031.892 1.529 2.341 1.087 2.91.832.091-.647.349-1.087.635-1.338-2.217-.252-4.555-1.108-4.555-4.932 0-1.09.39-1.982 1.029-2.68-.103-.252-.446-1.268.098-2.642 0 0 .84-.269 2.75 1.025a9.563 9.563 0 0 1 2.503-.336c.85.004 1.705.115 2.503.336 1.909-1.294 2.748-1.025 2.748-1.025.546 1.374.203 2.39.1 2.642.64.698 1.028 1.59 1.028 2.68 0 3.834-2.342 4.677-4.566 4.924.359.309.678.919.678 1.852 0 1.337-.012 2.415-.012 2.743 0 .267.18.578.688.48A10 10 0 0 0 12 2Z" />
+              </svg>
+            </SocialIconLink>
+            <SocialIconLink href="https://x.com/minebench_ai" label="MineBench on X">
+              <svg aria-hidden="true" className="h-[17px] w-[17px]" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24h-6.658l-5.214-6.817-5.966 6.817H1.68l7.73-8.835L1.254 2.25h6.827l4.713 6.231 5.45-6.231Zm-1.161 17.52h1.833L7.084 4.126H5.117L17.083 19.77Z" />
+              </svg>
+            </SocialIconLink>
+            <div className="mx-1 h-5 w-px shrink-0 bg-border/70" aria-hidden="true" />
             <SocialIconLink
               href="https://www.linkedin.com/in/ammaar-alam/"
               label="Ammaar Alam on LinkedIn"
@@ -208,11 +223,6 @@ export function SiteHeader() {
                 <path d="M12 21c4.97 0 9-4.03 9-9s-4.03-9-9-9-9 4.03-9 9 4.03 9 9 9Z" />
                 <path d="M3 12h18" />
                 <path d="M12 3c2.5 2.46 4 5.68 4 9s-1.5 6.54-4 9c-2.5-2.46-4-5.68-4-9s1.5-6.54 4-9Z" />
-              </svg>
-            </SocialIconLink>
-            <SocialIconLink href="https://github.com/Ammaar-Alam/minebench" label="MineBench on GitHub">
-              <svg aria-hidden="true" className="h-[22px] w-[22px]" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M12 2a10 10 0 0 0-3.162 19.492c.5.092.682-.217.682-.482 0-.237-.009-.866-.014-1.699-2.776.603-3.362-1.339-3.362-1.339-.455-1.156-1.11-1.465-1.11-1.465-.908-.62.069-.607.069-.607 1.004.07 1.532 1.031 1.532 1.031.892 1.529 2.341 1.087 2.91.832.091-.647.349-1.087.635-1.338-2.217-.252-4.555-1.108-4.555-4.932 0-1.09.39-1.982 1.029-2.68-.103-.252-.446-1.268.098-2.642 0 0 .84-.269 2.75 1.025a9.563 9.563 0 0 1 2.503-.336c.85.004 1.705.115 2.503.336 1.909-1.294 2.748-1.025 2.748-1.025.546 1.374.203 2.39.1 2.642.64.698 1.028 1.59 1.028 2.68 0 3.834-2.342 4.677-4.566 4.924.359.309.678.919.678 1.852 0 1.337-.012 2.415-.012 2.743 0 .267.18.578.688.48A10 10 0 0 0 12 2Z" />
               </svg>
             </SocialIconLink>
           </div>
