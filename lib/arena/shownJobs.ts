@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { ARENA_SHOWN_JOB_DRAIN_LOCK_KEY } from "@/lib/arena/advisoryLocks";
-import { persistArenaMatchupShown, settleArenaMatchupShown } from "@/lib/arena/coverage";
+import { settleArenaMatchupShown } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { ARENA_WRITE_RETRY_MAX_ATTEMPTS, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { prisma } from "@/lib/prisma";
@@ -229,9 +229,11 @@ export async function persistArenaMatchupShownDurably(modelIds: string[]) {
   try {
     await enqueueArenaShownJobs(modelIds);
   } catch (error) {
-    // keep pre-migration previews working if the queue is unavailable
-    await withArenaWriteRetry(() => persistArenaMatchupShown(modelIds));
-    console.warn("arena shown job enqueue failed; used direct shown-count persist", error);
+    // the insert may have committed before prisma saw the failure
+    console.warn("arena shown job enqueue failed; attempting drain only", error);
+    await drainArenaShownJobs({ maxJobs: JOB_BATCH_LIMIT }).catch((drainError) => {
+      console.warn("arena shown job drain after enqueue failure failed", drainError);
+    });
     return;
   }
 
