@@ -366,6 +366,7 @@ async function optimizeGifBlobForSize(input: Blob, signal?: AbortSignal): Promis
       relativeSavings >= LOSSLESS_OPT_MIN_RELATIVE_SAVINGS;
     return meaningful ? best : input;
   } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") throw err;
     console.warn("[gif-export] optimize skipped", err);
     if (input.size > GIF_OPT_TARGET_MAX_BYTES) {
       throw err instanceof Error

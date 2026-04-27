@@ -991,7 +991,7 @@ export function SandboxBenchmark() {
           : undefined;
 
         const laneError =
-          laneState.phase === "error"
+          laneState.phase === "error" && !selectionReloading
             ? laneState.error ?? "Failed to load build"
             : !build && !selectionReloading
               ? "No seeded build found for this model/prompt pair."
