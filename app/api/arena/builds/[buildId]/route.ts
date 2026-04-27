@@ -269,7 +269,9 @@ export async function GET(
   const variant = parseVariant(url.searchParams.get("variant"));
   const expectedChecksum = url.searchParams.get("checksum")?.trim() || null;
   const shouldGzip = acceptsGzip(request);
-  const buildMeta = await getArenaBuildMeta(buildId);
+  // pass the client-supplied checksum so the meta cache can detect stale
+  // entries left behind by an overwrite import that landed on another lambda
+  const buildMeta = await getArenaBuildMeta(buildId, expectedChecksum);
 
   if (!buildMeta) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });

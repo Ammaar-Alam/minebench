@@ -92,12 +92,27 @@ function touchOnHit(buildId: string, entry: CacheEntry) {
 
 export async function getArenaBuildMeta(
   buildId: string,
+  // optional cross-lambda staleness guard. callers that already know the
+  // checksum the matchup/client expects can pass it here; if our cached row
+  // disagrees we treat the cache as stale and refetch. this lets overwrite
+  // imports propagate across warm lambdas at the latency of the next
+  // mismatched request instead of waiting for the 60s ttl.
+  expectedChecksum?: string | null,
 ): Promise<ArenaBuildMetaRow | null> {
   const now = Date.now();
   const cached = cache.get(buildId);
   if (cached && cached.expiresAt > now) {
-    touchOnHit(buildId, cached);
-    return cached.row;
+    const cachedChecksum = cached.row?.voxelSha256?.trim() || null;
+    const expected = expectedChecksum?.trim() || null;
+    if (expected && cachedChecksum && expected !== cachedChecksum) {
+      // checksum guard: the row this lambda has may predate an overwrite
+      // import that landed on another instance. drop it and let the path
+      // below refetch from the source of truth.
+      cache.delete(buildId);
+    } else {
+      touchOnHit(buildId, cached);
+      return cached.row;
+    }
   }
 
   const existing = inflight.get(buildId);

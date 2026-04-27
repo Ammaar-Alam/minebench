@@ -202,7 +202,8 @@ export async function GET(
   const variant = parseVariant(url.searchParams.get("variant"));
   const expectedChecksum = url.searchParams.get("checksum")?.trim() || null;
 
-  const meta = await getArenaBuildMeta(buildId);
+  // pass expected checksum so the meta cache can detect cross-lambda staleness
+  const meta = await getArenaBuildMeta(buildId, expectedChecksum);
 
   if (!meta) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });
