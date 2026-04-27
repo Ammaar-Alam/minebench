@@ -9,6 +9,11 @@ export type MoonshotThinkingConfig = {
   type: "enabled" | "disabled";
 };
 
+export type DeepSeekThinkingConfig = {
+  type: "enabled" | "disabled";
+  reasoningEffort?: "high" | "max";
+};
+
 function normalizeReasoningOverride(value?: string): string | undefined {
   const normalized = value?.trim().toLowerCase();
   return normalized ? normalized : undefined;
@@ -150,6 +155,55 @@ export function moonshotThinkingConfigForModel(
 
   throw new Error(
     `Moonshot model ${modelId} does not support reasoning '${override}'. Supported values: enabled, disabled.`,
+  );
+}
+
+export function deepseekThinkingConfigForModel(
+  modelId: string,
+  override?: string,
+): DeepSeekThinkingConfig | undefined {
+  const normalized = normalizeReasoningOverride(override);
+  const supportsThinking =
+    modelId === "deepseek-v4-pro" ||
+    modelId === "deepseek-v4-flash" ||
+    modelId === "deepseek-reasoner";
+
+  if (!supportsThinking) {
+    if (normalized) {
+      throw new Error(`DeepSeek model ${modelId} does not expose a thinking override.`);
+    }
+    return undefined;
+  }
+
+  if (
+    !normalized ||
+    normalized === "default" ||
+    normalized === "enabled" ||
+    normalized === "on" ||
+    normalized === "true" ||
+    normalized === "max" ||
+    normalized === "xhigh"
+  ) {
+    return { type: "enabled", reasoningEffort: "max" };
+  }
+
+  if (normalized === "high") {
+    return { type: "enabled", reasoningEffort: "high" };
+  }
+
+  if (
+    normalized === "disabled" ||
+    normalized === "off" ||
+    normalized === "false" ||
+    normalized === "none" ||
+    normalized === "non-think" ||
+    normalized === "nonthinking"
+  ) {
+    return { type: "disabled" };
+  }
+
+  throw new Error(
+    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high, disabled.`,
   );
 }
 
