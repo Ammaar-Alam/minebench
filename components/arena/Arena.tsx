@@ -221,27 +221,56 @@ const INITIAL_RETRIEVAL_OVERLAY_DELAY_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_INITIAL_RETRIEVAL_OVERLAY_DELAY_MS ?? "420",
   10,
 );
-const CLIENT_BUILD_CACHE_MAX_ENTRIES = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_ENTRIES ?? "8",
-  10,
+// client memory budgets. mobile defaults are roughly 40% of desktop because
+// safari ios kills tabs near 350-500 MB and large builds plus three.js geometry
+// already use most of that envelope.
+function detectIsMobileEnv(): boolean {
+  if (typeof window === "undefined") return false;
+  // hardware proxy first; deviceMemory is unreliable on safari
+  const ua = window.navigator?.userAgent?.toLowerCase() ?? "";
+  const uaMobile = /iphone|ipod|ipad|android|mobile/.test(ua);
+  const coarsePointer =
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(pointer: coarse)").matches
+      : false;
+  return uaMobile || coarsePointer;
+}
+const IS_MOBILE_ENV = detectIsMobileEnv();
+const MOBILE_SCALE = 0.4;
+const CLIENT_BUILD_CACHE_MAX_ENTRIES = Math.max(
+  1,
+  Math.round(
+    Number.parseInt(
+      process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_ENTRIES ?? "8",
+      10,
+    ) * (IS_MOBILE_ENV ? MOBILE_SCALE : 1),
+  ),
 );
-const CLIENT_BUILD_CACHE_MAX_EST_BYTES = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_EST_BYTES ?? "60000000",
-  10,
+const CLIENT_BUILD_CACHE_MAX_EST_BYTES = Math.round(
+  Number.parseInt(
+    process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_EST_BYTES ?? "60000000",
+    10,
+  ) * (IS_MOBILE_ENV ? MOBILE_SCALE : 1),
 );
 // client caps keep prefetch from eating renderer memory
-const CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES ?? "90000000",
-  10,
+const CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES = Math.round(
+  Number.parseInt(
+    process.env.NEXT_PUBLIC_ARENA_CLIENT_BUILD_CACHE_MAX_TOTAL_EST_BYTES ?? "90000000",
+    10,
+  ) * (IS_MOBILE_ENV ? MOBILE_SCALE : 1),
 );
-const CLIENT_FULL_PREFETCH_MAX_EST_BYTES = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_FULL_PREFETCH_MAX_EST_BYTES ?? "30000000",
-  10,
+const CLIENT_FULL_PREFETCH_MAX_EST_BYTES = Math.round(
+  Number.parseInt(
+    process.env.NEXT_PUBLIC_ARENA_FULL_PREFETCH_MAX_EST_BYTES ?? "30000000",
+    10,
+  ) * (IS_MOBILE_ENV ? MOBILE_SCALE : 1),
 );
-const CLIENT_FULL_PREFETCH_MAX_IN_FLIGHT = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_FULL_PREFETCH_MAX_IN_FLIGHT ?? "2",
-  10,
-);
+const CLIENT_FULL_PREFETCH_MAX_IN_FLIGHT = IS_MOBILE_ENV
+  ? 0
+  : Number.parseInt(
+      process.env.NEXT_PUBLIC_ARENA_FULL_PREFETCH_MAX_IN_FLIGHT ?? "2",
+      10,
+    );
 
 type CachedHydratedBuild = {
   build: NonNullable<ArenaMatchup["a"]["build"]>;
@@ -622,7 +651,13 @@ async function fetchBuildVariantStreamOnce(
       if (event.type === "chunk") {
         sawFirstEvent = true;
         if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          streamedBlocks.push(...event.blocks);
+          // append without spread to avoid call-stack/GC pressure on chunks
+          // that can carry tens of thousands of blocks each.
+          const chunkBlocks = event.blocks;
+          const chunkLen = chunkBlocks.length;
+          for (let i = 0; i < chunkLen; i += 1) {
+            streamedBlocks.push(chunkBlocks[i]);
+          }
         }
         totalBlocks = event.totalBlocks || totalBlocks;
         emitProgress({

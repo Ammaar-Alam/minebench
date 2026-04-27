@@ -15,11 +15,14 @@ const PROMPT_COVERAGE_FLOOR = 2;
 const CONSISTENCY_TAIL_SHARE = 0.2;
 const CONSISTENCY_QUADRATIC_WEIGHT = 0.75;
 const RECENT_FORM_WINDOW = 30;
-const LEADERBOARD_CACHE_TTL_MS = 20_000;
-const MODEL_DETAIL_CACHE_TTL_MS = 20_000;
-const PROMPT_SIGNAL_CACHE_TTL_MS = 20_000;
-const BT_MAX_ITERS = 2_000;
-const BT_CONVERGENCE_EPSILON = 1e-10;
+// process-local caches; longer TTLs reduce cold-lambda BT recompute cost.
+// vote drains call invalidateArenaStatsCache so stale data is bounded by writes.
+const LEADERBOARD_CACHE_TTL_MS = 120_000;
+const MODEL_DETAIL_CACHE_TTL_MS = 120_000;
+const PROMPT_SIGNAL_CACHE_TTL_MS = 120_000;
+// 600 iters converges for our model count; 2000 was a safety margin from earlier tuning
+const BT_MAX_ITERS = 600;
+const BT_CONVERGENCE_EPSILON = 1e-9;
 const BT_PSEUDOINVERSE_RIDGE = 1e-9;
 const BT_VARIANCE_FLOOR = 1e-6;
 

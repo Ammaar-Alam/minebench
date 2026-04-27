@@ -166,7 +166,11 @@ export async function GET() {
   };
 
   timing.end("total", requestStartedAt);
-  const headers = new Headers({ "Cache-Control": "no-store" });
+  // edge cache absorbs the burst; vote drain invalidates stats and the next miss recomputes.
+  // s-maxage governs Vercel CDN, max-age=0 keeps browsers from holding stale rankings.
+  const headers = new Headers({
+    "Cache-Control": "public, max-age=0, s-maxage=30, stale-while-revalidate=300",
+  });
   timing.apply(headers);
   return NextResponse.json(body, { headers });
 }

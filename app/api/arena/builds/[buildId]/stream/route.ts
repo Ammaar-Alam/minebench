@@ -18,6 +18,7 @@ import {
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
+import { getArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
@@ -201,19 +202,7 @@ export async function GET(
   const variant = parseVariant(url.searchParams.get("variant"));
   const expectedChecksum = url.searchParams.get("checksum")?.trim() || null;
 
-  const meta = await prisma.build.findUnique({
-    where: { id: buildId },
-    select: {
-      id: true,
-      gridSize: true,
-      palette: true,
-      blockCount: true,
-      voxelByteSize: true,
-      voxelCompressedByteSize: true,
-      voxelSha256: true,
-      arenaBuildHints: true,
-    },
-  });
+  const meta = await getArenaBuildMeta(buildId);
 
   if (!meta) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });

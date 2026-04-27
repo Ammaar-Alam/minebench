@@ -4,6 +4,9 @@ import { ModelDetail } from "@/components/leaderboard/ModelDetail";
 import { getModelDetailStats } from "@/lib/arena/stats";
 import { absoluteUrl, breadcrumbJsonLd, DEFAULT_OG_IMAGE, modelDetailJsonLd } from "@/lib/seo";
 
+// ISR for model detail; vote drains can stale a snapshot but it self-refreshes within revalidate.
+export const revalidate = 60;
+
 type PageProps = {
   params: Promise<{
     modelKey: string;
