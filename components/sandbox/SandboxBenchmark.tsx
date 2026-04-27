@@ -546,6 +546,7 @@ export function SandboxBenchmark() {
   const [data, setData] = useState<BenchmarkResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectionReloading, setSelectionReloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [slotState, setSlotState] = useState<Record<Slot, SlotHydrationState>>({
     a: createEmptySlotState(),
@@ -612,6 +613,7 @@ export function SandboxBenchmark() {
         const nextData = await fetchBenchmarkResponse({ ...args, signal: loadAbort.signal });
         if (requestId !== requestIdRef.current) return;
 
+        setSelectionReloading(false);
         setData(nextData);
         setPromptId(nextData.selectedPrompt?.id ?? "");
         setModelPair({
@@ -621,7 +623,14 @@ export function SandboxBenchmark() {
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
         if (requestId !== requestIdRef.current) return;
-        setError(err instanceof Error ? err.message : "Failed to load benchmark comparison data");
+        const message =
+          err instanceof Error ? err.message : "Failed to load benchmark comparison data";
+        setSelectionReloading(false);
+        setError(message);
+        setSlotState({
+          a: { ...createEmptySlotState(), phase: "error", error: message },
+          b: { ...createEmptySlotState(), phase: "error", error: message },
+        });
       } finally {
         if (requestId !== requestIdRef.current) return;
         if (loadAbortRef.current === loadAbort) {
@@ -873,6 +882,7 @@ export function SandboxBenchmark() {
 
   function handlePromptChange(nextPromptId: string) {
     setPromptId(nextPromptId);
+    setSelectionReloading(true);
     clearVisibleBuilds();
     setData((prev) => {
       if (!prev) return prev;
@@ -899,6 +909,7 @@ export function SandboxBenchmark() {
     if (modelKey === other) return;
     const nextPair = slot === "a" ? { a: modelKey, b: other } : { a: other, b: modelKey };
     setModelPair(nextPair);
+    setSelectionReloading(true);
     clearVisibleBuilds();
     setData((prev) =>
       prev
@@ -974,7 +985,7 @@ export function SandboxBenchmark() {
         const title = model ? model.displayName : slot === "a" ? "Model A" : "Model B";
 
         const hasRenderableBuild = Boolean(laneState.build);
-        const isHydrating = laneState.phase === "loading";
+        const isHydrating = laneState.phase === "loading" || (!build && selectionReloading);
         const loadingMessage = isHydrating
           ? formatBuildLoadingMessage(laneState.progress)
           : undefined;
@@ -982,7 +993,7 @@ export function SandboxBenchmark() {
         const laneError =
           laneState.phase === "error"
             ? laneState.error ?? "Failed to load build"
-            : !build
+            : !build && !selectionReloading
               ? "No seeded build found for this model/prompt pair."
               : undefined;
 
@@ -1068,6 +1079,7 @@ export function SandboxBenchmark() {
               type="button"
               className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
               onClick={() => {
+                setSelectionReloading(true);
                 clearVisibleBuilds();
                 void runLoad(
                   {
