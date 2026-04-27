@@ -92,26 +92,27 @@ function touchOnHit(buildId: string, entry: CacheEntry) {
 
 export async function getArenaBuildMeta(
   buildId: string,
-  // optional cross-lambda staleness guard. callers that already know the
-  // checksum the matchup/client expects can pass it here; if our cached row
-  // disagrees we treat the cache as stale and refetch. this lets overwrite
-  // imports propagate across warm lambdas at the latency of the next
-  // mismatched request instead of waiting for the 60s ttl.
+  // cross-lambda staleness guard. callers that already know the checksum
+  // the matchup/client expects pass it here; the cache is only consulted
+  // when an expected checksum is available so we can verify freshness.
+  // checksumless callers always go to the source of truth (an in-flight
+  // fetch will still be shared, but no cache hit is returned without a
+  // checksum to compare against).
   expectedChecksum?: string | null,
 ): Promise<ArenaBuildMetaRow | null> {
+  const expected = expectedChecksum?.trim() || null;
   const now = Date.now();
-  const cached = cache.get(buildId);
-  if (cached && cached.expiresAt > now) {
-    const cachedChecksum = cached.row?.voxelSha256?.trim() || null;
-    const expected = expectedChecksum?.trim() || null;
-    if (expected && cachedChecksum && expected !== cachedChecksum) {
-      // checksum guard: the row this lambda has may predate an overwrite
-      // import that landed on another instance. drop it and let the path
-      // below refetch from the source of truth.
-      cache.delete(buildId);
-    } else {
-      touchOnHit(buildId, cached);
-      return cached.row;
+  if (expected) {
+    const cached = cache.get(buildId);
+    if (cached && cached.expiresAt > now) {
+      const cachedChecksum = cached.row?.voxelSha256?.trim() || null;
+      if (cachedChecksum && cachedChecksum !== expected) {
+        // overwrite landed elsewhere; drop the stale row and refetch
+        cache.delete(buildId);
+      } else {
+        touchOnHit(buildId, cached);
+        return cached.row;
+      }
     }
   }
 
