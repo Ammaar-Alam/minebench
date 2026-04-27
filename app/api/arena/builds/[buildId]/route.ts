@@ -13,7 +13,11 @@ import {
   ensureArenaBuildSnapshotArtifacts,
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
-import { getArenaBuildMeta } from "@/lib/arena/buildMetaCache";
+import {
+  getArenaBuildMeta,
+  getArenaBuildSnapshotFields,
+  invalidateArenaBuildMeta,
+} from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
 
@@ -360,8 +364,11 @@ export async function GET(
 
   const persistedResponseBytes = jsonCacheKey
     ? await getOrCreateJsonResponse(jsonCacheKey, async () => {
-        // db snapshot fields are already on the cached row, no extra query.
-        const persistedSnapshot = pickCurrentPersistedSnapshot(buildMeta, variant, storedChecksum);
+        // snapshot json bodies live outside the meta cache to avoid retaining
+        // multi-mb blobs across many buildIds. the response cache covers
+        // subsequent identical requests with its own byte-weight cap.
+        const snapshotFields = await getArenaBuildSnapshotFields(buildId);
+        const persistedSnapshot = pickCurrentPersistedSnapshot(snapshotFields, variant, storedChecksum);
         if (!persistedSnapshot) return null;
         return jsonBytes(
           {
@@ -507,6 +514,8 @@ export async function GET(
         data: getPreparedArenaBuildMetadataUpdate(prepared),
       })
       .catch(() => undefined);
+    // drop stale meta cache so the next request sees the freshly written checksum
+    invalidateArenaBuildMeta(prepared.buildId);
     await ensureArenaBuildSnapshotArtifacts(prepared);
   });
 

@@ -18,7 +18,7 @@ import {
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
-import { getArenaBuildMeta } from "@/lib/arena/buildMetaCache";
+import { getArenaBuildMeta, invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
@@ -426,6 +426,7 @@ export async function GET(
               .catch((err) => {
                 console.warn("arena stream metadata update failed", err);
               });
+            invalidateArenaBuildMeta(buildId);
           }
 
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {

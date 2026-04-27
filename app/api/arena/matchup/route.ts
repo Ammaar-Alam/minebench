@@ -12,6 +12,7 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import { createArenaBuildSnapshotArtifactSignedUrl } from "@/lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
+import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/arena/matchupToken";
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
@@ -877,14 +878,16 @@ export async function GET(req: Request) {
   if (preparedForPersistence.length > 0) {
     after(async () => {
       await Promise.all(
-        preparedForPersistence.map((prepared) =>
-          prisma.build
+        preparedForPersistence.map(async (prepared) => {
+          await prisma.build
             .update({
               where: { id: prepared.buildId },
               data: getPreparedArenaBuildMetadataUpdate(prepared),
             })
-            .catch(() => undefined),
-        ),
+            .catch(() => undefined);
+          // drop stale meta so the next request sees the freshly written checksum
+          invalidateArenaBuildMeta(prepared.buildId);
+        }),
       );
     });
   }
