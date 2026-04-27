@@ -29,20 +29,41 @@ type CacheEntry = {
 
 const TTL_MS = 60_000;
 const MAX_ENTRIES = 1024;
+// generation tokens live longer than any plausible findUnique so they outlast
+// the in-flight fetch they are guarding. five minutes is wildly conservative
+// vs single-digit-second prisma calls but keeps memory bounded against pure
+// invalidation traffic with no follow-up reads.
+const GENERATION_TTL_MS = 5 * TTL_MS;
+
+type GenerationEntry = {
+  value: number;
+  expiresAt: number;
+};
 
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<ArenaBuildMetaRow | null>>();
 // per-key generation token. invalidateArenaBuildMeta bumps it so any in-flight
 // fetch that started before the invalidation will refuse to write its (now
-// stale) row back into the cache.
-const generations = new Map<string, number>();
+// stale) row back into the cache. tokens self-expire so a long-lived process
+// does not retain one permanent entry per ever-seen buildId.
+const generations = new Map<string, GenerationEntry>();
 
 function getGeneration(buildId: string): number {
-  return generations.get(buildId) ?? 0;
+  const entry = generations.get(buildId);
+  if (!entry) return 0;
+  if (entry.expiresAt <= Date.now()) {
+    generations.delete(buildId);
+    return 0;
+  }
+  return entry.value;
 }
 
 function bumpGeneration(buildId: string) {
-  generations.set(buildId, getGeneration(buildId) + 1);
+  const current = getGeneration(buildId);
+  generations.set(buildId, {
+    value: current + 1,
+    expiresAt: Date.now() + GENERATION_TTL_MS,
+  });
 }
 
 function pruneExpired(now: number) {
@@ -55,6 +76,11 @@ function pruneExpired(now: number) {
     const oldest = cache.keys().next().value as string | undefined;
     if (!oldest) break;
     cache.delete(oldest);
+  }
+  // generations is independent of cache; expire stale tokens here so the map
+  // stays bounded by recent invalidation activity, not lifetime build count.
+  for (const [key, entry] of generations) {
+    if (entry.expiresAt <= now) generations.delete(key);
   }
 }
 
