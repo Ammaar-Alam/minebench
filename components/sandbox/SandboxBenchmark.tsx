@@ -90,6 +90,7 @@ type BuildStreamProgress = {
 
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
+  allowLiveFallback?: boolean;
   onProgress?: (
     build: VoxelBuild,
     progress: BuildStreamProgress,
@@ -277,6 +278,7 @@ async function fetchBenchmarkResponse(args: {
   promptId?: string;
   modelA?: string;
   modelB?: string;
+  signal?: AbortSignal;
 }): Promise<BenchmarkResponse> {
   const params = new URLSearchParams();
   if (args.promptId) params.set("promptId", args.promptId);
@@ -285,7 +287,7 @@ async function fetchBenchmarkResponse(args: {
 
   const query = params.toString();
   const url = query ? `/api/sandbox/benchmark?${query}` : "/api/sandbox/benchmark";
-  const res = await fetch(url, { method: "GET", cache: "no-store" });
+  const res = await fetch(url, { method: "GET", cache: "no-store", signal: args.signal });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     let message = text || "Failed to load benchmark comparison data";
@@ -426,7 +428,9 @@ async function fetchBuildVariantStreamOnce(
       if (event.type === "chunk") {
         sawFirstEvent = true;
         if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          streamedBlocks.push(...event.blocks);
+          for (const block of event.blocks) {
+            streamedBlocks.push(block);
+          }
         }
         totalBlocks = event.totalBlocks || totalBlocks;
         emitProgress({
@@ -502,7 +506,9 @@ async function fetchBuildVariantStream(
   const attempts: Array<() => Promise<BuildVariantResponse>> = [
     () => fetchBuildVariantStreamOnce(ref, true, opts),
     () => fetchBuildVariantSnapshot(ref, opts?.signal),
-    () => fetchBuildVariantStreamOnce(ref, false, opts),
+    ...(opts?.allowLiveFallback
+      ? [() => fetchBuildVariantStreamOnce(ref, false, opts)]
+      : []),
     () => fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS * 2),
   ];
 
@@ -548,6 +554,7 @@ export function SandboxBenchmark() {
 
   const requestIdRef = useRef(0);
   const hydrationRunIdRef = useRef(0);
+  const loadAbortRef = useRef<AbortController | null>(null);
   const slotAbortRef = useRef<Record<Slot, AbortController | null>>({ a: null, b: null });
   const buildCacheRef = useRef<Map<string, CachedBuild>>(new Map());
 
@@ -570,6 +577,18 @@ export function SandboxBenchmark() {
     return buildCacheRef.current.get(getBuildCacheKey(ref)) ?? null;
   }, []);
 
+  const clearVisibleBuilds = useCallback(() => {
+    for (const slot of ["a", "b"] as const) {
+      slotAbortRef.current[slot]?.abort();
+      slotAbortRef.current[slot] = null;
+    }
+    hydrationRunIdRef.current += 1;
+    setSlotState({
+      a: createEmptySlotState(),
+      b: createEmptySlotState(),
+    });
+  }, []);
+
   const runLoad = useCallback(
     async (
       args: {
@@ -577,16 +596,20 @@ export function SandboxBenchmark() {
         modelA?: string;
         modelB?: string;
       },
-      opts?: { initial?: boolean },
+      opts?: { initial?: boolean; bypassCache?: boolean },
     ) => {
       const requestId = ++requestIdRef.current;
+      loadAbortRef.current?.abort();
+      const loadAbort = new AbortController();
+      loadAbortRef.current = loadAbort;
       const isInitial = Boolean(opts?.initial);
+      if (opts?.bypassCache) buildCacheRef.current.clear();
       if (isInitial) setLoading(true);
       else setRefreshing(true);
       setError(null);
 
       try {
-        const nextData = await fetchBenchmarkResponse(args);
+        const nextData = await fetchBenchmarkResponse({ ...args, signal: loadAbort.signal });
         if (requestId !== requestIdRef.current) return;
 
         setData(nextData);
@@ -596,10 +619,14 @@ export function SandboxBenchmark() {
           b: nextData.selectedModels.b ?? "",
         });
       } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return;
         if (requestId !== requestIdRef.current) return;
         setError(err instanceof Error ? err.message : "Failed to load benchmark comparison data");
       } finally {
         if (requestId !== requestIdRef.current) return;
+        if (loadAbortRef.current === loadAbort) {
+          loadAbortRef.current = null;
+        }
         if (isInitial) setLoading(false);
         else setRefreshing(false);
       }
@@ -730,9 +757,11 @@ export function SandboxBenchmark() {
 
       void (async () => {
         try {
+          const initialDeliveryClass = getInitialDeliveryClass(lane.buildLoadHints);
           const streamFetch = () =>
             fetchBuildVariantStream(lane.buildRef, {
               signal: controller.signal,
+              allowLiveFallback: initialDeliveryClass !== "stream-artifact",
               onProgress: (progressiveBuild, progress, meta) => {
                 if (hydrationRunIdRef.current !== runId) return;
                 setSlotState((prev) => {
@@ -768,7 +797,6 @@ export function SandboxBenchmark() {
                 });
               },
             });
-          const initialDeliveryClass = getInitialDeliveryClass(lane.buildLoadHints);
           const payload =
             initialDeliveryClass === "snapshot" || initialDeliveryClass === "inline"
               ? await fetchBuildVariantSnapshot(lane.buildRef, controller.signal).catch(streamFetch)
@@ -845,6 +873,16 @@ export function SandboxBenchmark() {
 
   function handlePromptChange(nextPromptId: string) {
     setPromptId(nextPromptId);
+    clearVisibleBuilds();
+    setData((prev) => {
+      if (!prev) return prev;
+      const selectedPrompt = prev.prompts.find((p) => p.id === nextPromptId);
+      return {
+        ...prev,
+        selectedPrompt: selectedPrompt ? { id: selectedPrompt.id, text: selectedPrompt.text } : prev.selectedPrompt,
+        builds: { a: null, b: null },
+      };
+    });
     void runLoad(
       {
         promptId: nextPromptId,
@@ -861,6 +899,16 @@ export function SandboxBenchmark() {
     if (modelKey === other) return;
     const nextPair = slot === "a" ? { a: modelKey, b: other } : { a: other, b: modelKey };
     setModelPair(nextPair);
+    clearVisibleBuilds();
+    setData((prev) =>
+      prev
+        ? {
+            ...prev,
+            selectedModels: nextPair,
+            builds: { a: null, b: null },
+          }
+        : prev,
+    );
     void runLoad(
       {
         promptId,
@@ -890,7 +938,8 @@ export function SandboxBenchmark() {
     handlePromptChange(next.id);
   }
 
-  const selectedPromptText = data?.selectedPrompt?.text ?? "";
+  const selectedPromptText =
+    data?.prompts.find((p) => p.id === promptId)?.text ?? data?.selectedPrompt?.text ?? "";
   const selectedPromptIndex = data?.prompts.findIndex((p) => p.id === promptId) ?? -1;
   const totalPrompts = data?.prompts.length ?? 0;
   const canNavigatePrompts = totalPrompts > 1;
@@ -972,6 +1021,7 @@ export function SandboxBenchmark() {
                     },
                   ]}
                   promptText={selectedPromptText}
+                  cancelKey={`${promptId}:${slot}:${build.buildId}:${model.key}`}
                   iconOnly
                   label="Export GIF"
                 />
@@ -1009,6 +1059,7 @@ export function SandboxBenchmark() {
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={selectedPromptText}
+              cancelKey={`${promptId}:${modelPair.a}:${modelPair.b}:${data?.builds.a?.buildId ?? "none"}:${data?.builds.b?.buildId ?? "none"}`}
               label="Export GIF"
               className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
             />
@@ -1016,16 +1067,17 @@ export function SandboxBenchmark() {
             <button
               type="button"
               className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
-              onClick={() =>
+              onClick={() => {
+                clearVisibleBuilds();
                 void runLoad(
                   {
                     promptId,
                     modelA: modelPair.a,
                     modelB: modelPair.b,
                   },
-                  { initial: false },
-                )
-              }
+                  { initial: false, bypassCache: true },
+                );
+              }}
               disabled={loading || refreshing}
               title="Refresh builds"
             >

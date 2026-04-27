@@ -442,6 +442,23 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     }
     return picked;
   }, [compareEnabled, customModel, modelPair.a, modelPair.b]);
+  const inputSignature = useMemo(
+    () =>
+      [
+        prompt,
+        gridSize,
+        palette,
+        selectedModels
+          .map((model) =>
+            model.kind === "catalog"
+              ? model.modelKey
+              : `${model.displayName}:${model.modelId}:${model.baseUrl}`,
+          )
+          .join("|"),
+      ].join("\0"),
+    [gridSize, palette, prompt, selectedModels],
+  );
+  const lastGenerateInputRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!running) return;
@@ -452,6 +469,22 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   useEffect(() => {
     saveProviderKeysToStorage(providerKeys);
   }, [providerKeys]);
+
+  useEffect(() => {
+    if (lastGenerateInputRef.current === inputSignature) return;
+    generateAbortRef.current?.abort();
+    generateAbortRef.current = null;
+    previewCacheRef.current.clear();
+    setRunning(false);
+    setRequestError(null);
+    setResults((prev) => {
+      const next = new Map(prev);
+      for (const model of selectedModels) {
+        next.set(model.id, { modelKey: model.id, status: "idle", voxelBuild: null });
+      }
+      return next;
+    });
+  }, [inputSignature, selectedModels]);
 
   useEffect(() => {
     if (!compareEnabled) return;
@@ -551,6 +584,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     }
 
     setRunning(true);
+    lastGenerateInputRef.current = inputSignature;
     setRequestError(null);
     forceRender((c) => c + 1);
     setResults((prev) => {
@@ -570,9 +604,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       return next;
     });
 
+    const abortController = new AbortController();
+    generateAbortRef.current = abortController;
     try {
-      const abortController = new AbortController();
-      generateAbortRef.current = abortController;
       const sanitizedKeys: ProviderApiKeys = {};
       const setKey = (k: keyof ProviderApiKeys, v: unknown) => {
         if (typeof v !== "string") return;
@@ -757,8 +791,10 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       }
       setRequestError(err instanceof Error ? err.message : "Request failed");
     } finally {
-      generateAbortRef.current = null;
-      setRunning(false);
+      if (generateAbortRef.current === abortController) {
+        generateAbortRef.current = null;
+        setRunning(false);
+      }
     }
   }
 
@@ -863,6 +899,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             <SandboxGifExportButton
               targets={gifTargets}
               promptText={prompt}
+              cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
               iconOnly
               label="Export GIF"
             />
@@ -1235,6 +1272,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={prompt}
+              cancelKey={`${inputSignature}:${compareTargets
+                .map((target) => `${target.modelName}:${target.blockCount}`)
+                .join("|")}`}
               label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
             <div className="flex items-center gap-2">

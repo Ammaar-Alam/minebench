@@ -60,6 +60,22 @@ const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
   10,
 );
+const BUILD_LOAD_DEBOUNCE_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_MODEL_DETAIL_BUILD_LOAD_DEBOUNCE_MS ?? "250",
+  10,
+);
+const LARGE_BUILD_PREVIEW_BLOCKS = Number.parseInt(
+  process.env.NEXT_PUBLIC_MODEL_DETAIL_PREVIEW_BLOCKS ?? "100000",
+  10,
+);
+const FULL_BUILD_IDLE_MS = Number.parseInt(
+  process.env.NEXT_PUBLIC_MODEL_DETAIL_FULL_BUILD_IDLE_MS ?? "1200",
+  10,
+);
+const BUILD_CACHE_MAX_ENTRIES = Number.parseInt(
+  process.env.NEXT_PUBLIC_MODEL_DETAIL_BUILD_CACHE_MAX_ENTRIES ?? "8",
+  10,
+);
 
 type TimeoutSignal = {
   signal: AbortSignal;
@@ -133,6 +149,7 @@ async function readWithTimeout<T>(
 type CurvePoint = { x: number; y: number; value: number };
 type LoadedPromptBuild = {
   buildId: string;
+  variant: ArenaBuildVariant;
   voxelBuild: VoxelBuild;
   gridSize: number;
   palette: "simple" | "advanced";
@@ -178,6 +195,29 @@ function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
   } catch {
     return null;
   }
+}
+
+function buildCacheKey(buildId: string, variant: ArenaBuildVariant) {
+  return `${buildId}:${variant}`;
+}
+
+function rememberLoadedBuild(
+  current: Record<string, LoadedPromptBuild>,
+  loadedBuild: LoadedPromptBuild,
+) {
+  const key = buildCacheKey(loadedBuild.buildId, loadedBuild.variant);
+  if (current[key]) return current;
+  const next = { ...current, [key]: loadedBuild };
+  const maxEntries =
+    Number.isFinite(BUILD_CACHE_MAX_ENTRIES) && BUILD_CACHE_MAX_ENTRIES > 0
+      ? Math.floor(BUILD_CACHE_MAX_ENTRIES)
+      : 8;
+  const keys = Object.keys(next);
+  while (keys.length > maxEntries) {
+    const oldest = keys.shift();
+    if (oldest) delete next[oldest];
+  }
+  return next;
 }
 
 async function fetchBuildVariantSnapshot(
@@ -1027,7 +1067,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const hoveredPrompt = hoveredCurveIndex != null ? promptCurveSource[hoveredCurveIndex] : null;
   const activeBuildId = activePrompt?.build?.buildId ?? null;
   const activeBuildMeta = activePrompt?.build ?? null;
-  const activeCachedBuild = activeBuildId ? buildCache[activeBuildId] ?? null : null;
+  const activeFullCachedBuild = activeBuildId
+    ? buildCache[buildCacheKey(activeBuildId, "full")] ?? null
+    : null;
+  const activePreviewCachedBuild = activeBuildId
+    ? buildCache[buildCacheKey(activeBuildId, "preview")] ?? null
+    : null;
+  const activeCachedBuild = activeFullCachedBuild ?? activePreviewCachedBuild;
   const activeLoadedBuild =
     activeStreamingBuild && activeStreamingBuild.buildId === activeBuildId
       ? activeStreamingBuild
@@ -1035,7 +1081,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const isActiveBuildLoading = Boolean(
     activePrompt?.build &&
       activeBuildId &&
-      !activeCachedBuild &&
+      !activeLoadedBuild &&
       activeBuildError == null,
   );
   const activeBuildLoadingLabel = useMemo(
@@ -1125,81 +1171,128 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
       return;
     }
 
-    if (buildCacheRef.current[activeBuildId]) {
+    const getCachedBuild = (variant: ArenaBuildVariant) =>
+      buildCacheRef.current[buildCacheKey(activeBuildId, variant)] ?? null;
+    const cachedFullBuild = getCachedBuild("full");
+    const cachedPreviewBuild = getCachedBuild("preview");
+    if (cachedFullBuild || cachedPreviewBuild) {
       setActiveBuildError(null);
       setActiveBuildProgress({
-        receivedBlocks: activeBuildMeta.blockCount,
+        receivedBlocks: (cachedFullBuild ?? cachedPreviewBuild)?.blockCount ?? activeBuildMeta.blockCount,
         totalBlocks: activeBuildMeta.blockCount,
       });
       setActiveStreamingBuild(null);
-      return;
+      if (cachedFullBuild) return;
     }
 
     const controller = new AbortController();
-    setActiveBuildError(null);
-    setActiveBuildProgress({
-      receivedBlocks: 0,
-      totalBlocks: activeBuildMeta.blockCount || null,
-    });
-    setActiveStreamingBuild(null);
+    let fullTimer: ReturnType<typeof setTimeout> | null = null;
+    const largeBuild = activeBuildMeta.blockCount >= LARGE_BUILD_PREVIEW_BLOCKS;
 
-    void fetchBuildVariantStream(
-      {
+    const storePayload = (payload: BuildVariantResponse) => {
+      const loadedBuild: LoadedPromptBuild = {
         buildId: activeBuildId,
-        variant: "full",
-        checksum: activeBuildMeta.checksum,
-      },
-      {
-        signal: controller.signal,
-        allowLiveFallback: activeBuildMeta.blockCount < 100_000,
-        onProgress: (progressiveBuild, progress) => {
-          if (activeRequestRef.current !== requestId) return;
-          setActiveBuildProgress({
-            receivedBlocks: progress.receivedBlocks,
-            totalBlocks: progress.totalBlocks,
-          });
+        variant: payload.variant,
+        voxelBuild: payload.voxelBuild,
+        gridSize: activeBuildMeta.gridSize,
+        palette: activeBuildMeta.palette,
+        mode: activeBuildMeta.mode,
+        blockCount:
+          payload.variant === "full"
+            ? Math.max(activeBuildMeta.blockCount, payload.voxelBuild.blocks.length)
+            : payload.voxelBuild.blocks.length,
+      };
 
-          if (progress.receivedBlocks <= 0) return;
-          setActiveStreamingBuild({
-            buildId: activeBuildId,
-            voxelBuild: progressiveBuild,
-            gridSize: activeBuildMeta.gridSize,
-            palette: activeBuildMeta.palette,
-            mode: activeBuildMeta.mode,
-            blockCount: progress.receivedBlocks,
-          });
-        },
-      },
-    )
-      .then((payload) => {
-        if (activeRequestRef.current !== requestId) return;
-        const loadedBuild: LoadedPromptBuild = {
+      setBuildCache((current) => rememberLoadedBuild(current, loadedBuild));
+      return loadedBuild;
+    };
+
+    const loadVariant = async (variant: ArenaBuildVariant) => {
+      if (getCachedBuild(variant)) return null;
+      const payload = await fetchBuildVariantStream(
+        {
           buildId: activeBuildId,
-          voxelBuild: payload.voxelBuild,
-          gridSize: activeBuildMeta.gridSize,
-          palette: activeBuildMeta.palette,
-          mode: activeBuildMeta.mode,
-          blockCount: Math.max(activeBuildMeta.blockCount, payload.voxelBuild.blocks.length),
-        };
+          variant,
+          checksum: activeBuildMeta.checksum,
+        },
+        {
+          signal: controller.signal,
+          allowLiveFallback: !largeBuild && variant === "full",
+          onProgress: (progressiveBuild, progress) => {
+            if (activeRequestRef.current !== requestId) return;
+            setActiveBuildProgress({
+              receivedBlocks: progress.receivedBlocks,
+              totalBlocks: progress.totalBlocks,
+            });
 
-        setBuildCache((current) => {
-          if (current[loadedBuild.buildId]) return current;
-          return { ...current, [loadedBuild.buildId]: loadedBuild };
-        });
+            if (progress.receivedBlocks <= 0) return;
+            setActiveStreamingBuild({
+              buildId: activeBuildId,
+              variant,
+              voxelBuild: progressiveBuild,
+              gridSize: activeBuildMeta.gridSize,
+              palette: activeBuildMeta.palette,
+              mode: activeBuildMeta.mode,
+              blockCount: progress.receivedBlocks,
+            });
+          },
+        },
+      );
+      if (activeRequestRef.current !== requestId) return null;
+      return storePayload(payload);
+    };
+
+    const startTimer = setTimeout(() => {
+      if (activeRequestRef.current !== requestId || controller.signal.aborted) return;
+      setActiveBuildError(null);
+      setActiveBuildProgress({
+        receivedBlocks: cachedPreviewBuild?.blockCount ?? 0,
+        totalBlocks: activeBuildMeta.blockCount || null,
+      });
+      setActiveStreamingBuild(null);
+
+      void (async () => {
+        const initialVariant: ArenaBuildVariant = largeBuild ? "preview" : "full";
+        let latestLoaded: LoadedPromptBuild | null = getCachedBuild(initialVariant);
+        if (!latestLoaded) {
+          latestLoaded = await loadVariant(initialVariant);
+        }
+        if (activeRequestRef.current !== requestId) return;
         setActiveStreamingBuild(null);
-        setActiveBuildProgress({
-          receivedBlocks: loadedBuild.blockCount,
-          totalBlocks: loadedBuild.blockCount,
-        });
-      })
-      .catch((error: unknown) => {
+        if (latestLoaded) {
+          setActiveBuildProgress({
+            receivedBlocks: latestLoaded.blockCount,
+            totalBlocks: latestLoaded.variant === "full" ? latestLoaded.blockCount : activeBuildMeta.blockCount,
+          });
+        }
+
+        if (!largeBuild || getCachedBuild("full")) return;
+        fullTimer = setTimeout(() => {
+          if (activeRequestRef.current !== requestId || controller.signal.aborted) return;
+          void loadVariant("full")
+            .then((loadedFull) => {
+              if (activeRequestRef.current !== requestId || !loadedFull) return;
+              setActiveStreamingBuild(null);
+              setActiveBuildProgress({
+                receivedBlocks: loadedFull.blockCount,
+                totalBlocks: loadedFull.blockCount,
+              });
+            })
+            .catch(() => {
+              // Keep the preview visible if the full artifact is still warming.
+            });
+        }, FULL_BUILD_IDLE_MS);
+      })().catch((error: unknown) => {
         if (error instanceof Error && error.name === "AbortError") return;
         if (activeRequestRef.current !== requestId) return;
         setActiveBuildError(error instanceof Error ? error.message : "Failed to load build");
         setActiveStreamingBuild(null);
       });
+    }, BUILD_LOAD_DEBOUNCE_MS);
 
     return () => {
+      clearTimeout(startTimer);
+      if (fullTimer) clearTimeout(fullTimer);
       controller.abort();
     };
   }, [activeBuildId, activeBuildMeta]);
@@ -1913,6 +2006,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                       <SandboxGifExportButton
                         targets={modalExportTargets}
                         promptText={activePrompt.promptText}
+                        cancelKey={`${activePrompt.promptId}:${activeBuildId ?? "none"}:${activeLoadedBuild?.variant ?? "none"}`}
                         iconOnly
                         label="Export GIF"
                       />

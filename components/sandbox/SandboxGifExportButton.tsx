@@ -1,7 +1,7 @@
 "use client";
 
 import type { RefObject } from "react";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 
 export type SandboxGifExportTarget = {
@@ -17,6 +17,7 @@ type Props = {
   label?: string;
   iconOnly?: boolean;
   className?: string;
+  cancelKey?: string;
 };
 
 type GifExportFormat = "wide" | "vertical";
@@ -117,6 +118,14 @@ function waitForNextPaint() {
   return new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => resolve());
   });
+}
+
+function createAbortError() {
+  return new DOMException("Aborted", "AbortError");
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw createAbortError();
 }
 
 function wrapTextLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
@@ -287,7 +296,8 @@ function getPaletteSampleSize(profile: GifRenderProfile) {
   };
 }
 
-async function optimizeGifBlobForSize(input: Blob): Promise<Blob> {
+async function optimizeGifBlobForSize(input: Blob, signal?: AbortSignal): Promise<Blob> {
+  throwIfAborted(signal);
   if (input.size < LOSSLESS_OPT_MIN_INPUT_BYTES) return input;
 
   try {
@@ -295,13 +305,16 @@ async function optimizeGifBlobForSize(input: Blob): Promise<Blob> {
       import("gifsicle-wasm-browser"),
       input.arrayBuffer(),
     ]);
+    throwIfAborted(signal);
 
     const runOptimize = async (command: string) => {
+      throwIfAborted(signal);
       const outputs = await gifsicle.run({
         input: [{ file: inputBytes.slice(0), name: "in.gif" }],
         command: [`${command} in.gif -o /out/out.gif`],
         isStrict: true,
       });
+      throwIfAborted(signal);
       return outputs.find((file) => file.name.toLowerCase().endsWith(".gif")) ?? null;
     };
 
@@ -516,7 +529,9 @@ async function buildPaletteSamples(
   targets: SandboxGifExportTarget[],
   format: GifExportFormat,
   profile: GifRenderProfile,
+  signal?: AbortSignal,
 ) {
+  throwIfAborted(signal);
   const sampleSize = getPaletteSampleSize(profile);
   const sampleCanvas = document.createElement("canvas");
   sampleCanvas.width = sampleSize.width;
@@ -539,12 +554,16 @@ async function buildPaletteSamples(
   const sampleFrames = buildPaletteSampleFrames(FRAME_COUNT, PALETTE_SAMPLE_COUNT);
 
   for (let idx = 0; idx < sampleFrames.length; idx += 1) {
+    throwIfAborted(signal);
     const frame = sampleFrames[idx];
     const t = FRAME_COUNT > 1 ? frame / (FRAME_COUNT - 1) : 0;
     renderCompositeFrame(sampleCtx, layout, targets, t * Math.PI * 2);
     const pixels = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
     samples.push(pixels.buffer);
-    if (idx > 0 && idx % 4 === 0) await waitForNextPaint();
+    if (idx > 0 && idx % 4 === 0) {
+      await waitForNextPaint();
+      throwIfAborted(signal);
+    }
   }
 
   return samples;
@@ -556,7 +575,9 @@ async function buildGifBlob(
   format: GifExportFormat,
   profile: GifRenderProfile,
   onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
 ) {
+  throwIfAborted(signal);
   const { width, height } = profile;
 
   const frameCanvas = document.createElement("canvas");
@@ -630,8 +651,10 @@ async function buildGifBlob(
 
   worker.postMessage({ type: "start" });
   await readyPromise;
+  throwIfAborted(signal);
 
-  const paletteSamples = await buildPaletteSamples(targets, format, profile);
+  const paletteSamples = await buildPaletteSamples(targets, format, profile, signal);
+  throwIfAborted(signal);
   if (paletteSamples.length > 0) {
     worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
   }
@@ -643,6 +666,7 @@ async function buildGifBlob(
     let completed = 0;
 
     for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
+      throwIfAborted(signal);
       const t = FRAME_COUNT > 1 ? frame / (FRAME_COUNT - 1) : 0;
       renderCompositeFrame(frameCtx, layout, targets, t * Math.PI * 2);
 
@@ -671,17 +695,21 @@ async function buildGifBlob(
       if (inFlight.length >= MAX_IN_FLIGHT_FRAMES) {
         await inFlight[0];
         inFlight.shift();
+        throwIfAborted(signal);
       }
 
       if (frame > 0 && frame % YIELD_EVERY_FRAMES === 0) {
         await waitForNextPaint();
+        throwIfAborted(signal);
       }
     }
 
     if (inFlight.length) await Promise.all(inFlight);
+    throwIfAborted(signal);
 
     worker.postMessage({ type: "finish" });
     const bytes = await resultPromise;
+    throwIfAborted(signal);
     return new Blob([bytes], { type: "image/gif" });
   } finally {
     worker.terminate();
@@ -784,15 +812,20 @@ function GifFormatSelector({
   );
 }
 
-export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className }: Props) {
+export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className, cancelKey }: Props) {
   const tooltipId = useId();
   const [exporting, setExporting] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [format, setFormat] = useState<GifExportFormat>("wide");
+  const exportAbortRef = useRef<AbortController | null>(null);
 
   const hasTargets = targets.length > 0;
+
+  useEffect(() => {
+    exportAbortRef.current?.abort();
+  }, [cancelKey]);
 
   async function handleExport() {
     if (!hasTargets || exporting) return;
@@ -805,6 +838,8 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     setOptimizing(false);
     setError(null);
     setProgress({ done: 0, total: FRAME_COUNT });
+    const abortController = new AbortController();
+    exportAbortRef.current = abortController;
     await waitForNextPaint();
     try {
       const profiles = EXPORT_RENDER_PROFILES[format];
@@ -824,17 +859,20 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
           (done, total) => {
             if (done === total || done % 2 === 0) setProgress({ done, total });
           },
+          abortController.signal,
         );
 
         setOptimizing(true);
         setProgress(null);
         try {
-          finalBlob = await optimizeGifBlobForSize(blob);
+          finalBlob = await optimizeGifBlobForSize(blob, abortController.signal);
           break;
         } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") throw err;
           lastError = err;
           if (idx === profiles.length - 1) throw err;
           await waitForNextPaint();
+          throwIfAborted(abortController.signal);
         }
       }
 
@@ -848,12 +886,17 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       const typeToken = targets.length === 2 ? "compare" : "build";
       const formatToken = format === "vertical" ? "vertical" : "wide";
       const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.gif`;
+      throwIfAborted(abortController.signal);
       triggerDownload(finalBlob, fileName);
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : "GIF export failed";
       setError(message);
       console.error("[gif-export]", err);
     } finally {
+      if (exportAbortRef.current === abortController) {
+        exportAbortRef.current = null;
+      }
       setOptimizing(false);
       setExporting(false);
       setProgress(null);
