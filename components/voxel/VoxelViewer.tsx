@@ -46,6 +46,23 @@ function getViewerTheme(): ViewerTheme {
   return t === "dark" ? "dark" : "light";
 }
 
+function isMobileViewerEnv(): boolean {
+  if (typeof window === "undefined") return false;
+  const ua = window.navigator?.userAgent?.toLowerCase() ?? "";
+  if (/iphone|ipod|ipad|android|mobile/.test(ua)) return true;
+  return typeof window.matchMedia === "function"
+    ? window.matchMedia("(pointer: coarse)").matches
+    : false;
+}
+
+function getViewerPixelRatio(): number {
+  if (typeof window === "undefined") return 1;
+  const dpr = window.devicePixelRatio || 1;
+  // 1.5x on mobile cuts fragment work ~30% vs 2x retina with no perceptible loss
+  const cap = isMobileViewerEnv() ? 1.5 : 2;
+  return Math.min(dpr, cap);
+}
+
 function applyGridTheme(grid: THREE.GridHelper, theme: ViewerTheme) {
   const mats = Array.isArray(grid.material) ? grid.material : [grid.material];
   const centerMat = mats[0];
@@ -782,7 +799,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       alpha: true,
       powerPreference: "high-performance",
     });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    // mobile retina is much more fragment-shader bound; cap lower to keep memory + frame time down
+    renderer.setPixelRatio(getViewerPixelRatio());
     // important: keep canvas css size in sync with the mount, otherwise we end up showing only a corner
     renderer.setSize(mount.clientWidth, mount.clientHeight, true);
     camera.aspect = mount.clientWidth / Math.max(1, mount.clientHeight);
@@ -791,7 +809,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     mount.appendChild(renderer.domElement);
 
     const syncRendererSize = () => {
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      // mobile retina is much more fragment-shader bound; cap lower to keep memory + frame time down
+    renderer.setPixelRatio(getViewerPixelRatio());
       const w = mount.clientWidth;
       const h = mount.clientHeight;
       if (w > 0 && h > 0) {

@@ -10,6 +10,7 @@ import { BuildStorageRef, loadBuildJsonFromStorage } from "@/lib/storage/buildPa
 import { Prisma } from "@prisma/client";
 import { createHash } from "node:crypto";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
+import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 
 export const runtime = "nodejs";
@@ -315,6 +316,9 @@ export async function POST(req: Request) {
           generationTimeMs: 0,
         },
       });
+
+  // overwrite imports may replace an existing buildId; drop any cached row eagerly
+  invalidateArenaBuildMeta(saved.id);
 
   try {
     await maybePrecomputeArenaArtifactsForBuild({

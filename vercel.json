@@ -7,6 +7,10 @@
     {
       "path": "/api/admin/arena/drain-vote-jobs",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/admin/arena/drain-shown-jobs",
+      "schedule": "* * * * *"
     }
   ]
 }

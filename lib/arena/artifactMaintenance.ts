@@ -12,6 +12,7 @@ import {
   uploadArenaBuildStreamArtifact,
 } from "@/lib/arena/buildStream";
 import { ensureArenaBuildSnapshotArtifacts } from "@/lib/arena/buildSnapshotArtifacts";
+import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
 
 function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
@@ -68,6 +69,7 @@ export async function maybePrecomputeArenaArtifactsForBuild(
     where: { id: source.id },
     data: getPreparedArenaBuildMetadataUpdate(prepared),
   });
+  invalidateArenaBuildMeta(source.id);
   const stream = isArtifactEligibleBuild(resolveSourceBytes(source))
     ? await maybePrecomputeArenaStreamArtifactsForPrepared(prepared)
     : { uploaded: 0, skipped: true, reason: "below_threshold" as const };

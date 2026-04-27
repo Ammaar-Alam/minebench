@@ -13,6 +13,11 @@ import {
   ensureArenaBuildSnapshotArtifacts,
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
+import {
+  getArenaBuildMeta,
+  getArenaBuildSnapshotFields,
+  invalidateArenaBuildMeta,
+} from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
 
@@ -55,6 +60,9 @@ type CachedJsonResponse = {
 const jsonResponseCache = new Map<string, CachedJsonResponse>();
 const jsonResponseInflight = new Map<string, Promise<Uint8Array | null>>();
 let jsonResponseCacheWeight = 0;
+
+// shared build metadata cache lives in lib/arena/buildMetaCache so the build
+// and stream routes coalesce concurrent metadata reads on the same lambda.
 
 function parseVariant(value: string | null): ArenaBuildVariant {
   return value === "preview" ? "preview" : "full";
@@ -261,19 +269,9 @@ export async function GET(
   const variant = parseVariant(url.searchParams.get("variant"));
   const expectedChecksum = url.searchParams.get("checksum")?.trim() || null;
   const shouldGzip = acceptsGzip(request);
-  const buildMeta = await prisma.build.findUnique({
-    where: { id: buildId },
-    select: {
-      id: true,
-      gridSize: true,
-      palette: true,
-      blockCount: true,
-      voxelByteSize: true,
-      voxelCompressedByteSize: true,
-      voxelSha256: true,
-      arenaBuildHints: true,
-    },
-  });
+  // pass the client-supplied checksum so the meta cache can detect stale
+  // entries left behind by an overwrite import that landed on another lambda
+  const buildMeta = await getArenaBuildMeta(buildId, expectedChecksum);
 
   if (!buildMeta) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });
@@ -368,17 +366,11 @@ export async function GET(
 
   const persistedResponseBytes = jsonCacheKey
     ? await getOrCreateJsonResponse(jsonCacheKey, async () => {
-        // persisted snapshots beat raw payload parse on hot paths
-        const persistedBuild = await prisma.build.findUnique({
-          where: { id: buildId },
-          select: {
-            arenaSnapshotPreview: true,
-            arenaSnapshotPreviewChecksum: true,
-            arenaSnapshotFull: true,
-            arenaSnapshotFullChecksum: true,
-          },
-        });
-        const persistedSnapshot = pickCurrentPersistedSnapshot(persistedBuild, variant, storedChecksum);
+        // snapshot json bodies live outside the meta cache to avoid retaining
+        // multi-mb blobs across many buildIds. the response cache covers
+        // subsequent identical requests with its own byte-weight cap.
+        const snapshotFields = await getArenaBuildSnapshotFields(buildId);
+        const persistedSnapshot = pickCurrentPersistedSnapshot(snapshotFields, variant, storedChecksum);
         if (!persistedSnapshot) return null;
         return jsonBytes(
           {
@@ -472,6 +464,8 @@ export async function GET(
 
   let prepared = getCachedPreparedArenaBuild(buildId, storedChecksum);
   if (!prepared) {
+    // live prepare is rare (artifact + db snapshot already missed), so fetching
+    // voxelData/storage pointers on demand is fine instead of holding them in cache.
     const build = await prisma.build.findUnique({
       where: { id: buildId },
       select: {
@@ -522,6 +516,8 @@ export async function GET(
         data: getPreparedArenaBuildMetadataUpdate(prepared),
       })
       .catch(() => undefined);
+    // drop stale meta cache so the next request sees the freshly written checksum
+    invalidateArenaBuildMeta(prepared.buildId);
     await ensureArenaBuildSnapshotArtifacts(prepared);
   });
 
