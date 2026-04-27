@@ -158,6 +158,7 @@ type BuildStreamProgress = {
 
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
+  allowLiveFallback?: boolean;
   onProgress?: (
     build: VoxelBuild,
     progress: BuildStreamProgress,
@@ -286,7 +287,9 @@ async function fetchBuildVariantStreamOnce(
       if (event.type === "chunk") {
         sawFirstEvent = true;
         if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          streamedBlocks.push(...event.blocks);
+          for (const block of event.blocks) {
+            streamedBlocks.push(block);
+          }
         }
         totalBlocks = event.totalBlocks || totalBlocks;
         emitProgress({
@@ -362,7 +365,9 @@ async function fetchBuildVariantStream(
   const attempts: Array<() => Promise<BuildVariantResponse>> = [
     () => fetchBuildVariantSnapshot(ref, opts?.signal),
     () => fetchBuildVariantStreamOnce(ref, true, opts),
-    () => fetchBuildVariantStreamOnce(ref, false, opts),
+    ...(opts?.allowLiveFallback
+      ? [() => fetchBuildVariantStreamOnce(ref, false, opts)]
+      : []),
     () => fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS * 2),
   ];
 
@@ -1142,10 +1147,11 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
       {
         buildId: activeBuildId,
         variant: "full",
-        checksum: null,
+        checksum: activeBuildMeta.checksum,
       },
       {
         signal: controller.signal,
+        allowLiveFallback: activeBuildMeta.blockCount < 100_000,
         onProgress: (progressiveBuild, progress) => {
           if (activeRequestRef.current !== requestId) return;
           setActiveBuildProgress({

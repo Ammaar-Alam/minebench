@@ -146,6 +146,7 @@ export type ModelPromptBreakdown = {
   bothBad: number;
   build: {
     buildId: string;
+    checksum: string | null;
     gridSize: number;
     palette: "simple" | "advanced";
     mode: string;
@@ -1093,6 +1094,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         palette: true,
         mode: true,
         blockCount: true,
+        voxelSha256: true,
         prompt: {
           select: { text: true },
         },
@@ -1160,6 +1162,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       promptText: build.prompt.text,
       build: {
         buildId: build.id,
+        checksum: build.voxelSha256?.trim() || null,
         gridSize,
         palette,
         mode: build.mode,
