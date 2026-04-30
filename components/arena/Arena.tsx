@@ -494,7 +494,7 @@ async function fetchBuildVariantSnapshot(
     try {
       res = await fetch(url, {
         method: "GET",
-        credentials: "include",
+        credentials: "same-origin",
         signal: timed.signal,
         redirect: "follow",
       });
@@ -545,7 +545,7 @@ async function fetchBuildVariantStreamOnce(
   try {
     res = await fetch(url, {
       method: "GET",
-      credentials: "include",
+      credentials: "same-origin",
       signal: requestTimed.signal,
     });
   } catch (err: unknown) {
@@ -743,9 +743,6 @@ async function fetchBuildVariantStream(
     attempts.push(() => fetchBuildVariantStreamOnce(ref, true, opts));
   }
   if (ref.variant === "full" && opts?.allowLiveFallback !== false) {
-    attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
-  }
-  if (attempts.length === 0) {
     attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
   }
   if (opts?.allowSnapshotFallback !== false) {

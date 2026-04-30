@@ -1,6 +1,6 @@
 import { after, NextResponse } from "next/server";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "@/lib/arena/types";
-import { isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
+import { estimateArenaBuildBytes, isArtifactEligibleBuild } from "@/lib/arena/buildDeliveryPolicy";
 import {
   ARENA_BUILD_STREAM_HELLO_PAD,
   createArenaBuildStreamArtifactSignedUrl,
@@ -222,9 +222,21 @@ export async function GET(
   }
 
   const shellHints = deriveArenaBuildLoadHints(meta);
+  const rawFullEstimatedBytes = estimateArenaBuildBytes({
+    blockCount: meta.blockCount,
+    voxelByteSize: meta.voxelByteSize,
+    voxelCompressedByteSize: meta.voxelCompressedByteSize,
+  });
+  const fullEstimatedBytes = shellHints.fullEstimatedBytes ?? rawFullEstimatedBytes;
+  const fullArtifactEligible =
+    isArtifactEligibleBuild(shellHints.fullEstimatedBytes) ||
+    isArtifactEligibleBuild(rawFullEstimatedBytes);
+  const fullRequiresArtifact =
+    variant === "full" &&
+    (shellHints.deliveryClass === "stream-artifact" || fullArtifactEligible);
   const artifactRequested = url.searchParams.get("artifact") !== "0";
   const artifactFetchAllowed =
-    artifactRequested && isArtifactEligibleBuild(shellHints.fullEstimatedBytes);
+    artifactRequested && (variant === "full" ? fullRequiresArtifact : fullArtifactEligible);
 
   try {
     if (artifactFetchAllowed) {
@@ -287,21 +299,23 @@ export async function GET(
     console.warn("arena stream artifact fetch failed", err);
   }
 
-  if (artifactRequested && variant === "full" && shellHints.deliveryClass === "stream-artifact") {
+  if (fullRequiresArtifact) {
     // artifact-class builds should not silently fall back to heavy live streams
     timing.end("total", requestStartedAt);
     const headers = new Headers({
       "Cache-Control": "no-store",
       "Retry-After": "1",
-      "x-build-delivery-class": shellHints.deliveryClass,
+      "x-build-delivery-class": "stream-artifact",
       "x-build-stream-source": "artifact-required",
     });
+    if (typeof fullEstimatedBytes === "number" && Number.isFinite(fullEstimatedBytes)) {
+      headers.set("x-build-est-bytes", String(Math.floor(fullEstimatedBytes)));
+    }
     timing.apply(headers);
     return NextResponse.json(
       {
         error: "Full build artifact is still warming. Try again shortly.",
-        retryVia: "stream-live",
-        retryParams: { artifact: "0" },
+        retryVia: "artifact",
       },
       { status: 503, headers },
     );
