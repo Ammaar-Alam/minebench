@@ -10,7 +10,7 @@ Use this index to find implementation-accurate docs for Arena ranking, generatio
 
 ## Core
 
-- [Arena Ranking System (Math + Matchmaking)](./arena-ranking-system.md)
+- ~~[Arena Ranking System (Math + Matchmaking)](./arena-ranking-system.md)~~ OUTDATED
 - [Arena Ranking Validity Policy v2](./arena-ranking-validity-policy-v2.md)
 - [Consistency Metric (Prompt-Local Percentiles + Shrunk ES Gap)](./consistency-metric-percentile-band.md)
 - [Voxel Exec Runtime, Conversion, and Import Workflows](./voxel-exec-raw-output.md)
