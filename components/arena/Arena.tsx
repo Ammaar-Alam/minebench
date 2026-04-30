@@ -193,6 +193,7 @@ type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
   onProgress?: (build: ArenaMatchup["a"]["build"], progress: BuildStreamProgress) => void;
   allowSnapshotFallback?: boolean;
+  allowLiveFallback?: boolean;
 };
 
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
@@ -741,7 +742,7 @@ async function fetchBuildVariantStream(
   if (!streamStorageRedirectBlocked) {
     attempts.push(() => fetchBuildVariantStreamOnce(ref, true, opts));
   }
-  if (ref.variant === "full") {
+  if (ref.variant === "full" && opts?.allowLiveFallback !== false) {
     attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
   }
   if (attempts.length === 0) {
@@ -1668,6 +1669,7 @@ export function Arena() {
       } else {
         // stream classes stay on stream paths
         const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
+        const allowLiveFallback = deliveryClass !== "stream-artifact";
         if (shouldHydrateViaSnapshot(deliveryClass)) {
           try {
             payload = await fetchBuildVariantSnapshot(ref, effectiveSignal);
@@ -1676,6 +1678,7 @@ export function Arena() {
               signal: effectiveSignal,
               onProgress: applyProgressiveBuild,
               allowSnapshotFallback,
+              allowLiveFallback,
             });
           }
         } else {
@@ -1683,6 +1686,7 @@ export function Arena() {
             signal: effectiveSignal,
             onProgress: applyProgressiveBuild,
             allowSnapshotFallback,
+            allowLiveFallback,
           });
         }
       }
@@ -1851,17 +1855,20 @@ export function Arena() {
       const promise = (async () => {
         const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, "full");
         const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
+        const allowLiveFallback = deliveryClass !== "stream-artifact";
         const payload = shouldHydrateViaSnapshot(deliveryClass)
           ? await fetchBuildVariantSnapshot(ref, controller.signal).catch(() =>
               fetchBuildVariantStream(ref, {
                 signal: controller.signal,
                 allowSnapshotFallback,
+                allowLiveFallback,
                 onProgress: (_build, progress) => emitPrefetchProgress(progress),
               }),
             )
           : await fetchBuildVariantStream(ref, {
               signal: controller.signal,
               allowSnapshotFallback,
+              allowLiveFallback,
               onProgress: (_build, progress) => emitPrefetchProgress(progress),
             });
         const resolvedRef: ArenaBuildRef = {

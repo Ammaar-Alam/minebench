@@ -530,6 +530,13 @@ function getInitialDeliveryClass(hints: ArenaBuildLoadHints | undefined): ArenaB
   return hints?.initialDeliveryClass ?? hints?.deliveryClass;
 }
 
+function getHydrationDeliveryClass(
+  hints: ArenaBuildLoadHints | undefined,
+  variant: ArenaBuildVariant,
+): ArenaBuildDeliveryClass | undefined {
+  return variant === "preview" ? getInitialDeliveryClass(hints) : hints?.deliveryClass;
+}
+
 function getBuildCacheKey(ref: ArenaBuildRef): string {
   return `${ref.buildId}:${ref.variant}:${ref.checksum ?? "none"}`;
 }
@@ -766,11 +773,11 @@ export function SandboxBenchmark() {
 
       void (async () => {
         try {
-          const initialDeliveryClass = getInitialDeliveryClass(lane.buildLoadHints);
+          const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, lane.buildRef.variant);
           const streamFetch = () =>
             fetchBuildVariantStream(lane.buildRef, {
               signal: controller.signal,
-              allowLiveFallback: initialDeliveryClass !== "stream-artifact",
+              allowLiveFallback: deliveryClass !== "stream-artifact",
               onProgress: (progressiveBuild, progress, meta) => {
                 if (hydrationRunIdRef.current !== runId) return;
                 setSlotState((prev) => {
@@ -807,7 +814,7 @@ export function SandboxBenchmark() {
               },
             });
           const payload =
-            initialDeliveryClass === "snapshot" || initialDeliveryClass === "inline"
+            deliveryClass === "snapshot" || deliveryClass === "inline"
               ? await fetchBuildVariantSnapshot(lane.buildRef, controller.signal).catch(streamFetch)
               : await streamFetch();
 

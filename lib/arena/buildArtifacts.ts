@@ -181,8 +181,8 @@ export function parsePersistedArenaBuildLoadHints(value: unknown): ArenaBuildLoa
 
   return {
     initialVariant,
-    initialDeliveryClass,
-    deliveryClass,
+    initialDeliveryClass: classifyArenaBuildDelivery(initialEstimatedBytes),
+    deliveryClass: classifyArenaBuildDelivery(fullEstimatedBytes),
     fullBlockCount,
     previewBlockCount,
     previewStride,
