@@ -227,7 +227,8 @@ export async function GET(
     voxelByteSize: meta.voxelByteSize,
     voxelCompressedByteSize: meta.voxelCompressedByteSize,
   });
-  const fullEstimatedBytes = shellHints.fullEstimatedBytes ?? rawFullEstimatedBytes;
+  const fullEstimatedBytes =
+    Math.max(shellHints.fullEstimatedBytes ?? 0, rawFullEstimatedBytes ?? 0) || null;
   const fullArtifactEligible =
     isArtifactEligibleBuild(shellHints.fullEstimatedBytes) ||
     isArtifactEligibleBuild(rawFullEstimatedBytes);
@@ -254,13 +255,20 @@ export async function GET(
         timing.end("artifact_hit", artifactStartedAt);
         timing.end("total", requestStartedAt);
         const shellEstimatedBytes =
-          estimateArenaBuildVariantBytes(
-            shellHints,
-            variant,
-            variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount,
-          ) ?? shellHints.fullEstimatedBytes;
+          variant === "full"
+            ? fullEstimatedBytes
+            : (estimateArenaBuildVariantBytes(
+                shellHints,
+                variant,
+                shellHints.previewBlockCount,
+              ) ?? shellHints.fullEstimatedBytes);
         const headers = createStreamHeaders("artifact", {
-          deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
+          deliveryClass:
+            variant === "full" && fullRequiresArtifact
+              ? "stream-artifact"
+              : variant === "preview"
+                ? shellHints.initialDeliveryClass
+                : shellHints.deliveryClass,
           estimatedBytes: shellEstimatedBytes,
         });
         headers.set("Location", artifactSignedUrl);
