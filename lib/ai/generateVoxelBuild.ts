@@ -50,6 +50,7 @@ function parseOptionalIntEnvVar(name: string): number | undefined {
 }
 
 function defaultOutputTokenRequestForModel(modelId: string): number | undefined {
+  if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
   if (
     modelId === "deepseek-v4-pro" ||
     modelId === "deepseek-v4-flash" ||
@@ -68,6 +69,7 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   // gpt-5-pro alias remaining at 272k.
   if (modelId === "gpt-5-pro") return 272_000;
   if (modelId.startsWith("gpt-5")) return 128_000;
+  if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
   if (
     modelId === "deepseek-v4-pro" ||
     modelId === "deepseek-v4-flash" ||
@@ -145,6 +147,7 @@ function describeRequestedThinkingMode(opts: {
   deepseekThinkingConfig?: DeepSeekThinkingConfig;
 }): string {
   if (opts.route === "openrouter") {
+    if (opts.modelId === "x-ai/grok-4.3") return "automatic";
     if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
       return `effort_fallback=${opts.reasoningEffortAttempts.join("->")}->disabled`;
     }
@@ -748,6 +751,10 @@ async function providerGenerateText(args: {
   const openRouterUsesThinkingToggle =
     model.openRouterModelId === "moonshotai/kimi-k2.6" ||
     model.openRouterModelId === "moonshotai/kimi-k2.5";
+  const openRouterUsesAutomaticReasoning = model.openRouterModelId === "x-ai/grok-4.3";
+  if (openRouterUsesAutomaticReasoning) {
+    xaiAutomaticReasoningForModel(model.openRouterModelId, args.reasoning);
+  }
   const xaiOpenRouterReasoningEnabled = openRouterReasoningEnabledForModel(
     model.openRouterModelId,
     args.reasoning,
@@ -770,7 +777,9 @@ async function providerGenerateText(args: {
     );
   }
   const openRouterReasoningEffortAttempts =
-    xaiOpenRouterReasoningEnabled !== undefined || openRouterUsesThinkingToggle
+    xaiOpenRouterReasoningEnabled !== undefined ||
+    openRouterUsesThinkingToggle ||
+    openRouterUsesAutomaticReasoning
       ? undefined
       : openRouterReasoningEffortAttemptsForModel(
           model.openRouterModelId,
@@ -796,6 +805,7 @@ async function providerGenerateText(args: {
     system: args.system,
     user: args.user,
     maxOutputTokens: args.maxOutputTokens,
+    automaticReasoning: openRouterUsesAutomaticReasoning,
     enableReasoning: openRouterReasoningEnabled,
     reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
