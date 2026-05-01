@@ -33,14 +33,17 @@ type ReasoningConfigAttempt =
   | { kind: "enabled" }
   | { kind: "effort"; effort: string }
   | { kind: "max_tokens"; maxTokens: number }
+  | "__automatic__"
   | "__default__"
   | undefined;
 
 function reasoningConfigFallbacks(opts: {
+  automatic?: boolean;
   enabled?: boolean;
   efforts?: string[];
   maxTokens?: number;
 }): ReasoningConfigAttempt[] {
+  const usesAutomaticReasoning = Boolean(opts.automatic);
   const explicitlyEnabled = Boolean(opts.enabled);
   const requested = opts.efforts;
   const normalized = (requested ?? [])
@@ -59,6 +62,7 @@ function reasoningConfigFallbacks(opts: {
     efforts.push({ kind: "max_tokens", maxTokens: Math.floor(rawMaxTokens) });
   }
 
+  if (usesAutomaticReasoning && efforts.length === 0) return ["__automatic__"];
   if (efforts.length === 0) return [undefined];
   if (explicitlyEnabled && normalized.length === 0 && !(Number.isFinite(rawMaxTokens) && rawMaxTokens > 0)) {
     return efforts;
@@ -160,6 +164,7 @@ export async function openrouterGenerateText(params: {
   system: string;
   user: string;
   maxOutputTokens?: number;
+  automaticReasoning?: boolean;
   enableReasoning?: boolean;
   reasoningMaxTokens?: number;
   temperature?: number;
@@ -175,6 +180,7 @@ export async function openrouterGenerateText(params: {
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
   const maxTokens = params.maxOutputTokens ?? 8192;
   const reasoningAttempts = reasoningConfigFallbacks({
+    automatic: params.automaticReasoning,
     enabled: params.enableReasoning,
     efforts: params.reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
@@ -182,6 +188,7 @@ export async function openrouterGenerateText(params: {
   let useDefaultVerbosity = Boolean(defaultTextVerbosity(params.modelId));
 
   const describeReasoningAttempt = (cfg: ReasoningConfigAttempt): string => {
+    if (cfg === "__automatic__") return "automatic";
     if (cfg === "__default__") return "default";
     if (cfg == null) return "disabled";
     if (cfg.kind === "enabled") return "enabled";

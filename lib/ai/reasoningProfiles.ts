@@ -214,6 +214,8 @@ export function xaiAutomaticReasoningForModel(
   const normalized = normalizeReasoningOverride(override);
   const label = `xAI model ${modelId}`;
   const isAutomaticReasoningModel =
+    modelId === "grok-4.3" ||
+    modelId === "x-ai/grok-4.3" ||
     modelId === "grok-4.20-0309-reasoning" ||
     modelId === "grok-4.20-reasoning" ||
     modelId === "grok-4-1-fast-reasoning" ||
