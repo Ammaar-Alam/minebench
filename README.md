@@ -118,6 +118,6 @@ _Disclosure: MineBench earns a recurring affiliate commission when this code is 
 
 Texture pack: [Faithful](https://faithfulpack.net/) (see `assets/texture-pack/LICENSE.txt`)
 
-Inspired by [MC-Bench](https://mcbench.ai/) ([GitHub](https://github.com/mc-bench))
+Inspired by [MC-Bench](https://github.com/mc-bench) and [VoxelBench](https://voxelbench.ai/)
 
 _[Disclaimer: all documentation (including README) and frontend is almost entirely AI-created]_

@@ -29,11 +29,20 @@ export function SiteFooter() {
             Inspired by{" "}
             <a
               className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"
-              href="https://mcbench.ai/"
+              href="https://github.com/mc-bench"
               target="_blank"
               rel="noreferrer"
             >
               MC-Bench
+            </a>
+            {" "}and{" "}
+            <a
+              className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"
+              href="https://voxelbench.ai/"
+              target="_blank"
+              rel="noreferrer"
+            >
+              VoxelBench
             </a>
           </span>
           <span className="text-border">·</span>
