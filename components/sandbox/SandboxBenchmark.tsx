@@ -90,6 +90,7 @@ type BuildStreamProgress = {
 
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
+  allowSnapshotFallback?: boolean;
   allowLiveFallback?: boolean;
   onProgress?: (
     build: VoxelBuild,
@@ -500,6 +501,9 @@ async function fetchBuildVariantStreamOnce(
       hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
 
     if (!streamLooksComplete) {
+      if (opts?.allowSnapshotFallback === false) {
+        throw new Error("Build stream ended before all blocks loaded");
+      }
       return fetchBuildVariantSnapshot(ref, opts?.signal);
     }
 
@@ -527,11 +531,15 @@ async function fetchBuildVariantStream(
   let lastError: unknown = null;
   const attempts: Array<() => Promise<BuildVariantResponse>> = [
     () => fetchBuildVariantStreamOnce(ref, true, opts),
-    () => fetchBuildVariantSnapshot(ref, opts?.signal),
+    ...(opts?.allowSnapshotFallback === false
+      ? []
+      : [
+          () => fetchBuildVariantSnapshot(ref, opts?.signal),
+          () => fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS * 2),
+        ]),
     ...(opts?.allowLiveFallback
       ? [() => fetchBuildVariantStreamOnce(ref, false, opts)]
       : []),
-    () => fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS * 2),
   ];
 
   for (const attempt of attempts) {
@@ -796,9 +804,11 @@ export function SandboxBenchmark() {
       void (async () => {
         try {
           const deliveryClass = getHydrationDeliveryClass(lane.buildLoadHints, lane.buildRef.variant);
+          const allowSnapshotFallback = deliveryClass !== "stream-artifact";
           const streamFetch = () =>
             fetchBuildVariantStream(lane.buildRef, {
               signal: controller.signal,
+              allowSnapshotFallback,
               allowLiveFallback: deliveryClass !== "stream-artifact",
               onProgress: (progressiveBuild, progress, meta) => {
                 if (hydrationRunIdRef.current !== runId) return;
