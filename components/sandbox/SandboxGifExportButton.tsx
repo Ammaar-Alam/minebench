@@ -823,6 +823,8 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const exportAbortRef = useRef<AbortController | null>(null);
 
   const hasTargets = targets.length > 0;
+  const canChooseFormat = targets.length === 2;
+  const exportFormat: GifExportFormat = canChooseFormat ? format : "wide";
 
   useEffect(() => {
     exportAbortRef.current?.abort();
@@ -843,7 +845,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     exportAbortRef.current = abortController;
     await waitForNextPaint();
     try {
-      const profiles = EXPORT_RENDER_PROFILES[format];
+      const profiles = EXPORT_RENDER_PROFILES[exportFormat];
       let finalBlob: Blob | null = null;
       let lastError: unknown = null;
 
@@ -855,7 +857,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
         const blob = await buildGifBlob(
           targets,
           promptText ?? "",
-          format,
+          exportFormat,
           profile,
           (done, total) => {
             if (done === total || done % 2 === 0) setProgress({ done, total });
@@ -885,7 +887,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const typeToken = targets.length === 2 ? "compare" : "build";
-      const formatToken = format === "vertical" ? "vertical" : "wide";
+      const formatToken = exportFormat === "vertical" ? "vertical" : "wide";
       const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.gif`;
       throwIfAborted(abortController.signal);
       triggerDownload(finalBlob, fileName);
@@ -915,15 +917,15 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const busy = exporting || optimizing;
   const isUnavailable = !hasTargets;
   const shouldKeepTooltipVisible = Boolean(iconOnly && (busy || error));
-  const formatSelector = (
+  const formatSelector = canChooseFormat ? (
     <GifFormatSelector
-      format={format}
+      format={exportFormat}
       disabled={busy}
       compact={iconOnly}
       embedded
       onChange={setFormat}
     />
-  );
+  ) : null;
 
   const button = (
     <button
@@ -964,7 +966,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     return (
       <div className="inline-flex h-9 items-center rounded-full border border-border/70 bg-bg/55 p-0.5 shadow-[0_18px_44px_-28px_rgba(4,11,31,0.95)] backdrop-blur-sm">
         {formatSelector}
-        <span className="mx-1 h-4 w-px bg-border/45" aria-hidden="true" />
+        {formatSelector ? <span className="mx-1 h-4 w-px bg-border/45" aria-hidden="true" /> : null}
         {button}
       </div>
     );
@@ -981,7 +983,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
         <span className="block truncate">{buttonTitle}</span>
       </div>
       {formatSelector}
-      <span className="mx-1 h-3.5 w-px bg-border/45" aria-hidden="true" />
+      {formatSelector ? <span className="mx-1 h-3.5 w-px bg-border/45" aria-hidden="true" /> : null}
       {button}
     </div>
   );
