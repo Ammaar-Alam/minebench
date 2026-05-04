@@ -138,6 +138,8 @@ const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
   10,
 );
+const GZIP_MAGIC_0 = 0x1f;
+const GZIP_MAGIC_1 = 0x8b;
 
 type TimeoutSignal = {
   signal: AbortSignal;
@@ -274,6 +276,26 @@ function formatBuildLoadingMessage(progress: SlotHydrationState["progress"]): st
   return formatVoxelLoadingMessage("Retrieving build", progress);
 }
 
+function isGzipChunk(chunk: Uint8Array): boolean {
+  return chunk.length >= 2 && chunk[0] === GZIP_MAGIC_0 && chunk[1] === GZIP_MAGIC_1;
+}
+
+async function gunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("Compressed build artifact is not supported by this browser.");
+  }
+  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const decompressor = new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>;
+  const stream = new Blob([body]).stream().pipeThrough(decompressor);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function readBuildVariantJson(res: Response): Promise<BuildVariantResponse> {
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const body = isGzipChunk(bytes) ? await gunzipBytes(bytes) : bytes;
+  return JSON.parse(new TextDecoder().decode(body)) as BuildVariantResponse;
+}
+
 async function fetchBenchmarkResponse(args: {
   promptId?: string;
   modelA?: string;
@@ -324,7 +346,7 @@ async function fetchBuildVariantSnapshot(
       signal: timed.signal,
     });
     if (!res.ok) throw new Error(await res.text());
-    return (await res.json()) as BuildVariantResponse;
+    return await readBuildVariantJson(res);
   } finally {
     timed.cleanup();
   }
