@@ -179,12 +179,14 @@ async function readWithTimeout<T>(
   read: () => Promise<T>,
   timeoutMs: number,
   signal?: AbortSignal,
+  onTimeout?: () => void,
 ): Promise<T> {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   return await new Promise<T>((resolve, reject) => {
     const timer =
       Number.isFinite(timeoutMs) && timeoutMs > 0
         ? window.setTimeout(() => {
+            onTimeout?.();
             cleanup();
             reject(new Error("Build stream stalled"));
           }, timeoutMs)
@@ -362,6 +364,30 @@ function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
   }
 }
 
+function streamFromFirstChunk(
+  firstChunk: Uint8Array,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(firstChunk);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) controller.enqueue(value);
+        }
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
 async function fetchBuildVariantStreamOnce(
   ref: ArenaBuildRef,
   useArtifact: boolean,
@@ -392,8 +418,33 @@ async function fetchBuildVariantStreamOnce(
     return (await res.json()) as BuildVariantResponse;
   }
 
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let cancelled = false;
+  const cancelReader = () => {
+    if (cancelled) return;
+    cancelled = true;
+    void reader?.cancel().catch(() => undefined);
+  };
+
   try {
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
+    const firstRead = await readWithTimeout(
+      () => reader!.read(),
+      STREAM_FIRST_EVENT_TIMEOUT_MS,
+      opts?.signal,
+      cancelReader,
+    );
+    if (firstRead.done || !firstRead.value) {
+      throw new Error("Build stream ended before any data loaded");
+    }
+
+    const firstChunk = firstRead.value;
+    const stream = streamFromFirstChunk(firstChunk, reader);
+    reader = isGzipChunk(firstChunk)
+      ? stream
+          .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>)
+          .getReader()
+      : stream.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const startedAt = performance.now();
@@ -472,13 +523,15 @@ async function fetchBuildVariantStreamOnce(
 
     while (true) {
       if (performance.now() - startedAt > STREAM_HARD_TIMEOUT_MS) {
+        cancelReader();
         throw new Error("Build stream hard timeout");
       }
 
       const { done, value } = await readWithTimeout(
-        () => reader.read(),
+        () => reader!.read(),
         sawFirstEvent ? STREAM_STALL_TIMEOUT_MS : STREAM_FIRST_EVENT_TIMEOUT_MS,
         opts?.signal,
+        cancelReader,
       );
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -501,6 +554,7 @@ async function fetchBuildVariantStreamOnce(
       hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
 
     if (!streamLooksComplete) {
+      cancelReader();
       if (opts?.allowSnapshotFallback === false) {
         throw new Error("Build stream ended before all blocks loaded");
       }
@@ -519,6 +573,7 @@ async function fetchBuildVariantStreamOnce(
       },
     };
   } catch (err: unknown) {
+    cancelReader();
     if (err instanceof Error && err.name === "AbortError") throw err;
     throw err;
   }
