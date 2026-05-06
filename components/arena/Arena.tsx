@@ -1107,6 +1107,7 @@ export function Arena() {
   const submittingRef = useRef(false);
   const transitioningStateRef = useRef(false);
   const cardsScrollRef = useRef<HTMLDivElement | null>(null);
+  const programmaticMobileScrollRef = useRef<{ side: "a" | "b"; until: number } | null>(null);
   const revealRef = useRef<RevealState>({ kind: "none" });
   const transitionRef = useRef(false);
   const hydrateInFlightRef = useRef(new Set<string>());
@@ -1380,6 +1381,12 @@ export function Arena() {
     if (!el) return;
 
     const sync = () => {
+      const programmaticScroll = programmaticMobileScrollRef.current;
+      if (programmaticScroll && performance.now() < programmaticScroll.until) {
+        setMobileBuildView(programmaticScroll.side);
+        return;
+      }
+      programmaticMobileScrollRef.current = null;
       const max = Math.max(0, el.scrollWidth - el.clientWidth);
       if (max <= 0) {
         setMobileBuildView("a");
@@ -1406,6 +1413,8 @@ export function Arena() {
     if (!el) return;
     const max = Math.max(0, el.scrollWidth - el.clientWidth);
     const left = side === "a" ? 0 : max;
+    programmaticMobileScrollRef.current =
+      behavior === "smooth" ? { side, until: performance.now() + 420 } : null;
     setMobileBuildView(side);
     el.scrollTo({ left, behavior });
   }, []);
@@ -2584,13 +2593,6 @@ export function Arena() {
             <div
               className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "ring-1 ring-accent/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
             >
-              {/* swipe hint – only on mobile, points toward Build B */}
-              <div className="pointer-events-none absolute right-2.5 top-2.5 z-10 flex items-center gap-1 md:hidden" aria-hidden="true">
-                <span className="text-[9px] uppercase tracking-widest text-muted2/40">swipe</span>
-                <span className="mb-swipe-arrow-right inline-block text-muted2/50">
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6 4l4 4-4 4"/></svg>
-                </span>
-              </div>
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:a` : "arena-build-a"}
                 title="Build A"
@@ -2641,13 +2643,6 @@ export function Arena() {
             <div
               className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "ring-1 ring-accent2/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
             >
-              {/* swipe hint – only on mobile, points back toward Build A */}
-              <div className="pointer-events-none absolute right-2.5 top-2.5 z-10 flex items-center gap-1 md:hidden" aria-hidden="true">
-                <span className="mb-swipe-arrow-left inline-block text-muted2/50">
-                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 4l-4 4 4 4"/></svg>
-                </span>
-                <span className="text-[9px] uppercase tracking-widest text-muted2/40">swipe</span>
-              </div>
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:b` : "arena-build-b"}
                 title="Build B"
@@ -2698,34 +2693,40 @@ export function Arena() {
           </div>
 
           {/* segmented build switcher – mobile only */}
-	          <div className="md:hidden">
-	            <div className="relative flex rounded-xl bg-bg/40 p-0.5 ring-1 ring-border/50">
-              {/* sliding indicator */}
-              <span
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[10px] bg-card/70 ring-1 ring-border/40 transition-transform duration-200 ease-out"
-                style={{ transform: mobileBuildView === "b" ? "translateX(calc(100% + 4px))" : "translateX(0)" }}
-              />
+          <div className="md:hidden">
+            <div className="flex rounded-xl border border-border/55 bg-bg/45 p-0.5 shadow-[inset_0_1px_0_hsl(var(--fg)_/_0.04)] backdrop-blur-sm">
               <button
                 type="button"
                 aria-pressed={mobileBuildView === "a"}
-                className={`relative z-10 flex-1 rounded-[10px] py-2 text-center font-mono text-[12px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "a" ? "text-fg" : "text-muted2 hover:text-fg"}`}
+                aria-current={mobileBuildView === "a" ? "true" : undefined}
+                aria-label="Show Build A"
+                className={`flex h-10 flex-1 items-center justify-center rounded-[10px] text-center font-mono text-[11px] font-semibold uppercase tracking-[0.13em] transition-colors ${
+                  mobileBuildView === "a"
+                    ? "bg-card/80 text-fg ring-1 ring-border/65 shadow-[inset_0_1px_0_hsl(var(--fg)_/_0.08)]"
+                    : "text-muted/60 hover:bg-bg/45 hover:text-fg"
+                }`}
                 disabled={buildSwitchDisabled}
                 onClick={() => scrollToMobileBuild("a")}
               >
-                Build A
+                <span>Build A</span>
               </button>
               <button
                 type="button"
                 aria-pressed={mobileBuildView === "b"}
-                className={`relative z-10 flex-1 rounded-[10px] py-2 text-center font-mono text-[12px] font-medium uppercase tracking-[0.12em] transition-colors ${mobileBuildView === "b" ? "text-fg" : "text-muted2 hover:text-fg"}`}
+                aria-current={mobileBuildView === "b" ? "true" : undefined}
+                aria-label="Show Build B"
+                className={`flex h-10 flex-1 items-center justify-center rounded-[10px] text-center font-mono text-[11px] font-semibold uppercase tracking-[0.13em] transition-colors ${
+                  mobileBuildView === "b"
+                    ? "bg-card/80 text-fg ring-1 ring-border/65 shadow-[inset_0_1px_0_hsl(var(--fg)_/_0.08)]"
+                    : "text-muted/60 hover:bg-bg/45 hover:text-fg"
+                }`}
                 disabled={buildSwitchDisabled}
                 onClick={() => scrollToMobileBuild("b")}
               >
-                Build B
-	              </button>
-	            </div>
-	          </div>
+                <span>Build B</span>
+              </button>
+            </div>
+          </div>
 
 	          {buildLoadError ? (
 	            <div className="mb-subpanel flex items-center justify-between gap-3 px-3 py-2 text-sm text-muted sm:px-4">
