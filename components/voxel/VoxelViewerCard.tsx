@@ -356,17 +356,6 @@ export function VoxelViewerCard({
             </div>
           ) : null}
 
-          {showBuildView && build ? (
-            <div className="pointer-events-none absolute bottom-[3.5rem] left-2.5 flex gap-2 sm:bottom-3 sm:left-3">
-              <span className="mb-badge px-2 py-0.5 text-[10px] sm:px-3 sm:py-1.5 sm:text-xs">
-                <span className="sm:hidden">Drag to spin • Pinch to zoom</span>
-                <span className="hidden sm:inline">
-                  Drag to rotate • <span className="mb-kbd">Ctrl</span>+drag to pan • Scroll to zoom
-                </span>
-              </span>
-            </div>
-          ) : null}
-
           {showLoadingHud ? (
             <VoxelLoadingHud
               label={hudLabel}

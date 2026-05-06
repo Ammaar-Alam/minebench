@@ -34,6 +34,11 @@ export type VoxelViewerHandle = {
 
 let atlasPromise: Promise<THREE.Texture> | null = null;
 const EXPORT_RENDER_OVERSCAN = 1;
+let viewerSpinPreference = true;
+const viewerSpinPreferenceListeners = new Set<(enabled: boolean) => void>();
+const MOBILE_DOUBLE_TAP_MS = 330;
+const MOBILE_TAP_MAX_TRAVEL_PX = 14;
+const MOBILE_DOUBLE_TAP_MAX_DISTANCE_PX = 34;
 
 type ViewerTheme = "light" | "dark";
 const REVEAL_ANIMATION_MIN_BLOCKS = Number.parseInt(
@@ -61,6 +66,51 @@ function getViewerPixelRatio(): number {
   // 1.5x on mobile cuts fragment work ~30% vs 2x retina with no perceptible loss
   const cap = isMobileViewerEnv() ? 1.5 : 2;
   return Math.min(dpr, cap);
+}
+
+function hasPanModifier(event: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+  return Boolean(event.ctrlKey || event.metaKey || event.shiftKey);
+}
+
+function isPanModifierKey(event: { key?: string; code?: string }): boolean {
+  return (
+    event.key === "Control" ||
+    event.key === "Meta" ||
+    event.key === "Shift" ||
+    event.code === "ControlLeft" ||
+    event.code === "ControlRight" ||
+    event.code === "MetaLeft" ||
+    event.code === "MetaRight" ||
+    event.code === "ShiftLeft" ||
+    event.code === "ShiftRight"
+  );
+}
+
+function isTouchLikePointer(event: PointerEvent): boolean {
+  return event.pointerType !== "mouse" || isMobileViewerEnv();
+}
+
+function setViewerSpinPreference(enabled: boolean) {
+  if (viewerSpinPreference === enabled) return;
+  viewerSpinPreference = enabled;
+  viewerSpinPreferenceListeners.forEach((listener) => listener(enabled));
+}
+
+function toggleViewerSpinPreference() {
+  setViewerSpinPreference(!viewerSpinPreference);
+}
+
+export function useVoxelViewerSpinPreference() {
+  const [enabled, setEnabled] = useState(viewerSpinPreference);
+
+  useEffect(() => {
+    viewerSpinPreferenceListeners.add(setEnabled);
+    return () => {
+      viewerSpinPreferenceListeners.delete(setEnabled);
+    };
+  }, []);
+
+  return enabled;
 }
 
 function applyGridTheme(grid: THREE.GridHelper, theme: ViewerTheme) {
@@ -175,17 +225,26 @@ function computeBuildYieldAfterMs(blockCount: number): number {
   return 8;
 }
 
-function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, bounds: BuildBounds) {
+function frameBounds(
+  camera: THREE.PerspectiveCamera,
+  controls: OrbitControls,
+  bounds: BuildBounds,
+  opts?: { reserveMobileBottomChrome?: boolean },
+) {
   const center = bounds.center;
   const radius = Math.max(0.001, bounds.radius);
-
-  controls.target.copy(center);
 
   const size = bounds.box.getSize(new THREE.Vector3());
   const horiz = Math.max(0.001, Math.max(size.x, size.z));
   const tallness = size.y / horiz;
   // slightly more top-down by default (about +10%)
   const yBias = THREE.MathUtils.clamp((0.38 + tallness * 0.22) * 1.1, 0.38, 0.95);
+  const reserveMobileBottomChrome = Boolean(opts?.reserveMobileBottomChrome && isMobileViewerEnv());
+  const target = center.clone();
+  if (reserveMobileBottomChrome) {
+    target.y -= THREE.MathUtils.clamp(size.y * 0.08, radius * 0.04, radius * 0.16);
+  }
+  controls.target.copy(target);
 
   const vFov = THREE.MathUtils.degToRad(camera.fov);
   const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
@@ -195,17 +254,61 @@ function frameBounds(camera: THREE.PerspectiveCamera, controls: OrbitControls, b
 
   const dir = new THREE.Vector3(1, yBias, 1).normalize();
   // slightly closer default framing
-  camera.position.copy(center).addScaledVector(dir, distance * 1.1);
+  camera.position.copy(target).addScaledVector(dir, distance * (reserveMobileBottomChrome ? 1.22 : 1.1));
   camera.near = Math.max(0.05, distance / 250);
   camera.far = Math.max(200, distance * 60);
   camera.updateProjectionMatrix();
-  camera.lookAt(center);
+  camera.lookAt(target);
 
   controls.minDistance = Math.max(0.5, distance * 0.12);
   controls.maxDistance = Math.max(40, distance * 14);
 
   controls.update();
   controls.saveState();
+}
+
+function ViewerControlHint({ isPanMode, spinEnabled }: { isPanMode: boolean; spinEnabled: boolean }) {
+  const itemClass = "inline-flex items-center gap-1.5 whitespace-nowrap";
+  const desktopItemClass = "hidden items-center gap-1.5 whitespace-nowrap sm:inline-flex";
+  const inputLabelClass = "text-fg/65";
+  const dividerClass = "h-1 w-1 rounded-full bg-muted/[0.18]";
+  const keyClass =
+    "inline-flex h-4 min-w-4 items-center justify-center rounded border border-border/40 bg-bg/40 px-1 font-mono text-[9px] font-semibold leading-none text-muted/70";
+  const spinKeyClass = `${keyClass} ${
+    spinEnabled ? "border-accent/20 bg-accent/[0.07] text-accent/75" : "text-muted/55"
+  }`;
+
+  return (
+    <div className="pointer-events-none absolute bottom-[4.15rem] left-2.5 right-2.5 z-10 flex sm:bottom-3 sm:left-3 sm:right-auto">
+      <div className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-full border border-border/40 bg-bg/[0.50] px-2.5 py-1 text-[10px] font-medium leading-none text-muted/70 backdrop-blur-sm sm:px-3">
+        <span className={itemClass}>
+          <span className={inputLabelClass}>Drag</span>
+          <span>{isPanMode ? "Pan" : "Rotate"}</span>
+        </span>
+        <span className={dividerClass} aria-hidden="true" />
+        <span className={desktopItemClass}>
+          <span className={keyClass}>Ctrl</span>
+          <span>Pan</span>
+        </span>
+        <span className={`${dividerClass} hidden sm:inline-flex`} aria-hidden="true" />
+        <span className={itemClass}>
+          <span className={`${inputLabelClass} sm:hidden`}>Pinch</span>
+          <span className={`${inputLabelClass} hidden sm:inline`}>Scroll</span>
+          <span>Zoom</span>
+        </span>
+        <span className={`${dividerClass} sm:hidden`} aria-hidden="true" />
+        <span className={`${itemClass} sm:hidden`}>
+          <span className={inputLabelClass}>Double tap</span>
+          <span>Spin</span>
+        </span>
+        <span className="hidden h-1 w-1 rounded-full bg-muted/[0.18] sm:inline-flex" aria-hidden="true" />
+        <span className={desktopItemClass}>
+          <span className={spinKeyClass}>S</span>
+          <span>{spinEnabled ? "Spin on" : "Spin off"}</span>
+        </span>
+      </div>
+    </div>
+  );
 }
 
 function collectRevealGeometries(group: THREE.Group): RevealGeometry[] {
@@ -261,6 +364,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const exportCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const tapStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const lastTapRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const threeRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
@@ -272,7 +377,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const [dragMode, setDragMode] = useState<DragMode>("orbit");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [supportsFullscreen, setSupportsFullscreen] = useState(false);
-  const [ctrlHeld, setCtrlHeld] = useState(false);
+  const [panModifierHeld, setPanModifierHeld] = useState(false);
+  const effectivePanMode = dragMode === "pan" || (dragMode === "orbit" && panModifierHeld);
+  const spinPreferenceEnabled = useVoxelViewerSpinPreference();
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
   const latestRef = useRef<{
@@ -361,12 +468,12 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const vg = voxelGroupRef.current;
     const bounds = boundsRef.current;
     if (!three || !vg || !bounds) return;
-    frameBounds(three.camera, three.controls, bounds);
+    frameBounds(three.camera, three.controls, bounds, { reserveMobileBottomChrome: showControls });
     if (gridRef.current) {
       gridRef.current.position.y = bounds.box.min.y - 0.5;
     }
     requestRenderRef.current?.();
-  }, []);
+  }, [showControls]);
 
   const clearVoxelGroup = useCallback((three: NonNullable<typeof threeRef.current>) => {
     if (revealRafRef.current) {
@@ -848,6 +955,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     };
     const onEnd = () => {
       userInteractingRef.current = false;
+      if (autoRotateRef.current) requestRenderRef.current?.();
     };
     controls.addEventListener("start", onStart);
     controls.addEventListener("end", onEnd);
@@ -899,8 +1007,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const controlsChanged = (controls.update() as boolean | void) === true;
 
         const vg = voxelGroupRef.current;
-        const shouldAutoRotate = Boolean(vg && autoRotateRef.current && !userInteractingRef.current);
-        if (vg && autoRotateRef.current && !userInteractingRef.current) {
+        const shouldAutoRotate = Boolean(
+          vg && autoRotateRef.current && !userInteractingRef.current,
+        );
+        if (vg && shouldAutoRotate) {
           vg.group.rotation.y += dt * 0.25;
         }
         renderer.render(scene, camera);
@@ -928,8 +1038,48 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const ro = new ResizeObserver(onResize);
     ro.observe(mount);
 
-    const onDblClick = () => fitView();
+    const onPointerDownForTap = (e: PointerEvent) => {
+      if (!isTouchLikePointer(e) || e.isPrimary === false) return;
+      tapStartRef.current = { x: e.clientX, y: e.clientY, at: performance.now() };
+    };
+    const onPointerUpForTap = (e: PointerEvent) => {
+      if (!isTouchLikePointer(e) || e.isPrimary === false) return;
+      const now = performance.now();
+      const start = tapStartRef.current;
+      tapStartRef.current = null;
+      if (!start) return;
+
+      const travel = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+      if (travel > MOBILE_TAP_MAX_TRAVEL_PX || now - start.at > MOBILE_DOUBLE_TAP_MS) {
+        lastTapRef.current = null;
+        return;
+      }
+
+      const previousTap = lastTapRef.current;
+      const distanceFromPrevious = previousTap
+        ? Math.hypot(e.clientX - previousTap.x, e.clientY - previousTap.y)
+        : Number.POSITIVE_INFINITY;
+      const isDoubleTap =
+        previousTap != null &&
+        now - previousTap.at <= MOBILE_DOUBLE_TAP_MS &&
+        distanceFromPrevious <= MOBILE_DOUBLE_TAP_MAX_DISTANCE_PX;
+      if (!isDoubleTap) {
+        lastTapRef.current = { x: e.clientX, y: e.clientY, at: now };
+        return;
+      }
+
+      e.preventDefault();
+      lastTapRef.current = null;
+      toggleViewerSpinPreference();
+      requestRender();
+    };
+    const onDblClick = () => {
+      if (isMobileViewerEnv()) return;
+      fitView();
+    };
     const onContextMenu = (e: Event) => e.preventDefault();
+    renderer.domElement.addEventListener("pointerdown", onPointerDownForTap);
+    renderer.domElement.addEventListener("pointerup", onPointerUpForTap);
     renderer.domElement.addEventListener("dblclick", onDblClick);
     renderer.domElement.addEventListener("contextmenu", onContextMenu);
     controls.addEventListener("change", requestRender);
@@ -979,6 +1129,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
       exportCanvasRef.current = null;
       captureCanvasRef.current = null;
+      tapStartRef.current = null;
+      lastTapRef.current = null;
+      renderer.domElement.removeEventListener("pointerdown", onPointerDownForTap);
+      renderer.domElement.removeEventListener("pointerup", onPointerUpForTap);
       renderer.domElement.removeEventListener("dblclick", onDblClick);
       renderer.domElement.removeEventListener("contextmenu", onContextMenu);
       renderer.domElement.remove();
@@ -1011,27 +1165,47 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
-    autoRotateRef.current = Boolean(autoRotate);
+    autoRotateRef.current = Boolean(autoRotate && spinPreferenceEnabled);
     three.controls.autoRotate = false;
     if (autoRotate) requestRenderRef.current?.();
-  }, [autoRotate]);
+  }, [autoRotate, spinPreferenceEnabled]);
+
+  const controlButtonClass =
+    "mb-btn h-11 flex-1 gap-1.5 rounded-lg px-3 text-[12px] leading-none sm:h-8 sm:flex-none sm:px-2.5 sm:text-[11px]";
+  const controlGhostClass = `${controlButtonClass} ring-1 ring-border/60 bg-bg/[0.46] text-fg/85 hover:bg-bg/[0.64] hover:ring-border/80`;
+  const controlActiveClass = `${controlButtonClass} ring-1 ring-border/75 bg-card/65 text-fg hover:bg-card/80 hover:ring-border`;
+  const controlKeyClass =
+    "hidden h-5 min-w-5 items-center justify-center rounded-md border border-border/55 bg-bg/45 px-1.5 font-mono text-[10px] font-semibold leading-none text-muted/75 sm:inline-flex";
+  const activeControlKeyClass = `${controlKeyClass} border-border/60 bg-bg/55 text-fg/80`;
 
   return (
     <div
       ref={containerRef}
       data-mb-voxel-viewer="true"
-      className={`relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
+      className={`relative h-full w-full outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${effectivePanMode ? "cursor-move" : "cursor-grab active:cursor-grabbing"}`}
       tabIndex={0}
+      onPointerEnter={(e) => {
+        setPanModifierHeld(hasPanModifier(e));
+      }}
       onPointerDown={(e) => {
+        setPanModifierHeld(hasPanModifier(e));
         containerRef.current?.focus();
       }}
+      onPointerMove={(e) => {
+        setPanModifierHeld(hasPanModifier(e));
+      }}
+      onPointerLeave={() => {
+        setPanModifierHeld(false);
+      }}
       onBlur={() => {
-        setCtrlHeld(false);
+        setPanModifierHeld(false);
       }}
       onKeyDown={(e) => {
-        // OrbitControls already maps Ctrl+left-drag to pan when LEFT is ROTATE.
+        // OrbitControls already maps modifier+left-drag to pan when LEFT is ROTATE.
         // Flipping dragMode here inverts back to rotate due its modifier behavior.
-        if ((e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") && !e.repeat) setCtrlHeld(true);
+        if (isPanModifierKey(e)) {
+          setPanModifierHeld(hasPanModifier(e));
+        }
         if ((e.key === "r" || e.key === "R") && !e.repeat) {
           e.preventDefault();
           fitView();
@@ -1040,42 +1214,51 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           e.preventDefault();
           void toggleFullscreen();
         }
+        if ((e.key === "s" || e.key === "S") && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          e.preventDefault();
+          toggleViewerSpinPreference();
+          requestRenderRef.current?.();
+        }
       }}
       onKeyUp={(e) => {
-        if (e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight") setCtrlHeld(false);
+        if (isPanModifierKey(e)) setPanModifierHeld(hasPanModifier(e));
       }}
     >
       <div ref={mountRef} className="h-full w-full" />
 
       {showControls ? (
-        <div className="absolute inset-x-2.5 bottom-2.5 flex items-center gap-1 rounded-xl border border-border/60 bg-bg/70 p-1 backdrop-blur-md sm:inset-x-auto sm:bottom-auto sm:right-3 sm:top-3 sm:gap-2 sm:rounded-2xl sm:border-transparent sm:bg-transparent sm:p-0 sm:shadow-none sm:backdrop-blur-0">
-          <button
-            aria-pressed={dragMode === "pan" || (dragMode === "orbit" && ctrlHeld)}
-            aria-label={dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "Switch to rotate mode" : "Switch to move mode"}
-            className={`mb-btn h-9 flex-1 px-3 text-[12px] sm:h-9 sm:flex-none sm:px-3 sm:text-xs ${dragMode === "pan" || (dragMode === "orbit" && ctrlHeld) ? "mb-btn-primary" : "mb-btn-ghost"}`}
-            onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
-          >
-            <span>Move</span>
-            <span className="hidden sm:inline"><span className="mb-kbd">Ctrl</span></span>
-          </button>
-          <button
-            aria-label="Reset camera framing"
-            className="mb-btn mb-btn-ghost h-9 flex-1 px-3 text-[12px] sm:h-9 sm:flex-none sm:px-3 sm:text-xs"
-            onClick={fitView}
-          >
-            Reset <span className="hidden sm:inline"><span className="mb-kbd">R</span></span>
-          </button>
-          {supportsFullscreen || isFullscreen ? (
+        <>
+          <ViewerControlHint isPanMode={effectivePanMode} spinEnabled={Boolean(autoRotate && spinPreferenceEnabled)} />
+          <div className="absolute inset-x-2.5 bottom-2 flex items-center gap-1 rounded-xl border border-border/60 bg-bg/65 p-1 backdrop-blur-md sm:inset-x-auto sm:bottom-auto sm:right-3 sm:top-3 sm:gap-1.5 sm:rounded-full sm:border-transparent sm:bg-transparent sm:p-0 sm:shadow-none sm:backdrop-blur-0">
             <button
-              aria-label={isFullscreen ? "Exit fullscreen" : "Open fullscreen"}
-              className="mb-btn mb-btn-ghost h-9 flex-1 px-3 text-[12px] sm:h-9 sm:flex-none sm:px-3 sm:text-xs"
-              onClick={() => void toggleFullscreen()}
+              aria-pressed={effectivePanMode}
+              aria-label={effectivePanMode ? "Switch to rotate mode" : "Switch to pan mode"}
+              className={effectivePanMode ? controlActiveClass : controlGhostClass}
+              onClick={() => setDragMode((m) => (m === "pan" ? "orbit" : "pan"))}
             >
-              {isFullscreen ? "Exit" : "Expand"}{" "}
-              <span className="hidden sm:inline"><span className="mb-kbd">F</span></span>
+              <span>Pan</span>
+              <span className={effectivePanMode ? activeControlKeyClass : controlKeyClass}>Ctrl</span>
             </button>
-          ) : null}
-        </div>
+            <button
+              aria-label="Reset camera framing"
+              className={controlGhostClass}
+              onClick={fitView}
+            >
+              <span>Reset</span>
+              <span className={controlKeyClass}>R</span>
+            </button>
+            {supportsFullscreen || isFullscreen ? (
+              <button
+                aria-label={isFullscreen ? "Exit fullscreen" : "Open fullscreen"}
+                className={controlGhostClass}
+                onClick={() => void toggleFullscreen()}
+              >
+                <span>{isFullscreen ? "Exit" : "Expand"}</span>
+                <span className={controlKeyClass}>F</span>
+              </button>
+            ) : null}
+          </div>
+        </>
       ) : null}
     </div>
   );
