@@ -1300,10 +1300,11 @@ export function Arena() {
   }, [clearAutoFullHydrationRetryTimer, matchup?.id]);
 
   useEffect(() => {
+    // New matchup should always start at Build A on mobile.
+    programmaticMobileScrollRef.current = null;
+    setMobileBuildView("a");
     const el = cardsScrollRef.current;
     if (!el) return;
-    // New matchup should always start at Build A on mobile.
-    setMobileBuildView("a");
     el.scrollTo({ left: 0, behavior: "auto" });
   }, [matchup?.id]);
 
