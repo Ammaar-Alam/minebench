@@ -33,6 +33,14 @@ Choose the format based on where the build is going:
 | Mesh tools and slicers | STL | Geometry repair, slicers, 3D-print prep | No colors, block names, or materials |
 | Minecraft | `.schem` | WorldEdit/FAWE import | Requires a mod/plugin and can be large |
 
+## Example Imports
+
+MineBench exports can be inspected in general 3D tools and pasted into Minecraft worlds.
+
+| Blender GLB import | Minecraft WorldEdit import |
+| --- | --- |
+| ![MineBench fighter jet exported as GLB and imported into Blender](../.github/assets/docs/export-import/blender-glb-fighter-jet.png) | ![MineBench castle exported as a schematic and pasted into Minecraft with WorldEdit](../.github/assets/docs/export-import/minecraft-worldedit-castle.png) |
+
 ### JSON
 
 JSON is the native MineBench build format. Use it when you want to re-import, debug, archive, or inspect the exact `version/blocks/boxes/lines` payload that MineBench rendered.
