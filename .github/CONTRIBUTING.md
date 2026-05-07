@@ -32,6 +32,18 @@ Good benchmark prompts test spatial reasoning in interesting ways. To add prompt
 
 The UI is built with Next.js, React, Tailwind CSS, and Three.js. Improvements to the 3D viewer, voting experience, or overall design are welcome.
 
+### Add an Export Format
+
+Build export formats live under `lib/voxel/export/` and are called from the browser worker in `components/voxel/voxelBuildExport.worker.ts`.
+
+When adding a format:
+
+1. Reuse the validated `VoxelBuild` shape and palette block IDs.
+2. Keep conversion lazy and worker-backed so Arena and Sandbox rendering stay responsive.
+3. Preserve block identity through native block states, material names, or metadata.
+4. Add artifact checks to `scripts/verify-voxel-export.ts`.
+5. Update `docs/voxel-exec-raw-output.md` with import steps and format limits.
+
 ### Fix Bugs or Improve Documentation
 
 Bug fixes and documentation improvements are always appreciated. Check the [open issues](https://github.com/Ammaar-Alam/minebench/issues) for things to work on.

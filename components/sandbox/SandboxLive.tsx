@@ -869,6 +869,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         palette={palette}
         viewerRef={viewerRef}
         enableBuildJsonToggle
+        enableBuildExport={r?.status === "success"}
+        exportLabel={modelName}
+        exportPrompt={prompt}
         actions={
           <div className="flex items-center gap-1">
             <button

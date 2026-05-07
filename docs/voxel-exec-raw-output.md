@@ -192,8 +192,50 @@ There are two different JSON artifacts:
 
 MineBench executes the first and stores the second.
 
-## 8) Related docs
+## 8) Exporting builds
+
+Arena and Sandbox build cards can export the rendered build to these formats:
+
+- GLB (`.glb`) for Blender and other glTF tools. MineBench writes one glTF material per block type, with `extras.minebenchBlockId` and `extras.minecraftBlockState` metadata so downstream tools can inspect the original block mapping.
+- STL (`.stl`) for mesh and print workflows. STL is geometry-only, so block colors and material names are not part of the file.
+- Sponge schematic (`.schem`) for Minecraft. MineBench writes gzip-compressed Sponge v3 NBT, with `Width`, `Height`, `Length`, `Offset`, `Blocks.Palette`, and varint-packed `Blocks.Data` indexed as `x + z * Width + y * Width * Length`.
+
+Exporting uses the same validated `VoxelBuild` shape that the viewer receives. The exporter deduplicates positions, crops the schematic to the occupied bounds, and greedily merges visible faces per block type before writing GLB/STL geometry. This keeps large solid builds small and keeps conversion off the render path by running it in a browser worker.
+
+### Blender
+
+Use the build card Export menu and choose Blender. Import the downloaded `.glb` through Blender's glTF importer. Colors are stored as glTF material base colors. Transparent and cutout blocks are written with matching glTF alpha modes where the source block type supports it.
+
+### Minecraft
+
+Use the build card Export menu and choose Minecraft. MineBench exports `.schem` because it is the practical import format for full MineBench-scale builds through existing tools such as WorldEdit or FAWE. A custom MineBench importer plugin is not needed for the initial workflow.
+
+Typical WorldEdit flow:
+
+```text
+1. Put the downloaded file in the WorldEdit schematics folder.
+   - Bukkit, Spigot, Paper: plugins/WorldEdit/schematics
+   - Fabric, Forge, NeoForge: config/worldedit/schematics
+2. Run //schem load <filename>
+3. Stand where the build should appear and run //paste
+```
+
+For detailed client/server setup, FAWE guidance, Blender import notes, and troubleshooting, see `docs/build-export-import.md`.
+
+Vanilla structure-block `.nbt` export is intentionally not the primary path. It is useful for small structures, but it is a poor default for MineBench's larger grids and would not replace the existing WorldEdit import path.
+
+Reference docs:
+
+- Sponge schematic v3 specification: https://github.com/SpongePowered/Schematic-Specification
+- WorldEdit clipboard and schematic storage docs: https://worldedit.enginehub.org/en/latest/usage/clipboard/
+
+### Adding formats
+
+Add new export formats under `lib/voxel/export/`, wire them through `components/voxel/voxelBuildExport.worker.ts`, and extend `scripts/verify-voxel-export.ts`. Format code should not run on viewer mount, and it should preserve the block ID mapping either as materials, metadata, or the native block-state representation.
+
+## 9) Related docs
 
 - Ranking system: `docs/arena-ranking-system.md`
 - Policy layer: `docs/arena-ranking-validity-policy-v2.md`
+- Build export and import guide: `docs/build-export-import.md`
 - Prompt template: `docs/chatgpt-web-voxel-prompt.md`

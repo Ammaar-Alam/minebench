@@ -23,6 +23,7 @@ import type {
   VoxelViewerBuildProgress,
   VoxelViewerHandle,
 } from "@/components/voxel/VoxelViewer";
+import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { ModelLateralNav, PromptLateralNav } from "@/components/leaderboard/LateralNav";
@@ -2002,14 +2003,24 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   heightClass="h-[min(62vh,580px)] min-h-[18rem]"
                   viewerRef={modalViewerRef}
                   actions={
-                    modalExportTargets.length > 0 ? (
-                      <SandboxGifExportButton
-                        targets={modalExportTargets}
-                        promptText={activePrompt.promptText}
-                        cancelKey={`${activePrompt.promptId}:${activeBuildId ?? "none"}:${activeLoadedBuild?.variant ?? "none"}`}
-                        iconOnly
-                        label="Export GIF"
-                      />
+                    activeLoadedBuild ? (
+                      <>
+                        <VoxelBuildExportButton
+                          build={activeLoadedBuild.voxelBuild}
+                          palette={activeLoadedBuild.palette}
+                          fileLabel={data.model.displayName}
+                          promptText={activePrompt.promptText}
+                        />
+                        {modalExportTargets.length > 0 ? (
+                          <SandboxGifExportButton
+                            targets={modalExportTargets}
+                            promptText={activePrompt.promptText}
+                            cancelKey={`${activePrompt.promptId}:${activeBuildId ?? "none"}:${activeLoadedBuild.variant}`}
+                            iconOnly
+                            label="Export GIF"
+                          />
+                        ) : null}
+                      </>
                     ) : null
                   }
                   overlay={
