@@ -135,16 +135,6 @@
     color: hsl(var(--fg));
   }
 
-  @keyframes mb-swipe-nudge-right {
-    0%, 100% { transform: translateX(0); opacity: 0.5; }
-    50% { transform: translateX(3px); opacity: 0.9; }
-  }
-
-  @keyframes mb-swipe-nudge-left {
-    0%, 100% { transform: translateX(0); opacity: 0.5; }
-    50% { transform: translateX(-3px); opacity: 0.9; }
-  }
-
   @keyframes mb-fade-in-up {
     0% {
       opacity: 0;
@@ -1097,21 +1087,6 @@
 
   .mb-fade-in {
     animation: mb-fade-in-up 220ms ease-out both;
-  }
-
-  .mb-swipe-arrow-right {
-    animation: mb-swipe-nudge-right 2s ease-in-out infinite;
-  }
-
-  .mb-swipe-arrow-left {
-    animation: mb-swipe-nudge-left 2s ease-in-out infinite;
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .mb-swipe-arrow-right,
-    .mb-swipe-arrow-left {
-      animation: none;
-    }
   }
 
   .mb-caret {
