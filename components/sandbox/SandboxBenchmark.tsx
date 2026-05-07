@@ -1114,6 +1114,9 @@ export function SandboxBenchmark() {
             loadingMessage={loadingMessage}
             loadingProgress={isHydrating ? laneState.progress ?? undefined : undefined}
             viewerRef={viewerRef}
+            enableBuildExport={hasRenderableBuild && laneState.phase === "ready" && Boolean(build && model)}
+            exportLabel={title}
+            exportPrompt={selectedPromptText}
             actions={
               hasRenderableBuild && build && model ? (
                 <SandboxGifExportButton

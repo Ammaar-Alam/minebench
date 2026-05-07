@@ -2624,6 +2624,9 @@ export function Arena() {
                 loadingProgress={laneProgressA ?? undefined}
                 autoRotate={!isCoarsePointer || mobileBuildView === "a"}
                 viewerSize="arena"
+                enableBuildExport={Boolean(matchup?.a.build && !laneNeedsFullA)}
+                exportLabel={matchup?.a.model.displayName ?? "build-a"}
+                exportPrompt={promptText}
                 actions={
                   laneNeedsFullA ? (
                     <button
@@ -2681,6 +2684,9 @@ export function Arena() {
                 loadingProgress={laneProgressB ?? undefined}
                 autoRotate={!isCoarsePointer || mobileBuildView === "b"}
                 viewerSize="arena"
+                enableBuildExport={Boolean(matchup?.b.build && !laneNeedsFullB)}
+                exportLabel={matchup?.b.model.displayName ?? "build-b"}
+                exportPrompt={promptText}
                 actions={
                   laneNeedsFullB ? (
                     <button

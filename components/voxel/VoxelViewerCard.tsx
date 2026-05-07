@@ -11,6 +11,7 @@ import {
   type VoxelViewerBuildProgress,
   type VoxelViewerHandle,
 } from "@/components/voxel/VoxelViewer";
+import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -40,6 +41,11 @@ export function VoxelViewerCard({
   palette = "simple",
   viewerSize = "default",
   enableBuildJsonToggle = false,
+  enableBuildExport = false,
+  exportLabel,
+  exportPrompt,
+  exportDisabled,
+  exportDisabledReason,
   actions,
   viewerRef,
   skipValidation = false,
@@ -67,6 +73,11 @@ export function VoxelViewerCard({
   palette?: "simple" | "advanced";
   viewerSize?: "default" | "arena";
   enableBuildJsonToggle?: boolean;
+  enableBuildExport?: boolean;
+  exportLabel?: string;
+  exportPrompt?: string;
+  exportDisabled?: boolean;
+  exportDisabledReason?: string;
   actions?: ReactNode;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
@@ -299,7 +310,21 @@ export function VoxelViewerCard({
                   </button>
                 </div>
               ) : null}
-              {actions ? <div className="flex items-center">{actions}</div> : null}
+              {enableBuildExport || actions ? (
+                <div className="flex items-center gap-1.5">
+                  {enableBuildExport ? (
+                    <VoxelBuildExportButton
+                      build={build}
+                      palette={palette}
+                      fileLabel={exportLabel ?? title}
+                      promptText={exportPrompt}
+                      disabled={exportDisabled}
+                      disabledReason={exportDisabledReason}
+                    />
+                  ) : null}
+                  {actions}
+                </div>
+              ) : null}
               <div className="hidden text-right text-[11px] text-muted sm:block sm:text-xs">
                 {build ? (
                   <div className="items-center gap-2 font-mono sm:flex">
