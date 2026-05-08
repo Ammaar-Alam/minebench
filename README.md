@@ -12,6 +12,9 @@
   <a href="https://minebench.ai">
     <img alt="Live" src="https://img.shields.io/badge/Live-minebench.ai-0ea5e9?style=flat&logo=vercel&logoColor=white" />
   </a>
+  <a href="https://x.com/minebench_ai">
+    <img alt="MineBench on X" src="https://img.shields.io/badge/X-%40minebench_ai-000000?style=flat&logo=x&logoColor=white" />
+  </a>
   <a href="https://github.com/Ammaar-Alam/minebench/releases/latest">
     <img alt="Latest Release" src="https://img.shields.io/github/v/release/Ammaar-Alam/minebench?style=flat&color=22c55e&label=release&display_name=tag" />
   </a>
