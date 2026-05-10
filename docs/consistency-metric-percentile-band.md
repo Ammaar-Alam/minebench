@@ -1,222 +1,146 @@
-# Consistency Metric: Prompt-Local Percentiles, Shrunk ES Gap, and the Residual Alternative
+# Consistency Metric: Prompt-Strength Tail Gap
 
-Status: implemented on this branch
+MineBench reports `Consistency` as a `0-100` summary of how steadily a model stays in the same field-relative quality band across benchmark prompts.
 
-Last updated: April 23, 2026
+The metric is built from the same prompt-strength signal used on model detail pages:
 
-Scope: define the implemented public `Consistency` metric, explain the model-detail prompt graph change, document why raw prompt scores are schedule-confounded, and keep the residual-based alternative as a research comparison.
+- estimate each model's strength on each prompt from active head-to-head votes,
+- shrink sparse prompt estimates toward the model's global ability,
+- convert each prompt-local estimate into a percentile within the active model field,
+- compare the model's strongest and weakest prompt-strength tails.
 
-## Snapshot context
+Higher is steadier. Lower means the model has larger prompt-to-prompt swings.
 
-Everything below is tied to the April 22, 2026 production snapshot used in this pass.
+## Why Raw Prompt Scores Are Not Enough
 
-- active ranked leaderboard models: `38`
-- eligible prompts: `15`
-- current public production consistency values shown below come from `https://minebench.ai/api/leaderboard`
-- the implemented-metric numbers below come from the current branch codepath on the matching prod-clone snapshot used for local analysis on the same date
-
-These numbers will drift as new votes land.
-
-## What is implemented
-
-If MineBench wants `Consistency` to mean:
-
-- does this model stay in roughly the same field-relative quality band across prompts
-- does it avoid big highs and lows
-- does it get punished when one prompt is elite and another is weak
-
-the implemented public metric is:
-
-- **shrunk prompt-local strength percentile** as the prompt-page / graph primitive
-- **posterior-shrunk convex expected-shortfall gap** on those percentiles as the public `Consistency` score
-
-This is the GPT 5.4 Pro direction implemented as a production-grade empirical-Bayes approximation.
-
-The earlier residual-based metric is still useful, but it is better framed as an internal research diagnostic:
-
-- it measures prompt-to-prompt deviation from a model's own expected baseline
-- it does not align with how users read the prompt graph
-- it punishes models like `Gemini 3.1 Pro` more than the product meaning of "consistency" probably should
-
-## Why raw prompt scores are misleading
-
-MineBench's current raw prompt score is an observed head-to-head average on the exact schedule that happened to occur for that prompt:
+A raw prompt score is the average head-to-head outcome on that prompt:
 
 - win = `1.0`
-- loss = `0.0`
 - tie = `0.5`
-- `BOTH_BAD` excluded
+- loss = `0.0`
+- `BOTH_BAD` excluded from the skill signal
 
-That number is useful, but it is not an absolute prompt-quality percentile.
+That score is useful, but it depends heavily on the sampled opponents. MineBench matchmaking is coverage-aware and contender-heavy, so strong models often face other strong models on the same prompt. A model can have a modest raw score on a prompt while still being one of the best active models for that prompt.
 
-Because matchmaking is coverage-aware and contender-heavy, strong models often face other strong models on the same prompt. That can drag a raw prompt score down even when the build is still one of the best in the field.
+The model-detail page therefore separates two ideas:
 
-In the implemented branch, the public prompt-strength and consistency pipeline uses a single aligned population:
+- `Prompt strength`: field-relative percentile for that prompt.
+- `Observed score`: raw average against the sampled schedule.
 
-- eligible prompts only
-- decisive votes only (`A`, `B`, `TIE`)
-- active ranked models only on both sides of the comparison
+`Consistency` is derived from prompt strength, not from raw score alone, so the graph and leaderboard stat use the same interpretation.
 
-That alignment matters because prompt-strength percentiles, raw prompt averages used for spread, and consistency should all summarize the same cohort rather than mixing active-only prompt strength with historical votes against retired or disabled opponents.
+## Cohort
 
-### Gemini 3.1 Pro treehouse example
+The prompt-strength and consistency pipeline uses one aligned vote population:
 
-On the April 22, 2026 snapshot, under the implemented branch code:
+- active ranked models only,
+- arena-eligible prompts only,
+- decisive skill outcomes only (`A`, `B`, `TIE`),
+- comparisons where both sides are in the active ranked cohort.
 
-- observed treehouse score: `48.0%`
-- prompt-strength percentile: `86.5%`
-- prompt-strength rank: `#6 / 38`
+Using one cohort matters. Prompt strength, prompt spread, and model-detail summaries should not mix active-only evidence with historical votes against retired or disabled models.
 
-That is the core fallacy we found:
+## Statistical Target
 
-- the raw `48.0%` score looks like a mediocre treehouse build
-- the prompt-local paired-comparison evidence says it is still a top-tier treehouse build
-
-So the current large prompt number on the model detail page should not be raw observed score.
-
-## What should change on the model detail page
-
-The model detail page should separate two ideas:
-
-- `Prompt strength`: primary number
-- `Observed score`: secondary context
-
-### Primary prompt metric
-
-Use shrunk prompt-local percentile rank:
-
-- `100%` = best active model on that prompt after prompt-level shrinkage
-- `50%` = middle of the active field
-- `0%` = weakest active model on that prompt
-
-### Secondary prompt metric
-
-Keep the current observed score, but demote it:
-
-- raw head-to-head average against the sampled schedule
-
-### What the graph would mean
-
-The graph becomes a `Prompt strength curve`, not a raw prompt-score curve.
-
-For Gemini 3.1 Pro on the April 22 snapshot:
-
-- current raw observed curve range: about `48.1% -> 88.1%`
-- prompt-strength percentile curve range: about `81.1% -> 100.0%`
-
-So the page would stop implying:
-
-- "Gemini has several mediocre prompts"
-
-and start showing:
-
-- "Gemini is strong on almost every prompt, but not equally dominant on all of them"
-
-That is much closer to what users mean when they inspect the prompt breakdown.
-
-## Implemented formula
-
-The branch implementation uses an empirical-Bayes version of the GPT 5.4 Pro design.
-
-### Notation
-
-Throughout this document:
-
-- \(i, j\) index models
-- \(p\) indexes prompts
-- \(N_p\) is the number of active ranked models with usable prompt signal on prompt \(p\)
-- \(n_i\) is the number of retained prompts for model \(i\)
-- \(k_i = \max(1, \lceil 0.2 \cdot n_i \rceil)\) is the tail size used for model \(i\)
-- \(\alpha_i\) is model \(i\)'s global Bradley-Terry ability
-- \(\hat{\theta}_{i,p}\) is the raw prompt-local Bradley-Terry ability for model \(i\) on prompt \(p\)
-- \(s_{i,p}^2\) is the approximate posterior variance of \(\hat{\theta}_{i,p}\)
-- \(\tau_p^2\) is the between-model prompt variance used for shrinkage on prompt \(p\)
-- \(\rho_{i,p}\) is the shrinkage weight for model \(i\) on prompt \(p\)
-- \(\tilde{\theta}_{i,p}\) is the shrunk prompt-local ability
-- \(\tilde{r}_{i,p}\) is the rank induced by \(\tilde{\theta}_{i,p}\) on prompt \(p\)
-- \(\tilde{q}_{i,p}\) is the shrunk prompt-strength percentile shown in the UI
-
-All public prompt percentiles are on a `0-100` scale, where:
-
-- `100` = strongest active model on that prompt
-- `0` = weakest active model on that prompt
-
-### Statistical target
-
-The branch is trying to estimate:
+The metric estimates:
 
 \[
-\text{Consistency} \approx \text{how tightly model } i \text{ stays in the same field-relative quality band across prompts}
+\text{Consistency}_i \approx \text{how tightly model } i \text{ stays in the same field-relative quality band across prompts.}
 \]
 
-That is deliberately different from:
+This is deliberately different from:
 
-- raw prompt win-rate spread
-- deviation from the model's own expected baseline
-- a lower-tail-only robustness metric
+- raw prompt win-rate spread,
+- deviation from the model's own expected baseline,
+- lower-tail-only robustness,
+- ordinary rating uncertainty.
 
-### 1. Global prompt-agnostic ability
+## Notation
 
-Across all decisive votes on active prompts:
+- \(i, j\) index models.
+- \(p\) indexes prompts.
+- \(N_p\) is the number of active ranked models with usable prompt signal on prompt \(p\).
+- \(n_i\) is the number of retained prompts for model \(i\).
+- \(k_i = \max(1, \lceil 0.2 \cdot n_i \rceil)\) is the tail size used for model \(i\).
+- \(\alpha_i\) is model \(i\)'s global Bradley-Terry ability.
+- \(\hat{\theta}_{i,p}\) is model \(i\)'s raw prompt-local Bradley-Terry ability on prompt \(p\).
+- \(s_{i,p}^2\) is the approximate posterior variance of \(\hat{\theta}_{i,p}\).
+- \(\tau_p^2\) is the between-model prompt variance used for shrinkage on prompt \(p\).
+- \(\rho_{i,p}\) is the shrinkage weight for model \(i\) on prompt \(p\).
+- \(\tilde{\theta}_{i,p}\) is the shrunk prompt-local ability.
+- \(\tilde{r}_{i,p}\) is the rank induced by \(\tilde{\theta}_{i,p}\) on prompt \(p\).
+- \(\tilde{q}_{i,p}\) is the shrunk prompt-strength percentile shown in the UI.
 
-1. fit a global Bradley-Terry model
-2. get a global latent ability `alpha(i)` for each model `i`
+All prompt-strength percentiles are on a `0-100` scale:
 
-This acts as the shrinkage anchor.
+- `100` = strongest active model on that prompt,
+- `50` = middle of the active field,
+- `0` = weakest active model on that prompt.
 
-Formally, for a decisive comparison between models \(i\) and \(j\),
+## 1. Global Ability
+
+Across all retained comparisons, MineBench fits a global Bradley-Terry model and estimates one prompt-agnostic latent ability \(\alpha_i\) for each model.
+
+For a decisive comparison between models \(i\) and \(j\):
 
 \[
-\Pr(i \succ j) = \frac{\exp(\alpha_i)}{\exp(\alpha_i) + \exp(\alpha_j)}
+\Pr(i \succ j) =
+\frac{\exp(\alpha_i)}
+{\exp(\alpha_i) + \exp(\alpha_j)}
 \]
 
-with the usual Bradley-Terry location constraint handled numerically by centering the fitted latent scores.
+The fitted scores are centered to handle the usual Bradley-Terry location constraint. These global abilities act as shrinkage anchors for sparse prompt-local estimates.
 
-### 2. Prompt-local ability
+## 2. Prompt-Local Ability
 
-For each prompt `p`:
-
-1. fit a prompt-local Bradley-Terry model on decisive votes for that prompt
-2. estimate prompt-local latent ability `theta_hat(i, p)`
-3. estimate an approximate posterior variance `s(i, p)^2` from the prompt-level comparison graph
-4. align disconnected prompt components back onto the global `alpha(i)` scale before shrinkage
-
-For a decisive comparison on prompt \(p\),
+For each prompt \(p\), MineBench fits a prompt-local Bradley-Terry model on that prompt's retained votes:
 
 \[
-\Pr(i \succ j \mid p) = \frac{\exp(\hat{\theta}_{i,p})}{\exp(\hat{\theta}_{i,p}) + \exp(\hat{\theta}_{j,p})}
+\Pr(i \succ j \mid p) =
+\frac{\exp(\hat{\theta}_{i,p})}
+{\exp(\hat{\theta}_{i,p}) + \exp(\hat{\theta}_{j,p})}
 \]
 
-The implementation estimates \(s_{i,p}^2\) from the stabilized inverse information matrix of the prompt-local Bradley-Terry fit, with a small variance floor to avoid singular behavior on sparse prompt graphs.
+The implementation also estimates \(s_{i,p}^2\), an approximate posterior variance for each prompt-local ability, from the stabilized inverse information matrix of the prompt-local comparison graph. Disconnected prompt components are aligned back onto the global \(\alpha_i\) scale before shrinkage.
 
-### 3. Prompt-level shrinkage
+## 3. Prompt-Level Shrinkage
 
-For each prompt `p`, estimate a between-model prompt variance:
+Prompt-level estimates can be noisy when a prompt has few votes or an uneven comparison graph. MineBench shrinks each prompt-local ability toward the model's global ability.
 
-Estimate the prompt-level between-model variance:
+First estimate prompt-level between-model variance:
 
 \[
-\tau_p^2 = \max\left(0, \operatorname{Var}\big(\hat{\theta}_{i,p} - \alpha_i\big) - \operatorname{mean}(s_{i,p}^2)\right)
+\tau_p^2 =
+\max\left(
+0,
+\operatorname{Var}(\hat{\theta}_{i,p} - \alpha_i)
+-
+\operatorname{mean}(s_{i,p}^2)
+\right)
 \]
 
-Then shrink each prompt-local estimate toward the global ability:
+Then compute each shrinkage weight:
 
 \[
-\rho_{i,p} = \frac{\tau_p^2}{\tau_p^2 + s_{i,p}^2}
+\rho_{i,p} =
+\frac{\tau_p^2}{\tau_p^2 + s_{i,p}^2}
 \]
+
+And the shrunk prompt-local ability:
 
 \[
-\tilde{\theta}_{i,p} = \alpha_i + \rho_{i,p}\big(\hat{\theta}_{i,p} - \alpha_i\big)
+\tilde{\theta}_{i,p} =
+\alpha_i + \rho_{i,p}(\hat{\theta}_{i,p} - \alpha_i)
 \]
 
-Finally:
+High-confidence prompt evidence moves farther from the global anchor. Sparse or noisy prompt evidence stays closer to the model's global ability.
 
-1. rerank models on prompt `p` by `theta_tilde(i, p)`
-2. convert that rank to a percentile `q_tilde(i, p)`
+## 4. Prompt-Strength Percentile
 
-That percentile is the main `Prompt strength` number shown on the model detail page.
+For each prompt \(p\):
 
-The percentile mapping is:
+1. rank active models by \(\tilde{\theta}_{i,p}\),
+2. convert each rank to a percentile.
 
 \[
 \tilde{q}_{i,p} =
@@ -226,44 +150,69 @@ The percentile mapping is:
 \end{cases}
 \]
 
-### 4. Public consistency
+This percentile is the primary `Prompt strength` value on model detail pages.
 
-For each model `i`:
+## 5. Public Consistency
 
-1. keep prompts with at least `2` decisive votes
-2. if fewer than `5` prompts remain, `consistency = null`
-3. sort `q_tilde(i, p)` ascending
-4. let `k = max(1, ceil(0.2 * n))`
-5. compute:
+For each model \(i\):
+
+1. keep prompts with at least `2` decisive votes,
+2. return `null` if fewer than `5` prompts remain,
+3. sort \(\tilde{q}_{i,p}\) from weakest to strongest,
+4. let \(k_i = \max(1, \lceil 0.2 \cdot n_i \rceil)\),
+5. compare the bottom and top prompt-strength tails.
+
+Let \(\tilde{q}_{i,(t)}\) be the \(t\)-th ordered retained prompt-strength percentile:
 
 \[
-L_i = \frac{1}{k_i}\sum_{t=1}^{k_i} \tilde{q}_{i,(t)}
+L_i =
+\frac{1}{k_i}
+\sum_{t=1}^{k_i} \tilde{q}_{i,(t)}
 \]
 
 \[
-U_i = \frac{1}{k_i}\sum_{t=n_i-k_i+1}^{n_i} \tilde{q}_{i,(t)}
+U_i =
+\frac{1}{k_i}
+\sum_{t=n_i-k_i+1}^{n_i} \tilde{q}_{i,(t)}
 \]
 
 \[
 G_i = U_i - L_i
 \]
 
+The public score is:
+
 \[
 \operatorname{Consistency}_i =
-\operatorname{clamp}\left(100 - G_i - 0.75 \cdot \frac{G_i^2}{100}, 0, 100\right)
+\operatorname{clamp}
+\left(
+100 - G_i - 0.75 \cdot \frac{G_i^2}{100},
+0,
+100
+\right)
 \]
 
-where \(\tilde{q}_{i,(t)}\) is the \(t\)-th order statistic of the retained shrunk prompt-strength percentiles for model \(i\).
+This mapping is intentionally convex:
 
-This gives the intended behavior:
+- small prompt-band gaps only lightly affect stable models,
+- large prompt-band gaps are penalized more strongly,
+- the score remains bounded and easy to read on a `0-100` scale.
 
-- small prompt-band gaps barely move elite stable models
-- large prompt-band gaps get punished materially harder
-- the prompt graph and the public consistency score now speak the same language
+## Relationship To Other Leaderboard Stats
 
-## Candidate B: schedule-adjusted residual tail span
+`Consistency` is not a replacement for the rest of the leaderboard:
 
-This was the strongest earlier alternative.
+- `Rating` captures head-to-head skill.
+- `RD` captures rating uncertainty.
+- `Spread` captures raw prompt-score dispersion.
+- `Avg score` is the arithmetic mean of retained raw prompt averages.
+- `Consistency` summarizes the gap between strongest and weakest prompt-strength tails.
+
+The separation is important because a model can be strong but uneven, weaker but steady, or high-variance because of limited evidence.
+
+## Alternative Considered: Schedule-Adjusted Residual Span
+
+The strongest alternative was a residual-based metric that asks whether a model overperforms or underperforms its expected baseline on each prompt.
 
 For each decisive vote:
 
@@ -277,14 +226,17 @@ r_{i,v} = y_{i,v} - e_{i,v}
 
 where:
 
-- \(C_i\) is the conservative rating for model \(i\)
-- \(y_{i,v} \in \{1, 0.5, 0\}\) is the observed decisive vote score for model \(i\) on vote \(v\)
+- \(C_i\) is the conservative rating for model \(i\),
+- \(y_{i,v} \in \{1, 0.5, 0\}\) is the observed vote score for model \(i\).
 
-For each prompt, average those residuals. Then for each model:
+For each prompt:
 
 \[
-\bar{r}_{i,p} = \operatorname{mean}_{v \in p}(r_{i,v})
+\bar{r}_{i,p} =
+\operatorname{mean}_{v \in p}(r_{i,v})
 \]
+
+Then:
 
 \[
 \operatorname{span}_i =
@@ -294,49 +246,35 @@ For each prompt, average those residuals. Then for each model:
 \]
 
 \[
-x_i = \frac{\min(0.5, \operatorname{span}_i)}{0.5}
+x_i =
+\frac{\min(0.5, \operatorname{span}_i)}{0.5}
 \]
 
 \[
-\operatorname{Consistency}^{\text{residual}}_i
-=
+\operatorname{Consistency}^{\text{residual}}_i =
 \operatorname{round}\left(100(1 - x_i^2), 1\right)
 \]
 
-What it measures well:
+This residual metric is valuable as a research diagnostic:
 
-- prompt-to-prompt deviation from a model's expected baseline
-- genuinely spiky models get punished hard
+- it measures prompt-to-prompt deviation from a model's expected baseline,
+- it catches models that are unusually spiky relative to their own rating,
+- it is harsher when a prompt outcome is surprising after schedule adjustment.
 
-Why it is not the best public stat:
+It is not the headline public stat because it answers a different question. A model can underperform its own baseline on a prompt and still be one of the best models in the field on that prompt. The public UI is easier to interpret when the prompt graph and leaderboard consistency both use field-relative prompt strength.
 
-- it is about relative overperformance vs baseline, not field-relative prompt quality
-- it can make elite models look too inconsistent when a prompt is still strong in absolute field terms
-- it no longer matches the meaning of the prompt graph if the graph is percentile-based
+## Historical Validation Snapshot
 
-## Why Candidate A is the better public choice
+The current public direction was validated against an April 22, 2026 production snapshot:
 
-Candidate A fixes the exact user-facing problem that triggered this work:
+- active ranked leaderboard models: `38`,
+- eligible prompts: `15`,
+- baseline public consistency values from `https://minebench.ai/api/leaderboard`,
+- comparison values computed on the same vote cohort used for the metric rollout.
 
-- a prompt like Gemini 3.1 Pro treehouse should not look weak just because its sampled opponents were brutal
+These numbers are historical and will drift as new votes, models, and prompts are added.
 
-Compared with the residual-based metric, the implemented GPT-style metric:
-
-- keeps `GPT 5.4 Pro` and `Gemini 3.1 Pro` in a much more plausible range
-- still punishes models like `Kimi K2.6` and `Grok 4.20` for real prompt-band swings
-- uses the same prompt-quality primitive as the prompt graph
-
-The residual metric is still worth keeping around in research notes and internal analysis.
-
-## April 22, 2026 leaderboard comparison
-
-Columns:
-
-- `Current` = live public leaderboard consistency on April 22, 2026
-- `Implemented GPT metric` = the current branch implementation
-- `Residual alternative` = schedule-adjusted residual tail-span metric
-
-| Rank | Model | Current | Implemented GPT metric | Delta | Residual alternative | Delta |
+| Rank | Model | Previous public score | Prompt-strength tail gap | Delta | Residual alternative | Delta |
 |---:|---|---:|---:|---:|---:|---:|
 | 1 | GPT 5.4 Pro | 87 | 97.2 | +10.2 | 89.0 | +2.0 |
 | 2 | Gemini 3.1 Pro | 80 | 86.2 | +6.2 | 68.0 | -12.0 |
@@ -377,62 +315,17 @@ Columns:
 | 37 | Llama 4 Maverick | 89 | 90.4 | +1.4 | 91.6 | +2.6 |
 | 38 | GPT 5 Nano | 93 | 95.3 | +2.3 | 96.7 | +3.7 |
 
-## How to read the comparison
+The snapshot comparison showed the intended split:
 
-The biggest signal from the table is:
+- elite models with strong field-relative prompt results were no longer made to look weak solely because they faced difficult sampled opponents,
+- genuinely uneven models still received materially lower consistency scores,
+- the residual alternative remained useful for analyzing overperformance and underperformance, but not as the clearest public leaderboard stat.
 
-- the implemented GPT-style metric materially fixes the "Gemini looks unfairly low" problem
-- the residual plan remains much harsher on schedule-confounded elite models
+## References
 
-Concrete examples:
-
-- `GPT 5.4 Pro`: `87 -> 97.2` under the implemented metric, only `89.0` under the residual alternative
-- `Gemini 3.1 Pro`: `80 -> 86.2` under the implemented metric, but `68.0` under the residual alternative
-- `Kimi K2.6`: `75 -> 50.0` under the implemented metric and `48.3` under the residual alternative
-- `Grok 4.20`: `77 -> 54.2` under the implemented metric and `61.1` under the residual alternative
-
-So the two candidates are not answering the same question:
-
-- implemented GPT-style metric: field-relative prompt-band steadiness
-- residual alternative: deviation from expected baseline
-
-## Product split
-
-This branch implements the clean public split:
-
-1. model detail graph primary value = shrunk prompt-strength percentile
-2. prompt cards primary value = shrunk prompt-strength percentile
-3. observed prompt score stays visible, but secondary
-4. public `Consistency` = shrunk convex ES-gap on prompt-strength percentiles
-5. `Spread` stays raw
-6. `Avg score` stays raw
-
-Formally:
-
-- `Prompt strength` on prompt \(p\) is \(\tilde{q}_{i,p}\)
-- public `Consistency` is a tail-gap functional of \(\tilde{q}_{i,p}\)
-- `Spread` is the population standard deviation of the retained raw prompt averages
-- `Avg score` is the arithmetic mean of those retained raw prompt averages
-
-## Secondary research metric
-
-The residual-based score is still worth preserving, just not as the headline public metric.
-
-Best use:
-
-- internal volatility diagnostic
-- model-evaluation notes
-- "does this model overperform or underperform its own baseline on certain prompts"
-
-Not the best use:
-
-- the main public `Consistency` stat on the leaderboard
-
-## Companion references
-
-- leaderboard API: `app/api/leaderboard/route.ts`
-- leaderboard/detail aggregation: `lib/arena/stats.ts`
-- rating expectation helper: `lib/arena/rating.ts`
-- model detail UI: `components/leaderboard/ModelDetail.tsx`
-- leaderboard UI: `components/leaderboard/Leaderboard.tsx`
-- system doc: `docs/arena-ranking-system.md`
+- Leaderboard aggregation: `lib/arena/stats.ts`
+- Leaderboard API: `app/api/leaderboard/route.ts`
+- Rating expectation helper: `lib/arena/rating.ts`
+- Model detail UI: `components/leaderboard/ModelDetail.tsx`
+- Leaderboard UI: `components/leaderboard/Leaderboard.tsx`
+- Ranking system overview: `docs/arena-ranking-system.md`

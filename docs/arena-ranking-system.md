@@ -385,12 +385,12 @@ G_i = U_i - L_i
 \operatorname{clamp}\left(100 - G_i - 0.75 \cdot \frac{G_i^2}{100}, 0, 100\right)
 \]
 
-See [Consistency Metric (Prompt-Local Percentiles + Shrunk ES Gap)](./consistency-metric-percentile-band.md) for:
+See [Consistency Metric: Prompt-Strength Tail Gap](./consistency-metric-percentile-band.md) for:
 
-- the Gemini treehouse confound example
-- the implemented empirical-Bayes shrinkage path
+- the schedule-confounding problem
+- the empirical-Bayes shrinkage path
 - the residual-based alternative
-- the April 22, 2026 full leaderboard comparison table
+- the April 22, 2026 validation snapshot
 
 So the intended public split is:
 
