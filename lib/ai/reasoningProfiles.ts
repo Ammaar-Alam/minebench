@@ -292,7 +292,9 @@ export function openRouterReasoningEffortAttempts(
   if (modelId.startsWith("google/gemini-3")) {
     return descendingAttempts(
       label,
-      isGemini3FlashFamily(modelId) ? ["high", "medium", "low", "minimal"] : ["high", "low"],
+      isGemini3FlashFamily(modelId)
+        ? ["high", "medium", "low", "minimal"]
+        : ["high", "medium", "low"],
       override,
     );
   }
