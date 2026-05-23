@@ -1,7 +1,8 @@
 export type AnthropicAdaptiveEffort = "low" | "medium" | "high" | "max";
+export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 export type GeminiThinkingConfig = {
-  thinkingLevel?: "low" | "high";
+  thinkingLevel?: GeminiThinkingLevel;
   thinkingBudget?: number;
 };
 
@@ -99,9 +100,14 @@ export function geminiThinkingConfigForModel(
 
   if (modelId.startsWith("gemini-3")) {
     if (!normalized) return { thinkingLevel: "high" };
-    if (normalized !== "high" && normalized !== "low") {
+    if (
+      normalized !== "high" &&
+      normalized !== "medium" &&
+      normalized !== "low" &&
+      normalized !== "minimal"
+    ) {
       throw new Error(
-        `Gemini model ${modelId} does not support reasoning '${override}'. Supported values: high, low.`,
+        `Gemini model ${modelId} does not support reasoning '${override}'. Supported values: high, medium, low, minimal.`,
       );
     }
     return { thinkingLevel: normalized };

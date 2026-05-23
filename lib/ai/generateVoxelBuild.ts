@@ -69,6 +69,9 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   // gpt-5-pro alias remaining at 272k.
   if (modelId === "gpt-5-pro") return 272_000;
   if (modelId.startsWith("gpt-5")) return 128_000;
+  if (modelId === "gemini-3.5-flash" || modelId === "google/gemini-3.5-flash") {
+    return 65_536;
+  }
   if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
   if (
     modelId === "deepseek-v4-pro" ||
@@ -236,6 +239,8 @@ function providerRequestTraceLine(opts: {
           ? 0.6
           : 1.0
         : 0.6
+      : opts.route === "direct" && opts.provider === "gemini" && opts.modelId.startsWith("gemini-3")
+      ? "default"
       : DEFAULT_TEMPERATURE;
   return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${temperature}.`;
 }
