@@ -40,6 +40,7 @@ import {
 } from "@/lib/ai/tools/voxelExec";
 
 const INT_ENV_MAX_OUTPUT_TOKENS = "MINEBENCH_MAX_OUTPUT_TOKENS";
+const FRESH_RETRY_ATTEMPTS_BEFORE_REPAIR = 3;
 
 function parseOptionalIntEnvVar(name: string): number | undefined {
   const raw = process.env[name];
@@ -241,6 +242,7 @@ function providerRequestTraceLine(opts: {
 }
 
 type DirectProvider = ModelCatalogEntry["provider"] | "custom";
+type GenerationFailureKind = "none" | "provider" | "model_output";
 
 type ResolvedModel = {
   key: string;
@@ -282,6 +284,22 @@ function isDeterministicStructuredSchemaProviderError(message: string): boolean 
     (m.includes("structured output") && m.includes("not supported")) ||
     (m.includes("structured output") && m.includes("invalid"))
   );
+}
+
+function retryPromptModeForAttempt(opts: {
+  attempt: number;
+  lastFailureKind: GenerationFailureKind;
+  previousText: string;
+}): "fresh" | "repair" {
+  if (opts.attempt <= FRESH_RETRY_ATTEMPTS_BEFORE_REPAIR) return "fresh";
+  if (opts.lastFailureKind !== "model_output") return "fresh";
+  if (opts.previousText.trim().length === 0) return "fresh";
+  return "repair";
+}
+
+function formatRetryReason(error: string, promptMode: "fresh" | "repair"): string {
+  const trimmed = error.trim() || "Generation failed";
+  return `${trimmed}; retrying ${promptMode === "repair" ? "with repair feedback" : "from scratch"}`;
 }
 
 function normalizeApiKey(raw: string | undefined): string | null {
@@ -916,11 +934,17 @@ export async function generateVoxelBuild(
 
   let previousText = "";
   let lastError = "";
+  let lastFailureKind: GenerationFailureKind = "none";
   const start = Date.now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const promptMode = retryPromptModeForAttempt({
+      attempt,
+      lastFailureKind,
+      previousText,
+    });
     const user =
-      attempt === 1
+      promptMode === "fresh"
         ? buildUserPrompt(params.prompt)
         : buildRepairPrompt({
             error: lastError || "Invalid JSON",
@@ -931,7 +955,7 @@ export async function generateVoxelBuild(
             ? `\n\nReminder: return ONLY the ${VOXEL_EXEC_TOOL_NAME} tool call JSON (not the build JSON).`
             : "");
 
-    if (attempt > 1) params.onRetry?.(attempt, lastError);
+    if (attempt > 1) params.onRetry?.(attempt, formatRetryReason(lastError, promptMode));
 
     try {
       const { text } = await providerGenerateText({
@@ -954,6 +978,7 @@ export async function generateVoxelBuild(
       const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
       if (!json) {
         lastError = "Could not find a valid JSON object in the response";
+        lastFailureKind = "model_output";
         continue;
       }
 
@@ -962,35 +987,49 @@ export async function generateVoxelBuild(
             const parsedCall = voxelExecToolCallSchema.safeParse(json);
             if (!parsedCall.success) {
               lastError = parsedCall.error.message;
+              lastFailureKind = "model_output";
               return null;
             }
 
             const call = parsedCall.data;
             if (call.input.gridSize !== params.gridSize) {
               lastError = `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})`;
+              lastFailureKind = "model_output";
               return null;
             }
             if (call.input.palette !== params.palette) {
               lastError = `Tool call palette mismatch (${call.input.palette} vs ${params.palette})`;
+              lastFailureKind = "model_output";
               return null;
             }
 
-            const run = runVoxelExec({
-              code: call.input.code,
-              gridSize: params.gridSize,
-              palette: params.palette,
-              seed: call.input.seed,
-            });
+            let run: ReturnType<typeof runVoxelExec>;
+            try {
+              run = runVoxelExec({
+                code: call.input.code,
+                gridSize: params.gridSize,
+                palette: params.palette,
+                seed: call.input.seed,
+              });
+            } catch (err) {
+              lastError = err instanceof Error ? err.message : "voxel.exec failed";
+              lastFailureKind = "model_output";
+              return null;
+            }
 
             return run.build;
           })()
         : json;
 
-      if (!buildJson) continue;
+      if (!buildJson) {
+        lastFailureKind = "model_output";
+        continue;
+      }
 
       const validated = validateParsedJson(buildJson, paletteDefs, params.gridSize);
       if (!validated.ok) {
         lastError = validated.error;
+        lastFailureKind = "model_output";
         continue;
       }
 
@@ -1000,11 +1039,13 @@ export async function generateVoxelBuild(
       if (blockCount === 0) {
         lastError =
           "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
+        lastFailureKind = "model_output";
         continue;
       }
 
       if (blockCount < minBlocks) {
         lastError = `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
+        lastFailureKind = "model_output";
         continue;
       }
 
@@ -1016,11 +1057,13 @@ export async function generateVoxelBuild(
 
         if (maxFootprintSpan < minFootprint) {
           lastError = `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.`;
+          lastFailureKind = "model_output";
           continue;
         }
 
         if (bounds.spanY < minHeight) {
           lastError = `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.`;
+          lastFailureKind = "model_output";
           continue;
         }
       }
@@ -1028,6 +1071,7 @@ export async function generateVoxelBuild(
       const spec = parseVoxelBuildSpec(buildJson);
       if (!spec.ok) {
         lastError = spec.error;
+        lastFailureKind = "model_output";
         continue;
       }
 
@@ -1042,6 +1086,7 @@ export async function generateVoxelBuild(
       };
     } catch (err) {
       lastError = err instanceof Error ? err.message : "Provider request failed";
+      lastFailureKind = "provider";
       // Avoid expensive duplicate retries when the upstream likely processed work
       // but the client timed out waiting for headers/body.
       if (isBilledTimeoutStyleProviderError(lastError)) break;

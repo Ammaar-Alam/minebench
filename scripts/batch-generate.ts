@@ -280,11 +280,21 @@ function getEnabledModels(): ModelKey[] {
 }
 
 function getCandidateModels(modelFilters: string[]): ModelKey[] {
-  // If the user is explicitly filtering by model, include disabled models too so
-  // existing builds (e.g. benchmark-only models) can be uploaded/status-checked.
-  // Generation will still be gated elsewhere unless the user explicitly requests it.
-  if (modelFilters.length > 0) return MODEL_CATALOG.map((m) => m.key);
-  return getEnabledModels();
+  const enabledModels = getEnabledModels();
+  if (modelFilters.length === 0) return enabledModels;
+
+  // Exact filters may target disabled historical models for status/upload checks,
+  // but broad family filters should not revive deprecated models.
+  const normalizedFilters = new Set(modelFilters.map((filter) => filter.trim().toLowerCase()).filter(Boolean));
+  const exactDisabledMatches = MODEL_CATALOG.filter((model) => !model.enabled)
+    .filter((model) => {
+      const slug = MODEL_SLUG[model.key].toLowerCase();
+      const key = model.key.toLowerCase();
+      return normalizedFilters.has(slug) || normalizedFilters.has(key);
+    })
+    .map((model) => model.key);
+
+  return Array.from(new Set([...enabledModels, ...exactDisabledMatches]));
 }
 
 function getAllPromptSlugs(): string[] {

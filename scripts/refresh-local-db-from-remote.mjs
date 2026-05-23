@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import readline from "node:readline";
 import dotenv from "dotenv";
 
 const repoRoot = process.cwd();
@@ -52,7 +53,36 @@ function normalizePostgresUrlForCli(urlString) {
   return url.toString();
 }
 
-function main() {
+async function sanitizeDumpFile(filePath) {
+  const sanitizedPath = `${filePath}.sanitized`;
+  const input = fs.createReadStream(filePath, { encoding: "utf8" });
+  const output = fs.createWriteStream(sanitizedPath, { encoding: "utf8" });
+  const lines = readline.createInterface({ input, crlfDelay: Infinity });
+
+  try {
+    for await (const line of lines) {
+      if (line === "SET transaction_timeout = 0;") continue;
+      if (line === "CREATE SCHEMA public;") continue;
+      if (/^ALTER SCHEMA public OWNER TO .*;$/.test(line)) continue;
+      if (!output.write(`${line}\n`)) {
+        await new Promise((resolve) => output.once("drain", resolve));
+      }
+    }
+  } finally {
+    lines.close();
+  }
+
+  await new Promise((resolve, reject) => {
+    output.end((err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+
+  fs.renameSync(sanitizedPath, filePath);
+}
+
+async function main() {
   const remoteEnv = parseEnvFile(path.join(repoRoot, ".env"));
   const localEnv = parseEnvFile(path.join(repoRoot, ".env.localdb.local"));
 
@@ -88,12 +118,7 @@ function main() {
     normalizedRemoteDirectUrl,
   ]);
 
-  const sanitizedSql = fs
-    .readFileSync(tmpDumpPath, "utf8")
-    .replace(/^SET transaction_timeout = 0;\n/gm, "")
-    .replace(/^CREATE SCHEMA public;\n/gm, "")
-    .replace(/^ALTER SCHEMA public OWNER TO .*;\n/gm, "");
-  fs.writeFileSync(tmpDumpPath, sanitizedSql, "utf8");
+  await sanitizeDumpFile(tmpDumpPath);
 
   run(psqlBin, [
     normalizedLocalDirectUrl,
@@ -115,7 +140,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } finally {
   if (fs.existsSync(tmpDumpPath)) {
     fs.unlinkSync(tmpDumpPath);

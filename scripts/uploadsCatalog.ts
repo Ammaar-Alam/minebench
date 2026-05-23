@@ -21,7 +21,7 @@ export const PROMPT_MAP: Record<string, string> = {
   worldtree:
     "A massive world tree: an enormous trunk with roots visible above ground forming archways, multiple levels of thick branches like platforms, glowing fruit hanging from smaller branches, and vines draping down",
   floating:
-    "A floating island ecosystem: a chunk of earth suspended in air with waterfalls pouring off multiple edges, a small forest on top, exposed roots and rocks hanging underneath, and smaller floating rocks nearby connected by ancient chain bridges",
+    "A floating island ecosystem: a chunk of earth suspended in air with waterfalls pouring off multiple edges, a small forest on top (with a larger central tree), exposed roots and rocks hanging underneath, and smaller floating rocks nearby connected by ancient chain bridges.",
   shipwreck:
     "An underwater shipwreck: a wooden galleon on its side on the ocean floor, holes in the hull, coral and seaweed growing on it, treasure chests spilling gold, and fish swimming around",
   phoenix:
@@ -29,6 +29,27 @@ export const PROMPT_MAP: Record<string, string> = {
   knight: "A knight in armor",
   castle:
     "A medieval stone castle with curtain walls forming a square, four tall corner towers with battlements, a central keep, a gatehouse with an archway and portcullis, and a surrounding moat with a small drawbridge.",
+  arcade:
+    "A classic arcade cabinet with a joystick and three buttons on the control panel, a screen showing simple graphics, coin slot on the front, and artwork on the sides",
+  astronaut: "An astronaut",
+  "fighter-jet": "A fighter jet",
+  "figure-skater": "A figure skater performing a Biellmann spin",
+  "formula-one": "A Formula One car",
+  pelican: "A pelican riding a bicycle",
+  globe: "A fully accurate globe of the Earth",
+  shuttle:
+    "A space shuttle on a launch pad with booster rockets, gantry arms, flame trench, and service tower",
+  analog_clock: "An analog clock showcasing the time of 1:17 and 47 seconds",
+  "nyc-skyline": "An accurate representation of the New York City skyline",
+  "chess-game":
+    "A chess game in progress with captured pieces beside the board, and one king in check",
+  "snow-globe": "A snow globe containing a tiny winter village",
+  "solar-system": "An accurate representation of the Solar System",
+  macbook: "A fully accurate MacBook home screen",
+  "integral-chalkboard":
+    "A classroom chalkboard showing the solved integral of x squared from 0 to 3, with the full work written on the board",
+  pythagorean: "A representation of the Pythagorean theorem",
+  "golden-gate-bridge": "The Golden Gate Bridge",
 };
 
 // Model key to short filename slug.

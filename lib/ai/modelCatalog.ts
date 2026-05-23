@@ -186,6 +186,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "GPT OSS 120B",
     enabled: true,
     openRouterModelId: "openai/gpt-oss-120b",
+    forceOpenRouter: true,
   },
   {
     key: "anthropic_claude_4_5_sonnet",
