@@ -26,6 +26,10 @@ function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | und
   return undefined;
 }
 
+function usesDefaultSampling(modelId: string): boolean {
+  return modelId.startsWith("gemini-3");
+}
+
 function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
   const budget = Math.floor(maxOutputTokens);
   const trimmed = message.trim().replace(/[.!?]$/, "");
@@ -75,14 +79,15 @@ export async function geminiGenerateText(params: {
   try {
     const thinkingConfig = params.thinkingConfig ?? bestThinkingConfigForModel(params.modelId);
     const thinkingConfigLine = describeThinkingConfigLine(thinkingConfig);
+    const generationConfig = {
+      ...(usesDefaultSampling(params.modelId) ? {} : { temperature: params.temperature ?? 0.2 }),
+      maxOutputTokens: params.maxOutputTokens ?? 8192,
+      ...(thinkingConfig ? { thinkingConfig } : {}),
+    };
     const basePayload = {
       systemInstruction: { parts: [{ text: params.system }] },
       contents: [{ role: "user", parts: [{ text: params.user }] }],
-      generationConfig: {
-        temperature: params.temperature ?? 0.2,
-        maxOutputTokens: params.maxOutputTokens ?? 8192,
-        ...(thinkingConfig ? { thinkingConfig } : {}),
-      },
+      generationConfig,
     };
 
     const uniqTokens = tokenBudgetCandidates(basePayload.generationConfig.maxOutputTokens);
