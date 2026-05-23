@@ -20,6 +20,10 @@ function normalizeReasoningOverride(value?: string): string | undefined {
   return normalized ? normalized : undefined;
 }
 
+function isGemini3FlashFamily(modelId: string): boolean {
+  return /(?:^|\/)gemini-3(?:[.-]\d+)?-flash/.test(modelId);
+}
+
 function descendingAttempts<T extends string>(
   label: string,
   allowed: readonly T[],
@@ -99,18 +103,16 @@ export function geminiThinkingConfigForModel(
   const normalized = normalizeReasoningOverride(override);
 
   if (modelId.startsWith("gemini-3")) {
+    const allowed: readonly GeminiThinkingLevel[] = isGemini3FlashFamily(modelId)
+      ? ["high", "medium", "low", "minimal"]
+      : ["high", "low"];
     if (!normalized) return { thinkingLevel: "high" };
-    if (
-      normalized !== "high" &&
-      normalized !== "medium" &&
-      normalized !== "low" &&
-      normalized !== "minimal"
-    ) {
+    if (!allowed.includes(normalized as GeminiThinkingLevel)) {
       throw new Error(
-        `Gemini model ${modelId} does not support reasoning '${override}'. Supported values: high, medium, low, minimal.`,
+        `Gemini model ${modelId} does not support reasoning '${override}'. Supported values: ${allowed.join(", ")}.`,
       );
     }
-    return { thinkingLevel: normalized };
+    return { thinkingLevel: normalized as GeminiThinkingLevel };
   }
 
   if (modelId.startsWith("gemma-4")) {
@@ -288,7 +290,11 @@ export function openRouterReasoningEffortAttempts(
     return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
   }
   if (modelId.startsWith("google/gemini-3")) {
-    return descendingAttempts(label, ["high", "medium", "low", "minimal"], override);
+    return descendingAttempts(
+      label,
+      isGemini3FlashFamily(modelId) ? ["high", "medium", "low", "minimal"] : ["high", "low"],
+      override,
+    );
   }
   if (modelId === "google/gemma-4-31b-it") {
     return descendingAttempts(label, ["high"], override);
