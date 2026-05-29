@@ -5,6 +5,11 @@ import {
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
 import type { ArenaBuildDeliveryClass, ArenaBuildLoadHints, ArenaBuildRef } from "@/lib/arena/types";
+import {
+  databaseUnavailableBody,
+  databaseUnavailableHeaders,
+  isDatabaseUnavailableError,
+} from "@/lib/db/errors";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -404,9 +409,19 @@ export async function GET(req: Request) {
 
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to load benchmark builds";
+    if (isDatabaseUnavailableError(err)) {
+      console.warn("sandbox benchmark database unavailable", err);
+      return NextResponse.json(databaseUnavailableBody(), {
+        status: 503,
+        headers: {
+          ...databaseUnavailableHeaders(),
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     return NextResponse.json(
-      { error: message },
+      { error: "Failed to load benchmark builds." },
       { status: 500, headers: { "Cache-Control": "no-store" } },
     );
   }
