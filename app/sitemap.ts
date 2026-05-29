@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
+import { MODEL_CATALOG } from "@/lib/ai/modelCatalog";
 import { absoluteUrl } from "@/lib/seo";
-import { prisma } from "@/lib/prisma";
 
 const PUBLIC_ROUTES = [
   { path: "/", priority: 1, changeFrequency: "daily" },
@@ -16,23 +16,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: route.priority,
   }));
 
-  let modelRoutes: MetadataRoute.Sitemap | null = null;
+  const modelRoutes = MODEL_CATALOG.filter((model) => model.enabled).map((model) => ({
+    url: absoluteUrl(`/leaderboard/${model.key}`),
+    lastModified: new Date(),
+    changeFrequency: "daily" as const,
+    priority: 0.7,
+  }));
 
-  try {
-    const modelPages = await prisma.model.findMany({
-      where: { enabled: true, isBaseline: false },
-      select: { key: true, updatedAt: true },
-    });
-
-    modelRoutes = modelPages.map((model) => ({
-      url: absoluteUrl(`/leaderboard/${model.key}`),
-      lastModified: model.updatedAt,
-      changeFrequency: "daily" as const,
-      priority: 0.7,
-    }));
-  } catch (error) {
-    console.error("Sitemap: unable to load model routes, falling back to static URLs", error);
-  }
-
-  return modelRoutes ? [...staticRoutes, ...modelRoutes] : staticRoutes;
+  return [...staticRoutes, ...modelRoutes];
 }
