@@ -22,7 +22,7 @@ import {
   type EligibleModel,
   type EligiblePrompt,
 } from "@/lib/arena/coverage";
-import { persistArenaMatchupShownDurably } from "@/lib/arena/shownJobs";
+import { enqueueArenaMatchupShownDurably } from "@/lib/arena/shownJobs";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
 
@@ -961,9 +961,8 @@ export async function GET(req: Request) {
   };
   recordArenaMatchupShown([leftModel.id, rightModel.id]);
   after(() => {
-    // queued so async db pressure cannot drop impressions
-    return persistArenaMatchupShownDurably([leftModel.id, rightModel.id]).catch((error) => {
-      console.warn("arena shown-count persist failed", error);
+    return enqueueArenaMatchupShownDurably([leftModel.id, rightModel.id]).catch((error) => {
+      console.warn("arena shown-count enqueue failed", error);
     });
   });
 

@@ -12,11 +12,11 @@ function readPositiveIntEnv(name: string, fallback: number, max: number): number
   return Math.min(Math.floor(parsed), max);
 }
 
-const JOB_TX_MAX_WAIT_MS = readPositiveIntEnv("ARENA_SHOWN_JOB_TX_MAX_WAIT_MS", 1000, 10000);
-const JOB_TX_TIMEOUT_MS = readPositiveIntEnv("ARENA_SHOWN_JOB_TX_TIMEOUT_MS", 8000, 30000);
-const JOB_BATCH_LIMIT = readPositiveIntEnv("ARENA_SHOWN_JOB_BATCH_LIMIT", 256, 1024);
-const JOB_DRAIN_MAX_JOBS = readPositiveIntEnv("ARENA_SHOWN_JOB_DRAIN_MAX_JOBS", 10000, 50000);
-const JOB_DRAIN_MAX_MS = readPositiveIntEnv("ARENA_SHOWN_JOB_DRAIN_MAX_MS", 50000, 300000);
+const JOB_TX_MAX_WAIT_MS = readPositiveIntEnv("ARENA_SHOWN_JOB_TX_MAX_WAIT_MS", 500, 5000);
+const JOB_TX_TIMEOUT_MS = readPositiveIntEnv("ARENA_SHOWN_JOB_TX_TIMEOUT_MS", 4000, 15000);
+const JOB_BATCH_LIMIT = readPositiveIntEnv("ARENA_SHOWN_JOB_BATCH_LIMIT", 64, 256);
+const JOB_DRAIN_MAX_JOBS = readPositiveIntEnv("ARENA_SHOWN_JOB_DRAIN_MAX_JOBS", 64, 1000);
+const JOB_DRAIN_MAX_MS = readPositiveIntEnv("ARENA_SHOWN_JOB_DRAIN_MAX_MS", 5000, 30000);
 const JOB_DRAIN_MIN_BATCH_BUDGET_MS =
   (JOB_TX_MAX_WAIT_MS + JOB_TX_TIMEOUT_MS + 250) * ARENA_WRITE_RETRY_MAX_ATTEMPTS;
 const JOB_CONTINUE_DELAY_MS = 75;
@@ -69,6 +69,10 @@ async function enqueueArenaShownJobs(modelIds: string[]) {
       VALUES ${Prisma.join(rows.map((row) => Prisma.sql`(${row.id}, ${row.modelId}, ${row.count})`))}
     `),
   );
+}
+
+export async function enqueueArenaMatchupShownDurably(modelIds: string[]) {
+  await enqueueArenaShownJobs(modelIds);
 }
 
 async function tryAcquireShownJobDrainLock(tx: Prisma.TransactionClient): Promise<boolean> {

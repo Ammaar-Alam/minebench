@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { drainArenaShownJobs, getArenaShownJobStatus } from "@/lib/arena/shownJobs";
+import {
+  resolveArenaDrainRequestLimits,
+  shouldIncludeArenaDrainStatus,
+} from "@/lib/arena/drainConfig";
 import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
-
-const DEFAULT_MAX_JOBS = 10_000;
-const DEFAULT_MAX_MS = 50_000;
 
 function requireAdmin(req: Request): string | null {
   const allowedTokens = [process.env.ADMIN_TOKEN, process.env.CRON_SECRET]
@@ -25,20 +26,13 @@ function requireAdmin(req: Request): string | null {
   return null;
 }
 
-function parsePositiveInt(value: string | null, fallback: number, max: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.min(parsed, max);
-}
-
 async function handle(req: Request) {
   const denied = requireAdmin(req);
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
 
   const url = new URL(req.url);
-  const maxJobs = parsePositiveInt(url.searchParams.get("maxJobs"), DEFAULT_MAX_JOBS, 10_000);
-  const maxMs = parsePositiveInt(url.searchParams.get("maxMs"), DEFAULT_MAX_MS, 50_000);
+  const { maxJobs, maxMs } = resolveArenaDrainRequestLimits(url, "shown");
+  const includeStatus = shouldIncludeArenaDrainStatus(url);
 
   const timing = new ServerTiming();
   const requestStartedAt = timing.start();
@@ -48,9 +42,17 @@ async function handle(req: Request) {
     const drain = await drainArenaShownJobs({ maxJobs, maxMs });
     timing.end("drain", drainStartedAt);
 
-    const statusStartedAt = timing.start();
-    const pending = await getArenaShownJobStatus();
-    timing.end("pending", statusStartedAt);
+    let pending:
+      | Awaited<ReturnType<typeof getArenaShownJobStatus>>
+      | { error: string }
+      | undefined;
+    if (includeStatus) {
+      const statusStartedAt = timing.start();
+      pending = await getArenaShownJobStatus().catch((error) => ({
+        error: error instanceof Error ? error.message : "Shown job status lookup failed",
+      }));
+      timing.end("pending", statusStartedAt);
+    }
     timing.end("total", requestStartedAt);
 
     const headers = new Headers({ "Cache-Control": "no-store" });
@@ -59,7 +61,7 @@ async function handle(req: Request) {
       {
         ok: true,
         drain,
-        pending,
+        ...(includeStatus ? { pending } : {}),
       },
       { headers },
     );

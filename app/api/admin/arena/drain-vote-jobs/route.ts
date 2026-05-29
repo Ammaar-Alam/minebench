@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { drainArenaVoteJobs } from "@/lib/arena/voteJobs";
+import {
+  resolveArenaDrainRequestLimits,
+  shouldIncludeArenaDrainStatus,
+} from "@/lib/arena/drainConfig";
 import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
-
-const DEFAULT_MAX_JOBS = 10_000;
-const DEFAULT_MAX_MS = 50_000;
 
 function requireAdmin(req: Request): string | null {
   const allowedTokens = [process.env.ADMIN_TOKEN, process.env.CRON_SECRET]
@@ -24,13 +25,6 @@ function requireAdmin(req: Request): string | null {
   if (!presented) return "Empty Bearer token";
   if (!allowedTokens.includes(presented)) return "Invalid token";
   return null;
-}
-
-function parsePositiveInt(value: string | null, fallback: number, max: number): number {
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return Math.min(parsed, max);
 }
 
 async function getPendingVoteJobStatus() {
@@ -53,8 +47,8 @@ async function handle(req: Request) {
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
 
   const url = new URL(req.url);
-  const maxJobs = parsePositiveInt(url.searchParams.get("maxJobs"), DEFAULT_MAX_JOBS, 10_000);
-  const maxMs = parsePositiveInt(url.searchParams.get("maxMs"), DEFAULT_MAX_MS, 50_000);
+  const { maxJobs, maxMs } = resolveArenaDrainRequestLimits(url, "vote");
+  const includeStatus = shouldIncludeArenaDrainStatus(url);
 
   const timing = new ServerTiming();
   const requestStartedAt = timing.start();
@@ -64,9 +58,17 @@ async function handle(req: Request) {
     const drain = await drainArenaVoteJobs({ maxJobs, maxMs });
     timing.end("drain", drainStartedAt);
 
-    const statusStartedAt = timing.start();
-    const pending = await getPendingVoteJobStatus();
-    timing.end("pending", statusStartedAt);
+    let pending:
+      | Awaited<ReturnType<typeof getPendingVoteJobStatus>>
+      | { error: string }
+      | undefined;
+    if (includeStatus) {
+      const statusStartedAt = timing.start();
+      pending = await getPendingVoteJobStatus().catch((error) => ({
+        error: error instanceof Error ? error.message : "Vote job status lookup failed",
+      }));
+      timing.end("pending", statusStartedAt);
+    }
     timing.end("total", requestStartedAt);
 
     const headers = new Headers({ "Cache-Control": "no-store" });
@@ -75,7 +77,7 @@ async function handle(req: Request) {
       {
         ok: true,
         drain,
-        pending,
+        ...(includeStatus ? { pending } : {}),
       },
       { headers },
     );

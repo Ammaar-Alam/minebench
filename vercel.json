@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/admin/arena/drain-shown-jobs",
-      "schedule": "* * * * *"
+      "schedule": "*/5 * * * *"
     }
   ]
 }

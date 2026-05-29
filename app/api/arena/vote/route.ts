@@ -1,30 +1,20 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { VoteChoice } from "@/lib/arena/types";
 import { hasArenaMatchupSigningSecret, parseArenaMatchupToken } from "@/lib/arena/matchupToken";
 import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetry";
-import { scheduleArenaVoteJobDrain } from "@/lib/arena/voteJobs";
 import { ServerTiming } from "@/lib/serverTiming";
 
 export const runtime = "nodejs";
 
 const SESSION_COOKIE = "mb_session";
-const VOTE_JOB_DRAIN_AFTER_RESPONSE = readBoolEnv("ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE", true);
 
 const reqSchema = z.object({
   matchupId: z.string().min(1).max(2048),
   choice: z.union([z.literal("A"), z.literal("B"), z.literal("TIE"), z.literal("BOTH_BAD")]),
 });
-
-function readBoolEnv(name: string, fallback: boolean): boolean {
-  const normalized = process.env[name]?.trim().toLowerCase();
-  if (!normalized) return fallback;
-  if (["1", "true", "yes", "on"].includes(normalized)) return true;
-  if (["0", "false", "no", "off"].includes(normalized)) return false;
-  return fallback;
-}
 
 function getOrSetSessionId(res: NextResponse, req: Request) {
   const cookieHeader = req.headers.get("cookie") ?? "";
@@ -122,8 +112,8 @@ export async function POST(req: Request) {
     const txStartedAt = timing.start();
     const voteId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
-    // keep vote writes small; rating and coverage drain after response
-    const insertedRows = await withArenaWriteRetry(async () => {
+    // keep vote writes small; rating and coverage drain from cron
+    await withArenaWriteRetry(async () => {
       return prisma.$queryRaw<Array<{ voteId: string }>>(Prisma.sql`
         WITH inserted_matchup AS (
           INSERT INTO "Matchup" (
@@ -181,12 +171,6 @@ export async function POST(req: Request) {
       `);
     });
     timing.end("tx", txStartedAt);
-    if (insertedRows.length > 0) {
-      if (VOTE_JOB_DRAIN_AFTER_RESPONSE) {
-        // return the promise so serverless tracks the drain
-        after(() => scheduleArenaVoteJobDrain());
-      }
-    }
   } catch (err) {
     if (res && isDuplicateVoteError(err)) {
       if (!finalized) {
