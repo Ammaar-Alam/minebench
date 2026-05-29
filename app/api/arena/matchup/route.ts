@@ -16,6 +16,12 @@ import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/arena/matchupToken";
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
+  databaseUnavailableBody,
+  databaseUnavailableHeaders,
+  getErrorMessage,
+  isDatabaseUnavailableError,
+} from "@/lib/db/errors";
+import {
   getArenaMatchupSamplingStateWithMeta,
   recordArenaMatchupShown,
   type CoverageState,
@@ -693,7 +699,14 @@ export async function GET(req: Request) {
   try {
     sampling = await getArenaMatchupSamplingStateWithMeta();
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load arena state";
+    if (isDatabaseUnavailableError(error)) {
+      console.warn("arena matchup database unavailable", getErrorMessage(error, "unknown error"));
+      return respondJson(databaseUnavailableBody(), {
+        status: 503,
+        headers: databaseUnavailableHeaders(),
+      });
+    }
+    const message = getErrorMessage(error, "Failed to load arena state");
     return respondJson(
       { error: message },
       {
@@ -848,7 +861,14 @@ export async function GET(req: Request) {
 	            : Promise.resolve(null),
       ]);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load build payload";
+      if (isDatabaseUnavailableError(err)) {
+        console.warn("arena matchup build payload database unavailable", getErrorMessage(err, "unknown error"));
+        return respondJson(databaseUnavailableBody(), {
+          status: 503,
+          headers: databaseUnavailableHeaders(),
+        });
+      }
+      const message = getErrorMessage(err, "Failed to load build payload");
       return respondJson({ error: message }, { status: 500 });
     }
   }

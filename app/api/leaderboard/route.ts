@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { LeaderboardResponse } from "@/lib/arena/types";
 import { getLeaderboardDispersionByModelId } from "@/lib/arena/stats";
@@ -7,6 +8,12 @@ import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
 import { getArenaPairCoverageByKey } from "@/lib/arena/coverage";
 import { ServerTiming } from "@/lib/serverTiming";
+import {
+  databaseUnavailableBody,
+  databaseUnavailableHeaders,
+  getErrorMessage,
+  isDatabaseUnavailableError,
+} from "@/lib/db/errors";
 
 export const runtime = "nodejs";
 
@@ -20,6 +27,24 @@ type PairCoverage = {
   decisiveVotes: number;
   promptCount: number;
 };
+
+const LEADERBOARD_MODEL_SELECT = {
+  id: true,
+  key: true,
+  provider: true,
+  displayName: true,
+  eloRating: true,
+  glickoRd: true,
+  conservativeRating: true,
+  shownCount: true,
+  winCount: true,
+  lossCount: true,
+  drawCount: true,
+  bothBadCount: true,
+} satisfies Prisma.ModelSelect;
+
+type LeaderboardModelRow = Prisma.ModelGetPayload<{ select: typeof LEADERBOARD_MODEL_SELECT }>;
+type BaselineAnchor = { capturedAt: Date } | null;
 
 function pairKey(a: string, b: string): string {
   return a < b ? `${a}|${b}` : `${b}|${a}`;
@@ -36,33 +61,38 @@ export async function GET() {
   const timing = new ServerTiming();
   const requestStartedAt = timing.start();
   const movementAnchorTime = new Date(Date.now() - MOVEMENT_LOOKBACK_MS);
-  const [models, dispersionByModelId, eligiblePromptIds, baselineAnchor] = await Promise.all([
-    prisma.model.findMany({
-      where: { isBaseline: false, enabled: true },
-      orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
-      select: {
-        id: true,
-        key: true,
-        provider: true,
-        displayName: true,
-        eloRating: true,
-        glickoRd: true,
-        conservativeRating: true,
-        shownCount: true,
-        winCount: true,
-        lossCount: true,
-        drawCount: true,
-        bothBadCount: true,
-      },
-    }),
-    getLeaderboardDispersionByModelId(),
-    getArenaEligiblePromptIds(),
-    prisma.modelRankSnapshot.findFirst({
-      where: { capturedAt: { lte: movementAnchorTime } },
-      orderBy: { capturedAt: "desc" },
-      select: { capturedAt: true },
-    }),
-  ]);
+  let models: LeaderboardModelRow[];
+  let dispersionByModelId: Awaited<ReturnType<typeof getLeaderboardDispersionByModelId>>;
+  let eligiblePromptIds: Awaited<ReturnType<typeof getArenaEligiblePromptIds>>;
+  let baselineAnchor: BaselineAnchor;
+
+  try {
+    [models, dispersionByModelId, eligiblePromptIds, baselineAnchor] = await Promise.all([
+      prisma.model.findMany({
+        where: { isBaseline: false, enabled: true },
+        orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
+        select: LEADERBOARD_MODEL_SELECT,
+      }),
+      getLeaderboardDispersionByModelId(),
+      getArenaEligiblePromptIds(),
+      prisma.modelRankSnapshot.findFirst({
+        where: { capturedAt: { lte: movementAnchorTime } },
+        orderBy: { capturedAt: "desc" },
+        select: { capturedAt: true },
+      }),
+    ]);
+  } catch (error) {
+    timing.end("total", requestStartedAt);
+    const headers = new Headers(databaseUnavailableHeaders());
+    timing.apply(headers);
+
+    if (isDatabaseUnavailableError(error)) {
+      console.warn("leaderboard database unavailable", getErrorMessage(error, "unknown error"));
+      return NextResponse.json(databaseUnavailableBody(), { status: 503, headers });
+    }
+
+    throw error;
+  }
   const eligiblePromptCount = eligiblePromptIds.length;
   const hasGlobalBaseline = Boolean(baselineAnchor);
 
