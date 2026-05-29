@@ -175,6 +175,7 @@ model ArenaVoteJob {
   choice    String
 
   @@index([matchupId])
+  @@index([processedAt, createdAt])
 }
 
 model ArenaShownJob {
@@ -188,6 +189,7 @@ model ArenaShownJob {
   count Int @default(1)
 
   @@index([modelId])
+  @@index([processedAt, createdAt])
 }
 
 model ArenaCoverageModelPrompt {

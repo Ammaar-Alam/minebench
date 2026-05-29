@@ -6,11 +6,11 @@
     },
     {
       "path": "/api/admin/arena/drain-vote-jobs",
-      "schedule": "* * * * *"
+      "schedule": "10,25,40,55 * * * *"
     },
     {
       "path": "/api/admin/arena/drain-shown-jobs",
-      "schedule": "*/5 * * * *"
+      "schedule": "5,20,35,50 * * * *"
     }
   ]
 }
