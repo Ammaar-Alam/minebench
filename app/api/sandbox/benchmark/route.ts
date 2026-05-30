@@ -17,6 +17,10 @@ export const runtime = "nodejs";
 const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
 const ARENA_MODE = "precise";
+const BENCHMARK_INLINE_MAX_BYTES = Number.parseInt(
+  process.env.SANDBOX_BENCHMARK_INLINE_MAX_BYTES ?? process.env.ARENA_MATCHUP_INLINE_MAX_BYTES ?? "0",
+  10,
+);
 
 type PromptOption = {
   id: string;
@@ -87,8 +91,11 @@ function pickPair(models: ModelOption[], requestedA?: string, requestedB?: strin
   return { a, b };
 }
 
-function shouldInlineInAdaptiveMode(deliveryClass: ArenaBuildDeliveryClass): boolean {
-  return deliveryClass === "inline";
+function shouldInlineInAdaptiveMode(hints: ArenaBuildLoadHints): boolean {
+  if (getInitialAdaptiveDeliveryClass(hints) !== "inline") return false;
+  if (!Number.isFinite(BENCHMARK_INLINE_MAX_BYTES) || BENCHMARK_INLINE_MAX_BYTES <= 0) return false;
+  const estimatedBytes = hints.initialEstimatedBytes;
+  return typeof estimatedBytes === "number" && estimatedBytes > 0 && estimatedBytes <= BENCHMARK_INLINE_MAX_BYTES;
 }
 
 function getInitialAdaptiveDeliveryClass(hints: ArenaBuildLoadHints): ArenaBuildDeliveryClass {
@@ -270,12 +277,8 @@ export async function GET(req: Request) {
     const hintsB = buildB ? deriveArenaBuildLoadHints(buildB) : null;
     const shouldProbeA = Boolean(hintsA && hintsA.initialEstimatedBytes == null);
     const shouldProbeB = Boolean(hintsB && hintsB.initialEstimatedBytes == null);
-    const shouldPrepareA = hintsA
-      ? shouldInlineInAdaptiveMode(getInitialAdaptiveDeliveryClass(hintsA)) || shouldProbeA
-      : false;
-    const shouldPrepareB = hintsB
-      ? shouldInlineInAdaptiveMode(getInitialAdaptiveDeliveryClass(hintsB)) || shouldProbeB
-      : false;
+    const shouldPrepareA = hintsA ? shouldInlineInAdaptiveMode(hintsA) || shouldProbeA : false;
+    const shouldPrepareB = hintsB ? shouldInlineInAdaptiveMode(hintsB) || shouldProbeB : false;
 
     let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
     let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
@@ -355,7 +358,7 @@ export async function GET(req: Request) {
 
       const checksum = (prepared?.checksum ?? build.voxelSha256)?.trim() || null;
       const effectiveHints = prepared?.hints ?? hints;
-      const shouldInline = shouldInlineInAdaptiveMode(getInitialAdaptiveDeliveryClass(effectiveHints));
+      const shouldInline = shouldInlineInAdaptiveMode(effectiveHints);
       const buildRef: ArenaBuildRef = prepared?.buildRef ?? {
         buildId: build.id,
         variant: "full",
