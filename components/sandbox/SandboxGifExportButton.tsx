@@ -21,41 +21,40 @@ type Props = {
 };
 
 type GifExportFormat = "wide" | "vertical";
+type GifExportLayoutFormat = GifExportFormat | "single";
 
-const TARGET_FPS = 60;
-const FRAME_DELAY_MS = Math.round(1000 / TARGET_FPS);
-const FRAME_COUNT = 160;
 const GIF_DELAY_TICK_MS = 10;
-const ROTATION_SLOWDOWN_FACTOR = 1.25;
-const MAX_IN_FLIGHT_FRAMES = 6;
-const YIELD_EVERY_FRAMES = 50;
-const PALETTE_SAMPLE_COUNT = 18;
-const PALETTE_SAMPLE_LONG_EDGE = 720;
-const EXPORT_SIZE_WIDE = { width: 1920, height: 1080 };
-const EXPORT_SIZE_VERTICAL = { width: 1080, height: 1920 };
-const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * 1024 * 1024;
-const LOSSLESS_OPT_LARGE_INPUT_BYTES = 10 * 1024 * 1024;
-const LOSSLESS_OPT_ALWAYS_KEEP_BYTES = 15 * 1024 * 1024;
+const MAX_IN_FLIGHT_FRAMES = 4;
+const YIELD_EVERY_FRAMES = 24;
+const COMPARISON_FRAME_COUNT = 96;
+const SINGLE_FRAME_COUNT = 144;
+const COMPARISON_FRAME_DELAY_MS = 30;
+const SINGLE_FRAME_DELAY_MS = 20;
+const COMPARISON_PALETTE_SAMPLE_COUNT = 10;
+const SINGLE_PALETTE_SAMPLE_COUNT = 16;
+const COMPARISON_PALETTE_SAMPLE_LONG_EDGE = 540;
+const SINGLE_PALETTE_SAMPLE_LONG_EDGE = 720;
+const BYTES_PER_MB = 1024 * 1024;
+const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * BYTES_PER_MB;
+const LOSSLESS_OPT_MAX_INPUT_BYTES = 10 * BYTES_PER_MB;
 const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
 const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
-const GIF_OPT_TARGET_MAX_BYTES = 15 * 1024 * 1024;
-// keep post-processing light so color and motion stay stable
-const LOSSY_OPT_LEVELS = [12, 20, 28, 35] as const;
+const GIF_TARGET_MAX_BYTES = 15 * BYTES_PER_MB;
 const EXPORT_RENDER_PROFILES: Record<
-  GifExportFormat,
+  GifExportLayoutFormat,
   ReadonlyArray<{ width: number; height: number }>
 > = {
+  single: [
+    { width: 1080, height: 1215 },
+    { width: 960, height: 1080 },
+    { width: 840, height: 945 },
+  ],
   wide: [
-    EXPORT_SIZE_WIDE,
-    { width: 1600, height: 900 },
-    { width: 1440, height: 810 },
     { width: 1280, height: 720 },
     { width: 960, height: 540 },
+    { width: 720, height: 405 },
   ],
   vertical: [
-    EXPORT_SIZE_VERTICAL,
-    { width: 900, height: 1600 },
-    { width: 810, height: 1440 },
     { width: 720, height: 1280 },
     { width: 640, height: 1138 },
     { width: 540, height: 960 },
@@ -85,25 +84,37 @@ type ExportLayout = {
   };
 };
 
-type GifRenderProfile = (typeof EXPORT_RENDER_PROFILES)[GifExportFormat][number];
+type GifRenderProfile = (typeof EXPORT_RENDER_PROFILES)[GifExportLayoutFormat][number];
+type GifExportRuntime = {
+  frameCount: number;
+  frameDelayMs: number;
+  frameDelaysMs: number[];
+  paletteSampleCount: number;
+  paletteSampleLongEdge: number;
+};
+type GifExportRotationBases = number[];
 
-function buildFrameDelaySchedule(frameCount: number, slowdownFactor: number): number[] {
-  const baseDelayTicks = Math.max(1, Math.round(FRAME_DELAY_MS / GIF_DELAY_TICK_MS));
-  const totalDelayTicks = Math.max(1, Math.round(frameCount * baseDelayTicks * slowdownFactor));
-  const delays: number[] = [];
-  let assignedTicks = 0;
-
-  for (let frame = 0; frame < frameCount; frame += 1) {
-    const nextAssignedTicks = Math.round(((frame + 1) * totalDelayTicks) / frameCount);
-    const frameDelayTicks = Math.max(1, nextAssignedTicks - assignedTicks);
-    delays.push(frameDelayTicks * GIF_DELAY_TICK_MS);
-    assignedTicks = nextAssignedTicks;
-  }
-
-  return delays;
+function buildFrameDelaySchedule(frameCount: number, frameDelayMs: number): number[] {
+  const delayTicks = Math.max(1, Math.round(frameDelayMs / GIF_DELAY_TICK_MS));
+  return Array.from({ length: frameCount }, () => delayTicks * GIF_DELAY_TICK_MS);
 }
 
-const FRAME_DELAYS_MS = buildFrameDelaySchedule(FRAME_COUNT, ROTATION_SLOWDOWN_FACTOR);
+function getExportRuntime(format: GifExportLayoutFormat): GifExportRuntime {
+  const single = format === "single";
+  const frameCount = single ? SINGLE_FRAME_COUNT : COMPARISON_FRAME_COUNT;
+  const frameDelayMs = single ? SINGLE_FRAME_DELAY_MS : COMPARISON_FRAME_DELAY_MS;
+  return {
+    frameCount,
+    frameDelayMs,
+    frameDelaysMs: buildFrameDelaySchedule(frameCount, frameDelayMs),
+    paletteSampleCount: single ? SINGLE_PALETTE_SAMPLE_COUNT : COMPARISON_PALETTE_SAMPLE_COUNT,
+    paletteSampleLongEdge: single ? SINGLE_PALETTE_SAMPLE_LONG_EDGE : COMPARISON_PALETTE_SAMPLE_LONG_EDGE,
+  };
+}
+
+function getExportRotationBases(targets: SandboxGifExportTarget[]): GifExportRotationBases {
+  return targets.map((target) => target.viewerRef.current?.getRotationY() ?? 0);
+}
 
 function sanitizeFilePart(value: string) {
   return value
@@ -226,7 +237,7 @@ function buildExportLayout(
   width: number,
   height: number,
   promptText: string,
-  format: GifExportFormat,
+  format: GifExportLayoutFormat,
 ): ExportLayout {
   const panelGap = count === 1 ? 0 : PANEL_GAP;
   ctx.font = HEADER_PROMPT_FONT;
@@ -288,17 +299,21 @@ function buildPaletteSampleFrames(frameCount: number, sampleCount: number): numb
   return Array.from(frames).sort((a, b) => a - b);
 }
 
-function getPaletteSampleSize(profile: GifRenderProfile) {
-  const scale = PALETTE_SAMPLE_LONG_EDGE / Math.max(profile.width, profile.height);
+function getPaletteSampleSize(profile: GifRenderProfile, longEdge: number) {
+  const scale = longEdge / Math.max(profile.width, profile.height);
   return {
     width: Math.max(1, Math.round(profile.width * scale)),
     height: Math.max(1, Math.round(profile.height * scale)),
   };
 }
 
-async function optimizeGifBlobForSize(input: Blob, signal?: AbortSignal): Promise<Blob> {
+function shouldTryLosslessOptimization(input: Blob) {
+  return input.size >= LOSSLESS_OPT_MIN_INPUT_BYTES && input.size <= LOSSLESS_OPT_MAX_INPUT_BYTES;
+}
+
+async function optimizeGifBlobForDownload(input: Blob, signal?: AbortSignal): Promise<Blob> {
   throwIfAborted(signal);
-  if (input.size < LOSSLESS_OPT_MIN_INPUT_BYTES) return input;
+  if (!shouldTryLosslessOptimization(input)) return input;
 
   try {
     const [{ default: gifsicle }, inputBytes] = await Promise.all([
@@ -318,46 +333,8 @@ async function optimizeGifBlobForSize(input: Blob, signal?: AbortSignal): Promis
       return outputs.find((file) => file.name.toLowerCase().endsWith(".gif")) ?? null;
     };
 
-    const primaryLevel = input.size >= LOSSLESS_OPT_LARGE_INPUT_BYTES ? "-O2" : "-O3";
-    const lossyOptimizeLevel = input.size >= LOSSLESS_OPT_LARGE_INPUT_BYTES ? "-O2" : "-O3";
-    let optimized = await runOptimize(primaryLevel);
+    const optimized = await runOptimize("-O2");
     let best = optimized && optimized.size < input.size ? optimized : input;
-
-    if (
-      primaryLevel === "-O2" &&
-      optimized &&
-      optimized.size > GIF_OPT_TARGET_MAX_BYTES &&
-      optimized.size < input.size
-    ) {
-      const tighter = await runOptimize("-O3");
-      if (tighter && tighter.size < optimized.size) optimized = tighter;
-      if (tighter && tighter.size < best.size) best = tighter;
-    }
-
-    if (!optimized && best === input) {
-      if (input.size > GIF_OPT_TARGET_MAX_BYTES) {
-        throw new Error(
-          `GIF stayed above 15 MB after optimization (${(input.size / 1024 / 1024).toFixed(1)} MB)`,
-        );
-      }
-      return input;
-    }
-    if (best.size > GIF_OPT_TARGET_MAX_BYTES) {
-      for (const lossyLevel of LOSSY_OPT_LEVELS) {
-        // use the least lossy setting that gets under the target
-        const lossy = await runOptimize(`${lossyOptimizeLevel} --lossy=${lossyLevel}`);
-        if (lossy && lossy.size < best.size) best = lossy;
-        if (lossy && lossy.size <= GIF_OPT_TARGET_MAX_BYTES) return lossy;
-      }
-
-      throw new Error(
-        `GIF stayed above 15 MB after optimization (${(best.size / 1024 / 1024).toFixed(1)} MB)`,
-      );
-    }
-
-    if (input.size >= LOSSLESS_OPT_ALWAYS_KEEP_BYTES) {
-      return best.size < input.size ? best : input;
-    }
 
     const savings = input.size - best.size;
     const relativeSavings = savings / Math.max(1, input.size);
@@ -368,11 +345,6 @@ async function optimizeGifBlobForSize(input: Blob, signal?: AbortSignal): Promis
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw err;
     console.warn("[gif-export] optimize skipped", err);
-    if (input.size > GIF_OPT_TARGET_MAX_BYTES) {
-      throw err instanceof Error
-        ? err
-        : new Error("GIF optimization failed before it could fit under 15 MB");
-    }
     return input;
   }
 }
@@ -496,6 +468,7 @@ function renderCompositeFrame(
   ctx: CanvasRenderingContext2D,
   layout: ExportLayout,
   targets: SandboxGifExportTarget[],
+  rotationBases: GifExportRotationBases,
   angle: number,
 ) {
   drawBaseBackdrop(ctx, layout.width, layout.height, layout.header);
@@ -507,9 +480,10 @@ function renderCompositeFrame(
     const captureWidth = Math.max(1, Math.round(panel.width - PANEL_PAD * 2));
     const captureHeight = Math.max(1, Math.round(panel.height - PANEL_PAD * 2 - PANEL_META_HEIGHT));
     const capture = target.viewerRef.current?.captureFrame({
-      rotationY: angle,
+      rotationY: (rotationBases[idx] ?? 0) + angle,
       width: captureWidth,
       height: captureHeight,
+      fit: "contain",
     });
     if (!capture) {
       throw new Error("One of the viewers is not ready for export");
@@ -528,12 +502,14 @@ function renderCompositeFrame(
 
 async function buildPaletteSamples(
   targets: SandboxGifExportTarget[],
-  format: GifExportFormat,
+  format: GifExportLayoutFormat,
   profile: GifRenderProfile,
+  runtime: GifExportRuntime,
+  rotationBases: GifExportRotationBases,
   signal?: AbortSignal,
 ) {
   throwIfAborted(signal);
-  const sampleSize = getPaletteSampleSize(profile);
+  const sampleSize = getPaletteSampleSize(profile, runtime.paletteSampleLongEdge);
   const sampleCanvas = document.createElement("canvas");
   sampleCanvas.width = sampleSize.width;
   sampleCanvas.height = sampleSize.height;
@@ -552,13 +528,13 @@ async function buildPaletteSamples(
     format,
   );
   const samples: ArrayBuffer[] = [];
-  const sampleFrames = buildPaletteSampleFrames(FRAME_COUNT, PALETTE_SAMPLE_COUNT);
+  const sampleFrames = buildPaletteSampleFrames(runtime.frameCount, runtime.paletteSampleCount);
 
   for (let idx = 0; idx < sampleFrames.length; idx += 1) {
     throwIfAborted(signal);
     const frame = sampleFrames[idx];
-    const t = FRAME_COUNT > 1 ? frame / (FRAME_COUNT - 1) : 0;
-    renderCompositeFrame(sampleCtx, layout, targets, t * Math.PI * 2);
+    const t = runtime.frameCount > 0 ? frame / runtime.frameCount : 0;
+    renderCompositeFrame(sampleCtx, layout, targets, rotationBases, t * Math.PI * 2);
     const pixels = sampleCtx.getImageData(0, 0, sampleCanvas.width, sampleCanvas.height).data;
     samples.push(pixels.buffer);
     if (idx > 0 && idx % 4 === 0) {
@@ -573,8 +549,9 @@ async function buildPaletteSamples(
 async function buildGifBlob(
   targets: SandboxGifExportTarget[],
   promptText: string,
-  format: GifExportFormat,
+  format: GifExportLayoutFormat,
   profile: GifRenderProfile,
+  runtime: GifExportRuntime,
   onProgress?: (done: number, total: number) => void,
   signal?: AbortSignal,
 ) {
@@ -588,6 +565,7 @@ async function buildGifBlob(
   if (!frameCtx) throw new Error("Unable to initialize export canvas");
   frameCtx.imageSmoothingEnabled = true;
   frameCtx.imageSmoothingQuality = "high";
+  const rotationBases = getExportRotationBases(targets);
 
   type WorkerOut =
     | { type: "ready" }
@@ -654,7 +632,7 @@ async function buildGifBlob(
   await readyPromise;
   throwIfAborted(signal);
 
-  const paletteSamples = await buildPaletteSamples(targets, format, profile, signal);
+  const paletteSamples = await buildPaletteSamples(targets, format, profile, runtime, rotationBases, signal);
   throwIfAborted(signal);
   if (paletteSamples.length > 0) {
     worker.postMessage({ type: "palette", samples: paletteSamples }, paletteSamples);
@@ -666,10 +644,10 @@ async function buildGifBlob(
     const inFlight: Promise<void>[] = [];
     let completed = 0;
 
-    for (let frame = 0; frame < FRAME_COUNT; frame += 1) {
+    for (let frame = 0; frame < runtime.frameCount; frame += 1) {
       throwIfAborted(signal);
-      const t = FRAME_COUNT > 1 ? frame / (FRAME_COUNT - 1) : 0;
-      renderCompositeFrame(frameCtx, layout, targets, t * Math.PI * 2);
+      const t = runtime.frameCount > 0 ? frame / runtime.frameCount : 0;
+      renderCompositeFrame(frameCtx, layout, targets, rotationBases, t * Math.PI * 2);
 
       const pixels = frameCtx.getImageData(0, 0, width, height).data;
       const buffer = pixels.buffer;
@@ -682,14 +660,14 @@ async function buildGifBlob(
           frameIndex: frame,
           width,
           height,
-          delay: FRAME_DELAYS_MS[frame] ?? FRAME_DELAY_MS,
+          delay: runtime.frameDelaysMs[frame] ?? runtime.frameDelayMs,
           pixels: buffer,
         },
         [buffer],
       );
       const tracked = ackPromise.then(() => {
         completed += 1;
-        onProgress?.(completed, FRAME_COUNT);
+        onProgress?.(completed, runtime.frameCount);
       });
       inFlight.push(tracked);
 
@@ -824,7 +802,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
 
   const hasTargets = targets.length > 0;
   const canChooseFormat = targets.length === 2;
-  const exportFormat: GifExportFormat = canChooseFormat ? format : "wide";
+  const exportFormat: GifExportLayoutFormat = canChooseFormat ? format : "single";
 
   useEffect(() => {
     exportAbortRef.current?.abort();
@@ -840,54 +818,79 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     setExporting(true);
     setOptimizing(false);
     setError(null);
-    setProgress({ done: 0, total: FRAME_COUNT });
     const abortController = new AbortController();
     exportAbortRef.current = abortController;
     await waitForNextPaint();
     try {
       const profiles = EXPORT_RENDER_PROFILES[exportFormat];
+      const runtime = getExportRuntime(exportFormat);
+      setProgress({ done: 0, total: runtime.frameCount });
       let finalBlob: Blob | null = null;
-      let lastError: unknown = null;
+      let smallestBlob: Blob | null = null;
 
       for (let idx = 0; idx < profiles.length; idx += 1) {
         const profile = profiles[idx] ?? profiles[profiles.length - 1];
         setOptimizing(false);
-        setProgress({ done: 0, total: FRAME_COUNT });
+        setProgress({ done: 0, total: runtime.frameCount });
 
-        const blob = await buildGifBlob(
-          targets,
-          promptText ?? "",
-          exportFormat,
-          profile,
-          (done, total) => {
-            if (done === total || done % 2 === 0) setProgress({ done, total });
-          },
-          abortController.signal,
-        );
-
-        setOptimizing(true);
-        setProgress(null);
+        let blob: Blob;
         try {
-          finalBlob = await optimizeGifBlobForSize(blob, abortController.signal);
-          break;
+          blob = await buildGifBlob(
+            targets,
+            promptText ?? "",
+            exportFormat,
+            profile,
+            runtime,
+            (done, total) => {
+              if (done === total || done % 2 === 0) setProgress({ done, total });
+            },
+            abortController.signal,
+          );
         } catch (err) {
           if (err instanceof Error && err.name === "AbortError") throw err;
-          lastError = err;
           if (idx === profiles.length - 1) throw err;
+          console.warn("[gif-export] render profile skipped", profile, err);
           await waitForNextPaint();
           throwIfAborted(abortController.signal);
+          continue;
         }
+
+        if (blob.size > GIF_TARGET_MAX_BYTES && idx < profiles.length - 1) {
+          await waitForNextPaint();
+          throwIfAborted(abortController.signal);
+          continue;
+        }
+
+        smallestBlob = blob;
+
+        const shouldOptimize = shouldTryLosslessOptimization(blob);
+        if (shouldOptimize) {
+          setOptimizing(true);
+          setProgress(null);
+        }
+
+        const optimizedBlob = await optimizeGifBlobForDownload(blob, abortController.signal);
+        if (!smallestBlob || optimizedBlob.size < smallestBlob.size) {
+          smallestBlob = optimizedBlob;
+        }
+
+        finalBlob = optimizedBlob;
+        break;
       }
 
       if (!finalBlob) {
-        throw lastError instanceof Error ? lastError : new Error("GIF export failed");
+        finalBlob = smallestBlob;
+      }
+      if (!finalBlob) {
+        throw new Error("GIF export failed");
       }
 
       const modelToken = targets.map((t) => sanitizeFilePart(t.modelName) || "model").join("-vs-");
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const typeToken = targets.length === 2 ? "compare" : "build";
-      const formatToken = exportFormat === "vertical" ? "vertical" : "wide";
+      const formatToken =
+        exportFormat === "vertical" ? "vertical" : exportFormat === "single" ? "viewer" : "wide";
       const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.gif`;
       throwIfAborted(abortController.signal);
       triggerDownload(finalBlob, fileName);
@@ -919,7 +922,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const shouldKeepTooltipVisible = Boolean(iconOnly && (busy || error));
   const formatSelector = canChooseFormat ? (
     <GifFormatSelector
-      format={exportFormat}
+      format={format}
       disabled={busy}
       compact={iconOnly}
       embedded

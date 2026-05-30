@@ -29,7 +29,14 @@ type ViewerProps = {
 
 export type VoxelViewerHandle = {
   hasBuild: () => boolean;
-  captureFrame: (opts?: { rotationY?: number; width?: number; height?: number }) => HTMLCanvasElement | null;
+  getRotationY: () => number | null;
+  captureFrame: (opts?: {
+    rotationY?: number;
+    rotationOffsetY?: number;
+    width?: number;
+    height?: number;
+    fit?: "cover" | "contain";
+  }) => HTMLCanvasElement | null;
 };
 
 let atlasPromise: Promise<THREE.Texture> | null = null;
@@ -765,6 +772,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       hasBuild() {
         return Boolean(voxelGroupRef.current && threeRef.current);
       },
+      getRotationY() {
+        return voxelGroupRef.current?.group.rotation.y ?? null;
+      },
       captureFrame(opts) {
         const three = threeRef.current;
         const vg = voxelGroupRef.current;
@@ -772,8 +782,17 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
         const { scene, camera, renderer, controls } = three;
         const previousY = vg.group.rotation.y;
-        if (typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY)) {
-          vg.group.rotation.y = opts.rotationY;
+        const absoluteRotationY =
+          typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY) ? opts.rotationY : null;
+        const rotationOffsetY =
+          typeof opts?.rotationOffsetY === "number" && Number.isFinite(opts.rotationOffsetY)
+            ? opts.rotationOffsetY
+            : null;
+        const hasExportRotation = absoluteRotationY !== null || rotationOffsetY !== null;
+        if (absoluteRotationY !== null) {
+          vg.group.rotation.y = absoluteRotationY;
+        } else if (rotationOffsetY !== null) {
+          vg.group.rotation.y = previousY + rotationOffsetY;
         }
 
         controls.update();
@@ -785,7 +804,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         frame.height = height;
         const ctx = frame.getContext("2d");
         if (!ctx) {
-          if (typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY)) {
+          if (hasExportRotation) {
             vg.group.rotation.y = previousY;
             controls.update();
             renderer.render(scene, camera);
@@ -801,55 +820,86 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const dstH = height;
         const srcAspect = srcW > 0 && srcH > 0 ? srcW / srcH : camera.aspect || 1;
         const dstAspect = dstW > 0 && dstH > 0 ? dstW / dstH : 1;
+        const fitMode = opts?.fit ?? "cover";
 
-        let cropWidth = srcW;
-        let cropHeight = srcH;
-        if (srcAspect > dstAspect) {
-          cropWidth = Math.max(1, Math.round(srcH * dstAspect));
-        } else if (srcAspect < dstAspect) {
-          cropHeight = Math.max(1, Math.round(srcW / dstAspect));
-        }
-
-        const needsHighResSource = cropWidth < dstW || cropHeight < dstH;
-        let sourceCanvas: HTMLCanvasElement = source;
-        if (needsHighResSource) {
-          const exportRenderer = getExportRenderer();
-          let renderWidth = dstW;
-          let renderHeight = dstH;
-          if (srcAspect > dstAspect) {
-            renderHeight = Math.max(1, Math.round(dstH * EXPORT_RENDER_OVERSCAN));
-            renderWidth = Math.max(dstW, Math.ceil(renderHeight * srcAspect));
+        if (fitMode === "contain") {
+          const drawWidth =
+            dstAspect > srcAspect ? Math.max(1, Math.round(dstH * srcAspect)) : dstW;
+          const drawHeight =
+            dstAspect > srcAspect ? dstH : Math.max(1, Math.round(dstW / srcAspect));
+          const needsHighResSource = srcW < drawWidth || srcH < drawHeight;
+          let sourceCanvas: HTMLCanvasElement = source;
+          if (needsHighResSource) {
+            const exportRenderer = getExportRenderer();
+            exportRenderer.setSize(drawWidth, drawHeight, false);
+            exportRenderer.render(scene, camera);
+            sourceCanvas = exportRenderer.domElement;
           } else {
-            renderWidth = Math.max(1, Math.round(dstW * EXPORT_RENDER_OVERSCAN));
-            renderHeight = Math.max(dstH, Math.ceil(renderWidth / srcAspect));
+            renderer.render(scene, camera);
           }
-          exportRenderer.setSize(renderWidth, renderHeight, false);
-          exportRenderer.render(scene, camera);
-          sourceCanvas = exportRenderer.domElement;
+
+          ctx.clearRect(0, 0, dstW, dstH);
+          ctx.drawImage(
+            sourceCanvas,
+            0,
+            0,
+            sourceCanvas.width,
+            sourceCanvas.height,
+            Math.round((dstW - drawWidth) / 2),
+            Math.round((dstH - drawHeight) / 2),
+            drawWidth,
+            drawHeight,
+          );
         } else {
-          renderer.render(scene, camera);
+          let cropWidth = srcW;
+          let cropHeight = srcH;
+          if (srcAspect > dstAspect) {
+            cropWidth = Math.max(1, Math.round(srcH * dstAspect));
+          } else if (srcAspect < dstAspect) {
+            cropHeight = Math.max(1, Math.round(srcW / dstAspect));
+          }
+
+          const needsHighResSource = cropWidth < dstW || cropHeight < dstH;
+          let sourceCanvas: HTMLCanvasElement = source;
+          if (needsHighResSource) {
+            const exportRenderer = getExportRenderer();
+            let renderWidth = dstW;
+            let renderHeight = dstH;
+            if (srcAspect > dstAspect) {
+              renderHeight = Math.max(1, Math.round(dstH * EXPORT_RENDER_OVERSCAN));
+              renderWidth = Math.max(dstW, Math.ceil(renderHeight * srcAspect));
+            } else {
+              renderWidth = Math.max(1, Math.round(dstW * EXPORT_RENDER_OVERSCAN));
+              renderHeight = Math.max(dstH, Math.ceil(renderWidth / srcAspect));
+            }
+            exportRenderer.setSize(renderWidth, renderHeight, false);
+            exportRenderer.render(scene, camera);
+            sourceCanvas = exportRenderer.domElement;
+          } else {
+            renderer.render(scene, camera);
+          }
+
+          const exportSrcW = sourceCanvas.width;
+          const exportSrcH = sourceCanvas.height;
+          let sx = 0;
+          let sy = 0;
+          let sw = exportSrcW;
+          let sh = exportSrcH;
+          const exportAspect = exportSrcW > 0 && exportSrcH > 0 ? exportSrcW / exportSrcH : srcAspect;
+          if (exportAspect > dstAspect) {
+            // Too wide: crop left/right.
+            sw = Math.max(1, Math.round(exportSrcH * dstAspect));
+            sx = Math.round((exportSrcW - sw) / 2);
+          } else if (exportAspect < dstAspect) {
+            // Too tall: crop top/bottom.
+            sh = Math.max(1, Math.round(exportSrcW / dstAspect));
+            sy = Math.round((exportSrcH - sh) / 2);
+          }
+          ctx.clearRect(0, 0, dstW, dstH);
+          ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, dstW, dstH);
         }
 
-        const exportSrcW = sourceCanvas.width;
-        const exportSrcH = sourceCanvas.height;
-        let sx = 0;
-        let sy = 0;
-        let sw = exportSrcW;
-        let sh = exportSrcH;
-        const exportAspect = exportSrcW > 0 && exportSrcH > 0 ? exportSrcW / exportSrcH : srcAspect;
-        if (exportAspect > dstAspect) {
-          // Too wide: crop left/right.
-          sw = Math.max(1, Math.round(exportSrcH * dstAspect));
-          sx = Math.round((exportSrcW - sw) / 2);
-        } else if (exportAspect < dstAspect) {
-          // Too tall: crop top/bottom.
-          sh = Math.max(1, Math.round(exportSrcW / dstAspect));
-          sy = Math.round((exportSrcH - sh) / 2);
-        }
-        ctx.clearRect(0, 0, dstW, dstH);
-        ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, dstW, dstH);
-
-        if (typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY)) {
+        if (hasExportRotation) {
           vg.group.rotation.y = previousY;
           controls.update();
           renderer.render(scene, camera);
