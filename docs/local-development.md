@@ -101,8 +101,8 @@ Copy `.env.example` to `.env` and set what you need.
 - `MINEBENCH_ALLOW_SERVER_KEYS=1` (production opt-in for server env keys in `/api/generate`)
 - `ANTHROPIC_OPUS_4_8_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_4_7_EFFORT=low|medium|high|xhigh|max`
-- `ANTHROPIC_OPUS_4_6_EFFORT=low|medium|high|xhigh|max`
-- `ANTHROPIC_SONNET_4_6_EFFORT=low|medium|high|xhigh|max` (runtime falls back automatically if provider rejects `max`)
+- `ANTHROPIC_OPUS_4_6_EFFORT=low|medium|high|max`
+- `ANTHROPIC_SONNET_4_6_EFFORT=low|medium|high|max` (runtime falls back automatically if provider rejects `max`)
 - `ANTHROPIC_STREAM_RESPONSES=1`
 - `OPENAI_STREAM_RESPONSES=1` (applies to live-delta callers; batch generation uses non-streamed Responses JSON)
 - `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs; defaults on for `gpt-5*` when not streaming deltas)
