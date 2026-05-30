@@ -40,6 +40,7 @@ const LOSSLESS_OPT_MAX_INPUT_BYTES = 10 * BYTES_PER_MB;
 const LOSSLESS_OPT_MIN_ABS_SAVINGS_BYTES = 256 * 1024;
 const LOSSLESS_OPT_MIN_RELATIVE_SAVINGS = 0.03;
 const GIF_TARGET_MAX_BYTES = 15 * BYTES_PER_MB;
+const LOSSY_OPT_LEVELS = [12, 20, 28, 35] as const;
 const EXPORT_RENDER_PROFILES: Record<
   GifExportLayoutFormat,
   ReadonlyArray<{ width: number; height: number }>
@@ -307,13 +308,20 @@ function getPaletteSampleSize(profile: GifRenderProfile, longEdge: number) {
   };
 }
 
-function shouldTryLosslessOptimization(input: Blob) {
-  return input.size >= LOSSLESS_OPT_MIN_INPUT_BYTES && input.size <= LOSSLESS_OPT_MAX_INPUT_BYTES;
+function shouldTryGifOptimization(input: Blob, enforceTarget = false) {
+  return (
+    input.size >= LOSSLESS_OPT_MIN_INPUT_BYTES &&
+    (enforceTarget || input.size <= LOSSLESS_OPT_MAX_INPUT_BYTES)
+  );
 }
 
-async function optimizeGifBlobForDownload(input: Blob, signal?: AbortSignal): Promise<Blob> {
+async function optimizeGifBlobForDownload(
+  input: Blob,
+  signal?: AbortSignal,
+  opts: { enforceTarget?: boolean } = {},
+): Promise<Blob> {
   throwIfAborted(signal);
-  if (!shouldTryLosslessOptimization(input)) return input;
+  if (!shouldTryGifOptimization(input, opts.enforceTarget)) return input;
 
   try {
     const [{ default: gifsicle }, inputBytes] = await Promise.all([
@@ -336,6 +344,18 @@ async function optimizeGifBlobForDownload(input: Blob, signal?: AbortSignal): Pr
     const optimized = await runOptimize("-O2");
     let best = optimized && optimized.size < input.size ? optimized : input;
 
+    if (opts.enforceTarget && best.size > GIF_TARGET_MAX_BYTES) {
+      for (const lossyLevel of LOSSY_OPT_LEVELS) {
+        const lossy = await runOptimize(`-O2 --lossy=${lossyLevel}`);
+        if (lossy && lossy.size < best.size) best = lossy;
+        if (lossy && lossy.size <= GIF_TARGET_MAX_BYTES) return lossy;
+      }
+
+      throw new Error(
+        `GIF stayed above 15 MB after optimization (${(best.size / BYTES_PER_MB).toFixed(1)} MB)`,
+      );
+    }
+
     const savings = input.size - best.size;
     const relativeSavings = savings / Math.max(1, input.size);
     const meaningful =
@@ -345,6 +365,11 @@ async function optimizeGifBlobForDownload(input: Blob, signal?: AbortSignal): Pr
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") throw err;
     console.warn("[gif-export] optimize skipped", err);
+    if (opts.enforceTarget && input.size > GIF_TARGET_MAX_BYTES) {
+      throw err instanceof Error
+        ? err
+        : new Error("GIF optimization failed before it could fit under 15 MB");
+    }
     return input;
   }
 }
@@ -863,13 +888,16 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
 
         smallestBlob = blob;
 
-        const shouldOptimize = shouldTryLosslessOptimization(blob);
+        const enforceTarget = blob.size > GIF_TARGET_MAX_BYTES && idx === profiles.length - 1;
+        const shouldOptimize = shouldTryGifOptimization(blob, enforceTarget);
         if (shouldOptimize) {
           setOptimizing(true);
           setProgress(null);
         }
 
-        const optimizedBlob = await optimizeGifBlobForDownload(blob, abortController.signal);
+        const optimizedBlob = await optimizeGifBlobForDownload(blob, abortController.signal, {
+          enforceTarget,
+        });
         if (!smallestBlob || optimizedBlob.size < smallestBlob.size) {
           smallestBlob = optimizedBlob;
         }
