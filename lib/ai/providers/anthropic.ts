@@ -16,7 +16,7 @@ type AnthropicStreamEvent = {
   delta?: { type?: unknown; text?: unknown } | unknown;
 };
 
-type AnthropicEffort = "low" | "medium" | "high" | "max";
+type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
@@ -144,15 +144,15 @@ function parseEffortEnv(
   opts: { defaultEffort: AnthropicEffort; allowMax: boolean },
 ): AnthropicEffort {
   const raw = (process.env[envVar] ?? "").trim().toLowerCase();
-  if (raw === "low" || raw === "medium" || raw === "high") return raw;
+  if (raw === "low" || raw === "medium" || raw === "high" || raw === "xhigh") return raw;
   if (raw === "max") return opts.allowMax ? "max" : "high";
   return opts.defaultEffort;
 }
 
 function effortFallbacks(initial: AnthropicEffort, opts: { allowMax: boolean }): AnthropicEffort[] {
   const ordered: AnthropicEffort[] = opts.allowMax
-    ? ["max", "high", "medium", "low"]
-    : ["high", "medium", "low"];
+    ? ["max", "xhigh", "high", "medium", "low"]
+    : ["xhigh", "high", "medium", "low"];
   const startIndex = Math.max(0, ordered.indexOf(initial));
   return ordered.slice(startIndex);
 }
@@ -180,6 +180,10 @@ function isOpus47(modelId: string): boolean {
   return modelId.startsWith("claude-opus-4-7");
 }
 
+function isOpus48(modelId: string): boolean {
+  return modelId.startsWith("claude-opus-4-8");
+}
+
 function isOpus46(modelId: string): boolean {
   return modelId.startsWith("claude-opus-4-6");
 }
@@ -189,10 +193,17 @@ function isSonnet46(modelId: string): boolean {
 }
 
 function isAdaptiveThinkingModel(modelId: string): boolean {
-  return isOpus47(modelId) || isOpus46(modelId) || isSonnet46(modelId);
+  return isOpus48(modelId) || isOpus47(modelId) || isOpus46(modelId) || isSonnet46(modelId);
 }
 
 function parseAdaptiveEfforts(modelId: string): AnthropicEffort[] {
+  if (isOpus48(modelId)) {
+    const preferred = parseEffortEnv("ANTHROPIC_OPUS_4_8_EFFORT", {
+      defaultEffort: "max",
+      allowMax: true,
+    });
+    return effortFallbacks(preferred, { allowMax: true });
+  }
   if (isOpus47(modelId)) {
     const preferred = parseEffortEnv("ANTHROPIC_OPUS_4_7_EFFORT", {
       defaultEffort: "max",

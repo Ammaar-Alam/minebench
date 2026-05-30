@@ -1,4 +1,4 @@
-export type AnthropicAdaptiveEffort = "low" | "medium" | "high" | "max";
+export type AnthropicAdaptiveEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 export type GeminiThinkingConfig = {
@@ -79,6 +79,7 @@ export function anthropicAdaptiveEffortAttempts(
 ): AnthropicAdaptiveEffort[] | undefined {
   const isAdaptiveModel =
     modelId.startsWith("claude-opus-4-7") ||
+    modelId.startsWith("claude-opus-4-8") ||
     modelId.startsWith("claude-opus-4-6") ||
     modelId.startsWith("claude-sonnet-4-6");
   if (!isAdaptiveModel) {
@@ -91,7 +92,7 @@ export function anthropicAdaptiveEffortAttempts(
 
   return descendingAttempts(
     `Anthropic model ${modelId}`,
-    ["max", "high", "medium", "low"],
+    ["max", "xhigh", "high", "medium", "low"],
     override,
   );
 }
@@ -274,6 +275,7 @@ export function openRouterReasoningEffortAttempts(
   }
   if (
     modelId === "anthropic/claude-opus-4.7" ||
+    modelId === "anthropic/claude-opus-4.8" ||
     modelId === "anthropic/claude-sonnet-4.6" ||
     modelId === "anthropic/claude-opus-4.6"
   ) {

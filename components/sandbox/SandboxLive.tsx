@@ -1088,7 +1088,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                           value={customModel.modelId}
                           onChange={(e) => updateCustomModel({ modelId: e.target.value })}
                           disabled={running}
-                          placeholder="aws/anthropic/bedrock-claude-opus-4-7"
+                          placeholder="aws/anthropic/bedrock-claude-opus-4-8"
                         />
                       </label>
                       <label className="flex flex-col gap-1">

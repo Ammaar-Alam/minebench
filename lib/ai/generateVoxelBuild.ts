@@ -84,6 +84,8 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   if (modelId === "deepseek/deepseek-v3.2") return 65_536;
   if (modelId === "glm-5.1" || modelId === "glm-5") return 131_072;
   if (
+    modelId.startsWith("claude-opus-4-8") ||
+    modelId === "anthropic/claude-opus-4.8" ||
     modelId.startsWith("claude-opus-4-7") ||
     modelId === "anthropic/claude-opus-4.7"
   ) {
