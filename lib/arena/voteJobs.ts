@@ -51,6 +51,7 @@ type ModelUpdatePlan = {
 };
 
 type VoteCacheUpdate = {
+  voteJobId: string;
   decisive: boolean;
   promptId: string;
   modelA: {
@@ -405,6 +406,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           }
 
           cacheUpdates.push({
+            voteJobId: job.id,
             decisive: isDecisiveChoice(job.choice),
             promptId: job.promptId,
             modelA: {

@@ -1,9 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import type { VoteChoice } from "@/lib/arena/types";
 import { hasArenaMatchupSigningSecret, parseArenaMatchupToken } from "@/lib/arena/matchupToken";
+import { recordArenaVoteQueuedForSampling } from "@/lib/arena/coverage";
+import { shouldScheduleArenaVoteJobDrainAfterResponse } from "@/lib/arena/drainConfig";
+import { scheduleArenaVoteJobDrain } from "@/lib/arena/voteJobs";
 import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { ServerTiming } from "@/lib/serverTiming";
 
@@ -68,6 +71,16 @@ export async function POST(req: Request) {
   const { matchupId, choice } = parsed.data as { matchupId: string; choice: VoteChoice };
 
   let res: NextResponse | null = null;
+  let queuedVoteJobs = 0;
+  let queuedVoteJobInput:
+    | {
+        voteJobId: string;
+        promptId: string;
+        modelAId: string;
+        modelBId: string;
+        choice: VoteChoice;
+      }
+    | null = null;
 
   try {
     const lookupStartedAt = timing.start();
@@ -112,8 +125,7 @@ export async function POST(req: Request) {
     const txStartedAt = timing.start();
     const voteId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
-    // keep vote writes small; rating and coverage drain from cron
-    await withArenaWriteRetry(async () => {
+    const insertedJobs = await withArenaWriteRetry(async () => {
       return prisma.$queryRaw<Array<{ voteId: string }>>(Prisma.sql`
         WITH inserted_matchup AS (
           INSERT INTO "Matchup" (
@@ -170,6 +182,16 @@ export async function POST(req: Request) {
         RETURNING "voteId"
       `);
     });
+    queuedVoteJobs = insertedJobs.length;
+    if (queuedVoteJobs > 0) {
+      queuedVoteJobInput = {
+        voteJobId: jobId,
+        promptId: matchup.promptId,
+        modelAId: matchup.modelAId,
+        modelBId: matchup.modelBId,
+        choice,
+      };
+    }
     timing.end("tx", txStartedAt);
   } catch (err) {
     if (res && isDuplicateVoteError(err)) {
@@ -197,6 +219,16 @@ export async function POST(req: Request) {
   }
   if (!res) {
     return respondJson({ error: "Vote failed" }, { status: 409 });
+  }
+  if (queuedVoteJobInput) {
+    recordArenaVoteQueuedForSampling(queuedVoteJobInput);
+  }
+  if (shouldScheduleArenaVoteJobDrainAfterResponse(queuedVoteJobs)) {
+    after(() =>
+      scheduleArenaVoteJobDrain().catch((error) => {
+        console.warn("arena vote job drain failed", error);
+      }),
+    );
   }
   timing.apply(res.headers);
   return res;

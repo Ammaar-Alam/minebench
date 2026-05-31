@@ -9,14 +9,14 @@ type DrainDefaults = {
 
 const DRAIN_DEFAULTS: Record<ArenaDrainKind, DrainDefaults> = {
   vote: {
-    defaultMaxJobs: 32,
-    defaultMaxMs: 5_000,
+    defaultMaxJobs: 256,
+    defaultMaxMs: 15_000,
     hardMaxJobs: 256,
     hardMaxMs: 15_000,
   },
   shown: {
-    defaultMaxJobs: 64,
-    defaultMaxMs: 5_000,
+    defaultMaxJobs: 512,
+    defaultMaxMs: 15_000,
     hardMaxJobs: 512,
     hardMaxMs: 15_000,
   },
@@ -55,4 +55,13 @@ export function shouldIncludeArenaDrainStatus(url: URL): boolean {
     readBoolParam(url.searchParams.get("status")) ||
     readBoolParam(url.searchParams.get("includeStatus"))
   );
+}
+
+export function shouldScheduleArenaVoteJobDrainAfterResponse(
+  queuedJobs: number,
+  envValue = process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE,
+): boolean {
+  if (queuedJobs <= 0) return false;
+  const normalized = envValue?.trim().toLowerCase();
+  return normalized !== "0" && normalized !== "false" && normalized !== "off";
 }
