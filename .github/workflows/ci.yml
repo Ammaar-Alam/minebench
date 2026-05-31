@@ -1,4 +1,4 @@
-name: CI
+name: MineBench Quality Gates
 
 on:
   push:
@@ -6,25 +6,144 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
 jobs:
-  lint-and-build:
+  static-analysis:
+    name: "Quality / Static Analysis"
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
 
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      - run: pnpm lint
+      - name: Capture tool versions
+        id: versions
+        run: |
+          echo "node=$(node --version)" >> "$GITHUB_OUTPUT"
+          echo "pnpm=$(pnpm --version)" >> "$GITHUB_OUTPUT"
 
-      - run: pnpm build
+      - name: Run ESLint
+        id: lint
+        run: pnpm lint
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Quality / Static Analysis"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Command | \`pnpm lint\` |"
+            echo "| Result | \`${{ steps.lint.outcome }}\` |"
+            echo "| Node | \`${{ steps.versions.outputs.node }}\` |"
+            echo "| pnpm | \`${{ steps.versions.outputs.pnpm }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  regression-tests:
+    name: "Quality / Regression Tests"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Capture tool versions
+        id: versions
+        run: |
+          echo "node=$(node --version)" >> "$GITHUB_OUTPUT"
+          echo "pnpm=$(pnpm --version)" >> "$GITHUB_OUTPUT"
+
+      - name: Run regression suite
+        id: regression
+        run: pnpm test
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Quality / Regression Tests"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Command | \`pnpm test\` |"
+            echo "| Result | \`${{ steps.regression.outcome }}\` |"
+            echo "| Node | \`${{ steps.versions.outputs.node }}\` |"
+            echo "| pnpm | \`${{ steps.versions.outputs.pnpm }}\` |"
+            echo ""
+            echo "Covers the fast regression suite under \`tests/\`; opt-in performance budgets stay outside the default gate."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  production-build:
+    name: "Quality / Production Build"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Capture tool versions
+        id: versions
+        run: |
+          echo "node=$(node --version)" >> "$GITHUB_OUTPUT"
+          echo "pnpm=$(pnpm --version)" >> "$GITHUB_OUTPUT"
+
+      - name: Build production bundle
+        id: build
+        run: pnpm build
         env:
           DATABASE_URL: "postgresql://fake:fake@localhost:5432/fake"
           DIRECT_URL: "postgresql://fake:fake@localhost:5432/fake"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          {
+            echo "## Quality / Production Build"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Command | \`pnpm build\` |"
+            echo "| Result | \`${{ steps.build.outcome }}\` |"
+            echo "| Node | \`${{ steps.versions.outputs.node }}\` |"
+            echo "| pnpm | \`${{ steps.versions.outputs.pnpm }}\` |"
+            echo "| Prisma env | CI placeholder Postgres URLs |"
+          } >> "$GITHUB_STEP_SUMMARY"
