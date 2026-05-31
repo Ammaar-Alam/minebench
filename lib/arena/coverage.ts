@@ -566,6 +566,9 @@ async function queryCoverageState(
   }
 
   const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
+  if (eligiblePromptIds.length === 0 || eligibleModelIds.length === 0) {
+    return emptyCoverageState();
+  }
 
   const [pairPromptRows, voteJobRows] = await prisma.$transaction(
     async (tx) => {

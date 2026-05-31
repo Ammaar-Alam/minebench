@@ -125,6 +125,12 @@ assert.ok(
   "persisted coverage and pending jobs should not be read with independent snapshots",
 );
 assert.ok(
+  /const eligiblePromptIds = eligiblePrompts\.map[\s\S]*if \(eligiblePromptIds\.length === 0 \|\| eligibleModelIds\.length === 0\) \{\s*return emptyCoverageState\(\);\s*\}/.test(
+    coverageSource,
+  ),
+  "raw coverage queries should guard the exact arrays passed into Prisma.join",
+);
+assert.ok(
   migrationSources.includes('"ArenaVoteJob_sampling_coverage_snapshot_idx"'),
   "vote-job snapshot refreshes should have a covering partial index",
 );
