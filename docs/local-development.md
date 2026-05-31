@@ -123,6 +123,8 @@ Copy `.env.example` to `.env` and set what you need.
 - `pnpm dev`: start Next.js dev server
 - `pnpm build` / `pnpm start`: production build and serve
 - `pnpm lint`: ESLint
+- `pnpm test`: run the automated regression suite in `tests/`
+- `pnpm check`: run lint, tests, and a production build before pushing larger changes
 - `pnpm db:up` / `pnpm db:down` / `pnpm db:reset`
 - `pnpm prisma:migrate` / `pnpm prisma:dev` / `pnpm prisma:generate`
 - `pnpm atlas`: rebuild texture atlas
@@ -134,7 +136,8 @@ Copy `.env.example` to `.env` and set what you need.
 ## Quality Checks
 
 - `pnpm lint` for static checks
-- no automated test suite is configured yet
+- `pnpm test` for fast automated regression tests
+- `pnpm check` before pushing changes that should clear the full local gate
 
 ## Arena Load Testing
 

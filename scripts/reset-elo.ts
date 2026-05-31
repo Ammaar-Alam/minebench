@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S tsx
 /**
  * Reset Arena ELO + stats (without deleting builds).
  *

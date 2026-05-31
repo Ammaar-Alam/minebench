@@ -12,6 +12,7 @@
 
 ## Checklist
 
-- [ ] `pnpm lint` passes
+- [ ] `pnpm test` passes
+- [ ] `pnpm check` passes
 - [ ] Tested locally
 - [ ] Updated README or docs if needed

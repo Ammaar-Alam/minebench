@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S tsx
 /**
  * Prompt + Build Import Script for MineBench
  *

@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S tsx
 /**
  * Convert raw OpenAI/Anthropic tool-call payloads into MineBench voxel build JSON.
  *

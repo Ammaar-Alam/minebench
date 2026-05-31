@@ -231,7 +231,7 @@ Reference docs:
 
 ### Adding formats
 
-Add new export formats under `lib/voxel/export/`, wire them through `components/voxel/voxelBuildExport.worker.ts`, and extend `scripts/verify-voxel-export.ts`. Format code should not run on viewer mount, and it should preserve the block ID mapping either as materials, metadata, or the native block-state representation.
+Add new export formats under `lib/voxel/export/`, wire them through `components/voxel/voxelBuildExport.worker.ts`, and extend `tests/integration/voxel-export.test.ts`. Format code should not run on viewer mount, and it should preserve the block ID mapping either as materials, metadata, or the native block-state representation.
 
 ## 9) Related docs
 

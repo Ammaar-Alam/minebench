@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S tsx
 /**
  * Recompute Arena rating + vote counters from stored vote history.
  *
@@ -214,4 +214,3 @@ main()
     process.exitCode = 1;
   })
   .finally(() => prisma.$disconnect().catch(() => undefined));
-

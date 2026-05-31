@@ -41,7 +41,7 @@ When adding a format:
 1. Reuse the validated `VoxelBuild` shape and palette block IDs.
 2. Keep conversion lazy and worker-backed so Arena and Sandbox rendering stay responsive.
 3. Preserve block identity through native block states, material names, or metadata.
-4. Add artifact checks to `scripts/verify-voxel-export.ts`.
+4. Add artifact checks to `tests/integration/voxel-export.test.ts`.
 5. Update `docs/voxel-exec-raw-output.md` with import steps and format limits.
 
 ### Fix Bugs or Improve Documentation
@@ -60,15 +60,18 @@ pnpm dev:setup
 # seed the database with existing builds
 pnpm prompt --import
 
-# run linter
-pnpm lint
+# run tests
+pnpm test
+
+# run the full local gate
+pnpm check
 ```
 
 ## Pull Request Guidelines
 
 - Keep PRs focused on a single change
 - Include a clear description of what the PR does and why
-- Make sure `pnpm lint` passes
+- Make sure `pnpm check` passes before opening a merge-ready PR
 - Test your changes locally before submitting
 - If adding a new model provider, include sample output in the PR description
 
@@ -86,6 +89,7 @@ When reporting bugs, please include:
 - TypeScript with strict mode
 - Tailwind CSS for styling
 - ESLint for linting (`pnpm lint`)
+- Regression tests live under `tests/` and run with `pnpm test`
 - Keep comments brief and informal
 
 ## License
