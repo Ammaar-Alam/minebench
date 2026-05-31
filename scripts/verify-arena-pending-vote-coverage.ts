@@ -113,6 +113,10 @@ assert.ok(
   "persisted coverage and vote-job rows should be read from one repeatable-read snapshot",
 );
 assert.ok(
+  /recordArenaVoteInSamplingCache[\s\S]*applySamplingStateMutation\(\(state\) =>/.test(coverageSource),
+  "drained vote rating updates should replay into in-flight sampling refreshes",
+);
+assert.ok(
   coverageSource.includes("\"processedAt\" IS NOT NULL"),
   "recent processed vote jobs should mark replayed deltas as already applied",
 );

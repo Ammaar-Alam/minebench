@@ -357,7 +357,7 @@ export function recordArenaVoteInSamplingCache(input: {
   modelA: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
   modelB: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
 }) {
-  applyCachedSamplingStateMutation((state) => {
+  applySamplingStateMutation((state) => {
     for (const nextModel of [input.modelA, input.modelB]) {
       const cachedModel = state.modelsById.get(nextModel.id);
       if (!cachedModel) continue;
