@@ -15,9 +15,9 @@ import type {
   ArenaBuildVariant,
 } from "@/lib/arena/types";
 import {
-  isGzipChunk,
+  isGzipStreamPrefix,
   readBuildVariantJson,
-  streamFromFirstChunk,
+  streamFromInitialChunks,
 } from "@/lib/arena/clientBuildResponse";
 import {
   VoxelLoadingHud,
@@ -348,18 +348,26 @@ async function fetchBuildVariantStreamOnce(
 
   try {
     reader = res.body.getReader();
-    const firstRead = await readWithTimeout(
-      () => reader!.read(),
-      STREAM_FIRST_EVENT_TIMEOUT_MS,
-      opts?.signal,
-      cancelReader,
-    );
-    if (firstRead.done || !firstRead.value) {
+    const initialChunks: Uint8Array[] = [];
+    let initialByteCount = 0;
+    while (initialByteCount < 2) {
+      const initialRead = await readWithTimeout(
+        () => reader!.read(),
+        STREAM_FIRST_EVENT_TIMEOUT_MS,
+        opts?.signal,
+        cancelReader,
+      );
+      if (initialRead.done) break;
+      if (initialRead.value && initialRead.value.length > 0) {
+        initialChunks.push(initialRead.value);
+        initialByteCount += initialRead.value.length;
+      }
+    }
+    if (initialChunks.length === 0) {
       throw new Error("Build stream ended before any data loaded");
     }
-    const firstChunk = firstRead.value;
-    const stream = streamFromFirstChunk(firstChunk, reader);
-    reader = isGzipChunk(firstChunk)
+    const stream = streamFromInitialChunks(initialChunks, reader);
+    reader = isGzipStreamPrefix(initialChunks)
       ? stream
           .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>)
           .getReader()
