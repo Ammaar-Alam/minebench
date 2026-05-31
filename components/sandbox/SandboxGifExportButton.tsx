@@ -28,11 +28,11 @@ const MAX_IN_FLIGHT_FRAMES = 4;
 const YIELD_EVERY_FRAMES = 24;
 const COMPARISON_FRAME_COUNT = 96;
 const SINGLE_FRAME_COUNT = 144;
-const COMPARISON_FRAME_DELAY_MS = 30;
-const SINGLE_FRAME_DELAY_MS = 20;
-const COMPARISON_PALETTE_SAMPLE_COUNT = 10;
+const COMPARISON_FRAME_DELAY_MS = 40;
+const SINGLE_FRAME_DELAY_MS = 30;
+const COMPARISON_PALETTE_SAMPLE_COUNT = 12;
 const SINGLE_PALETTE_SAMPLE_COUNT = 16;
-const COMPARISON_PALETTE_SAMPLE_LONG_EDGE = 540;
+const COMPARISON_PALETTE_SAMPLE_LONG_EDGE = 640;
 const SINGLE_PALETTE_SAMPLE_LONG_EDGE = 720;
 const BYTES_PER_MB = 1024 * 1024;
 const LOSSLESS_OPT_MIN_INPUT_BYTES = 6 * BYTES_PER_MB;
@@ -51,11 +51,13 @@ const EXPORT_RENDER_PROFILES: Record<
     { width: 840, height: 945 },
   ],
   wide: [
+    { width: 1440, height: 810 },
     { width: 1280, height: 720 },
     { width: 960, height: 540 },
     { width: 720, height: 405 },
   ],
   vertical: [
+    { width: 810, height: 1440 },
     { width: 720, height: 1280 },
     { width: 640, height: 1138 },
     { width: 540, height: 960 },
