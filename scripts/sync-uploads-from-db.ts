@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S tsx
 /**
  * Sync local uploads/ JSON files from builds currently stored in the database.
  *

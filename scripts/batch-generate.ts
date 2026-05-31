@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S tsx
 /**
  * Batch Generate & Upload Script for MineBench
  * 

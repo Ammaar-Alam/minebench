@@ -1,4 +1,4 @@
-#!/usr/bin/env npx tsx
+#!/usr/bin/env -S tsx
 
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
