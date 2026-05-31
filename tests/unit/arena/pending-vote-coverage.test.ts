@@ -6,7 +6,7 @@ import {
   pairKey,
   pairPromptKey,
   type ArenaMatchupSamplingState,
-} from "../lib/arena/coverage";
+} from "../../../lib/arena/coverage";
 
 const coverageSource = readFileSync("lib/arena/coverage.ts", "utf8");
 const migrationSources = readdirSync("prisma/migrations")

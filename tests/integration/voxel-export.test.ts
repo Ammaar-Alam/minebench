@@ -1,15 +1,17 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { getPalette } from "../lib/blocks/palettes";
+import { getPalette } from "../../lib/blocks/palettes";
 import {
   buildSpongeSchematic,
   buildVoxelExportGeometry,
   buildVoxelGlb,
   buildVoxelStl,
-} from "../lib/voxel/export";
-import type { VoxelBuild } from "../lib/voxel/types";
+} from "../../lib/voxel/export";
+import type { VoxelBuild } from "../../lib/voxel/types";
 
-const OUT_DIR = "/private/tmp/minebench-export-verify";
+const OUT_DIR = join(tmpdir(), "minebench-export-verify");
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

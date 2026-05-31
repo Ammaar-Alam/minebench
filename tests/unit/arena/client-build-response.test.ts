@@ -5,7 +5,7 @@ import {
   isGzipStreamPrefix,
   readBuildVariantJson,
   streamFromInitialChunks,
-} from "../lib/arena/clientBuildResponse";
+} from "../../../lib/arena/clientBuildResponse";
 
 async function main() {
   const payload = {

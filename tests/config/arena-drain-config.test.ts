@@ -4,7 +4,7 @@ import {
   resolveArenaDrainRequestLimits,
   shouldScheduleArenaVoteJobDrainAfterResponse,
   shouldIncludeArenaDrainStatus,
-} from "../lib/arena/drainConfig";
+} from "../../lib/arena/drainConfig";
 
 const vercelConfig = JSON.parse(readFileSync("vercel.json", "utf8")) as {
   crons?: Array<{ path?: string; schedule?: string }>;

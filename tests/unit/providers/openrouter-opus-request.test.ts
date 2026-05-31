@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { openrouterGenerateText } from "../lib/ai/providers/openrouter";
+import { openrouterGenerateText } from "../../../lib/ai/providers/openrouter";
 
 type CapturedRequest = {
   url: string;
