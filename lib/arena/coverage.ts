@@ -60,6 +60,7 @@ export type CoverageState = {
   pairPromptDecisiveVotes: Map<string, number>;
   promptCoverageByModelId: Map<string, number>;
   promptDecisiveTotals: Map<string, number>;
+  appliedVoteJobIds: Set<string>;
 };
 
 export type ArenaMatchupSamplingState = {
@@ -84,17 +85,18 @@ type NumberLike = number | bigint | string | null;
 type SamplingStateMutation = (state: ArenaMatchupSamplingState) => void;
 
 export type ArenaCoverageVoteDelta = {
+  voteJobId?: string;
   modelAId: string;
   modelBId: string;
   promptId: string;
   decisiveVotes: number;
 };
 
-type CoverageVoteAggregateRow = {
+type PendingCoverageVoteJobRow = {
+  id: string;
   modelAId: string;
   modelBId: string;
   promptId: string;
-  decisiveVotes: NumberLike;
 };
 
 let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
@@ -151,6 +153,10 @@ function applyArenaCoverageVoteDeltasToCoverage(
       !delta.promptId
     ) {
       continue;
+    }
+    if (delta.voteJobId) {
+      if (coverage.appliedVoteJobIds.has(delta.voteJobId)) continue;
+      coverage.appliedVoteJobIds.add(delta.voteJobId);
     }
 
     const pair = pairKey(delta.modelAId, delta.modelBId);
@@ -322,6 +328,7 @@ function refreshPromptCoverageForModel(state: ArenaMatchupSamplingState, modelId
 }
 
 export function recordArenaVoteQueuedForSampling(input: {
+  voteJobId: string;
   promptId: string;
   modelAId: string;
   modelBId: string;
@@ -329,14 +336,45 @@ export function recordArenaVoteQueuedForSampling(input: {
 }) {
   if (!isDecisiveChoice(input.choice)) return;
   const delta = {
+    voteJobId: input.voteJobId,
     modelAId: input.modelAId,
     modelBId: input.modelBId,
     promptId: input.promptId,
     decisiveVotes: 1,
   };
 
-  applyCachedSamplingStateMutation((state) => {
+  applySamplingStateMutation((state) => {
     applyArenaCoverageVoteDeltasToSamplingState(state, [delta]);
+  });
+}
+
+export function recordArenaVoteInSamplingCache(input: {
+  voteJobId: string;
+  promptId: string;
+  decisive: boolean;
+  modelA: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
+  modelB: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
+}) {
+  applyCachedSamplingStateMutation((state) => {
+    for (const nextModel of [input.modelA, input.modelB]) {
+      const cachedModel = state.modelsById.get(nextModel.id);
+      if (!cachedModel) continue;
+      cachedModel.eloRating = nextModel.eloRating;
+      cachedModel.conservativeRating = nextModel.conservativeRating;
+      cachedModel.ratingDeviation = nextModel.ratingDeviation;
+    }
+
+    if (!input.decisive) return;
+
+    applyArenaCoverageVoteDeltasToSamplingState(state, [
+      {
+        voteJobId: input.voteJobId,
+        modelAId: input.modelA.id,
+        modelBId: input.modelB.id,
+        promptId: input.promptId,
+        decisiveVotes: 1,
+      },
+    ]);
   });
 }
 
@@ -352,6 +390,7 @@ function emptyCoverageState(): CoverageState {
     pairPromptDecisiveVotes: new Map(),
     promptCoverageByModelId: new Map(),
     promptDecisiveTotals: new Map(),
+    appliedVoteJobIds: new Set(),
   };
 }
 
@@ -540,19 +579,18 @@ async function queryCoverageState(
         decisiveVotes: true,
       },
     }),
-    prisma.$queryRaw<CoverageVoteAggregateRow[]>(Prisma.sql`
+    prisma.$queryRaw<PendingCoverageVoteJobRow[]>(Prisma.sql`
       SELECT
+        "id",
         "modelAId",
         "modelBId",
-        "promptId",
-        COUNT(*)::int AS "decisiveVotes"
+        "promptId"
       FROM "ArenaVoteJob"
       WHERE "processedAt" IS NULL
         AND "choice" IN ('A', 'B')
         AND "promptId" IN (${Prisma.join(eligiblePromptIds)})
         AND "modelAId" IN (${Prisma.join(eligibleModelIds)})
         AND "modelBId" IN (${Prisma.join(eligibleModelIds)})
-      GROUP BY "modelAId", "modelBId", "promptId"
     `),
   ]);
 
@@ -595,12 +633,14 @@ async function queryCoverageState(
       pairPromptDecisiveVotes,
       promptCoverageByModelId: new Map(),
       promptDecisiveTotals,
+      appliedVoteJobIds: new Set(),
     },
     pendingVoteRows.map((row) => ({
+      voteJobId: row.id,
       modelAId: row.modelAId,
       modelBId: row.modelBId,
       promptId: row.promptId,
-      decisiveVotes: toNumber(row.decisiveVotes),
+      decisiveVotes: 1,
     })),
   );
 
@@ -622,6 +662,7 @@ async function queryCoverageState(
     pairPromptDecisiveVotes,
     promptCoverageByModelId,
     promptDecisiveTotals,
+    appliedVoteJobIds: new Set(pendingVoteRows.map((row) => row.id)),
   };
 }
 

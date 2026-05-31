@@ -56,15 +56,17 @@ function makeState(): ArenaMatchupSamplingState {
         ["model-b", 0],
       ]),
       promptDecisiveTotals: new Map(),
+      appliedVoteJobIds: new Set(),
     },
   };
 }
 
 const state = makeState();
 applyArenaCoverageVoteDeltasToSamplingState(state, [
-  { modelAId: "model-a", modelBId: "model-b", promptId: "prompt-1", decisiveVotes: 1 },
-  { modelAId: "model-a", modelBId: "model-b", promptId: "prompt-1", decisiveVotes: 1 },
-  { modelAId: "model-b", modelBId: "model-a", promptId: "prompt-2", decisiveVotes: 1 },
+  { voteJobId: "job-1", modelAId: "model-a", modelBId: "model-b", promptId: "prompt-1", decisiveVotes: 1 },
+  { voteJobId: "job-2", modelAId: "model-a", modelBId: "model-b", promptId: "prompt-1", decisiveVotes: 1 },
+  { voteJobId: "job-3", modelAId: "model-b", modelBId: "model-a", promptId: "prompt-2", decisiveVotes: 1 },
+  { voteJobId: "job-2", modelAId: "model-a", modelBId: "model-b", promptId: "prompt-1", decisiveVotes: 1 },
 ]);
 
 const modelAPrompt1 = modelPromptKey("model-a", "prompt-1");

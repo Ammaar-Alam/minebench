@@ -74,6 +74,7 @@ export async function POST(req: Request) {
   let queuedVoteJobs = 0;
   let queuedVoteJobInput:
     | {
+        voteJobId: string;
         promptId: string;
         modelAId: string;
         modelBId: string;
@@ -184,6 +185,7 @@ export async function POST(req: Request) {
     queuedVoteJobs = insertedJobs.length;
     if (queuedVoteJobs > 0) {
       queuedVoteJobInput = {
+        voteJobId: jobId,
         promptId: matchup.promptId,
         modelAId: matchup.modelAId,
         modelBId: matchup.modelBId,

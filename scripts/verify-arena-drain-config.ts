@@ -10,6 +10,7 @@ const vercelConfig = JSON.parse(readFileSync("vercel.json", "utf8")) as {
   crons?: Array<{ path?: string; schedule?: string }>;
 };
 const voteRouteSource = readFileSync("app/api/arena/vote/route.ts", "utf8");
+const voteJobsSource = readFileSync("lib/arena/voteJobs.ts", "utf8");
 
 const voteDefaults = resolveArenaDrainRequestLimits(
   new URL("https://minebench.ai/api/admin/arena/drain-vote-jobs"),
@@ -65,6 +66,14 @@ assert.ok(
 assert.ok(
   voteRouteSource.includes("scheduleArenaVoteJobDrain()"),
   "vote route should schedule the bounded vote job drainer after successful queue writes",
+);
+assert.ok(
+  voteJobsSource.includes("recordArenaVoteInSamplingCache"),
+  "vote drains should update the cached sampling state instead of clearing it",
+);
+assert.ok(
+  !voteJobsSource.includes("invalidateArenaCoverageCache"),
+  "vote drains should not invalidate the 60s sampling cache after every processed vote",
 );
 
 assert.equal(

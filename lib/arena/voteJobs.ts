@@ -1,8 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { conservativeScore, updateRatingPair } from "@/lib/arena/rating";
 import {
-  invalidateArenaCoverageCache,
   isDecisiveChoice,
+  recordArenaVoteInSamplingCache,
 } from "@/lib/arena/coverage";
 import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { prisma } from "@/lib/prisma";
@@ -50,6 +50,24 @@ type ModelUpdatePlan = {
   data: Prisma.ModelUpdateInput;
 };
 
+type VoteCacheUpdate = {
+  voteJobId: string;
+  decisive: boolean;
+  promptId: string;
+  modelA: {
+    id: string;
+    eloRating: number;
+    conservativeRating: number;
+    ratingDeviation: number;
+  };
+  modelB: {
+    id: string;
+    eloRating: number;
+    conservativeRating: number;
+    ratingDeviation: number;
+  };
+};
+
 type CounterIncrements = {
   winCount: number;
   lossCount: number;
@@ -66,6 +84,7 @@ type CoveragePersistUpdate = {
 
 type VoteJobBatchResult = {
   processedCount: number;
+  cacheUpdates: VoteCacheUpdate[];
   lockSkipped?: boolean;
 };
 
@@ -264,6 +283,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
         if (!hasDrainLock) {
           return {
             processedCount: 0,
+            cacheUpdates: [],
             lockSkipped: true,
           };
         }
@@ -286,6 +306,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
         if (jobs.length === 0) {
           return {
             processedCount: 0,
+            cacheUpdates: [],
           };
         }
 
@@ -303,6 +324,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           ]),
         );
         const counterIncrements = new Map<string, CounterIncrements>();
+        const cacheUpdates: VoteCacheUpdate[] = [];
         const coveragePersistUpdates = new Map<string, CoveragePersistUpdate>();
 
         // batch repeated pair and prompt increments into one write
@@ -383,6 +405,23 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
             countersB.drawCount += 1;
           }
 
+          cacheUpdates.push({
+            voteJobId: job.id,
+            decisive: isDecisiveChoice(job.choice),
+            promptId: job.promptId,
+            modelA: {
+              id: job.modelAId,
+              eloRating: modelA.eloRating,
+              conservativeRating: modelA.conservativeRating,
+              ratingDeviation: modelA.glickoRd,
+            },
+            modelB: {
+              id: job.modelBId,
+              eloRating: modelB.eloRating,
+              conservativeRating: modelB.conservativeRating,
+              ratingDeviation: modelB.glickoRd,
+            },
+          });
         }
 
         const modelUpdatePlans = Array.from(modelStates.values()).map((model) => {
@@ -409,7 +448,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           WHERE "id" IN (${Prisma.join(jobs.map((job) => job.id))})
         `);
 
-        return { processedCount: jobs.length };
+        return { processedCount: jobs.length, cacheUpdates };
       },
       {
         maxWait: JOB_TX_MAX_WAIT_MS,
@@ -422,7 +461,9 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
   if (result.processedCount <= 0) return result;
 
   invalidateArenaStatsCache();
-  invalidateArenaCoverageCache();
+  for (const cacheUpdate of result.cacheUpdates) {
+    recordArenaVoteInSamplingCache(cacheUpdate);
+  }
   return result;
 }
 
