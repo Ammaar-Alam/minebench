@@ -83,6 +83,9 @@ jobs:
       - name: Run regression suite
         id: regression
         run: pnpm test
+        env:
+          DATABASE_URL: "postgresql://minebench:minebench@localhost:5432/minebench_ci"
+          DIRECT_URL: "postgresql://minebench:minebench@localhost:5432/minebench_ci"
 
       - name: Write job summary
         if: always()
@@ -129,8 +132,8 @@ jobs:
         id: build
         run: pnpm build
         env:
-          DATABASE_URL: "postgresql://fake:fake@localhost:5432/fake"
-          DIRECT_URL: "postgresql://fake:fake@localhost:5432/fake"
+          DATABASE_URL: "postgresql://minebench:minebench@localhost:5432/minebench_ci"
+          DIRECT_URL: "postgresql://minebench:minebench@localhost:5432/minebench_ci"
 
       - name: Write job summary
         if: always()
@@ -144,5 +147,5 @@ jobs:
             echo "| Result | \`${{ steps.build.outcome }}\` |"
             echo "| Node | \`${{ steps.versions.outputs.node }}\` |"
             echo "| pnpm | \`${{ steps.versions.outputs.pnpm }}\` |"
-            echo "| Prisma env | CI placeholder Postgres URLs |"
+            echo "| Prisma env | local CI Postgres URLs |"
           } >> "$GITHUB_STEP_SUMMARY"

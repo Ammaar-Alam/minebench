@@ -52,12 +52,16 @@ const scriptShebangsUsingNpx = trackedFiles
 assert.deepEqual(scriptShebangsUsingNpx, []);
 
 const voxelExportTestSource = readFileSync("tests/integration/voxel-export.test.ts", "utf8");
+const testRunnerSource = readFileSync("tests/run.ts", "utf8");
 assert.equal(
   voxelExportTestSource.includes("assert(totalMs <"),
   false,
   "default tests should not fail on wall-clock export timing",
 );
 assert.equal(voxelExportTestSource.includes(["perf", "BudgetMs"].join("")), false);
+assert.equal(testRunnerSource.includes("tsx.cmd"), false);
+assert.ok(testRunnerSource.includes('require.resolve("tsx/cli")'));
+assert.ok(testRunnerSource.includes("process.execPath"));
 
 const testFiles = listFiles("tests")
   .map((path) => relative(".", path))

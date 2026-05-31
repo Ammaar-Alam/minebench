@@ -35,6 +35,8 @@ assert.ok(includesInJob("static-analysis", "GITHUB_STEP_SUMMARY"));
 
 assert.ok(includesInJob("regression-tests", 'name: "Quality / Regression Tests"'));
 assert.ok(includesInJob("regression-tests", "run: pnpm test"));
+assert.ok(includesInJob("regression-tests", "DATABASE_URL"));
+assert.ok(includesInJob("regression-tests", "DIRECT_URL"));
 assert.ok(includesInJob("regression-tests", "GITHUB_STEP_SUMMARY"));
 
 assert.ok(includesInJob("production-build", 'name: "Quality / Production Build"'));

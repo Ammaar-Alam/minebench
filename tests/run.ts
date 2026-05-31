@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join, relative } from "node:path";
+
+const require = createRequire(import.meta.url);
+const tsxCliPath = require.resolve("tsx/cli");
 
 function listTestFiles(path: string): string[] {
   if (!existsSync(path)) {
@@ -26,13 +30,12 @@ if (testFiles.length === 0) {
 }
 
 const failures: string[] = [];
-const tsxCommand = process.platform === "win32" ? "tsx.cmd" : "tsx";
 
 for (const testFile of testFiles) {
   const displayPath = relative(process.cwd(), testFile);
   console.log(`\n> ${displayPath}`);
 
-  const result = spawnSync(tsxCommand, [testFile], {
+  const result = spawnSync(process.execPath, [tsxCliPath, testFile], {
     env: process.env,
     stdio: "inherit",
   });
