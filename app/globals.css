@@ -355,6 +355,20 @@
     animation: mb-col-fade-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
+  .mb-leaderboard-table[data-details="open"] .mb-leaderboard-row {
+    transition-duration: 260ms;
+  }
+
+  .mb-details-toggle {
+    transition-property: transform, background-color, color, box-shadow;
+    transition-duration: 180ms;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .mb-details-toggle:active {
+    transform: translateY(1px) scale(0.98);
+  }
+
   /* Fade-in the retry button when a refresh actually fails so it doesn't
      pop harshly into the stable header row. */
   .mb-refresh-retry {
@@ -365,6 +379,14 @@
     .mb-leaderboard-detail-col,
     .mb-refresh-retry {
       animation: none;
+    }
+
+    .mb-details-toggle {
+      transition: none;
+    }
+
+    .mb-details-toggle:active {
+      transform: none;
     }
   }
 
@@ -447,6 +469,58 @@
 
   .mb-leaderboard-cell {
     vertical-align: middle;
+  }
+
+  .mb-leaderboard-rating-stack {
+    display: grid;
+    justify-items: center;
+    row-gap: 0.08rem;
+    line-height: 1.05;
+  }
+
+  .mb-leaderboard-rating-primary {
+    font-size: 0.875rem;
+    line-height: 1.08;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mb-leaderboard-rating-detail {
+    display: grid;
+    grid-template-rows: 0fr;
+    min-height: 0;
+    color: hsl(var(--muted2));
+    font-size: 0.6875rem;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    opacity: 0;
+    transform: translateY(-3px);
+    transition:
+      grid-template-rows 240ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 180ms ease-out,
+      transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .mb-leaderboard-rating-detail > span {
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .mb-leaderboard-rating-detail-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .mb-leaderboard-rating-detail-closed {
+    pointer-events: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-leaderboard-rating-detail {
+      transition: none;
+      transform: none;
+    }
   }
 
   .mb-leaderboard-model-cell {

@@ -382,7 +382,7 @@ export function Leaderboard() {
               type="button"
               onClick={() => setShowDetailed((v) => !v)}
               aria-pressed={showDetailed}
-              className={`mb-btn h-7 rounded-full px-2.5 text-[11px] ${showDetailed ? "mb-btn-primary" : "mb-btn-ghost"}`}
+              className={`mb-btn mb-details-toggle h-7 rounded-full px-2.5 text-[11px] ${showDetailed ? "mb-btn-primary" : "mb-btn-ghost"}`}
             >
               {showDetailed ? "Hide details" : "Show details"}
             </button>
@@ -534,7 +534,8 @@ export function Leaderboard() {
 
           <table
             aria-label="Model rankings"
-            className="relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table"
+            data-details={showDetailed ? "open" : "closed"}
+            className="mb-leaderboard-table relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table"
           >
             <colgroup>
               <col className={showDetailed ? "w-[21%]" : "w-[28%]"} />
@@ -689,10 +690,20 @@ export function Leaderboard() {
 	                          </div>
 	                        </div>
 	                      </div>
-	                    </td>
+                    </td>
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
-                      <div className="font-mono font-semibold tracking-tight text-fg/95">
-                        {Math.round(m.rankScore).toLocaleString()}
+                      <div className="mb-leaderboard-rating-stack font-mono">
+                        <div className="mb-leaderboard-rating-primary font-semibold tracking-tight text-fg/95">
+                          {Math.round(m.rankScore).toLocaleString()}
+                        </div>
+                        <div
+                          className={`mb-leaderboard-rating-detail ${
+                            showDetailed ? "mb-leaderboard-rating-detail-open" : "mb-leaderboard-rating-detail-closed"
+                          }`}
+                          aria-hidden={!showDetailed}
+                        >
+                          <span>raw {Math.round(m.eloRating).toLocaleString()}</span>
+                        </div>
                       </div>
                     </td>
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
