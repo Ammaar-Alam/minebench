@@ -15,6 +15,11 @@ import type {
   ArenaBuildVariant,
 } from "@/lib/arena/types";
 import {
+  isGzipStreamPrefix,
+  readBuildVariantJson,
+  streamFromInitialChunks,
+} from "@/lib/arena/clientBuildResponse";
+import {
   VoxelLoadingHud,
   formatVoxelLoadingMessage,
   type VoxelLoadingProgress,
@@ -77,6 +82,7 @@ const BUILD_CACHE_MAX_ENTRIES = Number.parseInt(
   process.env.NEXT_PUBLIC_MODEL_DETAIL_BUILD_CACHE_MAX_ENTRIES ?? "8",
   10,
 );
+let snapshotStorageRedirectBlocked = false;
 
 type TimeoutSignal = {
   signal: AbortSignal;
@@ -115,12 +121,14 @@ async function readWithTimeout<T>(
   read: () => Promise<T>,
   timeoutMs: number,
   signal?: AbortSignal,
+  onTimeout?: () => void,
 ): Promise<T> {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   return await new Promise<T>((resolve, reject) => {
     const timer =
       Number.isFinite(timeoutMs) && timeoutMs > 0
         ? window.setTimeout(() => {
+            onTimeout?.();
             cleanup();
             reject(new Error("Build stream stalled"));
           }, timeoutMs)
@@ -202,6 +210,36 @@ function buildCacheKey(buildId: string, variant: ArenaBuildVariant) {
   return `${buildId}:${variant}`;
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
+  return [400, 403, 404, 500, 502, 504].includes(status);
+}
+
+async function readErrorResponse(res: Response, fallback: string): Promise<string> {
+  let detail: string | null = null;
+  try {
+    const body = await res.clone().json();
+    if (body && typeof body === "object") {
+      const candidate = (body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message;
+      if (typeof candidate === "string" && candidate.trim()) detail = candidate.trim();
+    }
+  } catch {
+    // fall through to text
+  }
+  if (!detail) {
+    try {
+      const text = (await res.text()).trim();
+      if (text && !text.startsWith("<") && text.length <= 500) detail = text;
+    } catch {
+      // ignore
+    }
+  }
+  return detail ?? fallback;
+}
+
 function rememberLoadedBuild(
   current: Record<string, LoadedPromptBuild>,
   loadedBuild: LoadedPromptBuild,
@@ -225,15 +263,45 @@ async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
   timeoutMs = SNAPSHOT_FETCH_TIMEOUT_MS,
+  opts?: { redirect?: boolean },
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
+  const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
+  if (!allowRedirect) url.searchParams.set("redirect", "0");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
-    const res = await fetch(url, { method: "GET", signal: timed.signal });
-    if (!res.ok) throw new Error(await res.text());
-    return (await res.json()) as BuildVariantResponse;
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "GET",
+        credentials: "same-origin",
+        signal: timed.signal,
+        redirect: "follow",
+      });
+    } catch (err: unknown) {
+      if (allowRedirect && !isAbortError(err)) {
+        snapshotStorageRedirectBlocked = true;
+        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
+        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+      }
+      throw new Error(await readErrorResponse(res, "Failed to load build"));
+    }
+    try {
+      return await readBuildVariantJson<BuildVariantResponse>(res);
+    } catch (err: unknown) {
+      if (allowRedirect && !isAbortError(err)) {
+        snapshotStorageRedirectBlocked = true;
+        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+      }
+      throw err;
+    }
   } finally {
     timed.cleanup();
   }
@@ -257,20 +325,53 @@ async function fetchBuildVariantStreamOnce(
   try {
     res = await fetch(url, {
       method: "GET",
+      credentials: "same-origin",
       signal: requestTimed.signal,
     });
   } finally {
     requestTimed.cleanup();
   }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readErrorResponse(res, "Failed to load build"));
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return (await res.json()) as BuildVariantResponse;
+    return await readBuildVariantJson<BuildVariantResponse>(res);
   }
 
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let cancelled = false;
+  const cancelReader = () => {
+    if (cancelled) return;
+    cancelled = true;
+    void reader?.cancel().catch(() => undefined);
+  };
+
   try {
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
+    const initialChunks: Uint8Array[] = [];
+    let initialByteCount = 0;
+    while (initialByteCount < 2) {
+      const initialRead = await readWithTimeout(
+        () => reader!.read(),
+        STREAM_FIRST_EVENT_TIMEOUT_MS,
+        opts?.signal,
+        cancelReader,
+      );
+      if (initialRead.done) break;
+      if (initialRead.value && initialRead.value.length > 0) {
+        initialChunks.push(initialRead.value);
+        initialByteCount += initialRead.value.length;
+      }
+    }
+    if (initialChunks.length === 0) {
+      throw new Error("Build stream ended before any data loaded");
+    }
+    const stream = streamFromInitialChunks(initialChunks, reader);
+    reader = isGzipStreamPrefix(initialChunks)
+      ? stream
+          .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>)
+          .getReader()
+      : stream.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     const startedAt = performance.now();
@@ -349,13 +450,15 @@ async function fetchBuildVariantStreamOnce(
 
     while (true) {
       if (performance.now() - startedAt > STREAM_HARD_TIMEOUT_MS) {
+        cancelReader();
         throw new Error("Build stream hard timeout");
       }
 
       const { done, value } = await readWithTimeout(
-        () => reader.read(),
+        () => reader!.read(),
         sawFirstEvent ? STREAM_STALL_TIMEOUT_MS : STREAM_FIRST_EVENT_TIMEOUT_MS,
         opts?.signal,
+        cancelReader,
       );
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -378,6 +481,7 @@ async function fetchBuildVariantStreamOnce(
       hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
 
     if (!streamLooksComplete) {
+      cancelReader();
       return fetchBuildVariantSnapshot(ref, opts?.signal);
     }
 
@@ -393,7 +497,8 @@ async function fetchBuildVariantStreamOnce(
       },
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") throw err;
+    cancelReader();
+    if (isAbortError(err)) throw err;
     throw err;
   }
 }
