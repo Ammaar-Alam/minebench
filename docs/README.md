@@ -2,8 +2,6 @@
 
 Use this index to find implementation-accurate docs for Arena ranking, generation tooling, and import workflows.
 
-Run `pnpm test` for the automated regression suite. Run `pnpm check` before pushing changes that should clear lint, tests, and production build locally.
-
 ## Guides
 
 - [Local Development](./local-development.md)
