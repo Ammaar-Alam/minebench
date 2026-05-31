@@ -126,6 +126,15 @@ function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
   return modelId.startsWith("openai/gpt-5") ? "high" : undefined;
 }
 
+function openRouterTemperaturePayload(modelId: string, temperature?: number): { temperature?: number } {
+  const normalized = modelId.toLowerCase();
+  const usesDefaultSampling = /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(
+    normalized,
+  );
+  if (usesDefaultSampling) return {};
+  return { temperature: temperature ?? 0.2 };
+}
+
 function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
   const budget = Math.floor(maxOutputTokens);
   const trimmed = message.trim().replace(/[.!?]$/, "");
@@ -248,7 +257,7 @@ export async function openrouterGenerateText(params: {
                     }
                   : {}),
                 stream: Boolean(params.onDelta),
-                temperature: params.temperature ?? 0.2,
+                ...openRouterTemperaturePayload(params.modelId, params.temperature),
                 max_tokens: tok,
                 reasoning: reasoningConfig,
                 ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),
@@ -334,7 +343,7 @@ export async function openrouterGenerateText(params: {
                 { role: "user", content: params.user },
               ],
               stream: false,
-              temperature: params.temperature ?? 0.2,
+              ...openRouterTemperaturePayload(params.modelId, params.temperature),
               max_tokens: maxTokens,
             }),
           },
