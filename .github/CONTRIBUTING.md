@@ -60,7 +60,7 @@ pnpm dev:setup
 # seed the database with existing builds
 pnpm prompt --import
 
-# run the fast regression suite
+# run tests
 pnpm test
 
 # run the full local gate

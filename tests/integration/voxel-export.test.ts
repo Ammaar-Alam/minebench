@@ -160,7 +160,6 @@ async function main() {
           stlMs: Math.round(t3 - t2),
           schemMs: Math.round(t4 - t3),
           totalMs: Math.round(totalMs),
-          perfBudgetMs: enforceExportPerformanceBudget ? EXPORT_PERFORMANCE_BUDGET_MS : null,
           glbBytes: largeGlb.byteLength,
           stlBytes: largeStl.byteLength,
           schemBytes: largeSchem.byteLength,

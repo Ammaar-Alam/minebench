@@ -16,13 +16,13 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -60,13 +60,13 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
@@ -96,8 +96,7 @@ jobs:
             echo "| Result | \`${{ steps.regression.outcome }}\` |"
             echo "| Node | \`${{ steps.versions.outputs.node }}\` |"
             echo "| pnpm | \`${{ steps.versions.outputs.pnpm }}\` |"
-            echo ""
-            echo "Covers the fast regression suite under \`tests/\`; opt-in performance budgets stay outside the default gate."
+            echo "| Scope | \`tests/\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   production-build:
@@ -106,13 +105,13 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm

@@ -15,6 +15,19 @@ function includesInJob(jobId: string, expected: string): boolean {
 
 assert.ok(ciWorkflow.includes("name: MineBench Quality Gates"));
 assert.equal(ciWorkflow.includes("  lint-and-build:"), false);
+assert.equal(ciWorkflow.includes("actions/checkout@v4"), false);
+assert.equal(ciWorkflow.includes("actions/setup-node@v4"), false);
+assert.equal(ciWorkflow.includes("pnpm/action-setup@v4"), false);
+const staleSummaryPhrases = [
+  `${["opt", "in"].join("-")} ${["performance", "budgets"].join(" ")}`,
+  ["default", "gate"].join(" "),
+];
+for (const phrase of staleSummaryPhrases) {
+  assert.equal(ciWorkflow.includes(phrase), false);
+}
+assert.ok(ciWorkflow.includes("actions/checkout@v6"));
+assert.ok(ciWorkflow.includes("actions/setup-node@v6"));
+assert.ok(ciWorkflow.includes("pnpm/action-setup@v6"));
 
 assert.ok(includesInJob("static-analysis", 'name: "Quality / Static Analysis"'));
 assert.ok(includesInJob("static-analysis", "run: pnpm lint"));

@@ -23,6 +23,8 @@ const trackedFiles = execFileSync("git", ["ls-files"], { encoding: "utf8" })
   .filter(Boolean);
 
 assert.equal(scripts.test, "tsx tests/run.ts");
+assert.equal(scripts.pretest, "prisma generate");
+assert.equal(scripts.lint, "eslint .");
 assert.equal(scripts["test:unit"], "tsx tests/run.ts tests/unit");
 assert.equal(scripts["test:config"], "tsx tests/run.ts tests/config");
 assert.equal(scripts["test:ui"], "tsx tests/run.ts tests/ui");
@@ -55,6 +57,7 @@ assert.equal(
   false,
   "default tests should not fail on wall-clock export timing",
 );
+assert.equal(voxelExportTestSource.includes(["perf", "BudgetMs"].join("")), false);
 
 const testFiles = listFiles("tests")
   .map((path) => relative(".", path))

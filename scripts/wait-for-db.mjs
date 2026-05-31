@@ -61,13 +61,11 @@ async function main() {
 
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    // eslint-disable-next-line no-await-in-loop
     const ok = await canConnect(host, port, 800);
     if (ok) {
       console.log(`db: reachable at ${host}:${port}`);
       return;
     }
-    // eslint-disable-next-line no-await-in-loop
     await sleep(500);
   }
 
@@ -78,4 +76,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

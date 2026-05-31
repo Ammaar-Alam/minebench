@@ -23,7 +23,8 @@
     "prebuild": "prisma generate",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
+    "pretest": "prisma generate",
     "test": "tsx tests/run.ts",
     "test:unit": "tsx tests/run.ts tests/unit",
     "test:config": "tsx tests/run.ts tests/config",
@@ -61,6 +62,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.5",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
