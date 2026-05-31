@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   applyArenaCoverageVoteDeltasToSamplingState,
   modelPromptKey,
@@ -6,6 +7,8 @@ import {
   pairPromptKey,
   type ArenaMatchupSamplingState,
 } from "../lib/arena/coverage";
+
+const coverageSource = readFileSync("lib/arena/coverage.ts", "utf8");
 
 function makeState(): ArenaMatchupSamplingState {
   return {
@@ -87,5 +90,29 @@ assert.equal(state.coverage.promptDecisiveTotals.get("prompt-1"), 2);
 assert.equal(state.coverage.promptDecisiveTotals.get("prompt-2"), 1);
 assert.equal(state.coverage.promptCoverageByModelId.get("model-a"), 0.5);
 assert.equal(state.coverage.promptCoverageByModelId.get("model-b"), 0.5);
+
+const persistedState = makeState();
+applyArenaCoverageVoteDeltasToSamplingState(persistedState, [
+  { modelAId: "model-a", modelBId: "model-b", promptId: "prompt-1", decisiveVotes: 1 },
+]);
+persistedState.coverage.appliedVoteJobIds.add("job-drained");
+applyArenaCoverageVoteDeltasToSamplingState(persistedState, [
+  { voteJobId: "job-drained", modelAId: "model-a", modelBId: "model-b", promptId: "prompt-1", decisiveVotes: 1 },
+]);
+
+assert.equal(persistedState.coverage.modelPromptDecisiveVotes.get(modelAPrompt1), 1);
+assert.equal(persistedState.coverage.pairDecisiveVotes.get(unorderedPair), 1);
+assert.ok(
+  coverageSource.includes("Prisma.TransactionIsolationLevel.RepeatableRead"),
+  "persisted coverage and vote-job rows should be read from one repeatable-read snapshot",
+);
+assert.ok(
+  coverageSource.includes("\"processedAt\" IS NOT NULL"),
+  "recent processed vote jobs should mark replayed deltas as already applied",
+);
+assert.ok(
+  !coverageSource.includes("const [pairPromptRows, pendingVoteRows] = await Promise.all"),
+  "persisted coverage and pending jobs should not be read with independent snapshots",
+);
 
 console.log("arena pending vote coverage checks passed");

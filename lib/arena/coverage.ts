@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 
 const MATCHUP_STATE_CACHE_TTL_MS = readIntEnv("ARENA_MATCHUP_STATE_CACHE_TTL_MS", 60_000);
 const PENDING_SHOWN_COUNT_TTL_MS = readIntEnv("ARENA_PENDING_SHOWN_COUNT_TTL_MS", 90_000);
+const APPLIED_VOTE_JOB_DEDUPE_WINDOW_MS = Math.max(MATCHUP_STATE_CACHE_TTL_MS, 120_000);
 
 const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
@@ -92,11 +93,12 @@ export type ArenaCoverageVoteDelta = {
   decisiveVotes: number;
 };
 
-type PendingCoverageVoteJobRow = {
+type CoverageVoteJobSnapshotRow = {
   id: string;
   modelAId: string;
   modelBId: string;
   promptId: string;
+  processedAt: Date | null;
 };
 
 let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
@@ -565,34 +567,50 @@ async function queryCoverageState(
 
   const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
 
-  const [pairPromptRows, pendingVoteRows] = await Promise.all([
-    prisma.arenaCoveragePairPrompt.findMany({
-      where: {
-        promptId: { in: eligiblePromptIds },
-        modelLowId: { in: eligibleModelIds },
-        modelHighId: { in: eligibleModelIds },
-      },
-      select: {
-        modelLowId: true,
-        modelHighId: true,
-        promptId: true,
-        decisiveVotes: true,
-      },
-    }),
-    prisma.$queryRaw<PendingCoverageVoteJobRow[]>(Prisma.sql`
-      SELECT
-        "id",
-        "modelAId",
-        "modelBId",
-        "promptId"
-      FROM "ArenaVoteJob"
-      WHERE "processedAt" IS NULL
-        AND "choice" IN ('A', 'B')
-        AND "promptId" IN (${Prisma.join(eligiblePromptIds)})
-        AND "modelAId" IN (${Prisma.join(eligibleModelIds)})
-        AND "modelBId" IN (${Prisma.join(eligibleModelIds)})
-    `),
-  ]);
+  const [pairPromptRows, voteJobRows] = await prisma.$transaction(
+    async (tx) => {
+      const coverageRows = await tx.arenaCoveragePairPrompt.findMany({
+        where: {
+          promptId: { in: eligiblePromptIds },
+          modelLowId: { in: eligibleModelIds },
+          modelHighId: { in: eligibleModelIds },
+        },
+        select: {
+          modelLowId: true,
+          modelHighId: true,
+          promptId: true,
+          decisiveVotes: true,
+        },
+      });
+      const jobRows = await tx.$queryRaw<CoverageVoteJobSnapshotRow[]>(Prisma.sql`
+        SELECT
+          "id",
+          "modelAId",
+          "modelBId",
+          "promptId",
+          "processedAt"
+        FROM "ArenaVoteJob"
+        WHERE "choice" IN ('A', 'B')
+          AND "promptId" IN (${Prisma.join(eligiblePromptIds)})
+          AND "modelAId" IN (${Prisma.join(eligibleModelIds)})
+          AND "modelBId" IN (${Prisma.join(eligibleModelIds)})
+          AND (
+            "processedAt" IS NULL
+            OR (
+              "processedAt" IS NOT NULL
+              AND "processedAt" >= NOW() - (${APPLIED_VOTE_JOB_DEDUPE_WINDOW_MS} * INTERVAL '1 millisecond')
+            )
+          )
+      `);
+
+      return [coverageRows, jobRows] as const;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+  );
+  const pendingVoteRows = voteJobRows.filter((row) => row.processedAt == null);
+  const appliedVoteJobIds = new Set(
+    voteJobRows.filter((row) => row.processedAt != null).map((row) => row.id),
+  );
 
   const modelPromptDecisiveVotes = new Map<string, number>();
   const pairDecisiveVotes = new Map<string, number>();
@@ -633,7 +651,7 @@ async function queryCoverageState(
       pairPromptDecisiveVotes,
       promptCoverageByModelId: new Map(),
       promptDecisiveTotals,
-      appliedVoteJobIds: new Set(),
+      appliedVoteJobIds,
     },
     pendingVoteRows.map((row) => ({
       voteJobId: row.id,
@@ -662,7 +680,7 @@ async function queryCoverageState(
     pairPromptDecisiveVotes,
     promptCoverageByModelId,
     promptDecisiveTotals,
-    appliedVoteJobIds: new Set(pendingVoteRows.map((row) => row.id)),
+    appliedVoteJobIds,
   };
 }
 
