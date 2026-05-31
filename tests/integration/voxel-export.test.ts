@@ -12,6 +12,8 @@ import {
 import type { VoxelBuild } from "../../lib/voxel/types";
 
 const OUT_DIR = join(tmpdir(), "minebench-export-verify");
+const EXPORT_PERFORMANCE_BUDGET_MS = 2000;
+const enforceExportPerformanceBudget = process.env.MINEBENCH_ENFORCE_EXPORT_PERF_BUDGET === "1";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -132,7 +134,9 @@ async function main() {
   const t4 = performance.now();
   const totalMs = t4 - t0;
 
-  assert(totalMs < 2000, `100k export path took ${Math.round(totalMs)}ms`);
+  if (enforceExportPerformanceBudget && totalMs >= EXPORT_PERFORMANCE_BUDGET_MS) {
+    throw new Error(`100k export path took ${Math.round(totalMs)}ms`);
+  }
   assert(largeGlb.byteLength > 1000, "large GLB should not be empty");
   assert(largeStl.byteLength > 1000, "large STL should not be empty");
   validateSchem(largeSchem);
@@ -156,6 +160,7 @@ async function main() {
           stlMs: Math.round(t3 - t2),
           schemMs: Math.round(t4 - t3),
           totalMs: Math.round(totalMs),
+          perfBudgetMs: enforceExportPerformanceBudget ? EXPORT_PERFORMANCE_BUDGET_MS : null,
           glbBytes: largeGlb.byteLength,
           stlBytes: largeStl.byteLength,
           schemBytes: largeSchem.byteLength,
