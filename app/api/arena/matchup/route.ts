@@ -83,9 +83,10 @@ function getOrSetSessionId(res: NextResponse, req: Request) {
 }
 
 function parseBuildPayloadMode(value: string | null): BuildPayloadMode {
+  if (value === "inline") return "inline";
   if (value === "shell") return "shell";
   if (value === "adaptive") return "adaptive";
-  return "inline";
+  return "adaptive";
 }
 
 function shouldInlineInAdaptiveMode(deliveryClass: ArenaBuildDeliveryClass): boolean {
