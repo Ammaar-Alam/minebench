@@ -1,4 +1,4 @@
-export type AnthropicAdaptiveEffort = "low" | "medium" | "high" | "max";
+export type AnthropicAdaptiveEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 export type GeminiThinkingConfig = {
@@ -22,6 +22,27 @@ function normalizeReasoningOverride(value?: string): string | undefined {
 
 function isGemini3FlashFamily(modelId: string): boolean {
   return /(?:^|\/)gemini-3(?:[.-]\d+)?-flash/.test(modelId);
+}
+
+function anthropicClaudeVersion(modelId: string): { major: number; minor: number } | null {
+  const match = /(?:^|\/)claude-(?:opus|sonnet)-(\d+)[.-](\d+)(?:[.-]|$)/.exec(modelId);
+  if (!match) return null;
+  const major = Number.parseInt(match[1] ?? "", 10);
+  const minor = Number.parseInt(match[2] ?? "", 10);
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
+  return { major, minor };
+}
+
+function isAnthropicAdaptiveModel(modelId: string): boolean {
+  const version = anthropicClaudeVersion(modelId);
+  if (!version) return false;
+  return version.major > 4 || (version.major === 4 && version.minor >= 6);
+}
+
+function supportsAnthropicXhighEffort(modelId: string): boolean {
+  const version = anthropicClaudeVersion(modelId);
+  if (!version) return false;
+  return version.major > 4 || (version.major === 4 && version.minor >= 7);
 }
 
 function descendingAttempts<T extends string>(
@@ -77,11 +98,7 @@ export function anthropicAdaptiveEffortAttempts(
   modelId: string,
   override?: string,
 ): AnthropicAdaptiveEffort[] | undefined {
-  const isAdaptiveModel =
-    modelId.startsWith("claude-opus-4-7") ||
-    modelId.startsWith("claude-opus-4-6") ||
-    modelId.startsWith("claude-sonnet-4-6");
-  if (!isAdaptiveModel) {
+  if (!isAnthropicAdaptiveModel(modelId)) {
     const normalized = normalizeReasoningOverride(override);
     if (normalized) {
       throw new Error(`Anthropic model ${modelId} does not expose an adaptive effort override.`);
@@ -91,7 +108,9 @@ export function anthropicAdaptiveEffortAttempts(
 
   return descendingAttempts(
     `Anthropic model ${modelId}`,
-    ["max", "high", "medium", "low"],
+    supportsAnthropicXhighEffort(modelId)
+      ? ["max", "xhigh", "high", "medium", "low"]
+      : ["max", "high", "medium", "low"],
     override,
   );
 }
@@ -272,14 +291,12 @@ export function openRouterReasoningEffortAttempts(
   if (modelId.startsWith("openai/gpt-5")) {
     return descendingAttempts(label, ["xhigh", "high"], override);
   }
-  if (
-    modelId === "anthropic/claude-opus-4.7" ||
-    modelId === "anthropic/claude-sonnet-4.6" ||
-    modelId === "anthropic/claude-opus-4.6"
-  ) {
+  if (isAnthropicAdaptiveModel(modelId)) {
     return descendingAttempts(
       label,
-      ["max", "xhigh", "high", "medium", "low"],
+      supportsAnthropicXhighEffort(modelId)
+        ? ["max", "xhigh", "high", "medium", "low"]
+        : ["max", "high", "medium", "low"],
       override,
     );
   }

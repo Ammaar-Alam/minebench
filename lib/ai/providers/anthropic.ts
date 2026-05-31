@@ -16,7 +16,7 @@ type AnthropicStreamEvent = {
   delta?: { type?: unknown; text?: unknown } | unknown;
 };
 
-type AnthropicEffort = "low" | "medium" | "high" | "max";
+type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
@@ -141,18 +141,23 @@ function parseThinkingBudget(): number | null {
 
 function parseEffortEnv(
   envVar: string,
-  opts: { defaultEffort: AnthropicEffort; allowMax: boolean },
+  opts: { defaultEffort: AnthropicEffort; allowMax: boolean; allowXhigh: boolean },
 ): AnthropicEffort {
   const raw = (process.env[envVar] ?? "").trim().toLowerCase();
   if (raw === "low" || raw === "medium" || raw === "high") return raw;
+  if (raw === "xhigh") return opts.allowXhigh ? "xhigh" : "high";
   if (raw === "max") return opts.allowMax ? "max" : "high";
   return opts.defaultEffort;
 }
 
-function effortFallbacks(initial: AnthropicEffort, opts: { allowMax: boolean }): AnthropicEffort[] {
+function effortFallbacks(initial: AnthropicEffort, opts: { allowMax: boolean; allowXhigh: boolean }): AnthropicEffort[] {
   const ordered: AnthropicEffort[] = opts.allowMax
-    ? ["max", "high", "medium", "low"]
-    : ["high", "medium", "low"];
+    ? opts.allowXhigh
+      ? ["max", "xhigh", "high", "medium", "low"]
+      : ["max", "high", "medium", "low"]
+    : opts.allowXhigh
+      ? ["xhigh", "high", "medium", "low"]
+      : ["high", "medium", "low"];
   const startIndex = Math.max(0, ordered.indexOf(initial));
   return ordered.slice(startIndex);
 }
@@ -176,45 +181,56 @@ function isLegacyManualThinkingModel(modelId: string): boolean {
   return modelId.startsWith("claude-sonnet-4-5") || modelId.startsWith("claude-opus-4-5");
 }
 
-function isOpus47(modelId: string): boolean {
-  return modelId.startsWith("claude-opus-4-7");
-}
-
-function isOpus46(modelId: string): boolean {
-  return modelId.startsWith("claude-opus-4-6");
-}
-
-function isSonnet46(modelId: string): boolean {
-  return modelId.startsWith("claude-sonnet-4-6");
+function anthropicClaudeVersion(modelId: string): { family: "opus" | "sonnet"; major: number; minor: number } | null {
+  const match = /^claude-(opus|sonnet)-(\d+)-(\d+)(?:-|$)/.exec(modelId);
+  if (!match) return null;
+  const major = Number.parseInt(match[2] ?? "", 10);
+  const minor = Number.parseInt(match[3] ?? "", 10);
+  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
+  return { family: match[1] as "opus" | "sonnet", major, minor };
 }
 
 function isAdaptiveThinkingModel(modelId: string): boolean {
-  return isOpus47(modelId) || isOpus46(modelId) || isSonnet46(modelId);
+  const version = anthropicClaudeVersion(modelId);
+  if (!version) return false;
+  return version.major > 4 || (version.major === 4 && version.minor >= 6);
+}
+
+function supportsXhighEffort(modelId: string): boolean {
+  const version = anthropicClaudeVersion(modelId);
+  if (!version) return false;
+  return version.major > 4 || (version.major === 4 && version.minor >= 7);
+}
+
+function effortEnvVarForModel(modelId: string): string | null {
+  const version = anthropicClaudeVersion(modelId);
+  if (!version) return null;
+  if (version.family === "opus" && version.major === 4 && version.minor === 8) {
+    return "ANTHROPIC_OPUS_4_8_EFFORT";
+  }
+  if (version.family === "opus" && version.major === 4 && version.minor === 7) {
+    return "ANTHROPIC_OPUS_4_7_EFFORT";
+  }
+  if (version.family === "opus" && version.major === 4 && version.minor === 6) {
+    return "ANTHROPIC_OPUS_4_6_EFFORT";
+  }
+  if (version.family === "sonnet" && version.major === 4 && version.minor === 6) {
+    return "ANTHROPIC_SONNET_4_6_EFFORT";
+  }
+  return null;
 }
 
 function parseAdaptiveEfforts(modelId: string): AnthropicEffort[] {
-  if (isOpus47(modelId)) {
-    const preferred = parseEffortEnv("ANTHROPIC_OPUS_4_7_EFFORT", {
-      defaultEffort: "max",
-      allowMax: true,
-    });
-    return effortFallbacks(preferred, { allowMax: true });
-  }
-  if (isOpus46(modelId)) {
-    const preferred = parseEffortEnv("ANTHROPIC_OPUS_4_6_EFFORT", {
-      defaultEffort: "max",
-      allowMax: true,
-    });
-    return effortFallbacks(preferred, { allowMax: true });
-  }
-  if (isSonnet46(modelId)) {
-    const preferred = parseEffortEnv("ANTHROPIC_SONNET_4_6_EFFORT", {
-      defaultEffort: "max",
-      allowMax: true,
-    });
-    return effortFallbacks(preferred, { allowMax: true });
-  }
-  return ["high"];
+  const allowXhigh = supportsXhighEffort(modelId);
+  const envVar = effortEnvVarForModel(modelId);
+  const preferred = envVar
+    ? parseEffortEnv(envVar, {
+        defaultEffort: "max",
+        allowMax: true,
+        allowXhigh,
+      })
+    : "max";
+  return effortFallbacks(preferred, { allowMax: true, allowXhigh });
 }
 
 function supportsContext1mBeta(modelId: string): boolean {
