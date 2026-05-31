@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
   applyArenaCoverageVoteDeltasToSamplingState,
   modelPromptKey,
@@ -9,6 +9,12 @@ import {
 } from "../lib/arena/coverage";
 
 const coverageSource = readFileSync("lib/arena/coverage.ts", "utf8");
+const migrationSources = readdirSync("prisma/migrations")
+  .filter((entry) => entry !== "migration_lock.toml")
+  .map((entry) => `prisma/migrations/${entry}/migration.sql`)
+  .filter((migrationPath) => existsSync(migrationPath))
+  .map((migrationPath) => readFileSync(migrationPath, "utf8"))
+  .join("\n");
 
 function makeState(): ArenaMatchupSamplingState {
   return {
@@ -113,6 +119,18 @@ assert.ok(
 assert.ok(
   !coverageSource.includes("const [pairPromptRows, pendingVoteRows] = await Promise.all"),
   "persisted coverage and pending jobs should not be read with independent snapshots",
+);
+assert.ok(
+  migrationSources.includes('"ArenaVoteJob_sampling_coverage_snapshot_idx"'),
+  "vote-job snapshot refreshes should have a covering partial index",
+);
+assert.ok(
+  migrationSources.includes('ON "ArenaVoteJob" ("processedAt", "promptId", "modelAId", "modelBId")'),
+  "vote-job snapshot index should lead with processedAt and include prompt/model filters",
+);
+assert.ok(
+  migrationSources.includes('WHERE "choice" IN (\'A\', \'B\')'),
+  "vote-job snapshot index should be limited to decisive choices",
 );
 
 console.log("arena pending vote coverage checks passed");
