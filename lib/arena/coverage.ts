@@ -83,6 +83,20 @@ export type PairCoverage = {
 type NumberLike = number | bigint | string | null;
 type SamplingStateMutation = (state: ArenaMatchupSamplingState) => void;
 
+export type ArenaCoverageVoteDelta = {
+  modelAId: string;
+  modelBId: string;
+  promptId: string;
+  decisiveVotes: number;
+};
+
+type CoverageVoteAggregateRow = {
+  modelAId: string;
+  modelBId: string;
+  promptId: string;
+  decisiveVotes: NumberLike;
+};
+
 let matchupStateCache: CachedValue<ArenaMatchupSamplingState> | null = null;
 let matchupStateInFlight: Promise<ArenaMatchupSamplingResult> | null = null;
 let matchupStateVersion = 0;
@@ -123,6 +137,64 @@ export function pairPromptKey(modelAId: string, modelBId: string, promptId: stri
   return `${pairKey(modelAId, modelBId)}|${promptId}`;
 }
 
+function applyArenaCoverageVoteDeltasToCoverage(
+  coverage: CoverageState,
+  deltas: ArenaCoverageVoteDelta[],
+) {
+  for (const delta of deltas) {
+    const decisiveVotes = Math.floor(toNumber(delta.decisiveVotes));
+    if (
+      decisiveVotes <= 0 ||
+      !delta.modelAId ||
+      !delta.modelBId ||
+      delta.modelAId === delta.modelBId ||
+      !delta.promptId
+    ) {
+      continue;
+    }
+
+    const pair = pairKey(delta.modelAId, delta.modelBId);
+    const pairPrompt = pairPromptKey(delta.modelAId, delta.modelBId, delta.promptId);
+    const previousPairPromptVotes = coverage.pairPromptDecisiveVotes.get(pairPrompt) ?? 0;
+
+    coverage.pairDecisiveVotes.set(pair, (coverage.pairDecisiveVotes.get(pair) ?? 0) + decisiveVotes);
+    coverage.pairPromptDecisiveVotes.set(pairPrompt, previousPairPromptVotes + decisiveVotes);
+    if (previousPairPromptVotes === 0) {
+      coverage.pairPromptCounts.set(pair, (coverage.pairPromptCounts.get(pair) ?? 0) + 1);
+    }
+    coverage.promptDecisiveTotals.set(
+      delta.promptId,
+      (coverage.promptDecisiveTotals.get(delta.promptId) ?? 0) + decisiveVotes,
+    );
+
+    for (const modelId of [delta.modelAId, delta.modelBId]) {
+      const key = modelPromptKey(modelId, delta.promptId);
+      coverage.modelPromptDecisiveVotes.set(
+        key,
+        (coverage.modelPromptDecisiveVotes.get(key) ?? 0) + decisiveVotes,
+      );
+    }
+  }
+}
+
+export function applyArenaCoverageVoteDeltasToSamplingState(
+  state: ArenaMatchupSamplingState,
+  deltas: ArenaCoverageVoteDelta[],
+) {
+  const affectedModelIds = new Set<string>();
+  for (const delta of deltas) {
+    if (delta.decisiveVotes <= 0) continue;
+    if (state.modelsById.has(delta.modelAId)) affectedModelIds.add(delta.modelAId);
+    if (state.modelsById.has(delta.modelBId)) affectedModelIds.add(delta.modelBId);
+  }
+
+  applyArenaCoverageVoteDeltasToCoverage(state.coverage, deltas);
+
+  for (const modelId of affectedModelIds) {
+    refreshPromptCoverageForModel(state, modelId);
+  }
+}
+
 export function invalidateArenaCoverageCache() {
   // version bump stops stale in-flight refreshes from becoming cache
   matchupStateVersion += 1;
@@ -140,6 +212,13 @@ function applySamplingStateMutation(mutation: SamplingStateMutation) {
   if (matchupStateInFlight) {
     // in-flight refreshes replay mutations before caching
     pendingSamplingStateMutations.push(mutation);
+  }
+}
+
+function applyCachedSamplingStateMutation(mutation: SamplingStateMutation) {
+  const cache = matchupStateCache;
+  if (cache && cache.expiresAt > Date.now()) {
+    mutation(cache.value);
   }
 }
 
@@ -242,46 +321,22 @@ function refreshPromptCoverageForModel(state: ArenaMatchupSamplingState, modelId
   state.coverage.promptCoverageByModelId.set(modelId, covered / totalPrompts);
 }
 
-export function recordArenaVoteInSamplingCache(input: {
+export function recordArenaVoteQueuedForSampling(input: {
   promptId: string;
-  decisive: boolean;
-  modelA: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
-  modelB: Pick<EligibleModel, "id" | "eloRating" | "conservativeRating" | "ratingDeviation">;
+  modelAId: string;
+  modelBId: string;
+  choice: string;
 }) {
-  applySamplingStateMutation((state) => {
-    for (const nextModel of [input.modelA, input.modelB]) {
-      const cachedModel = state.modelsById.get(nextModel.id);
-      if (!cachedModel) continue;
-      cachedModel.eloRating = nextModel.eloRating;
-      cachedModel.conservativeRating = nextModel.conservativeRating;
-      cachedModel.ratingDeviation = nextModel.ratingDeviation;
-    }
+  if (!isDecisiveChoice(input.choice)) return;
+  const delta = {
+    modelAId: input.modelAId,
+    modelBId: input.modelBId,
+    promptId: input.promptId,
+    decisiveVotes: 1,
+  };
 
-    if (!input.decisive) return;
-
-    const coverage = state.coverage;
-    const pair = pairKey(input.modelA.id, input.modelB.id);
-    const pairPrompt = pairPromptKey(input.modelA.id, input.modelB.id, input.promptId);
-    const previousPairPromptVotes = coverage.pairPromptDecisiveVotes.get(pairPrompt) ?? 0;
-
-    coverage.pairDecisiveVotes.set(pair, (coverage.pairDecisiveVotes.get(pair) ?? 0) + 1);
-    coverage.pairPromptDecisiveVotes.set(pairPrompt, previousPairPromptVotes + 1);
-    if (previousPairPromptVotes === 0) {
-      coverage.pairPromptCounts.set(pair, (coverage.pairPromptCounts.get(pair) ?? 0) + 1);
-    }
-    coverage.promptDecisiveTotals.set(
-      input.promptId,
-      (coverage.promptDecisiveTotals.get(input.promptId) ?? 0) + 1,
-    );
-
-    for (const modelId of [input.modelA.id, input.modelB.id]) {
-      const key = modelPromptKey(modelId, input.promptId);
-      coverage.modelPromptDecisiveVotes.set(
-        key,
-        (coverage.modelPromptDecisiveVotes.get(key) ?? 0) + 1,
-      );
-      refreshPromptCoverageForModel(state, modelId);
-    }
+  applyCachedSamplingStateMutation((state) => {
+    applyArenaCoverageVoteDeltasToSamplingState(state, [delta]);
   });
 }
 
@@ -471,19 +526,35 @@ async function queryCoverageState(
 
   const eligiblePromptIds = eligiblePrompts.map((prompt) => prompt.id);
 
-  const pairPromptRows = await prisma.arenaCoveragePairPrompt.findMany({
-    where: {
-      promptId: { in: eligiblePromptIds },
-      modelLowId: { in: eligibleModelIds },
-      modelHighId: { in: eligibleModelIds },
-    },
-    select: {
-      modelLowId: true,
-      modelHighId: true,
-      promptId: true,
-      decisiveVotes: true,
-    },
-  });
+  const [pairPromptRows, pendingVoteRows] = await Promise.all([
+    prisma.arenaCoveragePairPrompt.findMany({
+      where: {
+        promptId: { in: eligiblePromptIds },
+        modelLowId: { in: eligibleModelIds },
+        modelHighId: { in: eligibleModelIds },
+      },
+      select: {
+        modelLowId: true,
+        modelHighId: true,
+        promptId: true,
+        decisiveVotes: true,
+      },
+    }),
+    prisma.$queryRaw<CoverageVoteAggregateRow[]>(Prisma.sql`
+      SELECT
+        "modelAId",
+        "modelBId",
+        "promptId",
+        COUNT(*)::int AS "decisiveVotes"
+      FROM "ArenaVoteJob"
+      WHERE "processedAt" IS NULL
+        AND "choice" IN ('A', 'B')
+        AND "promptId" IN (${Prisma.join(eligiblePromptIds)})
+        AND "modelAId" IN (${Prisma.join(eligibleModelIds)})
+        AND "modelBId" IN (${Prisma.join(eligibleModelIds)})
+      GROUP BY "modelAId", "modelBId", "promptId"
+    `),
+  ]);
 
   const modelPromptDecisiveVotes = new Map<string, number>();
   const pairDecisiveVotes = new Map<string, number>();
@@ -515,6 +586,23 @@ async function queryCoverageState(
       (promptDecisiveTotals.get(row.promptId) ?? 0) + pairPromptVotes,
     );
   }
+
+  applyArenaCoverageVoteDeltasToCoverage(
+    {
+      modelPromptDecisiveVotes,
+      pairDecisiveVotes,
+      pairPromptCounts,
+      pairPromptDecisiveVotes,
+      promptCoverageByModelId: new Map(),
+      promptDecisiveTotals,
+    },
+    pendingVoteRows.map((row) => ({
+      modelAId: row.modelAId,
+      modelBId: row.modelBId,
+      promptId: row.promptId,
+      decisiveVotes: toNumber(row.decisiveVotes),
+    })),
+  );
 
   const totalPrompts = eligiblePrompts.length;
   const promptCoverageByModelId = new Map<string, number>();
