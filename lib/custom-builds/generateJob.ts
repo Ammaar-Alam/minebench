@@ -238,50 +238,56 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
 
     const payload = asGenerateJobPayload(job.payload);
     const requestedExports = payload.requestedExports ?? [];
-    await prisma.customBuild.update({
-      where: { id: customBuild.id },
-      data: {
-        status: "succeeded",
-        currentStage: "complete",
-        completedAt: new Date(),
-        blockCount: generated.blockCount,
-        generationTimeMs: generated.generationTimeMs,
-        warnings: generated.warnings,
-        metrics: {
+    await prisma.$transaction(async (tx) => {
+      await tx.customBuild.update({
+        where: { id: customBuild.id },
+        data: {
+          status: "succeeded",
+          currentStage: "complete",
+          completedAt: new Date(),
           blockCount: generated.blockCount,
           generationTimeMs: generated.generationTimeMs,
           warnings: generated.warnings,
+          metrics: {
+            blockCount: generated.blockCount,
+            generationTimeMs: generated.generationTimeMs,
+            warnings: generated.warnings,
+          },
+          buildSha256: fullSha,
+          buildByteSize: fullBytes.byteLength,
+          buildCompressedByteSize: fullGzip.byteLength,
+          previewBlockCount: preview.blocks.length,
+          previewSha256: previewSha,
+          errorCode: null,
+          errorMessage: null,
+          errorRetryable: null,
         },
-        buildSha256: fullSha,
-        buildByteSize: fullBytes.byteLength,
-        buildCompressedByteSize: fullGzip.byteLength,
-        previewBlockCount: preview.blocks.length,
-        previewSha256: previewSha,
-        errorCode: null,
-        errorMessage: null,
-        errorRetryable: null,
-      },
+      });
+
+      for (const format of requestedExports) {
+        await tx.customBuildJob.create({
+          data: {
+            customBuildId: customBuild.id,
+            type: "export",
+            status: "queued",
+            payload: { format, sourceBuildSha256: fullSha },
+            maxAttempts: job.maxAttempts,
+          },
+        });
+      }
+
+      await tx.customBuildStatsDaily.upsert({
+        where: { day: new Date(new Date().toISOString().slice(0, 10)) },
+        create: { day: new Date(new Date().toISOString().slice(0, 10)), succeeded: 1 },
+        update: { succeeded: { increment: 1 } },
+      });
+      await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
     });
 
     for (const format of requestedExports) {
-      await prisma.customBuildJob.create({
-        data: {
-          customBuildId: customBuild.id,
-          type: "export",
-          status: "queued",
-          payload: { format, sourceBuildSha256: fullSha },
-          maxAttempts: job.maxAttempts,
-        },
-      });
       await appendCustomBuildEvent(customBuild.id, "export_queued", { format });
     }
 
-    await prisma.customBuildStatsDaily.upsert({
-      where: { day: new Date(new Date().toISOString().slice(0, 10)) },
-      create: { day: new Date(new Date().toISOString().slice(0, 10)), succeeded: 1 },
-      update: { succeeded: { increment: 1 } },
-    });
-    await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
     await appendCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
   } catch (error) {
     const message = redactSensitiveText(error);

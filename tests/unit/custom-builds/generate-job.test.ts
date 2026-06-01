@@ -39,13 +39,16 @@ const queuedCustomBuild = {
 let currentCustomBuild = queuedCustomBuild;
 
 const updates: Array<{ data: Record<string, unknown> }> = [];
+const operations: Array<{ name: string; txId: number | null }> = [];
 let eventSeq = 0;
+let txSeq = 0;
 
 const fakePrisma = {
   customBuild: {
     findUnique: async () => currentCustomBuild,
     update: async (args: { data: Record<string, unknown> }) => {
       updates.push(args);
+      if (args.data.status === "succeeded") operations.push({ name: "customBuild.update.succeeded", txId: null });
       currentCustomBuild = { ...currentCustomBuild, ...args.data };
       return currentCustomBuild;
     },
@@ -54,18 +57,54 @@ const fakePrisma = {
     upsert: async (args: { create: Record<string, unknown> }) => args.create,
   },
   customBuildJob: {
-    create: async (args: { data: Record<string, unknown> }) => args.data,
+    create: async (args: { data: Record<string, unknown> }) => {
+      operations.push({ name: "customBuildJob.create", txId: null });
+      return args.data;
+    },
   },
   customBuildStatsDaily: {
-    upsert: async () => ({}),
+    upsert: async () => {
+      operations.push({ name: "customBuildStatsDaily.upsert", txId: null });
+      return {};
+    },
   },
   customBuildSecret: {
     findUnique: async () => null,
-    deleteMany: async () => ({ count: 0 }),
+    deleteMany: async () => {
+      operations.push({ name: "customBuildSecret.deleteMany", txId: null });
+      return { count: 0 };
+    },
   },
-  $transaction: async <T>(callback: (tx: unknown) => Promise<T>) =>
-    callback({
+  $transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
+    const txId = (txSeq += 1);
+    return callback({
       $queryRaw: async () => [{ id: customBuildId }],
+      customBuild: {
+        update: async (args: { data: Record<string, unknown> }) => {
+          updates.push(args);
+          if (args.data.status === "succeeded") operations.push({ name: "customBuild.update.succeeded", txId });
+          currentCustomBuild = { ...currentCustomBuild, ...args.data };
+          return currentCustomBuild;
+        },
+      },
+      customBuildJob: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          operations.push({ name: "customBuildJob.create", txId });
+          return args.data;
+        },
+      },
+      customBuildStatsDaily: {
+        upsert: async () => {
+          operations.push({ name: "customBuildStatsDaily.upsert", txId });
+          return {};
+        },
+      },
+      customBuildSecret: {
+        deleteMany: async () => {
+          operations.push({ name: "customBuildSecret.deleteMany", txId });
+          return { count: 0 };
+        },
+      },
       customBuildEvent: {
         aggregate: async () => ({ _max: { seq: eventSeq } }),
         create: async (args: { data: { seq: number; type: string; data: Prisma.InputJsonValue } }) => {
@@ -73,7 +112,8 @@ const fakePrisma = {
           return args.data;
         },
       },
-    }),
+    });
+  },
 };
 
 (globalThis as unknown as { prisma?: unknown }).prisma = fakePrisma;
@@ -104,6 +144,7 @@ async function main() {
     attempts: 2,
     maxAttempts: 3,
     payload: {
+      requestedExports: ["glb"],
       stubBuild: {
         version: "1.0",
         blocks: [{ x: 1, y: 1, z: 1, type: "stone" }],
@@ -116,8 +157,14 @@ async function main() {
   assert.equal(successUpdate.data.errorCode, null);
   assert.equal(successUpdate.data.errorMessage, null);
   assert.equal(successUpdate.data.errorRetryable, null);
+  const successTxId = operations.find((op) => op.name === "customBuild.update.succeeded")?.txId;
+  assert.notEqual(successTxId, null, "success update should run inside the bookkeeping transaction");
+  assert.equal(operations.find((op) => op.name === "customBuildJob.create")?.txId, successTxId);
+  assert.equal(operations.find((op) => op.name === "customBuildStatsDaily.upsert")?.txId, successTxId);
+  assert.equal(operations.find((op) => op.name === "customBuildSecret.deleteMany")?.txId, successTxId);
 
   updates.length = 0;
+  operations.length = 0;
   currentCustomBuild = {
     ...queuedCustomBuild,
     status: "succeeded",
