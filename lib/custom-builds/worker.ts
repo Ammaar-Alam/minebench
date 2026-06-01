@@ -4,6 +4,7 @@ import {
   claimNextCustomBuildJob,
   completeCustomBuildJob,
   failCustomBuildJob,
+  getCustomBuildJobLeaseSeconds,
   recoverStaleCustomBuildJobLeases,
   renewCustomBuildJobLease,
 } from "@/lib/custom-builds/jobs";
@@ -28,6 +29,11 @@ export function getCustomBuildWorkerId(): string {
   return process.env.CUSTOM_BUILD_WORKER_ID?.trim() || `custom-worker-${process.pid}`;
 }
 
+export function getCustomBuildWorkerHeartbeatMs(): number {
+  const leaseMs = getCustomBuildJobLeaseSeconds() * 1000;
+  return Math.max(1_000, Math.min(30_000, Math.floor(leaseMs / 2)));
+}
+
 async function runJob(job: CustomBuildJob): Promise<void> {
   if (job.type === "generate") {
     await runCustomBuildGenerateJob(job);
@@ -47,7 +53,7 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
 
   const heartbeat = setInterval(() => {
     void renewCustomBuildJobLease(job.id, workerId);
-  }, 30_000);
+  }, getCustomBuildWorkerHeartbeatMs());
 
   try {
     await runJob(job);

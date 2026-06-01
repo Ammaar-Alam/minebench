@@ -106,6 +106,47 @@ function artifactFor(status: CustomBuildStatusPayload, kind: string) {
   return status.artifacts.find((artifact) => artifact.kind === kind);
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+async function loadCustomBuildPreview(
+  previewUrl: string,
+  signal: AbortSignal,
+  opts?: { redirect?: boolean },
+): Promise<VoxelBuild> {
+  const allowRedirect = opts?.redirect !== false;
+  const url = new URL(previewUrl, window.location.origin);
+  if (!allowRedirect) url.searchParams.set("redirect", "0");
+
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store", signal, redirect: "follow" });
+  } catch (err) {
+    if (allowRedirect && !isAbortError(err)) {
+      return loadCustomBuildPreview(previewUrl, signal, { redirect: false });
+    }
+    throw err;
+  }
+
+  if (!res.ok) {
+    if (allowRedirect && [403, 404, 502, 503, 504].includes(res.status)) {
+      return loadCustomBuildPreview(previewUrl, signal, { redirect: false });
+    }
+    const text = await res.text().catch(() => "");
+    throw new Error(text || "Preview unavailable");
+  }
+
+  try {
+    return await readBuildVariantJson<VoxelBuild>(res);
+  } catch (err) {
+    if (allowRedirect && !isAbortError(err)) {
+      return loadCustomBuildPreview(previewUrl, signal, { redirect: false });
+    }
+    throw err;
+  }
+}
+
 function CopyButton({
   text,
   label = "Copy",
@@ -186,14 +227,7 @@ function CustomBuildPreview({ status }: { status: CustomBuildStatusPayload }) {
     const abort = new AbortController();
     setLoading(true);
     setError(null);
-    fetch(previewUrl, { cache: "no-store", signal: abort.signal })
-      .then(async (res) => {
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(text || "Preview unavailable");
-        }
-        return readBuildVariantJson<VoxelBuild>(res);
-      })
+    loadCustomBuildPreview(previewUrl, abort.signal)
       .then((nextBuild) => {
         setBuild(nextBuild);
         setError(null);
