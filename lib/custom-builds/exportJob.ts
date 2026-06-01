@@ -3,6 +3,7 @@ import type { CustomBuildJob, Prisma } from "@prisma/client";
 import { getPalette } from "@/lib/blocks/palettes";
 import { decodeGzipText, sha256Hex, uploadAndRecordCustomBuildArtifact } from "@/lib/custom-builds/artifacts";
 import { appendCustomBuildEvent } from "@/lib/custom-builds/events";
+import { throwIfCustomBuildLeaseLost } from "@/lib/custom-builds/lease";
 import { downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
 import { CUSTOM_BUILD_EXPORT_FORMATS, type CustomBuildExportFormat } from "@/lib/custom-builds/types";
 import { prisma } from "@/lib/prisma";
@@ -10,6 +11,7 @@ import { exportVoxelBuild } from "@/lib/voxel/export";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 type RunCustomBuildExportJobOptions = {
+  signal?: AbortSignal;
   beforeSynchronousExport?: () => Promise<void> | void;
 };
 
@@ -28,6 +30,7 @@ export async function runCustomBuildExportJob(
   job: CustomBuildJob,
   opts: RunCustomBuildExportJobOptions = {},
 ): Promise<void> {
+  throwIfCustomBuildLeaseLost(opts.signal);
   const format = parseExportFormat(job.payload);
   const customBuild = await prisma.customBuild.findUnique({
     where: { id: job.customBuildId },
@@ -49,6 +52,7 @@ export async function runCustomBuildExportJob(
     return;
   }
 
+  throwIfCustomBuildLeaseLost(opts.signal);
   await appendCustomBuildEvent(customBuild.id, "export_started", { format });
 
   const buildArtifact = await prisma.customBuildArtifact.findFirst({
@@ -62,10 +66,12 @@ export async function runCustomBuildExportJob(
     throw new Error("Custom build JSON artifact is missing");
   }
 
+  throwIfCustomBuildLeaseLost(opts.signal);
   const bytes = await downloadCustomBuildArtifactBytes({
     bucket: buildArtifact.bucket,
     path: buildArtifact.path,
   });
+  throwIfCustomBuildLeaseLost(opts.signal);
   const parsed = JSON.parse(decodeGzipText(bytes)) as unknown;
   const build = parseVoxelBuildSpec(parsed);
   if (!build.ok) {
@@ -74,10 +80,13 @@ export async function runCustomBuildExportJob(
 
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
   await opts.beforeSynchronousExport?.();
+  throwIfCustomBuildLeaseLost(opts.signal);
   const artifact = exportVoxelBuild(build.value, getPalette(palette), format);
+  throwIfCustomBuildLeaseLost(opts.signal);
   const exportBytes = format === "schem" ? gzipSync(artifact.bytes, { mtime: 0 }) : artifact.bytes;
   const exportSha = sha256Hex(exportBytes);
 
+  throwIfCustomBuildLeaseLost(opts.signal);
   await uploadAndRecordCustomBuildArtifact({
     customBuildId: customBuild.id,
     publicId: customBuild.publicId,
@@ -87,7 +96,9 @@ export async function runCustomBuildExportJob(
     sourceBuildSha256: customBuild.buildSha256,
     exportStats: artifact.stats as Prisma.InputJsonValue,
   });
+  throwIfCustomBuildLeaseLost(opts.signal);
   await appendCustomBuildEvent(customBuild.id, "export_complete", { format });
+  throwIfCustomBuildLeaseLost(opts.signal);
   await prisma.customBuildStatsDaily.upsert({
     where: { day: new Date(new Date().toISOString().slice(0, 10)) },
     create: { day: new Date(new Date().toISOString().slice(0, 10)), exportsSucceeded: 1 },

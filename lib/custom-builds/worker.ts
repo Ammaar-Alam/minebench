@@ -11,6 +11,11 @@ import {
 } from "@/lib/custom-builds/jobs";
 import { runCustomBuildExportJob } from "@/lib/custom-builds/exportJob";
 import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
+import {
+  CustomBuildLeaseLostError,
+  isCustomBuildLeaseLostError,
+  throwIfCustomBuildLeaseLost,
+} from "@/lib/custom-builds/lease";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { prisma } from "@/lib/prisma";
 
@@ -41,16 +46,68 @@ export function getCustomBuildSynchronousExportLeaseMs(): number {
   return Math.max(getCustomBuildJobLeaseSeconds() * 1000, SYNCHRONOUS_EXPORT_LEASE_MS);
 }
 
-async function runJob(job: CustomBuildJob, workerId: string): Promise<void> {
+function abortLease(controller: AbortController, message: string): void {
+  if (controller.signal.aborted) return;
+  controller.abort(new CustomBuildLeaseLostError(message));
+}
+
+function startCustomBuildJobHeartbeat(
+  job: CustomBuildJob,
+  workerId: string,
+  controller: AbortController,
+): NodeJS.Timeout {
+  let renewalInFlight = false;
+  return setInterval(() => {
+    if (renewalInFlight || controller.signal.aborted) return;
+    renewalInFlight = true;
+    void renewCustomBuildJobLease(job.id, workerId)
+      .then((renewed) => {
+        if (!renewed) {
+          abortLease(controller, "Custom build job lease is no longer owned by this worker.");
+        }
+      })
+      .catch((error) => {
+        abortLease(
+          controller,
+          `Custom build job lease renewal failed: ${redactSensitiveText(error)}`,
+        );
+      })
+      .finally(() => {
+        renewalInFlight = false;
+      });
+  }, getCustomBuildWorkerHeartbeatMs());
+}
+
+async function runJob(job: CustomBuildJob, workerId: string, signal: AbortSignal): Promise<void> {
+  throwIfCustomBuildLeaseLost(signal);
   if (job.type === "generate") {
-    await runCustomBuildGenerateJob(job);
+    await runCustomBuildGenerateJob(job, { signal });
+    throwIfCustomBuildLeaseLost(signal);
     return;
   }
   await runCustomBuildExportJob(job, {
+    signal,
     beforeSynchronousExport: async () => {
-      await extendCustomBuildJobLease(job.id, workerId, getCustomBuildSynchronousExportLeaseMs());
+      throwIfCustomBuildLeaseLost(signal);
+      let extended = false;
+      try {
+        extended = await extendCustomBuildJobLease(
+          job.id,
+          workerId,
+          getCustomBuildSynchronousExportLeaseMs(),
+        );
+      } catch (error) {
+        throw new CustomBuildLeaseLostError(
+          `Custom build job lease extension failed: ${redactSensitiveText(error)}`,
+        );
+      }
+      if (!extended) {
+        throw new CustomBuildLeaseLostError("Custom build job lease is no longer owned by this worker.");
+      }
+      throwIfCustomBuildLeaseLost(signal);
     },
   });
+  throwIfCustomBuildLeaseLost(signal);
 }
 
 export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId()): Promise<{
@@ -62,15 +119,19 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
   const job = await claimNextCustomBuildJob(workerId);
   if (!job) return { processed: false };
 
-  const heartbeat = setInterval(() => {
-    void renewCustomBuildJobLease(job.id, workerId);
-  }, getCustomBuildWorkerHeartbeatMs());
+  const leaseAbort = new AbortController();
+  const heartbeat = startCustomBuildJobHeartbeat(job, workerId, leaseAbort);
 
   try {
-    await runJob(job, workerId);
+    await runJob(job, workerId, leaseAbort.signal);
+    throwIfCustomBuildLeaseLost(leaseAbort.signal);
     await completeCustomBuildJob(job.id, workerId);
     return { processed: true, jobId: job.id, jobType: job.type };
   } catch (error) {
+    if (isCustomBuildLeaseLostError(error)) {
+      console.warn(`custom build job ${job.id} stopped: ${redactSensitiveText(error)}`);
+      return { processed: true, jobId: job.id, jobType: job.type };
+    }
     const message = redactSensitiveText(error);
     const forceTerminal = job.type === "generate" && isTerminalCustomBuildGenerateError(message);
     await failCustomBuildJob(job.id, workerId, {

@@ -12,6 +12,7 @@ import {
   uploadAndRecordCustomBuildArtifact,
 } from "@/lib/custom-builds/artifacts";
 import { appendCustomBuildEvent } from "@/lib/custom-builds/events";
+import { isCustomBuildLeaseLostError, throwIfCustomBuildLeaseLost } from "@/lib/custom-builds/lease";
 import { decryptProviderKey } from "@/lib/custom-builds/secrets";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import type { CustomBuildExportFormat } from "@/lib/custom-builds/types";
@@ -127,12 +128,17 @@ function emitCustomBuildEvent(customBuildId: string, type: string, data: Prisma.
   });
 }
 
-async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Promise<{
+async function generateBuild(
+  customBuild: CustomBuild,
+  job: CustomBuildJob,
+  opts: { signal?: AbortSignal } = {},
+): Promise<{
   build: VoxelBuild;
   warnings: string[];
   blockCount: number;
   generationTimeMs: number;
 }> {
+  throwIfCustomBuildLeaseLost(opts.signal);
   const payload = asGenerateJobPayload(job.payload);
   if (payload.stubBuild) {
     if (process.env.CUSTOM_BUILD_STUB_PROVIDER !== "1") {
@@ -168,6 +174,7 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
   const providerKeys = providerKeysForSecret(secret.provider, providerKey);
 
+  throwIfCustomBuildLeaseLost(opts.signal);
   const result = await generateVoxelBuild(
     {
       model: customBuildModelForGeneration(customBuild),
@@ -178,6 +185,7 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
       allowServerKeys: false,
       preferOpenRouter: customBuild.preferOpenRouter,
       reasoning: customBuild.reasoning ?? undefined,
+      abortSignal: opts.signal,
       onRetry: (attempt, reason) =>
         emitCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
       onProviderTrace: (message) =>
@@ -187,6 +195,7 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
     },
   );
 
+  throwIfCustomBuildLeaseLost(opts.signal);
   if (!result.ok) {
     throw new Error(redactSensitiveText(result.error));
   }
@@ -200,12 +209,16 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
   };
 }
 
-export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<void> {
+export async function runCustomBuildGenerateJob(
+  job: CustomBuildJob,
+  opts: { signal?: AbortSignal } = {},
+): Promise<void> {
   const customBuild = await prisma.customBuild.findUnique({
     where: { id: job.customBuildId },
   });
   if (!customBuild) throw new Error("Custom build not found");
   if (customBuild.status === "succeeded") return;
+  throwIfCustomBuildLeaseLost(opts.signal);
 
   await prisma.customBuild.update({
     where: { id: customBuild.id },
@@ -218,11 +231,13 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
   emitCustomBuildEvent(customBuild.id, "started", { stage: "generating" });
 
   try {
-    const generated = await generateBuild(customBuild, job);
+    const generated = await generateBuild(customBuild, job, opts);
+    throwIfCustomBuildLeaseLost(opts.signal);
     const fullBytes = jsonBytes(generated.build);
     const fullSha = sha256Hex(fullBytes);
     const fullGzip = gzipBytes(fullBytes);
     const fullArtifactSha = sha256Hex(fullGzip);
+    throwIfCustomBuildLeaseLost(opts.signal);
     await uploadAndRecordCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
@@ -236,11 +251,13 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
     });
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
 
+    throwIfCustomBuildLeaseLost(opts.signal);
     const preview = buildCustomBuildPreview(generated.build);
     const previewBytes = jsonBytes(preview);
     const previewSha = sha256Hex(previewBytes);
     const previewGzip = gzipBytes(previewBytes);
     const previewArtifactSha = sha256Hex(previewGzip);
+    throwIfCustomBuildLeaseLost(opts.signal);
     await uploadAndRecordCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
@@ -256,6 +273,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
 
     const payload = asGenerateJobPayload(job.payload);
     const requestedExports = payload.requestedExports ?? [];
+    throwIfCustomBuildLeaseLost(opts.signal);
     await prisma.$transaction(async (tx) => {
       await tx.customBuild.update({
         where: { id: customBuild.id },
@@ -302,12 +320,15 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
       await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
     });
 
+    throwIfCustomBuildLeaseLost(opts.signal);
     for (const format of requestedExports) {
       emitCustomBuildEvent(customBuild.id, "export_queued", { format });
     }
 
+    throwIfCustomBuildLeaseLost(opts.signal);
     emitCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
   } catch (error) {
+    if (isCustomBuildLeaseLostError(error)) throw error;
     const message = redactSensitiveText(error);
     const terminal = isTerminalCustomBuildGenerateError(message) || job.attempts >= job.maxAttempts;
     if (terminal) {

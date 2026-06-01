@@ -40,8 +40,34 @@ async function main() {
     "synchronous exports should extend the lease beyond the shortest accepted lease window",
   );
   const runJobIndex = workerSource.indexOf("async function runJob");
-  const extendIndex = workerSource.indexOf("extendCustomBuildJobLease(job.id, workerId, getCustomBuildSynchronousExportLeaseMs())");
+  const extendIndex = workerSource.indexOf("extendCustomBuildJobLease(");
   assert.ok(runJobIndex >= 0 && extendIndex > runJobIndex, "export jobs should extend the lease from the worker");
+  const heartbeatIndex = workerSource.indexOf("function startCustomBuildJobHeartbeat");
+  const renewIndex = workerSource.indexOf("renewCustomBuildJobLease(job.id, workerId)", heartbeatIndex);
+  const falseIndex = workerSource.indexOf("if (!renewed)", renewIndex);
+  const catchIndex = workerSource.indexOf(".catch((error) =>", renewIndex);
+  const abortIndex = workerSource.indexOf("abortLease(", renewIndex);
+  assert.ok(
+    heartbeatIndex >= 0 &&
+      renewIndex > heartbeatIndex &&
+      falseIndex > renewIndex &&
+      catchIndex > renewIndex &&
+      abortIndex > renewIndex,
+    "heartbeat renewals should abort the active job on false results and caught failures",
+  );
+  assert.ok(
+    workerSource.includes("runCustomBuildGenerateJob(job, { signal })"),
+    "generate jobs should receive the heartbeat abort signal",
+  );
+  assert.ok(
+    workerSource.includes("runCustomBuildExportJob(job, {\n    signal,"),
+    "export jobs should receive the heartbeat abort signal",
+  );
+  assert.ok(
+    workerSource.includes("isCustomBuildLeaseLostError(error)") &&
+      workerSource.includes("return { processed: true, jobId: job.id, jobType: job.type };"),
+    "lost leases should stop the worker path without failing a job it may no longer own",
+  );
   const callbackIndex = exportJobSource.indexOf("await opts.beforeSynchronousExport?.()");
   const exportIndex = exportJobSource.indexOf("const artifact = exportVoxelBuild");
   assert.ok(
