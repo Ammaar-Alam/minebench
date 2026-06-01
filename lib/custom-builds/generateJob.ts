@@ -231,6 +231,9 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
         buildCompressedByteSize: fullGzip.byteLength,
         previewBlockCount: preview.blocks.length,
         previewSha256: previewSha,
+        errorCode: null,
+        errorMessage: null,
+        errorRetryable: null,
       },
     });
 

@@ -53,7 +53,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           if (closed) return;
           controller.enqueue(encoder.encode(sseEvent(event)));
           after = event.seq;
-          if (["complete", "failed", "canceled"].includes(event.type)) {
+          if (["failed", "canceled"].includes(event.type)) {
             close();
             return;
           }

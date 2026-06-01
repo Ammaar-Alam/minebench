@@ -714,6 +714,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     setResults((prev) => {
       const next = new Map(prev);
       const existing = next.get(args.model.id);
+      if (!existing || (existing?.customBuildId && existing.customBuildId !== args.status.id)) {
+        return prev;
+      }
       const base = {
         modelKey: args.model.id,
         customBuildId: args.status.id,
@@ -764,8 +767,10 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }) {
     while (!args.signal.aborted) {
       const status = await readCustomBuildStatus(args.statusUrl, args.signal);
+      if (args.signal.aborted) return;
       if (status.status === "succeeded") {
         const preview = await readCustomBuildPreview(status, args.signal);
+        if (args.signal.aborted) return;
         applyCustomBuildStatus({
           model: args.model,
           status,
@@ -793,6 +798,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     abortController: AbortController;
     providerKeys: ProviderApiKeys;
   }) {
+    customBuildAbortRef.current?.abort();
     customBuildAbortRef.current = args.abortController;
     const queueResults = await Promise.allSettled(
       selectedModels.map(async (model) => {
