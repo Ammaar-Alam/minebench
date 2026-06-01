@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
-import { customBuildError, customBuildNoStoreHeaders, serializeCustomBuildStatus } from "@/lib/custom-builds/api";
+import {
+  customBuildError,
+  customBuildNoStoreHeaders,
+  customBuildsEnabled,
+  serializeCustomBuildStatus,
+} from "@/lib/custom-builds/api";
 import { appendCustomBuildEvent } from "@/lib/custom-builds/events";
 import { isCustomBuildPublicId } from "@/lib/custom-builds/ids";
 import { getCustomBuildJobMaxAttempts } from "@/lib/custom-builds/jobs";
@@ -30,6 +35,10 @@ function dayKey(): Date {
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  if (!customBuildsEnabled()) {
+    return customBuildError("custom_builds_disabled", "Custom builds are not enabled.", 503);
+  }
+
   const { id } = await params;
   if (!isCustomBuildPublicId(id)) {
     return customBuildError("not_found", "Custom build was not found.", 404);

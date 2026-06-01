@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 const publicId = "cb_123456789012345678901234";
 const customBuildId = "custom-build-row";
 const buildSha256 = "a".repeat(64);
+const previousCustomBuildsEnabled = process.env.CUSTOM_BUILDS_ENABLED;
 let createdJobs = 0;
 let statsUpdates = 0;
+let findUniqueCalls = 0;
 
 const baseCustomBuild = {
   id: customBuildId,
@@ -40,11 +42,14 @@ const runningExportJob = {
 
 const fakePrisma = {
   customBuild: {
-    findUnique: async () => ({
-      ...baseCustomBuild,
-      artifacts: [],
-      jobs: [],
-    }),
+    findUnique: async () => {
+      findUniqueCalls += 1;
+      return {
+        ...baseCustomBuild,
+        artifacts: [],
+        jobs: [],
+      };
+    },
     findUniqueOrThrow: async () => ({
       ...baseCustomBuild,
       artifacts: [],
@@ -77,6 +82,23 @@ const fakePrisma = {
 
 async function main() {
   const { POST } = await import("../../../app/api/custom-builds/[id]/exports/route");
+
+  process.env.CUSTOM_BUILDS_ENABLED = "0";
+  const disabledResponse = await POST(
+    new Request(`http://localhost/api/custom-builds/${publicId}/exports`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ formats: ["glb"] }),
+    }),
+    { params: Promise.resolve({ id: publicId }) },
+  );
+
+  assert.equal(disabledResponse.status, 503);
+  assert.equal(findUniqueCalls, 0, "disabled export requests should not load or mutate custom builds");
+  assert.equal(createdJobs, 0);
+  assert.equal(statsUpdates, 0);
+
+  process.env.CUSTOM_BUILDS_ENABLED = "1";
   const response = await POST(
     new Request(`http://localhost/api/custom-builds/${publicId}/exports`, {
       method: "POST",
@@ -93,7 +115,15 @@ async function main() {
   console.log("custom build export route checks passed");
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .finally(() => {
+    if (previousCustomBuildsEnabled === undefined) {
+      delete process.env.CUSTOM_BUILDS_ENABLED;
+    } else {
+      process.env.CUSTOM_BUILDS_ENABLED = previousCustomBuildsEnabled;
+    }
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

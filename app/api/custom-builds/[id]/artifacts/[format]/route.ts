@@ -5,7 +5,10 @@ import {
   customBuildNoStoreHeaders,
 } from "@/lib/custom-builds/api";
 import { isCustomBuildPublicId } from "@/lib/custom-builds/ids";
-import { createCustomBuildArtifactSignedUrl } from "@/lib/custom-builds/storage";
+import {
+  createCustomBuildArtifactSignedUrl,
+  downloadCustomBuildArtifactBytes,
+} from "@/lib/custom-builds/storage";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -16,8 +19,30 @@ function downloadFileName(publicId: string, format: string): string {
   return `minebench-${publicId}.${format}`;
 }
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string; format: string }> }) {
+function artifactResponseHeaders(args: {
+  id: string;
+  format: string;
+  contentType: string;
+  byteSize: number;
+  sha256: string;
+}): HeadersInit {
+  return {
+    ...customBuildNoStoreHeaders(),
+    "Content-Type": args.contentType,
+    "Content-Length": String(args.byteSize),
+    "Content-Disposition": `attachment; filename="${downloadFileName(args.id, args.format)}"`,
+    "X-Custom-Build-Artifact-Sha256": args.sha256,
+    "X-Custom-Build-Artifact-Bytes": String(args.byteSize),
+  };
+}
+
+function responseBody(bytes: Uint8Array): BodyInit {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+export async function GET(req: Request, { params }: { params: Promise<{ id: string; format: string }> }) {
   const { id, format } = await params;
+  const url = new URL(req.url);
   if (!isCustomBuildPublicId(id)) {
     return customBuildError("not_found", "Custom build was not found.", 404);
   }
@@ -58,6 +83,26 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     );
   }
 
+  if (url.searchParams.get("redirect") === "0") {
+    try {
+      const bytes = await downloadCustomBuildArtifactBytes({
+        bucket: artifact.bucket,
+        path: artifact.path,
+      });
+      return new Response(responseBody(bytes), {
+        headers: artifactResponseHeaders({
+          id,
+          format,
+          contentType: artifact.contentType,
+          byteSize: bytes.byteLength,
+          sha256: artifact.sha256,
+        }),
+      });
+    } catch {
+      return customBuildError("artifact_not_ready", "The requested artifact is temporarily unavailable.", 503);
+    }
+  }
+
   let signedUrl;
   try {
     signedUrl = await createCustomBuildArtifactSignedUrl({
@@ -75,15 +120,14 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         import("node:url"),
       ]);
       const bytes = await readFile(fileURLToPath(signedUrl));
-      return new Response(new Uint8Array(bytes), {
-        headers: {
-          ...customBuildNoStoreHeaders(),
-          "Content-Type": artifact.contentType,
-          "Content-Length": String(bytes.byteLength),
-          "Content-Disposition": `attachment; filename="${downloadFileName(id, format)}"`,
-          "X-Custom-Build-Artifact-Sha256": artifact.sha256,
-          "X-Custom-Build-Artifact-Bytes": String(artifact.compressedByteSize ?? artifact.byteSize),
-        },
+      return new Response(responseBody(new Uint8Array(bytes)), {
+        headers: artifactResponseHeaders({
+          id,
+          format,
+          contentType: artifact.contentType,
+          byteSize: bytes.byteLength,
+          sha256: artifact.sha256,
+        }),
       });
     } catch {
       return customBuildError("artifact_not_ready", "The requested artifact is temporarily unavailable.", 503);

@@ -31,6 +31,10 @@ export type CustomBuildProviderCredential = {
   providerKey: string;
 };
 
+export function customBuildsEnabled(): boolean {
+  return process.env.CUSTOM_BUILDS_ENABLED === "1";
+}
+
 export type SerializableCustomBuild = {
   publicId: string;
   status: CustomBuildStatus;

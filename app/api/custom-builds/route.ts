@@ -6,6 +6,7 @@ import { assertSafeCustomApiUrl } from "@/lib/ai/providers/nvidia";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import {
   chooseCustomBuildProviderCredential,
+  customBuildsEnabled,
   customBuildError,
   customBuildNoStoreHeaders,
 } from "@/lib/custom-builds/api";
@@ -56,10 +57,6 @@ const createSchema = z.object({
   reasoning: z.string().trim().min(1).max(64).optional(),
   exports: z.array(z.enum(CUSTOM_BUILD_EXPORT_FORMATS)).max(3).optional(),
 });
-
-function customBuildsEnabled(): boolean {
-  return process.env.CUSTOM_BUILDS_ENABLED === "1";
-}
 
 function getSecretTtlMs(): number {
   const raw = Number.parseInt(process.env.CUSTOM_BUILD_SECRET_TTL_SECONDS ?? "7200", 10);

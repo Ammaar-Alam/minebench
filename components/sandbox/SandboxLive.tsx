@@ -418,18 +418,44 @@ async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): P
   return (await res.json()) as CustomBuildStatusPayload;
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
 async function readCustomBuildPreview(
   status: CustomBuildStatusPayload,
   signal?: AbortSignal,
+  opts?: { redirect?: boolean },
 ): Promise<VoxelBuild | null> {
   const artifact = status.artifacts.find((candidate) => candidate.kind === "preview_json");
   if (!artifact) return null;
-  const res = await fetch(artifact.downloadUrl, { cache: "no-store", signal });
+  const allowRedirect = opts?.redirect !== false;
+  const url = new URL(artifact.downloadUrl, window.location.origin);
+  if (!allowRedirect) url.searchParams.set("redirect", "0");
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store", signal, redirect: "follow" });
+  } catch (err) {
+    if (allowRedirect && !isAbortError(err)) {
+      return readCustomBuildPreview(status, signal, { redirect: false });
+    }
+    throw err;
+  }
   if (!res.ok) {
+    if (allowRedirect && [403, 404, 502, 503, 504].includes(res.status)) {
+      return readCustomBuildPreview(status, signal, { redirect: false });
+    }
     const text = await res.text().catch(() => "");
     throw new Error(text || "Preview unavailable");
   }
-  return readBuildVariantJson<VoxelBuild>(res);
+  try {
+    return await readBuildVariantJson<VoxelBuild>(res);
+  } catch (err) {
+    if (allowRedirect && !isAbortError(err)) {
+      return readCustomBuildPreview(status, signal, { redirect: false });
+    }
+    throw err;
+  }
 }
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -564,6 +590,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
   useEffect(() => {
     if (lastGenerateInputRef.current === inputSignature) return;
+    if (DURABLE_CUSTOM_BUILDS_ENABLED) {
+      previewCacheRef.current.clear();
+      setRequestError(null);
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
     customBuildAbortRef.current?.abort();
