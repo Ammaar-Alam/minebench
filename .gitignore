@@ -44,6 +44,7 @@ package-lock.json
 .turbo
 voxel-build.json
 .custom-build-storage/
+/custom-builds/
 
 # Database
 prisma/dev.db

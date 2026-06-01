@@ -165,6 +165,29 @@ Reference prompt template:
 - `GET /api/sandbox/benchmark?promptId=&modelA=&modelB=`
 - `GET /api/leaderboard`
 
+### Custom Build Routes
+
+Custom Builds are private, durable generations outside Arena ranking tables. See [Custom Builds](./custom-builds.md) for full API examples, CLI usage, worker setup, and troubleshooting.
+
+- `POST /api/custom-builds`
+  - creates a private custom build, encrypts the user-supplied provider key for the queued job, and returns `202 Accepted`
+- `GET /api/custom-builds/$CUSTOM_BUILD_ID`
+  - returns status, artifact metadata, export status, and terminal errors
+- `GET /api/custom-builds/$CUSTOM_BUILD_ID/events`
+  - persisted SSE event replay with `Last-Event-ID` or `?after=`
+- `GET /api/custom-builds/$CUSTOM_BUILD_ID/artifacts`
+  - lists private artifacts
+- `GET /api/custom-builds/$CUSTOM_BUILD_ID/artifacts/json`
+  - redirects to, or locally serves, normalized `build.json.gz`
+- `GET /api/custom-builds/$CUSTOM_BUILD_ID/artifacts/glb|stl|schem`
+  - redirects to, or locally serves, server-side exports
+- `POST /api/custom-builds/$CUSTOM_BUILD_ID/exports`
+  - queues GLB/STL/Schem export jobs
+- `GET /api/custom-builds/stats`
+  - count-only aggregate stats
+
+Custom build prompts and generated outputs are private-link artifacts. Public stats remain count-only.
+
 ### Admin Routes
 
 Bearer `ADMIN_TOKEN` required.

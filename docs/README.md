@@ -7,6 +7,7 @@ Use this index to find implementation-accurate docs for Arena ranking, generatio
 - [Local Development](./local-development.md)
 - [Operations and API Reference](./operations.md)
 - [Deployment](./deployment.md)
+- [Custom Builds](./custom-builds.md)
 - [Build Export and Import Guide](./build-export-import.md)
 
 ## Core
@@ -24,6 +25,7 @@ Use this index to find implementation-accurate docs for Arena ranking, generatio
 
 - Raw tool-call example: [`examples/voxel-exec-tool-call-example.json`](./examples/voxel-exec-tool-call-example.json)
 - Build export/import guide: [`build-export-import.md`](./build-export-import.md)
+- Custom build API and CLI: [`custom-builds.md`](./custom-builds.md)
 - Tool-call conversion script: [`scripts/convert-voxel-tool-call.ts`](../scripts/convert-voxel-tool-call.ts)
 - Local execution API: [`app/api/local/voxel-exec/route.ts`](../app/api/local/voxel-exec/route.ts)
 - Arena matchmaking route: [`app/api/arena/matchup/route.ts`](../app/api/arena/matchup/route.ts)
