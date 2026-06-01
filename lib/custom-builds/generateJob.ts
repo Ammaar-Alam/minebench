@@ -15,6 +15,7 @@ import { appendCustomBuildEvent } from "@/lib/custom-builds/events";
 import { isCustomBuildLeaseLostError, throwIfCustomBuildLeaseLost } from "@/lib/custom-builds/lease";
 import { decryptProviderKey } from "@/lib/custom-builds/secrets";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
+import { assertCustomBuildStorageConfigured } from "@/lib/custom-builds/storage";
 import type { CustomBuildExportFormat } from "@/lib/custom-builds/types";
 import { prisma } from "@/lib/prisma";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
@@ -80,8 +81,32 @@ function customBuildModelForGeneration(customBuild: CustomBuild): GenerateVoxelB
   };
 }
 
+class CustomBuildArtifactPersistenceError extends Error {
+  constructor(error: unknown) {
+    super(`custom_build_artifact_persistence_failed: ${redactSensitiveText(error)}`);
+    this.name = "CustomBuildArtifactPersistenceError";
+  }
+}
+
+function isCustomBuildArtifactPersistenceError(error: unknown): error is CustomBuildArtifactPersistenceError {
+  return error instanceof CustomBuildArtifactPersistenceError;
+}
+
+function artifactPersistenceErrorCode(error: unknown): string {
+  return isCustomBuildArtifactPersistenceError(error) ? "artifact_persistence_failed" : "worker_failed";
+}
+
+async function persistCustomBuildArtifact(args: Parameters<typeof uploadAndRecordCustomBuildArtifact>[0]) {
+  try {
+    return await uploadAndRecordCustomBuildArtifact(args);
+  } catch (error) {
+    throw new CustomBuildArtifactPersistenceError(error);
+  }
+}
+
 export function isTerminalCustomBuildGenerateError(message: string): boolean {
   const normalized = message.trim().toLowerCase();
+  if (normalized.includes("custom_build_artifact_persistence_failed")) return true;
   if (normalized === "provider_key_expired") return true;
   if (normalized.includes("invalid_api_key")) return true;
   if (normalized.includes("invalid api key") || normalized.includes("incorrect api key")) return true;
@@ -231,6 +256,11 @@ export async function runCustomBuildGenerateJob(
   emitCustomBuildEvent(customBuild.id, "started", { stage: "generating" });
 
   try {
+    try {
+      assertCustomBuildStorageConfigured();
+    } catch (error) {
+      throw new CustomBuildArtifactPersistenceError(error);
+    }
     const generated = await generateBuild(customBuild, job, opts);
     throwIfCustomBuildLeaseLost(opts.signal);
     const fullBytes = jsonBytes(generated.build);
@@ -238,7 +268,7 @@ export async function runCustomBuildGenerateJob(
     const fullGzip = gzipBytes(fullBytes);
     const fullArtifactSha = sha256Hex(fullGzip);
     throwIfCustomBuildLeaseLost(opts.signal);
-    await uploadAndRecordCustomBuildArtifact({
+    await persistCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
       kind: "build_json",
@@ -258,7 +288,7 @@ export async function runCustomBuildGenerateJob(
     const previewGzip = gzipBytes(previewBytes);
     const previewArtifactSha = sha256Hex(previewGzip);
     throwIfCustomBuildLeaseLost(opts.signal);
-    await uploadAndRecordCustomBuildArtifact({
+    await persistCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
       kind: "preview_json",
@@ -330,7 +360,10 @@ export async function runCustomBuildGenerateJob(
   } catch (error) {
     if (isCustomBuildLeaseLostError(error)) throw error;
     const message = redactSensitiveText(error);
-    const terminal = isTerminalCustomBuildGenerateError(message) || job.attempts >= job.maxAttempts;
+    const terminal =
+      isCustomBuildArtifactPersistenceError(error) ||
+      isTerminalCustomBuildGenerateError(message) ||
+      job.attempts >= job.maxAttempts;
     if (terminal) {
       await prisma.customBuild.update({
         where: { id: customBuild.id },
@@ -338,7 +371,10 @@ export async function runCustomBuildGenerateJob(
           status: "failed",
           currentStage: "failed",
           completedAt: new Date(),
-          errorCode: message === "provider_key_expired" ? "provider_key_expired" : "worker_failed",
+          errorCode:
+            message === "provider_key_expired"
+              ? "provider_key_expired"
+              : artifactPersistenceErrorCode(error),
           errorMessage: message === "provider_key_expired" ? "Provider key expired before the worker could start." : message,
           errorRetryable: false,
         },

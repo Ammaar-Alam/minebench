@@ -84,6 +84,11 @@ export function getCustomBuildSignedUrlTtlSeconds(): number {
   );
 }
 
+export function assertCustomBuildStorageConfigured(): void {
+  if (getCustomBuildStorageBucket() === LOCAL_BUILD_STORAGE_BUCKET) return;
+  getSupabaseStorageConfig();
+}
+
 export function getCustomBuildArtifactDescriptor(kind: CustomBuildArtifactKind): CustomBuildArtifactDescriptor {
   if (kind === "build_json") {
     return {

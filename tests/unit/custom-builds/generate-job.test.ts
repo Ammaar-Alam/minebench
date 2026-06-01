@@ -150,6 +150,10 @@ async function main() {
     isTerminalCustomBuildGenerateError("Gemini request timed out"),
     false,
   );
+  assert.equal(
+    isTerminalCustomBuildGenerateError("custom_build_artifact_persistence_failed: storage unavailable"),
+    true,
+  );
 
   const expandedPrimitiveBuild = validateGeneratedBuildForArtifacts(
     {
@@ -244,6 +248,41 @@ async function main() {
     operations.some((op) => op.name === "customBuildSecret.deleteMany"),
     "event write failures should not skip success bookkeeping",
   );
+
+  updates.length = 0;
+  operations.length = 0;
+  artifactCreates.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
+  currentCustomBuild = queuedCustomBuild;
+  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = "package.json";
+  await assert.rejects(
+    runCustomBuildGenerateJob({
+      id: "artifact-failure-job-row",
+      customBuildId,
+      type: "generate",
+      status: "running",
+      attempts: 1,
+      maxAttempts: 3,
+      payload: {
+        stubBuild: {
+          version: "1.0",
+          blocks: [{ x: 3, y: 1, z: 1, type: "stone" }],
+        },
+      },
+    } as never),
+    /custom_build_artifact_persistence_failed/,
+  );
+  assert.equal(
+    updates.some((update) => update.data.status === "queued"),
+    false,
+    "artifact persistence failures should not requeue paid generation",
+  );
+  const artifactFailureUpdate = updates.find((update) => update.data.status === "failed");
+  assert.ok(artifactFailureUpdate, "artifact persistence failures should fail the custom build");
+  assert.equal(artifactFailureUpdate.data.errorCode, "artifact_persistence_failed");
+  assert.equal(artifactFailureUpdate.data.errorRetryable, false);
+  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-generate-job";
 
   updates.length = 0;
   operations.length = 0;
