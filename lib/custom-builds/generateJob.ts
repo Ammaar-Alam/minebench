@@ -1,6 +1,6 @@
 import type { CustomBuild, CustomBuildJob, Prisma } from "@prisma/client";
-import type { ModelKey } from "@/lib/ai/modelCatalog";
-import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
+import type { Provider } from "@/lib/ai/modelCatalog";
+import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
 import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -24,6 +24,8 @@ type GenerateJobPayload = {
   stubBuild?: unknown;
 };
 
+type GenerateVoxelBuildModel = NonNullable<GenerateVoxelBuildParams["model"]>;
+
 function asGenerateJobPayload(payload: Prisma.JsonValue | null): GenerateJobPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
   return payload as GenerateJobPayload;
@@ -45,6 +47,36 @@ function providerKeysForSecret(provider: string, providerKey: string): ProviderA
   if (provider === "xai") return { xai: providerKey };
   if (provider === "custom") return { custom: providerKey };
   return {};
+}
+
+function customBuildProviderForGeneration(provider: string): Provider | "custom" {
+  if (
+    provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "gemini" ||
+    provider === "moonshot" ||
+    provider === "deepseek" ||
+    provider === "xai" ||
+    provider === "zai" ||
+    provider === "qwen" ||
+    provider === "minimax" ||
+    provider === "meta" ||
+    provider === "custom"
+  ) {
+    return provider;
+  }
+  throw new Error(`Unsupported custom build model provider: ${provider}`);
+}
+
+function customBuildModelForGeneration(customBuild: CustomBuild): GenerateVoxelBuildModel {
+  return {
+    key: customBuild.modelKind === "catalog" && customBuild.modelKey ? customBuild.modelKey : customBuild.publicId,
+    provider: customBuildProviderForGeneration(customBuild.modelProvider),
+    modelId: customBuild.modelId,
+    displayName: customBuild.modelDisplayName,
+    openRouterModelId: customBuild.openRouterModelId ?? undefined,
+    baseUrl: customBuild.customBaseUrl ?? undefined,
+  };
 }
 
 export function isTerminalCustomBuildGenerateError(message: string): boolean {
@@ -134,44 +166,22 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
   const providerKeys = providerKeysForSecret(secret.provider, providerKey);
 
   const result = await generateVoxelBuild(
-    customBuild.modelKind === "catalog" && customBuild.modelKey
-      ? {
-          modelKey: customBuild.modelKey as ModelKey,
-          prompt: customBuild.promptText,
-          gridSize,
-          palette,
-          providerKeys,
-          allowServerKeys: false,
-          preferOpenRouter: customBuild.preferOpenRouter,
-          reasoning: customBuild.reasoning ?? undefined,
-          onRetry: (attempt, reason) =>
-            emitCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
-          onProviderTrace: (message) =>
-            emitCustomBuildEvent(customBuild.id, "provider_trace", {
-              message: redactSensitiveText(message),
-            }),
-        }
-      : {
-          model: {
-            key: customBuild.publicId,
-            provider: "custom",
-            modelId: customBuild.modelId,
-            displayName: customBuild.modelDisplayName,
-            baseUrl: customBuild.customBaseUrl ?? undefined,
-          },
-          prompt: customBuild.promptText,
-          gridSize,
-          palette,
-          providerKeys,
-          allowServerKeys: false,
-          reasoning: customBuild.reasoning ?? undefined,
-          onRetry: (attempt, reason) =>
-            emitCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
-          onProviderTrace: (message) =>
-            emitCustomBuildEvent(customBuild.id, "provider_trace", {
-              message: redactSensitiveText(message),
-            }),
-        },
+    {
+      model: customBuildModelForGeneration(customBuild),
+      prompt: customBuild.promptText,
+      gridSize,
+      palette,
+      providerKeys,
+      allowServerKeys: false,
+      preferOpenRouter: customBuild.preferOpenRouter,
+      reasoning: customBuild.reasoning ?? undefined,
+      onRetry: (attempt, reason) =>
+        emitCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
+      onProviderTrace: (message) =>
+        emitCustomBuildEvent(customBuild.id, "provider_trace", {
+          message: redactSensitiveText(message),
+        }),
+    },
   );
 
   if (!result.ok) {
