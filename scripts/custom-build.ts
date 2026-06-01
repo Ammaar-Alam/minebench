@@ -236,12 +236,20 @@ async function loadBuildFromJson(args: Args): Promise<{ build: VoxelBuild; warni
   const text = await readFile(args.jsonFile, "utf8");
   const parsed = parseVoxelBuildSpec(parseBuildText(text));
   if (!parsed.ok) throw new Error(`Invalid MineBench build JSON: ${parsed.error}`);
-  const validated = validateVoxelBuild(parsed.value, {
+  return validateBuildForOutput(args, parsed.value, "MineBench build JSON");
+}
+
+function validateBuildForOutput(
+  args: Pick<Args, "gridSize" | "palette">,
+  build: VoxelBuild,
+  source: string,
+): { build: VoxelBuild; warnings: string[] } {
+  const validated = validateVoxelBuild(build, {
     gridSize: args.gridSize,
     palette: getPalette(args.palette),
     maxBlocks: MAX_BLOCKS_BY_GRID[args.gridSize],
   });
-  if (!validated.ok) throw new Error(`Invalid MineBench build JSON: ${validated.error}`);
+  if (!validated.ok) throw new Error(`Invalid ${source}: ${validated.error}`);
   return validated.value;
 }
 
@@ -271,9 +279,10 @@ async function generateBuild(args: Args, prompt: string): Promise<{
   if (!result.ok) {
     throw new Error(result.error);
   }
+  const validated = validateBuildForOutput(args, result.build, "generated MineBench build");
   return {
-    build: result.build,
-    warnings: result.warnings,
+    build: validated.build,
+    warnings: Array.from(new Set([...result.warnings, ...validated.warnings])),
     generationTimeMs: result.generationTimeMs,
     rawText: result.rawText,
   };

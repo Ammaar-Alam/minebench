@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CustomBuildJob } from "@prisma/client";
 import {
@@ -28,13 +30,14 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
 }
 
 const SYNCHRONOUS_EXPORT_LEASE_MS = 30 * 60 * 1000;
+const DEFAULT_CUSTOM_BUILD_WORKER_ID = `custom-worker-${hostname()}-${process.pid}-${randomUUID()}`;
 
 export function getCustomBuildWorkerPollMs(): number {
   return readIntEnv("CUSTOM_BUILD_WORKER_POLL_MS", 2_000, 250, 60_000);
 }
 
 export function getCustomBuildWorkerId(): string {
-  return process.env.CUSTOM_BUILD_WORKER_ID?.trim() || `custom-worker-${process.pid}`;
+  return process.env.CUSTOM_BUILD_WORKER_ID?.trim() || DEFAULT_CUSTOM_BUILD_WORKER_ID;
 }
 
 export function getCustomBuildWorkerHeartbeatMs(): number {

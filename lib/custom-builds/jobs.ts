@@ -91,6 +91,16 @@ export async function extendCustomBuildJobLease(
 export async function recoverStaleCustomBuildJobLeases(
   client: PrismaClient | PrismaTx = prisma,
 ): Promise<{ requeued: number; failed: number }> {
+  const maybeTransactional = client as PrismaClient;
+  if (typeof maybeTransactional.$transaction === "function") {
+    return maybeTransactional.$transaction((tx) => recoverStaleCustomBuildJobLeasesInTransaction(tx));
+  }
+  return recoverStaleCustomBuildJobLeasesInTransaction(client as PrismaTx);
+}
+
+async function recoverStaleCustomBuildJobLeasesInTransaction(
+  client: PrismaTx,
+): Promise<{ requeued: number; failed: number }> {
   const requeuedRows = await client.$queryRaw<Array<{ id: string }>>`
     UPDATE "CustomBuildJob"
     SET status = 'queued'::"CustomBuildJobStatus",
