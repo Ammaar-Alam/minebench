@@ -800,6 +800,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }) {
     customBuildAbortRef.current?.abort();
     customBuildAbortRef.current = args.abortController;
+    const watchPromises: Promise<void>[] = [];
     const queueResults = await Promise.allSettled(
       selectedModels.map(async (model) => {
         const res = await fetch("/api/custom-builds", {
@@ -849,32 +850,34 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           return next;
         });
 
-        void watchCustomBuild({
-          model,
-          statusUrl: created.statusUrl,
-          pageUrl: created.pageUrl,
-          eventsUrl: created.eventsUrl,
-          signal: args.abortController.signal,
-        }).catch((err) => {
-          if (err instanceof Error && err.name === "AbortError") return;
-          setResults((prev) => {
-            const next = new Map(prev);
-            const existing = next.get(model.id);
-            next.set(model.id, {
-              modelKey: model.id,
-              status: "error",
-              voxelBuild: existing?.voxelBuild ?? null,
-              error: err instanceof Error ? err.message : "Status unavailable",
-              customBuildId: existing?.customBuildId,
-              customBuildPageUrl: existing?.customBuildPageUrl,
-              customBuildStatusUrl: existing?.customBuildStatusUrl,
-              customBuildEventsUrl: existing?.customBuildEventsUrl,
-              customBuildDownloadUrl: existing?.customBuildDownloadUrl,
-              startedAt: existing?.startedAt,
+        watchPromises.push(
+          watchCustomBuild({
+            model,
+            statusUrl: created.statusUrl,
+            pageUrl: created.pageUrl,
+            eventsUrl: created.eventsUrl,
+            signal: args.abortController.signal,
+          }).catch((err) => {
+            if (err instanceof Error && err.name === "AbortError") return;
+            setResults((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(model.id);
+              next.set(model.id, {
+                modelKey: model.id,
+                status: "error",
+                voxelBuild: existing?.voxelBuild ?? null,
+                error: err instanceof Error ? err.message : "Status unavailable",
+                customBuildId: existing?.customBuildId,
+                customBuildPageUrl: existing?.customBuildPageUrl,
+                customBuildStatusUrl: existing?.customBuildStatusUrl,
+                customBuildEventsUrl: existing?.customBuildEventsUrl,
+                customBuildDownloadUrl: existing?.customBuildDownloadUrl,
+                startedAt: existing?.startedAt,
+              });
+              return next;
             });
-            return next;
-          });
-        });
+          }),
+        );
       }),
     );
 
@@ -900,6 +903,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       const reason = failures[0]?.reason;
       throw reason instanceof Error ? reason : new Error("Request failed");
     }
+    await Promise.all(watchPromises);
   }
 
   async function runGenerate() {

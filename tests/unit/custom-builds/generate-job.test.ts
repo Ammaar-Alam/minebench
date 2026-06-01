@@ -11,10 +11,12 @@ process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
 process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-generate-job";
 process.env.CUSTOM_BUILD_STUB_PROVIDER = "1";
 
-const customBuild = {
+const queuedCustomBuild = {
   id: customBuildId,
   publicId,
   status: "queued",
+  currentStage: "queued",
+  completedAt: null as Date | null,
   promptText: "Build a stone marker",
   promptSha256: "prompt-sha",
   gridSize: 64,
@@ -32,17 +34,20 @@ const customBuild = {
   errorCode: "worker_failed",
   errorMessage: "first attempt failed",
   errorRetryable: true,
+  buildSha256: null as string | null,
 };
+let currentCustomBuild = queuedCustomBuild;
 
 const updates: Array<{ data: Record<string, unknown> }> = [];
 let eventSeq = 0;
 
 const fakePrisma = {
   customBuild: {
-    findUnique: async () => customBuild,
+    findUnique: async () => currentCustomBuild,
     update: async (args: { data: Record<string, unknown> }) => {
       updates.push(args);
-      return { ...customBuild, ...args.data };
+      currentCustomBuild = { ...currentCustomBuild, ...args.data };
+      return currentCustomBuild;
     },
   },
   customBuildArtifact: {
@@ -55,6 +60,7 @@ const fakePrisma = {
     upsert: async () => ({}),
   },
   customBuildSecret: {
+    findUnique: async () => null,
     deleteMany: async () => ({ count: 0 }),
   },
   $transaction: async <T>(callback: (tx: unknown) => Promise<T>) =>
@@ -110,6 +116,26 @@ async function main() {
   assert.equal(successUpdate.data.errorCode, null);
   assert.equal(successUpdate.data.errorMessage, null);
   assert.equal(successUpdate.data.errorRetryable, null);
+
+  updates.length = 0;
+  currentCustomBuild = {
+    ...queuedCustomBuild,
+    status: "succeeded",
+    currentStage: "complete",
+    completedAt: new Date("2026-05-31T22:22:42.000Z"),
+    buildSha256: "a".repeat(64),
+  };
+  await runCustomBuildGenerateJob({
+    id: "stale-job-row",
+    customBuildId,
+    type: "generate",
+    status: "running",
+    attempts: 3,
+    maxAttempts: 3,
+    payload: {},
+  } as never);
+
+  assert.equal(updates.length, 0, "succeeded custom builds should not be rerun or overwritten");
 
   console.log("custom build generate job retry checks passed");
 }

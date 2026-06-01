@@ -190,6 +190,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
     where: { id: job.customBuildId },
   });
   if (!customBuild) throw new Error("Custom build not found");
+  if (customBuild.status === "succeeded") return;
 
   await prisma.customBuild.update({
     where: { id: customBuild.id },

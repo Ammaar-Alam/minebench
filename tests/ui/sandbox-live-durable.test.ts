@@ -38,5 +38,11 @@ assert.ok(
     sourceText.includes("private links for download/export"),
   "private durable-storage copy should only render when durable custom builds are enabled",
 );
+assert.ok(
+  durableBody.includes("watchPromises.push(") &&
+    durableBody.includes("await Promise.all(watchPromises)") &&
+    !durableBody.includes("void watchCustomBuild"),
+  "durable generation should keep running until custom build watchers finish",
+);
 
 console.log("sandbox durable custom build race checks passed");
