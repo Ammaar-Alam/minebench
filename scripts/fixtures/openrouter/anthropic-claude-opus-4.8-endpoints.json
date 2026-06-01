@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "name": "Anthropic Claude Opus 4.8",
+      "supported_parameters": [
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "tools",
+        "verbosity"
+      ]
+    }
+  ]
+}
