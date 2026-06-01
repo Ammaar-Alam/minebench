@@ -42,6 +42,7 @@ const updates: Array<{ data: Record<string, unknown> }> = [];
 const operations: Array<{ name: string; txId: number | null }> = [];
 let eventSeq = 0;
 let txSeq = 0;
+let failEventWrites = false;
 
 const fakePrisma = {
   customBuild: {
@@ -108,6 +109,7 @@ const fakePrisma = {
       customBuildEvent: {
         aggregate: async () => ({ _max: { seq: eventSeq } }),
         create: async (args: { data: { seq: number; type: string; data: Prisma.InputJsonValue } }) => {
+          if (failEventWrites) throw new Error("event insert failed");
           eventSeq = args.data.seq;
           return args.data;
         },
@@ -117,6 +119,12 @@ const fakePrisma = {
 };
 
 (globalThis as unknown as { prisma?: unknown }).prisma = fakePrisma;
+
+async function flushAsyncEvents() {
+  for (let i = 0; i < 8; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 async function main() {
   const { runCustomBuildGenerateJob, isTerminalCustomBuildGenerateError } = await import(
@@ -165,6 +173,47 @@ async function main() {
 
   updates.length = 0;
   operations.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
+  currentCustomBuild = queuedCustomBuild;
+  const previousWarn = console.warn;
+  console.warn = () => {};
+  try {
+    failEventWrites = true;
+    await runCustomBuildGenerateJob({
+      id: "event-failure-job-row",
+      customBuildId,
+      type: "generate",
+      status: "running",
+      attempts: 1,
+      maxAttempts: 3,
+      payload: {
+        requestedExports: ["glb"],
+        stubBuild: {
+          version: "1.0",
+          blocks: [{ x: 2, y: 1, z: 1, type: "stone" }],
+        },
+      },
+    } as never);
+    await flushAsyncEvents();
+  } finally {
+    failEventWrites = false;
+    console.warn = previousWarn;
+  }
+
+  assert.ok(
+    updates.find((update) => update.data.status === "succeeded"),
+    "event write failures should not prevent a successful generate job",
+  );
+  assert.ok(
+    operations.some((op) => op.name === "customBuildSecret.deleteMany"),
+    "event write failures should not skip success bookkeeping",
+  );
+
+  updates.length = 0;
+  operations.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
   currentCustomBuild = {
     ...queuedCustomBuild,
     status: "succeeded",

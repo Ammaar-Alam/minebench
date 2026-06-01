@@ -200,7 +200,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
       currentStage: "generating",
     },
   });
-  await appendCustomBuildEvent(customBuild.id, "started", { stage: "generating" });
+  emitCustomBuildEvent(customBuild.id, "started", { stage: "generating" });
 
   try {
     const generated = await generateBuild(customBuild, job);
@@ -217,7 +217,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
       blockCount: generated.blockCount,
       encoding: "gzip",
     });
-    await appendCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
+    emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
 
     const preview = buildCustomBuildPreview(generated.build);
     const previewBytes = jsonBytes(preview);
@@ -234,7 +234,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
       blockCount: preview.blocks.length,
       encoding: "gzip",
     });
-    await appendCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_json" });
+    emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_json" });
 
     const payload = asGenerateJobPayload(job.payload);
     const requestedExports = payload.requestedExports ?? [];
@@ -285,10 +285,10 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
     });
 
     for (const format of requestedExports) {
-      await appendCustomBuildEvent(customBuild.id, "export_queued", { format });
+      emitCustomBuildEvent(customBuild.id, "export_queued", { format });
     }
 
-    await appendCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
+    emitCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
   } catch (error) {
     const message = redactSensitiveText(error);
     const terminal = isTerminalCustomBuildGenerateError(message) || job.attempts >= job.maxAttempts;
@@ -310,7 +310,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
         update: { failed: { increment: 1 } },
       });
       await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
-      await appendCustomBuildEvent(customBuild.id, "failed", { message });
+      emitCustomBuildEvent(customBuild.id, "failed", { message });
     } else {
       await prisma.customBuild.update({
         where: { id: customBuild.id },
@@ -322,7 +322,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
           errorRetryable: true,
         },
       });
-      await appendCustomBuildEvent(customBuild.id, "retry", {
+      emitCustomBuildEvent(customBuild.id, "retry", {
         attempt: job.attempts,
         reason: message,
       });
