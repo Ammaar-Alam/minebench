@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { getModelByKey, type ModelKey } from "@/lib/ai/modelCatalog";
@@ -66,7 +66,13 @@ function getSecretTtlMs(): number {
 
 function hashNullable(value: string | null): string | null {
   if (!value) return null;
-  return createHash("sha256").update(value).digest("hex");
+  const secret = (
+    process.env.CUSTOM_BUILD_METADATA_HASH_SECRET ??
+    process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET ??
+    ""
+  ).trim();
+  if (!secret) return null;
+  return createHmac("sha256", secret).update(value).digest("hex");
 }
 
 function requestIp(req: Request): string | null {

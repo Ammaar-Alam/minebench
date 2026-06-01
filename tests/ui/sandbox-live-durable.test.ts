@@ -61,6 +61,17 @@ assert.ok(
   applyStatusBody.includes("existing?.customBuildId && existing.customBuildId !== args.status.id"),
   "durable status updates should ignore stale watcher payloads for an older custom build id",
 );
+assert.ok(
+  sourceText.includes("renderGridSize?: GridSize") &&
+    sourceText.includes("renderPalette?: Palette") &&
+    applyStatusBody.includes("renderGridSize: statusGridSize") &&
+    applyStatusBody.includes("renderPalette: statusPalette") &&
+    durableBody.includes("renderGridSize: gridSize") &&
+    durableBody.includes("renderPalette: palette") &&
+    sourceText.includes("gridSize={cardGridSize}") &&
+    sourceText.includes("palette={cardPalette}"),
+  "durable cards should render with the grid size and palette captured for that custom build",
+);
 
 assert.ok(
   sourceText.includes("{DURABLE_CUSTOM_BUILDS_ENABLED ? (") &&

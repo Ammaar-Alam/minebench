@@ -58,6 +58,8 @@ type ModelResult = {
   customBuildStatusUrl?: string;
   customBuildEventsUrl?: string;
   customBuildDownloadUrl?: string;
+  renderGridSize?: GridSize;
+  renderPalette?: Palette;
   currentStage?: string;
 };
 
@@ -482,6 +484,14 @@ function customBuildMetrics(status: CustomBuildStatusPayload): ModelResult["metr
   };
 }
 
+function customBuildGridSize(value: number, fallback: GridSize): GridSize {
+  return value === 64 || value === 256 || value === 512 ? value : fallback;
+}
+
+function customBuildPalette(value: string, fallback: Palette): Palette {
+  return value === "advanced" ? "advanced" : value === "simple" ? "simple" : fallback;
+}
+
 export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
   const [gridSize, setGridSize] = useState<GridSize>(256);
@@ -751,6 +761,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       if (!existing || (existing?.customBuildId && existing.customBuildId !== args.status.id)) {
         return prev;
       }
+      const statusGridSize = customBuildGridSize(args.status.gridSize, existing?.renderGridSize ?? gridSize);
+      const statusPalette = customBuildPalette(args.status.palette, existing?.renderPalette ?? palette);
       const base = {
         modelKey: args.model.id,
         customBuildId: args.status.id,
@@ -758,6 +770,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         customBuildStatusUrl: args.statusUrl ?? existing?.customBuildStatusUrl,
         customBuildEventsUrl: args.eventsUrl ?? existing?.customBuildEventsUrl,
         customBuildDownloadUrl: buildArtifact?.downloadUrl ?? existing?.customBuildDownloadUrl,
+        renderGridSize: statusGridSize,
+        renderPalette: statusPalette,
         startedAt: existing?.startedAt,
         currentStage: customBuildStageLabel(args.status),
       };
@@ -891,6 +905,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             customBuildPageUrl: created.pageUrl,
             customBuildStatusUrl: created.statusUrl,
             customBuildEventsUrl: created.eventsUrl,
+            renderGridSize: gridSize,
+            renderPalette: palette,
             currentStage: "Queued",
           });
           return next;
@@ -918,6 +934,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 customBuildStatusUrl: existing?.customBuildStatusUrl,
                 customBuildEventsUrl: existing?.customBuildEventsUrl,
                 customBuildDownloadUrl: existing?.customBuildDownloadUrl,
+                renderGridSize: existing?.renderGridSize,
+                renderPalette: existing?.renderPalette,
                 startedAt: existing?.startedAt,
               });
               return next;
@@ -1183,16 +1201,22 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     }
   }
 
-  function getPreviewBuild(modelKey: string, rawText: string | undefined): VoxelBuild | null {
+  function getPreviewBuild(
+    modelKey: string,
+    rawText: string | undefined,
+    previewGridSize: GridSize,
+    previewPalette: Palette,
+  ): VoxelBuild | null {
     if (!rawText) return null;
     const now = Date.now();
-    const cached = previewCacheRef.current.get(modelKey);
+    const cacheKey = `${modelKey}:${previewGridSize}:${previewPalette}`;
+    const cached = previewCacheRef.current.get(cacheKey);
     const textLen = rawText.length;
     if (cached && now - cached.at < PREVIEW_THROTTLE_MS && textLen <= cached.textLen + 80) {
       return cached.build;
     }
-    const build = buildPreviewFromRawText({ rawText, gridSize, palette });
-    previewCacheRef.current.set(modelKey, { at: now, textLen, build });
+    const build = buildPreviewFromRawText({ rawText, gridSize: previewGridSize, palette: previewPalette });
+    previewCacheRef.current.set(cacheKey, { at: now, textLen, build });
     return build;
   }
 
@@ -1235,14 +1259,16 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     const liveRawText = r?.rawText;
-    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText) : null;
+    const cardGridSize = r?.renderGridSize ?? gridSize;
+    const cardPalette = r?.renderPalette ?? palette;
+    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText, cardGridSize, cardPalette) : null;
     return (
       <VoxelViewerCard
         key={model.id}
         title={model.displayName}
         subtitle={providerName}
         voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
-        gridSize={gridSize}
+        gridSize={cardGridSize}
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
@@ -1253,7 +1279,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         metrics={r?.status === "success" ? r.metrics : undefined}
         jsonText={isDurableResult ? undefined : r?.rawText}
         loadingMessage={isDurableResult ? r?.currentStage : undefined}
-        palette={palette}
+        palette={cardPalette}
         viewerRef={viewerRef}
         enableBuildJsonToggle={!isDurableResult}
         enableBuildExport={r?.status === "success" && !isDurableResult}
