@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildOpenRouterChatRequestBody,
+  type OpenRouterSupportedParameter,
   openRouterSupportedParametersFromEndpoints,
 } from "@/lib/ai/providers/openrouterRequest";
 
@@ -41,8 +42,8 @@ const requestBody = buildOpenRouterChatRequestBody({
   supportedParameters,
 });
 
-function providerParameterNames(body: Record<string, unknown>): string[] {
-  const names: string[] = [];
+function providerParameterNames(body: Record<string, unknown>): OpenRouterSupportedParameter[] {
+  const names: OpenRouterSupportedParameter[] = [];
   if (Object.hasOwn(body, "max_tokens")) names.push("max_tokens");
   if (Object.hasOwn(body, "reasoning")) names.push("reasoning");
   if (Object.hasOwn(body, "response_format")) names.push("response_format");

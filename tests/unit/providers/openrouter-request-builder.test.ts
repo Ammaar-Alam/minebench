@@ -59,6 +59,19 @@ function main() {
     },
   });
 
+  const defaultTemperatureSchemaRequest = buildOpenRouterChatRequestBody({
+    modelId: "openai/gpt-4.1",
+    messages: [{ role: "user", content: "Say ok." }],
+    stream: false,
+    maxTokens: 512,
+    temperature: 0.2,
+    jsonSchema: schema,
+    requireParameters: true,
+    supportedParameters: new Set(["max_tokens", "response_format", "temperature"]),
+  });
+
+  assert.equal(Object.hasOwn(defaultTemperatureSchemaRequest, "temperature"), false);
+
   const nonStrictRequest = buildOpenRouterChatRequestBody({
     modelId: "openai/gpt-4.1",
     messages: [{ role: "user", content: "Say ok." }],

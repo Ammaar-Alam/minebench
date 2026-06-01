@@ -7,6 +7,7 @@ type CapturedRequest = {
 };
 
 const capturedRequests: CapturedRequest[] = [];
+let forceSchemaFailure = false;
 const originalFetch = globalThis.fetch;
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -16,6 +17,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     url: String(input),
     body: JSON.parse(init.body as string) as Record<string, unknown>,
   });
+
+  if (forceSchemaFailure && capturedRequests.length === 1) {
+    return new Response(JSON.stringify({ error: "schema unsupported" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   return new Response(
     JSON.stringify({
@@ -91,6 +99,33 @@ async function main() {
   assert.ok(ordinaryRequest, "Ordinary OpenRouter request should be captured");
   assert.equal(ordinaryRequest.model, "openai/gpt-4.1");
   assert.equal(ordinaryRequest.temperature, 0.2);
+
+  capturedRequests.length = 0;
+  forceSchemaFailure = true;
+  await openrouterGenerateText({
+    modelId: "anthropic/claude-opus-4.8",
+    apiKey: "test-openrouter-key",
+    system: "Return valid JSON.",
+    user: "Build a small test shape.",
+    maxOutputTokens: 128000,
+    temperature: 0.2,
+    jsonSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        ok: { type: "boolean" },
+      },
+      required: ["ok"],
+    },
+  });
+
+  const fallbackRequest = capturedRequests[1]?.body;
+  assert.ok(fallbackRequest, "Fallback OpenRouter request should be captured");
+  assert.equal(fallbackRequest.model, "anthropic/claude-opus-4.8");
+  assert.equal(Object.hasOwn(fallbackRequest, "temperature"), false);
+  assert.equal(Object.hasOwn(fallbackRequest, "provider"), false);
+  assert.equal(Object.hasOwn(fallbackRequest, "response_format"), false);
+  assert.equal(fallbackRequest.max_tokens, 128000);
 
   console.log("openrouter opus request checks passed");
 }
