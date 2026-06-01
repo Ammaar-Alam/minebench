@@ -1,9 +1,14 @@
 import { customBuildError, customBuildNoStoreHeaders } from "@/lib/custom-builds/api";
 import { isCustomBuildPublicId } from "@/lib/custom-builds/ids";
-import { hasCustomBuildEventAtOrBefore, listCustomBuildEventsAfter } from "@/lib/custom-builds/events";
+import {
+  ensureCustomBuildEvent,
+  hasCustomBuildEventAtOrBefore,
+  listCustomBuildEventsAfter,
+} from "@/lib/custom-builds/events";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
+const TERMINAL_EVENT_GRACE_MS = 2_000;
 
 function parseAfter(req: Request): number {
   const url = new URL(req.url);
@@ -24,6 +29,13 @@ function terminalEventTypes(status: string): string[] {
   return [];
 }
 
+function terminalEventData(status: string) {
+  if (status === "succeeded") return { stage: "complete" };
+  if (status === "failed") return { stage: "failed" };
+  if (status === "canceled") return { stage: "canceled" };
+  return { stage: status };
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!isCustomBuildPublicId(id)) {
@@ -42,6 +54,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     async start(controller) {
       let after = parseAfter(req);
       let closed = false;
+      let terminalObservedAt: number | null = null;
       const close = () => {
         if (closed) return;
         closed = true;
@@ -87,6 +100,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
             (latest.status === "succeeded" && latest.jobs.length === 0));
         if (closed) return;
         if (terminalWithNoPendingExports) {
+          terminalObservedAt ??= Date.now();
           const terminalEvents = await listCustomBuildEventsAfter(customBuild.id, after);
           if (closed) return;
           const terminalTypes = terminalEventTypes(latest.status);
@@ -107,6 +121,30 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
             close();
             return;
           }
+          if (Date.now() - terminalObservedAt >= TERMINAL_EVENT_GRACE_MS && terminalTypes.length > 0) {
+            const fallbackEvent = await ensureCustomBuildEvent(
+              customBuild.id,
+              terminalTypes[0] ?? latest.status,
+              terminalEventData(latest.status),
+            ).catch(() => null);
+            if (closed) return;
+            if (fallbackEvent && fallbackEvent.seq > after) {
+              controller.enqueue(encoder.encode(sseEvent(fallbackEvent)));
+              after = fallbackEvent.seq;
+            } else if (!fallbackEvent) {
+              const syntheticEvent = {
+                seq: after + 1,
+                type: terminalTypes[0] ?? latest.status,
+                data: terminalEventData(latest.status),
+              };
+              controller.enqueue(encoder.encode(sseEvent(syntheticEvent)));
+              after = syntheticEvent.seq;
+            }
+            close();
+            return;
+          }
+        } else {
+          terminalObservedAt = null;
         }
 
         if (closed) return;

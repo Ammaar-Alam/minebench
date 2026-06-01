@@ -33,6 +33,40 @@ export async function appendCustomBuildEvent(
   });
 }
 
+export async function ensureCustomBuildEvent(
+  customBuildId: string,
+  type: string,
+  data?: CustomBuildEventData,
+  client: PrismaClient = prisma,
+) {
+  return client.$transaction(async (tx) => {
+    await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "CustomBuild"
+      WHERE id = ${customBuildId}
+      FOR UPDATE
+    `;
+    const existing = await tx.customBuildEvent.findFirst({
+      where: { customBuildId, type },
+      orderBy: { seq: "asc" },
+    });
+    if (existing) return existing;
+
+    const latest = await tx.customBuildEvent.aggregate({
+      where: { customBuildId },
+      _max: { seq: true },
+    });
+    return tx.customBuildEvent.create({
+      data: {
+        customBuildId,
+        seq: (latest._max.seq ?? 0) + 1,
+        type,
+        data: data ?? Prisma.JsonNull,
+      },
+    });
+  });
+}
+
 export async function listCustomBuildEventsAfter(
   customBuildId: string,
   afterSeq: number,
