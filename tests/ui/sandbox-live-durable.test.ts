@@ -21,6 +21,8 @@ function functionBodyText(name: string): string {
 }
 
 const durableBody = functionBodyText("runGenerateDurable");
+const stopBody = functionBodyText("stopGenerate");
+const watchBody = functionBodyText("watchCustomBuild");
 const abortIndex = durableBody.indexOf("customBuildAbortRef.current?.abort()");
 const assignIndex = durableBody.indexOf("customBuildAbortRef.current = args.abortController");
 assert.ok(assignIndex >= 0, "durable generation should store the active abort controller");
@@ -43,6 +45,18 @@ assert.ok(
     durableBody.includes("await Promise.all(watchPromises)") &&
     !durableBody.includes("void watchCustomBuild"),
   "durable generation should keep running until custom build watchers finish",
+);
+assert.ok(
+  stopBody.includes("DURABLE_CUSTOM_BUILDS_ENABLED") &&
+    stopBody.indexOf("return;") < stopBody.indexOf("customBuildAbortRef.current?.abort()"),
+  "stopping a durable run should preserve the private link/watch state instead of orphaning the job",
+);
+assert.ok(
+  watchBody.includes("try {") &&
+    watchBody.includes("readCustomBuildPreview") &&
+    watchBody.includes("catch") &&
+    watchBody.includes("console.warn(\"Custom build preview unavailable\""),
+  "durable watch should treat preview loading as optional after generation succeeds",
 );
 
 console.log("sandbox durable custom build race checks passed");

@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const eventsRouteSource = readFileSync("app/api/custom-builds/[id]/events/route.ts", "utf8");
 
 const publicId = "cb_123456789012345678901234";
 const customBuildId = "custom-build-row";
@@ -40,6 +43,12 @@ async function main() {
   assert.ok(
     text.indexOf("event: complete") < text.indexOf("event: export_complete"),
     "SSE replay should keep events appended after generation completion",
+  );
+  assert.ok(
+    eventsRouteSource.includes("if (closed) return;\n        if (terminalWithNoPendingExports)") &&
+      eventsRouteSource.includes("if (closed) return;\n          for (const event of terminalEvents)") &&
+      eventsRouteSource.includes("if (closed) return;\n        controller.enqueue(encoder.encode(`: ping"),
+    "SSE route should recheck stream closure before terminal replay and ping enqueues",
   );
 
   console.log("custom build SSE replay checks passed");

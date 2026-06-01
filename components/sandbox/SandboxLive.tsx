@@ -633,6 +633,9 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }
 
   function stopGenerate() {
+    if (DURABLE_CUSTOM_BUILDS_ENABLED) {
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
     customBuildAbortRef.current?.abort();
@@ -769,16 +772,28 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       const status = await readCustomBuildStatus(args.statusUrl, args.signal);
       if (args.signal.aborted) return;
       if (status.status === "succeeded") {
-        const preview = await readCustomBuildPreview(status, args.signal);
-        if (args.signal.aborted) return;
         applyCustomBuildStatus({
           model: args.model,
           status,
-          preview,
           pageUrl: args.pageUrl,
           statusUrl: args.statusUrl,
           eventsUrl: args.eventsUrl,
         });
+        try {
+          const preview = await readCustomBuildPreview(status, args.signal);
+          if (args.signal.aborted) return;
+          applyCustomBuildStatus({
+            model: args.model,
+            status,
+            preview,
+            pageUrl: args.pageUrl,
+            statusUrl: args.statusUrl,
+            eventsUrl: args.eventsUrl,
+          });
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return;
+          console.warn("Custom build preview unavailable", err);
+        }
         return;
       }
 
@@ -1660,7 +1675,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               </p>
             ) : null}
             <div className="flex items-center gap-2">
-              {running ? (
+              {running && !DURABLE_CUSTOM_BUILDS_ENABLED ? (
                 <button
                   className="mb-btn h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={stopGenerate}

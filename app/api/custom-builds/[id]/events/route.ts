@@ -78,9 +78,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           (latest.status === "failed" ||
             latest.status === "canceled" ||
             (latest.status === "succeeded" && latest.jobs.length === 0));
+        if (closed) return;
         if (terminalWithNoPendingExports) {
           const terminalEvents = await listCustomBuildEventsAfter(customBuild.id, after);
+          if (closed) return;
           for (const event of terminalEvents) {
+            if (closed) return;
             controller.enqueue(encoder.encode(sseEvent(event)));
             after = event.seq;
           }
@@ -88,6 +91,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
           return;
         }
 
+        if (closed) return;
         controller.enqueue(encoder.encode(`: ping ${Date.now()}\n\n`));
         await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
