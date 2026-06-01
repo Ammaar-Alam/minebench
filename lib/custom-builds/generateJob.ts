@@ -222,13 +222,15 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
     const fullBytes = jsonBytes(generated.build);
     const fullSha = sha256Hex(fullBytes);
     const fullGzip = gzipBytes(fullBytes);
+    const fullArtifactSha = sha256Hex(fullGzip);
     await uploadAndRecordCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
       kind: "build_json",
       bytes: fullGzip,
       uncompressedByteSize: fullBytes.byteLength,
-      sha256: fullSha,
+      sha256: fullArtifactSha,
+      sourceBuildSha256: fullSha,
       blockCount: generated.blockCount,
       encoding: "gzip",
     });
@@ -238,13 +240,14 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
     const previewBytes = jsonBytes(preview);
     const previewSha = sha256Hex(previewBytes);
     const previewGzip = gzipBytes(previewBytes);
+    const previewArtifactSha = sha256Hex(previewGzip);
     await uploadAndRecordCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
       kind: "preview_json",
       bytes: previewGzip,
       uncompressedByteSize: previewBytes.byteLength,
-      sha256: previewSha,
+      sha256: previewArtifactSha,
       sourceBuildSha256: fullSha,
       blockCount: preview.blocks.length,
       encoding: "gzip",

@@ -40,6 +40,7 @@ let currentCustomBuild = queuedCustomBuild;
 
 const updates: Array<{ data: Record<string, unknown> }> = [];
 const operations: Array<{ name: string; txId: number | null }> = [];
+const artifactCreates: Array<Record<string, unknown>> = [];
 let eventSeq = 0;
 let txSeq = 0;
 let failEventWrites = false;
@@ -55,7 +56,10 @@ const fakePrisma = {
     },
   },
   customBuildArtifact: {
-    upsert: async (args: { create: Record<string, unknown> }) => args.create,
+    upsert: async (args: { create: Record<string, unknown> }) => {
+      artifactCreates.push(args.create);
+      return args.create;
+    },
   },
   customBuildJob: {
     create: async (args: { data: Record<string, unknown> }) => {
@@ -132,6 +136,7 @@ async function main() {
     isTerminalCustomBuildGenerateError,
     validateGeneratedBuildForArtifacts,
   } = await import("../../../lib/custom-builds/generateJob");
+  const { gzipBytes, jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
 
   assert.equal(
     isTerminalCustomBuildGenerateError("OpenAI error 401: invalid_api_key"),
@@ -185,9 +190,24 @@ async function main() {
   assert.equal(operations.find((op) => op.name === "customBuildJob.create")?.txId, successTxId);
   assert.equal(operations.find((op) => op.name === "customBuildStatsDaily.upsert")?.txId, successTxId);
   assert.equal(operations.find((op) => op.name === "customBuildSecret.deleteMany")?.txId, successTxId);
+  const expectedFullBytes = jsonBytes({
+    version: "1.0",
+    blocks: [{ x: 1, y: 1, z: 1, type: "stone" }],
+  });
+  const expectedFullSourceSha = sha256Hex(expectedFullBytes);
+  const expectedFullArtifactSha = sha256Hex(gzipBytes(expectedFullBytes));
+  const buildJsonArtifact = artifactCreates.find((artifact) => artifact.kind === "build_json");
+  const previewJsonArtifact = artifactCreates.find((artifact) => artifact.kind === "preview_json");
+  assert.ok(buildJsonArtifact, "generate job should record the full JSON artifact");
+  assert.ok(previewJsonArtifact, "generate job should record the preview JSON artifact");
+  assert.equal(buildJsonArtifact.sha256, expectedFullArtifactSha);
+  assert.equal(buildJsonArtifact.sourceBuildSha256, expectedFullSourceSha);
+  assert.equal(previewJsonArtifact.sha256, expectedFullArtifactSha);
+  assert.equal(previewJsonArtifact.sourceBuildSha256, expectedFullSourceSha);
 
   updates.length = 0;
   operations.length = 0;
+  artifactCreates.length = 0;
   eventSeq = 0;
   txSeq = 0;
   currentCustomBuild = queuedCustomBuild;
