@@ -61,9 +61,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 
         const latest = await prisma.customBuild.findUnique({
           where: { id: customBuild.id },
-          select: { status: true },
+          select: {
+            status: true,
+            jobs: {
+              where: {
+                type: "export",
+                status: { in: ["queued", "running"] },
+              },
+              select: { id: true },
+              take: 1,
+            },
+          },
         });
-        if (latest && ["succeeded", "failed", "canceled"].includes(latest.status)) {
+        const terminalWithNoPendingExports =
+          latest &&
+          (latest.status === "failed" ||
+            latest.status === "canceled" ||
+            (latest.status === "succeeded" && latest.jobs.length === 0));
+        if (terminalWithNoPendingExports) {
           const terminalEvents = await listCustomBuildEventsAfter(customBuild.id, after);
           for (const event of terminalEvents) {
             controller.enqueue(encoder.encode(sseEvent(event)));

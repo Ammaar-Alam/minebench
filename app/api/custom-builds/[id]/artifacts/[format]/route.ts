@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import {
   artifactKindForDownloadFormat,
   customBuildError,
@@ -8,6 +10,12 @@ import { createCustomBuildArtifactSignedUrl } from "@/lib/custom-builds/storage"
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
+
+function downloadFileName(publicId: string, format: string): string {
+  if (format === "json") return `minebench-${publicId}.json.gz`;
+  if (format === "preview-json") return `minebench-${publicId}-preview.json.gz`;
+  return `minebench-${publicId}.${format}`;
+}
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string; format: string }> }) {
   const { id, format } = await params;
@@ -64,11 +72,30 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     return customBuildError("storage_sign_failed", "Artifact download is temporarily unavailable.", 503);
   }
 
+  if (signedUrl.startsWith("file://")) {
+    try {
+      const bytes = await readFile(fileURLToPath(signedUrl));
+      return new Response(new Uint8Array(bytes), {
+        headers: {
+          ...customBuildNoStoreHeaders(),
+          "Content-Type": artifact.contentType,
+          "Content-Length": String(bytes.byteLength),
+          "Content-Disposition": `attachment; filename="${downloadFileName(id, format)}"`,
+          "X-Custom-Build-Artifact-Sha256": artifact.sha256,
+          "X-Custom-Build-Artifact-Bytes": String(artifact.compressedByteSize ?? artifact.byteSize),
+        },
+      });
+    } catch {
+      return customBuildError("artifact_not_ready", "The requested artifact is temporarily unavailable.", 503);
+    }
+  }
+
   return new Response(null, {
     status: 307,
     headers: {
       ...customBuildNoStoreHeaders(),
       Location: signedUrl,
+      "Content-Disposition": `attachment; filename="${downloadFileName(id, format)}"`,
       "X-Custom-Build-Artifact-Sha256": artifact.sha256,
       "X-Custom-Build-Artifact-Bytes": String(artifact.compressedByteSize ?? artifact.byteSize),
     },

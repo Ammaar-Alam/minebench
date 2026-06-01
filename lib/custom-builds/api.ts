@@ -217,3 +217,5 @@ export function serializeCustomBuildStatus(args: {
     exports,
   };
 }
+
+export type CustomBuildStatusPayload = ReturnType<typeof serializeCustomBuildStatus>;
