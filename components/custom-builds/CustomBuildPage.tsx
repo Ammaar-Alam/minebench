@@ -539,6 +539,10 @@ export function CustomBuildPage({ initialStatus }: { initialStatus: CustomBuildS
             <h1 className="mt-1 font-display text-2xl font-semibold tracking-tight text-fg sm:text-3xl">
               {status.model.displayName}
             </h1>
+            <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted">
+              Custom prompts and generated outputs are stored under private links for download/export and aggregate
+              usage stats.
+            </p>
           </div>
         </div>
         <button

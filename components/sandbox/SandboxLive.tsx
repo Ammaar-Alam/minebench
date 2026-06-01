@@ -1616,7 +1616,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-5">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={prompt}
@@ -1625,6 +1625,10 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 .join("|")}`}
               label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
+            <p className="max-w-md text-xs leading-relaxed text-muted">
+              Custom prompts and generated outputs are stored under private links for download/export and aggregate
+              usage stats.
+            </p>
             <div className="flex items-center gap-2">
               {running ? (
                 <button
