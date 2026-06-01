@@ -1,8 +1,25 @@
 # Custom Builds
 
-Custom Builds are durable, private generations that sit outside Arena ranking data. They reuse MineBench generation, validation, viewer, storage, and export code without writing to `Build`, `Prompt`, `Matchup`, `Vote`, or leaderboard tables.
+Custom Builds add a dedicated way to generate MineBench builds without touching Arena rankings. The feature has two entrypoints:
 
-Custom prompts and generated outputs are stored under private links for download/export and aggregate usage stats.
+- **Hosted API endpoints** for creating custom build jobs, watching status/events, downloading generated JSON, and requesting GLB/STL/Schem exports.
+- **Local CLI tooling** for developers who want a faster repo-local path to generate, validate, export, and save custom builds from a terminal.
+
+Use the API when another app, script, or hosted MineBench session should request a generation and get a private status/download link back. Use the CLI when you are working from a repo checkout and want artifacts written directly to disk.
+
+Custom Builds reuse MineBench generation, validation, viewer, storage, and export code, but they do not write to `Build`, `Prompt`, `Matchup`, `Vote`, model ranking, or leaderboard tables. Prompts and generated outputs are stored behind private links, and public stats are count-only.
+
+## What You Can Call
+
+The main API flow is:
+
+1. `POST /api/custom-builds` with a prompt, model, grid size, palette, and provider key.
+2. Read the returned custom build id and private `/custom/$CUSTOM_BUILD_ID` page URL.
+3. Poll `GET /api/custom-builds/$CUSTOM_BUILD_ID` or reconnect to `GET /api/custom-builds/$CUSTOM_BUILD_ID/events`.
+4. Download JSON from `GET /api/custom-builds/$CUSTOM_BUILD_ID/artifacts/json`.
+5. Request optional exports with `POST /api/custom-builds/$CUSTOM_BUILD_ID/exports`, then download `glb`, `stl`, or `schem` artifacts.
+
+The same generation pipeline is available locally with `pnpm custom:build`, which can either call a provider from a prompt or export an existing MineBench JSON file.
 
 ## Hosted Flow
 
@@ -18,7 +35,7 @@ Provider keys are user-supplied by default. The web route encrypts a TTL-bound c
 
 ## Local CLI
 
-Use the CLI when working from a repo clone and writing files locally:
+Use the CLI when working from a repo clone and writing files locally. It is the shortest path for developer custom builds because it does not require clicking through the Sandbox UI or wiring up HTTP calls:
 
 ```bash
 pnpm custom:build --prompt "a small stone bridge" --model openai_gpt_5_4_mini
@@ -54,7 +71,9 @@ pnpm custom:build \
 
 Generation uses configured provider env vars such as `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GOOGLE_AI_API_KEY`.
 
-## API
+## API Endpoints
+
+These endpoints let scripts and integrations start custom build generations directly. The create route returns immediately with an id, status URL, event stream URL, artifact URL, export URL, and private page URL while the worker does the model call in the background.
 
 Create a custom build:
 

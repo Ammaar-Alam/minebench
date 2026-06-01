@@ -64,7 +64,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 - Local development: [`docs/local-development.md`](docs/local-development.md)
 - Operations and API reference: [`docs/operations.md`](docs/operations.md)
 - Deployment: [`docs/deployment.md`](docs/deployment.md)
-- Custom builds and developer API: [`docs/custom-builds.md`](docs/custom-builds.md)
+- Custom build API endpoints and CLI: [`docs/custom-builds.md`](docs/custom-builds.md)
 - Ranking math and matchmaking walkthrough: [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md)
 - Ranking policy: [`docs/arena-ranking-validity-policy-v2.md`](docs/arena-ranking-validity-policy-v2.md)
 - Build export and Blender/3D printing/Minecraft imports: [`docs/build-export-import.md`](docs/build-export-import.md)
