@@ -11,8 +11,7 @@ export const runtime = "nodejs";
 
 const exportSchema = z.object({
   formats: z.array(z.enum(CUSTOM_BUILD_EXPORT_FORMATS)).min(1).max(3),
-  overwrite: z.boolean().optional(),
-});
+}).strict();
 
 function exportFormatFromPayload(payload: Prisma.JsonValue | null): string | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
@@ -50,12 +49,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const formats = Array.from(new Set(parsed.data.formats));
   let queuedCount = 0;
+  const queuedFormats: string[] = [];
   await prisma.$transaction(async (tx) => {
     for (const format of formats) {
       const existingArtifact = customBuild.artifacts.find(
         (artifact) => artifact.kind === format && artifact.sourceBuildSha256 === customBuild.buildSha256,
       );
-      if (existingArtifact && !parsed.data.overwrite) continue;
+      if (existingArtifact) continue;
       const existingJob = customBuild.jobs.find(
         (job) =>
           job.type === "export" &&
@@ -69,10 +69,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           type: "export",
           status: "queued",
           maxAttempts: getCustomBuildJobMaxAttempts(),
-          payload: { format },
+          payload: { format, sourceBuildSha256: customBuild.buildSha256 },
         },
       });
       queuedCount += 1;
+      queuedFormats.push(format);
     }
     if (queuedCount > 0) {
       await tx.customBuildStatsDaily.upsert({
@@ -83,7 +84,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
   });
 
-  for (const format of formats) {
+  for (const format of queuedFormats) {
     await appendCustomBuildEvent(customBuild.id, "export_queued", { format });
   }
 

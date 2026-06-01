@@ -684,6 +684,24 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     };
   }
 
+  function directProviderKey(provider: string, providerKeys: ProviderApiKeys): string | undefined {
+    if (provider === "openai") return providerKeys.openai;
+    if (provider === "anthropic") return providerKeys.anthropic;
+    if (provider === "gemini") return providerKeys.gemini;
+    if (provider === "moonshot") return providerKeys.moonshot;
+    if (provider === "deepseek") return providerKeys.deepseek;
+    if (provider === "minimax") return providerKeys.minimax;
+    if (provider === "xai") return providerKeys.xai;
+    return undefined;
+  }
+
+  function customBuildPreferOpenRouter(model: SelectedLiveModel, providerKeys: ProviderApiKeys): boolean {
+    if (model.kind !== "catalog" || !providerKeys.openrouter) return false;
+    const catalogModel = MODEL_CATALOG.find((entry) => entry.key === model.modelKey);
+    if (!catalogModel?.openRouterModelId) return false;
+    return catalogModel.forceOpenRouter === true || !directProviderKey(catalogModel.provider, providerKeys);
+  }
+
   function applyCustomBuildStatus(args: {
     model: SelectedLiveModel;
     status: CustomBuildStatusPayload;
@@ -788,7 +806,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             palette,
             model: customBuildRequestModel(model),
             providerKeys: args.providerKeys,
-            preferOpenRouter: Boolean(args.providerKeys.openrouter),
+            preferOpenRouter: customBuildPreferOpenRouter(model, args.providerKeys),
           }),
         });
 

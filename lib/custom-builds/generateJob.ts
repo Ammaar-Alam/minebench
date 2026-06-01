@@ -61,6 +61,12 @@ function validateStubBuild(build: unknown, customBuild: CustomBuild): { build: V
   return validated.value;
 }
 
+function emitCustomBuildEvent(customBuildId: string, type: string, data: Prisma.InputJsonValue): void {
+  void appendCustomBuildEvent(customBuildId, type, data).catch((error) => {
+    console.warn(`custom build event write failed for ${customBuildId}:`, redactSensitiveText(error));
+  });
+}
+
 async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Promise<{
   build: VoxelBuild;
   warnings: string[];
@@ -114,9 +120,9 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
           preferOpenRouter: customBuild.preferOpenRouter,
           reasoning: customBuild.reasoning ?? undefined,
           onRetry: (attempt, reason) =>
-            void appendCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
+            emitCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
           onProviderTrace: (message) =>
-            void appendCustomBuildEvent(customBuild.id, "provider_trace", {
+            emitCustomBuildEvent(customBuild.id, "provider_trace", {
               message: redactSensitiveText(message),
             }),
         }
@@ -135,9 +141,9 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
           allowServerKeys: false,
           reasoning: customBuild.reasoning ?? undefined,
           onRetry: (attempt, reason) =>
-            void appendCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
+            emitCustomBuildEvent(customBuild.id, "retry", { attempt, reason: redactSensitiveText(reason) }),
           onProviderTrace: (message) =>
-            void appendCustomBuildEvent(customBuild.id, "provider_trace", {
+            emitCustomBuildEvent(customBuild.id, "provider_trace", {
               message: redactSensitiveText(message),
             }),
         },
@@ -234,7 +240,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
           customBuildId: customBuild.id,
           type: "export",
           status: "queued",
-          payload: { format },
+          payload: { format, sourceBuildSha256: fullSha },
           maxAttempts: job.maxAttempts,
         },
       });
@@ -250,24 +256,42 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
     await appendCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
   } catch (error) {
     const message = redactSensitiveText(error);
-    await prisma.customBuild.update({
-      where: { id: customBuild.id },
-      data: {
-        status: "failed",
-        currentStage: "failed",
-        completedAt: new Date(),
-        errorCode: message === "provider_key_expired" ? "provider_key_expired" : "worker_failed",
-        errorMessage: message === "provider_key_expired" ? "Provider key expired before the worker could start." : message,
-        errorRetryable: message !== "provider_key_expired",
-      },
-    });
-    await prisma.customBuildStatsDaily.upsert({
-      where: { day: new Date(new Date().toISOString().slice(0, 10)) },
-      create: { day: new Date(new Date().toISOString().slice(0, 10)), failed: 1 },
-      update: { failed: { increment: 1 } },
-    });
-    await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
-    await appendCustomBuildEvent(customBuild.id, "failed", { message });
+    const terminal = message === "provider_key_expired" || job.attempts >= job.maxAttempts;
+    if (terminal) {
+      await prisma.customBuild.update({
+        where: { id: customBuild.id },
+        data: {
+          status: "failed",
+          currentStage: "failed",
+          completedAt: new Date(),
+          errorCode: message === "provider_key_expired" ? "provider_key_expired" : "worker_failed",
+          errorMessage: message === "provider_key_expired" ? "Provider key expired before the worker could start." : message,
+          errorRetryable: false,
+        },
+      });
+      await prisma.customBuildStatsDaily.upsert({
+        where: { day: new Date(new Date().toISOString().slice(0, 10)) },
+        create: { day: new Date(new Date().toISOString().slice(0, 10)), failed: 1 },
+        update: { failed: { increment: 1 } },
+      });
+      await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+      await appendCustomBuildEvent(customBuild.id, "failed", { message });
+    } else {
+      await prisma.customBuild.update({
+        where: { id: customBuild.id },
+        data: {
+          status: "queued",
+          currentStage: "queued",
+          errorCode: "worker_failed",
+          errorMessage: message,
+          errorRetryable: true,
+        },
+      });
+      await appendCustomBuildEvent(customBuild.id, "retry", {
+        attempt: job.attempts,
+        reason: message,
+      });
+    }
     throw error;
   }
 }

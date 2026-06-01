@@ -54,9 +54,12 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
     await completeCustomBuildJob(job.id, workerId);
     return { processed: true, jobId: job.id, jobType: job.type };
   } catch (error) {
+    const message = redactSensitiveText(error);
     await failCustomBuildJob(job.id, workerId, {
-      code: "worker_failed",
-      message: redactSensitiveText(error),
+      code: message === "provider_key_expired" ? "provider_key_expired" : "worker_failed",
+      message,
+    }, prisma, {
+      forceTerminal: message === "provider_key_expired",
     });
     return { processed: true, jobId: job.id, jobType: job.type };
   } finally {

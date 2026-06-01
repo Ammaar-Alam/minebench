@@ -12,6 +12,12 @@ export async function appendCustomBuildEvent(
   client: PrismaClient = prisma,
 ) {
   return client.$transaction(async (tx) => {
+    await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "CustomBuild"
+      WHERE id = ${customBuildId}
+      FOR UPDATE
+    `;
     const latest = await tx.customBuildEvent.aggregate({
       where: { customBuildId },
       _max: { seq: true },

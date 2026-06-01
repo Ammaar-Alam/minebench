@@ -85,7 +85,7 @@ export async function recoverStaleCustomBuildJobLeases(
       AND attempts < "maxAttempts"
     RETURNING id;
   `;
-  const failedRows = await client.$queryRaw<Array<{ id: string }>>`
+  const failedRows = await client.$queryRaw<Array<{ id: string; customBuildId: string; type: string }>>`
     UPDATE "CustomBuildJob"
     SET status = 'failed'::"CustomBuildJobStatus",
         "lockedBy" = NULL,
@@ -98,8 +98,26 @@ export async function recoverStaleCustomBuildJobLeases(
     WHERE status = 'running'::"CustomBuildJobStatus"
       AND "leaseExpiresAt" < now()
       AND attempts >= "maxAttempts"
-    RETURNING id;
+    RETURNING id, "customBuildId", type::text;
   `;
+  for (const row of failedRows) {
+    if (row.type !== "generate") continue;
+    await client.customBuild.updateMany({
+      where: {
+        id: row.customBuildId,
+        status: { in: ["queued", "running"] },
+      },
+      data: {
+        status: "failed",
+        currentStage: "failed",
+        completedAt: new Date(),
+        errorCode: "lease_expired",
+        errorMessage: "Worker lease expired after maximum attempts.",
+        errorRetryable: false,
+      },
+    });
+    await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
+  }
   return { requeued: requeuedRows.length, failed: failedRows.length };
 }
 
@@ -129,7 +147,38 @@ export async function failCustomBuildJob(
   workerId: string,
   error: { code: string; message: string },
   client: PrismaClient | PrismaTx = prisma,
-): Promise<void> {
+  opts: { forceTerminal?: boolean } = {},
+): Promise<{ requeued: boolean }> {
+  const job = await client.customBuildJob.findFirst({
+    where: {
+      id: jobId,
+      status: "running",
+      lockedBy: workerId,
+    },
+    select: { attempts: true, maxAttempts: true },
+  });
+  if (!job) return { requeued: false };
+
+  if (!opts.forceTerminal && job.attempts < job.maxAttempts) {
+    await client.customBuildJob.updateMany({
+      where: {
+        id: jobId,
+        status: "running",
+        lockedBy: workerId,
+      },
+      data: {
+        status: "queued",
+        runAfter: new Date(Date.now() + 15_000),
+        lockedBy: null,
+        lockedAt: null,
+        leaseExpiresAt: null,
+        lastErrorCode: error.code,
+        lastErrorMessage: redactSensitiveText(error.message),
+      },
+    });
+    return { requeued: true };
+  }
+
   await client.customBuildJob.updateMany({
     where: {
       id: jobId,
@@ -146,4 +195,5 @@ export async function failCustomBuildJob(
       lastErrorMessage: redactSensitiveText(error.message),
     },
   });
+  return { requeued: false };
 }
