@@ -211,6 +211,25 @@ Set desired count to `1` initially. Increase worker count only after queue depth
 
 OpenRouter request shaping is verified without spending model credits by `pnpm openrouter:verify`. Schema-constrained Opus 4.8 fallback requests omit unsupported parameters such as `temperature` when `provider.require_parameters` is enabled.
 
+## Verification
+
+Run the stubbed local flow against the Docker database:
+
+```bash
+node scripts/with-local-env.mjs pnpm custom:verify
+```
+
+The same script has an opt-in cheap model smoke path. It still writes metadata and artifacts to local verification storage, but it makes a real provider call:
+
+```bash
+CUSTOM_BUILD_SMOKE=1 \
+CUSTOM_BUILD_SMOKE_PROVIDER=openrouter \
+CUSTOM_BUILD_SMOKE_MODEL_KEY=openai_gpt_5_4_nano \
+node scripts/with-local-env.mjs pnpm custom:verify
+```
+
+For the default OpenRouter smoke, set `OPENROUTER_API_KEY` in the shell or local env before running the command. Direct-provider smoke runs use the matching provider key env, such as `OPENAI_API_KEY` or `GOOGLE_AI_API_KEY`.
+
 ## Troubleshooting
 
 ### `Custom build credential encryption is not configured`
