@@ -3,6 +3,7 @@ import type { CustomBuildJob } from "@prisma/client";
 import {
   claimNextCustomBuildJob,
   completeCustomBuildJob,
+  extendCustomBuildJobLease,
   failCustomBuildJob,
   getCustomBuildJobLeaseSeconds,
   recoverStaleCustomBuildJobLeases,
@@ -21,6 +22,8 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
   return Math.max(min, Math.min(max, parsed));
 }
 
+const SYNCHRONOUS_EXPORT_LEASE_MS = 30 * 60 * 1000;
+
 export function getCustomBuildWorkerPollMs(): number {
   return readIntEnv("CUSTOM_BUILD_WORKER_POLL_MS", 2_000, 250, 60_000);
 }
@@ -34,12 +37,20 @@ export function getCustomBuildWorkerHeartbeatMs(): number {
   return Math.max(1_000, Math.min(30_000, Math.floor(leaseMs / 2)));
 }
 
-async function runJob(job: CustomBuildJob): Promise<void> {
+export function getCustomBuildSynchronousExportLeaseMs(): number {
+  return Math.max(getCustomBuildJobLeaseSeconds() * 1000, SYNCHRONOUS_EXPORT_LEASE_MS);
+}
+
+async function runJob(job: CustomBuildJob, workerId: string): Promise<void> {
   if (job.type === "generate") {
     await runCustomBuildGenerateJob(job);
     return;
   }
-  await runCustomBuildExportJob(job);
+  await runCustomBuildExportJob(job, {
+    beforeSynchronousExport: async () => {
+      await extendCustomBuildJobLease(job.id, workerId, getCustomBuildSynchronousExportLeaseMs());
+    },
+  });
 }
 
 export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId()): Promise<{
@@ -56,7 +67,7 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
   }, getCustomBuildWorkerHeartbeatMs());
 
   try {
-    await runJob(job);
+    await runJob(job, workerId);
     await completeCustomBuildJob(job.id, workerId);
     return { processed: true, jobId: job.id, jobType: job.type };
   } catch (error) {

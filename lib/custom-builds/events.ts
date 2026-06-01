@@ -46,3 +46,22 @@ export async function listCustomBuildEventsAfter(
     orderBy: { seq: "asc" },
   });
 }
+
+export async function hasCustomBuildEventAtOrBefore(
+  customBuildId: string,
+  atOrBeforeSeq: number,
+  types: string[],
+  client: PrismaClient | PrismaTx = prisma,
+): Promise<boolean> {
+  const seq = Math.max(0, Math.floor(atOrBeforeSeq));
+  if (seq <= 0 || types.length === 0) return false;
+  const event = await client.customBuildEvent.findFirst({
+    where: {
+      customBuildId,
+      seq: { lte: seq },
+      type: { in: types },
+    },
+    select: { id: true },
+  });
+  return Boolean(event);
+}

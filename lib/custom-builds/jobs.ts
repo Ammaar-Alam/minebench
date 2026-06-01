@@ -69,6 +69,25 @@ export async function renewCustomBuildJobLease(
   return result.count === 1;
 }
 
+export async function extendCustomBuildJobLease(
+  jobId: string,
+  workerId: string,
+  leaseMs: number,
+  client: PrismaClient | PrismaTx = prisma,
+): Promise<boolean> {
+  const result = await client.customBuildJob.updateMany({
+    where: {
+      id: jobId,
+      status: "running",
+      lockedBy: workerId,
+    },
+    data: {
+      leaseExpiresAt: new Date(Date.now() + Math.max(0, Math.floor(leaseMs))),
+    },
+  });
+  return result.count === 1;
+}
+
 export async function recoverStaleCustomBuildJobLeases(
   client: PrismaClient | PrismaTx = prisma,
 ): Promise<{ requeued: number; failed: number }> {

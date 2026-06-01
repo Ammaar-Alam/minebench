@@ -1,6 +1,6 @@
 import { customBuildError, customBuildNoStoreHeaders } from "@/lib/custom-builds/api";
 import { isCustomBuildPublicId } from "@/lib/custom-builds/ids";
-import { listCustomBuildEventsAfter } from "@/lib/custom-builds/events";
+import { hasCustomBuildEventAtOrBefore, listCustomBuildEventsAfter } from "@/lib/custom-builds/events";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -15,6 +15,13 @@ function parseAfter(req: Request): number {
 
 function sseEvent(event: { seq: number; type: string; data: unknown }) {
   return `id: ${event.seq}\nevent: ${event.type}\ndata: ${JSON.stringify(event.data ?? {})}\n\n`;
+}
+
+function terminalEventTypes(status: string): string[] {
+  if (status === "succeeded") return ["complete"];
+  if (status === "failed") return ["failed"];
+  if (status === "canceled") return ["canceled"];
+  return [];
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -82,13 +89,24 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
         if (terminalWithNoPendingExports) {
           const terminalEvents = await listCustomBuildEventsAfter(customBuild.id, after);
           if (closed) return;
+          const terminalTypes = terminalEventTypes(latest.status);
+          let terminalEventReplayed = false;
           for (const event of terminalEvents) {
             if (closed) return;
             controller.enqueue(encoder.encode(sseEvent(event)));
             after = event.seq;
+            if (terminalTypes.includes(event.type)) {
+              terminalEventReplayed = true;
+            }
           }
-          close();
-          return;
+          if (
+            terminalEventReplayed ||
+            (await hasCustomBuildEventAtOrBefore(customBuild.id, after, terminalTypes))
+          ) {
+            if (closed) return;
+            close();
+            return;
+          }
         }
 
         if (closed) return;

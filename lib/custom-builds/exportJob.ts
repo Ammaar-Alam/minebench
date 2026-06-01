@@ -9,6 +9,10 @@ import { prisma } from "@/lib/prisma";
 import { exportVoxelBuild } from "@/lib/voxel/export";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
+type RunCustomBuildExportJobOptions = {
+  beforeSynchronousExport?: () => Promise<void> | void;
+};
+
 function parseExportFormat(payload: Prisma.JsonValue | null): CustomBuildExportFormat {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error("Export job payload is missing a format");
@@ -20,7 +24,10 @@ function parseExportFormat(payload: Prisma.JsonValue | null): CustomBuildExportF
   throw new Error("Export job payload has an unsupported format");
 }
 
-export async function runCustomBuildExportJob(job: CustomBuildJob): Promise<void> {
+export async function runCustomBuildExportJob(
+  job: CustomBuildJob,
+  opts: RunCustomBuildExportJobOptions = {},
+): Promise<void> {
   const format = parseExportFormat(job.payload);
   const customBuild = await prisma.customBuild.findUnique({
     where: { id: job.customBuildId },
@@ -66,6 +73,7 @@ export async function runCustomBuildExportJob(job: CustomBuildJob): Promise<void
   }
 
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
+  await opts.beforeSynchronousExport?.();
   const artifact = exportVoxelBuild(build.value, getPalette(palette), format);
   const exportBytes = format === "schem" ? gzipSync(artifact.bytes, { mtime: 0 }) : artifact.bytes;
   const exportSha = sha256Hex(exportBytes);

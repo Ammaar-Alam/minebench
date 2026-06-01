@@ -5,6 +5,7 @@ const eventsRouteSource = readFileSync("app/api/custom-builds/[id]/events/route.
 
 const publicId = "cb_123456789012345678901234";
 const customBuildId = "custom-build-row";
+let eventMode: "replay" | "terminal-status-before-event" = "replay";
 const events = [
   { seq: 1, type: "started", data: { stage: "generating" } },
   { seq: 2, type: "complete", data: { stage: "complete" } },
@@ -23,7 +24,11 @@ const fakePrisma = {
   },
   customBuildEvent: {
     findMany: async (args: { where: { customBuildId: string; seq: { gt: number } } }) =>
-      events.filter((event) => event.seq > args.where.seq.gt),
+      eventMode === "replay" ? events.filter((event) => event.seq > args.where.seq.gt) : [],
+    findFirst: async (args: { where: { seq: { lte: number }; type: { in: string[] } } }) =>
+      eventMode === "replay"
+        ? events.find((event) => event.seq <= args.where.seq.lte && args.where.type.in.includes(event.type)) ?? null
+        : null,
   },
 };
 
@@ -45,10 +50,30 @@ async function main() {
     "SSE replay should keep events appended after generation completion",
   );
   assert.ok(
-    eventsRouteSource.includes("if (closed) return;\n        if (terminalWithNoPendingExports)") &&
-      eventsRouteSource.includes("if (closed) return;\n          for (const event of terminalEvents)") &&
+    eventsRouteSource.includes("if (terminalWithNoPendingExports)") &&
+      eventsRouteSource.includes("for (const event of terminalEvents)") &&
+      eventsRouteSource.includes("hasCustomBuildEventAtOrBefore(customBuild.id, after, terminalTypes)") &&
       eventsRouteSource.includes("if (closed) return;\n        controller.enqueue(encoder.encode(`: ping"),
-    "SSE route should recheck stream closure before terminal replay and ping enqueues",
+    "SSE route should recheck stream closure and only close after a terminal event is replayed or already seen",
+  );
+
+  eventMode = "terminal-status-before-event";
+  const controller = new AbortController();
+  const raceResponse = await GET(
+    new Request(`http://localhost/api/custom-builds/${publicId}/events?after=0`, { signal: controller.signal }),
+    {
+      params: Promise.resolve({ id: publicId }),
+    },
+  );
+  assert.ok(raceResponse.body);
+  const reader = raceResponse.body.getReader();
+  await reader.read();
+  const secondRead = await reader.read();
+  controller.abort();
+  assert.equal(
+    secondRead.done,
+    false,
+    "SSE should keep polling when terminal status is visible before the terminal event is persisted",
   );
 
   console.log("custom build SSE replay checks passed");
