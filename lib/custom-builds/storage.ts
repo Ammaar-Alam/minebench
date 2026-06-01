@@ -1,13 +1,12 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { getSupabaseStorageConfig, LOCAL_BUILD_STORAGE_BUCKET } from "@/lib/storage/buildPayload";
 import { assertCustomBuildPublicId } from "@/lib/custom-builds/ids";
 import type {
   CustomBuildArtifactDescriptor,
   CustomBuildArtifactKind,
   CustomBuildStorageEncoding,
 } from "@/lib/custom-builds/types";
+import { getSupabaseStorageConfig, LOCAL_BUILD_STORAGE_BUCKET } from "@/lib/storage/config";
 
 const DEFAULT_CUSTOM_BUILD_STORAGE_BUCKET = "builds";
 const DEFAULT_CUSTOM_BUILD_STORAGE_PREFIX = "custom-builds/v1";
@@ -44,6 +43,17 @@ function resolveLocalCustomBuildStoragePath(objectPath: string): string {
     throw new Error("Custom build local storage path escapes storage root");
   }
   return absolutePath;
+}
+
+async function writeLocalCustomBuildArtifact(pathname: string, bytes: Uint8Array): Promise<void> {
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  await mkdir(path.dirname(pathname), { recursive: true });
+  await writeFile(pathname, bytes);
+}
+
+async function readLocalCustomBuildArtifact(pathname: string): Promise<Uint8Array> {
+  const { readFile } = await import("node:fs/promises");
+  return new Uint8Array(await readFile(pathname));
 }
 
 function assertSha256(value: string | undefined, label: string): string {
@@ -168,8 +178,7 @@ export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload)
   const bucket = (args.bucket ?? getCustomBuildStorageBucket()).trim();
   if (bucket === LOCAL_BUILD_STORAGE_BUCKET) {
     const absolutePath = resolveLocalCustomBuildStoragePath(args.path);
-    await mkdir(path.dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, args.bytes);
+    await writeLocalCustomBuildArtifact(absolutePath, args.bytes);
     return;
   }
 
@@ -234,7 +243,7 @@ export async function downloadCustomBuildArtifactBytes(args: {
   path: string;
 }): Promise<Uint8Array> {
   if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
-    return new Uint8Array(await readFile(resolveLocalCustomBuildStoragePath(args.path)));
+    return readLocalCustomBuildArtifact(resolveLocalCustomBuildStoragePath(args.path));
   }
 
   const config = getSupabaseStorageConfig();

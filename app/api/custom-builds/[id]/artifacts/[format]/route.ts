@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import {
   artifactKindForDownloadFormat,
   customBuildError,
@@ -74,6 +72,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   if (signedUrl.startsWith("file://")) {
     try {
+      const [{ readFile }, { fileURLToPath }] = await Promise.all([
+        import("node:fs/promises"),
+        import("node:url"),
+      ]);
       const bytes = await readFile(fileURLToPath(signedUrl));
       return new Response(new Uint8Array(bytes), {
         headers: {
