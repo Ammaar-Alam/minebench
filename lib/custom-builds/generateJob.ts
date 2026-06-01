@@ -104,7 +104,10 @@ export function isTerminalCustomBuildGenerateError(message: string): boolean {
   );
 }
 
-function validateStubBuild(build: unknown, customBuild: CustomBuild): { build: VoxelBuild; warnings: string[] } {
+export function validateGeneratedBuildForArtifacts(
+  build: unknown,
+  customBuild: Pick<CustomBuild, "gridSize" | "palette">,
+): { build: VoxelBuild; warnings: string[] } {
   const gridSize = assertGridSize(customBuild.gridSize);
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
   const validated = validateVoxelBuild(build, {
@@ -113,7 +116,7 @@ function validateStubBuild(build: unknown, customBuild: CustomBuild): { build: V
     maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
   });
   if (!validated.ok) {
-    throw new Error(`Stub custom build is invalid: ${validated.error}`);
+    throw new Error(`Generated custom build is invalid: ${validated.error}`);
   }
   return validated.value;
 }
@@ -136,7 +139,7 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
       throw new Error("Stub custom build jobs require CUSTOM_BUILD_STUB_PROVIDER=1");
     }
     const started = Date.now();
-    const validated = validateStubBuild(payload.stubBuild, customBuild);
+    const validated = validateGeneratedBuildForArtifacts(payload.stubBuild, customBuild);
     return {
       build: validated.build,
       warnings: validated.warnings,
@@ -187,10 +190,12 @@ async function generateBuild(customBuild: CustomBuild, job: CustomBuildJob): Pro
   if (!result.ok) {
     throw new Error(redactSensitiveText(result.error));
   }
+  const artifactBuild = validateGeneratedBuildForArtifacts(result.build, customBuild);
+  const warnings = Array.from(new Set([...result.warnings, ...artifactBuild.warnings]));
   return {
-    build: result.build,
-    warnings: result.warnings,
-    blockCount: result.blockCount,
+    build: artifactBuild.build,
+    warnings,
+    blockCount: artifactBuild.build.blocks.length,
     generationTimeMs: result.generationTimeMs,
   };
 }

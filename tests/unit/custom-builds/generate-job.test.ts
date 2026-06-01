@@ -127,9 +127,11 @@ async function flushAsyncEvents() {
 }
 
 async function main() {
-  const { runCustomBuildGenerateJob, isTerminalCustomBuildGenerateError } = await import(
-    "../../../lib/custom-builds/generateJob"
-  );
+  const {
+    runCustomBuildGenerateJob,
+    isTerminalCustomBuildGenerateError,
+    validateGeneratedBuildForArtifacts,
+  } = await import("../../../lib/custom-builds/generateJob");
 
   assert.equal(
     isTerminalCustomBuildGenerateError("OpenAI error 401: invalid_api_key"),
@@ -143,6 +145,19 @@ async function main() {
     isTerminalCustomBuildGenerateError("Gemini request timed out"),
     false,
   );
+
+  const expandedPrimitiveBuild = validateGeneratedBuildForArtifacts(
+    {
+      version: "1.0",
+      blocks: [],
+      boxes: [{ x1: 1, y1: 1, z1: 1, x2: 2, y2: 2, z2: 2, type: "stone" }],
+      lines: [{ from: { x: 4, y: 1, z: 1 }, to: { x: 6, y: 1, z: 1 }, type: "oak_planks" }],
+    },
+    queuedCustomBuild as never,
+  );
+  assert.equal(expandedPrimitiveBuild.build.blocks.length, 11);
+  assert.equal(expandedPrimitiveBuild.build.boxes, undefined);
+  assert.equal(expandedPrimitiveBuild.build.lines, undefined);
 
   await runCustomBuildGenerateJob({
     id: "job-row",
