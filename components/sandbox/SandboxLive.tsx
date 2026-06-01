@@ -1649,10 +1649,12 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 .join("|")}`}
               label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
-            <p className="max-w-md text-xs leading-relaxed text-muted">
-              Custom prompts and generated outputs are stored under private links for download/export and aggregate
-              usage stats.
-            </p>
+            {DURABLE_CUSTOM_BUILDS_ENABLED ? (
+              <p className="max-w-md text-xs leading-relaxed text-muted">
+                Custom prompts and generated outputs are stored under private links for download/export and aggregate
+                usage stats.
+              </p>
+            ) : null}
             <div className="flex items-center gap-2">
               {running ? (
                 <button

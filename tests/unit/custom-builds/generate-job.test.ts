@@ -73,7 +73,22 @@ const fakePrisma = {
 (globalThis as unknown as { prisma?: unknown }).prisma = fakePrisma;
 
 async function main() {
-  const { runCustomBuildGenerateJob } = await import("../../../lib/custom-builds/generateJob");
+  const { runCustomBuildGenerateJob, isTerminalCustomBuildGenerateError } = await import(
+    "../../../lib/custom-builds/generateJob"
+  );
+
+  assert.equal(
+    isTerminalCustomBuildGenerateError("OpenAI error 401: invalid_api_key"),
+    true,
+  );
+  assert.equal(
+    isTerminalCustomBuildGenerateError("Gemini error 400: structured output is not supported"),
+    true,
+  );
+  assert.equal(
+    isTerminalCustomBuildGenerateError("Gemini request timed out"),
+    false,
+  );
 
   await runCustomBuildGenerateJob({
     id: "job-row",

@@ -93,7 +93,9 @@ async function main() {
       process.env.SUPABASE_SERVICE_ROLE_KEY = originalSupabaseServiceRoleKey;
     }
   }
-  assert.equal(observedHeaders?.get("x-upsert"), "true");
+  const headers = observedHeaders as Headers | null;
+  assert.ok(headers, "Supabase upload headers should be captured");
+  assert.equal(headers.get("x-upsert"), "true");
 }
 
 main().catch((error) => {

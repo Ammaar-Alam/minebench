@@ -178,6 +178,7 @@ export async function POST(req: Request) {
     return customBuildError("worker_failed", "Custom build credential encryption is not configured.", 500);
   }
 
+  const useOpenRouter = credential.provider === "openrouter";
   const publicId = generateCustomBuildPublicId();
   const origin = pageOrigin(req);
   const expiresAt = new Date(Date.now() + getSecretTtlMs());
@@ -200,7 +201,7 @@ export async function POST(req: Request) {
         modelDisplayName: model.modelDisplayName,
         openRouterModelId: model.openRouterModelId,
         customBaseUrl: model.customBaseUrl,
-        preferOpenRouter: Boolean(body.preferOpenRouter),
+        preferOpenRouter: useOpenRouter,
         reasoning: body.reasoning,
         requestedIpHash: hashNullable(requestIp(req)),
         requestedUserAgentHash: hashNullable(req.headers.get("user-agent")),

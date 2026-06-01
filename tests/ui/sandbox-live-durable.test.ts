@@ -33,4 +33,10 @@ assert.ok(
   "durable status updates should ignore stale watcher payloads for an older custom build id",
 );
 
+assert.ok(
+  sourceText.includes("{DURABLE_CUSTOM_BUILDS_ENABLED ? (") &&
+    sourceText.includes("private links for download/export"),
+  "private durable-storage copy should only render when durable custom builds are enabled",
+);
+
 console.log("sandbox durable custom build race checks passed");

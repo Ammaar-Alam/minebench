@@ -47,6 +47,31 @@ function providerKeysForSecret(provider: string, providerKey: string): ProviderA
   return {};
 }
 
+export function isTerminalCustomBuildGenerateError(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (normalized === "provider_key_expired") return true;
+  if (normalized.includes("invalid_api_key")) return true;
+  if (normalized.includes("invalid api key") || normalized.includes("incorrect api key")) return true;
+  if (normalized.includes("api key") && normalized.includes("invalid")) return true;
+  if (/\berror\s+(401|403)\b/.test(normalized)) return true;
+  if (normalized.includes("unauthorized") || normalized.includes("forbidden")) return true;
+  if (normalized.includes("authentication") || normalized.includes("permission denied")) return true;
+  if (normalized.includes("missing ") && (normalized.includes("api_key") || normalized.includes("api key"))) {
+    return true;
+  }
+  if (normalized.includes("openrouter routing requested")) return true;
+  if (normalized.includes("openrouter routing is unavailable")) return true;
+  if (normalized.includes("not integrated with openrouter")) return true;
+  if (normalized.includes("no openrouter model id configured")) return true;
+  if (normalized.includes("direct api not supported; use openrouter fallback")) return true;
+  return (
+    normalized.includes("output_config.format.schema") ||
+    (normalized.includes("json_schema") && normalized.includes("not supported")) ||
+    (normalized.includes("structured output") && normalized.includes("not supported")) ||
+    (normalized.includes("structured output") && normalized.includes("invalid"))
+  );
+}
+
 function validateStubBuild(build: unknown, customBuild: CustomBuild): { build: VoxelBuild; warnings: string[] } {
   const gridSize = assertGridSize(customBuild.gridSize);
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
@@ -259,7 +284,7 @@ export async function runCustomBuildGenerateJob(job: CustomBuildJob): Promise<vo
     await appendCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
   } catch (error) {
     const message = redactSensitiveText(error);
-    const terminal = message === "provider_key_expired" || job.attempts >= job.maxAttempts;
+    const terminal = isTerminalCustomBuildGenerateError(message) || job.attempts >= job.maxAttempts;
     if (terminal) {
       await prisma.customBuild.update({
         where: { id: customBuild.id },

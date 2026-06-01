@@ -57,15 +57,32 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   let queuedCount = 0;
   const queuedFormats: string[] = [];
   await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "CustomBuild"
+      WHERE id = ${customBuild.id}
+      FOR UPDATE
+    `;
     for (const format of formats) {
-      const existingArtifact = customBuild.artifacts.find(
-        (artifact) => artifact.kind === format && artifact.sourceBuildSha256 === customBuild.buildSha256,
-      );
+      const existingArtifact = await tx.customBuildArtifact.findFirst({
+        where: {
+          customBuildId: customBuild.id,
+          kind: format,
+          sourceBuildSha256: customBuild.buildSha256,
+        },
+        select: { id: true },
+      });
       if (existingArtifact) continue;
-      const existingJob = customBuild.jobs.find(
+      const activeExportJobs = await tx.customBuildJob.findMany({
+        where: {
+          customBuildId: customBuild.id,
+          type: "export",
+          status: { in: ["queued", "running"] },
+        },
+        select: { payload: true },
+      });
+      const existingJob = activeExportJobs.find(
         (job) =>
-          job.type === "export" &&
-          ["queued", "running"].includes(job.status) &&
           exportFormatFromPayload(job.payload) === format &&
           exportSourceBuildShaFromPayload(job.payload) === customBuild.buildSha256,
       );

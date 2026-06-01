@@ -8,7 +8,7 @@ import {
   renewCustomBuildJobLease,
 } from "@/lib/custom-builds/jobs";
 import { runCustomBuildExportJob } from "@/lib/custom-builds/exportJob";
-import { runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
+import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { prisma } from "@/lib/prisma";
 
@@ -55,11 +55,12 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
     return { processed: true, jobId: job.id, jobType: job.type };
   } catch (error) {
     const message = redactSensitiveText(error);
+    const forceTerminal = job.type === "generate" && isTerminalCustomBuildGenerateError(message);
     await failCustomBuildJob(job.id, workerId, {
       code: message === "provider_key_expired" ? "provider_key_expired" : "worker_failed",
       message,
     }, prisma, {
-      forceTerminal: message === "provider_key_expired",
+      forceTerminal,
     });
     return { processed: true, jobId: job.id, jobType: job.type };
   } finally {
