@@ -48,7 +48,9 @@
     "arena:snapshot:precompute": "tsx scripts/precompute-arena-snapshot-artifacts.ts",
     "arena:stream:precompute": "tsx scripts/precompute-arena-stream-artifacts.ts",
     "arena:stream:clear": "tsx scripts/clear-arena-stream-artifacts.ts",
-    "openrouter:verify": "tsx scripts/verify-openrouter-request-shape.ts"
+    "openrouter:verify": "tsx scripts/verify-openrouter-request-shape.ts",
+    "custom:worker": "tsx scripts/custom-build-worker.ts",
+    "custom:verify": "tsx scripts/verify-custom-build-flow.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

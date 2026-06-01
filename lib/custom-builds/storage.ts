@@ -1,4 +1,7 @@
-import { getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { getSupabaseStorageConfig, LOCAL_BUILD_STORAGE_BUCKET } from "@/lib/storage/buildPayload";
 import { assertCustomBuildPublicId } from "@/lib/custom-builds/ids";
 import type {
   CustomBuildArtifactDescriptor,
@@ -28,6 +31,19 @@ function encodeStoragePath(path: string): string {
     .filter(Boolean)
     .map((segment) => encodeURIComponent(segment))
     .join("/");
+}
+
+function resolveLocalCustomBuildStoragePath(objectPath: string): string {
+  const storageRoot = process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR?.trim() || ".custom-build-storage";
+  const repoRoot = path.resolve(process.cwd());
+  const root = path.resolve(repoRoot, storageRoot);
+  const normalizedPath = objectPath.replace(/^\/+/, "");
+  const absolutePath = path.resolve(root, normalizedPath);
+  const rootPrefix = `${root}${path.sep}`;
+  if (absolutePath !== root && !absolutePath.startsWith(rootPrefix)) {
+    throw new Error("Custom build local storage path escapes storage root");
+  }
+  return absolutePath;
 }
 
 function assertSha256(value: string | undefined, label: string): string {
@@ -149,8 +165,15 @@ export type CustomBuildArtifactUpload = {
 };
 
 export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload): Promise<void> {
-  const config = getSupabaseStorageConfig();
   const bucket = (args.bucket ?? getCustomBuildStorageBucket()).trim();
+  if (bucket === LOCAL_BUILD_STORAGE_BUCKET) {
+    const absolutePath = resolveLocalCustomBuildStoragePath(args.path);
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, args.bytes);
+    return;
+  }
+
+  const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(args.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
   const resp = await fetch(url, {
@@ -160,7 +183,6 @@ export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload)
       apikey: config.serviceRoleKey,
       "x-upsert": "false",
       "Content-Type": args.contentType,
-      ...(args.encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}),
     },
     body: args.bytes as unknown as BodyInit,
   });
@@ -175,6 +197,10 @@ export async function createCustomBuildArtifactSignedUrl(args: {
   path: string;
   expiresInSec?: number;
 }): Promise<string> {
+  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    return pathToFileURL(resolveLocalCustomBuildStoragePath(args.path)).toString();
+  }
+
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(args.path);
   const expiresIn = args.expiresInSec ?? getCustomBuildSignedUrlTtlSeconds();
@@ -207,6 +233,10 @@ export async function downloadCustomBuildArtifactBytes(args: {
   bucket: string;
   path: string;
 }): Promise<Uint8Array> {
+  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    return new Uint8Array(await readFile(resolveLocalCustomBuildStoragePath(args.path)));
+  }
+
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(args.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(args.bucket)}/${encodedPath}`;
