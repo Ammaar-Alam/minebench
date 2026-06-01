@@ -14,6 +14,7 @@ export async function getCustomBuildStatusPayload(publicId: string) {
           byteSize: true,
           compressedByteSize: true,
           sha256: true,
+          sourceBuildSha256: true,
         },
       },
       jobs: {

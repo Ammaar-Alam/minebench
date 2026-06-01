@@ -19,6 +19,12 @@ function exportFormatFromPayload(payload: Prisma.JsonValue | null): string | nul
   return typeof format === "string" ? format : null;
 }
 
+function exportSourceBuildShaFromPayload(payload: Prisma.JsonValue | null): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const sourceBuildSha256 = (payload as { sourceBuildSha256?: unknown }).sourceBuildSha256;
+  return typeof sourceBuildSha256 === "string" ? sourceBuildSha256 : null;
+}
+
 function dayKey(): Date {
   return new Date(new Date().toISOString().slice(0, 10));
 }
@@ -60,7 +66,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         (job) =>
           job.type === "export" &&
           ["queued", "running"].includes(job.status) &&
-          exportFormatFromPayload(job.payload) === format,
+          exportFormatFromPayload(job.payload) === format &&
+          exportSourceBuildShaFromPayload(job.payload) === customBuild.buildSha256,
       );
       if (existingJob) continue;
       await tx.customBuildJob.create({
@@ -100,6 +107,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
           byteSize: true,
           compressedByteSize: true,
           sha256: true,
+          sourceBuildSha256: true,
         },
       },
       jobs: { orderBy: { createdAt: "asc" }, select: { type: true, status: true, payload: true } },

@@ -29,7 +29,7 @@ The same generation pipeline is available locally with `pnpm custom:build`, whic
 4. A worker processes generation outside the Vercel request path.
 5. The private page reconnects to persisted events, renders a preview, and exposes JSON/export downloads.
 
-The old `/api/generate` stream remains available when `NEXT_PUBLIC_CUSTOM_BUILDS_DURABLE=0`. Durable custom builds are enabled by default.
+The old `/api/generate` stream remains the default Sandbox path. Set `CUSTOM_BUILDS_ENABLED=1` to enable the hosted custom build endpoints. Set `NEXT_PUBLIC_CUSTOM_BUILDS_DURABLE=1` only after the custom build worker, encryption secret, and storage credentials are configured.
 
 Provider keys are user-supplied by default. The web route encrypts a TTL-bound credential for queued/running jobs and deletes it when the generation reaches a terminal state. Plaintext provider keys are not stored.
 
@@ -271,7 +271,7 @@ When using local filesystem storage, run the dev server with the same local stor
 
 ```bash
 node scripts/with-local-env.mjs env \
-  CUSTOM_BUILD_STORAGE_BUCKET=local-build-storage \
+  CUSTOM_BUILD_STORAGE_BUCKET=__local_fs__ \
   CUSTOM_BUILD_LOCAL_STORAGE_DIR=.custom-build-storage \
   pnpm dev
 ```

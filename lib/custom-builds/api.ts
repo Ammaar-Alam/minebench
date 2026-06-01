@@ -62,6 +62,7 @@ export type SerializableArtifact = {
   byteSize: number;
   compressedByteSize: number | null;
   sha256: string;
+  sourceBuildSha256: string | null;
 };
 
 export type SerializableJob = {
@@ -69,6 +70,22 @@ export type SerializableJob = {
   status: CustomBuildJobStatus;
   payload: Prisma.JsonValue | null;
 };
+
+export function customBuildArtifactMatchesCurrentBuild(
+  artifact: Pick<SerializableArtifact, "kind" | "sourceBuildSha256">,
+  buildSha256: string | null | undefined,
+): boolean {
+  if (
+    artifact.kind === "build_json" ||
+    artifact.kind === "preview_json" ||
+    artifact.kind === "glb" ||
+    artifact.kind === "stl" ||
+    artifact.kind === "schem"
+  ) {
+    return Boolean(buildSha256 && artifact.sourceBuildSha256 === buildSha256);
+  }
+  return true;
+}
 
 function noIndexHeaders() {
   return {
@@ -116,7 +133,14 @@ export function chooseCustomBuildProviderCredential(args: {
   const directKey = keys[provider]?.trim();
   const openRouterKey = keys.openrouter?.trim();
 
-  if ((args.preferOpenRouter || args.forceOpenRouter) && args.openRouterModelId && openRouterKey) {
+  if (args.forceOpenRouter) {
+    if (args.openRouterModelId && openRouterKey) {
+      return { provider: "openrouter", providerKey: openRouterKey };
+    }
+    throw new Error("missing_provider_key");
+  }
+
+  if (args.preferOpenRouter && args.openRouterModelId && openRouterKey) {
     return { provider: "openrouter", providerKey: openRouterKey };
   }
   if (directKey) return { provider, providerKey: directKey };
@@ -149,13 +173,24 @@ function exportFormatFromJob(job: SerializableJob): CustomBuildExportFormat | nu
   return format === "glb" || format === "stl" || format === "schem" ? format : null;
 }
 
+function exportJobMatchesCurrentBuild(job: SerializableJob, buildSha256: string | null | undefined): boolean {
+  if (job.type !== "export") return true;
+  if (!job.payload || typeof job.payload !== "object" || Array.isArray(job.payload)) return true;
+  const sourceBuildSha256 = (job.payload as { sourceBuildSha256?: unknown }).sourceBuildSha256;
+  if (typeof sourceBuildSha256 !== "string") return true;
+  return Boolean(buildSha256 && sourceBuildSha256 === buildSha256);
+}
+
 export function serializeCustomBuildStatus(args: {
   customBuild: SerializableCustomBuild;
   artifacts: SerializableArtifact[];
   exportJobs: SerializableJob[];
 }) {
   const build = args.customBuild;
-  const artifactResponses = args.artifacts.map((artifact) => ({
+  const currentArtifacts = args.artifacts.filter((artifact) =>
+    customBuildArtifactMatchesCurrentBuild(artifact, build.buildSha256),
+  );
+  const artifactResponses = currentArtifacts.map((artifact) => ({
     kind: artifact.kind,
     format: artifact.format,
     contentType: artifact.contentType,
@@ -171,11 +206,12 @@ export function serializeCustomBuildStatus(args: {
     schem: { status: "not_requested" },
   };
   for (const job of args.exportJobs) {
+    if (!exportJobMatchesCurrentBuild(job, build.buildSha256)) continue;
     const format = exportFormatFromJob(job);
     if (!format) continue;
     exports[format] = { status: job.status };
   }
-  for (const artifact of args.artifacts) {
+  for (const artifact of currentArtifacts) {
     if (artifact.kind === "glb" || artifact.kind === "stl" || artifact.kind === "schem") {
       exports[artifact.kind] = {
         status: "available",

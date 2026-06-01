@@ -58,7 +58,7 @@ const createSchema = z.object({
 });
 
 function customBuildsEnabled(): boolean {
-  return process.env.CUSTOM_BUILDS_ENABLED !== "0";
+  return process.env.CUSTOM_BUILDS_ENABLED === "1";
 }
 
 function getSecretTtlMs(): number {

@@ -85,7 +85,7 @@ const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
   modelId: "",
   baseUrl: DEFAULT_CUSTOM_API_URL,
 };
-const DURABLE_CUSTOM_BUILDS_ENABLED = process.env.NEXT_PUBLIC_CUSTOM_BUILDS_DURABLE !== "0";
+const DURABLE_CUSTOM_BUILDS_ENABLED = process.env.NEXT_PUBLIC_CUSTOM_BUILDS_DURABLE === "1";
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
 const DEFAULT_MODEL_A: ModelKey =

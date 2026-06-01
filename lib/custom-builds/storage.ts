@@ -190,7 +190,7 @@ export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload)
     headers: {
       Authorization: `Bearer ${config.serviceRoleKey}`,
       apikey: config.serviceRoleKey,
-      "x-upsert": "false",
+      "x-upsert": "true",
       "Content-Type": args.contentType,
     },
     body: args.bytes as unknown as BodyInit,

@@ -9,9 +9,9 @@ import {
   encryptProviderKey,
 } from "../../../lib/custom-builds/secrets";
 import { redactSensitiveText } from "../../../lib/custom-builds/sanitize";
-import { getCustomBuildArtifactPath } from "../../../lib/custom-builds/storage";
+import { getCustomBuildArtifactPath, uploadCustomBuildArtifact } from "../../../lib/custom-builds/storage";
 
-function main() {
+async function main() {
   const id = generateCustomBuildPublicId();
   assert.match(id, /^cb_[A-Za-z0-9_-]{24}$/);
   assert.equal(isCustomBuildPublicId(id), true);
@@ -62,6 +62,41 @@ function main() {
     () => getCustomBuildArtifactPath({ publicId: "../escape", kind: "build_json", sha256: "a".repeat(64) }),
     /Invalid custom build id/,
   );
+
+  const originalFetch = globalThis.fetch;
+  const originalSupabaseUrl = process.env.SUPABASE_URL;
+  const originalSupabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  let observedHeaders: Headers | null = null;
+  process.env.SUPABASE_URL = "https://example.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    observedHeaders = new Headers(init?.headers);
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  try {
+    await uploadCustomBuildArtifact({
+      bucket: "builds",
+      path: "custom-builds/v1/cb_123456789012345678901234/build/build-a.json.gz",
+      bytes: new Uint8Array([1, 2, 3]),
+      contentType: "application/gzip",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSupabaseUrl === undefined) {
+      delete process.env.SUPABASE_URL;
+    } else {
+      process.env.SUPABASE_URL = originalSupabaseUrl;
+    }
+    if (originalSupabaseServiceRoleKey === undefined) {
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    } else {
+      process.env.SUPABASE_SERVICE_ROLE_KEY = originalSupabaseServiceRoleKey;
+    }
+  }
+  assert.equal(observedHeaders?.get("x-upsert"), "true");
 }
 
-main();
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

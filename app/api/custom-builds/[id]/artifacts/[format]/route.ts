@@ -1,5 +1,6 @@
 import {
   artifactKindForDownloadFormat,
+  customBuildArtifactMatchesCurrentBuild,
   customBuildError,
   customBuildNoStoreHeaders,
 } from "@/lib/custom-builds/api";
@@ -35,10 +36,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 
   const artifact = customBuild.artifacts.find((candidate) => {
     if (candidate.kind !== kind) return false;
-    if (kind === "glb" || kind === "stl" || kind === "schem") {
-      return candidate.sourceBuildSha256 === customBuild.buildSha256;
-    }
-    return true;
+    return customBuildArtifactMatchesCurrentBuild(candidate, customBuild.buildSha256);
   });
   if (!artifact) {
     if (customBuild.status !== "succeeded") {

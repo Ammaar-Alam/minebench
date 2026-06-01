@@ -1,4 +1,9 @@
-import { customBuildError, customBuildNoStoreHeaders, downloadFormatForArtifactKind } from "@/lib/custom-builds/api";
+import {
+  customBuildArtifactMatchesCurrentBuild,
+  customBuildError,
+  customBuildNoStoreHeaders,
+  downloadFormatForArtifactKind,
+} from "@/lib/custom-builds/api";
 import { isCustomBuildPublicId } from "@/lib/custom-builds/ids";
 import { prisma } from "@/lib/prisma";
 
@@ -23,15 +28,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   return Response.json(
     {
       id,
-      artifacts: customBuild.artifacts.map((artifact) => ({
-        kind: artifact.kind,
-        format: artifact.format,
-        contentType: artifact.contentType,
-        byteSize: artifact.byteSize,
-        compressedByteSize: artifact.compressedByteSize,
-        sha256: artifact.sha256,
-        downloadUrl: `/api/custom-builds/${id}/artifacts/${downloadFormatForArtifactKind(artifact.kind)}`,
-      })),
+      artifacts: customBuild.artifacts
+        .filter((artifact) => customBuildArtifactMatchesCurrentBuild(artifact, customBuild.buildSha256))
+        .map((artifact) => ({
+          kind: artifact.kind,
+          format: artifact.format,
+          contentType: artifact.contentType,
+          byteSize: artifact.byteSize,
+          compressedByteSize: artifact.compressedByteSize,
+          sha256: artifact.sha256,
+          downloadUrl: `/api/custom-builds/${id}/artifacts/${downloadFormatForArtifactKind(artifact.kind)}`,
+        })),
     },
     { headers: customBuildNoStoreHeaders() },
   );
