@@ -188,6 +188,68 @@ async function getArenaVoteJobStatus() {
   };
 }
 
+async function getCustomBuildOpsStatus() {
+  const [
+    queued,
+    running,
+    succeeded,
+    failed,
+    canceled,
+    jobsQueued,
+    jobsRunning,
+    oldestQueuedJob,
+    staleLeases,
+    artifactAggregate,
+  ] = await Promise.all([
+    prisma.customBuild.count({ where: { status: "queued" } }),
+    prisma.customBuild.count({ where: { status: "running" } }),
+    prisma.customBuild.count({ where: { status: "succeeded" } }),
+    prisma.customBuild.count({ where: { status: "failed" } }),
+    prisma.customBuild.count({ where: { status: "canceled" } }),
+    prisma.customBuildJob.count({ where: { status: "queued" } }),
+    prisma.customBuildJob.count({ where: { status: "running" } }),
+    prisma.customBuildJob.findFirst({
+      where: { status: "queued" },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+    prisma.customBuildJob.count({
+      where: {
+        status: "running",
+        leaseExpiresAt: { lt: new Date() },
+      },
+    }),
+    prisma.customBuildArtifact.aggregate({
+      _count: { id: true },
+      _sum: {
+        compressedByteSize: true,
+        byteSize: true,
+      },
+    }),
+  ]);
+
+  return {
+    counts: {
+      queued,
+      running,
+      succeeded,
+      failed,
+      canceled,
+    },
+    jobs: {
+      queued: jobsQueued,
+      running: jobsRunning,
+      oldestQueuedAgeMs: oldestQueuedJob ? Math.max(0, Date.now() - oldestQueuedJob.createdAt.getTime()) : null,
+      staleLeases,
+    },
+    artifacts: {
+      objects: artifactAggregate._count.id,
+      compressedBytes: artifactAggregate._sum.compressedByteSize ?? 0,
+      logicalBytes: artifactAggregate._sum.byteSize ?? 0,
+    },
+  };
+}
+
 export async function GET(req: Request) {
   const denied = requireAdmin(req);
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
@@ -207,6 +269,7 @@ export async function GET(req: Request) {
       artifactCoverage,
       voteJobs,
       shownJobs,
+      customBuilds,
     ] = await Promise.all([
       prisma.prompt.count(),
       prisma.prompt.count({ where: { active: true } }),
@@ -218,6 +281,7 @@ export async function GET(req: Request) {
       getArenaArtifactCoverage(),
       getArenaVoteJobStatus(),
       getArenaShownJobStatus(),
+      getCustomBuildOpsStatus(),
     ]);
     timing.end("artifact_status", artifactStartedAt);
     timing.end("total", requestStartedAt);
@@ -239,6 +303,7 @@ export async function GET(req: Request) {
         artifacts: artifactCoverage,
         voteJobs,
         shownJobs,
+        customBuilds,
       },
       { headers }
     );
