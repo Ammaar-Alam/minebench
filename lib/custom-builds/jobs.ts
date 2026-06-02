@@ -101,6 +101,41 @@ export async function recoverStaleCustomBuildJobLeases(
 async function recoverStaleCustomBuildJobLeasesInTransaction(
   client: PrismaTx,
 ): Promise<{ requeued: number; failed: number }> {
+  const expiredQueuedRows = await client.$queryRaw<Array<{ id: string; customBuildId: string; type: string }>>`
+    UPDATE "CustomBuildJob" j
+    SET status = 'failed'::"CustomBuildJobStatus",
+        "lockedBy" = NULL,
+        "lockedAt" = NULL,
+        "leaseExpiresAt" = NULL,
+        "completedAt" = now(),
+        "lastErrorCode" = 'provider_key_expired',
+        "lastErrorMessage" = 'Provider key expired before the worker could start.',
+        "updatedAt" = now()
+    FROM "CustomBuildSecret" s
+    WHERE j."customBuildId" = s."customBuildId"
+      AND j.status = 'queued'::"CustomBuildJobStatus"
+      AND j.type = 'generate'::"CustomBuildJobType"
+      AND s."expiresAt" <= now()
+    RETURNING j.id, j."customBuildId", j.type::text;
+  `;
+  for (const row of expiredQueuedRows) {
+    await client.customBuild.updateMany({
+      where: {
+        id: row.customBuildId,
+        status: { in: ["queued", "running"] },
+      },
+      data: {
+        status: "failed",
+        currentStage: "failed",
+        completedAt: new Date(),
+        errorCode: "provider_key_expired",
+        errorMessage: "Provider key expired before the worker could start.",
+        errorRetryable: false,
+      },
+    });
+    await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
+  }
+
   const requeuedRows = await client.$queryRaw<Array<{ id: string }>>`
     UPDATE "CustomBuildJob"
     SET status = 'queued'::"CustomBuildJobStatus",
@@ -147,7 +182,7 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
     });
     await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
   }
-  return { requeued: requeuedRows.length, failed: failedRows.length };
+  return { requeued: requeuedRows.length, failed: expiredQueuedRows.length + failedRows.length };
 }
 
 export async function completeCustomBuildJob(

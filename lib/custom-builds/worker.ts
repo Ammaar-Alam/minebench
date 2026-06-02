@@ -81,10 +81,35 @@ function startCustomBuildJobHeartbeat(
   }, getCustomBuildWorkerHeartbeatMs());
 }
 
+async function extendLeaseForSynchronousWork(job: CustomBuildJob, workerId: string): Promise<void> {
+  let extended = false;
+  try {
+    extended = await extendCustomBuildJobLease(
+      job.id,
+      workerId,
+      getCustomBuildSynchronousExportLeaseMs(),
+    );
+  } catch (error) {
+    throw new CustomBuildLeaseLostError(
+      `Custom build job lease extension failed: ${redactSensitiveText(error)}`,
+    );
+  }
+  if (!extended) {
+    throw new CustomBuildLeaseLostError("Custom build job lease is no longer owned by this worker.");
+  }
+}
+
 async function runJob(job: CustomBuildJob, workerId: string, signal: AbortSignal): Promise<void> {
   throwIfCustomBuildLeaseLost(signal);
   if (job.type === "generate") {
-    await runCustomBuildGenerateJob(job, { signal });
+    await runCustomBuildGenerateJob(job, {
+      signal,
+      beforeSynchronousArtifactPackaging: async () => {
+        throwIfCustomBuildLeaseLost(signal);
+        await extendLeaseForSynchronousWork(job, workerId);
+        throwIfCustomBuildLeaseLost(signal);
+      },
+    });
     throwIfCustomBuildLeaseLost(signal);
     return;
   }
@@ -92,21 +117,7 @@ async function runJob(job: CustomBuildJob, workerId: string, signal: AbortSignal
     signal,
     beforeSynchronousExport: async () => {
       throwIfCustomBuildLeaseLost(signal);
-      let extended = false;
-      try {
-        extended = await extendCustomBuildJobLease(
-          job.id,
-          workerId,
-          getCustomBuildSynchronousExportLeaseMs(),
-        );
-      } catch (error) {
-        throw new CustomBuildLeaseLostError(
-          `Custom build job lease extension failed: ${redactSensitiveText(error)}`,
-        );
-      }
-      if (!extended) {
-        throw new CustomBuildLeaseLostError("Custom build job lease is no longer owned by this worker.");
-      }
+      await extendLeaseForSynchronousWork(job, workerId);
       throwIfCustomBuildLeaseLost(signal);
     },
   });

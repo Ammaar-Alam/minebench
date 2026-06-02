@@ -236,7 +236,10 @@ async function generateBuild(
 
 export async function runCustomBuildGenerateJob(
   job: CustomBuildJob,
-  opts: { signal?: AbortSignal } = {},
+  opts: {
+    signal?: AbortSignal;
+    beforeSynchronousArtifactPackaging?: () => Promise<void> | void;
+  } = {},
 ): Promise<void> {
   const customBuild = await prisma.customBuild.findUnique({
     where: { id: job.customBuildId },
@@ -262,6 +265,8 @@ export async function runCustomBuildGenerateJob(
       throw new CustomBuildArtifactPersistenceError(error);
     }
     const generated = await generateBuild(customBuild, job, opts);
+    throwIfCustomBuildLeaseLost(opts.signal);
+    await opts.beforeSynchronousArtifactPackaging?.();
     throwIfCustomBuildLeaseLost(opts.signal);
     const fullBytes = jsonBytes(generated.build);
     const fullSha = sha256Hex(fullBytes);

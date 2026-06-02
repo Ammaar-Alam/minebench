@@ -9,11 +9,15 @@ async function main() {
   let queryCount = 0;
   const txClient = {
     $queryRaw: async () => {
-      operations.push("$queryRaw");
       queryCount += 1;
-      return queryCount === 1
-        ? [{ id: "requeued-job" }]
-        : [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate" }];
+      operations.push(`$queryRaw.${queryCount}`);
+      if (queryCount === 1) {
+        return [{ id: "expired-queued-job", customBuildId: "expired-custom-build-row", type: "generate" }];
+      }
+      if (queryCount === 2) {
+        return [{ id: "requeued-job" }];
+      }
+      return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate" }];
     },
     customBuild: {
       updateMany: async () => {
@@ -38,11 +42,14 @@ async function main() {
   };
 
   const result = await recoverStaleCustomBuildJobLeases(rootClient as never);
-  assert.deepEqual(result, { requeued: 1, failed: 1 });
+  assert.deepEqual(result, { requeued: 1, failed: 2 });
   assert.deepEqual(operations, [
     "$transaction.begin",
-    "$queryRaw",
-    "$queryRaw",
+    "$queryRaw.1",
+    "customBuild.updateMany",
+    "customBuildSecret.deleteMany",
+    "$queryRaw.2",
+    "$queryRaw.3",
     "customBuild.updateMany",
     "customBuildSecret.deleteMany",
     "$transaction.commit",

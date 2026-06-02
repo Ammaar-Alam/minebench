@@ -56,10 +56,22 @@ async function main() {
   );
   const runJobIndex = workerSource.indexOf("async function runJob");
   const extendIndex = workerSource.indexOf("extendCustomBuildJobLease(");
-  assert.ok(runJobIndex >= 0 && extendIndex > runJobIndex, "export jobs should extend the lease from the worker");
+  assert.ok(runJobIndex >= 0 && extendIndex >= 0, "worker should be able to extend job leases");
+  assert.ok(
+    workerSource.includes("async function extendLeaseForSynchronousWork") &&
+      workerSource.includes("await extendLeaseForSynchronousWork(job, workerId);"),
+    "generate and export jobs should extend the lease through the shared synchronous-work helper",
+  );
   assert.ok(
     workerSource.includes("randomUUID") && workerSource.includes("hostname()"),
     "worker fallback IDs should include host and random process identity",
+  );
+  const generatePackagingCallbackIndex = workerSource.indexOf("beforeSynchronousArtifactPackaging");
+  assert.ok(
+    generatePackagingCallbackIndex > runJobIndex &&
+      workerSource.indexOf("await extendLeaseForSynchronousWork(job, workerId);", generatePackagingCallbackIndex) >
+        generatePackagingCallbackIndex,
+    "generate jobs should extend the lease before synchronous artifact packaging",
   );
   const heartbeatIndex = workerSource.indexOf("function startCustomBuildJobHeartbeat");
   const renewIndex = workerSource.indexOf("renewCustomBuildJobLease(job.id, workerId)", heartbeatIndex);
@@ -75,7 +87,7 @@ async function main() {
     "heartbeat renewals should abort the active job on false results and caught failures",
   );
   assert.ok(
-    workerSource.includes("runCustomBuildGenerateJob(job, { signal })"),
+    workerSource.includes("runCustomBuildGenerateJob(job, {") && workerSource.includes("signal,"),
     "generate jobs should receive the heartbeat abort signal",
   );
   assert.ok(
