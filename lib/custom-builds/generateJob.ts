@@ -88,12 +88,25 @@ class CustomBuildArtifactPersistenceError extends Error {
   }
 }
 
+class CustomBuildArtifactBookkeepingError extends Error {
+  constructor(error: unknown) {
+    super(`custom_build_artifact_bookkeeping_failed: ${redactSensitiveText(error)}`);
+    this.name = "CustomBuildArtifactBookkeepingError";
+  }
+}
+
 function isCustomBuildArtifactPersistenceError(error: unknown): error is CustomBuildArtifactPersistenceError {
   return error instanceof CustomBuildArtifactPersistenceError;
 }
 
+function isCustomBuildArtifactBookkeepingError(error: unknown): error is CustomBuildArtifactBookkeepingError {
+  return error instanceof CustomBuildArtifactBookkeepingError;
+}
+
 function artifactPersistenceErrorCode(error: unknown): string {
-  return isCustomBuildArtifactPersistenceError(error) ? "artifact_persistence_failed" : "worker_failed";
+  if (isCustomBuildArtifactPersistenceError(error)) return "artifact_persistence_failed";
+  if (isCustomBuildArtifactBookkeepingError(error)) return "artifact_bookkeeping_failed";
+  return "worker_failed";
 }
 
 async function persistCustomBuildArtifact(args: Parameters<typeof uploadAndRecordCustomBuildArtifact>[0]) {
@@ -107,6 +120,7 @@ async function persistCustomBuildArtifact(args: Parameters<typeof uploadAndRecor
 export function isTerminalCustomBuildGenerateError(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (normalized.includes("custom_build_artifact_persistence_failed")) return true;
+  if (normalized.includes("custom_build_artifact_bookkeeping_failed")) return true;
   if (normalized === "provider_key_expired") return true;
   if (normalized.includes("invalid_api_key")) return true;
   if (normalized.includes("invalid api key") || normalized.includes("incorrect api key")) return true;
@@ -258,6 +272,7 @@ export async function runCustomBuildGenerateJob(
   });
   emitCustomBuildEvent(customBuild.id, "started", { stage: "generating" });
 
+  let artifactsPersisted = false;
   try {
     try {
       assertCustomBuildStorageConfigured();
@@ -305,6 +320,7 @@ export async function runCustomBuildGenerateJob(
       encoding: "gzip",
     });
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_json" });
+    artifactsPersisted = true;
 
     const payload = asGenerateJobPayload(job.payload);
     const requestedExports = payload.requestedExports ?? [];
@@ -364,9 +380,14 @@ export async function runCustomBuildGenerateJob(
     emitCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
   } catch (error) {
     if (isCustomBuildLeaseLostError(error)) throw error;
-    const message = redactSensitiveText(error);
+    const effectiveError =
+      artifactsPersisted && !isCustomBuildArtifactPersistenceError(error)
+        ? new CustomBuildArtifactBookkeepingError(error)
+        : error;
+    const message = redactSensitiveText(effectiveError);
     const terminal =
-      isCustomBuildArtifactPersistenceError(error) ||
+      isCustomBuildArtifactPersistenceError(effectiveError) ||
+      isCustomBuildArtifactBookkeepingError(effectiveError) ||
       isTerminalCustomBuildGenerateError(message) ||
       job.attempts >= job.maxAttempts;
     if (terminal) {
@@ -379,7 +400,7 @@ export async function runCustomBuildGenerateJob(
           errorCode:
             message === "provider_key_expired"
               ? "provider_key_expired"
-              : artifactPersistenceErrorCode(error),
+              : artifactPersistenceErrorCode(effectiveError),
           errorMessage: message === "provider_key_expired" ? "Provider key expired before the worker could start." : message,
           errorRetryable: false,
         },
@@ -407,6 +428,6 @@ export async function runCustomBuildGenerateJob(
         reason: message,
       });
     }
-    throw error;
+    throw effectiveError;
   }
 }

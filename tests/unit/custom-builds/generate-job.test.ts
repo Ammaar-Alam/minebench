@@ -44,6 +44,7 @@ const artifactCreates: Array<Record<string, unknown>> = [];
 let eventSeq = 0;
 let txSeq = 0;
 let failEventWrites = false;
+let failSuccessBookkeeping = false;
 
 const fakePrisma = {
   customBuild: {
@@ -94,6 +95,7 @@ const fakePrisma = {
       },
       customBuildJob: {
         create: async (args: { data: Record<string, unknown> }) => {
+          if (failSuccessBookkeeping) throw new Error("bookkeeping insert failed");
           operations.push({ name: "customBuildJob.create", txId });
           return args.data;
         },
@@ -152,6 +154,10 @@ async function main() {
   );
   assert.equal(
     isTerminalCustomBuildGenerateError("custom_build_artifact_persistence_failed: storage unavailable"),
+    true,
+  );
+  assert.equal(
+    isTerminalCustomBuildGenerateError("custom_build_artifact_bookkeeping_failed: db unavailable"),
     true,
   );
 
@@ -283,6 +289,50 @@ async function main() {
   assert.equal(artifactFailureUpdate.data.errorCode, "artifact_persistence_failed");
   assert.equal(artifactFailureUpdate.data.errorRetryable, false);
   process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-generate-job";
+
+  updates.length = 0;
+  operations.length = 0;
+  artifactCreates.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
+  currentCustomBuild = queuedCustomBuild;
+  failSuccessBookkeeping = true;
+  try {
+    await assert.rejects(
+      runCustomBuildGenerateJob({
+        id: "bookkeeping-failure-job-row",
+        customBuildId,
+        type: "generate",
+        status: "running",
+        attempts: 1,
+        maxAttempts: 3,
+        payload: {
+          requestedExports: ["glb"],
+          stubBuild: {
+            version: "1.0",
+            blocks: [{ x: 4, y: 1, z: 1, type: "stone" }],
+          },
+        },
+      } as never),
+      /bookkeeping insert failed/,
+    );
+  } finally {
+    failSuccessBookkeeping = false;
+  }
+  assert.equal(
+    artifactCreates.filter((artifact) => artifact.kind === "build_json" || artifact.kind === "preview_json").length,
+    2,
+    "bookkeeping failure regression should happen after full and preview artifacts are recorded",
+  );
+  assert.equal(
+    updates.some((update) => update.data.status === "queued"),
+    false,
+    "post-artifact bookkeeping failures should not requeue paid generation",
+  );
+  const bookkeepingFailureUpdate = updates.find((update) => update.data.status === "failed");
+  assert.ok(bookkeepingFailureUpdate, "post-artifact bookkeeping failures should fail the custom build");
+  assert.equal(bookkeepingFailureUpdate.data.errorCode, "artifact_bookkeeping_failed");
+  assert.equal(bookkeepingFailureUpdate.data.errorRetryable, false);
 
   updates.length = 0;
   operations.length = 0;
