@@ -328,8 +328,8 @@ export function openRouterReasoningEffortAttempts(
     return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
   }
   if (
-    modelId === "minimax/minimax-m2.7" ||
-    modelId === "minimax/minimax-m2.5"
+    modelId === "minimax/minimax-m3" ||
+    modelId === "minimax/minimax-m2.7"
   ) {
     return descendingAttempts(
       label,

@@ -91,10 +91,10 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   ) {
     return 128_000;
   }
-  // MiniMax M2.7's OpenAI-compatible route rejects the larger MineBench default
-  // output budgets. Keep a lower completion budget so the prompt plus output
-  // stays within the model's effective request limit.
-  if (modelId === "MiniMax-M2.7") return 131_072;
+  // MiniMax M3 and M2.7's OpenAI-compatible route rejects the larger MineBench
+  // default output budgets. Keep a lower completion budget so the prompt plus
+  // output stays within the model's effective request limit.
+  if (modelId === "MiniMax-M3" || modelId === "MiniMax-M2.7") return 131_072;
   if (
     modelId === "grok-4-1-fast" ||
     modelId === "grok-4-1-fast-reasoning" ||
