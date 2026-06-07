@@ -402,6 +402,10 @@ function warningsFromCustomBuildStatus(status: CustomBuildStatusPayload): string
   return warnings.filter((warning): warning is string => typeof warning === "string" && warning.trim().length > 0);
 }
 
+function customBuildStatusPath(id: string): string {
+  return `/api/custom-builds/${encodeURIComponent(id)}`;
+}
+
 async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): Promise<CustomBuildStatusPayload> {
   const res = await fetch(statusUrl, { cache: "no-store", signal });
   if (!res.ok) {
@@ -892,6 +896,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         }
 
         const created = (await res.json()) as CustomBuildCreateResponse;
+        const statusUrl = customBuildStatusPath(created.id);
         setResults((prev) => {
           const next = new Map(prev);
           const existing = next.get(model.id);
@@ -903,7 +908,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             startedAt: existing?.startedAt ?? Date.now(),
             customBuildId: created.id,
             customBuildPageUrl: created.pageUrl,
-            customBuildStatusUrl: created.statusUrl,
+            customBuildStatusUrl: statusUrl,
             customBuildEventsUrl: created.eventsUrl,
             renderGridSize: gridSize,
             renderPalette: palette,
@@ -915,7 +920,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         watchPromises.push(
           watchCustomBuild({
             model,
-            statusUrl: created.statusUrl,
+            statusUrl,
             pageUrl: created.pageUrl,
             eventsUrl: created.eventsUrl,
             signal: args.abortController.signal,

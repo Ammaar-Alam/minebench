@@ -62,6 +62,14 @@ assert.ok(
   "durable status updates should ignore stale watcher payloads for an older custom build id",
 );
 assert.ok(
+  sourceText.includes("function customBuildStatusPath(id: string): string") &&
+    durableBody.includes("const statusUrl = customBuildStatusPath(created.id)") &&
+    durableBody.includes("customBuildStatusUrl: statusUrl") &&
+    durableBody.includes("statusUrl,") &&
+    !durableBody.includes("statusUrl: created.statusUrl"),
+  "durable watcher should poll the same-origin status path derived from the custom build id",
+);
+assert.ok(
   sourceText.includes("renderGridSize?: GridSize") &&
     sourceText.includes("renderPalette?: Palette") &&
     applyStatusBody.includes("renderGridSize: statusGridSize") &&
