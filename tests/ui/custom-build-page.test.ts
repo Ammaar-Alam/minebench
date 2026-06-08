@@ -22,6 +22,7 @@ function functionBodyText(name: string): string {
 
 const previewBody = functionBodyText("loadCustomBuildPreview");
 const componentBody = functionBodyText("CustomBuildPreview");
+const pageBody = functionBodyText("CustomBuildPage");
 
 assert.ok(
   previewBody.includes('searchParams.set("redirect", "0")') &&
@@ -33,6 +34,14 @@ assert.ok(
 assert.ok(
   componentBody.includes("loadCustomBuildPreview(previewUrl, abort.signal)"),
   "private custom build page should use the redirect-aware preview loader",
+);
+
+assert.ok(
+  pageBody.includes("const hasActiveWorkNow = hasActiveWork(status)") &&
+    pageBody.includes("const activeWorkKey = useMemo(") &&
+    !sourceText.includes("}, [activeWorkKey, refresh, status]);") &&
+    sourceText.includes("}, [activeWorkKey, hasActiveWorkNow, refresh, status.id]);"),
+  "custom build page should keep one event stream across status object refreshes",
 );
 
 console.log("custom build page preview checks passed");

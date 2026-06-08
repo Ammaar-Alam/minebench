@@ -1,8 +1,19 @@
-import { customBuildError, customBuildNoStoreHeaders, customBuildPrivateTerminalHeaders } from "@/lib/custom-builds/api";
+import {
+  customBuildError,
+  customBuildNoStoreHeaders,
+  customBuildPrivateTerminalHeaders,
+  type CustomBuildStatusPayload,
+} from "@/lib/custom-builds/api";
 import { isCustomBuildPublicId } from "@/lib/custom-builds/ids";
 import { getCustomBuildStatusPayload } from "@/lib/custom-builds/status";
 
 export const runtime = "nodejs";
+
+function canCacheCustomBuildStatus(payload: CustomBuildStatusPayload): boolean {
+  if (payload.status === "failed" || payload.status === "canceled") return true;
+  if (payload.status !== "succeeded") return false;
+  return Object.values(payload.exports).every((entry) => entry.status === "available");
+}
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -13,8 +24,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   if (!payload) {
     return customBuildError("not_found", "Custom build was not found.", 404);
   }
-  const terminal = payload.status === "succeeded" || payload.status === "failed" || payload.status === "canceled";
   return Response.json(payload, {
-    headers: terminal ? customBuildPrivateTerminalHeaders() : customBuildNoStoreHeaders(),
+    headers: canCacheCustomBuildStatus(payload) ? customBuildPrivateTerminalHeaders() : customBuildNoStoreHeaders(),
   });
 }

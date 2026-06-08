@@ -454,9 +454,15 @@ export function CustomBuildPage({ initialStatus }: { initialStatus: CustomBuildS
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [requestingExports, setRequestingExports] = useState<Set<CustomBuildExportFormat>>(() => new Set());
   const lastEventSeqRef = useRef(0);
+  const hasActiveWorkNow = hasActiveWork(status);
   const activeWorkKey = useMemo(
-    () => Object.entries(status.exports).map(([format, entry]) => `${format}:${entry.status}`).join("|"),
-    [status.exports],
+    () =>
+      [
+        status.id,
+        status.status,
+        ...Object.entries(status.exports).map(([format, entry]) => `${format}:${entry.status}`),
+      ].join("|"),
+    [status.id, status.status, status.exports],
   );
 
   const refresh = useCallback(async () => {
@@ -476,7 +482,7 @@ export function CustomBuildPage({ initialStatus }: { initialStatus: CustomBuildS
   }, []);
 
   useEffect(() => {
-    if (!hasActiveWork(status)) return;
+    if (!hasActiveWorkNow) return;
 
     const events = [
       "queued",
@@ -511,17 +517,17 @@ export function CustomBuildPage({ initialStatus }: { initialStatus: CustomBuildS
       for (const eventName of events) source.removeEventListener(eventName, handler as EventListener);
       source.close();
     };
-  }, [activeWorkKey, refresh, status]);
+  }, [activeWorkKey, hasActiveWorkNow, refresh, status.id]);
 
   useEffect(() => {
-    if (!hasActiveWork(status)) return;
+    if (!hasActiveWorkNow) return;
     const id = window.setInterval(() => {
       void refresh().catch((err) => {
         setRefreshError(err instanceof Error ? err.message : "Status unavailable");
       });
     }, 2500);
     return () => window.clearInterval(id);
-  }, [activeWorkKey, refresh, status]);
+  }, [activeWorkKey, hasActiveWorkNow, refresh, status.id]);
 
   async function requestExport(format: CustomBuildExportFormat) {
     setRequestingExports((prev) => new Set(prev).add(format));

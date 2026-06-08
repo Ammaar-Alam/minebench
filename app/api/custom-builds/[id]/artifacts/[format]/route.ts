@@ -40,6 +40,10 @@ function responseBody(bytes: Uint8Array): BodyInit {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
+function canProxyArtifactForDownload(kind: string): boolean {
+  return kind === "preview_json";
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ id: string; format: string }> }) {
   const { id, format } = await params;
   const url = new URL(req.url);
@@ -84,6 +88,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   }
 
   if (url.searchParams.get("redirect") === "0") {
+    if (!canProxyArtifactForDownload(kind)) {
+      return customBuildError(
+        "invalid_request",
+        "Direct artifact download is only available for previews.",
+        400,
+      );
+    }
     try {
       const bytes = await downloadCustomBuildArtifactBytes({
         bucket: artifact.bucket,

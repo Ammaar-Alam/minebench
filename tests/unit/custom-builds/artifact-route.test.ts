@@ -11,6 +11,7 @@ process.env.SUPABASE_URL = "https://storage.example";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "unit-service-role";
 
 const artifactBytes = new Uint8Array([1, 2, 3, 4]);
+const buildArtifactBytes = new Uint8Array([5, 6, 7, 8]);
 const fetchCalls: Array<{ url: string; method: string }> = [];
 
 const fakePrisma = {
@@ -31,6 +32,16 @@ const fakePrisma = {
           sha256: previewSha256,
           sourceBuildSha256: buildSha256,
         },
+        {
+          kind: "build_json",
+          bucket: "builds",
+          path: `custom-builds/v1/${publicId}/build/build-${buildSha256}.json.gz`,
+          contentType: "application/gzip",
+          byteSize: 24,
+          compressedByteSize: buildArtifactBytes.byteLength,
+          sha256: buildSha256,
+          sourceBuildSha256: buildSha256,
+        },
       ],
     }),
   },
@@ -45,7 +56,7 @@ globalThis.fetch = async (input, init) => {
     return Response.json({ signedURL: "/object/signature" });
   }
   if (url.includes("/storage/v1/object/builds/")) {
-    return new Response(artifactBytes);
+    return new Response(url.includes("/preview/") ? artifactBytes : buildArtifactBytes);
   }
   return new Response("unexpected request", { status: 500 });
 };
@@ -74,6 +85,14 @@ async function main() {
     fetchCalls[0]?.url.includes("/storage/v1/object/builds/"),
     "redirect=0 should download the artifact through the same-origin route",
   );
+
+  fetchCalls.length = 0;
+  const fullProxyResponse = await GET(
+    new Request(`http://localhost/api/custom-builds/${publicId}/artifacts/json?redirect=0`),
+    { params: Promise.resolve({ id: publicId, format: "json" }) },
+  );
+  assert.equal(fullProxyResponse.status, 400);
+  assert.equal(fetchCalls.length, 0, "redirect=0 should not proxy full build artifacts through the app server");
 
   console.log("custom build artifact route checks passed");
 }
