@@ -49,6 +49,7 @@ const durableBody = functionBodyText("runGenerateDurable");
 const stopBody = functionBodyText("stopGenerate");
 const watchBody = functionBodyText("watchCustomBuild");
 const previewBody = functionBodyText("readCustomBuildPreview");
+const keyPayloadBody = functionBodyText("customBuildProviderKeys");
 const inputResetEffect = effectBodyTextContaining("lastGenerateInputRef.current === inputSignature");
 const abortIndex = durableBody.indexOf("customBuildAbortRef.current?.abort()");
 const assignIndex = durableBody.indexOf("customBuildAbortRef.current = args.abortController");
@@ -85,6 +86,16 @@ assert.ok(
   sourceText.includes("{DURABLE_CUSTOM_BUILDS_ENABLED ? (") &&
     sourceText.includes("private links for download/export"),
   "private durable-storage copy should only render when durable custom builds are enabled",
+);
+assert.ok(
+  keyPayloadBody.includes("const keys: ProviderApiKeys = {}") &&
+    keyPayloadBody.includes("keys.custom = customKey") &&
+    keyPayloadBody.includes("keys.openrouter = openRouterKey") &&
+    durableBody.includes("const requestProviderKeys = customBuildProviderKeys(model, args.providerKeys)") &&
+    durableBody.includes("providerKeys: requestProviderKeys") &&
+    durableBody.includes("customBuildPreferOpenRouter(model, requestProviderKeys)") &&
+    !durableBody.includes("providerKeys: args.providerKeys"),
+  "durable generation should only send provider keys usable by the selected model",
 );
 assert.ok(
   durableBody.includes("watchPromises.push(") &&

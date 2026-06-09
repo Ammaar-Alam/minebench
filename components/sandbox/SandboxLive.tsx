@@ -750,6 +750,31 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     return catalogModel.forceOpenRouter === true || !directProviderKey(catalogModel.provider, providerKeys);
   }
 
+  function customBuildProviderKeys(model: SelectedLiveModel, providerKeys: ProviderApiKeys): ProviderApiKeys {
+    const keys: ProviderApiKeys = {};
+    if (model.kind === "custom") {
+      const customKey = providerKeys.custom?.trim();
+      if (customKey) keys.custom = customKey;
+      return keys;
+    }
+
+    const catalogModel = MODEL_CATALOG.find((entry) => entry.key === model.modelKey);
+    if (!catalogModel) return keys;
+
+    const openRouterKey = catalogModel.openRouterModelId ? providerKeys.openrouter?.trim() : undefined;
+    if (catalogModel.forceOpenRouter) {
+      if (openRouterKey) keys.openrouter = openRouterKey;
+      return keys;
+    }
+
+    const directKey = directProviderKey(catalogModel.provider, providerKeys)?.trim();
+    if (directKey) {
+      keys[catalogModel.provider as keyof ProviderApiKeys] = directKey;
+    }
+    if (openRouterKey) keys.openrouter = openRouterKey;
+    return keys;
+  }
+
   function applyCustomBuildStatus(args: {
     model: SelectedLiveModel;
     status: CustomBuildStatusPayload;
@@ -867,6 +892,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const watchPromises: Promise<void>[] = [];
     const queueResults = await Promise.allSettled(
       selectedModels.map(async (model) => {
+        const requestProviderKeys = customBuildProviderKeys(model, args.providerKeys);
         const res = await fetch("/api/custom-builds", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -876,8 +902,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             gridSize,
             palette,
             model: customBuildRequestModel(model),
-            providerKeys: args.providerKeys,
-            preferOpenRouter: customBuildPreferOpenRouter(model, args.providerKeys),
+            providerKeys: requestProviderKeys,
+            preferOpenRouter: customBuildPreferOpenRouter(model, requestProviderKeys),
           }),
         });
 
