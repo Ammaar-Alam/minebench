@@ -116,15 +116,16 @@ async function main() {
   assert.ok(directRequest, "direct Anthropic request should be captured");
   assert.equal(directRequest.model, "claude-fable-5");
   assert.equal(directRequest.max_tokens, 128000);
-  assert.equal(directRequest.temperature, 1);
+  assert.equal(Object.hasOwn(directRequest, "temperature"), false);
   assert.deepEqual(directRequest.thinking, { type: "adaptive" });
   assert.deepEqual((directRequest.output_config as { effort?: unknown })?.effort, "max");
   assert.ok(
     directTraces.some((trace) =>
       trace.includes("max_output_tokens=128000") &&
-      trace.includes("adaptive_effort=max->xhigh->high->medium->low"),
+      trace.includes("adaptive_effort=max->xhigh->high->medium->low") &&
+      trace.includes("temperature=default"),
     ),
-    "direct trace should report the 128000-token cap and max adaptive effort fallback",
+    "direct trace should report the 128000-token cap, max adaptive effort fallback, and default sampling",
   );
 
   const openRouterTraces: string[] = [];
@@ -151,9 +152,10 @@ async function main() {
   assert.ok(
     openRouterTraces.some((trace) =>
       trace.includes("max_output_tokens=128000") &&
-      trace.includes("effort_fallback=max->xhigh->high->medium->low->disabled"),
+      trace.includes("effort_fallback=max->xhigh->high->medium->low->disabled") &&
+      trace.includes("temperature=default"),
     ),
-    "OpenRouter trace should report the 128000-token cap and max reasoning fallback",
+    "OpenRouter trace should report the 128000-token cap, max reasoning fallback, and default sampling",
   );
 
   console.log("claude fable config checks passed");

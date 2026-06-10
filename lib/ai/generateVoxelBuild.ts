@@ -142,6 +142,16 @@ function formatOptionalInteger(value: number | undefined): string {
   return String(Math.floor(value));
 }
 
+function usesDefaultSamplingForModel(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return (
+    normalized === "claude-fable-5" ||
+    normalized === "anthropic/claude-fable-5" ||
+    /^claude-opus-4-(?:7|8)(?:-|$)/.test(normalized) ||
+    /^anthropic\/claude-opus-4[.-](?:7|8)(?:$|[-:])/.test(normalized)
+  );
+}
+
 function describeRequestedThinkingMode(opts: {
   route: "direct" | "openrouter";
   provider: DirectProvider | "openrouter";
@@ -244,6 +254,8 @@ function providerRequestTraceLine(opts: {
           : 1.0
         : 0.6
       : opts.route === "direct" && opts.provider === "gemini" && opts.modelId.startsWith("gemini-3")
+      ? "default"
+      : usesDefaultSamplingForModel(opts.modelId)
       ? "default"
       : DEFAULT_TEMPERATURE;
   return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${temperature}.`;
