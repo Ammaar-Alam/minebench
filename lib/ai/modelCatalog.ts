@@ -26,6 +26,7 @@ export type ModelKey =
   | "openai_gpt_4_1"
   | "openai_gpt_4o"
   | "openai_gpt_oss_120b"
+  | "anthropic_claude_fable_5"
   | "anthropic_claude_4_5_sonnet"
   | "anthropic_claude_4_6_sonnet"
   | "anthropic_claude_4_5_opus"
@@ -188,6 +189,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "GPT OSS 120B",
     enabled: true,
     openRouterModelId: "openai/gpt-oss-120b",
+  },
+  {
+    key: "anthropic_claude_fable_5",
+    provider: "anthropic",
+    modelId: "claude-fable-5",
+    displayName: "Claude Fable 5",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-fable-5",
   },
   {
     key: "anthropic_claude_4_5_sonnet",

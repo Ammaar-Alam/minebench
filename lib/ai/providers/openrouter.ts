@@ -128,9 +128,9 @@ function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
 
 function openRouterTemperaturePayload(modelId: string, temperature?: number): { temperature?: number } {
   const normalized = modelId.toLowerCase();
-  const usesDefaultSampling = /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(
-    normalized,
-  );
+  const usesDefaultSampling =
+    normalized === "anthropic/claude-fable-5" ||
+    /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(normalized);
   if (usesDefaultSampling) return {};
   return { temperature: temperature ?? 0.2 };
 }
