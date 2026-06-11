@@ -24,6 +24,10 @@ function isGemini3FlashFamily(modelId: string): boolean {
   return /(?:^|\/)gemini-3(?:[.-]\d+)?-flash/.test(modelId);
 }
 
+function isAnthropicFableOrMythos5(modelId: string): boolean {
+  return /(?:^|\/)claude-(?:fable|mythos)-5(?:[.-]|$)/.test(modelId);
+}
+
 function anthropicClaudeVersion(modelId: string): { major: number; minor: number } | null {
   const match = /(?:^|\/)claude-(?:opus|sonnet)-(\d+)[.-](\d+)(?:[.-]|$)/.exec(modelId);
   if (!match) return null;
@@ -34,12 +38,14 @@ function anthropicClaudeVersion(modelId: string): { major: number; minor: number
 }
 
 function isAnthropicAdaptiveModel(modelId: string): boolean {
+  if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
   return version.major > 4 || (version.major === 4 && version.minor >= 6);
 }
 
 function supportsAnthropicXhighEffort(modelId: string): boolean {
+  if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
   return version.major > 4 || (version.major === 4 && version.minor >= 7);
