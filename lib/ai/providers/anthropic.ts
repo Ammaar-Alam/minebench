@@ -181,6 +181,10 @@ function isLegacyManualThinkingModel(modelId: string): boolean {
   return modelId.startsWith("claude-sonnet-4-5") || modelId.startsWith("claude-opus-4-5");
 }
 
+function isFableOrMythos5(modelId: string): boolean {
+  return /^claude-(?:fable|mythos)-5(?:-|$)/.test(modelId);
+}
+
 function anthropicClaudeVersion(modelId: string): { family: "opus" | "sonnet"; major: number; minor: number } | null {
   const match = /^claude-(opus|sonnet)-(\d+)-(\d+)(?:-|$)/.exec(modelId);
   if (!match) return null;
@@ -190,19 +194,31 @@ function anthropicClaudeVersion(modelId: string): { family: "opus" | "sonnet"; m
   return { family: match[1] as "opus" | "sonnet", major, minor };
 }
 
+function omitsSamplingParameters(modelId: string): boolean {
+  if (isFableOrMythos5(modelId)) return true;
+  const version = anthropicClaudeVersion(modelId);
+  if (!version) return false;
+  return version.family === "opus" && (version.major > 4 || (version.major === 4 && version.minor >= 7));
+}
+
 function isAdaptiveThinkingModel(modelId: string): boolean {
+  if (isFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
   return version.major > 4 || (version.major === 4 && version.minor >= 6);
 }
 
 function supportsXhighEffort(modelId: string): boolean {
+  if (isFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
   return version.major > 4 || (version.major === 4 && version.minor >= 7);
 }
 
 function effortEnvVarForModel(modelId: string): string | null {
+  if (modelId.startsWith("claude-fable-5")) {
+    return "ANTHROPIC_FABLE_5_EFFORT";
+  }
   const version = anthropicClaudeVersion(modelId);
   if (!version) return null;
   if (version.family === "opus" && version.major === 4 && version.minor === 8) {
@@ -320,6 +336,7 @@ export async function anthropicGenerateText(params: {
               ? { type: "enabled" as const, budget_tokens: budget }
               : undefined;
         const temperature = thinking ? 1 : (params.temperature ?? 0.2);
+        const sampling = omitsSamplingParameters(params.modelId) ? {} : { temperature };
         const efforts = usesAdaptiveThinking ? adaptiveEffortAttempts : [null];
         effortLoop: for (let effortIdx = 0; effortIdx < efforts.length; effortIdx += 1) {
           const effort = efforts[effortIdx];
@@ -350,7 +367,7 @@ export async function anthropicGenerateText(params: {
             body: JSON.stringify({
               model: params.modelId,
               max_tokens: tok,
-              temperature,
+              ...sampling,
               system: params.system,
               messages: [{ role: "user", content: params.user }],
               stream: streamResponses,

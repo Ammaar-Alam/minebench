@@ -99,6 +99,7 @@ Copy `.env.example` to `.env` and set what you need.
 ### Optional Provider and Runtime Tuning
 
 - `MINEBENCH_ALLOW_SERVER_KEYS=1` (production opt-in for server env keys in `/api/generate`)
+- `ANTHROPIC_FABLE_5_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_4_8_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_4_7_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_4_6_EFFORT=low|medium|high|max`
@@ -109,6 +110,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
+- Claude Fable 5 uses the native Anthropic model ID `claude-fable-5`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude 4.8 Opus uses the native Anthropic model ID `claude-opus-4-8`, supports adaptive effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Gemini 3.5 Flash uses the native Google AI model ID `gemini-3.5-flash`, supports `thinking_level=high|medium|low|minimal`, and MineBench defaults it to `high` with a 65536-token output cap.
 - Grok 4.3 uses the native xAI API, reasons automatically, rejects `reasoning_effort`, and uses a `max_tokens` request of up to 1000000 unless `MINEBENCH_MAX_OUTPUT_TOKENS` lowers it; MineBench does not send a thinking override for this model.

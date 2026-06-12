@@ -84,6 +84,8 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   if (modelId === "deepseek/deepseek-v3.2") return 65_536;
   if (modelId === "glm-5.1" || modelId === "glm-5") return 131_072;
   if (
+    modelId === "claude-fable-5" ||
+    modelId === "anthropic/claude-fable-5" ||
     modelId.startsWith("claude-opus-4-8") ||
     modelId === "anthropic/claude-opus-4.8" ||
     modelId.startsWith("claude-opus-4-7") ||
@@ -138,6 +140,16 @@ const DEFAULT_TEMPERATURE = 1.0;
 function formatOptionalInteger(value: number | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
   return String(Math.floor(value));
+}
+
+function usesDefaultSamplingForModel(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return (
+    normalized === "claude-fable-5" ||
+    normalized === "anthropic/claude-fable-5" ||
+    /^claude-opus-4-(?:7|8)(?:-|$)/.test(normalized) ||
+    /^anthropic\/claude-opus-4[.-](?:7|8)(?:$|[-:])/.test(normalized)
+  );
 }
 
 function describeRequestedThinkingMode(opts: {
@@ -242,6 +254,8 @@ function providerRequestTraceLine(opts: {
           : 1.0
         : 0.6
       : opts.route === "direct" && opts.provider === "gemini" && opts.modelId.startsWith("gemini-3")
+      ? "default"
+      : usesDefaultSamplingForModel(opts.modelId)
       ? "default"
       : DEFAULT_TEMPERATURE;
   return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${temperature}.`;

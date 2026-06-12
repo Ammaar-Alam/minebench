@@ -27,6 +27,7 @@ type OpenRouterEndpointMetadata = {
 export const VOXEL_BUILD_JSON_SCHEMA_NAME = "voxel_build_response";
 
 export const OPENROUTER_UNSUPPORTED_WHEN_REQUIRE_PARAMETERS: Record<string, OpenRouterSupportedParameter[]> = {
+  "anthropic/claude-fable-5": ["temperature"],
   "anthropic/claude-opus-4.8": ["temperature"],
 };
 
