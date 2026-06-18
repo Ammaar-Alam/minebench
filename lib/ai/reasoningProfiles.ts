@@ -306,6 +306,16 @@ export function openRouterReasoningEffortAttempts(
       override,
     );
   }
+  if (modelId === "z-ai/glm-5.2") {
+    const normalized = normalizeReasoningOverride(override);
+    if (!normalized || normalized === "max" || normalized === "xhigh") {
+      return ["xhigh", "high"];
+    }
+    if (normalized === "high") return ["high"];
+    throw new Error(
+      `${label} does not support reasoning '${override}'. Supported values: max, xhigh, high.`,
+    );
+  }
   if (
     modelId === "z-ai/glm-5.1" ||
     modelId === "z-ai/glm-5"
