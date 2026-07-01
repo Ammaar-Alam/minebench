@@ -827,6 +827,22 @@ Upload notes:
 
   printStatus(allJobs);
 
+  if (opts.generate) {
+    const importOnlyModels = selectedModelKeys
+      .flatMap((modelKey) => {
+        const model = MODEL_CATALOG.find((m) => m.key === modelKey);
+        return model?.importOnly ? [model] : [];
+      });
+    if (importOnlyModels.length > 0) {
+      console.error(
+        "\nError: these models are import-only and cannot be generated through provider APIs:\n" +
+          importOnlyModels.map((m) => `  - ${MODEL_SLUG[m.key]} (${m.displayName})`).join("\n") +
+          "\n\nDrop JSON files into existing upload prompt folders, for example uploads/castle/castle-gpt-4-5-web-harness.json, then run upload/status without --generate.\n",
+      );
+      process.exit(1);
+    }
+  }
+
   const missing = getMissingJobs(allJobs);
   const existing = allJobs.filter((j) => !isEmptyPlaceholder(j.filePath));
   console.log(`\n🔍 Missing builds: ${missing.length}`);

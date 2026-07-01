@@ -46,6 +46,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   openai_gpt_5_mini: "gpt-5-mini",
   openai_gpt_5_nano: "gpt-5-nano",
   openai_gpt_4_1: "gpt-4-1",
+  openai_gpt_4_5_web_harness: "gpt-4-5-web-harness",
   openai_gpt_4o: "gpt-4o",
   openai_gpt_oss_120b: "gpt-oss-120b",
   anthropic_claude_fable_5: "claude-fable-5",

@@ -274,6 +274,7 @@ type ResolvedModel = {
   displayName: string;
   openRouterModelId?: string;
   forceOpenRouter?: boolean;
+  importOnly?: boolean;
   baseUrl?: string;
 };
 
@@ -431,6 +432,7 @@ export type GenerateVoxelBuildParams = {
     displayName: string;
     openRouterModelId?: string;
     forceOpenRouter?: boolean;
+    importOnly?: boolean;
     baseUrl?: string;
   };
   prompt: string;
@@ -889,8 +891,18 @@ export async function generateVoxelBuild(
         displayName: catalogModel.displayName,
         openRouterModelId: catalogModel.openRouterModelId,
         forceOpenRouter: catalogModel.forceOpenRouter,
+        importOnly: catalogModel.importOnly,
       };
     })();
+  if (model.importOnly) {
+    return {
+      ok: false,
+      error:
+        `${model.displayName} is import-only in MineBench. Add web harness JSON files such as ` +
+        `uploads/castle/castle-gpt-4-5-web-harness.json and upload/import them.`,
+      generationTimeMs: 0,
+    };
+  }
   const paletteDefs = getPalette(params.palette);
   const enableTools = params.enableTools ?? true;
   const maxAttempts = params.maxAttempts ?? (enableTools ? 8 : 3);
