@@ -185,6 +185,10 @@ function isFableOrMythos5(modelId: string): boolean {
   return /^claude-(?:fable|mythos)-5(?:-|$)/.test(modelId);
 }
 
+function isSonnet5(modelId: string): boolean {
+  return /^claude-sonnet-5(?:-|$)/.test(modelId);
+}
+
 function anthropicClaudeVersion(modelId: string): { family: "opus" | "sonnet"; major: number; minor: number } | null {
   const match = /^claude-(opus|sonnet)-(\d+)-(\d+)(?:-|$)/.exec(modelId);
   if (!match) return null;
@@ -195,6 +199,7 @@ function anthropicClaudeVersion(modelId: string): { family: "opus" | "sonnet"; m
 }
 
 function omitsSamplingParameters(modelId: string): boolean {
+  if (isSonnet5(modelId)) return true;
   if (isFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
@@ -202,6 +207,7 @@ function omitsSamplingParameters(modelId: string): boolean {
 }
 
 function isAdaptiveThinkingModel(modelId: string): boolean {
+  if (isSonnet5(modelId)) return true;
   if (isFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
@@ -209,6 +215,7 @@ function isAdaptiveThinkingModel(modelId: string): boolean {
 }
 
 function supportsXhighEffort(modelId: string): boolean {
+  if (isSonnet5(modelId)) return true;
   if (isFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
@@ -218,6 +225,9 @@ function supportsXhighEffort(modelId: string): boolean {
 function effortEnvVarForModel(modelId: string): string | null {
   if (modelId.startsWith("claude-fable-5")) {
     return "ANTHROPIC_FABLE_5_EFFORT";
+  }
+  if (modelId.startsWith("claude-sonnet-5")) {
+    return "ANTHROPIC_SONNET_5_EFFORT";
   }
   const version = anthropicClaudeVersion(modelId);
   if (!version) return null;

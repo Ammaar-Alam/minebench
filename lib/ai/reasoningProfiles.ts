@@ -28,6 +28,10 @@ function isAnthropicFableOrMythos5(modelId: string): boolean {
   return /(?:^|\/)claude-(?:fable|mythos)-5(?:[.-]|$)/.test(modelId);
 }
 
+function isAnthropicSonnet5(modelId: string): boolean {
+  return /(?:^|\/)claude-sonnet-5(?:[.-]|$)/.test(modelId);
+}
+
 function anthropicClaudeVersion(modelId: string): { major: number; minor: number } | null {
   const match = /(?:^|\/)claude-(?:opus|sonnet)-(\d+)[.-](\d+)(?:[.-]|$)/.exec(modelId);
   if (!match) return null;
@@ -38,6 +42,7 @@ function anthropicClaudeVersion(modelId: string): { major: number; minor: number
 }
 
 function isAnthropicAdaptiveModel(modelId: string): boolean {
+  if (isAnthropicSonnet5(modelId)) return true;
   if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
@@ -45,6 +50,7 @@ function isAnthropicAdaptiveModel(modelId: string): boolean {
 }
 
 function supportsAnthropicXhighEffort(modelId: string): boolean {
+  if (isAnthropicSonnet5(modelId)) return true;
   if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
