@@ -2,6 +2,16 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  outputFileTracingExcludes: {
+    "/*": [
+      ".next/cache/**/*",
+      ".git/**/*",
+      ".github/assets/**/*",
+      ".agents/**/*",
+      "graphify-out/**/*",
+      "uploads/**/*",
+    ],
+  },
   webpack: (config, { dev }) => {
     if (dev) {
       // Avoid stale client/server bundle divergence when watch limits are hit locally.

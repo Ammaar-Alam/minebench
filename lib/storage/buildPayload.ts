@@ -2,10 +2,21 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import {
+  getSupabaseStorageConfig,
+  LOCAL_BUILD_STORAGE_BUCKET,
+  normalizeBuildStoragePath,
+} from "@/lib/storage/config";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
-export const DEFAULT_BUILD_STORAGE_BUCKET = "builds";
-export const LOCAL_BUILD_STORAGE_BUCKET = "__local_fs__";
+export {
+  DEFAULT_BUILD_STORAGE_BUCKET,
+  getBuildStorageBucketFromEnv,
+  getSupabaseStorageConfig,
+  hasSupabaseStorageConfig,
+  LOCAL_BUILD_STORAGE_BUCKET,
+  normalizeBuildStoragePath,
+} from "@/lib/storage/config";
 
 export type BuildStorageRef = {
   bucket: string;
@@ -27,15 +38,6 @@ export type BuildPayloadSource = {
 type LoadBuildPayloadOptions = {
   signal?: AbortSignal;
 };
-
-type SupabaseStorageConfig = {
-  url: string;
-  serviceRoleKey: string;
-};
-
-function trimTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, "");
-}
 
 function encodePath(path: string): string {
   return path
@@ -69,34 +71,6 @@ function encodingWantsGzip(encoding: string | null | undefined): boolean {
   if (!encoding) return false;
   const first = encoding.split(",")[0]?.trim().toLowerCase();
   return first === "gzip" || first === "x-gzip";
-}
-
-export function getSupabaseStorageConfig(): SupabaseStorageConfig {
-  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
-
-  if (!url) {
-    throw new Error("Missing SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) for storage-backed build payloads");
-  }
-  if (!serviceRoleKey) {
-    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY for storage-backed build payloads");
-  }
-
-  return { url: trimTrailingSlashes(url), serviceRoleKey };
-}
-
-export function hasSupabaseStorageConfig(): boolean {
-  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
-  return Boolean(url && serviceRoleKey);
-}
-
-export function getBuildStorageBucketFromEnv(): string {
-  return (process.env.SUPABASE_STORAGE_BUCKET ?? DEFAULT_BUILD_STORAGE_BUCKET).trim();
-}
-
-export function normalizeBuildStoragePath(rawPath: string): string {
-  return rawPath.replace(/^\/+/, "");
 }
 
 export async function fetchStoredBuildBytes(

@@ -1,4 +1,5 @@
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
+import { buildOpenRouterChatRequestBody } from "@/lib/ai/providers/openrouterRequest";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
@@ -11,8 +12,6 @@ type OpenRouterStreamChunk = {
 };
 
 type TextVerbosity = "low" | "medium" | "high";
-
-const VOXEL_BUILD_JSON_SCHEMA_NAME = "voxel_build_response";
 
 function extractTextFromChatCompletions(data: OpenRouterChatResponse): string {
   const content = data.choices?.[0]?.message?.content;
@@ -126,15 +125,6 @@ function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
   return modelId.startsWith("openai/gpt-5") ? "high" : undefined;
 }
 
-function openRouterTemperaturePayload(modelId: string, temperature?: number): { temperature?: number } {
-  const normalized = modelId.toLowerCase();
-  const usesDefaultSampling =
-    normalized === "anthropic/claude-fable-5" ||
-    /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(normalized);
-  if (usesDefaultSampling) return {};
-  return { temperature: temperature ?? 0.2 };
-}
-
 function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
   const budget = Math.floor(maxOutputTokens);
   const trimmed = message.trim().replace(/[.!?]$/, "");
@@ -243,37 +233,21 @@ export async function openrouterGenerateText(params: {
                 ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
               },
               signal: controller.signal,
-              body: JSON.stringify({
-                model: params.modelId,
+              body: JSON.stringify(buildOpenRouterChatRequestBody({
+                modelId: params.modelId,
                 messages: [
                   { role: "system", content: params.system },
                   { role: "user", content: params.user },
                 ],
-                ...(params.jsonSchema
-                  ? {
-                      provider: {
-                        require_parameters: true,
-                      },
-                    }
-                  : {}),
                 stream: Boolean(params.onDelta),
-                ...openRouterTemperaturePayload(params.modelId, params.temperature),
-                max_tokens: tok,
+                maxTokens: tok,
+                temperature: params.temperature ?? 0.2,
+                explicitTemperature: typeof params.temperature === "number",
                 reasoning: reasoningConfig,
-                ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),
-                ...(params.jsonSchema
-                  ? {
-                      response_format: {
-                        type: "json_schema",
-                        json_schema: {
-                          name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-                          strict: true,
-                          schema: params.jsonSchema,
-                        },
-                      },
-                    }
-                  : {}),
-              }),
+                textVerbosity,
+                jsonSchema: params.jsonSchema,
+                requireParameters: Boolean(params.jsonSchema),
+              })),
             },
             { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
           );
@@ -336,16 +310,17 @@ export async function openrouterGenerateText(params: {
               "X-Title": "MineBench",
             },
             signal: controller.signal,
-            body: JSON.stringify({
-              model: params.modelId,
+            body: JSON.stringify(buildOpenRouterChatRequestBody({
+              modelId: params.modelId,
               messages: [
                 { role: "system", content: params.system },
                 { role: "user", content: params.user },
               ],
               stream: false,
-              ...openRouterTemperaturePayload(params.modelId, params.temperature),
-              max_tokens: maxTokens,
-            }),
+              maxTokens,
+              temperature: params.temperature ?? 0.2,
+              explicitTemperature: typeof params.temperature === "number",
+            })),
           },
           { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
         );

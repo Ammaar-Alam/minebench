@@ -9,10 +9,12 @@ import {
 } from "@/components/sandbox/SandboxGifExportButton";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { readBuildVariantJson } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
+import type { CustomBuildStatusPayload } from "@/lib/custom-builds/api";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -51,6 +53,25 @@ type ModelResult = {
   retryReason?: string;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
   startedAt?: number;
+  customBuildId?: string;
+  customBuildPageUrl?: string;
+  customBuildStatusUrl?: string;
+  customBuildEventsUrl?: string;
+  customBuildDownloadUrl?: string;
+  renderGridSize?: GridSize;
+  renderPalette?: Palette;
+  currentStage?: string;
+};
+
+type CustomBuildCreateResponse = {
+  id: string;
+  status: "queued";
+  pageUrl: string;
+  statusUrl: string;
+  eventsUrl: string;
+  exportsUrl: string;
+  artifactsUrl: string;
+  requestedExports: string[];
 };
 
 const MAX_LIVE_RAW_TEXT_CHARS = 80_000;
@@ -66,6 +87,7 @@ const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
   modelId: "",
   baseUrl: DEFAULT_CUSTOM_API_URL,
 };
+const DURABLE_CUSTOM_BUILDS_ENABLED = process.env.NEXT_PUBLIC_CUSTOM_BUILDS_DURABLE === "1";
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
 const DEFAULT_MODEL_A: ModelKey =
@@ -365,6 +387,115 @@ function getRawBuildJsonForExport(args: {
   }
 }
 
+function customBuildStageLabel(status: CustomBuildStatusPayload): string {
+  if (status.status === "succeeded") return "Ready";
+  if (status.status === "failed") return "Failed";
+  if (status.status === "canceled") return "Canceled";
+  if (status.currentStage === "generating") return "Building";
+  if (status.currentStage === "queued") return "Queued";
+  return status.currentStage ?? (status.status === "running" ? "Building" : "Queued");
+}
+
+function warningsFromCustomBuildStatus(status: CustomBuildStatusPayload): string[] {
+  const warnings = status.metrics.warnings;
+  if (!Array.isArray(warnings)) return [];
+  return warnings.filter((warning): warning is string => typeof warning === "string" && warning.trim().length > 0);
+}
+
+function customBuildStatusPath(id: string): string {
+  return `/api/custom-builds/${encodeURIComponent(id)}`;
+}
+
+async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): Promise<CustomBuildStatusPayload> {
+  const res = await fetch(statusUrl, { cache: "no-store", signal });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const obj = safeJsonParseObject(text);
+    const message =
+      obj &&
+      typeof obj.error === "object" &&
+      obj.error &&
+      "message" in obj.error &&
+      typeof (obj.error as { message?: unknown }).message === "string"
+        ? (obj.error as { message: string }).message
+        : text || "Status unavailable";
+    throw new Error(message);
+  }
+  return (await res.json()) as CustomBuildStatusPayload;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+async function readCustomBuildPreview(
+  status: CustomBuildStatusPayload,
+  signal?: AbortSignal,
+  opts?: { redirect?: boolean },
+): Promise<VoxelBuild | null> {
+  const artifact = status.artifacts.find((candidate) => candidate.kind === "preview_json");
+  if (!artifact) return null;
+  const allowRedirect = opts?.redirect !== false;
+  const url = new URL(artifact.downloadUrl, window.location.origin);
+  if (!allowRedirect) url.searchParams.set("redirect", "0");
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store", signal, redirect: "follow" });
+  } catch (err) {
+    if (allowRedirect && !isAbortError(err)) {
+      return readCustomBuildPreview(status, signal, { redirect: false });
+    }
+    throw err;
+  }
+  if (!res.ok) {
+    if (allowRedirect && [403, 404, 502, 503, 504].includes(res.status)) {
+      return readCustomBuildPreview(status, signal, { redirect: false });
+    }
+    const text = await res.text().catch(() => "");
+    throw new Error(text || "Preview unavailable");
+  }
+  try {
+    return await readBuildVariantJson<VoxelBuild>(res);
+  } catch (err) {
+    if (allowRedirect && !isAbortError(err)) {
+      return readCustomBuildPreview(status, signal, { redirect: false });
+    }
+    throw err;
+  }
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function customBuildMetrics(status: CustomBuildStatusPayload): ModelResult["metrics"] | undefined {
+  if (status.status !== "succeeded") return undefined;
+  return {
+    blockCount: status.metrics.blockCount ?? 0,
+    warnings: warningsFromCustomBuildStatus(status),
+    generationTimeMs: status.metrics.generationTimeMs ?? 0,
+  };
+}
+
+function customBuildGridSize(value: number, fallback: GridSize): GridSize {
+  return value === 64 || value === 256 || value === 512 ? value : fallback;
+}
+
+function customBuildPalette(value: string, fallback: Palette): Palette {
+  return value === "advanced" ? "advanced" : value === "simple" ? "simple" : fallback;
+}
+
 export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
   const [gridSize, setGridSize] = useState<GridSize>(256);
@@ -390,6 +521,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   const [requestError, setRequestError] = useState<string | null>(null);
   const [, forceRender] = useState(0);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const customBuildAbortRef = useRef<AbortController | null>(null);
   const previewCacheRef = useRef(
     new Map<string, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
@@ -472,8 +604,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
   useEffect(() => {
     if (lastGenerateInputRef.current === inputSignature) return;
+    if (DURABLE_CUSTOM_BUILDS_ENABLED) {
+      previewCacheRef.current.clear();
+      setRequestError(null);
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
+    customBuildAbortRef.current?.abort();
+    customBuildAbortRef.current = null;
     previewCacheRef.current.clear();
     setRunning(false);
     setRequestError(null);
@@ -539,8 +678,13 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }
 
   function stopGenerate() {
+    if (DURABLE_CUSTOM_BUILDS_ENABLED) {
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
+    customBuildAbortRef.current?.abort();
+    customBuildAbortRef.current = null;
     setRunning(false);
     setResults((prev) => {
       const next = new Map(prev);
@@ -570,6 +714,291 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const json = typeof args.rawBuildJson === "string" ? args.rawBuildJson.trim() : "";
     if (!json) return;
     triggerDownload(new Blob([json], { type: "application/json" }), fileName);
+  }
+
+  function customBuildRequestModel(model: SelectedLiveModel) {
+    if (model.kind === "catalog") {
+      return {
+        kind: "catalog" as const,
+        modelKey: model.modelKey,
+      };
+    }
+    return {
+      kind: "custom" as const,
+      provider: "custom" as const,
+      displayName: model.displayName,
+      modelId: model.modelId,
+      baseUrl: model.baseUrl,
+    };
+  }
+
+  function directProviderKey(provider: string, providerKeys: ProviderApiKeys): string | undefined {
+    if (provider === "openai") return providerKeys.openai;
+    if (provider === "anthropic") return providerKeys.anthropic;
+    if (provider === "gemini") return providerKeys.gemini;
+    if (provider === "moonshot") return providerKeys.moonshot;
+    if (provider === "deepseek") return providerKeys.deepseek;
+    if (provider === "minimax") return providerKeys.minimax;
+    if (provider === "xai") return providerKeys.xai;
+    return undefined;
+  }
+
+  function customBuildPreferOpenRouter(model: SelectedLiveModel, providerKeys: ProviderApiKeys): boolean {
+    if (model.kind !== "catalog" || !providerKeys.openrouter) return false;
+    const catalogModel = MODEL_CATALOG.find((entry) => entry.key === model.modelKey);
+    if (!catalogModel?.openRouterModelId) return false;
+    return catalogModel.forceOpenRouter === true || !directProviderKey(catalogModel.provider, providerKeys);
+  }
+
+  function customBuildProviderKeys(model: SelectedLiveModel, providerKeys: ProviderApiKeys): ProviderApiKeys {
+    const keys: ProviderApiKeys = {};
+    if (model.kind === "custom") {
+      const customKey = providerKeys.custom?.trim();
+      if (customKey) keys.custom = customKey;
+      return keys;
+    }
+
+    const catalogModel = MODEL_CATALOG.find((entry) => entry.key === model.modelKey);
+    if (!catalogModel) return keys;
+
+    const openRouterKey = catalogModel.openRouterModelId ? providerKeys.openrouter?.trim() : undefined;
+    if (catalogModel.forceOpenRouter) {
+      if (openRouterKey) keys.openrouter = openRouterKey;
+      return keys;
+    }
+
+    const directKey = directProviderKey(catalogModel.provider, providerKeys)?.trim();
+    if (directKey) {
+      keys[catalogModel.provider as keyof ProviderApiKeys] = directKey;
+    }
+    if (openRouterKey) keys.openrouter = openRouterKey;
+    return keys;
+  }
+
+  function applyCustomBuildStatus(args: {
+    model: SelectedLiveModel;
+    status: CustomBuildStatusPayload;
+    preview?: VoxelBuild | null;
+    pageUrl?: string;
+    statusUrl?: string;
+    eventsUrl?: string;
+  }) {
+    const buildArtifact = args.status.artifacts.find((artifact) => artifact.kind === "build_json");
+    setResults((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(args.model.id);
+      if (!existing || (existing?.customBuildId && existing.customBuildId !== args.status.id)) {
+        return prev;
+      }
+      const statusGridSize = customBuildGridSize(args.status.gridSize, existing?.renderGridSize ?? gridSize);
+      const statusPalette = customBuildPalette(args.status.palette, existing?.renderPalette ?? palette);
+      const base = {
+        modelKey: args.model.id,
+        customBuildId: args.status.id,
+        customBuildPageUrl: args.pageUrl ?? existing?.customBuildPageUrl ?? `/custom/${args.status.id}`,
+        customBuildStatusUrl: args.statusUrl ?? existing?.customBuildStatusUrl,
+        customBuildEventsUrl: args.eventsUrl ?? existing?.customBuildEventsUrl,
+        customBuildDownloadUrl: buildArtifact?.downloadUrl ?? existing?.customBuildDownloadUrl,
+        renderGridSize: statusGridSize,
+        renderPalette: statusPalette,
+        startedAt: existing?.startedAt,
+        currentStage: customBuildStageLabel(args.status),
+      };
+
+      if (args.status.status === "failed" || args.status.status === "canceled") {
+        next.set(args.model.id, {
+          ...base,
+          status: "error",
+          voxelBuild: null,
+          error: args.status.error?.message ?? customBuildStageLabel(args.status),
+        });
+        return next;
+      }
+
+      if (args.status.status === "succeeded") {
+        next.set(args.model.id, {
+          ...base,
+          status: "success",
+          voxelBuild: args.preview ?? existing?.voxelBuild ?? null,
+          metrics: customBuildMetrics(args.status),
+        });
+        return next;
+      }
+
+      next.set(args.model.id, {
+        ...base,
+        status: "loading",
+        voxelBuild: existing?.voxelBuild ?? null,
+        attempt: existing?.attempt ?? 1,
+      });
+      return next;
+    });
+  }
+
+  async function watchCustomBuild(args: {
+    model: SelectedLiveModel;
+    statusUrl: string;
+    pageUrl: string;
+    eventsUrl: string;
+    signal: AbortSignal;
+  }) {
+    while (!args.signal.aborted) {
+      const status = await readCustomBuildStatus(args.statusUrl, args.signal);
+      if (args.signal.aborted) return;
+      if (status.status === "succeeded") {
+        applyCustomBuildStatus({
+          model: args.model,
+          status,
+          pageUrl: args.pageUrl,
+          statusUrl: args.statusUrl,
+          eventsUrl: args.eventsUrl,
+        });
+        try {
+          const preview = await readCustomBuildPreview(status, args.signal);
+          if (args.signal.aborted) return;
+          applyCustomBuildStatus({
+            model: args.model,
+            status,
+            preview,
+            pageUrl: args.pageUrl,
+            statusUrl: args.statusUrl,
+            eventsUrl: args.eventsUrl,
+          });
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return;
+          console.warn("Custom build preview unavailable", err);
+        }
+        return;
+      }
+
+      applyCustomBuildStatus({
+        model: args.model,
+        status,
+        pageUrl: args.pageUrl,
+        statusUrl: args.statusUrl,
+        eventsUrl: args.eventsUrl,
+      });
+      if (status.status === "failed" || status.status === "canceled") return;
+      await abortableDelay(2500, args.signal);
+    }
+  }
+
+  async function runGenerateDurable(args: {
+    abortController: AbortController;
+    providerKeys: ProviderApiKeys;
+  }) {
+    customBuildAbortRef.current?.abort();
+    customBuildAbortRef.current = args.abortController;
+    const watchPromises: Promise<void>[] = [];
+    const queueResults = await Promise.allSettled(
+      selectedModels.map(async (model) => {
+        const requestProviderKeys = customBuildProviderKeys(model, args.providerKeys);
+        const res = await fetch("/api/custom-builds", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: args.abortController.signal,
+          body: JSON.stringify({
+            prompt,
+            gridSize,
+            palette,
+            model: customBuildRequestModel(model),
+            providerKeys: requestProviderKeys,
+            preferOpenRouter: customBuildPreferOpenRouter(model, requestProviderKeys),
+          }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          const obj = safeJsonParseObject(text);
+          const message =
+            obj &&
+            typeof obj.error === "object" &&
+            obj.error &&
+            "message" in obj.error &&
+            typeof (obj.error as { message?: unknown }).message === "string"
+              ? (obj.error as { message: string }).message
+              : text || "Request failed";
+          throw new Error(message);
+        }
+
+        const created = (await res.json()) as CustomBuildCreateResponse;
+        const statusUrl = customBuildStatusPath(created.id);
+        setResults((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(model.id);
+          next.set(model.id, {
+            modelKey: model.id,
+            status: "loading",
+            voxelBuild: null,
+            attempt: 1,
+            startedAt: existing?.startedAt ?? Date.now(),
+            customBuildId: created.id,
+            customBuildPageUrl: created.pageUrl,
+            customBuildStatusUrl: statusUrl,
+            customBuildEventsUrl: created.eventsUrl,
+            renderGridSize: gridSize,
+            renderPalette: palette,
+            currentStage: "Queued",
+          });
+          return next;
+        });
+
+        watchPromises.push(
+          watchCustomBuild({
+            model,
+            statusUrl,
+            pageUrl: created.pageUrl,
+            eventsUrl: created.eventsUrl,
+            signal: args.abortController.signal,
+          }).catch((err) => {
+            if (err instanceof Error && err.name === "AbortError") return;
+            setResults((prev) => {
+              const next = new Map(prev);
+              const existing = next.get(model.id);
+              next.set(model.id, {
+                modelKey: model.id,
+                status: "error",
+                voxelBuild: existing?.voxelBuild ?? null,
+                error: err instanceof Error ? err.message : "Status unavailable",
+                customBuildId: existing?.customBuildId,
+                customBuildPageUrl: existing?.customBuildPageUrl,
+                customBuildStatusUrl: existing?.customBuildStatusUrl,
+                customBuildEventsUrl: existing?.customBuildEventsUrl,
+                customBuildDownloadUrl: existing?.customBuildDownloadUrl,
+                renderGridSize: existing?.renderGridSize,
+                renderPalette: existing?.renderPalette,
+                startedAt: existing?.startedAt,
+              });
+              return next;
+            });
+          }),
+        );
+      }),
+    );
+
+    const failures = queueResults.filter((result) => result.status === "rejected");
+    queueResults.forEach((result, idx) => {
+      if (result.status !== "rejected") return;
+      const model = selectedModels[idx];
+      if (!model) return;
+      setResults((prev) => {
+        const next = new Map(prev);
+        const existing = next.get(model.id);
+        next.set(model.id, {
+          modelKey: model.id,
+          status: "error",
+          voxelBuild: null,
+          error: result.reason instanceof Error ? result.reason.message : "Request failed",
+          startedAt: existing?.startedAt,
+        });
+        return next;
+      });
+    });
+    if (failures.length === selectedModels.length) {
+      const reason = failures[0]?.reason;
+      throw reason instanceof Error ? reason : new Error("Request failed");
+    }
+    await Promise.all(watchPromises);
   }
 
   async function runGenerate() {
@@ -622,6 +1051,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       setKey("minimax", providerKeys.minimax);
       setKey("xai", providerKeys.xai);
       setKey("custom", providerKeys.custom);
+
+      if (DURABLE_CUSTOM_BUILDS_ENABLED) {
+        await runGenerateDurable({ abortController, providerKeys: sanitizedKeys });
+        return;
+      }
 
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -798,16 +1232,22 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     }
   }
 
-  function getPreviewBuild(modelKey: string, rawText: string | undefined): VoxelBuild | null {
+  function getPreviewBuild(
+    modelKey: string,
+    rawText: string | undefined,
+    previewGridSize: GridSize,
+    previewPalette: Palette,
+  ): VoxelBuild | null {
     if (!rawText) return null;
     const now = Date.now();
-    const cached = previewCacheRef.current.get(modelKey);
+    const cacheKey = `${modelKey}:${previewGridSize}:${previewPalette}`;
+    const cached = previewCacheRef.current.get(cacheKey);
     const textLen = rawText.length;
     if (cached && now - cached.at < PREVIEW_THROTTLE_MS && textLen <= cached.textLen + 80) {
       return cached.build;
     }
-    const build = buildPreviewFromRawText({ rawText, gridSize, palette });
-    previewCacheRef.current.set(modelKey, { at: now, textLen, build });
+    const build = buildPreviewFromRawText({ rawText, gridSize: previewGridSize, palette: previewPalette });
+    previewCacheRef.current.set(cacheKey, { at: now, textLen, build });
     return build;
   }
 
@@ -830,9 +1270,10 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const viewerRef = idx === 0 ? viewerARef : viewerBRef;
     const modelName = model.displayName;
     const providerName = model.providerLabel;
+    const isDurableResult = Boolean(r?.customBuildId);
     const rawBuildJsonForExport = getRawBuildJsonForExport({
-      voxelBuild: r?.voxelBuild ?? undefined,
-      rawJsonText: r?.rawText,
+      voxelBuild: isDurableResult ? undefined : r?.voxelBuild ?? undefined,
+      rawJsonText: isDurableResult ? undefined : r?.rawText,
     });
     const hasJsonExport = Boolean(rawBuildJsonForExport);
     const gifTargets: SandboxGifExportTarget[] =
@@ -849,63 +1290,98 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     const liveRawText = r?.rawText;
-    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText) : null;
+    const cardGridSize = r?.renderGridSize ?? gridSize;
+    const cardPalette = r?.renderPalette ?? palette;
+    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText, cardGridSize, cardPalette) : null;
     return (
       <VoxelViewerCard
         key={model.id}
         title={model.displayName}
         subtitle={providerName}
         voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
-        gridSize={gridSize}
+        gridSize={cardGridSize}
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
-        debugRawText={liveRawText}
-        attempt={r?.status === "loading" ? r.attempt : undefined}
-        retryReason={r?.status === "loading" ? r.retryReason : undefined}
+        debugRawText={isDurableResult ? undefined : liveRawText}
+        attempt={r?.status === "loading" && !isDurableResult ? r.attempt : undefined}
+        retryReason={r?.status === "loading" && !isDurableResult ? r.retryReason : undefined}
         elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
-        jsonText={r?.rawText}
-        palette={palette}
+        jsonText={isDurableResult ? undefined : r?.rawText}
+        loadingMessage={isDurableResult ? r?.currentStage : undefined}
+        palette={cardPalette}
         viewerRef={viewerRef}
-        enableBuildJsonToggle
-        enableBuildExport={r?.status === "success"}
+        enableBuildJsonToggle={!isDurableResult}
+        enableBuildExport={r?.status === "success" && !isDurableResult}
         exportLabel={modelName}
         exportPrompt={prompt}
         actions={
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label="Export JSON"
-              title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
-              disabled={!hasJsonExport}
-              className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-              onClick={() =>
-                exportModelJson({
-                  modelName,
-                  modelKey: model.id,
-                  rawBuildJson: rawBuildJsonForExport ?? undefined,
-                })
-              }
-            >
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-                <path
-                  d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="1.8"
-                />
-              </svg>
-            </button>
-            <SandboxGifExportButton
-              targets={gifTargets}
-              promptText={prompt}
-              cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
-              iconOnly
-              label="Export GIF"
-            />
+            {r?.customBuildPageUrl ? (
+              <a
+                className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs"
+                href={r.customBuildPageUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open
+              </a>
+            ) : null}
+            {r?.customBuildDownloadUrl ? (
+              <a
+                aria-label="Download JSON"
+                title="Download JSON"
+                className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg"
+                href={r.customBuildDownloadUrl}
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <path
+                    d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </a>
+            ) : !isDurableResult ? (
+              <button
+                type="button"
+                aria-label="Export JSON"
+                title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
+                disabled={!hasJsonExport}
+                className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() =>
+                  exportModelJson({
+                    modelName,
+                    modelKey: model.id,
+                    rawBuildJson: rawBuildJsonForExport ?? undefined,
+                  })
+                }
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <path
+                    d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </button>
+            ) : null}
+            {!isDurableResult ? (
+              <SandboxGifExportButton
+                targets={gifTargets}
+                promptText={prompt}
+                cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
+                iconOnly
+                label="Export GIF"
+              />
+            ) : null}
           </div>
         }
       />
@@ -1112,7 +1588,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="mb-eyebrow">API keys</div>
-                <div className="mt-1 text-xs text-muted">Stored in your browser only.</div>
+                <div className="mt-1 text-xs text-muted">Saved in this browser.</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -1271,7 +1747,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-5">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={prompt}
@@ -1280,8 +1756,14 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 .join("|")}`}
               label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
+            {DURABLE_CUSTOM_BUILDS_ENABLED ? (
+              <p className="max-w-md text-xs leading-relaxed text-muted">
+                Custom prompts and generated outputs are stored under private links for download/export and aggregate
+                usage stats.
+              </p>
+            ) : null}
             <div className="flex items-center gap-2">
-              {running ? (
+              {running && !DURABLE_CUSTOM_BUILDS_ENABLED ? (
                 <button
                   className="mb-btn h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={stopGenerate}

@@ -8,6 +8,41 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum CustomBuildStatus {
+  queued
+  running
+  succeeded
+  failed
+  canceled
+}
+
+enum CustomBuildJobType {
+  generate
+  export
+}
+
+enum CustomBuildJobStatus {
+  queued
+  running
+  succeeded
+  failed
+  canceled
+}
+
+enum CustomBuildArtifactKind {
+  build_json
+  preview_json
+  raw_text_debug
+  glb
+  stl
+  schem
+}
+
+enum CustomBuildStorageEncoding {
+  identity
+  gzip
+}
+
 model Model {
   id          String   @id @default(cuid())
   key         String   @unique
@@ -225,4 +260,166 @@ model ArenaCoveragePairPrompt {
 
   @@id([modelLowId, modelHighId, promptId])
   @@index([promptId])
+}
+
+model CustomBuild {
+  id          String   @id @default(cuid())
+  publicId    String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  status       CustomBuildStatus @default(queued)
+  currentStage String?
+  progress     Json?
+
+  promptText     String
+  promptSha256   String
+  gridSize       Int
+  palette        String
+  mode           String @default("precise")
+  generationMode String @default("tool")
+
+  modelKind         String
+  modelKey          String?
+  modelProvider     String
+  modelId           String
+  modelDisplayName  String
+  openRouterModelId String?
+  customBaseUrl     String?
+  preferOpenRouter  Boolean @default(false)
+  reasoning         String?
+
+  blockCount       Int?
+  generationTimeMs Int?
+  warnings         Json?
+  metrics          Json?
+
+  buildSha256             String?
+  buildByteSize           Int?
+  buildCompressedByteSize Int?
+  previewBlockCount       Int?
+  previewSha256           String?
+
+  errorCode      String?
+  errorMessage   String?
+  errorRetryable Boolean?
+
+  requestedIpHash        String?
+  requestedUserAgentHash String?
+
+  jobs      CustomBuildJob[]
+  artifacts CustomBuildArtifact[]
+  events    CustomBuildEvent[]
+  secret    CustomBuildSecret?
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@index([promptSha256])
+  @@index([modelProvider, modelId])
+}
+
+model CustomBuildSecret {
+  id            String @id @default(cuid())
+  customBuildId String @unique
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  provider      String
+  keyCiphertext String
+  keyIv         String
+  keyAuthTag    String?
+  keyVersion    Int @default(1)
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  deletedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model CustomBuildJob {
+  id            String @id @default(cuid())
+  customBuildId String
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  type     CustomBuildJobType
+  status   CustomBuildJobStatus @default(queued)
+  payload  Json?
+  priority Int @default(0)
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+  runAfter    DateTime @default(now())
+
+  lockedBy       String?
+  lockedAt       DateTime?
+  leaseExpiresAt DateTime?
+
+  startedAt        DateTime?
+  completedAt      DateTime?
+  lastErrorCode    String?
+  lastErrorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, runAfter, priority, createdAt])
+  @@index([leaseExpiresAt])
+  @@index([customBuildId, type, status])
+}
+
+model CustomBuildArtifact {
+  id            String @id @default(cuid())
+  customBuildId String
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  kind        CustomBuildArtifactKind
+  format      String
+  bucket      String
+  path        String
+  encoding    CustomBuildStorageEncoding @default(identity)
+  contentType String
+  fileName    String
+
+  sha256             String
+  sourceBuildSha256  String?
+  byteSize           Int
+  compressedByteSize Int?
+  blockCount         Int?
+  exportStats        Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([customBuildId, kind, sourceBuildSha256])
+  @@index([customBuildId, kind])
+  @@index([sha256])
+}
+
+model CustomBuildEvent {
+  id            String @id @default(cuid())
+  customBuildId String
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  seq       Int
+  type      String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@unique([customBuildId, seq])
+  @@index([customBuildId, createdAt])
+}
+
+model CustomBuildStatsDaily {
+  day              DateTime @id
+  created          Int @default(0)
+  succeeded        Int @default(0)
+  failed           Int @default(0)
+  canceled         Int @default(0)
+  exportsRequested Int @default(0)
+  exportsSucceeded Int @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 }

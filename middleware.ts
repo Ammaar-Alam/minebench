@@ -4,7 +4,10 @@ import { LEGACY_HOSTS, SITE_HOST } from "@/lib/seo";
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
 const MAX_PER_WINDOW_LOCAL_EXEC = 6;
+const CUSTOM_BUILD_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_SESSION_COOKIE = "mb_rls";
+const CUSTOM_BUILD_MAX_CREATE_PER_IP_10M = readIntEnv("CUSTOM_BUILD_MAX_CREATE_PER_IP_10M", 10, 1, 1000);
+const CUSTOM_BUILD_MAX_CREATE_PER_SESSION_10M = readIntEnv("CUSTOM_BUILD_MAX_CREATE_PER_SESSION_10M", 5, 1, 1000);
 const ARENA_IP_GUARDRAIL_MULTIPLIER = readIntEnv("ARENA_IP_GUARDRAIL_MULTIPLIER", 250, 1, 1000);
 const ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER = readIntEnv(
   "ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER",
@@ -22,7 +25,7 @@ const BUCKET_PRUNE_INTERVAL = 256;
 
 type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
-type RateLimitRule = { key: string; maxPerWindow: number };
+type RateLimitRule = { key: string; maxPerWindow: number; windowMs?: number };
 let requestsSinceLastPrune = 0;
 type BucketPreview = { key: string; resetAt: number; nextCount: number };
 
@@ -106,7 +109,8 @@ function consumeBuckets(rules: RateLimitRule[], now: number) {
 
   for (const rule of rules) {
     const bucket = buckets.get(rule.key);
-    const resetAt = !bucket || bucket.resetAt <= now ? now + WINDOW_MS : bucket.resetAt;
+    const windowMs = rule.windowMs ?? WINDOW_MS;
+    const resetAt = !bucket || bucket.resetAt <= now ? now + windowMs : bucket.resetAt;
     const nextCount = !bucket || bucket.resetAt <= now ? 1 : bucket.count + 1;
 
     if (nextCount > rule.maxPerWindow) {
@@ -188,6 +192,7 @@ export function middleware(req: NextRequest) {
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
   const isArenaApi = pathname.startsWith("/api/arena/");
   const isArenaBuildAsset = /^\/api\/arena\/builds\/[^/]+(?:\/stream)?$/.test(pathname);
+  const isCustomBuildCreate = pathname === "/api/custom-builds" && req.method === "POST";
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
   const bucketPath = normalizeRateLimitPath(pathname);
   const ip = getIp(req);
@@ -195,6 +200,9 @@ export function middleware(req: NextRequest) {
   const now = Date.now();
   maybePruneExpiredBuckets(now);
   const arenaSession = isArenaApi
+    ? getArenaRateLimitSession(req, getArenaAnonymousBucketId(req, ip))
+    : null;
+  const customBuildSession = isCustomBuildCreate
     ? getArenaRateLimitSession(req, getArenaAnonymousBucketId(req, ip))
     : null;
   const arenaIpRules = ip
@@ -216,7 +224,24 @@ export function middleware(req: NextRequest) {
           },
         ]
       : [];
-  const rules: RateLimitRule[] = isArenaApi
+  const rules: RateLimitRule[] = isCustomBuildCreate
+    ? [
+        ...(ip
+          ? [
+              {
+                key: `custom-build-ip:${ip}`,
+                maxPerWindow: CUSTOM_BUILD_MAX_CREATE_PER_IP_10M,
+                windowMs: CUSTOM_BUILD_WINDOW_MS,
+              },
+            ]
+          : []),
+        {
+          key: `custom-build-session:${customBuildSession?.bucketId ?? ipBucket}`,
+          maxPerWindow: CUSTOM_BUILD_MAX_CREATE_PER_SESSION_10M,
+          windowMs: CUSTOM_BUILD_WINDOW_MS,
+        },
+      ]
+    : isArenaApi
     ? isArenaBuildAsset
       ? ip
         ? [
@@ -248,8 +273,9 @@ export function middleware(req: NextRequest) {
   }
 
   const response = NextResponse.next();
-  if (arenaSession?.cookieValue) {
-    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, arenaSession.cookieValue, {
+  const cookieValue = arenaSession?.cookieValue ?? customBuildSession?.cookieValue;
+  if (cookieValue) {
+    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, cookieValue, {
       httpOnly: true,
       sameSite: "lax",
       path: "/",

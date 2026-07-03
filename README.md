@@ -53,6 +53,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 
 - **Arena** — blind head-to-head comparisons of pre-generated builds with confidence-aware ranking
 - **Sandbox** — compare existing builds or generate new ones live with your own API keys
+- **Custom Builds** — durable private generations with reconnectable status pages and artifact downloads
 - **Local Lab** — copy the benchmark prompt, run it in any model, paste the JSON back to render
 - **Leaderboard** — live rankings with win/loss/draw stats across all models
 - **Exports** — save builds as GLB, STL, or WorldEdit `.schem` for Blender, 3D printing, and Minecraft
@@ -63,6 +64,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 - Local development: [`docs/local-development.md`](docs/local-development.md)
 - Operations and API reference: [`docs/operations.md`](docs/operations.md)
 - Deployment: [`docs/deployment.md`](docs/deployment.md)
+- Custom build API endpoints and CLI: [`docs/custom-builds.md`](docs/custom-builds.md)
 - Ranking math and matchmaking walkthrough: [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md)
 - Ranking policy: [`docs/arena-ranking-validity-policy-v2.md`](docs/arena-ranking-validity-policy-v2.md)
 - Build export and Blender/3D printing/Minecraft imports: [`docs/build-export-import.md`](docs/build-export-import.md)

@@ -17,10 +17,17 @@ Current surfaces:
 
 - Arena matchup build cards.
 - Sandbox benchmark result cards.
-- Sandbox live model result cards.
+- Sandbox live model result cards for legacy inline generations.
+- Custom Build pages and Sandbox durable result cards for private generated builds.
 - Leaderboard model detail prompt modal after the selected build has loaded.
 
 The live generation surface also has a JSON download button. That is separate from the build export menu and exists for quickly saving the raw MineBench build payload.
+
+Durable Custom Builds use server-side export jobs. The private `/custom/$CUSTOM_BUILD_ID` page can request GLB, STL, and `.schem` exports after generation succeeds, then downloads the stored artifacts through private links. The local CLI can write the same formats directly:
+
+```bash
+pnpm custom:build --json uploads/castle/castle-gpt-5-4-mini.json --exports glb,stl,schem
+```
 
 ## Export Formats
 
