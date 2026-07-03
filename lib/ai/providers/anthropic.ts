@@ -13,7 +13,7 @@ type AnthropicMessageResponse = {
 
 type AnthropicStreamEvent = {
   type?: unknown;
-  delta?: { type?: unknown; text?: unknown } | unknown;
+  delta?: { type?: unknown; text?: unknown; partial_json?: unknown } | unknown;
 };
 
 type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
@@ -473,8 +473,13 @@ export async function anthropicGenerateText(params: {
       }
       // message streaming sends incremental deltas on content_block_delta
       if (parsed?.type === "content_block_delta") {
-        const deltaObj = parsed.delta as { text?: unknown } | undefined;
-        const chunk = deltaObj && typeof deltaObj.text === "string" ? deltaObj.text : "";
+        const deltaObj = parsed.delta as { text?: unknown; partial_json?: unknown } | undefined;
+        const chunk =
+          deltaObj && typeof deltaObj.text === "string"
+            ? deltaObj.text
+            : deltaObj && typeof deltaObj.partial_json === "string"
+              ? deltaObj.partial_json
+              : "";
         if (chunk) {
           text += chunk;
           params.onDelta?.(chunk);

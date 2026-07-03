@@ -30,6 +30,36 @@ function validBuildJson(): string {
   });
 }
 
+function validToolCallJson(): string {
+  return JSON.stringify({
+    tool: "voxel.exec",
+    input: {
+      code: 'box(0, 0, 0, 11, 7, 11, "stone");',
+      gridSize: 64,
+      palette: "simple",
+      seed: 123,
+    },
+  });
+}
+
+function streamingStructuredAnthropicResponse(text: string): Response {
+  const mid = Math.floor(text.length / 2);
+  const chunks = [text.slice(0, mid), text.slice(mid)];
+  const events = chunks.map((partialJson) => (
+    `event: content_block_delta\n` +
+    `data: ${JSON.stringify({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: partialJson },
+    })}\n\n`
+  ));
+
+  return new Response(events.join(""), {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
   if (!headers) return {};
   if (headers instanceof Headers) return Object.fromEntries(headers.entries());
@@ -50,6 +80,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   });
 
   if (url.includes("api.anthropic.com")) {
+    if (body.stream) {
+      return streamingStructuredAnthropicResponse(validToolCallJson());
+    }
+
     return new Response(
       JSON.stringify({
         content: [{ type: "text", text: validBuildJson() }],
@@ -172,6 +206,21 @@ async function main() {
     ),
     "OpenRouter trace should report the 128000-token cap, max reasoning fallback, and default sampling",
   );
+
+  process.env.ANTHROPIC_STREAM_RESPONSES = "1";
+  const streamingResult = await generateVoxelBuild({
+    modelKey: "anthropic_claude_sonnet_5",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    enableTools: true,
+    providerKeys: { anthropic: "test-anthropic-key" },
+    allowServerKeys: false,
+  });
+  assert.equal(streamingResult.ok, true, "streamed Anthropic structured output should parse");
+  if (streamingResult.ok) {
+    assert.equal(streamingResult.blockCount, 1152);
+  }
 
   console.log("claude sonnet 5 config checks passed");
 }
