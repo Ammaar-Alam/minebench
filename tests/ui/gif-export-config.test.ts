@@ -90,12 +90,12 @@ const singleFrameCount = readNumericConst("SINGLE_FRAME_COUNT");
 const comparisonFrameDelayMs = readNumericConst("COMPARISON_FRAME_DELAY_MS");
 const singleFrameDelayMs = readNumericConst("SINGLE_FRAME_DELAY_MS");
 
-assert.equal(comparisonFrameCount, 96);
-assert.equal(singleFrameCount, 144);
-assert.equal(comparisonFrameDelayMs, 40);
-assert.equal(singleFrameDelayMs, 30);
-assert.equal(comparisonFrameCount * comparisonFrameDelayMs, 3840);
-assert.equal(singleFrameCount * singleFrameDelayMs, 4320);
+assert.equal(comparisonFrameCount, 108);
+assert.equal(singleFrameCount, 135);
+assert.equal(comparisonFrameDelayMs, 50);
+assert.equal(singleFrameDelayMs, 40);
+assert.equal(comparisonFrameCount * comparisonFrameDelayMs, 5400);
+assert.equal(singleFrameCount * singleFrameDelayMs, 5400);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_COUNT"), 12);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_LONG_EDGE"), 640);
 
