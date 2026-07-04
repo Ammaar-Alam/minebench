@@ -28,6 +28,10 @@ function isAnthropicFableOrMythos5(modelId: string): boolean {
   return /(?:^|\/)claude-(?:fable|mythos)-5(?:[.-]|$)/.test(modelId);
 }
 
+function isAnthropicSonnet5(modelId: string): boolean {
+  return /(?:^|\/)claude-sonnet-5(?:[.-]|$)/.test(modelId);
+}
+
 function anthropicClaudeVersion(modelId: string): { major: number; minor: number } | null {
   const match = /(?:^|\/)claude-(?:opus|sonnet)-(\d+)[.-](\d+)(?:[.-]|$)/.exec(modelId);
   if (!match) return null;
@@ -38,6 +42,7 @@ function anthropicClaudeVersion(modelId: string): { major: number; minor: number
 }
 
 function isAnthropicAdaptiveModel(modelId: string): boolean {
+  if (isAnthropicSonnet5(modelId)) return true;
   if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
@@ -45,10 +50,48 @@ function isAnthropicAdaptiveModel(modelId: string): boolean {
 }
 
 function supportsAnthropicXhighEffort(modelId: string): boolean {
+  if (isAnthropicSonnet5(modelId)) return true;
   if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
   if (!version) return false;
   return version.major > 4 || (version.major === 4 && version.minor >= 7);
+}
+
+function anthropicAdaptiveEffortEnvVar(modelId: string): string | null {
+  if (isAnthropicFableOrMythos5(modelId)) return "ANTHROPIC_FABLE_5_EFFORT";
+  if (isAnthropicSonnet5(modelId)) return "ANTHROPIC_SONNET_5_EFFORT";
+  const version = anthropicClaudeVersion(modelId);
+  if (!version) return null;
+  if (modelId.includes("claude-opus-4") && version.major === 4 && version.minor === 8) {
+    return "ANTHROPIC_OPUS_4_8_EFFORT";
+  }
+  if (modelId.includes("claude-opus-4") && version.major === 4 && version.minor === 7) {
+    return "ANTHROPIC_OPUS_4_7_EFFORT";
+  }
+  if (modelId.includes("claude-opus-4") && version.major === 4 && version.minor === 6) {
+    return "ANTHROPIC_OPUS_4_6_EFFORT";
+  }
+  if (modelId.includes("claude-sonnet-4") && version.major === 4 && version.minor === 6) {
+    return "ANTHROPIC_SONNET_4_6_EFFORT";
+  }
+  return null;
+}
+
+function anthropicAdaptiveEffortOverride(modelId: string, override?: string): string | undefined {
+  const normalizedOverride = normalizeReasoningOverride(override);
+  if (normalizedOverride) return normalizedOverride;
+
+  const envVar = anthropicAdaptiveEffortEnvVar(modelId);
+  const normalizedEnv = envVar ? normalizeReasoningOverride(process.env[envVar]) : undefined;
+  if (!normalizedEnv) return undefined;
+  if (normalizedEnv === "low" || normalizedEnv === "medium" || normalizedEnv === "high") {
+    return normalizedEnv;
+  }
+  if (normalizedEnv === "xhigh") {
+    return supportsAnthropicXhighEffort(modelId) ? "xhigh" : "high";
+  }
+  if (normalizedEnv === "max") return "max";
+  return undefined;
 }
 
 function descendingAttempts<T extends string>(
@@ -117,7 +160,7 @@ export function anthropicAdaptiveEffortAttempts(
     supportsAnthropicXhighEffort(modelId)
       ? ["max", "xhigh", "high", "medium", "low"]
       : ["max", "high", "medium", "low"],
-    override,
+    anthropicAdaptiveEffortOverride(modelId, override),
   );
 }
 
@@ -303,7 +346,7 @@ export function openRouterReasoningEffortAttempts(
       supportsAnthropicXhighEffort(modelId)
         ? ["max", "xhigh", "high", "medium", "low"]
         : ["max", "high", "medium", "low"],
-      override,
+      anthropicAdaptiveEffortOverride(modelId, override),
     );
   }
   if (modelId === "z-ai/glm-5.2") {

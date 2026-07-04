@@ -130,6 +130,7 @@ function openRouterTemperaturePayload(modelId: string, temperature?: number): { 
   const normalized = modelId.toLowerCase();
   const usesDefaultSampling =
     normalized === "anthropic/claude-fable-5" ||
+    normalized === "anthropic/claude-sonnet-5" ||
     /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(normalized);
   if (usesDefaultSampling) return {};
   return { temperature: temperature ?? 0.2 };

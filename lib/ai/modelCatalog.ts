@@ -24,9 +24,11 @@ export type ModelKey =
   | "openai_gpt_5_mini"
   | "openai_gpt_5_nano"
   | "openai_gpt_4_1"
+  | "openai_gpt_4_5_web_harness"
   | "openai_gpt_4o"
   | "openai_gpt_oss_120b"
   | "anthropic_claude_fable_5"
+  | "anthropic_claude_sonnet_5"
   | "anthropic_claude_4_5_sonnet"
   | "anthropic_claude_4_6_sonnet"
   | "anthropic_claude_4_5_opus"
@@ -68,6 +70,8 @@ export type ModelCatalogEntry = {
   openRouterModelId?: string;
   // optional: force routing via OpenRouter even if a direct provider key exists
   forceOpenRouter?: boolean;
+  // optional: model is available only through imported benchmark artifacts
+  importOnly?: boolean;
 };
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
@@ -176,6 +180,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     openRouterModelId: "openai/gpt-4.1",
   },
   {
+    key: "openai_gpt_4_5_web_harness",
+    provider: "openai",
+    modelId: "gpt-4.5-preview",
+    displayName: "GPT 4.5 (web harness)",
+    enabled: false,
+    importOnly: true,
+  },
+  {
     key: "openai_gpt_4o",
     provider: "openai",
     modelId: "gpt-4o",
@@ -198,6 +210,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Claude Fable 5",
     enabled: true,
     openRouterModelId: "anthropic/claude-fable-5",
+  },
+  {
+    key: "anthropic_claude_sonnet_5",
+    provider: "anthropic",
+    modelId: "claude-sonnet-5",
+    displayName: "Claude Sonnet 5",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-sonnet-5",
   },
   {
     key: "anthropic_claude_4_5_sonnet",
