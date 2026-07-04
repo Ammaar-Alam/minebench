@@ -234,6 +234,33 @@ async function main() {
     "direct trace should report the Sonnet 5 env effort override",
   );
 
+  capturedRequests.length = 0;
+  const lowOpenRouterEffortTraces: string[] = [];
+  await generateVoxelBuild({
+    modelKey: "anthropic_claude_sonnet_5",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    enableTools: false,
+    preferOpenRouter: true,
+    providerKeys: { openrouter: "test-openrouter-key" },
+    allowServerKeys: false,
+    onProviderTrace: (message) => lowOpenRouterEffortTraces.push(message),
+  });
+
+  const lowOpenRouterEffortRequest = capturedRequests.find((request) =>
+    request.url.includes("openrouter.test"),
+  )?.body;
+  assert.ok(lowOpenRouterEffortRequest, "low-effort OpenRouter request should be captured");
+  assert.deepEqual(lowOpenRouterEffortRequest.reasoning, { effort: "low" });
+  assert.ok(
+    lowOpenRouterEffortTraces.some((trace) =>
+      trace.includes("effort_fallback=low->disabled") &&
+      trace.includes("temperature=default"),
+    ),
+    "OpenRouter trace should report the Sonnet 5 env effort override",
+  );
+
   process.env.ANTHROPIC_STREAM_RESPONSES = "1";
   const streamingResult = await generateVoxelBuild({
     modelKey: "anthropic_claude_sonnet_5",

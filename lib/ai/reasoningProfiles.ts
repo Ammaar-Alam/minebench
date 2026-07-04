@@ -346,7 +346,7 @@ export function openRouterReasoningEffortAttempts(
       supportsAnthropicXhighEffort(modelId)
         ? ["max", "xhigh", "high", "medium", "low"]
         : ["max", "high", "medium", "low"],
-      override,
+      anthropicAdaptiveEffortOverride(modelId, override),
     );
   }
   if (

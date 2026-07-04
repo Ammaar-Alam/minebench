@@ -6,6 +6,7 @@ import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { createHash } from "node:crypto";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
+import { modelCatalogSeedUpsertArgs } from "@/lib/admin/seedModelCatalog";
 
 export const runtime = "nodejs";
 
@@ -124,27 +125,7 @@ export async function POST(req: Request) {
     });
 
     for (const m of MODEL_CATALOG) {
-      await tx.model.upsert({
-        where: { key: m.key },
-        create: {
-          key: m.key,
-          provider: m.provider,
-          modelId: m.modelId,
-          displayName: m.displayName,
-          enabled: m.enabled,
-          isBaseline: false,
-          eloRating: 1500,
-          glickoRd: 350,
-          glickoVolatility: 0.06,
-          conservativeRating: 800,
-        },
-        update: {
-          provider: m.provider,
-          modelId: m.modelId,
-          displayName: m.displayName,
-          enabled: m.enabled,
-        },
-      });
+      await tx.model.upsert(modelCatalogSeedUpsertArgs(m));
     }
 
     for (const text of CURATED_PROMPTS) {
