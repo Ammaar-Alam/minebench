@@ -26,7 +26,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
 import { maxBlocksForGrid } from "../lib/ai/limits";
@@ -358,6 +358,13 @@ function isEmptyPlaceholder(filePath: string): boolean {
 
 function getMissingJobs(jobs: Job[]): Job[] {
   return jobs.filter((j) => isEmptyPlaceholder(j.filePath));
+}
+
+export function getImportOnlyModelsForGenerationJobs(
+  jobsToGenerate: Array<Pick<Job, "modelKey">>,
+) {
+  const modelKeys = new Set(jobsToGenerate.map((job) => job.modelKey));
+  return MODEL_CATALOG.filter((model) => modelKeys.has(model.key) && model.importOnly);
 }
 
 async function generateAndSave(
@@ -827,22 +834,6 @@ Upload notes:
 
   printStatus(allJobs);
 
-  if (opts.generate) {
-    const importOnlyModels = selectedModelKeys
-      .flatMap((modelKey) => {
-        const model = MODEL_CATALOG.find((m) => m.key === modelKey);
-        return model?.importOnly ? [model] : [];
-      });
-    if (importOnlyModels.length > 0) {
-      console.error(
-        "\nError: these models are import-only and cannot be generated through provider APIs:\n" +
-          importOnlyModels.map((m) => `  - ${MODEL_SLUG[m.key]} (${m.displayName})`).join("\n") +
-          "\n\nDrop JSON files into existing upload prompt folders, for example uploads/castle/castle-gpt-4-5-web-harness.json, then run upload/status without --generate.\n",
-      );
-      process.exit(1);
-    }
-  }
-
   const missing = getMissingJobs(allJobs);
   const existing = allJobs.filter((j) => !isEmptyPlaceholder(j.filePath));
   console.log(`\n🔍 Missing builds: ${missing.length}`);
@@ -863,6 +854,17 @@ Upload notes:
 
   // generate missing builds only if --generate flag is set
   const jobsToGenerate = opts.generate ? (opts.overwrite ? allJobs : missing) : [];
+  if (opts.generate) {
+    const importOnlyModels = getImportOnlyModelsForGenerationJobs(jobsToGenerate);
+    if (importOnlyModels.length > 0) {
+      console.error(
+        "\nError: these models are import-only and cannot be generated through provider APIs:\n" +
+          importOnlyModels.map((m) => `  - ${MODEL_SLUG[m.key]} (${m.displayName})`).join("\n") +
+          "\n\nDrop JSON files into existing upload prompt folders, for example uploads/castle/castle-gpt-4-5-web-harness.json, then run upload/status without --generate.\n",
+      );
+      process.exit(1);
+    }
+  }
   if (opts.generate && jobsToGenerate.length > 0 && opts.concurrency > jobsToGenerate.length) {
     console.error(
       `\nError: --concurrency ${opts.concurrency} exceeds the number of selected build jobs (${jobsToGenerate.length}).\n` +
@@ -957,7 +959,13 @@ Upload notes:
   }
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+const isDirectRun = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+
+if (isDirectRun) {
+  main().catch((err) => {
+    console.error("Fatal error:", err);
+    process.exit(1);
+  });
+}
