@@ -207,6 +207,33 @@ async function main() {
     "OpenRouter trace should report the 128000-token cap, max reasoning fallback, and default sampling",
   );
 
+  capturedRequests.length = 0;
+  process.env.ANTHROPIC_SONNET_5_EFFORT = "low";
+  const lowEffortTraces: string[] = [];
+  await generateVoxelBuild({
+    modelKey: "anthropic_claude_sonnet_5",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    enableTools: false,
+    providerKeys: { anthropic: "test-anthropic-key" },
+    allowServerKeys: false,
+    onProviderTrace: (message) => lowEffortTraces.push(message),
+  });
+
+  const lowEffortDirectRequest = capturedRequests.find((request) =>
+    request.url.includes("api.anthropic.com"),
+  );
+  assert.ok(lowEffortDirectRequest, "low-effort direct Anthropic request should be captured");
+  assert.deepEqual((lowEffortDirectRequest.body.output_config as { effort?: unknown })?.effort, "low");
+  assert.ok(
+    lowEffortTraces.some((trace) =>
+      trace.includes("adaptive_effort=low") &&
+      trace.includes("temperature=default"),
+    ),
+    "direct trace should report the Sonnet 5 env effort override",
+  );
+
   process.env.ANTHROPIC_STREAM_RESPONSES = "1";
   const streamingResult = await generateVoxelBuild({
     modelKey: "anthropic_claude_sonnet_5",

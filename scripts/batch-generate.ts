@@ -287,6 +287,47 @@ export function getCandidateModels(modelFilters: string[]): ModelKey[] {
   return getDefaultCandidateModels();
 }
 
+function getModel(modelKey: ModelKey) {
+  return MODEL_CATALOG.find((model) => model.key === modelKey);
+}
+
+function exactImportOnlyModelKeys(modelFilters: string[]): Set<ModelKey> {
+  const normalizedFilters = modelFilters.map((filter) => filter.trim().toLowerCase()).filter(Boolean);
+  return new Set(
+    MODEL_CATALOG
+      .filter((model) => model.importOnly)
+      .flatMap((model) => {
+        const slug = MODEL_SLUG[model.key].toLowerCase();
+        const key = model.key.toLowerCase();
+        return normalizedFilters.includes(slug) || normalizedFilters.includes(key) ? [model.key] : [];
+      }),
+  );
+}
+
+export function getJobsToGenerate<T extends Pick<Job, "modelKey">>(opts: {
+  generate: boolean;
+  overwrite: boolean;
+  modelFilters: string[];
+  allJobs: T[];
+  missingJobs: T[];
+}): T[] {
+  if (!opts.generate) return [];
+  const candidates = opts.overwrite ? opts.allJobs : opts.missingJobs;
+  const explicitImportOnlyModels = exactImportOnlyModelKeys(opts.modelFilters);
+  return candidates.filter((job) => {
+    const model = getModel(job.modelKey);
+    if (!model?.importOnly) return true;
+    return explicitImportOnlyModels.has(job.modelKey);
+  });
+}
+
+function getModelsMissingOpenRouterForGenerationJobs(jobsToGenerate: Array<Pick<Job, "modelKey">>): string[] {
+  const modelKeys = new Set(jobsToGenerate.map((job) => job.modelKey));
+  return MODEL_CATALOG
+    .filter((model) => modelKeys.has(model.key) && !model.openRouterModelId)
+    .map((model) => `${model.key} (${model.displayName})`);
+}
+
 function getAllPromptSlugs(): string[] {
   const slugs = new Set<string>(Object.keys(PROMPT_MAP));
   for (const slug of listUploadPromptSlugs()) slugs.add(slug);
@@ -805,23 +846,6 @@ Upload notes:
       console.error("\nError: --openrouter requires OPENROUTER_API_KEY.\n");
       process.exit(1);
     }
-
-    const missingOpenRouter: string[] = [];
-    for (const modelKey of selectedModelKeys) {
-      const entry = MODEL_CATALOG.find((m) => m.key === modelKey);
-      if (entry && !entry.openRouterModelId) {
-        missingOpenRouter.push(`${entry.key} (${entry.displayName})`);
-      }
-    }
-
-    if (missingOpenRouter.length > 0) {
-      console.error(
-        "\nError: --openrouter was requested, but these models are not integrated via OpenRouter:\n" +
-          missingOpenRouter.map((m) => `  - ${m}`).join("\n") +
-          "\n\nAdd openRouterModelId in lib/ai/modelCatalog.ts or remove these models from the selection.\n"
-      );
-      process.exit(1);
-    }
   }
 
   const modelCountForSummary = selectedModelKeys.length;
@@ -853,7 +877,13 @@ Upload notes:
   }
 
   // generate missing builds only if --generate flag is set
-  const jobsToGenerate = opts.generate ? (opts.overwrite ? allJobs : missing) : [];
+  const jobsToGenerate = getJobsToGenerate({
+    generate: opts.generate,
+    overwrite: opts.overwrite,
+    modelFilters: opts.modelFilters,
+    allJobs,
+    missingJobs: missing,
+  });
   if (opts.generate) {
     const importOnlyModels = getImportOnlyModelsForGenerationJobs(jobsToGenerate);
     if (importOnlyModels.length > 0) {
@@ -861,6 +891,17 @@ Upload notes:
         "\nError: these models are import-only and cannot be generated through provider APIs:\n" +
           importOnlyModels.map((m) => `  - ${MODEL_SLUG[m.key]} (${m.displayName})`).join("\n") +
           "\n\nDrop JSON files into existing upload prompt folders, for example uploads/castle/castle-gpt-4-5-web-harness.json, then run upload/status without --generate.\n",
+      );
+      process.exit(1);
+    }
+  }
+  if (opts.openrouter && opts.generate && jobsToGenerate.length > 0) {
+    const missingOpenRouter = getModelsMissingOpenRouterForGenerationJobs(jobsToGenerate);
+    if (missingOpenRouter.length > 0) {
+      console.error(
+        "\nError: --openrouter was requested, but these models are not integrated via OpenRouter:\n" +
+          missingOpenRouter.map((m) => `  - ${m}`).join("\n") +
+          "\n\nAdd openRouterModelId in lib/ai/modelCatalog.ts or remove these models from the selection.\n"
       );
       process.exit(1);
     }
