@@ -275,16 +275,16 @@ function ensureDir(dir: string) {
   }
 }
 
-function getEnabledModels(): ModelKey[] {
-  return MODEL_CATALOG.filter((m) => m.enabled).map((m) => m.key);
+function getDefaultCandidateModels(): ModelKey[] {
+  return MODEL_CATALOG.filter((m) => m.enabled || m.importOnly).map((m) => m.key);
 }
 
-function getCandidateModels(modelFilters: string[]): ModelKey[] {
+export function getCandidateModels(modelFilters: string[]): ModelKey[] {
   // If the user is explicitly filtering by model, include disabled models too so
   // existing builds (e.g. benchmark-only models) can be uploaded/status-checked.
   // Generation will still be gated elsewhere unless the user explicitly requests it.
   if (modelFilters.length > 0) return MODEL_CATALOG.map((m) => m.key);
-  return getEnabledModels();
+  return getDefaultCandidateModels();
 }
 
 function getAllPromptSlugs(): string[] {

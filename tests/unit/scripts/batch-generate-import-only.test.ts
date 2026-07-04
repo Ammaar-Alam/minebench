@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { getImportOnlyModelsForGenerationJobs } from "../../../scripts/batch-generate";
+import {
+  getCandidateModels,
+  getImportOnlyModelsForGenerationJobs,
+} from "../../../scripts/batch-generate";
 import type { ModelKey } from "../../../lib/ai/modelCatalog";
 
 function job(modelKey: ModelKey) {
@@ -7,6 +10,11 @@ function job(modelKey: ModelKey) {
 }
 
 async function main() {
+  assert.ok(
+    getCandidateModels([]).includes("openai_gpt_4_5_web_harness"),
+    "default batch candidates should include import-only models for status/upload",
+  );
+
   assert.deepEqual(
     getImportOnlyModelsForGenerationJobs([
       job("openai_gpt_5_2"),
