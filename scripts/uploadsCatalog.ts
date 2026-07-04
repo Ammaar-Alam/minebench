@@ -70,6 +70,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   xai_grok_4_3: "grok-4-3",
   xai_grok_4_1: "grok-4-1",
   xai_grok_4_20: "grok-4-20",
+  zai_glm_5_2: "glm-5-2",
   zai_glm_5_1: "glm-5-1",
   zai_glm_5: "glm-5",
   zai_glm_4_7: "glm-4-7",
