@@ -6,7 +6,10 @@ import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { createHash } from "node:crypto";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
-import { modelCatalogSeedUpsertArgs } from "@/lib/admin/seedModelCatalog";
+import {
+  isCatalogModelGeneratableForSeed,
+  modelCatalogSeedUpsertArgs,
+} from "@/lib/admin/seedModelCatalog";
 
 export const runtime = "nodejs";
 
@@ -68,17 +71,18 @@ function providerKeyStatus() {
 function isModelGeneratable(args: { modelKey: string; provider: string }) {
   const status = providerKeyStatus();
   const catalog = MODEL_CATALOG.find((m) => m.key === args.modelKey);
-  const canUseOpenRouter = Boolean(status.openrouter && catalog?.openRouterModelId);
+  if (catalog) {
+    return isCatalogModelGeneratableForSeed({ model: catalog, providerKeys: status });
+  }
 
-  if (catalog?.forceOpenRouter) return canUseOpenRouter;
-  if (args.provider === "xai") return status.xai || canUseOpenRouter;
+  if (args.provider === "xai") return status.xai;
 
-  if (args.provider === "openai") return status.openai || canUseOpenRouter;
-  if (args.provider === "anthropic") return status.anthropic || canUseOpenRouter;
-  if (args.provider === "gemini") return status.gemini || canUseOpenRouter;
-  if (args.provider === "moonshot") return status.moonshot || canUseOpenRouter;
-  if (args.provider === "deepseek") return status.deepseek || canUseOpenRouter;
-  if (args.provider === "minimax") return status.minimax || canUseOpenRouter;
+  if (args.provider === "openai") return status.openai;
+  if (args.provider === "anthropic") return status.anthropic;
+  if (args.provider === "gemini") return status.gemini;
+  if (args.provider === "moonshot") return status.moonshot;
+  if (args.provider === "deepseek") return status.deepseek;
+  if (args.provider === "minimax") return status.minimax;
 
   // Unknown provider: assume it's callable (or OpenRouter-gated via catalog entries).
   return true;
