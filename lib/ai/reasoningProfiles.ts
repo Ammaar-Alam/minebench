@@ -117,6 +117,13 @@ export function openAiReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `OpenAI model ${modelId}`;
+  if (modelId.startsWith("gpt-5.6")) {
+    return descendingAttempts(
+      label,
+      ["max", "xhigh", "high", "medium", "low", "none"],
+      override,
+    );
+  }
   if (modelId.startsWith("gpt-5.5-pro")) {
     return descendingAttempts(label, ["xhigh", "high", "medium"], override);
   }

@@ -63,7 +63,7 @@ function defaultOutputTokenRequestForModel(modelId: string): number | undefined 
 }
 
 function maxOutputTokenCapForModel(modelId: string): number | undefined {
-  // OpenAI's latest GPT-5 family models use max_output_tokens as a total
+  // OpenAI's GPT-5 family models use max_output_tokens as a total
   // generation budget that includes reasoning tokens. Most GPT-5 variants in
   // MineBench are currently capped at 128k output tokens, with the older
   // gpt-5-pro alias remaining at 272k.
@@ -205,13 +205,18 @@ function describeRequestedThinkingMode(opts: {
   if (opts.provider === "custom") return "default";
 
   if (opts.provider === "openai") {
+    const usesProReasoning = opts.modelId.startsWith("gpt-5.6");
+    const reasoningMode = usesProReasoning
+      ? "reasoning_mode=pro,"
+      : "";
+    const finalFallback = usesProReasoning ? "pro-default" : "disabled";
     if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
-      return `reasoning_effort_fallback=${opts.reasoningEffortAttempts.join("->")}->disabled`;
+      return `${reasoningMode}reasoning_effort_fallback=${opts.reasoningEffortAttempts.join("->")}->${finalFallback}`;
     }
     if (typeof opts.reasoningMaxTokens === "number") {
-      return `reasoning_max_tokens<=${Math.floor(opts.reasoningMaxTokens)}`;
+      return `${reasoningMode}reasoning_max_tokens<=${Math.floor(opts.reasoningMaxTokens)}`;
     }
-    return "default";
+    return reasoningMode ? "reasoning_mode=pro" : "default";
   }
 
   if (opts.provider === "anthropic") {

@@ -445,10 +445,12 @@ export async function openaiGenerateText(params: {
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
   const isGptOssFamily = params.modelId.startsWith("gpt-oss-");
+  const isGpt56 = params.modelId.startsWith("gpt-5.6");
   // Some models are Responses-only (or otherwise not supported in chat/completions).
   // For these, don't fall back to chat/completions because it hides the real failure cause.
   const isGpt55Pro = params.modelId.startsWith("gpt-5.5-pro");
   const isResponsesOnlyModel =
+    isGpt56 ||
     params.modelId === "gpt-5.2-pro" ||
     isGpt55Pro ||
     params.modelId.startsWith("gpt-5.4-pro") ||
@@ -456,7 +458,9 @@ export async function openaiGenerateText(params: {
     params.modelId === "gpt-5.2-codex" ||
     params.modelId === "gpt-5.3-codex";
   const defaultReasoningEffortAttempts: string[] = isGpt5Family
-    ? isGpt55Pro
+    ? isGpt56
+      ? ["max", "xhigh", "high", "medium", "low", "none"]
+      : isGpt55Pro
       ? ["xhigh", "high", "medium"]
       : params.modelId.startsWith("gpt-5.5")
         ? ["xhigh", "high", "medium", "low", "none"]
@@ -509,11 +513,17 @@ export async function openaiGenerateText(params: {
       for (const [cfgIdx, cfg] of reasoningConfigAttempts.entries()) {
         const reasoning =
           cfg?.kind === "effort"
-            ? { effort: cfg.effort }
+            ? { effort: cfg.effort, ...(isGpt56 ? { mode: "pro" } : {}) }
             : cfg?.kind === "max_tokens"
-              ? { max_tokens: clampReasoningBudget(cfg.maxTokens, tok) }
-              : undefined;
-        const currentReasoningLabel = describeReasoningConfigAttempt(cfg, tok);
+              ? {
+                  max_tokens: clampReasoningBudget(cfg.maxTokens, tok),
+                  ...(isGpt56 ? { mode: "pro" } : {}),
+                }
+              : isGpt56
+                ? { mode: "pro" }
+                : undefined;
+        const currentReasoningLabel =
+          isGpt56 && !cfg ? "pro-default" : describeReasoningConfigAttempt(cfg, tok);
         while (true) {
           const textVerbosity = useDefaultVerbosity ? defaultTextVerbosity(params.modelId) : undefined;
           const payload: Record<string, unknown> = {
