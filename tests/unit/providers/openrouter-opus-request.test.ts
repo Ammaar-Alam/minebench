@@ -8,6 +8,7 @@ type CapturedRequest = {
 
 const capturedRequests: CapturedRequest[] = [];
 const originalFetch = globalThis.fetch;
+let failWithBadRequest = false;
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   assert.ok(init?.body, "OpenRouter request should include a JSON body");
@@ -16,6 +17,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     url: String(input),
     body: JSON.parse(init.body as string) as Record<string, unknown>,
   });
+
+  if (failWithBadRequest) {
+    return new Response(JSON.stringify({ error: { message: "invalid request" } }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   return new Response(
     JSON.stringify({
@@ -92,7 +100,54 @@ async function main() {
   assert.equal(ordinaryRequest.model, "openai/gpt-4.1");
   assert.equal(ordinaryRequest.temperature, 0.2);
 
-  console.log("openrouter opus request checks passed");
+  failWithBadRequest = true;
+  const failedRequestIndex = capturedRequests.length;
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    await assert.rejects(
+      openrouterGenerateText({
+        modelId: "openai/gpt-4.1",
+        apiKey: "test-openrouter-key",
+        system: "Return valid JSON.",
+        user: "Build a small test shape.",
+        maxOutputTokens: 512,
+        jsonSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            ok: { type: "boolean" },
+          },
+          required: ["ok"],
+        },
+      }),
+      /OpenRouter error 400/,
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  assert.equal(
+    capturedRequests.length,
+    failedRequestIndex + 1,
+    "A structured-output rejection must not retry without the schema",
+  );
+  const failedRequest = capturedRequests[failedRequestIndex]?.body;
+  assert.ok(failedRequest, "Failed structured-output request should be captured");
+  assert.deepEqual(failedRequest.provider, { require_parameters: true });
+  assert.equal(
+    (failedRequest.response_format as { type?: unknown })?.type,
+    "json_schema",
+  );
+  assert.equal(
+    (
+      failedRequest.response_format as {
+        json_schema?: { strict?: unknown };
+      }
+    )?.json_schema?.strict,
+    true,
+  );
+
+  console.log("openrouter request checks passed");
 }
 
 main()

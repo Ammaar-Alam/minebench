@@ -149,6 +149,7 @@ function formatOptionalInteger(value: number | undefined): string {
 function usesDefaultSamplingForModel(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return (
+    normalized.startsWith("openai/gpt-5.6") ||
     normalized === "claude-fable-5" ||
     normalized === "anthropic/claude-fable-5" ||
     normalized === "claude-sonnet-5" ||

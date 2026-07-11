@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { generateVoxelBuild } from "../../../lib/ai/generateVoxelBuild";
 import { getModelByKey } from "../../../lib/ai/modelCatalog";
-import { openAiReasoningEffortAttempts } from "../../../lib/ai/reasoningProfiles";
+import {
+  openAiReasoningEffortAttempts,
+  openRouterReasoningEffortAttempts,
+} from "../../../lib/ai/reasoningProfiles";
 import { MODEL_SLUG } from "../../../scripts/uploadsCatalog";
 
 type CapturedRequest = {
@@ -26,13 +29,26 @@ function validBuildJson(): string {
 }
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-  assert.ok(init?.body, "OpenAI request should include a JSON body");
-  assert.equal(typeof init.body, "string", "OpenAI request body should be serialized JSON");
+  assert.ok(init?.body, "Provider request should include a JSON body");
+  assert.equal(typeof init.body, "string", "Provider request body should be serialized JSON");
 
+  const url = String(input);
   capturedRequests.push({
-    url: String(input),
+    url,
     body: JSON.parse(init.body as string) as Record<string, unknown>,
   });
+
+  if (url.includes("/chat/completions")) {
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: validBuildJson() } }],
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  }
 
   return new Response(
     JSON.stringify({
@@ -55,7 +71,7 @@ async function main() {
   assert.equal(model.provider, "openai");
   assert.equal(model.modelId, "gpt-5.6-sol");
   assert.equal(model.displayName, "GPT 5.6 Sol");
-  assert.equal(model.openRouterModelId, undefined);
+  assert.equal(model.openRouterModelId, "openai/gpt-5.6-sol-pro");
   assert.equal(MODEL_SLUG.openai_gpt_5_6_sol, "gpt-5-6-sol");
   assert.deepEqual(openAiReasoningEffortAttempts(model.modelId), [
     "max",
@@ -66,6 +82,14 @@ async function main() {
     "none",
   ]);
   assert.deepEqual(openAiReasoningEffortAttempts(model.modelId, "max"), [
+    "max",
+    "xhigh",
+    "high",
+    "medium",
+    "low",
+    "none",
+  ]);
+  assert.deepEqual(openRouterReasoningEffortAttempts(model.openRouterModelId), [
     "max",
     "xhigh",
     "high",
@@ -107,6 +131,49 @@ async function main() {
       trace.includes("temperature=1"),
     ),
     "direct trace should report the output cap, max reasoning fallback, and pro mode",
+  );
+
+  const openRouterTraces: string[] = [];
+  await generateVoxelBuild({
+    modelKey: "openai_gpt_5_6_sol",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    enableTools: false,
+    providerKeys: { openrouter: "test-openrouter-key" },
+    allowServerKeys: false,
+    onProviderTrace: (message) => openRouterTraces.push(message),
+  });
+
+  const openRouterRequest = capturedRequests.find((candidate) =>
+    candidate.url.includes("/chat/completions"),
+  )?.body;
+  assert.ok(openRouterRequest, "OpenRouter request should be captured");
+  assert.equal(openRouterRequest.model, "openai/gpt-5.6-sol-pro");
+  assert.equal(openRouterRequest.max_tokens, 128000);
+  assert.deepEqual(openRouterRequest.reasoning, { effort: "max" });
+  assert.equal(Object.hasOwn(openRouterRequest, "temperature"), false);
+  assert.equal(Object.hasOwn(openRouterRequest, "text"), false);
+  assert.deepEqual(openRouterRequest.provider, { require_parameters: true });
+  assert.equal(
+    (openRouterRequest.response_format as { type?: unknown })?.type,
+    "json_schema",
+  );
+  const openRouterJsonSchema = (
+    openRouterRequest.response_format as {
+      json_schema?: { strict?: unknown; schema?: unknown };
+    }
+  )?.json_schema;
+  assert.equal(openRouterJsonSchema?.strict, true);
+  assert.ok(openRouterJsonSchema?.schema, "OpenRouter request should include the voxel schema");
+  assert.ok(
+    openRouterTraces.some((trace) =>
+      trace.includes("Routing via OpenRouter (openai/gpt-5.6-sol-pro)") &&
+      trace.includes("max_output_tokens=128000") &&
+      trace.includes("effort_fallback=max->xhigh->high->medium->low->none->disabled") &&
+      trace.includes("temperature=default"),
+    ),
+    "OpenRouter trace should report the pro route, output cap, and max reasoning fallback",
   );
 
   console.log("gpt 5.6 sol config checks passed");

@@ -111,7 +111,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
-- GPT 5.6 Sol uses the native OpenAI model ID `gpt-5.6-sol` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses the model's 128000-token combined reasoning and output cap.
+- GPT 5.6 Sol uses the native OpenAI model ID `gpt-5.6-sol` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses the model's 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-sol-pro` with max effort and strict structured output.
 - Claude Fable 5 uses the native Anthropic model ID `claude-fable-5`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude Sonnet 5 uses the native Anthropic model ID `claude-sonnet-5`, supports adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude 4.8 Opus uses the native Anthropic model ID `claude-opus-4-8`, supports adaptive effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.

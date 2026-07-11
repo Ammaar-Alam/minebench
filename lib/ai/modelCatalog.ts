@@ -82,6 +82,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     modelId: "gpt-5.6-sol",
     displayName: "GPT 5.6 Sol",
     enabled: true,
+    openRouterModelId: "openai/gpt-5.6-sol-pro",
   },
   {
     key: "openai_gpt_5_5",
