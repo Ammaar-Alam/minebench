@@ -128,9 +128,9 @@ async function main() {
       trace.includes("max_output_tokens=128000") &&
       trace.includes("reasoning_effort_fallback=max->xhigh->high->medium->low->none->pro-default") &&
       trace.includes("reasoning_mode=pro") &&
-      trace.includes("temperature=1"),
+      trace.includes("temperature=default"),
     ),
-    "direct trace should report the output cap, max reasoning fallback, and pro mode",
+    "direct trace should report the output cap, max reasoning fallback, pro mode, and default sampling",
   );
 
   const openRouterTraces: string[] = [];
