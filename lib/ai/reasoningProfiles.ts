@@ -327,6 +327,26 @@ export function xaiAutomaticReasoningForModel(
   );
 }
 
+export function xaiReasoningEffortAttempts(
+  modelId: string,
+  override?: string,
+): string[] | undefined {
+  const normalized = normalizeReasoningOverride(override);
+  const isGrok45 = modelId === "grok-4.5" || modelId === "x-ai/grok-4.5";
+
+  if (!isGrok45) return undefined;
+
+  if (!normalized || normalized === "max" || normalized === "xhigh" || normalized === "high") {
+    return ["high", "medium", "low"];
+  }
+  if (normalized === "medium") return ["medium", "low"];
+  if (normalized === "low") return ["low"];
+
+  throw new Error(
+    `xAI model ${modelId} does not support reasoning '${override}'. Supported values: max, high, medium, low.`,
+  );
+}
+
 export function openRouterReasoningEffortAttempts(
   modelId: string,
   override?: string,
@@ -338,6 +358,9 @@ export function openRouterReasoningEffortAttempts(
       ["max", "xhigh", "high", "medium", "low", "none"],
       override,
     );
+  }
+  if (modelId === "x-ai/grok-4.5") {
+    return xaiReasoningEffortAttempts(modelId, override);
   }
   if (modelId === "openai/gpt-5.5-pro") {
     return descendingAttempts(label, ["xhigh", "high", "medium"], override);
