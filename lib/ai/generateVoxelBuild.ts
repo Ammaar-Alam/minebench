@@ -26,6 +26,7 @@ import {
   openRouterReasoningEnabledForModel,
   openRouterReasoningEffortAttempts as openRouterReasoningEffortAttemptsForModel,
   xaiAutomaticReasoningForModel,
+  xaiReasoningEffortAttempts,
 } from "@/lib/ai/reasoningProfiles";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -50,6 +51,7 @@ function parseOptionalIntEnvVar(name: string): number | undefined {
 }
 
 function defaultOutputTokenRequestForModel(modelId: string): number | undefined {
+  if (modelId === "grok-4.5" || modelId === "x-ai/grok-4.5") return 500_000;
   if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
   if (
     modelId === "deepseek-v4-pro" ||
@@ -73,6 +75,7 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
     return 65_536;
   }
   if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
+  if (modelId === "grok-4.5" || modelId === "x-ai/grok-4.5") return 500_000;
   if (
     modelId === "deepseek-v4-pro" ||
     modelId === "deepseek-v4-flash" ||
@@ -195,7 +198,12 @@ function describeRequestedThinkingMode(opts: {
     if (opts.deepseekThinkingConfig.type === "disabled") return "thinking=disabled";
     return `thinking=${opts.deepseekThinkingConfig.reasoningEffort ?? "high"}`;
   }
-  if (opts.provider === "xai") return "automatic";
+  if (opts.provider === "xai") {
+    if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
+      return `reasoning_effort=${opts.reasoningEffortAttempts[0]}`;
+    }
+    return "automatic";
+  }
   if (opts.provider === "moonshot") {
     return opts.moonshotThinkingConfig
       ? `thinking=${opts.moonshotThinkingConfig.type}`
@@ -597,6 +605,7 @@ async function callDirectProvider(args: {
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
+      reasoningEffortAttempts: args.reasoningEffortAttempts,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       signal: args.signal,
@@ -711,6 +720,10 @@ async function providerGenerateText(args: {
       model.provider === "openai"
         ? openAiReasoningEffortAttempts(model.modelId, args.reasoning)
         : undefined;
+    const directXaiReasoningEffortAttempts =
+      model.provider === "xai"
+        ? xaiReasoningEffortAttempts(model.modelId, args.reasoning)
+        : undefined;
     const directAnthropicAdaptiveEffortAttempts =
       model.provider === "anthropic"
         ? anthropicAdaptiveEffortAttempts(model.modelId, args.reasoning)
@@ -727,7 +740,7 @@ async function providerGenerateText(args: {
       model.provider === "deepseek"
         ? deepseekThinkingConfigForModel(model.modelId, args.reasoning)
         : undefined;
-    if (model.provider === "xai") {
+    if (model.provider === "xai" && !directXaiReasoningEffortAttempts) {
       xaiAutomaticReasoningForModel(model.modelId, args.reasoning);
     }
     args.onProviderTrace?.(
@@ -738,7 +751,8 @@ async function providerGenerateText(args: {
           modelId: model.modelId,
           maxOutputTokens: args.maxOutputTokens,
           reasoningMaxTokens: args.reasoningMaxTokens,
-          reasoningEffortAttempts: directOpenAiReasoningEffortAttempts,
+          reasoningEffortAttempts:
+            directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
           adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
           geminiThinkingConfig: directGeminiThinkingConfig,
           moonshotThinkingConfig: directMoonshotThinkingConfig,
@@ -756,7 +770,8 @@ async function providerGenerateText(args: {
         jsonSchema: args.jsonSchema,
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
-        reasoningEffortAttempts: directOpenAiReasoningEffortAttempts,
+        reasoningEffortAttempts:
+          directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
         adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
         geminiThinkingConfig: directGeminiThinkingConfig,
         moonshotThinkingConfig: directMoonshotThinkingConfig,

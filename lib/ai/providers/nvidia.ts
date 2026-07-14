@@ -438,6 +438,7 @@ function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
   return (
     b.includes("max_tokens") ||
+    b.includes("max_completion_tokens") ||
     (b.includes("maximum") && b.includes("tokens")) ||
     b.includes("too many tokens") ||
     b.includes("token limit") ||
@@ -469,6 +470,8 @@ export async function openAiCompatibleGenerateText(params: {
   system: string;
   user: string;
   maxOutputTokens?: number;
+  maxTokensParameter?: "max_tokens" | "max_completion_tokens";
+  reasoningEffort?: string;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   serviceLabel?: string;
@@ -508,7 +511,8 @@ export async function openAiCompatibleGenerateText(params: {
           ],
           stream: Boolean(params.onDelta),
           temperature: params.temperature ?? 0.2,
-          max_tokens: tok,
+          [params.maxTokensParameter ?? "max_tokens"]: tok,
+          ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
           ...(useStructuredOutput && params.jsonSchema
             ? {
                 response_format: {
