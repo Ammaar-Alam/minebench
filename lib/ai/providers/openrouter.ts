@@ -123,12 +123,14 @@ function looksLikeVerbosityConfigError(body: string): boolean {
 }
 
 function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
+  if (modelId.startsWith("openai/gpt-5.6")) return undefined;
   return modelId.startsWith("openai/gpt-5") ? "high" : undefined;
 }
 
 function openRouterTemperaturePayload(modelId: string, temperature?: number): { temperature?: number } {
   const normalized = modelId.toLowerCase();
   const usesDefaultSampling =
+    normalized.startsWith("openai/gpt-5.6") ||
     normalized === "anthropic/claude-fable-5" ||
     normalized === "anthropic/claude-sonnet-5" ||
     /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(normalized);
@@ -325,40 +327,6 @@ export async function openrouterGenerateText(params: {
 
     if (!res.ok) {
       const body = lastBody || (await res.text().catch(() => ""));
-      if (res.status === 400 && params.jsonSchema) {
-        const retry = await fetchWithRetry(
-          `${baseUrl}/v1/chat/completions`,
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-              "HTTP-Referer": "https://minebench.dev",
-              "X-Title": "MineBench",
-            },
-            signal: controller.signal,
-            body: JSON.stringify({
-              model: params.modelId,
-              messages: [
-                { role: "system", content: params.system },
-                { role: "user", content: params.user },
-              ],
-              stream: false,
-              ...openRouterTemperaturePayload(params.modelId, params.temperature),
-              max_tokens: maxTokens,
-            }),
-          },
-          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
-        );
-
-        if (!retry.ok) {
-          const retryBody = await retry.text().catch(() => "");
-          throw new Error(`OpenRouter error ${retry.status}: ${retryBody || body}`);
-        }
-
-        const retryData = (await retry.json()) as OpenRouterChatResponse;
-        return { text: extractTextFromChatCompletions(retryData) };
-      }
       throw new Error(`OpenRouter error ${res.status}: ${body}`);
     }
 

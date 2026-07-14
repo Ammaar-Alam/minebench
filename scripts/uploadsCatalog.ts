@@ -33,6 +33,7 @@ export const PROMPT_MAP: Record<string, string> = {
 
 // Model key to short filename slug.
 export const MODEL_SLUG: Record<ModelKey, string> = {
+  openai_gpt_5_6_sol: "gpt-5-6-sol",
   openai_gpt_5_5: "gpt-5-5",
   openai_gpt_5_5_pro: "gpt-5-5-pro",
   openai_gpt_5_4: "gpt-5-4",
