@@ -327,12 +327,7 @@ export function xaiReasoningEffortAttempts(
   const normalized = normalizeReasoningOverride(override);
   const isGrok45 = modelId === "grok-4.5" || modelId === "x-ai/grok-4.5";
 
-  if (!isGrok45) {
-    if (normalized) {
-      throw new Error(`xAI model ${modelId} does not expose a reasoning-effort override.`);
-    }
-    return undefined;
-  }
+  if (!isGrok45) return undefined;
 
   if (!normalized || normalized === "max" || normalized === "xhigh" || normalized === "high") {
     return ["high", "medium", "low"];

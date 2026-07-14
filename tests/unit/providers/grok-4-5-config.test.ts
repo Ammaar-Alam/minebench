@@ -3,6 +3,7 @@ import { generateVoxelBuild } from "../../../lib/ai/generateVoxelBuild";
 import { getModelByKey } from "../../../lib/ai/modelCatalog";
 import {
   openRouterReasoningEffortAttempts,
+  xaiAutomaticReasoningForModel,
   xaiReasoningEffortAttempts,
 } from "../../../lib/ai/reasoningProfiles";
 import { xaiRequestConfigForModel } from "../../../lib/ai/providers/xai";
@@ -77,6 +78,16 @@ async function main() {
     "medium",
     "low",
   ]);
+  assert.equal(
+    xaiReasoningEffortAttempts("grok-4.3", "automatic"),
+    undefined,
+    "automatic xAI models should bypass the explicit effort helper",
+  );
+  assert.equal(
+    xaiAutomaticReasoningForModel("grok-4.3", "automatic"),
+    "automatic",
+    "Grok 4.3 should preserve its automatic reasoning override",
+  );
   assert.deepEqual(openRouterReasoningEffortAttempts(model.openRouterModelId), [
     "high",
     "medium",
