@@ -7,7 +7,8 @@ export type GeminiThinkingConfig = {
 };
 
 export type MoonshotThinkingConfig = {
-  type: "enabled" | "disabled";
+  type?: "enabled" | "disabled";
+  reasoningEffort?: "max";
 };
 
 export type DeepSeekThinkingConfig = {
@@ -219,6 +220,15 @@ export function moonshotThinkingConfigForModel(
   override?: string,
 ): MoonshotThinkingConfig | undefined {
   const normalized = normalizeReasoningOverride(override);
+  if (modelId === "kimi-k3") {
+    if (!normalized || normalized === "default" || normalized === "max") {
+      return { reasoningEffort: "max" };
+    }
+    throw new Error(
+      `Moonshot model ${modelId} does not support reasoning '${override}'. Supported values: max.`,
+    );
+  }
+
   const supportsThinkingToggle = modelId === "kimi-k2.6" || modelId === "kimi-k2.5";
 
   if (!supportsThinkingToggle) {
@@ -352,6 +362,9 @@ export function openRouterReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `OpenRouter model ${modelId}`;
+  if (modelId === "moonshotai/kimi-k3") {
+    return descendingAttempts(label, ["max"], override);
+  }
   if (modelId.startsWith("openai/gpt-5.6")) {
     return descendingAttempts(
       label,

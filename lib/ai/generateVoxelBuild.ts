@@ -154,6 +154,8 @@ function usesDefaultSamplingForModel(modelId: string): boolean {
   return (
     normalized.startsWith("gpt-5.6") ||
     normalized.startsWith("openai/gpt-5.6") ||
+    normalized === "kimi-k3" ||
+    normalized === "moonshotai/kimi-k3" ||
     normalized === "claude-fable-5" ||
     normalized === "anthropic/claude-fable-5" ||
     normalized === "claude-sonnet-5" ||
@@ -207,7 +209,10 @@ function describeRequestedThinkingMode(opts: {
     return "automatic";
   }
   if (opts.provider === "moonshot") {
-    return opts.moonshotThinkingConfig
+    if (opts.moonshotThinkingConfig?.reasoningEffort) {
+      return `reasoning_effort=${opts.moonshotThinkingConfig.reasoningEffort}`;
+    }
+    return opts.moonshotThinkingConfig?.type
       ? `thinking=${opts.moonshotThinkingConfig.type}`
       : "default";
   }
@@ -269,7 +274,9 @@ function providerRequestTraceLine(opts: {
     opts.deepseekThinkingConfig?.type === "enabled"
       ? "n/a"
       : opts.route === "direct" && opts.provider === "moonshot"
-      ? opts.modelId === "kimi-k2.6" || opts.modelId === "kimi-k2.5"
+      ? opts.modelId === "kimi-k3"
+        ? "default"
+        : opts.modelId === "kimi-k2.6" || opts.modelId === "kimi-k2.5"
         ? opts.moonshotThinkingConfig?.type === "disabled"
           ? 0.6
           : 1.0
