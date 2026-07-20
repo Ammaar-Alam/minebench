@@ -112,6 +112,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
 - GPT 5.6 Sol uses the native OpenAI model ID `gpt-5.6-sol` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses the model's 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-sol-pro` with max effort and strict structured output.
+- Kimi K3 uses the native Moonshot model ID `kimi-k3`, always reasons with `reasoning_effort=max`, uses its 1048576-token completion ceiling, and omits its fixed sampling parameters. Its OpenRouter fallback uses `moonshotai/kimi-k3` with max effort and fails closed if that effort is rejected.
 - Claude Fable 5 uses the native Anthropic model ID `claude-fable-5`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude Sonnet 5 uses the native Anthropic model ID `claude-sonnet-5`, supports adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude 4.8 Opus uses the native Anthropic model ID `claude-opus-4-8`, supports adaptive effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.

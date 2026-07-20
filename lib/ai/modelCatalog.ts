@@ -43,6 +43,7 @@ export type ModelKey =
   | "gemini_3_1_flash_lite"
   | "gemini_2_5_pro"
   | "gemma_4_31b"
+  | "moonshot_kimi_k3"
   | "moonshot_kimi_k2"
   | "moonshot_kimi_k2_6"
   | "moonshot_kimi_k2_5"
@@ -332,6 +333,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Gemma 4 31B",
     enabled: true,
     openRouterModelId: "google/gemma-4-31b-it",
+  },
+  {
+    key: "moonshot_kimi_k3",
+    provider: "moonshot",
+    modelId: "kimi-k3",
+    displayName: "Kimi K3",
+    enabled: true,
+    openRouterModelId: "moonshotai/kimi-k3",
   },
   {
     key: "moonshot_kimi_k2",

@@ -42,6 +42,7 @@ function reasoningConfigFallbacks(opts: {
   enabled?: boolean;
   efforts?: string[];
   maxTokens?: number;
+  failClosed?: boolean;
 }): ReasoningConfigAttempt[] {
   const usesAutomaticReasoning = Boolean(opts.automatic);
   const explicitlyEnabled = Boolean(opts.enabled);
@@ -63,6 +64,12 @@ function reasoningConfigFallbacks(opts: {
   }
 
   if (usesAutomaticReasoning && efforts.length === 0) return ["__automatic__"];
+  if (opts.failClosed) {
+    if (efforts.length === 0) {
+      throw new Error("Fail-closed reasoning requires an explicit reasoning configuration.");
+    }
+    return efforts;
+  }
   if (efforts.length === 0) return [undefined];
   if (explicitlyEnabled && normalized.length === 0 && !(Number.isFinite(rawMaxTokens) && rawMaxTokens > 0)) {
     return efforts;
@@ -131,6 +138,7 @@ function openRouterTemperaturePayload(modelId: string, temperature?: number): { 
   const normalized = modelId.toLowerCase();
   const usesDefaultSampling =
     normalized.startsWith("openai/gpt-5.6") ||
+    normalized === "moonshotai/kimi-k3" ||
     normalized === "anthropic/claude-fable-5" ||
     normalized === "anthropic/claude-sonnet-5" ||
     /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(normalized);
@@ -196,6 +204,7 @@ export async function openrouterGenerateText(params: {
     enabled: params.enableReasoning,
     efforts: params.reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
+    failClosed: params.modelId === "moonshotai/kimi-k3",
   });
   let useDefaultVerbosity = Boolean(defaultTextVerbosity(params.modelId));
 

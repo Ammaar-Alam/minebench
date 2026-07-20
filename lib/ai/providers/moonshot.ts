@@ -36,7 +36,8 @@ function looksLikeTokenLimitError(body: string): boolean {
 function defaultMoonshotTemperature(
   modelId: string,
   thinkingConfig?: MoonshotThinkingConfig,
-): number {
+): number | undefined {
+  if (modelId === "kimi-k3") return undefined;
   if (modelId === "kimi-k2.6" || modelId === "kimi-k2.5") {
     return thinkingConfig?.type === "disabled" ? 0.6 : 1.0;
   }
@@ -48,12 +49,13 @@ function defaultMoonshotTopP(modelId: string): number | undefined {
   return undefined;
 }
 
-function buildStructuredResponseFormat(jsonSchema?: Record<string, unknown>) {
+function buildStructuredResponseFormat(modelId: string, jsonSchema?: Record<string, unknown>) {
   if (!jsonSchema) return undefined;
   return {
     type: "json_schema",
     json_schema: {
       name: "minebench_output",
+      ...(modelId === "kimi-k3" ? { strict: true } : {}),
       schema: jsonSchema,
     },
   };
@@ -95,7 +97,7 @@ export async function moonshotGenerateText(params: {
 
   try {
     for (const tok of tokenBudgetCandidates(maxTokens)) {
-      const responseFormat = buildStructuredResponseFormat(params.jsonSchema);
+      const responseFormat = buildStructuredResponseFormat(params.modelId, params.jsonSchema);
       const temperature =
         typeof params.temperature === "number"
           ? params.temperature
@@ -117,10 +119,15 @@ export async function moonshotGenerateText(params: {
             { role: "user", content: params.user },
           ],
           stream: Boolean(params.onDelta),
-          temperature,
+          ...(typeof temperature === "number" ? { temperature } : {}),
           ...(typeof topP === "number" ? { top_p: topP } : {}),
           max_completion_tokens: tok,
-          ...(params.thinkingConfig ? { thinking: params.thinkingConfig } : {}),
+          ...(params.thinkingConfig?.type
+            ? { thinking: { type: params.thinkingConfig.type } }
+            : {}),
+          ...(params.thinkingConfig?.reasoningEffort
+            ? { reasoning_effort: params.thinkingConfig.reasoningEffort }
+            : {}),
           ...(responseFormat ? { response_format: responseFormat } : {}),
         }),
       });
@@ -155,11 +162,13 @@ export async function moonshotGenerateText(params: {
   }
 
   const budget = selectedTokenBudget ?? maxTokens;
-  const thinkingLabel = params.thinkingConfig?.type ?? "default";
+  const reasoningLabel = params.thinkingConfig?.reasoningEffort
+    ? `reasoning_effort=${params.thinkingConfig.reasoningEffort}`
+    : `thinking=${params.thinkingConfig?.type ?? "default"}`;
   const structuredLabel = params.jsonSchema ? "json_schema" : "text";
   params.onTrace?.(
     withMaxOutputTokens(
-      `Moonshot request config in use: thinking=${thinkingLabel}, response_format=${structuredLabel}.`,
+      `Moonshot request config in use: ${reasoningLabel}, response_format=${structuredLabel}.`,
       budget,
     ),
   );
