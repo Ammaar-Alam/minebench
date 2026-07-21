@@ -40,6 +40,11 @@ assert.equal(gpt55Pro?.averageInferenceTime, "21m 23.3s (1,283.3s)");
 assert.equal(gpt55Pro?.totalCost, "$223.90");
 
 const gpt54Pro = getModelBenchmarkProfile("openai_gpt_5_4_pro");
+assert.deepEqual(gpt54Pro?.parameters, [
+  { label: "Reasoning effort", value: "XHigh" },
+  { label: "Text verbosity", value: "High" },
+  { label: "Output cap", value: "128,000 tokens" },
+]);
 assert.equal(gpt54Pro?.averageInferenceTime, "56 minutes");
 assert.equal(gpt54Pro?.totalCost, "$435");
 
@@ -48,7 +53,10 @@ assert.equal(gpt54?.averageInferenceTime, undefined);
 assert.equal(gpt54?.totalCost, "~$25");
 
 const gpt53Codex = getModelBenchmarkProfile("openai_gpt_5_3_codex");
-assert.deepEqual(gpt53Codex?.parameters, [{ label: "Reasoning effort", value: "XHigh" }]);
+assert.deepEqual(gpt53Codex?.parameters, [
+  { label: "Reasoning effort", value: "XHigh" },
+  { label: "Output cap", value: "128,000 tokens" },
+]);
 assert.equal(gpt53Codex?.averageInferenceTime, undefined);
 assert.equal(gpt53Codex?.totalCost, "Under approximately $5");
 
@@ -84,11 +92,50 @@ assert.equal(
   "unknown persisted models should keep their database label",
 );
 
-for (const key of Object.keys(MODEL_BENCHMARK_PROFILES)) {
-  assert.ok(
-    MODEL_CATALOG.some((model) => model.key === key),
-    `benchmark profile ${key} should match a catalog model`,
+const catalogKeys = MODEL_CATALOG.map((model) => model.key);
+assert.equal(
+  new Set(catalogKeys).size,
+  catalogKeys.length,
+  "model catalog keys should be unique",
+);
+assert.deepEqual(
+  Object.keys(MODEL_BENCHMARK_PROFILES).sort(),
+  [...catalogKeys].sort(),
+  "every catalog model should have exactly one benchmark profile",
+);
+
+for (const model of MODEL_CATALOG) {
+  const profile = getModelBenchmarkProfile(model.key);
+  assert.ok(profile, `${model.key} should have benchmark details`);
+  assert.ok(profile.parameters.length > 0, `${model.key} should have run parameters`);
+
+  const labels = profile.parameters.map((parameter) => {
+    assert.ok(parameter.label.trim(), `${model.key} parameter labels should not be blank`);
+    assert.ok(parameter.value.trim(), `${model.key} parameter values should not be blank`);
+    return parameter.label;
+  });
+  assert.equal(
+    new Set(labels).size,
+    labels.length,
+    `${model.key} parameter labels should be unique`,
   );
 }
+
+assert.deepEqual(getModelBenchmarkProfile("gemini_3_1_pro")?.parameters, [
+  { label: "Thinking level", value: "High" },
+]);
+assert.equal(
+  Boolean(
+    getModelBenchmarkProfile("openai_gpt_5_4")?.averageInferenceTime ||
+      getModelBenchmarkProfile("openai_gpt_5_4")?.totalCost,
+  ),
+  true,
+  "a cost-only profile should count as having recorded statistics",
+);
+assert.equal(
+  Boolean(gpt45WebHarness?.averageInferenceTime || gpt45WebHarness?.totalCost),
+  false,
+  "the web-harness profile should use the historical statistics fallback",
+);
 
 console.log("model benchmark profile checks passed");

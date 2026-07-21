@@ -64,15 +64,13 @@ function InfoIcon() {
 function resolveProfile(modelKey: string): ModelBenchmarkProfile {
   return (
     getModelBenchmarkProfile(modelKey) ?? {
-      parameters: [],
-      note: UNTRACKED_RUN_NOTE,
+      parameters: [{ label: "Configuration", value: "Not recorded" }],
     }
   );
 }
 
-function profileRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
-  const rows = [...profile.parameters];
-
+function statisticRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
+  const rows: ModelRunParameter[] = [];
   if (profile.averageInferenceTime) {
     rows.push({ label: "Avg. inference", value: profile.averageInferenceTime });
   }
@@ -81,6 +79,24 @@ function profileRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
   }
 
   return rows;
+}
+
+function DetailRows({ rows }: { rows: readonly ModelRunParameter[] }) {
+  return (
+    <dl className="mt-1 divide-y divide-border/60 border-y border-border/70">
+      {rows.map((row) => (
+        <div
+          key={row.label}
+          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-xs"
+        >
+          <dt className="text-muted2">{row.label}</dt>
+          <dd className="text-right font-medium tabular-nums text-fg/95 [overflow-wrap:anywhere]">
+            {row.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
 }
 
 function DetailsContent({
@@ -93,7 +109,8 @@ function DetailsContent({
   showHeader: boolean;
 }) {
   const profile = resolveProfile(modelKey);
-  const rows = profileRows(profile);
+  const statistics = statisticRows(profile);
+  const sectionId = useId();
 
   return (
     <>
@@ -110,32 +127,37 @@ function DetailsContent({
         </div>
       ) : null}
 
-      {rows.length > 0 ? (
-        <dl
-          className={`${showHeader ? "mt-3" : ""} divide-y divide-border/60 border-y border-border/70`}
+      <section
+        className={showHeader ? "mt-3" : ""}
+        aria-labelledby={`${sectionId}-parameters`}
+      >
+        <h3
+          id={`${sectionId}-parameters`}
+          className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-muted2"
         >
-          {rows.map((row) => (
-            <div
-              key={row.label}
-              className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-xs"
-            >
-              <dt className="text-muted2">{row.label}</dt>
-              <dd className="text-right font-medium tabular-nums text-fg/95 [overflow-wrap:anywhere]">
-                {row.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      ) : null}
+          Parameters
+        </h3>
+        <DetailRows rows={profile.parameters} />
+      </section>
 
-      {profile.note ? (
-        <p
-          className={`${rows.length > 0 || showHeader ? "mt-3" : ""} text-xs leading-relaxed text-muted`}
+      <section className="mt-4" aria-labelledby={`${sectionId}-statistics`}>
+        <h3
+          id={`${sectionId}-statistics`}
+          className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-muted2"
         >
-          {profile.note}
-        </p>
-      ) : null}
-
+          Statistics
+        </h3>
+        {statistics.length > 0 ? (
+          <DetailRows rows={statistics} />
+        ) : (
+          <p className="mt-1 border-y border-border/70 py-2.5 text-xs leading-relaxed text-muted">
+            {UNTRACKED_RUN_NOTE}
+          </p>
+        )}
+        {profile.note ? (
+          <p className="mt-2 text-xs leading-relaxed text-muted">{profile.note}</p>
+        ) : null}
+      </section>
     </>
   );
 }
