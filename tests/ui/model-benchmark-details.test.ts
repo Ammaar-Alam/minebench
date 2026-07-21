@@ -31,7 +31,8 @@ assert.ok(
 assert.ok(
   detailsSource.includes('document.addEventListener("pointerdown"') &&
     detailsSource.includes('event.key === "Escape"') &&
-    detailsSource.includes("event.stopPropagation()"),
+    detailsSource.includes("event.stopPropagation()") &&
+    !detailsSource.includes("onKeyDown={(event) => event.stopPropagation()}"),
   "the desktop popover should dismiss cleanly without activating its leaderboard row",
 );
 assert.ok(

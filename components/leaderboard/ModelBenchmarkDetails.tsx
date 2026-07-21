@@ -158,7 +158,6 @@ export function ModelBenchmarkDetailsTrigger({
         event.stopPropagation();
         onToggle();
       }}
-      onKeyDown={(event) => event.stopPropagation()}
     >
       <InfoIcon />
     </button>
