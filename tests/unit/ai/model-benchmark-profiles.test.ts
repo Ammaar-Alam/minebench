@@ -17,9 +17,61 @@ assert.deepEqual(gpt56.parameters, [
   { label: "Combined reasoning/output cap", value: "128,000 tokens" },
 ]);
 assert.equal(gpt56.sourceRelease, "3.9.0");
-assert.equal(gpt56.averageInferenceTime, "25m 16s (1516.2s)");
+assert.equal(gpt56.averageInferenceTime, "25m 16.2s (1,516.2s)");
 assert.equal(gpt56.totalCost, "$710.82");
 assert.equal(gpt56.buildCount, 15);
+
+const fable5 = getModelBenchmarkProfile("anthropic_claude_fable_5");
+assert.equal(fable5?.averageInferenceTime, "18m 04.4s (1,084.4s)");
+assert.equal(fable5?.totalCost, "$54.93");
+assert.equal(fable5?.buildCount, 15);
+
+const opus48 = getModelBenchmarkProfile("anthropic_claude_4_8_opus");
+assert.equal(opus48?.averageInferenceTime, "24m 47.9s (1,487.9s)");
+assert.equal(opus48?.totalCost, "$41.52");
+assert.equal(opus48?.buildCount, 15);
+
+const gpt55 = getModelBenchmarkProfile("openai_gpt_5_5");
+assert.equal(gpt55?.averageInferenceTime, "10m 24s (624s)");
+assert.equal(gpt55?.totalCost, "$19.98");
+
+const gpt55Pro = getModelBenchmarkProfile("openai_gpt_5_5_pro");
+assert.equal(gpt55Pro?.averageInferenceTime, "21m 23.3s (1,283.3s)");
+assert.equal(gpt55Pro?.totalCost, "$223.90");
+
+const gpt54Pro = getModelBenchmarkProfile("openai_gpt_5_4_pro");
+assert.equal(gpt54Pro?.averageInferenceTime, "56 minutes");
+assert.equal(gpt54Pro?.totalCost, "$435");
+
+const gpt54 = getModelBenchmarkProfile("openai_gpt_5_4");
+assert.equal(gpt54?.averageInferenceTime, undefined);
+assert.equal(gpt54?.totalCost, "~$25");
+
+const gpt53Codex = getModelBenchmarkProfile("openai_gpt_5_3_codex");
+assert.deepEqual(gpt53Codex?.parameters, [{ label: "Reasoning effort", value: "XHigh" }]);
+assert.equal(gpt53Codex?.averageInferenceTime, undefined);
+assert.equal(gpt53Codex?.totalCost, "Under approximately $5");
+
+const opus47 = getModelBenchmarkProfile("anthropic_claude_4_7_opus");
+assert.equal(opus47?.averageInferenceTime, "~43m 20s (~2,600s)");
+assert.equal(opus47?.totalCost, "~$275");
+
+const opus46 = getModelBenchmarkProfile("anthropic_claude_4_6_opus");
+assert.equal(opus46?.averageInferenceTime, undefined);
+assert.equal(opus46?.totalCost, "~$22");
+
+const kimi26 = getModelBenchmarkProfile("moonshot_kimi_k2_6");
+assert.equal(kimi26?.averageInferenceTime, undefined);
+assert.equal(kimi26?.totalCost, "$2.35");
+
+const gpt45WebHarness = getModelBenchmarkProfile("openai_gpt_4_5_web_harness");
+assert.deepEqual(gpt45WebHarness?.parameters, [
+  { label: "Source", value: "ChatGPT web harness" },
+]);
+assert.equal(
+  gpt45WebHarness?.note,
+  "Imported from the web harness; not directly comparable to API-generated runs.",
+);
 
 assert.equal(
   resolveModelDisplayName("openai_gpt_5_6_sol", "stale database label"),

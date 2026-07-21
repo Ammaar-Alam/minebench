@@ -8,7 +8,11 @@ import { ErrorState } from "@/components/ErrorState";
 import { getConsistencyBand } from "@/lib/arena/consistencyBands";
 import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
 import { formatAge, readStale, writeStale } from "@/lib/staleCache";
-import { ModelBenchmarkDetails } from "@/components/leaderboard/ModelBenchmarkDetails";
+import {
+  ModelBenchmarkDetails,
+  ModelBenchmarkDetailsInline,
+  ModelBenchmarkDetailsTrigger,
+} from "@/components/leaderboard/ModelBenchmarkDetails";
 
 const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v4";
 // accept cached data up to 10 min — older than that we prefer "loading…" over shipping stale rankings
@@ -188,6 +192,7 @@ export function Leaderboard() {
   const [reloadToken, setReloadToken] = useState(0);
   const [navigatingModelKey, setNavigatingModelKey] = useState<string | null>(null);
   const [showDetailed, setShowDetailed] = useState(false);
+  const [expandedMobileModelKey, setExpandedMobileModelKey] = useState<string | null>(null);
   const router = useRouter();
   const activeModelCount = data?.models.length ?? 0;
   const topModel = data?.models[0] ?? null;
@@ -452,7 +457,16 @@ export function Leaderboard() {
 	                          >
 	                            {m.displayName}
 	                          </button>
-	                          <ModelBenchmarkDetails modelKey={m.key} displayName={m.displayName} />
+	                          <ModelBenchmarkDetailsTrigger
+	                            displayName={m.displayName}
+	                            expanded={expandedMobileModelKey === m.key}
+	                            controlsId={`mobile-model-details-${m.key}`}
+	                            onToggle={() =>
+	                              setExpandedMobileModelKey((current) =>
+	                                current === m.key ? null : m.key,
+	                              )
+	                            }
+	                          />
 	                        </div>
 	                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
 	                          <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
@@ -475,6 +489,13 @@ export function Leaderboard() {
                       </div>
                     </div>
                   </div>
+
+                  <ModelBenchmarkDetailsInline
+                    id={`mobile-model-details-${m.key}`}
+                    modelKey={m.key}
+                    displayName={m.displayName}
+                    open={expandedMobileModelKey === m.key}
+                  />
 
                   <div className="mt-2.5 flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
                     <span

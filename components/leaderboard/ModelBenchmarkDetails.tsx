@@ -1,44 +1,187 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+
 import {
   getModelBenchmarkProfile,
   type ModelBenchmarkProfile,
+  type ModelRunParameter,
 } from "@/lib/ai/modelBenchmarkProfiles";
+
+const UNTRACKED_RUN_NOTE = "This model was benchmarked before run statistics were tracked.";
+const POPOVER_WIDTH = 340;
+const VIEWPORT_GUTTER = 16;
+const POPOVER_GAP = 4;
+
+type DetailsPosition = {
+  arrowLeft: number;
+  left: number;
+  placement: "above" | "below";
+  top: number;
+  width: number;
+};
+
+type ModelBenchmarkDetailsProps = {
+  modelKey: string;
+  displayName: string;
+  className?: string;
+};
+
+type ModelBenchmarkDetailsTriggerProps = {
+  displayName: string;
+  expanded: boolean;
+  controlsId: string;
+  onToggle: () => void;
+  className?: string;
+};
+
+type ModelBenchmarkDetailsInlineProps = {
+  id: string;
+  modelKey: string;
+  displayName: string;
+  open: boolean;
+};
 
 function InfoIcon() {
   return (
     <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      viewBox="0 0 20 20"
+      className="h-[15px] w-[15px]"
+      viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.7"
+      strokeWidth="1.5"
       strokeLinecap="round"
-      strokeLinejoin="round"
+      aria-hidden="true"
     >
-      <circle cx="10" cy="10" r="7.25" />
-      <path d="M10 8.6v4.25" />
-      <path d="M10 6.25h.01" strokeWidth="2.25" />
+      <circle cx="8" cy="8" r="6.25" />
+      <path d="M8 7.25v3.5" />
+      <path d="M8 5.25h.01" strokeWidth="2" />
     </svg>
   );
 }
 
-function CloseIcon() {
+function resolveProfile(modelKey: string): ModelBenchmarkProfile {
   return (
-    <svg
-      aria-hidden="true"
-      className="h-4 w-4"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
+    getModelBenchmarkProfile(modelKey) ?? {
+      parameters: [],
+      note: UNTRACKED_RUN_NOTE,
+    }
+  );
+}
+
+function profileRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
+  const rows = [...profile.parameters];
+
+  if (profile.averageInferenceTime) {
+    rows.push({ label: "Avg. inference", value: profile.averageInferenceTime });
+  }
+  if (profile.totalCost) {
+    rows.push({ label: "Total cost", value: profile.totalCost });
+  }
+
+  return rows;
+}
+
+function DetailsContent({
+  modelKey,
+  displayName,
+  showHeader,
+}: {
+  modelKey: string;
+  displayName: string;
+  showHeader: boolean;
+}) {
+  const profile = resolveProfile(modelKey);
+  const rows = profileRows(profile);
+
+  return (
+    <>
+      {showHeader ? (
+        <div className="flex min-w-0 items-baseline justify-between gap-3">
+          <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight text-fg">
+            {displayName}
+          </h2>
+          {profile.sourceRelease ? (
+            <span className="shrink-0 font-mono text-[10px] text-muted2">
+              v{profile.sourceRelease.replace(/^v/, "")}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {rows.length > 0 ? (
+        <dl
+          className={`${showHeader ? "mt-3" : ""} divide-y divide-border/60 border-y border-border/70`}
+        >
+          {rows.map((row) => (
+            <div
+              key={row.label}
+              className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-xs"
+            >
+              <dt className="text-muted2">{row.label}</dt>
+              <dd className="text-right font-medium tabular-nums text-fg/95 [overflow-wrap:anywhere]">
+                {row.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+
+      {profile.note ? (
+        <p
+          className={`${rows.length > 0 || showHeader ? "mt-3" : ""} text-xs leading-relaxed text-muted`}
+        >
+          {profile.note}
+        </p>
+      ) : null}
+
+    </>
+  );
+}
+
+export function ModelBenchmarkDetailsTrigger({
+  displayName,
+  expanded,
+  controlsId,
+  onToggle,
+  className = "",
+}: ModelBenchmarkDetailsTriggerProps) {
+  return (
+    <button
+      type="button"
+      className={`relative inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted2 transition-colors before:absolute before:-inset-y-2.5 before:-left-1 before:-right-4 before:content-[''] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${className}`}
+      aria-label={`View ${displayName} run details`}
+      aria-expanded={expanded}
+      aria-controls={controlsId}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggle();
+      }}
+      onKeyDown={(event) => event.stopPropagation()}
     >
-      <path d="m4 4 8 8M12 4l-8 8" />
-    </svg>
+      <InfoIcon />
+    </button>
+  );
+}
+
+export function ModelBenchmarkDetailsInline({
+  id,
+  modelKey,
+  displayName,
+  open,
+}: ModelBenchmarkDetailsInlineProps) {
+  return (
+    <div
+      id={id}
+      role="region"
+      aria-label={`${displayName} run details`}
+      hidden={!open}
+      className="mt-3 border-t border-border/70 pt-3"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <DetailsContent modelKey={modelKey} displayName={displayName} showHeader={false} />
+    </div>
   );
 }
 
@@ -46,178 +189,129 @@ export function ModelBenchmarkDetails({
   modelKey,
   displayName,
   className = "",
-}: {
-  modelKey: string;
-  displayName: string;
-  className?: string;
-}) {
-  const recordedProfile = getModelBenchmarkProfile(modelKey);
-  const profile: ModelBenchmarkProfile = recordedProfile ?? {
-    parameters: [],
-    note: "This model was benchmarked before run statistics were tracked.",
-  };
+}: ModelBenchmarkDetailsProps) {
   const [open, setOpen] = useState(false);
-  const titleId = useId();
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const closeRef = useRef<HTMLButtonElement>(null);
-  const dialogRef = useRef<HTMLElement>(null);
-  const wasOpenRef = useRef(false);
+  const [position, setPosition] = useState<DetailsPosition | null>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const detailsId = useId();
+
+  const updatePosition = useCallback(() => {
+    const trigger = triggerRef.current?.getBoundingClientRect();
+    if (!trigger) return;
+
+    const width = Math.min(POPOVER_WIDTH, window.innerWidth - VIEWPORT_GUTTER * 2);
+    const panelHeight = panelRef.current?.offsetHeight ?? 300;
+    const spaceBelow = window.innerHeight - trigger.bottom - VIEWPORT_GUTTER;
+    const placeAbove = spaceBelow < panelHeight + POPOVER_GAP && trigger.top > spaceBelow;
+    const preferredTop = placeAbove
+      ? trigger.top - panelHeight - POPOVER_GAP
+      : trigger.bottom + POPOVER_GAP;
+    const top = Math.max(
+      VIEWPORT_GUTTER,
+      Math.min(preferredTop, window.innerHeight - panelHeight - VIEWPORT_GUTTER),
+    );
+    const left = Math.max(
+      VIEWPORT_GUTTER,
+      Math.min(trigger.left - 12, window.innerWidth - width - VIEWPORT_GUTTER),
+    );
+    const arrowLeft = Math.max(
+      12,
+      Math.min(trigger.left + trigger.width / 2 - left, width - 12),
+    );
+
+    setPosition({
+      arrowLeft,
+      left,
+      placement: placeAbove ? "above" : "below",
+      top,
+      width,
+    });
+  }, []);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [modelKey]);
 
   useEffect(() => {
     if (!open) return;
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-
-      const focusable = Array.from(
-        dialogRef.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-        ) ?? [],
-      );
-      if (focusable.length === 0) return;
-
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
+    const frame = window.requestAnimationFrame(updatePosition);
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (panelRef.current?.contains(target) || triggerRef.current?.contains(target)) return;
+      setOpen(false);
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const handleScroll = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && panelRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const handleResize = () => setOpen(false);
 
-    document.addEventListener("keydown", onKeyDown);
-    closeRef.current?.focus();
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleResize);
 
-  useEffect(() => {
-    if (open) {
-      wasOpenRef.current = true;
-      return;
-    }
-    if (!wasOpenRef.current) return;
-    wasOpenRef.current = false;
-    triggerRef.current?.focus({ preventScroll: true });
-  }, [open]);
-
-  const hasRunStats = Boolean(profile.averageInferenceTime || profile.totalCost);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [open, updatePosition]);
 
   return (
-    <>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted2 ring-1 ring-border/80 transition hover:bg-accent/10 hover:text-accent hover:ring-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${className}`}
-        aria-label={`View ${displayName} run details`}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        onClick={(event) => {
-          event.stopPropagation();
-          setOpen(true);
+    <span ref={triggerRef} className={`inline-flex ${className}`}>
+      <ModelBenchmarkDetailsTrigger
+        displayName={displayName}
+        expanded={open}
+        controlsId={detailsId}
+        onToggle={() => {
+          if (!open) updatePosition();
+          setOpen((current) => !current);
         }}
-        onKeyDown={(event) => event.stopPropagation()}
-      >
-        <InfoIcon />
-      </button>
-
+      />
       {open && typeof document !== "undefined"
         ? createPortal(
             <div
-              className="fixed inset-0 z-[120] flex items-end justify-center bg-bg/70 p-3 backdrop-blur-sm sm:items-center sm:p-6"
-              onMouseDown={() => setOpen(false)}
+              ref={panelRef}
+              id={detailsId}
+              role="region"
+              aria-label={`${displayName} run details`}
+              className={`fixed z-30 overflow-visible rounded-lg border border-border bg-card shadow-[0_18px_45px_-30px_rgba(0,0,0,0.65)] ${
+                position ? "opacity-100" : "pointer-events-none opacity-0"
+              }`}
+              style={{
+                left: position?.left ?? VIEWPORT_GUTTER,
+                top: position?.top ?? VIEWPORT_GUTTER,
+                width: position?.width ?? POPOVER_WIDTH,
+              }}
+              onClick={(event) => event.stopPropagation()}
             >
-              <section
-                ref={dialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby={titleId}
-                className="max-h-[calc(100dvh-1.5rem)] w-full max-w-md overflow-y-auto rounded-2xl bg-card shadow-soft ring-1 ring-border"
-                onMouseDown={(event) => event.stopPropagation()}
-              >
-                <div className="flex items-start justify-between gap-4 border-b border-border/80 px-4 py-4 sm:px-5">
-                  <div className="min-w-0">
-                    <div className="mb-eyebrow">Run details</div>
-                    <h2 id={titleId} className="mt-1 truncate text-lg font-semibold tracking-tight text-fg">
-                      {displayName}
-                    </h2>
-                  </div>
-                  <button
-                    ref={closeRef}
-                    type="button"
-                    className="mb-btn mb-btn-ghost h-8 w-8 shrink-0 rounded-full p-0"
-                    aria-label="Close run details"
-                    onClick={() => setOpen(false)}
-                  >
-                    <CloseIcon />
-                  </button>
-                </div>
-
-                <div className="space-y-5 px-4 py-4 sm:px-5 sm:py-5">
-                  {profile.parameters.length > 0 ? (
-                    <div>
-                      <h3 className="mb-eyebrow mb-2">Run setup</h3>
-                      <dl className="divide-y divide-border/60 border-y border-border/60">
-                        {profile.parameters.map((parameter) => (
-                          <div
-                            key={parameter.label}
-                            className="flex items-baseline justify-between gap-5 py-2.5 text-sm"
-                          >
-                            <dt className="text-muted">{parameter.label}</dt>
-                            <dd className="text-right font-medium text-fg">{parameter.value}</dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </div>
-                  ) : null}
-
-                  {hasRunStats ? (
-                    <div>
-                      <h3 className="mb-eyebrow mb-2">Benchmark run</h3>
-                      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border/70 ring-1 ring-border/70">
-                        <div className="bg-bg/70 px-3 py-3">
-                          <dt className="text-[11px] text-muted">Avg. inference</dt>
-                          <dd className="mt-1 font-mono text-sm font-semibold text-fg">
-                            {profile.averageInferenceTime ?? "—"}
-                          </dd>
-                        </div>
-                        <div className="bg-bg/70 px-3 py-3">
-                          <dt className="text-[11px] text-muted">Total cost</dt>
-                          <dd className="mt-1 font-mono text-sm font-semibold text-fg">
-                            {profile.totalCost ?? "—"}
-                          </dd>
-                        </div>
-                      </dl>
-                      <p className="mt-2 text-[11px] text-muted2">
-                        {profile.buildCount
-                          ? `Reported for a ${profile.buildCount}-build benchmark run.`
-                          : "Reported for this benchmark run."}
-                      </p>
-                    </div>
-                  ) : null}
-
-                  {profile.note ? (
-                    <p className="rounded-xl bg-warn/10 px-3 py-2.5 text-xs leading-relaxed text-warn ring-1 ring-warn/20">
-                      {profile.note}
-                    </p>
-                  ) : null}
-                  <p className="border-t border-border/60 pt-3 text-[11px] leading-relaxed text-muted2">
-                    Ratings reflect the current prompt set
-                    {profile.parameters.length > 0 ? " and run configuration shown" : ""}.
-                    {profile.sourceRelease ? ` Source: MineBench ${profile.sourceRelease}.` : ""}
-                  </p>
-                </div>
-              </section>
+              {position ? (
+                <span
+                  aria-hidden="true"
+                  className={`pointer-events-none absolute h-2.5 w-2.5 -translate-x-1/2 rotate-45 bg-card ${
+                    position.placement === "above"
+                      ? "-bottom-[5px] border-b border-r border-border"
+                      : "-top-[5px] border-l border-t border-border"
+                  }`}
+                  style={{ left: position.arrowLeft }}
+                />
+              ) : null}
+              <div className="max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain rounded-[inherit] p-4">
+                <DetailsContent modelKey={modelKey} displayName={displayName} showHeader />
+              </div>
             </div>,
             document.body,
           )
         : null}
-    </>
+    </span>
   );
 }

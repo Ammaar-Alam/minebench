@@ -23,7 +23,7 @@ export const MODEL_BENCHMARK_PROFILES: Partial<Record<ModelKey, ModelBenchmarkPr
       { label: "Text verbosity", value: "High" },
       { label: "Combined reasoning/output cap", value: "128,000 tokens" },
     ],
-    averageInferenceTime: "25m 16s (1516.2s)",
+    averageInferenceTime: "25m 16.2s (1,516.2s)",
     totalCost: "$710.82",
     buildCount: 15,
   },
@@ -72,7 +72,7 @@ export const MODEL_BENCHMARK_PROFILES: Partial<Record<ModelKey, ModelBenchmarkPr
       { label: "Sampling", value: "Provider default" },
       { label: "Output cap", value: "128,000 tokens" },
     ],
-    averageInferenceTime: "18m 4s (1084.4s)",
+    averageInferenceTime: "18m 04.4s (1,084.4s)",
     totalCost: "$54.93",
     buildCount: 15,
   },
@@ -83,7 +83,7 @@ export const MODEL_BENCHMARK_PROFILES: Partial<Record<ModelKey, ModelBenchmarkPr
       { label: "Reasoning effort", value: "Max" },
       { label: "Output cap", value: "128,000 tokens" },
     ],
-    averageInferenceTime: "24m 48s (1487.9s)",
+    averageInferenceTime: "24m 47.9s (1,487.9s)",
     totalCost: "$41.52",
     buildCount: 15,
   },
@@ -121,8 +121,8 @@ export const MODEL_BENCHMARK_PROFILES: Partial<Record<ModelKey, ModelBenchmarkPr
       { label: "Text verbosity", value: "High" },
       { label: "Output cap", value: "128,000 tokens" },
     ],
-    averageInferenceTime: "10m 24s (624.0s)",
-    totalCost: "$19.984",
+    averageInferenceTime: "10m 24s (624s)",
+    totalCost: "$19.98",
   },
   openai_gpt_5_5_pro: {
     sourceRelease: "3.3.2",
@@ -131,8 +131,21 @@ export const MODEL_BENCHMARK_PROFILES: Partial<Record<ModelKey, ModelBenchmarkPr
       { label: "Text verbosity", value: "High" },
       { label: "Output cap", value: "128,000 tokens" },
     ],
-    averageInferenceTime: "21m 23s (1283.3s)",
-    totalCost: "$223.889",
+    averageInferenceTime: "21m 23.3s (1,283.3s)",
+    totalCost: "$223.90",
+  },
+  openai_gpt_5_4: {
+    parameters: [],
+    totalCost: "~$25",
+  },
+  openai_gpt_5_4_pro: {
+    parameters: [],
+    averageInferenceTime: "56 minutes",
+    totalCost: "$435",
+  },
+  openai_gpt_5_3_codex: {
+    parameters: [{ label: "Reasoning effort", value: "XHigh" }],
+    totalCost: "Under approximately $5",
   },
   deepseek_v4_pro: {
     sourceRelease: "3.3.2",
@@ -143,8 +156,12 @@ export const MODEL_BENCHMARK_PROFILES: Partial<Record<ModelKey, ModelBenchmarkPr
   anthropic_claude_4_7_opus: {
     sourceRelease: "v3.0.0",
     parameters: [{ label: "Reasoning effort", value: "Max" }],
+    averageInferenceTime: "~43m 20s (~2,600s)",
     totalCost: "~$275",
-    note: "Average inference time was not recorded for this model.",
+  },
+  anthropic_claude_4_6_opus: {
+    parameters: [],
+    totalCost: "~$22",
   },
   zai_glm_5_1: {
     sourceRelease: "v3.0.0",
@@ -159,9 +176,7 @@ export const MODEL_BENCHMARK_PROFILES: Partial<Record<ModelKey, ModelBenchmarkPr
   moonshot_kimi_k2_6: {
     sourceRelease: "v3.0.0",
     parameters: [{ label: "Reasoning", value: "Thinking enabled" }],
-    averageInferenceTime: "~43m",
     totalCost: "$2.35",
-    buildCount: 15,
   },
   moonshot_kimi_k3: {
     sourceRelease: "3.10.0 draft",
