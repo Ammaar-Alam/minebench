@@ -31,6 +31,7 @@ import {
 import { enqueueArenaMatchupShownDurably } from "@/lib/arena/shownJobs";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
+import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 
 export const runtime = "nodejs";
 
@@ -931,7 +932,7 @@ export async function GET(req: Request) {
       model: {
         key: leftModel.key,
         provider: leftModel.provider,
-        displayName: leftModel.displayName,
+        displayName: resolveModelDisplayName(leftModel.key, leftModel.displayName),
         eloRating: leftModel.eloRating,
       },
       build:
@@ -957,7 +958,7 @@ export async function GET(req: Request) {
       model: {
         key: rightModel.key,
         provider: rightModel.provider,
-        displayName: rightModel.displayName,
+        displayName: resolveModelDisplayName(rightModel.key, rightModel.displayName),
         eloRating: rightModel.eloRating,
       },
       build:

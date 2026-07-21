@@ -70,7 +70,7 @@ async function main() {
 
   assert.equal(model.provider, "openai");
   assert.equal(model.modelId, "gpt-5.6-sol");
-  assert.equal(model.displayName, "GPT 5.6 Sol");
+  assert.equal(model.displayName, "GPT 5.6 Sol Pro");
   assert.equal(model.openRouterModelId, "openai/gpt-5.6-sol-pro");
   assert.equal(MODEL_SLUG.openai_gpt_5_6_sol, "gpt-5-6-sol");
   assert.deepEqual(openAiReasoningEffortAttempts(model.modelId), [
