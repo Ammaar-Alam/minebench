@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ModelBenchmarkDetailsInline } from "../../components/leaderboard/ModelBenchmarkDetails";
+
+(globalThis as typeof globalThis & { React: typeof React }).React = React;
 
 const detailsSource = readFileSync(
   "components/leaderboard/ModelBenchmarkDetails.tsx",
@@ -59,8 +64,17 @@ assert.ok(
   "models without recorded statistics should still receive a useful details note",
 );
 assert.ok(
-  detailsSource.includes("Avg. inference") && detailsSource.includes("Total cost"),
-  "recorded benchmark details should show inference time and total cost",
+  detailsSource.includes(">\n          Parameters\n        </h3>") &&
+    detailsSource.includes(">\n          Statistics\n        </h3>") &&
+    detailsSource.includes("<DetailRows rows={profile.parameters} />") &&
+    detailsSource.includes("<DetailRows rows={statistics} />"),
+  "run parameters and benchmark statistics should render as distinct sections",
+);
+assert.ok(
+  detailsSource.includes("Avg. inference") &&
+    detailsSource.includes("Total cost") &&
+    detailsSource.includes("statistics.length > 0"),
+  "recorded benchmark details should show available statistics before using the fallback",
 );
 assert.ok(
   !detailsSource.includes('label: "Run size"'),
@@ -83,11 +97,59 @@ assert.ok(
     !detailsSource.includes("Benchmark run") &&
     !detailsSource.includes("Run details") &&
     !detailsSource.includes("Ratings reflect the current prompt set"),
-  "the details hierarchy should remain flat and concise",
+  "the details hierarchy should keep concise, user-facing labels",
 );
 assert.ok(
   leaderboardSource.includes('const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v4"'),
   "the canonical model-name change should invalidate stale client leaderboard data",
+);
+
+const trackedMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "tracked-details",
+    modelKey: "openai_gpt_5_6_sol",
+    displayName: "GPT 5.6 Sol Pro",
+    open: true,
+  }),
+);
+assert.ok(
+  trackedMarkup.includes("Parameters") &&
+    trackedMarkup.includes("Statistics") &&
+    trackedMarkup.includes("25m 16.2s") &&
+    trackedMarkup.includes("$710.82") &&
+    !trackedMarkup.includes("before run statistics were tracked"),
+  "a fully tracked model should render parameters and both benchmark statistics",
+);
+
+const costOnlyMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "cost-only-details",
+    modelKey: "openai_gpt_5_4",
+    displayName: "GPT 5.4",
+    open: true,
+  }),
+);
+assert.ok(
+  costOnlyMarkup.includes("XHigh") &&
+    costOnlyMarkup.includes("Total cost") &&
+    costOnlyMarkup.includes("~$25") &&
+    !costOnlyMarkup.includes("before run statistics were tracked"),
+  "a cost-only model should render its available statistic without the fallback",
+);
+
+const untrackedMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "untracked-details",
+    modelKey: "openai_gpt_4_5_web_harness",
+    displayName: "GPT 4.5 (web harness)",
+    open: true,
+  }),
+);
+assert.ok(
+  untrackedMarkup.includes("ChatGPT web harness") &&
+    untrackedMarkup.includes("before run statistics were tracked") &&
+    untrackedMarkup.includes("not directly comparable to API-generated runs"),
+  "an untracked run should keep its parameters, statistics fallback, and comparability note",
 );
 
 console.log("model benchmark details UI checks passed");
