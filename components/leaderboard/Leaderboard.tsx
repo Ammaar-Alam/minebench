@@ -428,12 +428,9 @@ export function Leaderboard() {
 	                <div
 	                  key={m.key}
 	                  className={`w-full rounded-2xl bg-gradient-to-b from-bg/62 to-bg/44 p-3 text-left ring-1 ring-border/70 transition ${
-                    navigatingModelKey === m.key
-                      ? "opacity-75"
-                      : "active:ring-accent/45 active:from-bg/72"
+                    navigatingModelKey === m.key ? "opacity-75" : ""
 	                  }`}
 	                  onMouseEnter={() => prefetchModel(m.key)}
-	                  onClick={() => navigateToModel(m.key)}
 	                >
 	                  <div className="flex items-start justify-between gap-3">
 	                    <div className="flex min-w-0 items-start gap-3">
@@ -682,8 +679,7 @@ export function Leaderboard() {
 	                    key={m.key}
 	                    data-tier={tier}
 	                    onMouseEnter={() => prefetchModel(m.key)}
-	                    onClick={() => navigateToModel(m.key)}
-                    className={`mb-leaderboard-row group mb-card-enter cursor-pointer ${
+                    className={`mb-leaderboard-row mb-card-enter ${
                       navigatingModelKey === m.key ? "opacity-75" : ""
                     }`}
                     style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}
@@ -700,7 +696,7 @@ export function Leaderboard() {
 	                          <div className="flex min-w-0 items-center gap-1.5">
 	                            <button
 	                              type="button"
-	                              className="min-w-0 truncate text-left font-medium text-fg transition-colors duration-200 group-hover:text-accent focus-visible:outline-none focus-visible:text-accent"
+	                              className="min-w-0 truncate text-left font-medium text-fg transition-colors duration-200 hover:text-accent focus-visible:outline-none focus-visible:text-accent"
 	                              aria-label={`Open ${m.displayName} profile`}
 	                              onFocus={() => prefetchModel(m.key)}
 	                              onClick={(event) => {

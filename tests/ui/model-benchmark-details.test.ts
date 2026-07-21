@@ -74,6 +74,11 @@ assert.ok(
   "mobile leaderboard cards should expand inline while desktop and model profiles expose the popover",
 );
 assert.ok(
+  !leaderboardSource.includes("onClick={() => navigateToModel(m.key)}") &&
+    leaderboardSource.includes('aria-label={`Open ${m.displayName} profile`}'),
+  "leaderboard navigation should stay on explicit keyboard-accessible model controls",
+);
+assert.ok(
   !detailsSource.includes("Run setup") &&
     !detailsSource.includes("Benchmark run") &&
     !detailsSource.includes("Run details") &&
