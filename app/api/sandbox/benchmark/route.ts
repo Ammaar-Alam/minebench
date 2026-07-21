@@ -11,6 +11,7 @@ import {
   isDatabaseUnavailableError,
 } from "@/lib/db/errors";
 import { prisma } from "@/lib/prisma";
+import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 
 export const runtime = "nodejs";
 
@@ -183,7 +184,7 @@ export async function GET(req: Request) {
     const models: ModelOption[] = modelRows.map((m) => ({
       key: m.key,
       provider: m.provider,
-      displayName: m.displayName,
+      displayName: resolveModelDisplayName(m.key, m.displayName),
       eloRating: Number(m.eloRating),
     }));
 
@@ -381,7 +382,7 @@ export async function GET(req: Request) {
         model: {
           key: build.model.key,
           provider: build.model.provider,
-          displayName: build.model.displayName,
+          displayName: resolveModelDisplayName(build.model.key, build.model.displayName),
           eloRating: Number(build.model.eloRating),
         },
         metrics: {

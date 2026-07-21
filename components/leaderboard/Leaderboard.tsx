@@ -8,8 +8,9 @@ import { ErrorState } from "@/components/ErrorState";
 import { getConsistencyBand } from "@/lib/arena/consistencyBands";
 import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
 import { formatAge, readStale, writeStale } from "@/lib/staleCache";
+import { ModelBenchmarkDetails } from "@/components/leaderboard/ModelBenchmarkDetails";
 
-const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v3";
+const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v4";
 // accept cached data up to 10 min — older than that we prefer "loading…" over shipping stale rankings
 const LEADERBOARD_STALE_MAX_AGE_MS = 10 * 60 * 1000;
 const LEADERBOARD_SLOW_THRESHOLD_MS = 5_000;
@@ -419,19 +420,16 @@ export function Leaderboard() {
 	              const coveragePercent = Math.round((m.promptCoverage ?? 0) * 100);
 	              const moveBadge = movementBadge(m);
 	              return (
-                <button
-                  key={m.key}
-                  type="button"
-                  className={`w-full rounded-2xl bg-gradient-to-b from-bg/62 to-bg/44 p-3 text-left ring-1 ring-border/70 transition ${
+	                <div
+	                  key={m.key}
+	                  className={`w-full rounded-2xl bg-gradient-to-b from-bg/62 to-bg/44 p-3 text-left ring-1 ring-border/70 transition ${
                     navigatingModelKey === m.key
                       ? "opacity-75"
                       : "active:ring-accent/45 active:from-bg/72"
-                  }`}
-                  onMouseEnter={() => prefetchModel(m.key)}
-                  onFocus={() => prefetchModel(m.key)}
-                  onClick={() => navigateToModel(m.key)}
-                  aria-label={`Open ${m.displayName} profile`}
-                >
+	                  }`}
+	                  onMouseEnter={() => prefetchModel(m.key)}
+	                  onClick={() => navigateToModel(m.key)}
+	                >
 	                  <div className="flex items-start justify-between gap-3">
 	                    <div className="flex min-w-0 items-start gap-3">
 	                      <div className="flex w-9 flex-col items-center gap-0.5 pt-0.5">
@@ -441,8 +439,20 @@ export function Leaderboard() {
 	                        <MovementMark badge={moveBadge} />
 	                      </div>
 	                      <div className="min-w-0">
-	                        <div className="mt-1.5 min-w-0 truncate text-[1rem] font-semibold tracking-tight text-fg">
-	                          {m.displayName}
+	                        <div className="mt-1.5 flex min-w-0 items-center gap-1.5">
+	                          <button
+	                            type="button"
+	                            className="min-w-0 truncate text-left text-[1rem] font-semibold tracking-tight text-fg focus-visible:outline-none focus-visible:text-accent"
+	                            aria-label={`Open ${m.displayName} profile`}
+	                            onFocus={() => prefetchModel(m.key)}
+	                            onClick={(event) => {
+	                              event.stopPropagation();
+	                              navigateToModel(m.key);
+	                            }}
+	                          >
+	                            {m.displayName}
+	                          </button>
+	                          <ModelBenchmarkDetails modelKey={m.key} displayName={m.displayName} />
 	                        </div>
 	                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
 	                          <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>
@@ -522,7 +532,7 @@ export function Leaderboard() {
                     <span>{voteSummary.totalVotes.toLocaleString()} votes</span>
                     <span>{m.bothBadCount.toLocaleString()} both bad</span>
                   </div>
-                </button>
+	                </div>
               );
             })}
             {!data ? (
@@ -647,20 +657,11 @@ export function Leaderboard() {
 	                const tier = index === 0 ? "champion" : index < 3 ? "top" : "base";
 	                const moveBadge = movementBadge(m);
 	                return (
-                  <tr
-                    key={m.key}
-                    role="link"
-                    tabIndex={0}
-                    data-tier={tier}
-                    aria-label={`Open ${m.displayName} profile`}
-                    onMouseEnter={() => prefetchModel(m.key)}
-                    onFocus={() => prefetchModel(m.key)}
-                    onClick={() => navigateToModel(m.key)}
-                    onKeyDown={(e) => {
-                      if (e.key !== "Enter" && e.key !== " ") return;
-                      e.preventDefault();
-                      navigateToModel(m.key);
-                    }}
+	                  <tr
+	                    key={m.key}
+	                    data-tier={tier}
+	                    onMouseEnter={() => prefetchModel(m.key)}
+	                    onClick={() => navigateToModel(m.key)}
                     className={`mb-leaderboard-row group mb-card-enter cursor-pointer ${
                       navigatingModelKey === m.key ? "opacity-75" : ""
                     }`}
@@ -675,8 +676,20 @@ export function Leaderboard() {
 	                          <MovementMark badge={moveBadge} />
 	                        </div>
 	                        <div className="min-w-0">
-	                          <div className="min-w-0 truncate font-medium text-fg transition-colors duration-200 group-hover:text-accent group-focus-visible:text-accent">
-	                            {m.displayName}
+	                          <div className="flex min-w-0 items-center gap-1.5">
+	                            <button
+	                              type="button"
+	                              className="min-w-0 truncate text-left font-medium text-fg transition-colors duration-200 group-hover:text-accent focus-visible:outline-none focus-visible:text-accent"
+	                              aria-label={`Open ${m.displayName} profile`}
+	                              onFocus={() => prefetchModel(m.key)}
+	                              onClick={(event) => {
+	                                event.stopPropagation();
+	                                navigateToModel(m.key);
+	                              }}
+	                            >
+	                              {m.displayName}
+	                            </button>
+	                            <ModelBenchmarkDetails modelKey={m.key} displayName={m.displayName} />
 	                          </div>
 	                          <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
 	                            <span className="truncate text-xs tracking-wide text-muted2">{m.provider}</span>

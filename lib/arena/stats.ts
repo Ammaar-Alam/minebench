@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
 import {
@@ -1206,7 +1207,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   const opponents: ModelOpponentBreakdown[] = opponentRows
     .map((row) => ({
       key: row.key,
-      displayName: row.displayName,
+      displayName: resolveModelDisplayName(row.key, row.displayName),
       votes: toNumber(row.votes),
       averageScore: toNumber(row.averageScore),
       wins: toNumber(row.wins),
@@ -1241,7 +1242,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
     model: {
       key: model.key,
       provider: model.provider,
-      displayName: model.displayName,
+      displayName: resolveModelDisplayName(model.key, model.displayName),
       eloRating: rawRating,
       ratingDeviation,
       rankScore,

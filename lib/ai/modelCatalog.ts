@@ -82,7 +82,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     key: "openai_gpt_5_6_sol",
     provider: "openai",
     modelId: "gpt-5.6-sol",
-    displayName: "GPT 5.6 Sol",
+    displayName: "GPT 5.6 Sol Pro",
     enabled: true,
     openRouterModelId: "openai/gpt-5.6-sol-pro",
   },
@@ -500,4 +500,8 @@ export function getModelByKey(key: ModelKey): ModelCatalogEntry {
   const found = MODEL_CATALOG.find((m) => m.key === key);
   if (!found) throw new Error(`Unknown model key: ${key}`);
   return found;
+}
+
+export function resolveModelDisplayName(key: string, fallback: string): string {
+  return MODEL_CATALOG.find((model) => model.key === key)?.displayName ?? fallback;
 }

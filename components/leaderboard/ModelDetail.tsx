@@ -37,6 +37,7 @@ import {
   type SandboxGifExportTarget,
 } from "@/components/sandbox/SandboxGifExportButton";
 import { getConsistencyBand, getConsistencyLabel } from "@/lib/arena/consistencyBands";
+import { ModelBenchmarkDetails } from "@/components/leaderboard/ModelBenchmarkDetails";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -1441,10 +1442,17 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                pushes to the far right at the name's baseline so the dead
                space next to the display-type is used; on mobile it wraps
                underneath. */}
-            <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
-              <h1 className="max-w-[18ch] font-display text-[2.1rem] font-semibold leading-[0.96] tracking-[-0.02em] text-fg sm:text-[3.2rem]">
-                {data.model.displayName}
-              </h1>
+	            <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
+	              <div className="flex max-w-full items-end gap-2.5">
+	                <h1 className="max-w-[18ch] font-display text-[2.1rem] font-semibold leading-[0.96] tracking-[-0.02em] text-fg sm:text-[3.2rem]">
+	                  {data.model.displayName}
+	                </h1>
+	                <ModelBenchmarkDetails
+	                  modelKey={data.model.key}
+	                  displayName={data.model.displayName}
+	                  className="mb-0.5 sm:mb-1"
+	                />
+	              </div>
               {/* Colorized meta — stability takes its colored dot+word, the
                  record W–L–D becomes three tinted tokens so you can read
                  the result at a glance instead of parsing one gray string. */}
