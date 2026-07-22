@@ -36,6 +36,8 @@ export type ModelKey =
   | "anthropic_claude_4_6_opus"
   | "anthropic_claude_4_7_opus"
   | "anthropic_claude_4_8_opus"
+  | "gemini_3_6_flash"
+  | "gemini_3_5_flash_lite"
   | "gemini_3_5_flash"
   | "gemini_3_0_pro"
   | "gemini_3_1_pro"
@@ -277,6 +279,22 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Claude 4.8 Opus",
     enabled: true,
     openRouterModelId: "anthropic/claude-opus-4.8",
+  },
+  {
+    key: "gemini_3_6_flash",
+    provider: "gemini",
+    modelId: "gemini-3.6-flash",
+    displayName: "Gemini 3.6 Flash",
+    enabled: true,
+    openRouterModelId: "google/gemini-3.6-flash",
+  },
+  {
+    key: "gemini_3_5_flash_lite",
+    provider: "gemini",
+    modelId: "gemini-3.5-flash-lite",
+    displayName: "Gemini 3.5 Flash-Lite",
+    enabled: true,
+    openRouterModelId: "google/gemini-3.5-flash-lite",
   },
   {
     key: "gemini_3_5_flash",

@@ -112,6 +112,16 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "Max" },
     { label: "Output cap", value: "128,000 tokens" },
   ],
+  gemini_3_6_flash: [
+    { label: "Thinking level", value: "High" },
+    { label: "Sampling", value: "Provider default" },
+    { label: "Output cap", value: "65,536 tokens" },
+  ],
+  gemini_3_5_flash_lite: [
+    { label: "Thinking level", value: "High" },
+    { label: "Sampling", value: "Provider default" },
+    { label: "Output cap", value: "65,536 tokens" },
+  ],
   gemini_3_5_flash: [
     { label: "Thinking level", value: "High" },
     { label: "Output cap", value: "65,536 tokens" },

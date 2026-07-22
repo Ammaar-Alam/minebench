@@ -118,22 +118,7 @@ export async function geminiGenerateText(params: {
       lastBody = await res.text().catch(() => "");
       // Retry with smaller token budget if that looks like the issue
       if (res.status === 400 && lastBody.toLowerCase().includes("maxoutputtokens")) continue;
-    }
-
-    if (!res || !res.ok) {
-      const fallbackPayload = { ...basePayload };
-      const fallbackRes = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
-        body: JSON.stringify(fallbackPayload),
-      });
-      if (fallbackRes.ok) {
-        res = fallbackRes;
-      } else {
-        lastBody = (await fallbackRes.text().catch(() => ""));
-        res = fallbackRes;
-      }
+      break;
     }
 
     if (!res) throw new Error("Gemini request failed");

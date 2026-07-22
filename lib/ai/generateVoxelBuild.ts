@@ -73,7 +73,14 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   if (modelId === "gpt-5-pro") return 272_000;
   if (modelId.startsWith("gpt-5")) return 128_000;
   if (modelId === "kimi-k3" || modelId === "moonshotai/kimi-k3") return 1_048_576;
-  if (modelId === "gemini-3.5-flash" || modelId === "google/gemini-3.5-flash") {
+  if (
+    modelId === "gemini-3.6-flash" ||
+    modelId === "google/gemini-3.6-flash" ||
+    modelId === "gemini-3.5-flash-lite" ||
+    modelId === "google/gemini-3.5-flash-lite" ||
+    modelId === "gemini-3.5-flash" ||
+    modelId === "google/gemini-3.5-flash"
+  ) {
     return 65_536;
   }
   if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
@@ -158,6 +165,8 @@ function usesDefaultSamplingForModel(modelId: string): boolean {
     normalized.startsWith("openai/gpt-5.6") ||
     normalized === "kimi-k3" ||
     normalized === "moonshotai/kimi-k3" ||
+    normalized === "google/gemini-3.6-flash" ||
+    normalized === "google/gemini-3.5-flash-lite" ||
     normalized === "claude-fable-5" ||
     normalized === "anthropic/claude-fable-5" ||
     normalized === "claude-sonnet-5" ||
