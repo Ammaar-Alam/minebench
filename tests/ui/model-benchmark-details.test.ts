@@ -139,6 +139,23 @@ assert.ok(
   "a cost-only model should render its available statistic without the fallback",
 );
 
+const timeOnlyMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "time-only-details",
+    modelKey: "gemini_3_6_flash",
+    displayName: "Gemini 3.6 Flash",
+    open: true,
+  }),
+);
+assert.ok(
+  timeOnlyMarkup.includes("High") &&
+    timeOnlyMarkup.includes("Avg. inference") &&
+    timeOnlyMarkup.includes("1m 41.9s") &&
+    !timeOnlyMarkup.includes("Total cost") &&
+    !timeOnlyMarkup.includes("before run statistics were tracked"),
+  "a time-only model should render its available statistic without inventing a cost",
+);
+
 const untrackedMarkup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
     id: "untracked-details",

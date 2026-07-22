@@ -21,6 +21,18 @@ assert.equal(gpt56.averageInferenceTime, "25m 16.2s (1,516.2s)");
 assert.equal(gpt56.totalCost, "$710.82");
 assert.equal(gpt56.buildCount, 15);
 
+const gemini36Flash = getModelBenchmarkProfile("gemini_3_6_flash");
+assert.equal(gemini36Flash?.sourceRelease, "3.10.0 draft");
+assert.equal(gemini36Flash?.averageInferenceTime, "1m 41.9s (101.9s)");
+assert.equal(gemini36Flash?.totalCost, undefined);
+assert.equal(gemini36Flash?.buildCount, 15);
+
+const gemini35FlashLite = getModelBenchmarkProfile("gemini_3_5_flash_lite");
+assert.equal(gemini35FlashLite?.sourceRelease, "3.10.0 draft");
+assert.equal(gemini35FlashLite?.averageInferenceTime, "25.7s");
+assert.equal(gemini35FlashLite?.totalCost, undefined);
+assert.equal(gemini35FlashLite?.buildCount, 15);
+
 const fable5 = getModelBenchmarkProfile("anthropic_claude_fable_5");
 assert.equal(fable5?.averageInferenceTime, "18m 04.4s (1,084.4s)");
 assert.equal(fable5?.totalCost, "$54.93");
