@@ -6,6 +6,7 @@ import {
   openRouterReasoningEffortAttempts,
 } from "../../../lib/ai/reasoningProfiles";
 import { geminiGenerateText } from "../../../lib/ai/providers/gemini";
+import { voxelExecToolCallJsonSchema } from "../../../lib/ai/tools/voxelExec";
 import { MODEL_KEY_BY_SLUG, MODEL_SLUG } from "../../../scripts/uploadsCatalog";
 
 type CapturedRequest = {
@@ -54,6 +55,13 @@ function validBuildJson(): string {
     lines: [],
     blocks: [{ x: 0, y: 0, z: 0, type: "stone" }],
   });
+}
+
+function schemaContainsKey(value: unknown, key: string): boolean {
+  if (Array.isArray(value)) return value.some((entry) => schemaContainsKey(entry, key));
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return Object.hasOwn(record, key) || Object.values(record).some((entry) => schemaContainsKey(entry, key));
 }
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -152,6 +160,16 @@ async function main() {
     assert.equal(Object.hasOwn(generationConfig, "temperature"), false);
     assert.equal(generationConfig.responseMimeType, "application/json");
     assert.ok(generationConfig.responseJsonSchema, "Direct request should include the voxel schema");
+    assert.equal(
+      schemaContainsKey(generationConfig.responseJsonSchema, "minLength"),
+      false,
+      "Direct request should remove JSON Schema keywords unsupported by Gemini",
+    );
+    assert.equal(
+      schemaContainsKey(generationConfig.responseJsonSchema, "minItems"),
+      true,
+      "Direct request should preserve Gemini-supported array constraints",
+    );
     assert.ok(
       directTraces.some((trace) =>
         trace.includes(`Routing via direct gemini provider (${expected.modelId})`) &&
@@ -212,6 +230,32 @@ async function main() {
       `OpenRouter ${expected.displayName} trace should report the output cap and highest reasoning effort`,
     );
   }
+
+  const toolSchema = voxelExecToolCallJsonSchema();
+  assert.equal(schemaContainsKey(toolSchema, "minLength"), true);
+  const toolRequestStart = capturedRequests.length;
+  await geminiGenerateText({
+    modelId: "gemini-3.6-flash",
+    apiKey: "test-google-key",
+    system: "Return a tool call.",
+    user: "small tower",
+    maxOutputTokens: 65536,
+    thinkingConfig: { thinkingLevel: "high" },
+    jsonSchema: toolSchema as unknown as Record<string, unknown>,
+  });
+  const toolRequest = capturedRequests[toolRequestStart]?.body;
+  assert.ok(toolRequest, "Direct Gemini tool-schema request should be captured");
+  const toolGenerationConfig = toolRequest.generationConfig as Record<string, unknown>;
+  assert.equal(
+    schemaContainsKey(toolGenerationConfig.responseJsonSchema, "minLength"),
+    false,
+    "Direct tool schema should remove unsupported Gemini keywords",
+  );
+  assert.equal(
+    schemaContainsKey(toolSchema, "minLength"),
+    true,
+    "Gemini schema sanitization should not mutate the shared tool schema",
+  );
 
   rejectDirectSchemaRequests = true;
   const rejectedRequestStart = capturedRequests.length;

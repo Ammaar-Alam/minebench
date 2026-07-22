@@ -5,6 +5,53 @@ import type { GeminiThinkingConfig } from "@/lib/ai/reasoningProfiles";
 
 type JsonSchema = Record<string, unknown>;
 
+const GEMINI_SUPPORTED_JSON_SCHEMA_KEYS = new Set([
+  "$id",
+  "$defs",
+  "$ref",
+  "$anchor",
+  "type",
+  "format",
+  "title",
+  "description",
+  "enum",
+  "items",
+  "prefixItems",
+  "minItems",
+  "maxItems",
+  "minimum",
+  "maximum",
+  "anyOf",
+  "oneOf",
+  "properties",
+  "additionalProperties",
+  "required",
+  "propertyOrdering",
+]);
+
+function sanitizeGeminiJsonSchema(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeGeminiJsonSchema);
+  if (!value || typeof value !== "object") return value;
+
+  const input = value as Record<string, unknown>;
+  const output: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(input)) {
+    if (!GEMINI_SUPPORTED_JSON_SCHEMA_KEYS.has(key)) continue;
+    if (key === "properties" || key === "$defs") {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      output[key] = Object.fromEntries(
+        Object.entries(entry as Record<string, unknown>).map(([name, schema]) => [
+          name,
+          sanitizeGeminiJsonSchema(schema),
+        ]),
+      );
+      continue;
+    }
+    output[key] = sanitizeGeminiJsonSchema(entry);
+  }
+  return output;
+}
+
 type GeminiGenerateContentResponse = {
   candidates?: { content?: { parts?: { text?: string }[] } }[];
 };
@@ -79,6 +126,7 @@ export async function geminiGenerateText(params: {
   try {
     const thinkingConfig = params.thinkingConfig ?? bestThinkingConfigForModel(params.modelId);
     const thinkingConfigLine = describeThinkingConfigLine(thinkingConfig);
+    const responseJsonSchema = sanitizeGeminiJsonSchema(params.jsonSchema) as JsonSchema;
     const generationConfig = {
       ...(usesDefaultSampling(params.modelId) ? {} : { temperature: params.temperature ?? 0.2 }),
       maxOutputTokens: params.maxOutputTokens ?? 8192,
@@ -100,7 +148,7 @@ export async function geminiGenerateText(params: {
           ...(basePayload.generationConfig as object),
           maxOutputTokens: tok,
           responseMimeType: "application/json",
-          responseJsonSchema: params.jsonSchema,
+          responseJsonSchema,
         },
       };
       const headers: Record<string, string> = { "Content-Type": "application/json" };
