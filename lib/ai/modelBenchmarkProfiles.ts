@@ -234,12 +234,12 @@ const MODEL_BENCHMARK_METADATA: Partial<
     buildCount: 15,
   },
   gemini_3_6_flash: {
-    sourceRelease: "3.10.0 draft",
+    sourceRelease: "3.10.0",
     averageInferenceTime: "1m 41.9s (101.9s)",
     buildCount: 15,
   },
   gemini_3_5_flash_lite: {
-    sourceRelease: "3.10.0 draft",
+    sourceRelease: "3.10.0",
     averageInferenceTime: "25.7s",
     buildCount: 15,
   },
@@ -303,7 +303,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
     totalCost: "$2.35",
   },
   moonshot_kimi_k3: {
-    sourceRelease: "3.10.0 draft",
+    sourceRelease: "3.10.0",
     averageInferenceTime: "32m 46s (1966.0s)",
     totalCost: "$12.70",
     buildCount: 15,
