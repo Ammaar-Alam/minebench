@@ -14,6 +14,7 @@ import {
 const POPOVER_WIDTH = 340;
 const VIEWPORT_GUTTER = 16;
 const POPOVER_GAP = 4;
+const BENCHMARK_PREDATES_TRACKING = "Benchmark predates tracking";
 
 type DetailsPosition = {
   arrowLeft: number;
@@ -100,7 +101,7 @@ function parameterRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
       label: "Output cap",
       value:
         profile.outputCapTokens === undefined
-          ? "Not tracked"
+          ? BENCHMARK_PREDATES_TRACKING
           : `${formatInteger(profile.outputCapTokens)} tokens`,
     },
   ];
@@ -110,18 +111,20 @@ function statisticRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
   return [
     {
       label: "Average inference time",
-      value: profile.averageInference ? formatDuration(profile.averageInference) : "Not tracked",
+      value: profile.averageInference
+        ? formatDuration(profile.averageInference)
+        : BENCHMARK_PREDATES_TRACKING,
     },
     {
       label: "Average JSON size",
       value:
         profile.averageJsonSizeBytes === undefined
-          ? "Not tracked"
+          ? BENCHMARK_PREDATES_TRACKING
           : formatJsonSize(profile.averageJsonSizeBytes),
     },
     {
       label: "Total cost",
-      value: profile.totalCost ? formatCost(profile.totalCost) : "Not tracked",
+      value: profile.totalCost ? formatCost(profile.totalCost) : BENCHMARK_PREDATES_TRACKING,
     },
   ];
 }

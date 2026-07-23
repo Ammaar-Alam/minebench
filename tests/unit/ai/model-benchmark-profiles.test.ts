@@ -23,7 +23,7 @@ assert.ok(
   Number.isInteger(gpt56.averageJsonSizeBytes) && (gpt56.averageJsonSizeBytes ?? 0) > 0,
   "GPT 5.6 Sol Pro should use the generated exact JSON-size aggregate",
 );
-assert.equal(gpt56.totalCost, undefined);
+assert.deepEqual(gpt56.totalCost, { usd: 710.82 });
 assert.equal(gpt56.buildCount, 15);
 
 const gemini36Flash = getModelBenchmarkProfile("gemini_3_6_flash");

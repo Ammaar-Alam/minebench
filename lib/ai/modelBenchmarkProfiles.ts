@@ -214,6 +214,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   openai_gpt_5_6_sol: {
     sourceRelease: "3.9.0",
     averageInference: { milliseconds: 1_516_200 },
+    totalCost: { usd: 710.82 },
     buildCount: 15,
   },
   xai_grok_4_5: {
