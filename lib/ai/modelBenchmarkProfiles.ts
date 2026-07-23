@@ -112,6 +112,16 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "Max" },
     { label: "Output cap", value: "128,000 tokens" },
   ],
+  gemini_3_6_flash: [
+    { label: "Thinking level", value: "High" },
+    { label: "Sampling", value: "Provider default" },
+    { label: "Output cap", value: "65,536 tokens" },
+  ],
+  gemini_3_5_flash_lite: [
+    { label: "Thinking level", value: "High" },
+    { label: "Sampling", value: "Provider default" },
+    { label: "Output cap", value: "65,536 tokens" },
+  ],
   gemini_3_5_flash: [
     { label: "Thinking level", value: "High" },
     { label: "Output cap", value: "65,536 tokens" },
@@ -223,6 +233,18 @@ const MODEL_BENCHMARK_METADATA: Partial<
     totalCost: "$41.52",
     buildCount: 15,
   },
+  gemini_3_6_flash: {
+    sourceRelease: "3.10.0",
+    averageInferenceTime: "1m 41.9s (101.9s)",
+    totalCost: "$2.84",
+    buildCount: 15,
+  },
+  gemini_3_5_flash_lite: {
+    sourceRelease: "3.10.0",
+    averageInferenceTime: "25.7s",
+    totalCost: "$0.38",
+    buildCount: 15,
+  },
   gemini_3_5_flash: {
     sourceRelease: "3.6.0",
     averageInferenceTime: "1m 54s (114.1s)",
@@ -283,7 +305,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
     totalCost: "$2.35",
   },
   moonshot_kimi_k3: {
-    sourceRelease: "3.10.0 draft",
+    sourceRelease: "3.10.0",
     averageInferenceTime: "32m 46s (1966.0s)",
     totalCost: "$12.70",
     buildCount: 15,

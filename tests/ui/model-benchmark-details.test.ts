@@ -64,6 +64,11 @@ assert.ok(
   "models without recorded statistics should still receive a useful details note",
 );
 assert.ok(
+  detailsSource.includes('v{profile.sourceRelease.replace(/^v/, "")}') &&
+    !detailsSource.toLowerCase().includes("draft"),
+  "the release header should render canonical profile versions without workflow-state copy",
+);
+assert.ok(
   detailsSource.includes(">\n          Parameters\n        </h3>") &&
     detailsSource.includes(">\n          Statistics\n        </h3>") &&
     detailsSource.includes("<DetailRows rows={profile.parameters} />") &&
@@ -137,6 +142,24 @@ assert.ok(
     costOnlyMarkup.includes("~$25") &&
     !costOnlyMarkup.includes("before run statistics were tracked"),
   "a cost-only model should render its available statistic without the fallback",
+);
+
+const geminiMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "gemini-details",
+    modelKey: "gemini_3_6_flash",
+    displayName: "Gemini 3.6 Flash",
+    open: true,
+  }),
+);
+assert.ok(
+  geminiMarkup.includes("High") &&
+    geminiMarkup.includes("Avg. inference") &&
+    geminiMarkup.includes("1m 41.9s") &&
+    geminiMarkup.includes("Total cost") &&
+    geminiMarkup.includes("$2.84") &&
+    !geminiMarkup.includes("before run statistics were tracked"),
+  "a fully tracked Gemini model should render both measured statistics",
 );
 
 const untrackedMarkup = renderToStaticMarkup(

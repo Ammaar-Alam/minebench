@@ -21,6 +21,18 @@ assert.equal(gpt56.averageInferenceTime, "25m 16.2s (1,516.2s)");
 assert.equal(gpt56.totalCost, "$710.82");
 assert.equal(gpt56.buildCount, 15);
 
+const gemini36Flash = getModelBenchmarkProfile("gemini_3_6_flash");
+assert.equal(gemini36Flash?.sourceRelease, "3.10.0");
+assert.equal(gemini36Flash?.averageInferenceTime, "1m 41.9s (101.9s)");
+assert.equal(gemini36Flash?.totalCost, "$2.84");
+assert.equal(gemini36Flash?.buildCount, 15);
+
+const gemini35FlashLite = getModelBenchmarkProfile("gemini_3_5_flash_lite");
+assert.equal(gemini35FlashLite?.sourceRelease, "3.10.0");
+assert.equal(gemini35FlashLite?.averageInferenceTime, "25.7s");
+assert.equal(gemini35FlashLite?.totalCost, "$0.38");
+assert.equal(gemini35FlashLite?.buildCount, 15);
+
 const fable5 = getModelBenchmarkProfile("anthropic_claude_fable_5");
 assert.equal(fable5?.averageInferenceTime, "18m 04.4s (1,084.4s)");
 assert.equal(fable5?.totalCost, "$54.93");
@@ -71,6 +83,12 @@ assert.equal(opus46?.totalCost, "~$22");
 const kimi26 = getModelBenchmarkProfile("moonshot_kimi_k2_6");
 assert.equal(kimi26?.averageInferenceTime, undefined);
 assert.equal(kimi26?.totalCost, "$2.35");
+
+assert.equal(
+  getModelBenchmarkProfile("moonshot_kimi_k3")?.sourceRelease,
+  "3.10.0",
+  "release workflow state should not appear in user-facing version metadata",
+);
 
 const gpt45WebHarness = getModelBenchmarkProfile("openai_gpt_4_5_web_harness");
 assert.deepEqual(gpt45WebHarness?.parameters, [

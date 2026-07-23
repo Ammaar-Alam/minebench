@@ -139,6 +139,8 @@ function openRouterTemperaturePayload(modelId: string, temperature?: number): { 
   const usesDefaultSampling =
     normalized.startsWith("openai/gpt-5.6") ||
     normalized === "moonshotai/kimi-k3" ||
+    normalized === "google/gemini-3.6-flash" ||
+    normalized === "google/gemini-3.5-flash-lite" ||
     normalized === "anthropic/claude-fable-5" ||
     normalized === "anthropic/claude-sonnet-5" ||
     /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(normalized);
