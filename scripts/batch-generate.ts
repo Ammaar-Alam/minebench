@@ -834,7 +834,6 @@ function printUploadCommands(jobs: Job[]) {
 }
 
 export function buildBenchmarkMetricJobs(
-  promptTextBySlug: Map<string, string | null>,
   modelKeys: ModelKey[],
 ): Job[] {
   return getBenchmarkPromptSlugs().flatMap((promptSlug) =>
@@ -842,7 +841,7 @@ export function buildBenchmarkMetricJobs(
       const modelSlug = MODEL_SLUG[modelKey];
       return {
         promptSlug,
-        promptText: promptTextBySlug.get(promptSlug) ?? null,
+        promptText: BENCHMARK_PROMPT_MAP[promptSlug],
         modelKey,
         modelSlug,
         filePath: getJsonPath(promptSlug, modelSlug),
@@ -968,10 +967,7 @@ Upload notes:
 
   const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilters, opts.modelFilters);
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
-  const metricJobs = buildBenchmarkMetricJobs(
-    promptTextBySlug,
-    selectedModelKeys,
-  );
+  const metricJobs = buildBenchmarkMetricJobs(selectedModelKeys);
   const metricsStore = new BenchmarkMetricsStore();
   const metricWarnings = metricsStore.reconcile(metricJobs);
   for (const warning of metricWarnings) console.warn(`  ⚠️  ${warning}`);

@@ -11,6 +11,7 @@ import {
   isEmptyPlaceholder,
 } from "../../../scripts/batch-generate";
 import type { ModelKey } from "../../../lib/ai/modelCatalog";
+import { BENCHMARK_PROMPT_MAP } from "../../../scripts/uploadsCatalog";
 
 function job(modelKey: ModelKey) {
   return { modelKey };
@@ -35,11 +36,7 @@ async function main() {
     "treehouse",
     "worldtree",
   ]);
-  const metricPromptTexts = new Map<string, string | null>(
-    benchmarkPromptSlugs.map((slug) => [slug, `Build prompt for ${slug}`]),
-  );
-  metricPromptTexts.set("local-only", "A local-only prompt");
-  const metricJobs = buildBenchmarkMetricJobs(metricPromptTexts, ["openai_gpt_5_6_sol"]);
+  const metricJobs = buildBenchmarkMetricJobs(["openai_gpt_5_6_sol"]);
   assert.deepEqual(
     metricJobs.map((candidate) => candidate.promptSlug),
     benchmarkPromptSlugs,
@@ -49,6 +46,11 @@ async function main() {
     metricJobs.some((candidate) => candidate.promptSlug === "local-only"),
     false,
     "custom upload folders must not change the published benchmark cohort",
+  );
+  assert.equal(
+    metricJobs.find((candidate) => candidate.promptSlug === "castle")?.promptText,
+    BENCHMARK_PROMPT_MAP.castle,
+    "CLI prompt overrides must not change the canonical metric prompt hash",
   );
 
   const placeholderRoot = mkdtempSync(join(tmpdir(), "minebench-batch-placeholder-"));
