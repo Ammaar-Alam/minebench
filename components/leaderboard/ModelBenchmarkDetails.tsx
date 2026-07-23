@@ -80,8 +80,7 @@ function formatDuration(duration: BenchmarkDuration): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds - minutes * 60;
   const secondsLabel = Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(1);
-  const value = minutes > 0 ? `${minutes}m ${secondsLabel}s` : `${secondsLabel}s`;
-  return duration.approximate ? `~${value}` : value;
+  return minutes > 0 ? `${minutes}m ${secondsLabel}s` : `${secondsLabel}s`;
 }
 
 function formatJsonSize(bytes: number): string {

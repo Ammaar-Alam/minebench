@@ -208,6 +208,20 @@ assert.ok(
   "a fully tracked Gemini model should render every normalized statistic row",
 );
 
+const gemini30Markup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "gemini-3-0-details",
+    modelKey: "gemini_3_0_flash",
+    displayName: "Gemini 3.0 Flash",
+    open: true,
+  }),
+);
+assert.ok(
+  gemini30Markup.includes("Output cap") &&
+    gemini30Markup.includes("65,536 tokens"),
+  "Gemini 3.0 Flash should render its exact provider output limit",
+);
+
 const untrackedMarkup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
     id: "untracked-details",
@@ -249,18 +263,19 @@ assert.ok(
   "Grok 4.20's recorded duration should render as exact",
 );
 
-const approximateOpusMarkup = renderToStaticMarkup(
+const exactOpusMarkup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
-    id: "approximate-opus-details",
+    id: "exact-opus-details",
     modelKey: "anthropic_claude_4_7_opus",
     displayName: "Claude 4.7 Opus",
     open: true,
   }),
 );
 assert.ok(
-  approximateOpusMarkup.includes("~43m 20s") &&
-    !approximateOpusMarkup.includes("$275.00"),
-  "Opus 4.7 should retain its approximate time while leaving cost untracked",
+  exactOpusMarkup.includes("43m 20s") &&
+    !exactOpusMarkup.includes("~43m 20s") &&
+    !exactOpusMarkup.includes("$275.00"),
+  "Opus 4.7 should render its recorded time without an approximation marker",
 );
 
 console.log("model benchmark details UI checks passed");

@@ -79,7 +79,9 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
     modelId === "gemini-3.5-flash-lite" ||
     modelId === "google/gemini-3.5-flash-lite" ||
     modelId === "gemini-3.5-flash" ||
-    modelId === "google/gemini-3.5-flash"
+    modelId === "google/gemini-3.5-flash" ||
+    modelId === "gemini-3-flash-preview" ||
+    modelId === "google/gemini-3-flash-preview"
   ) {
     return 65_536;
   }

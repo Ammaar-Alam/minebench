@@ -10,7 +10,6 @@ export type ModelRunParameters = readonly [ModelRunParameter, ...ModelRunParamet
 
 export type BenchmarkDuration = {
   milliseconds: number;
-  approximate?: true;
 };
 
 export type BenchmarkCost = {
@@ -197,6 +196,7 @@ export const HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS: Partial<Record<ModelKey, num
   gemini_3_6_flash: 65_536,
   gemini_3_5_flash_lite: 65_536,
   gemini_3_5_flash: 65_536,
+  gemini_3_0_flash: 65_536,
   moonshot_kimi_k3: 1_048_576,
   deepseek_v3_2: 65_536,
   xai_grok_4_5: 262_144,
@@ -300,7 +300,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
   anthropic_claude_4_7_opus: {
     sourceRelease: "v3.0.0",
-    averageInference: { milliseconds: 2_600_000, approximate: true },
+    averageInference: { milliseconds: 2_600_000 },
   },
   zai_glm_5_1: {
     sourceRelease: "v3.0.0",

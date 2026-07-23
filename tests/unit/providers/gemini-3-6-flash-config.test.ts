@@ -231,6 +231,28 @@ async function main() {
     );
   }
 
+  const gemini30RequestStart = capturedRequests.length;
+  await generateVoxelBuild({
+    modelKey: "gemini_3_0_flash",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    enableTools: false,
+    providerKeys: { gemini: "test-google-key" },
+    allowServerKeys: false,
+  });
+  const gemini30Request = capturedRequests
+    .slice(gemini30RequestStart)
+    .find((candidate) =>
+      candidate.url.includes("/models/gemini-3-flash-preview:generateContent"),
+    )?.body;
+  assert.ok(gemini30Request, "Gemini 3.0 Flash request should be captured");
+  assert.equal(
+    (gemini30Request.generationConfig as Record<string, unknown>).maxOutputTokens,
+    65_536,
+    "Gemini 3.0 Flash should use its exact provider output limit",
+  );
+
   const toolSchema = voxelExecToolCallJsonSchema();
   assert.equal(schemaContainsKey(toolSchema, "minLength"), true);
   const toolRequestStart = capturedRequests.length;
@@ -293,7 +315,7 @@ async function main() {
     "Gemini schema rejection should never launch a schema-less retry",
   );
 
-  console.log("gemini 3.6 flash and 3.5 flash-lite config checks passed");
+  console.log("gemini flash config checks passed");
 }
 
 main()

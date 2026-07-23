@@ -74,6 +74,9 @@ assert.deepEqual(gemini35FlashLite?.averageInference, { milliseconds: 25_700 });
 assert.deepEqual(gemini35FlashLite?.totalCost, { usd: 0.38 });
 assert.equal(gemini35FlashLite?.buildCount, 15);
 
+const gemini30Flash = getModelBenchmarkProfile("gemini_3_0_flash");
+assert.equal(gemini30Flash?.outputCapTokens, 65_536);
+
 const fable5 = getModelBenchmarkProfile("anthropic_claude_fable_5");
 assert.deepEqual(fable5?.averageInference, { milliseconds: 1_084_400 });
 assert.deepEqual(fable5?.totalCost, { usd: 54.93 });
@@ -119,7 +122,6 @@ assert.deepEqual(grok420?.averageInference, { milliseconds: 149_000 });
 const opus47 = getModelBenchmarkProfile("anthropic_claude_4_7_opus");
 assert.deepEqual(opus47?.averageInference, {
   milliseconds: 2_600_000,
-  approximate: true,
 });
 assert.equal(opus47?.totalCost, undefined);
 
