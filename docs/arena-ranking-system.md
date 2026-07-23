@@ -339,7 +339,8 @@ Implemented branch version:
 - keep prompts with at least 2 decisive votes
 - if fewer than 5 prompts remain, `consistency = null`
 - fit a global Bradley-Terry baseline across decisive votes
-- fit prompt-local Bradley-Terry strengths and estimate prompt-level variances
+- fit prompt-local Bradley-Terry strengths with a symmetric `0.5`/`0.5` pseudo-point prior on each observed model-pair edge
+- estimate prompt-level variances from the same prior-augmented edge totals
 - shrink prompt-local strengths back toward the global baseline before ranking
 - convert shrunk prompt-local ranks to prompt-strength percentiles
 - sort prompt-strength percentiles ascending
