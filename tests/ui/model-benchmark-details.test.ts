@@ -73,8 +73,9 @@ assert.ok(
     detailsSource.includes('label: "Average JSON size"') &&
     detailsSource.includes('label: "Total cost"') &&
     detailsSource.includes('label: "Output cap"') &&
-    detailsSource.includes('"Not tracked"'),
-  "every normalized field should render its own explicit untracked state",
+    detailsSource.includes('"Benchmark predates tracking"') &&
+    !detailsSource.includes('"Not tracked"'),
+  "every normalized field should explain when its benchmark predates tracking",
 );
 assert.ok(
   detailsSource.includes('v{profile.sourceRelease.replace(/^v/, "")}') &&
@@ -163,9 +164,9 @@ assert.ok(
     trackedMarkup.includes("25m 16.2s") &&
     trackedMarkup.includes("Average JSON size") &&
     trackedMarkup.includes("91.58 MiB") &&
-    !trackedMarkup.includes("$710.82") &&
-    trackedMarkup.includes("Not tracked"),
-  "GPT 5.6 Sol Pro should render tracked run metrics with untracked cost",
+    trackedMarkup.includes("$710.82") &&
+    !trackedMarkup.includes("Benchmark predates tracking"),
+  "GPT 5.6 Sol Pro should render all recorded benchmark statistics",
 );
 assert.ok(
   trackedMarkup.includes('<h2 class="sr-only">GPT 5.6 Sol Pro run details</h2>'),
@@ -185,8 +186,8 @@ assert.ok(
     removedEstimateMarkup.includes("Output cap") &&
     removedEstimateMarkup.includes("Total cost") &&
     !removedEstimateMarkup.includes("$25.00") &&
-    (removedEstimateMarkup.match(/Not tracked/g)?.length ?? 0) >= 2,
-  "removed GPT 5.4 estimates should render as explicitly untracked",
+    (removedEstimateMarkup.match(/Benchmark predates tracking/g)?.length ?? 0) === 2,
+  "removed GPT 5.4 estimates should explain that their benchmark predates tracking",
 );
 
 const geminiMarkup = renderToStaticMarkup(
@@ -217,9 +218,9 @@ const untrackedMarkup = renderToStaticMarkup(
 );
 assert.ok(
   untrackedMarkup.includes("ChatGPT web harness") &&
-    (untrackedMarkup.match(/Not tracked/g)?.length ?? 0) >= 3 &&
+    (untrackedMarkup.match(/Benchmark predates tracking/g)?.length ?? 0) === 3 &&
     untrackedMarkup.includes("not directly comparable to API-generated runs"),
-  "an untracked run should keep its parameters, explicit missing values, and comparability note",
+  "a historical web benchmark should explain missing values and keep its comparability note",
 );
 
 const exactGlmMarkup = renderToStaticMarkup(
