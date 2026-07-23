@@ -50,7 +50,7 @@ const GEMINI_HIGH: ModelRunParameters = [
   { label: "Thinking level", value: "High" },
 ];
 
-const OPENROUTER_XHIGH_32K: ModelRunParameters = [
+const OPENROUTER_XHIGH: ModelRunParameters = [
   { label: "Reasoning effort", value: "XHigh" },
 ];
 
@@ -162,8 +162,8 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "XHigh" },
   ],
   zai_glm_4_7: PROVIDER_DEFAULT,
-  qwen_qwen3_max_thinking: OPENROUTER_XHIGH_32K,
-  qwen_qwen3_5_397b_a17b: OPENROUTER_XHIGH_32K,
+  qwen_qwen3_max_thinking: OPENROUTER_XHIGH,
+  qwen_qwen3_5_397b_a17b: OPENROUTER_XHIGH,
   minimax_m2_7: [
     { label: "Reasoning effort", value: "XHigh" },
   ],
@@ -173,7 +173,8 @@ const MODEL_RUN_PARAMETERS = {
   meta_llama_4_maverick: PROVIDER_DEFAULT,
 } satisfies Record<ModelKey, ModelRunParameters>;
 
-const STATIC_OUTPUT_CAP_TOKENS: Partial<Record<ModelKey, number>> = {
+// Historical fallback values must be accepted caps, never requested-only budgets.
+export const HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS: Partial<Record<ModelKey, number>> = {
   openai_gpt_5_6_sol: 128_000,
   openai_gpt_5_5: 128_000,
   openai_gpt_5_5_pro: 128_000,
@@ -353,7 +354,7 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
           outputCapTokens:
             generatedTimingCohortIsComplete
               ? generated.outputCapTokens
-              : STATIC_OUTPUT_CAP_TOKENS[modelKey],
+              : HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS[modelKey],
           averageInference:
             generatedTimingCohortIsComplete
               ? generated.averageInferenceMs === undefined

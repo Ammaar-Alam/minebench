@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS,
   MODEL_BENCHMARK_PROFILES,
   getModelBenchmarkProfile,
 } from "../../../lib/ai/modelBenchmarkProfiles";
@@ -126,6 +127,21 @@ assert.equal(
   "Imported model",
   "unknown persisted models should keep their database label",
 );
+
+const requestedOnlyOutputBudgets = [
+  "anthropic_claude_4_6_sonnet",
+  "deepseek_v4_pro",
+  "qwen_qwen3_max_thinking",
+  "qwen_qwen3_5_397b_a17b",
+  "minimax_m2_5",
+] as const;
+for (const modelKey of requestedOnlyOutputBudgets) {
+  assert.equal(
+    HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS[modelKey],
+    undefined,
+    `${modelKey} should not promote a requested-only budget to an accepted cap`,
+  );
+}
 
 const catalogKeys = MODEL_CATALOG.map((model) => model.key);
 assert.equal(
