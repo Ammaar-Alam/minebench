@@ -285,6 +285,20 @@ assert.equal(
 );
 
 mkdirSync(join(checkoutRoot, "uploads", "castle"), { recursive: true });
+writeFileSync(checkoutJob.filePath, "{}\n");
+const placeholderMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);
+assert.equal(placeholderMetrics.models.openai_gpt_5_6_sol?.finalizedBuildCount, 0);
+assert.equal(
+  placeholderMetrics.models.openai_gpt_5_6_sol?.averageJsonSizeBytes,
+  undefined,
+  "newline-terminated placeholders must not contribute JSON-size metrics",
+);
+assert.equal(
+  readFileSync(checkoutMetricsPath, "utf8"),
+  committedContents,
+  "a placeholder cohort must not rewrite committed metrics",
+);
+
 const checkoutJson = JSON.stringify({ version: "1.0", blocks: [{ x: 1, y: 1, z: 1 }] });
 writeFileSync(checkoutJob.filePath, checkoutJson);
 const localCompleteMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);

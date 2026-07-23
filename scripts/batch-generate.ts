@@ -41,6 +41,7 @@ import { MODEL_SLUG, PROMPT_MAP, listUploadPromptSlugs, readUploadPromptText } f
 import {
   BenchmarkMetricsStore,
   createBenchmarkRunConfiguration,
+  isMissingBenchmarkArtifact,
   type BenchmarkModelSummary,
 } from "./benchmarkMetrics";
 import type { VoxelBuild } from "../lib/voxel/types";
@@ -396,13 +397,8 @@ function buildJobList(
   return jobs;
 }
 
-function isEmptyPlaceholder(filePath: string): boolean {
-  if (!fs.existsSync(filePath)) return true;
-  const size = fs.statSync(filePath).size;
-  if (size === 0) return true;
-  if (size > 2) return false;
-  const content = fs.readFileSync(filePath, "utf-8").trim();
-  return content === "{}" || content === "";
+export function isEmptyPlaceholder(filePath: string): boolean {
+  return isMissingBenchmarkArtifact(filePath);
 }
 
 function getMissingJobs(jobs: Job[]): Job[] {

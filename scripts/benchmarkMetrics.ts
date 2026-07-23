@@ -154,15 +154,18 @@ function atomicWriteJson(filePath: string, value: unknown): void {
   atomicWriteText(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function finalizedArtifact(filePath: string): { bytes: number } | null {
-  if (!fs.existsSync(filePath)) return null;
+export function isMissingBenchmarkArtifact(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return true;
   const size = fs.statSync(filePath).size;
-  if (size === 0) return null;
-  if (size <= 2) {
-    const text = fs.readFileSync(filePath, "utf8").trim();
-    if (!text || text === "{}") return null;
-  }
-  return { bytes: size };
+  if (size === 0) return true;
+  if (size > Buffer.byteLength("{}\r\n")) return false;
+  const text = fs.readFileSync(filePath, "utf8").trim();
+  return !text || text === "{}";
+}
+
+function finalizedArtifact(filePath: string): { bytes: number } | null {
+  if (isMissingBenchmarkArtifact(filePath)) return null;
+  return { bytes: fs.statSync(filePath).size };
 }
 
 function verifiedArtifact(filePath: string): { bytes: number; hash: string } | null {

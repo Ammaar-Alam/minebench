@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   getCandidateModels,
   getImportOnlyModelsForGenerationJobs,
   getJobsToGenerate,
+  isEmptyPlaceholder,
 } from "../../../scripts/batch-generate";
 import type { ModelKey } from "../../../lib/ai/modelCatalog";
 
@@ -11,6 +15,21 @@ function job(modelKey: ModelKey) {
 }
 
 async function main() {
+  const placeholderRoot = mkdtempSync(join(tmpdir(), "minebench-batch-placeholder-"));
+  const placeholderPath = join(placeholderRoot, "build.json");
+  writeFileSync(placeholderPath, "{}\n");
+  assert.equal(
+    isEmptyPlaceholder(placeholderPath),
+    true,
+    "LF-terminated placeholders should remain missing generation jobs",
+  );
+  writeFileSync(placeholderPath, "{}\r\n");
+  assert.equal(
+    isEmptyPlaceholder(placeholderPath),
+    true,
+    "CRLF-terminated placeholders should remain missing generation jobs",
+  );
+
   assert.ok(
     getCandidateModels([]).includes("openai_gpt_4_5_web_harness"),
     "default batch candidates should include import-only models for status/upload",
