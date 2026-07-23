@@ -246,4 +246,65 @@ assert.equal(generated.models.openai_gpt_5_6_sol?.finalizedBuildCount, 1);
 assert.equal(generated.models.openai_gpt_5_6_sol?.averageInferenceMs, undefined);
 assert.equal(generated.models.openai_gpt_5_6_sol?.averageJsonSizeBytes, undefined);
 
+const checkoutRoot = mkdtempSync(join(tmpdir(), "minebench-benchmark-checkout-"));
+const checkoutMetricsPath = join(checkoutRoot, "modelBenchmarkMetrics.generated.json");
+const checkoutJob: BenchmarkMetricJob = {
+  promptSlug: "castle",
+  promptText: "Build prompt for castle",
+  modelKey: "openai_gpt_5_6_sol",
+  modelSlug: "gpt-5-6-sol",
+  filePath: join(checkoutRoot, "uploads", "castle", "castle-gpt-5-6-sol.json"),
+};
+const committedMetrics = {
+  version: 1,
+  models: {
+    openai_gpt_5_6_sol: {
+      expectedBuildCount: 1,
+      finalizedBuildCount: 1,
+      inferenceSampleCount: 1,
+      configurationSampleCount: 1,
+      configurationIsConsistent: true,
+      averageInferenceMs: 456_000,
+      averageJsonSizeBytes: 123_456,
+      outputCapTokens: 128_000,
+    },
+  },
+};
+writeFileSync(checkoutMetricsPath, `${JSON.stringify(committedMetrics, null, 2)}\n`);
+const checkoutStore = new BenchmarkMetricsStore({
+  ledgerPath: join(checkoutRoot, "uploads", ".benchmark-metrics.json"),
+  generatedMetricsPath: checkoutMetricsPath,
+});
+const committedContents = readFileSync(checkoutMetricsPath, "utf8");
+const emptyCheckoutMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);
+assert.equal(emptyCheckoutMetrics.models.openai_gpt_5_6_sol?.finalizedBuildCount, 0);
+assert.equal(
+  readFileSync(checkoutMetricsPath, "utf8"),
+  committedContents,
+  "a status run with an incomplete local artifact cohort must not rewrite committed metrics",
+);
+
+mkdirSync(join(checkoutRoot, "uploads", "castle"), { recursive: true });
+const checkoutJson = JSON.stringify({ version: "1.0", blocks: [{ x: 1, y: 1, z: 1 }] });
+writeFileSync(checkoutJob.filePath, checkoutJson);
+const localCompleteMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);
+assert.equal(localCompleteMetrics.models.openai_gpt_5_6_sol?.inferenceSampleCount, 0);
+const refreshedCommittedMetrics = JSON.parse(readFileSync(checkoutMetricsPath, "utf8")) as {
+  models: { openai_gpt_5_6_sol: Record<string, number | boolean> };
+};
+assert.equal(
+  refreshedCommittedMetrics.models.openai_gpt_5_6_sol.averageJsonSizeBytes,
+  Buffer.byteLength(checkoutJson),
+);
+assert.equal(
+  refreshedCommittedMetrics.models.openai_gpt_5_6_sol.averageInferenceMs,
+  456_000,
+  "a complete artifact cohort without its gitignored ledger should preserve committed timing",
+);
+assert.equal(
+  refreshedCommittedMetrics.models.openai_gpt_5_6_sol.outputCapTokens,
+  128_000,
+  "a complete artifact cohort without its gitignored ledger should preserve the committed cap",
+);
+
 console.log("batch benchmark metric lifecycle checks passed");

@@ -22,7 +22,7 @@ assert.ok(
   Number.isInteger(gpt56.averageJsonSizeBytes) && (gpt56.averageJsonSizeBytes ?? 0) > 0,
   "GPT 5.6 Sol Pro should use the generated exact JSON-size aggregate",
 );
-assert.deepEqual(gpt56.totalCost, { usd: 710.82 });
+assert.equal(gpt56.totalCost, undefined);
 assert.equal(gpt56.buildCount, 15);
 
 const gemini36Flash = getModelBenchmarkProfile("gemini_3_6_flash");
@@ -66,7 +66,7 @@ assert.deepEqual(gpt54Pro?.totalCost, { usd: 435 });
 
 const gpt54 = getModelBenchmarkProfile("openai_gpt_5_4");
 assert.equal(gpt54?.averageInference, undefined);
-assert.deepEqual(gpt54?.totalCost, { usd: 25, qualifier: "approximate" });
+assert.equal(gpt54?.totalCost, undefined);
 
 const gpt53Codex = getModelBenchmarkProfile("openai_gpt_5_3_codex");
 assert.deepEqual(gpt53Codex?.parameters, [
@@ -74,21 +74,21 @@ assert.deepEqual(gpt53Codex?.parameters, [
 ]);
 assert.equal(gpt53Codex?.outputCapTokens, 128_000);
 assert.equal(gpt53Codex?.averageInference, undefined);
-assert.deepEqual(gpt53Codex?.totalCost, {
-  usd: 5,
-  qualifier: "under-approximately",
-});
+assert.equal(gpt53Codex?.totalCost, undefined);
+
+const grok420 = getModelBenchmarkProfile("xai_grok_4_20");
+assert.deepEqual(grok420?.averageInference, { milliseconds: 149_000 });
 
 const opus47 = getModelBenchmarkProfile("anthropic_claude_4_7_opus");
 assert.deepEqual(opus47?.averageInference, {
   milliseconds: 2_600_000,
   approximate: true,
 });
-assert.deepEqual(opus47?.totalCost, { usd: 275, qualifier: "approximate" });
+assert.equal(opus47?.totalCost, undefined);
 
 const opus46 = getModelBenchmarkProfile("anthropic_claude_4_6_opus");
 assert.equal(opus46?.averageInference, undefined);
-assert.deepEqual(opus46?.totalCost, { usd: 22, qualifier: "approximate" });
+assert.equal(opus46?.totalCost, undefined);
 
 const kimi26 = getModelBenchmarkProfile("moonshot_kimi_k2_6");
 assert.equal(kimi26?.averageInference, undefined);
@@ -183,8 +183,8 @@ assert.equal(
     getModelBenchmarkProfile("openai_gpt_5_4")?.averageInference ||
       getModelBenchmarkProfile("openai_gpt_5_4")?.totalCost,
   ),
-  true,
-  "a cost-only profile should count as having recorded statistics",
+  false,
+  "removed non-exact GPT 5.4 statistics should remain untracked",
 );
 assert.equal(
   Boolean(gpt45WebHarness?.averageInference || gpt45WebHarness?.totalCost),

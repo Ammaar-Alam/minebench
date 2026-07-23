@@ -15,7 +15,6 @@ export type BenchmarkDuration = {
 
 export type BenchmarkCost = {
   usd: number;
-  qualifier?: "approximate" | "under-approximately";
 };
 
 export type ModelBenchmarkProfile = {
@@ -214,7 +213,6 @@ const MODEL_BENCHMARK_METADATA: Partial<
   openai_gpt_5_6_sol: {
     sourceRelease: "3.9.0",
     averageInference: { milliseconds: 1_516_200 },
-    totalCost: { usd: 710.82 },
     buildCount: 15,
   },
   xai_grok_4_5: {
@@ -276,7 +274,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
   xai_grok_4_20: {
     sourceRelease: "v3.0.0",
-    averageInference: { milliseconds: 149_000, approximate: true },
+    averageInference: { milliseconds: 149_000 },
     totalCost: { usd: 18.44 },
     buildCount: 15,
   },
@@ -290,15 +288,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
     averageInference: { milliseconds: 1_283_300 },
     totalCost: { usd: 223.9 },
   },
-  openai_gpt_5_4: {
-    totalCost: { usd: 25, qualifier: "approximate" },
-  },
   openai_gpt_5_4_pro: {
     averageInference: { milliseconds: 3_360_000 },
     totalCost: { usd: 435 },
-  },
-  openai_gpt_5_3_codex: {
-    totalCost: { usd: 5, qualifier: "under-approximately" },
   },
   deepseek_v4_pro: {
     sourceRelease: "3.3.2",
@@ -307,10 +299,6 @@ const MODEL_BENCHMARK_METADATA: Partial<
   anthropic_claude_4_7_opus: {
     sourceRelease: "v3.0.0",
     averageInference: { milliseconds: 2_600_000, approximate: true },
-    totalCost: { usd: 275, qualifier: "approximate" },
-  },
-  anthropic_claude_4_6_opus: {
-    totalCost: { usd: 22, qualifier: "approximate" },
   },
   zai_glm_5_1: {
     sourceRelease: "v3.0.0",

@@ -163,15 +163,16 @@ assert.ok(
     trackedMarkup.includes("25m 16.2s") &&
     trackedMarkup.includes("Average JSON size") &&
     trackedMarkup.includes("91.58 MiB") &&
-    trackedMarkup.includes("$710.82"),
-  "a tracked model should render normalized parameters and all benchmark statistics",
+    !trackedMarkup.includes("$710.82") &&
+    trackedMarkup.includes("Not tracked"),
+  "GPT 5.6 Sol Pro should render tracked run metrics with untracked cost",
 );
 assert.ok(
   trackedMarkup.includes('<h2 class="sr-only">GPT 5.6 Sol Pro run details</h2>'),
   "inline details should establish an h2 before their h3 section headings",
 );
 
-const costOnlyMarkup = renderToStaticMarkup(
+const removedEstimateMarkup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
     id: "cost-only-details",
     modelKey: "openai_gpt_5_4",
@@ -180,12 +181,12 @@ const costOnlyMarkup = renderToStaticMarkup(
   }),
 );
 assert.ok(
-  costOnlyMarkup.includes("XHigh") &&
-    costOnlyMarkup.includes("Output cap") &&
-    costOnlyMarkup.includes("Total cost") &&
-    costOnlyMarkup.includes("~$25.00") &&
-    (costOnlyMarkup.match(/Not tracked/g)?.length ?? 0) >= 1,
-  "a cost-only model should explain its untracked inference statistic",
+  removedEstimateMarkup.includes("XHigh") &&
+    removedEstimateMarkup.includes("Output cap") &&
+    removedEstimateMarkup.includes("Total cost") &&
+    !removedEstimateMarkup.includes("$25.00") &&
+    (removedEstimateMarkup.match(/Not tracked/g)?.length ?? 0) >= 2,
+  "removed GPT 5.4 estimates should render as explicitly untracked",
 );
 
 const geminiMarkup = renderToStaticMarkup(
@@ -232,6 +233,33 @@ const exactGlmMarkup = renderToStaticMarkup(
 assert.ok(
   exactGlmMarkup.includes("17m 26s") && !exactGlmMarkup.includes("~17m 26s"),
   "the exact GLM 5.1 duration should not carry an approximation marker",
+);
+
+const exactGrokMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "exact-grok-details",
+    modelKey: "xai_grok_4_20",
+    displayName: "Grok 4.20",
+    open: true,
+  }),
+);
+assert.ok(
+  exactGrokMarkup.includes("2m 29s") && !exactGrokMarkup.includes("~2m 29s"),
+  "Grok 4.20's recorded duration should render as exact",
+);
+
+const approximateOpusMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "approximate-opus-details",
+    modelKey: "anthropic_claude_4_7_opus",
+    displayName: "Claude 4.7 Opus",
+    open: true,
+  }),
+);
+assert.ok(
+  approximateOpusMarkup.includes("~43m 20s") &&
+    !approximateOpusMarkup.includes("$275.00"),
+  "Opus 4.7 should retain its approximate time while leaving cost untracked",
 );
 
 console.log("model benchmark details UI checks passed");

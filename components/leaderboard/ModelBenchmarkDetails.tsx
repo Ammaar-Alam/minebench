@@ -90,10 +90,7 @@ function formatJsonSize(bytes: number): string {
 }
 
 function formatCost(cost: BenchmarkCost): string {
-  const value = `$${cost.usd.toFixed(2)}`;
-  if (cost.qualifier === "approximate") return `~${value}`;
-  if (cost.qualifier === "under-approximately") return `Under approximately ${value}`;
-  return value;
+  return `$${cost.usd.toFixed(2)}`;
 }
 
 function parameterRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {

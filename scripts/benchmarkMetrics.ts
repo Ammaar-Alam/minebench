@@ -512,10 +512,15 @@ export class BenchmarkMetricsStore {
 
   refreshGeneratedMetrics(jobs: BenchmarkMetricJob[]): GeneratedBenchmarkMetrics {
     const ledger = this.readLedger();
-    const generated = readJsonFile<GeneratedBenchmarkMetrics>(
+    const persisted = readJsonFile<GeneratedBenchmarkMetrics>(
       this.generatedMetricsPath,
       { version: 1, models: {} },
     );
+    const computed: GeneratedBenchmarkMetrics = {
+      version: 1,
+      models: { ...persisted.models },
+    };
+    let persistedChanged = false;
     const jobsByModel = new Map<ModelKey, BenchmarkMetricJob[]>();
     for (const job of jobs) {
       const group = jobsByModel.get(job.modelKey) ?? [];
@@ -566,7 +571,7 @@ export class BenchmarkMetricsStore {
         configurationKeys.size === 1 &&
         outputCaps.length === expectedBuildCount &&
         uniqueOutputCaps.size === 1;
-      generated.models[modelKey] = {
+      const metrics: GeneratedModelBenchmarkMetrics = {
         expectedBuildCount,
         finalizedBuildCount,
         inferenceSampleCount: timingSamples.length,
@@ -586,10 +591,48 @@ export class BenchmarkMetricsStore {
           ? { outputCapTokens: outputCaps[0] }
           : {}),
       };
+      computed.models[modelKey] = metrics;
+
+      if (!completeArtifacts) continue;
+
+      const previous = persisted.models[modelKey];
+      const completeTimingCohort =
+        timingSamples.length === expectedBuildCount && expectedBuildCount > 0;
+      const next: GeneratedModelBenchmarkMetrics = {
+        expectedBuildCount,
+        finalizedBuildCount,
+        inferenceSampleCount: previous?.inferenceSampleCount ?? metrics.inferenceSampleCount,
+        configurationSampleCount:
+          previous?.configurationSampleCount ?? metrics.configurationSampleCount,
+        configurationIsConsistent:
+          previous?.configurationIsConsistent ?? metrics.configurationIsConsistent,
+        averageJsonSizeBytes: metrics.averageJsonSizeBytes,
+        ...(previous?.averageInferenceMs === undefined
+          ? {}
+          : { averageInferenceMs: previous.averageInferenceMs }),
+        ...(previous?.outputCapTokens === undefined
+          ? {}
+          : { outputCapTokens: previous.outputCapTokens }),
+      };
+
+      if (completeTimingCohort) {
+        next.inferenceSampleCount = metrics.inferenceSampleCount;
+        next.configurationSampleCount = metrics.configurationSampleCount;
+        next.configurationIsConsistent = metrics.configurationIsConsistent;
+        if (metrics.averageInferenceMs === undefined) delete next.averageInferenceMs;
+        else next.averageInferenceMs = metrics.averageInferenceMs;
+        if (metrics.outputCapTokens === undefined) delete next.outputCapTokens;
+        else next.outputCapTokens = metrics.outputCapTokens;
+      }
+
+      if (JSON.stringify(previous) !== JSON.stringify(next)) {
+        persisted.models[modelKey] = next;
+        persistedChanged = true;
+      }
     }
 
-    atomicWriteJson(this.generatedMetricsPath, generated);
-    return generated;
+    if (persistedChanged) atomicWriteJson(this.generatedMetricsPath, persisted);
+    return computed;
   }
 
   summarize(jobs: BenchmarkMetricJob[]): Map<ModelKey, BenchmarkModelSummary> {
