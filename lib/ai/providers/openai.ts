@@ -437,6 +437,7 @@ export async function openaiGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
@@ -572,6 +573,7 @@ export async function openaiGenerateText(params: {
           );
 
           if (res.ok) {
+            params.onAcceptedOutputTokens?.(tok);
             params.onTrace?.(
               withMaxOutputTokens(
                 `OpenAI Responses reasoning config in use: '${currentReasoningLabel}'.`,
@@ -822,6 +824,7 @@ export async function openaiGenerateText(params: {
 
   if (res.ok && selectedChatEffortLabel) {
     const budget = selectedChatTokenBudget ?? maxOutputTokens;
+    params.onAcceptedOutputTokens?.(budget);
     params.onTrace?.(
       withMaxOutputTokens(
         `OpenAI Chat reasoning config in use: '${selectedChatEffortLabel}'.`,

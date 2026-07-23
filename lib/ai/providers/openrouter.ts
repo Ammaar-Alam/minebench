@@ -195,6 +195,7 @@ export async function openrouterGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
@@ -343,6 +344,7 @@ export async function openrouterGenerateText(params: {
 
     if (res.ok && selectedReasoningLabel) {
       const budget = selectedReasoningTokenBudget ?? maxTokens;
+      params.onAcceptedOutputTokens?.(budget);
       params.onTrace?.(
         withMaxOutputTokens(
           `OpenRouter reasoning config in use: '${selectedReasoningLabel}'.`,

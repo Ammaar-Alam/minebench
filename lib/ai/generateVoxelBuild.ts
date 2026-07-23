@@ -492,9 +492,18 @@ export type GenerateVoxelBuildResult =
       warnings: string[];
       blockCount: number;
       generationTimeMs: number;
+      acceptedOutputTokens?: number;
+      providerRoute?: "direct" | "openrouter";
       rawText: string;
     }
-  | { ok: false; error: string; rawText?: string; generationTimeMs: number };
+  | {
+      ok: false;
+      error: string;
+      rawText?: string;
+      generationTimeMs: number;
+      acceptedOutputTokens?: number;
+      providerRoute?: "direct" | "openrouter";
+    };
 
 // call the direct provider (OpenAI, Anthropic, etc.)
 async function callDirectProvider(args: {
@@ -526,6 +535,7 @@ async function callDirectProvider(args: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
@@ -541,6 +551,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -557,6 +568,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -573,6 +585,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -588,6 +601,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -604,6 +618,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -620,6 +635,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -636,6 +652,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -660,6 +677,7 @@ async function callDirectProvider(args: {
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
     });
   }
 
@@ -682,6 +700,8 @@ async function providerGenerateText(args: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
+  onProviderRoute?: (route: "direct" | "openrouter") => void;
 }): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
@@ -784,6 +804,7 @@ async function providerGenerateText(args: {
           deepseekThinkingConfig: directDeepSeekThinkingConfig,
         }),
     );
+    args.onProviderRoute?.("direct");
     try {
       return await callDirectProvider({
         provider: model.provider,
@@ -804,6 +825,7 @@ async function providerGenerateText(args: {
         signal: args.signal,
         onDelta: args.onDelta,
         onTrace: args.onProviderTrace,
+        onAcceptedOutputTokens: args.onAcceptedOutputTokens,
       });
     } catch (directErr) {
       // If a direct provider key is present, do not fall back to OpenRouter.
@@ -867,6 +889,7 @@ async function providerGenerateText(args: {
         openRouterReasoningEnabled,
       }),
   );
+  args.onProviderRoute?.("openrouter");
 
   return openrouterGenerateText({
     modelId: model.openRouterModelId,
@@ -883,6 +906,7 @@ async function providerGenerateText(args: {
     signal: args.signal,
     onDelta: args.onDelta,
     onTrace: args.onProviderTrace,
+    onAcceptedOutputTokens: args.onAcceptedOutputTokens,
   });
 }
 
@@ -995,6 +1019,8 @@ export async function generateVoxelBuild(
 
   let previousText = "";
   let lastError = "";
+  let acceptedOutputTokens: number | undefined;
+  let providerRoute: "direct" | "openrouter" | undefined;
   const start = Date.now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1027,6 +1053,12 @@ export async function generateVoxelBuild(
         signal: params.abortSignal,
         onDelta: params.onDelta,
         onProviderTrace: params.onProviderTrace,
+        onAcceptedOutputTokens: (tokens) => {
+          acceptedOutputTokens = tokens;
+        },
+        onProviderRoute: (route) => {
+          providerRoute = route;
+        },
       });
       previousText = text;
 
@@ -1117,6 +1149,8 @@ export async function generateVoxelBuild(
         warnings: validated.value.warnings,
         blockCount,
         generationTimeMs,
+        acceptedOutputTokens,
+        providerRoute,
         rawText: text,
       };
     } catch (err) {
@@ -1134,6 +1168,8 @@ export async function generateVoxelBuild(
     error: lastError || "Generation failed",
     rawText: previousText,
     generationTimeMs: Date.now() - start,
+    acceptedOutputTokens,
+    providerRoute,
   };
 }
 

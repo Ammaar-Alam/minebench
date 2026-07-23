@@ -38,6 +38,11 @@ import { isArtifactEligibleBuild } from "../lib/arena/buildDeliveryPolicy";
 import { iterateArenaBuildStreamEvents, uploadArenaBuildStreamArtifact, encodeArenaBuildStreamEvent } from "../lib/arena/buildStream";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
 import { MODEL_SLUG, PROMPT_MAP, listUploadPromptSlugs, readUploadPromptText } from "./uploadsCatalog";
+import {
+  BenchmarkMetricsStore,
+  createBenchmarkRunConfiguration,
+  type BenchmarkModelSummary,
+} from "./benchmarkMetrics";
 import type { VoxelBuild } from "../lib/voxel/types";
 import { validateVoxelBuild } from "../lib/voxel/validate";
 
@@ -393,6 +398,9 @@ function buildJobList(
 
 function isEmptyPlaceholder(filePath: string): boolean {
   if (!fs.existsSync(filePath)) return true;
+  const size = fs.statSync(filePath).size;
+  if (size === 0) return true;
+  if (size > 2) return false;
   const content = fs.readFileSync(filePath, "utf-8").trim();
   return content === "{}" || content === "";
 }
@@ -414,13 +422,25 @@ async function generateAndSave(
   enableTools: boolean,
   preferOpenRouter: boolean,
   reasoning: string | null,
-): Promise<{ ok: boolean; error?: string; blockCount?: number; generationTimeMs?: number }> {
+  metricsStore: BenchmarkMetricsStore,
+  signal: AbortSignal,
+): Promise<{
+  ok: boolean;
+  error?: string;
+  blockCount?: number;
+  generationTimeMs?: number;
+  jsonBytes?: number;
+  attemptCount?: number;
+}> {
 
   if (!job.promptText) {
-    return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
+    const error = `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.`;
+    metricsStore.markFailed(job, error, 0);
+    return { ok: false, error, generationTimeMs: 0, attemptCount: 0 };
   }
 
   const label = jobLabel(job);
+  let attemptCount = 1;
   const result = await generateVoxelBuild({
     modelKey: job.modelKey,
     prompt: job.promptText,
@@ -430,7 +450,10 @@ async function generateAndSave(
     enableTools,
     preferOpenRouter,
     reasoning: reasoning ?? undefined,
+    abortSignal: signal,
     onRetry: (attempt, reason) => {
+      attemptCount = Math.max(attemptCount, attempt);
+      metricsStore.markRetry(job, attempt);
       const msg = (reason ?? "").trim();
       if (!msg) return;
       console.log(`    ↻ [${label}] retry ${attempt}: ${msg}`);
@@ -456,16 +479,44 @@ async function generateAndSave(
         fs.writeFileSync(failedJsonPath, JSON.stringify(extracted, null, 2));
       }
     }
-    return { ok: false, error: result.error, generationTimeMs: result.generationTimeMs };
+    if (!signal.aborted) {
+      metricsStore.markFailed(job, result.error, result.generationTimeMs);
+    }
+    return {
+      ok: false,
+      error: result.error,
+      generationTimeMs: result.generationTimeMs,
+      attemptCount,
+    };
   }
 
-  // ensure prompt directory exists
-  ensureDir(path.dirname(job.filePath));
+  const serializedBuild = JSON.stringify(result.build, null, 2);
+  const sample = metricsStore.finalizeSuccess(job, serializedBuild, {
+    inferenceTimeMs: result.generationTimeMs,
+    attemptCount,
+    acceptedOutputTokens: result.acceptedOutputTokens,
+    configuration:
+      result.providerRoute && job.promptText
+        ? createBenchmarkRunConfiguration({
+            promptText: job.promptText,
+            providerRoute: result.providerRoute,
+            reasoningOverride: reasoning,
+            toolsEnabled: enableTools,
+          })
+        : undefined,
+  });
+  const failedJsonPath = job.filePath.endsWith(".json")
+    ? job.filePath.replace(/\.json$/, ".failed.json")
+    : `${job.filePath}.failed.json`;
+  if (fs.existsSync(failedJsonPath)) fs.unlinkSync(failedJsonPath);
 
-  // write the build json
-  fs.writeFileSync(job.filePath, JSON.stringify(result.build, null, 2));
-
-  return { ok: true, blockCount: result.blockCount, generationTimeMs: result.generationTimeMs };
+  return {
+    ok: true,
+    blockCount: result.blockCount,
+    generationTimeMs: result.generationTimeMs,
+    jsonBytes: sample.jsonBytes,
+    attemptCount,
+  };
 }
 
 function getUploadCommand(job: Job): string {
@@ -498,12 +549,16 @@ async function uploadBuildLegacy(
   job: Job,
   token: string,
   jsonBytes: Buffer<ArrayBufferLike>,
-  gzipped: Buffer<ArrayBufferLike>
+  gzipped: Buffer<ArrayBufferLike>,
+  generationTimeMs?: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const url = new URL(`${PROD_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
+  if (generationTimeMs !== undefined) {
+    url.searchParams.set("generationTimeMs", String(generationTimeMs));
+  }
 
   async function doUpload(opts: { body: Uint8Array<ArrayBufferLike>; headers: Record<string, string> }) {
     // Next's `fetch` typings only accept non-shared `ArrayBuffer` views, so coerce the buffer type
@@ -664,12 +719,16 @@ async function uploadToSupabaseStorage(
 async function finalizeStorageImport(
   job: Job,
   token: string,
-  ref: BuildStorageReference
+  ref: BuildStorageReference,
+  generationTimeMs?: number,
 ): Promise<{ ok: boolean; error?: string }> {
   const url = new URL(`${PROD_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
+  if (generationTimeMs !== undefined) {
+    url.searchParams.set("generationTimeMs", String(generationTimeMs));
+  }
 
   const resp = await fetch(url.toString(), {
     method: "POST",
@@ -685,7 +744,10 @@ async function finalizeStorageImport(
   return { ok: false, error: `Finalize import failed (HTTP ${resp.status}): ${text}` };
 }
 
-async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
+async function uploadBuild(
+  job: Job,
+  generationTimeMs?: number,
+): Promise<{ ok: boolean; error?: string }> {
   if (!job.promptText) {
     return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
   }
@@ -708,10 +770,16 @@ async function uploadBuild(job: Job): Promise<{ ok: boolean; error?: string }> {
     if (!artifactAttempt.ok) {
       return { ok: false, error: `Stream artifact upload failed: ${artifactAttempt.error}` };
     }
-    return finalizeStorageImport(job, token, storageAttempt.ref);
+    return finalizeStorageImport(job, token, storageAttempt.ref, generationTimeMs);
   }
 
-  const legacy = await uploadBuildLegacy(job, token, prepared.jsonBytes, prepared.gzipped);
+  const legacy = await uploadBuildLegacy(
+    job,
+    token,
+    prepared.jsonBytes,
+    prepared.gzipped,
+    generationTimeMs,
+  );
   if (legacy.ok) return legacy;
 
   return {
@@ -756,6 +824,61 @@ function printUploadCommands(jobs: Job[]) {
       console.log(getUploadCommand(job));
       console.log("");
     }
+  }
+}
+
+function buildBenchmarkMetricJobs(
+  promptSlugs: string[],
+  promptTextBySlug: Map<string, string | null>,
+  modelKeys: ModelKey[],
+): Job[] {
+  return promptSlugs.flatMap((promptSlug) =>
+    modelKeys.map((modelKey) => {
+      const modelSlug = MODEL_SLUG[modelKey];
+      return {
+        promptSlug,
+        promptText: promptTextBySlug.get(promptSlug) ?? null,
+        modelKey,
+        modelSlug,
+        filePath: getJsonPath(promptSlug, modelSlug),
+      };
+    }),
+  );
+}
+
+function formatDuration(milliseconds: number | undefined): string {
+  if (milliseconds === undefined) return "Not tracked";
+  const totalSeconds = milliseconds / 1000;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  const secondsLabel = Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(1);
+  return minutes > 0 ? `${minutes}m ${secondsLabel}s` : `${secondsLabel}s`;
+}
+
+function formatBytes(bytes: number | undefined): string {
+  if (bytes === undefined) return "Not tracked";
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+}
+
+function printBenchmarkSummary(
+  summaries: Map<ModelKey, BenchmarkModelSummary>,
+): void {
+  if (summaries.size === 0) return;
+  console.log("\n📈 Benchmark metrics:\n");
+  for (const [modelKey, summary] of summaries) {
+    const model = getModel(modelKey);
+    console.log(`  ${model?.displayName ?? modelKey}`);
+    console.log(
+      `    Finalized builds: ${summary.finalizedBuildCount}/${summary.expectedBuildCount}`,
+    );
+    console.log(
+      `    Average inference time: ${formatDuration(summary.averageInferenceMs)} (${summary.inferenceSampleCount}/${summary.expectedBuildCount} tracked)`,
+    );
+    console.log(`    Average JSON size: ${formatBytes(summary.averageJsonSizeBytes)}`);
+    console.log(
+      `    Failed: ${summary.failedCount} · Interrupted: ${summary.interruptedCount} · Running: ${summary.runningCount}`,
+    );
+    console.log("    Total cost: Manual");
   }
 }
 
@@ -840,6 +963,15 @@ Upload notes:
 
   const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilters, opts.modelFilters);
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
+  const metricJobs = buildBenchmarkMetricJobs(
+    promptSlugs,
+    promptTextBySlug,
+    selectedModelKeys,
+  );
+  const metricsStore = new BenchmarkMetricsStore();
+  const metricWarnings = metricsStore.reconcile(metricJobs);
+  for (const warning of metricWarnings) console.warn(`  ⚠️  ${warning}`);
+  metricsStore.refreshGeneratedMetrics(metricJobs);
 
   if (opts.openrouter && opts.generate) {
     if (!process.env.OPENROUTER_API_KEY) {
@@ -849,7 +981,7 @@ Upload notes:
   }
 
   const modelCountForSummary = selectedModelKeys.length;
-  console.log(`📋 Total jobs: ${allJobs.length} (${promptSlugs.length} prompts × ${modelCountForSummary} models)`);
+  console.log(`📋 Total jobs: ${allJobs.length} (${filteredPromptSlugs.length} prompts × ${modelCountForSummary} models)`);
 
   if (opts.promptFilters.length > 0) console.log(`   Filtered by prompt(s): ${opts.promptFilters.join(", ")}`);
   if (opts.modelFilters.length > 0) console.log(`   Filtered by model(s): ${opts.modelFilters.join(", ")}`);
@@ -870,7 +1002,7 @@ Upload notes:
       console.log("\n📤 Uploading existing builds...");
       for (const job of existing) {
         process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
-        const result = await uploadBuild(job);
+        const result = await uploadBuild(job, metricsStore.getSample(job)?.inferenceTimeMs);
         console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
       }
     }
@@ -924,71 +1056,110 @@ Upload notes:
 
     const queue = [...jobsToGenerate];
     let inFlight = 0;
-    await new Promise<void>((resolve) => {
-      const launchNext = () => {
-        while (inFlight < opts.concurrency && queue.length > 0) {
-          const job = queue.shift()!;
-          started += 1;
-          const startOrdinal = started;
-          console.log(`  ▶ [${startOrdinal}/${total}] ${jobLabel(job)}`);
-          inFlight += 1;
-          void (async () => {
-            const result = await generateAndSave(
-              job,
-              opts.attempts,
-              !opts.notools,
-              opts.openrouter,
-              opts.reasoning,
-            );
-            const elapsed = result.generationTimeMs ? `${(result.generationTimeMs / 1000).toFixed(1)}s` : "-";
-            if (result.ok) {
-              const fileLink = formatFileLink(job.filePath);
-              console.log(
-                `    ✅ [${jobLabel(job)}] Saved ${fileLink.displayPath} (${result.blockCount} blocks, ${elapsed})`,
-              );
-              console.log(`    🔗 [${jobLabel(job)}] Open: ${fileLink.absoluteUrl}`);
-              success++;
+    let stopRequested = false;
+    let stopSignal: NodeJS.Signals | null = null;
+    const active = new Map<string, { job: Job; controller: AbortController }>();
+    const handleStop = (signal: NodeJS.Signals) => {
+      if (stopRequested) {
+        console.error(`\n  ⏹ ${signal} received again. Exiting immediately.`);
+        process.exit(130);
+      }
+      stopRequested = true;
+      stopSignal = signal;
+      console.log(`\n  ⏸ ${signal} received. Stopping new jobs and recording active jobs as interrupted...`);
+      for (const { job, controller } of active.values()) {
+        metricsStore.markInterrupted(job, `Interrupted by ${signal}.`);
+        controller.abort();
+      }
+    };
+    const handleSigint = () => handleStop("SIGINT");
+    const handleSigterm = () => handleStop("SIGTERM");
+    process.on("SIGINT", handleSigint);
+    process.on("SIGTERM", handleSigterm);
 
-              if (opts.upload) {
-                console.log(`    📤 [${jobLabel(job)}] Uploading...`);
-                const uploadResult = await uploadBuild(job);
+    try {
+      await new Promise<void>((resolve) => {
+        const launchNext = () => {
+          while (!stopRequested && inFlight < opts.concurrency && queue.length > 0) {
+            const job = queue.shift()!;
+            started += 1;
+            const startOrdinal = started;
+            console.log(`  ▶ [${startOrdinal}/${total}] ${jobLabel(job)}`);
+            inFlight += 1;
+            const controller = new AbortController();
+            active.set(jobLabel(job), { job, controller });
+            metricsStore.markRunning(job);
+            void (async () => {
+              const result = await generateAndSave(
+                job,
+                opts.attempts,
+                !opts.notools,
+                opts.openrouter,
+                opts.reasoning,
+                metricsStore,
+                controller.signal,
+              );
+              const elapsed = formatDuration(result.generationTimeMs);
+              if (result.ok) {
+                const fileLink = formatFileLink(job.filePath);
                 console.log(
-                  uploadResult.ok
-                    ? `    ✅ [${jobLabel(job)}] Upload complete`
-                    : `    ❌ [${jobLabel(job)}] Upload failed: ${uploadResult.error}`,
+                  `    ✅ [${jobLabel(job)}] Saved ${fileLink.displayPath} (${result.blockCount} blocks, ${elapsed}, ${formatBytes(result.jsonBytes)}, ${result.attemptCount} attempt${result.attemptCount === 1 ? "" : "s"})`,
                 );
-              }
-            } else {
-              console.log(
-                `    ❌ [${jobLabel(job)}] Failed after ${opts.attempts} attempts (${elapsed}): ${result.error}`,
-              );
-              failed++;
-            }
-            completed += 1;
-            console.log(`    • Progress: ${completed}/${total} complete (${inFlight - 1} still running)`);
-          })()
-            .catch((err) => {
-              failed++;
-              completed += 1;
-              console.log(
-                `    ❌ [${jobLabel(job)}] Failed after ${opts.attempts} attempts: ${err instanceof Error ? err.message : err}`,
-              );
-              console.log(`    • Progress: ${completed}/${total} complete (${inFlight - 1} still running)`);
-            })
-            .finally(() => {
-              inFlight -= 1;
-              if (queue.length === 0 && inFlight === 0) {
-                resolve();
+                console.log(`    🔗 [${jobLabel(job)}] Open: ${fileLink.absoluteUrl}`);
+                success++;
+
+                if (opts.upload) {
+                  console.log(`    📤 [${jobLabel(job)}] Uploading...`);
+                  const uploadResult = await uploadBuild(job, result.generationTimeMs);
+                  console.log(
+                    uploadResult.ok
+                      ? `    ✅ [${jobLabel(job)}] Upload complete`
+                      : `    ❌ [${jobLabel(job)}] Upload failed: ${uploadResult.error}`,
+                  );
+                }
+              } else if (controller.signal.aborted) {
+                console.log(`    ⏸ [${jobLabel(job)}] Interrupted after ${elapsed}`);
               } else {
-                launchNext();
+                console.log(
+                  `    ❌ [${jobLabel(job)}] Failed after ${elapsed}: ${result.error}`,
+                );
+                failed++;
               }
-            });
-        }
-      };
-      launchNext();
-    });
+              completed += 1;
+              console.log(`    • Progress: ${completed}/${total} complete (${inFlight - 1} still running)`);
+            })()
+              .catch((err) => {
+                const message = err instanceof Error ? err.message : String(err);
+                if (controller.signal.aborted) {
+                  console.log(`    ⏸ [${jobLabel(job)}] Interrupted: ${message}`);
+                } else {
+                  metricsStore.markFailed(job, message);
+                  failed++;
+                  console.log(`    ❌ [${jobLabel(job)}] Failed: ${message}`);
+                }
+                completed += 1;
+                console.log(`    • Progress: ${completed}/${total} complete (${inFlight - 1} still running)`);
+              })
+              .finally(() => {
+                active.delete(jobLabel(job));
+                inFlight -= 1;
+                if ((queue.length === 0 || stopRequested) && inFlight === 0) {
+                  resolve();
+                } else {
+                  launchNext();
+                }
+              });
+          }
+        };
+        launchNext();
+      });
+    } finally {
+      process.off("SIGINT", handleSigint);
+      process.off("SIGTERM", handleSigterm);
+    }
 
     console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
+    if (stopSignal) process.exitCode = 130;
   } else if (missing.length > 0 && !opts.generate) {
     console.log("\n💡 Use --generate to generate missing builds.");
   } else if (missing.length === 0) {
@@ -998,6 +1169,7 @@ Upload notes:
   if (!opts.upload) {
     printUploadCommands(allJobs);
   }
+  printBenchmarkSummary(metricsStore.summarize(metricJobs));
 }
 
 const isDirectRun = process.argv[1]

@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
+import { parseGenerationTimeMs } from "@/lib/arena/importBuildMetrics";
 
 export const runtime = "nodejs";
 
@@ -119,6 +120,10 @@ export async function POST(req: Request) {
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
 
   const url = new URL(req.url);
+  const generationTime = parseGenerationTimeMs(url.searchParams.get("generationTimeMs"));
+  if (!generationTime.ok) {
+    return NextResponse.json({ error: generationTime.error }, { status: 400 });
+  }
   const modelKeyRaw = (url.searchParams.get("modelKey") ?? "").trim();
   if (!modelKeyRaw) {
     return NextResponse.json({ error: "Missing required query param: modelKey" }, { status: 400 });
@@ -295,7 +300,7 @@ export async function POST(req: Request) {
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
           voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
-          generationTimeMs: 0,
+          generationTimeMs: generationTime.value ?? existing.generationTimeMs,
         },
       })
     : await prisma.build.create({
@@ -313,7 +318,7 @@ export async function POST(req: Request) {
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
           voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
-          generationTimeMs: 0,
+          generationTimeMs: generationTime.value ?? 0,
         },
       });
 

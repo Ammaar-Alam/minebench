@@ -99,7 +99,7 @@ async function main() {
   ]);
 
   const traces: string[] = [];
-  await generateVoxelBuild({
+  const directResult = await generateVoxelBuild({
     modelKey: "openai_gpt_5_6_sol",
     prompt: "small tower",
     gridSize: 64,
@@ -109,6 +109,8 @@ async function main() {
     allowServerKeys: false,
     onProviderTrace: (message) => traces.push(message),
   });
+  assert.equal(directResult.acceptedOutputTokens, 128_000);
+  assert.equal(directResult.providerRoute, "direct");
 
   const request = capturedRequests.find((candidate) =>
     candidate.url.includes("api.openai.com/v1/responses"),
@@ -134,7 +136,7 @@ async function main() {
   );
 
   const openRouterTraces: string[] = [];
-  await generateVoxelBuild({
+  const openRouterResult = await generateVoxelBuild({
     modelKey: "openai_gpt_5_6_sol",
     prompt: "small tower",
     gridSize: 64,
@@ -144,6 +146,8 @@ async function main() {
     allowServerKeys: false,
     onProviderTrace: (message) => openRouterTraces.push(message),
   });
+  assert.equal(openRouterResult.acceptedOutputTokens, 128_000);
+  assert.equal(openRouterResult.providerRoute, "openrouter");
 
   const openRouterRequest = capturedRequests.find((candidate) =>
     candidate.url.includes("/chat/completions"),

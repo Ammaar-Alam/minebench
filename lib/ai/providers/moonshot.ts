@@ -79,6 +79,7 @@ export async function moonshotGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.MOONSHOT_API_KEY;
   if (!apiKey) throw new Error("Missing MOONSHOT_API_KEY");
@@ -162,6 +163,7 @@ export async function moonshotGenerateText(params: {
   }
 
   const budget = selectedTokenBudget ?? maxTokens;
+  params.onAcceptedOutputTokens?.(budget);
   const reasoningLabel = params.thinkingConfig?.reasoningEffort
     ? `reasoning_effort=${params.thinkingConfig.reasoningEffort}`
     : `thinking=${params.thinkingConfig?.type ?? "default"}`;
