@@ -16,10 +16,28 @@ export type BenchmarkCost = {
   usd: number;
 };
 
+export type BenchmarkOutputCap =
+  | {
+      kind: "exact";
+      tokens: number;
+    }
+  | {
+      kind: "variants";
+      tokens: readonly [number, number, ...number[]];
+    }
+  | {
+      kind: "unavailable";
+      reason:
+        | "accepted-cap-unrecorded"
+        | "predates-tracking"
+        | "varied-across-builds"
+        | "web-harness-unavailable";
+    };
+
 export type ModelBenchmarkProfile = {
   sourceRelease?: string;
   parameters: ModelRunParameters;
-  outputCapTokens?: number;
+  outputCap: BenchmarkOutputCap;
   averageInference?: BenchmarkDuration;
   averageJsonSizeBytes?: number;
   totalCost?: BenchmarkCost;
@@ -172,44 +190,82 @@ const MODEL_RUN_PARAMETERS = {
   meta_llama_4_maverick: PROVIDER_DEFAULT,
 } satisfies Record<ModelKey, ModelRunParameters>;
 
-// Historical fallback values must be accepted caps, never requested-only budgets.
-export const HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS: Partial<Record<ModelKey, number>> = {
-  openai_gpt_5_6_sol: 128_000,
-  openai_gpt_5_5: 128_000,
-  openai_gpt_5_5_pro: 128_000,
-  openai_gpt_5_4: 128_000,
-  openai_gpt_5_4_pro: 128_000,
-  openai_gpt_5_4_mini: 128_000,
-  openai_gpt_5_4_nano: 128_000,
-  openai_gpt_5_3_codex: 128_000,
-  openai_gpt_5_2: 128_000,
-  openai_gpt_5_2_pro: 128_000,
-  openai_gpt_5_2_codex: 128_000,
-  openai_gpt_5_mini: 128_000,
-  openai_gpt_5_nano: 128_000,
-  openai_gpt_oss_120b: 131_072,
-  anthropic_claude_fable_5: 128_000,
-  anthropic_claude_sonnet_5: 128_000,
-  anthropic_claude_4_6_opus: 131_072,
-  anthropic_claude_4_7_opus: 128_000,
-  anthropic_claude_4_8_opus: 128_000,
-  gemini_3_6_flash: 65_536,
-  gemini_3_5_flash_lite: 65_536,
-  gemini_3_5_flash: 65_536,
-  gemini_3_0_flash: 65_536,
-  moonshot_kimi_k3: 1_048_576,
-  deepseek_v3_2: 65_536,
-  xai_grok_4_5: 262_144,
-  xai_grok_4_3: 983_040,
-  xai_grok_4_1: 30_000,
-  zai_glm_5_2: 131_072,
-  zai_glm_5_1: 131_072,
-  zai_glm_5: 131_072,
-  minimax_m2_7: 131_072,
+const exactOutputCap = (tokens: number): BenchmarkOutputCap => ({
+  kind: "exact",
+  tokens,
+});
+
+// Historical fallback values describe accepted caps, never requested-only budgets.
+export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
+  Record<ModelKey, BenchmarkOutputCap>
+> = {
+  openai_gpt_5_6_sol: exactOutputCap(128_000),
+  openai_gpt_5_5: exactOutputCap(128_000),
+  openai_gpt_5_5_pro: exactOutputCap(128_000),
+  openai_gpt_5_4: exactOutputCap(128_000),
+  openai_gpt_5_4_pro: exactOutputCap(128_000),
+  openai_gpt_5_4_mini: exactOutputCap(128_000),
+  openai_gpt_5_4_nano: exactOutputCap(128_000),
+  openai_gpt_5_3_codex: exactOutputCap(128_000),
+  openai_gpt_5_2: exactOutputCap(128_000),
+  openai_gpt_5_2_pro: exactOutputCap(128_000),
+  openai_gpt_5_2_codex: exactOutputCap(128_000),
+  openai_gpt_5_mini: exactOutputCap(128_000),
+  openai_gpt_5_nano: exactOutputCap(128_000),
+  openai_gpt_4_1: exactOutputCap(32_768),
+  openai_gpt_4o: exactOutputCap(16_384),
+  openai_gpt_oss_120b: exactOutputCap(131_072),
+  anthropic_claude_fable_5: exactOutputCap(128_000),
+  anthropic_claude_sonnet_5: exactOutputCap(128_000),
+  anthropic_claude_4_5_sonnet: exactOutputCap(32_768),
+  anthropic_claude_4_6_sonnet: {
+    kind: "variants",
+    tokens: [32_768, 64_000],
+  },
+  anthropic_claude_4_5_opus: {
+    kind: "variants",
+    tokens: [8_192, 32_768],
+  },
+  anthropic_claude_4_6_opus: exactOutputCap(131_072),
+  anthropic_claude_4_7_opus: exactOutputCap(128_000),
+  anthropic_claude_4_8_opus: exactOutputCap(128_000),
+  gemini_3_6_flash: exactOutputCap(65_536),
+  gemini_3_5_flash_lite: exactOutputCap(65_536),
+  gemini_3_5_flash: exactOutputCap(65_536),
+  gemini_3_1_pro: exactOutputCap(65_536),
+  gemini_3_0_flash: exactOutputCap(65_536),
+  gemini_2_5_pro: exactOutputCap(65_536),
+  gemma_4_31b: exactOutputCap(32_768),
+  moonshot_kimi_k3: exactOutputCap(1_048_576),
+  moonshot_kimi_k2: exactOutputCap(65_536),
+  moonshot_kimi_k2_5: {
+    kind: "unavailable",
+    reason: "accepted-cap-unrecorded",
+  },
+  deepseek_v3_2: exactOutputCap(65_536),
+  xai_grok_4_5: exactOutputCap(262_144),
+  xai_grok_4_3: exactOutputCap(983_040),
+  xai_grok_4_1: exactOutputCap(30_000),
+  zai_glm_5_2: exactOutputCap(131_072),
+  zai_glm_5_1: exactOutputCap(131_072),
+  zai_glm_5: exactOutputCap(131_072),
+  zai_glm_4_7: exactOutputCap(65_536),
+  qwen_qwen3_max_thinking: exactOutputCap(32_768),
+  qwen_qwen3_5_397b_a17b: exactOutputCap(32_768),
+  minimax_m2_7: exactOutputCap(131_072),
+  minimax_m2_5: exactOutputCap(131_072),
+  meta_llama_4_maverick: {
+    kind: "unavailable",
+    reason: "accepted-cap-unrecorded",
+  },
+  openai_gpt_4_5_web_harness: {
+    kind: "unavailable",
+    reason: "web-harness-unavailable",
+  },
 };
 
 const MODEL_BENCHMARK_METADATA: Partial<
-  Record<ModelKey, Omit<ModelBenchmarkProfile, "parameters">>
+  Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
   openai_gpt_5_6_sol: {
     sourceRelease: "3.9.0",
@@ -327,6 +383,8 @@ export type GeneratedModelBenchmarkMetrics = {
   averageInferenceMs?: number;
   averageJsonSizeBytes?: number;
   outputCapTokens?: number;
+  outputCapSampleCount?: number;
+  outputCapIsConsistent?: boolean;
   configurationSampleCount?: number;
   configurationIsConsistent?: boolean;
 };
@@ -335,18 +393,42 @@ const GENERATED_MODEL_METRICS = generatedMetrics.models as Partial<
   Record<ModelKey, GeneratedModelBenchmarkMetrics>
 >;
 
-export function resolveBenchmarkOutputCapTokens(
+export function resolveBenchmarkOutputCap(
   modelKey: ModelKey,
   generated?: GeneratedModelBenchmarkMetrics,
-): number | undefined {
+): BenchmarkOutputCap {
+  const generatedOutputCapCohortIsComplete =
+    generated &&
+    generated.expectedBuildCount > 0 &&
+    generated.outputCapSampleCount === generated.expectedBuildCount;
+
+  if (generatedOutputCapCohortIsComplete) {
+    if (generated.outputCapIsConsistent && generated.outputCapTokens !== undefined) {
+      return exactOutputCap(generated.outputCapTokens);
+    }
+    return {
+      kind: "unavailable",
+      reason: "varied-across-builds",
+    };
+  }
+
   const generatedConfigurationCohortIsComplete =
     generated &&
     generated.expectedBuildCount > 0 &&
     generated.configurationSampleCount === generated.expectedBuildCount;
+  if (generatedConfigurationCohortIsComplete) {
+    return {
+      kind: "unavailable",
+      reason: "accepted-cap-unrecorded",
+    };
+  }
 
-  return generatedConfigurationCohortIsComplete
-    ? generated.outputCapTokens
-    : HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS[modelKey];
+  return (
+    HISTORICAL_BENCHMARK_OUTPUT_CAPS[modelKey] ?? {
+      kind: "unavailable",
+      reason: "predates-tracking",
+    }
+  );
 }
 
 export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
@@ -366,7 +448,7 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
         {
           parameters,
           ...metadata,
-          outputCapTokens: resolveBenchmarkOutputCapTokens(modelKey, generated),
+          outputCap: resolveBenchmarkOutputCap(modelKey, generated),
           averageInference:
             generatedTimingCohortIsComplete
               ? generated.averageInferenceMs === undefined

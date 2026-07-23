@@ -222,6 +222,55 @@ assert.ok(
   "Gemini 3.0 Flash should render its exact provider output limit",
 );
 
+const reconstructedCaps = {
+  openai_gpt_4_1: "32,768 tokens",
+  openai_gpt_4o: "16,384 tokens",
+  anthropic_claude_4_5_sonnet: "32,768 tokens",
+  qwen_qwen3_max_thinking: "32,768 tokens",
+  qwen_qwen3_5_397b_a17b: "32,768 tokens",
+  gemini_3_1_pro: "65,536 tokens",
+  gemini_2_5_pro: "65,536 tokens",
+  gemma_4_31b: "32,768 tokens",
+  moonshot_kimi_k2: "65,536 tokens",
+  zai_glm_4_7: "65,536 tokens",
+  minimax_m2_5: "131,072 tokens",
+} as const;
+for (const [modelKey, expectedCap] of Object.entries(reconstructedCaps)) {
+  const markup = renderToStaticMarkup(
+    React.createElement(ModelBenchmarkDetailsInline, {
+      id: `${modelKey}-details`,
+      modelKey,
+      displayName: modelKey,
+      open: true,
+    }),
+  );
+  assert.ok(
+    markup.includes(expectedCap),
+    `${modelKey} should render its reconstructed accepted output cap`,
+  );
+}
+
+const mixedCapExpectations = {
+  anthropic_claude_4_5_opus: "8,192 or 32,768 tokens",
+  anthropic_claude_4_6_sonnet: "32,768 or 64,000 tokens",
+  moonshot_kimi_k2_5: "Accepted cap not recorded",
+  meta_llama_4_maverick: "Accepted cap not recorded",
+} as const;
+for (const [modelKey, expectedCap] of Object.entries(mixedCapExpectations)) {
+  const markup = renderToStaticMarkup(
+    React.createElement(ModelBenchmarkDetailsInline, {
+      id: `${modelKey}-details`,
+      modelKey,
+      displayName: modelKey,
+      open: true,
+    }),
+  );
+  assert.ok(
+    markup.includes(expectedCap),
+    `${modelKey} should explain its nonuniform historical output cap`,
+  );
+}
+
 const untrackedMarkup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
     id: "untracked-details",
@@ -232,7 +281,8 @@ const untrackedMarkup = renderToStaticMarkup(
 );
 assert.ok(
   untrackedMarkup.includes("ChatGPT web harness") &&
-    (untrackedMarkup.match(/Benchmark predates tracking/g)?.length ?? 0) === 3 &&
+    untrackedMarkup.includes("Not available from web harness") &&
+    (untrackedMarkup.match(/Benchmark predates tracking/g)?.length ?? 0) === 2 &&
     untrackedMarkup.includes("not directly comparable to API-generated runs"),
   "a historical web benchmark should explain missing values and keep its comparability note",
 );

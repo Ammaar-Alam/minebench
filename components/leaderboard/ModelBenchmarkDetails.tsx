@@ -7,6 +7,7 @@ import {
   getModelBenchmarkProfile,
   type BenchmarkCost,
   type BenchmarkDuration,
+  type BenchmarkOutputCap,
   type ModelBenchmarkProfile,
   type ModelRunParameter,
 } from "@/lib/ai/modelBenchmarkProfiles";
@@ -67,6 +68,10 @@ function resolveProfile(modelKey: string): ModelBenchmarkProfile {
   return (
     getModelBenchmarkProfile(modelKey) ?? {
       parameters: [{ label: "Configuration", value: "Not recorded" }],
+      outputCap: {
+        kind: "unavailable",
+        reason: "predates-tracking",
+      },
     }
   );
 }
@@ -93,15 +98,31 @@ function formatCost(cost: BenchmarkCost): string {
   return `$${cost.usd.toFixed(2)}`;
 }
 
+function formatOutputCap(outputCap: BenchmarkOutputCap): string {
+  if (outputCap.kind === "exact") {
+    return `${formatInteger(outputCap.tokens)} tokens`;
+  }
+  if (outputCap.kind === "variants") {
+    return `${outputCap.tokens.map(formatInteger).join(" or ")} tokens`;
+  }
+  if (outputCap.reason === "varied-across-builds") {
+    return "Varied across benchmark builds";
+  }
+  if (outputCap.reason === "accepted-cap-unrecorded") {
+    return "Accepted cap not recorded";
+  }
+  if (outputCap.reason === "web-harness-unavailable") {
+    return "Not available from web harness";
+  }
+  return BENCHMARK_PREDATES_TRACKING;
+}
+
 function parameterRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
   return [
     ...profile.parameters,
     {
       label: "Output cap",
-      value:
-        profile.outputCapTokens === undefined
-          ? BENCHMARK_PREDATES_TRACKING
-          : `${formatInteger(profile.outputCapTokens)} tokens`,
+      value: formatOutputCap(profile.outputCap),
     },
   ];
 }

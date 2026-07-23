@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import {
-  HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS,
+  HISTORICAL_BENCHMARK_OUTPUT_CAPS,
   MODEL_BENCHMARK_PROFILES,
   getModelBenchmarkProfile,
-  resolveBenchmarkOutputCapTokens,
+  resolveBenchmarkOutputCap,
 } from "../../../lib/ai/modelBenchmarkProfiles";
 import {
   MODEL_CATALOG,
@@ -17,7 +17,7 @@ assert.deepEqual(gpt56.parameters, [
   { label: "Reasoning effort", value: "Max" },
   { label: "Text verbosity", value: "High" },
 ]);
-assert.equal(gpt56.outputCapTokens, 128_000);
+assert.deepEqual(gpt56.outputCap, { kind: "exact", tokens: 128_000 });
 assert.equal(gpt56.sourceRelease, "3.9.0");
 assert.deepEqual(gpt56.averageInference, { milliseconds: 1_516_200 });
 assert.ok(
@@ -28,37 +28,54 @@ assert.deepEqual(gpt56.totalCost, { usd: 710.82 });
 assert.equal(gpt56.buildCount, 15);
 
 assert.equal(
-  resolveBenchmarkOutputCapTokens("openai_gpt_5_6_sol", {
+  resolveBenchmarkOutputCap("openai_gpt_5_6_sol", {
     expectedBuildCount: 15,
     finalizedBuildCount: 15,
     inferenceSampleCount: 15,
     configurationSampleCount: 0,
     configurationIsConsistent: false,
-  }),
-  128_000,
+  }).kind,
+  "exact",
   "complete historical timing without cap telemetry should keep GPT 5.6's known cap",
 );
-assert.equal(
-  resolveBenchmarkOutputCapTokens("openai_gpt_5_6_sol", {
-    expectedBuildCount: 15,
-    finalizedBuildCount: 15,
-    inferenceSampleCount: 15,
-    configurationSampleCount: 15,
-    configurationIsConsistent: true,
-    outputCapTokens: 64_000,
-  }),
-  64_000,
-  "a complete configuration cohort should replace the historical cap",
-);
-assert.equal(
-  resolveBenchmarkOutputCapTokens("openai_gpt_5_6_sol", {
+assert.deepEqual(
+  resolveBenchmarkOutputCap("openai_gpt_5_6_sol", {
     expectedBuildCount: 15,
     finalizedBuildCount: 15,
     inferenceSampleCount: 15,
     configurationSampleCount: 15,
     configurationIsConsistent: false,
+    outputCapSampleCount: 0,
+    outputCapIsConsistent: false,
   }),
-  undefined,
+  { kind: "unavailable", reason: "accepted-cap-unrecorded" },
+  "complete current configuration telemetry should not masquerade as a pre-tracking cap",
+);
+assert.deepEqual(
+  resolveBenchmarkOutputCap("openai_gpt_5_6_sol", {
+    expectedBuildCount: 15,
+    finalizedBuildCount: 15,
+    inferenceSampleCount: 15,
+    configurationSampleCount: 15,
+    configurationIsConsistent: false,
+    outputCapSampleCount: 15,
+    outputCapIsConsistent: true,
+    outputCapTokens: 64_000,
+  }),
+  { kind: "exact", tokens: 64_000 },
+  "one consistent accepted cap should replace history despite other configuration differences",
+);
+assert.deepEqual(
+  resolveBenchmarkOutputCap("openai_gpt_5_6_sol", {
+    expectedBuildCount: 15,
+    finalizedBuildCount: 15,
+    inferenceSampleCount: 15,
+    configurationSampleCount: 15,
+    configurationIsConsistent: false,
+    outputCapSampleCount: 15,
+    outputCapIsConsistent: false,
+  }),
+  { kind: "unavailable", reason: "varied-across-builds" },
   "a complete mixed-cap cohort should not fall back to a single historical cap",
 );
 
@@ -75,7 +92,7 @@ assert.deepEqual(gemini35FlashLite?.totalCost, { usd: 0.38 });
 assert.equal(gemini35FlashLite?.buildCount, 15);
 
 const gemini30Flash = getModelBenchmarkProfile("gemini_3_0_flash");
-assert.equal(gemini30Flash?.outputCapTokens, 65_536);
+assert.deepEqual(gemini30Flash?.outputCap, { kind: "exact", tokens: 65_536 });
 
 const fable5 = getModelBenchmarkProfile("anthropic_claude_fable_5");
 assert.deepEqual(fable5?.averageInference, { milliseconds: 1_084_400 });
@@ -100,7 +117,7 @@ assert.deepEqual(gpt54Pro?.parameters, [
   { label: "Reasoning effort", value: "XHigh" },
   { label: "Text verbosity", value: "High" },
 ]);
-assert.equal(gpt54Pro?.outputCapTokens, 128_000);
+assert.deepEqual(gpt54Pro?.outputCap, { kind: "exact", tokens: 128_000 });
 assert.deepEqual(gpt54Pro?.averageInference, { milliseconds: 3_360_000 });
 assert.deepEqual(gpt54Pro?.totalCost, { usd: 435 });
 
@@ -112,7 +129,7 @@ const gpt53Codex = getModelBenchmarkProfile("openai_gpt_5_3_codex");
 assert.deepEqual(gpt53Codex?.parameters, [
   { label: "Reasoning effort", value: "XHigh" },
 ]);
-assert.equal(gpt53Codex?.outputCapTokens, 128_000);
+assert.deepEqual(gpt53Codex?.outputCap, { kind: "exact", tokens: 128_000 });
 assert.equal(gpt53Codex?.averageInference, undefined);
 assert.equal(gpt53Codex?.totalCost, undefined);
 
@@ -166,20 +183,44 @@ assert.equal(
   "unknown persisted models should keep their database label",
 );
 
-const requestedOnlyOutputBudgets = [
-  "anthropic_claude_4_6_sonnet",
-  "deepseek_v4_pro",
-  "qwen_qwen3_max_thinking",
-  "qwen_qwen3_5_397b_a17b",
-  "minimax_m2_5",
-] as const;
-for (const modelKey of requestedOnlyOutputBudgets) {
-  assert.equal(
-    HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS[modelKey],
-    undefined,
-    `${modelKey} should not promote a requested-only budget to an accepted cap`,
+const reconstructedExactOutputCaps = {
+  openai_gpt_4_1: 32_768,
+  openai_gpt_4o: 16_384,
+  anthropic_claude_4_5_sonnet: 32_768,
+  qwen_qwen3_max_thinking: 32_768,
+  qwen_qwen3_5_397b_a17b: 32_768,
+  gemini_3_1_pro: 65_536,
+  gemini_2_5_pro: 65_536,
+  gemma_4_31b: 32_768,
+  moonshot_kimi_k2: 65_536,
+  zai_glm_4_7: 65_536,
+  minimax_m2_5: 131_072,
+} as const;
+for (const [modelKey, tokens] of Object.entries(reconstructedExactOutputCaps)) {
+  assert.deepEqual(
+    HISTORICAL_BENCHMARK_OUTPUT_CAPS[
+      modelKey as keyof typeof reconstructedExactOutputCaps
+    ],
+    { kind: "exact", tokens },
+    `${modelKey} should expose its reconstructed accepted cap`,
   );
 }
+assert.deepEqual(
+  HISTORICAL_BENCHMARK_OUTPUT_CAPS.anthropic_claude_4_5_opus,
+  { kind: "variants", tokens: [8_192, 32_768] },
+);
+assert.deepEqual(
+  HISTORICAL_BENCHMARK_OUTPUT_CAPS.anthropic_claude_4_6_sonnet,
+  { kind: "variants", tokens: [32_768, 64_000] },
+);
+assert.deepEqual(
+  HISTORICAL_BENCHMARK_OUTPUT_CAPS.moonshot_kimi_k2_5,
+  { kind: "unavailable", reason: "accepted-cap-unrecorded" },
+);
+assert.deepEqual(
+  HISTORICAL_BENCHMARK_OUTPUT_CAPS.meta_llama_4_maverick,
+  { kind: "unavailable", reason: "accepted-cap-unrecorded" },
+);
 
 const catalogKeys = MODEL_CATALOG.map((model) => model.key);
 assert.equal(
@@ -217,10 +258,18 @@ for (const model of MODEL_CATALOG) {
     ),
     `${model.key} should keep the normalized output cap outside free-form parameters`,
   );
-  if (profile.outputCapTokens !== undefined) {
+  if (profile.outputCap.kind === "exact") {
     assert.ok(
-      Number.isInteger(profile.outputCapTokens) && profile.outputCapTokens > 0,
+      Number.isInteger(profile.outputCap.tokens) && profile.outputCap.tokens > 0,
       `${model.key} output cap should be a positive integer`,
+    );
+  } else if (profile.outputCap.kind === "variants") {
+    assert.ok(
+      profile.outputCap.tokens.length > 1 &&
+        profile.outputCap.tokens.every(
+          (tokens) => Number.isInteger(tokens) && tokens > 0,
+        ),
+      `${model.key} output cap variants should be positive integers`,
     );
   }
   assert.ok(

@@ -100,6 +100,8 @@ assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   inferenceSampleCount: 1,
   configurationSampleCount: 1,
   configurationIsConsistent: true,
+  outputCapSampleCount: 1,
+  outputCapIsConsistent: true,
   averageJsonSizeBytes: Buffer.byteLength(castleJson),
   averageInferenceMs: 1_046_000,
   outputCapTokens: 128_000,
@@ -236,7 +238,13 @@ store.finalizeSuccess(
 generated = store.refreshGeneratedMetrics([castle, phoenix, mixedRoute]);
 assert.equal(generated.models.openai_gpt_5_6_sol?.configurationIsConsistent, false);
 assert.equal(generated.models.openai_gpt_5_6_sol?.averageInferenceMs, undefined);
-assert.equal(generated.models.openai_gpt_5_6_sol?.outputCapTokens, undefined);
+assert.equal(generated.models.openai_gpt_5_6_sol?.outputCapSampleCount, 3);
+assert.equal(generated.models.openai_gpt_5_6_sol?.outputCapIsConsistent, true);
+assert.equal(
+  generated.models.openai_gpt_5_6_sol?.outputCapTokens,
+  128_000,
+  "route variation must not erase one consistent accepted cap",
+);
 
 const mixedCap = job("mixed-cap");
 store.markRunning(mixedCap);
@@ -261,6 +269,8 @@ store.finalizeSuccess(
 );
 generated = store.refreshGeneratedMetrics([castle, phoenix, mixedCap]);
 assert.equal(generated.models.openai_gpt_5_6_sol?.configurationIsConsistent, false);
+assert.equal(generated.models.openai_gpt_5_6_sol?.outputCapSampleCount, 3);
+assert.equal(generated.models.openai_gpt_5_6_sol?.outputCapIsConsistent, false);
 assert.equal(
   generated.models.openai_gpt_5_6_sol?.averageInferenceMs,
   undefined,
@@ -297,6 +307,8 @@ const committedMetrics = {
       inferenceSampleCount: 1,
       configurationSampleCount: 1,
       configurationIsConsistent: true,
+      outputCapSampleCount: 1,
+      outputCapIsConsistent: true,
       averageInferenceMs: 456_000,
       averageJsonSizeBytes: 123_456,
       outputCapTokens: 128_000,

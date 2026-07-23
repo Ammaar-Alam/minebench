@@ -57,6 +57,8 @@ export type GeneratedModelBenchmarkMetrics = {
   averageInferenceMs?: number;
   averageJsonSizeBytes?: number;
   outputCapTokens?: number;
+  outputCapSampleCount?: number;
+  outputCapIsConsistent?: boolean;
   configurationSampleCount?: number;
   configurationIsConsistent?: boolean;
 };
@@ -573,17 +575,22 @@ export class BenchmarkMetricsStore {
         configuredSamples.map((sample) => comparableConfigurationKey(sample.configuration!)),
       );
       const uniqueOutputCaps = new Set(outputCaps);
+      const outputCapIsConsistent =
+        outputCaps.length === expectedBuildCount &&
+        expectedBuildCount > 0 &&
+        uniqueOutputCaps.size === 1;
       const configurationIsConsistent =
         completeConfigurations &&
         configurationKeys.size === 1 &&
-        outputCaps.length === expectedBuildCount &&
-        uniqueOutputCaps.size === 1;
+        outputCapIsConsistent;
       const metrics: GeneratedModelBenchmarkMetrics = {
         expectedBuildCount,
         finalizedBuildCount,
         inferenceSampleCount: timingSamples.length,
         configurationSampleCount: configuredSamples.length,
         configurationIsConsistent,
+        outputCapSampleCount: outputCaps.length,
+        outputCapIsConsistent,
         ...(completeArtifacts
           ? { averageJsonSizeBytes: average(finalized.map(({ artifact }) => artifact!.bytes)) }
           : {}),
@@ -594,7 +601,7 @@ export class BenchmarkMetricsStore {
               ),
             }
           : {}),
-        ...(configurationIsConsistent
+        ...(outputCapIsConsistent
           ? { outputCapTokens: outputCaps[0] }
           : {}),
       };
@@ -613,6 +620,10 @@ export class BenchmarkMetricsStore {
           previous?.configurationSampleCount ?? metrics.configurationSampleCount,
         configurationIsConsistent:
           previous?.configurationIsConsistent ?? metrics.configurationIsConsistent,
+        outputCapSampleCount:
+          previous?.outputCapSampleCount ?? metrics.outputCapSampleCount,
+        outputCapIsConsistent:
+          previous?.outputCapIsConsistent ?? metrics.outputCapIsConsistent,
         averageJsonSizeBytes: metrics.averageJsonSizeBytes,
         ...(previous?.averageInferenceMs === undefined
           ? {}
@@ -626,6 +637,8 @@ export class BenchmarkMetricsStore {
         next.inferenceSampleCount = metrics.inferenceSampleCount;
         next.configurationSampleCount = metrics.configurationSampleCount;
         next.configurationIsConsistent = metrics.configurationIsConsistent;
+        next.outputCapSampleCount = metrics.outputCapSampleCount;
+        next.outputCapIsConsistent = metrics.outputCapIsConsistent;
         if (metrics.averageInferenceMs === undefined) delete next.averageInferenceMs;
         else next.averageInferenceMs = metrics.averageInferenceMs;
         if (metrics.outputCapTokens === undefined) delete next.outputCapTokens;
