@@ -74,6 +74,7 @@ export async function minimaxGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.MINIMAX_API_KEY;
   if (!apiKey) throw new Error("Missing MINIMAX_API_KEY");
@@ -147,6 +148,7 @@ export async function minimaxGenerateText(params: {
   }
 
   const budget = selectedTokenBudget ?? maxTokens;
+  params.onAcceptedOutputTokens?.(budget);
   params.onTrace?.(withMaxOutputTokens("MiniMax reasoning config in use: default.", budget));
 
   if (params.onDelta) {

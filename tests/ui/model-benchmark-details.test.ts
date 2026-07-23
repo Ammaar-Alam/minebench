@@ -60,8 +60,21 @@ assert.ok(
   "the anchored shell should expose its pointer while an inner viewport owns overflow",
 );
 assert.ok(
-  detailsSource.includes("This model was benchmarked before run statistics were tracked."),
-  "models without recorded statistics should still receive a useful details note",
+  detailsSource.includes("setPosition(null);") &&
+    detailsSource.includes("setOpen(true);") &&
+    !detailsSource.includes("if (!open) updatePosition();") &&
+    detailsSource.includes(
+      'position ? "opacity-100" : "pointer-events-none opacity-0"',
+    ),
+  "the popover should stay hidden until its mounted height is measured",
+);
+assert.ok(
+  detailsSource.includes('label: "Average inference time"') &&
+    detailsSource.includes('label: "Average JSON size"') &&
+    detailsSource.includes('label: "Total cost"') &&
+    detailsSource.includes('label: "Output cap"') &&
+    detailsSource.includes('"Not tracked"'),
+  "every normalized field should render its own explicit untracked state",
 );
 assert.ok(
   detailsSource.includes('v{profile.sourceRelease.replace(/^v/, "")}') &&
@@ -71,19 +84,42 @@ assert.ok(
 assert.ok(
   detailsSource.includes(">\n          Parameters\n        </h3>") &&
     detailsSource.includes(">\n          Statistics\n        </h3>") &&
-    detailsSource.includes("<DetailRows rows={profile.parameters} />") &&
+    detailsSource.includes('<h2 className="sr-only">{displayName} run details</h2>') &&
+    detailsSource.includes("<DetailRows rows={parameters} />") &&
     detailsSource.includes("<DetailRows rows={statistics} />"),
   "run parameters and benchmark statistics should render as distinct sections",
 );
 assert.ok(
-  detailsSource.includes("Avg. inference") &&
+  detailsSource.includes("Average inference") &&
+    detailsSource.includes("Average JSON size") &&
     detailsSource.includes("Total cost") &&
-    detailsSource.includes("statistics.length > 0"),
-  "recorded benchmark details should show available statistics before using the fallback",
+    !detailsSource.includes("statistics.length > 0"),
+  "the statistics section should always render the same normalized rows",
 );
 assert.ok(
-  !detailsSource.includes('label: "Run size"'),
-  "benchmark tables should expose only the two reported statistics",
+  !detailsSource.includes('label: "Run size"') && !detailsSource.includes("Avg."),
+  "benchmark tables should use the full, specific statistic labels",
+);
+assert.ok(
+  detailsSource.includes('className="mt-1 divide-y divide-border/60"') &&
+    !detailsSource.includes("divide-y divide-border/60 border-y") &&
+    detailsSource.includes("mt-4 border-t border-border/70 pt-4") &&
+    detailsSource.includes(
+      'className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-[13px]"',
+    ) &&
+    detailsSource.includes('<dt className="text-muted">{row.label}</dt>') &&
+    !detailsSource.includes('<dt className="text-muted2">{row.label}</dt>') &&
+    detailsSource.includes('className="shrink-0 font-mono text-[11px] text-muted"') &&
+    detailsSource.includes("shadow-soft") &&
+    !detailsSource.includes("rgba(0,0,0"),
+  "details should use one section rule, readable metadata type, and the shared shadow token",
+);
+assert.equal(
+  detailsSource.match(
+    /text-\[11px\] font-medium uppercase tracking-\[0\.14em\] text-muted/g,
+  )?.length,
+  2,
+  "both section headings should use the readable metadata treatment",
 );
 assert.ok(
   leaderboardSource.includes("<ModelBenchmarkDetailsTrigger") &&
@@ -122,13 +158,21 @@ const trackedMarkup = renderToStaticMarkup(
 assert.ok(
   trackedMarkup.includes("Parameters") &&
     trackedMarkup.includes("Statistics") &&
+    trackedMarkup.includes("Output cap") &&
+    trackedMarkup.includes("128,000 tokens") &&
     trackedMarkup.includes("25m 16.2s") &&
-    trackedMarkup.includes("$710.82") &&
-    !trackedMarkup.includes("before run statistics were tracked"),
-  "a fully tracked model should render parameters and both benchmark statistics",
+    trackedMarkup.includes("Average JSON size") &&
+    trackedMarkup.includes("91.58 MiB") &&
+    !trackedMarkup.includes("$710.82") &&
+    trackedMarkup.includes("Not tracked"),
+  "GPT 5.6 Sol Pro should render tracked run metrics with untracked cost",
+);
+assert.ok(
+  trackedMarkup.includes('<h2 class="sr-only">GPT 5.6 Sol Pro run details</h2>'),
+  "inline details should establish an h2 before their h3 section headings",
 );
 
-const costOnlyMarkup = renderToStaticMarkup(
+const removedEstimateMarkup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
     id: "cost-only-details",
     modelKey: "openai_gpt_5_4",
@@ -137,11 +181,12 @@ const costOnlyMarkup = renderToStaticMarkup(
   }),
 );
 assert.ok(
-  costOnlyMarkup.includes("XHigh") &&
-    costOnlyMarkup.includes("Total cost") &&
-    costOnlyMarkup.includes("~$25") &&
-    !costOnlyMarkup.includes("before run statistics were tracked"),
-  "a cost-only model should render its available statistic without the fallback",
+  removedEstimateMarkup.includes("XHigh") &&
+    removedEstimateMarkup.includes("Output cap") &&
+    removedEstimateMarkup.includes("Total cost") &&
+    !removedEstimateMarkup.includes("$25.00") &&
+    (removedEstimateMarkup.match(/Not tracked/g)?.length ?? 0) >= 2,
+  "removed GPT 5.4 estimates should render as explicitly untracked",
 );
 
 const geminiMarkup = renderToStaticMarkup(
@@ -154,12 +199,12 @@ const geminiMarkup = renderToStaticMarkup(
 );
 assert.ok(
   geminiMarkup.includes("High") &&
-    geminiMarkup.includes("Avg. inference") &&
+    geminiMarkup.includes("Average inference") &&
     geminiMarkup.includes("1m 41.9s") &&
+    geminiMarkup.includes("Average JSON size") &&
     geminiMarkup.includes("Total cost") &&
-    geminiMarkup.includes("$2.84") &&
-    !geminiMarkup.includes("before run statistics were tracked"),
-  "a fully tracked Gemini model should render both measured statistics",
+    geminiMarkup.includes("$2.84"),
+  "a fully tracked Gemini model should render every normalized statistic row",
 );
 
 const untrackedMarkup = renderToStaticMarkup(
@@ -172,9 +217,49 @@ const untrackedMarkup = renderToStaticMarkup(
 );
 assert.ok(
   untrackedMarkup.includes("ChatGPT web harness") &&
-    untrackedMarkup.includes("before run statistics were tracked") &&
+    (untrackedMarkup.match(/Not tracked/g)?.length ?? 0) >= 3 &&
     untrackedMarkup.includes("not directly comparable to API-generated runs"),
-  "an untracked run should keep its parameters, statistics fallback, and comparability note",
+  "an untracked run should keep its parameters, explicit missing values, and comparability note",
+);
+
+const exactGlmMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "exact-glm-details",
+    modelKey: "zai_glm_5_1",
+    displayName: "Z.AI GLM 5.1",
+    open: true,
+  }),
+);
+assert.ok(
+  exactGlmMarkup.includes("17m 26s") && !exactGlmMarkup.includes("~17m 26s"),
+  "the exact GLM 5.1 duration should not carry an approximation marker",
+);
+
+const exactGrokMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "exact-grok-details",
+    modelKey: "xai_grok_4_20",
+    displayName: "Grok 4.20",
+    open: true,
+  }),
+);
+assert.ok(
+  exactGrokMarkup.includes("2m 29s") && !exactGrokMarkup.includes("~2m 29s"),
+  "Grok 4.20's recorded duration should render as exact",
+);
+
+const approximateOpusMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "approximate-opus-details",
+    modelKey: "anthropic_claude_4_7_opus",
+    displayName: "Claude 4.7 Opus",
+    open: true,
+  }),
+);
+assert.ok(
+  approximateOpusMarkup.includes("~43m 20s") &&
+    !approximateOpusMarkup.includes("$275.00"),
+  "Opus 4.7 should retain its approximate time while leaving cost untracked",
 );
 
 console.log("model benchmark details UI checks passed");

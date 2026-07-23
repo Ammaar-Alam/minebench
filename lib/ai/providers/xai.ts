@@ -28,6 +28,7 @@ export async function xaiGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.XAI_API_KEY;
   if (!apiKey) throw new Error("Missing XAI_API_KEY");
@@ -53,5 +54,6 @@ export async function xaiGenerateText(params: {
     signal: params.signal,
     onDelta: params.onDelta,
     onTrace: params.onTrace,
+    onAcceptedOutputTokens: params.onAcceptedOutputTokens,
   });
 }

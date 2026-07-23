@@ -478,6 +478,7 @@ export async function openAiCompatibleGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const serviceLabel = params.serviceLabel ?? "Custom API";
   const apiKey = params.apiKey ?? process.env.CUSTOM_API_KEY;
@@ -564,6 +565,7 @@ export async function openAiCompatibleGenerateText(params: {
   }
 
   const budget = selectedTokenBudget ?? maxTokens;
+  params.onAcceptedOutputTokens?.(budget);
   params.onTrace?.(
     withMaxOutputTokens(
       useStructuredOutput

@@ -5,11 +5,12 @@ import { createPortal } from "react-dom";
 
 import {
   getModelBenchmarkProfile,
+  type BenchmarkCost,
+  type BenchmarkDuration,
   type ModelBenchmarkProfile,
   type ModelRunParameter,
 } from "@/lib/ai/modelBenchmarkProfiles";
 
-const UNTRACKED_RUN_NOTE = "This model was benchmarked before run statistics were tracked.";
 const POPOVER_WIDTH = 340;
 const VIEWPORT_GUTTER = 16;
 const POPOVER_GAP = 4;
@@ -69,27 +70,71 @@ function resolveProfile(modelKey: string): ModelBenchmarkProfile {
   );
 }
 
-function statisticRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
-  const rows: ModelRunParameter[] = [];
-  if (profile.averageInferenceTime) {
-    rows.push({ label: "Avg. inference", value: profile.averageInferenceTime });
-  }
-  if (profile.totalCost) {
-    rows.push({ label: "Total cost", value: profile.totalCost });
-  }
+function formatInteger(value: number): string {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+}
 
-  return rows;
+function formatDuration(duration: BenchmarkDuration): string {
+  const totalSeconds = duration.milliseconds / 1000;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds - minutes * 60;
+  const secondsLabel = Number.isInteger(seconds) ? seconds.toFixed(0) : seconds.toFixed(1);
+  const value = minutes > 0 ? `${minutes}m ${secondsLabel}s` : `${secondsLabel}s`;
+  return duration.approximate ? `~${value}` : value;
+}
+
+function formatJsonSize(bytes: number): string {
+  const mebibytes = bytes / (1024 * 1024);
+  if (mebibytes >= 1) return `${mebibytes.toFixed(2)} MiB`;
+  return `${(bytes / 1024).toFixed(1)} KiB`;
+}
+
+function formatCost(cost: BenchmarkCost): string {
+  return `$${cost.usd.toFixed(2)}`;
+}
+
+function parameterRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
+  return [
+    ...profile.parameters,
+    {
+      label: "Output cap",
+      value:
+        profile.outputCapTokens === undefined
+          ? "Not tracked"
+          : `${formatInteger(profile.outputCapTokens)} tokens`,
+    },
+  ];
+}
+
+function statisticRows(profile: ModelBenchmarkProfile): ModelRunParameter[] {
+  return [
+    {
+      label: "Average inference time",
+      value: profile.averageInference ? formatDuration(profile.averageInference) : "Not tracked",
+    },
+    {
+      label: "Average JSON size",
+      value:
+        profile.averageJsonSizeBytes === undefined
+          ? "Not tracked"
+          : formatJsonSize(profile.averageJsonSizeBytes),
+    },
+    {
+      label: "Total cost",
+      value: profile.totalCost ? formatCost(profile.totalCost) : "Not tracked",
+    },
+  ];
 }
 
 function DetailRows({ rows }: { rows: readonly ModelRunParameter[] }) {
   return (
-    <dl className="mt-1 divide-y divide-border/60 border-y border-border/70">
+    <dl className="mt-1 divide-y divide-border/60">
       {rows.map((row) => (
         <div
           key={row.label}
-          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-xs"
+          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-[13px]"
         >
-          <dt className="text-muted2">{row.label}</dt>
+          <dt className="text-muted">{row.label}</dt>
           <dd className="text-right font-medium tabular-nums text-fg/95 [overflow-wrap:anywhere]">
             {row.value}
           </dd>
@@ -109,6 +154,7 @@ function DetailsContent({
   showHeader: boolean;
 }) {
   const profile = resolveProfile(modelKey);
+  const parameters = parameterRows(profile);
   const statistics = statisticRows(profile);
   const sectionId = useId();
 
@@ -120,12 +166,14 @@ function DetailsContent({
             {displayName}
           </h2>
           {profile.sourceRelease ? (
-            <span className="shrink-0 font-mono text-[10px] text-muted2">
+            <span className="shrink-0 font-mono text-[11px] text-muted">
               v{profile.sourceRelease.replace(/^v/, "")}
             </span>
           ) : null}
         </div>
-      ) : null}
+      ) : (
+        <h2 className="sr-only">{displayName} run details</h2>
+      )}
 
       <section
         className={showHeader ? "mt-3" : ""}
@@ -133,29 +181,26 @@ function DetailsContent({
       >
         <h3
           id={`${sectionId}-parameters`}
-          className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-muted2"
+          className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted"
         >
           Parameters
         </h3>
-        <DetailRows rows={profile.parameters} />
+        <DetailRows rows={parameters} />
       </section>
 
-      <section className="mt-4" aria-labelledby={`${sectionId}-statistics`}>
+      <section
+        className="mt-4 border-t border-border/70 pt-4"
+        aria-labelledby={`${sectionId}-statistics`}
+      >
         <h3
           id={`${sectionId}-statistics`}
-          className="font-mono text-[10px] font-medium uppercase tracking-[0.16em] text-muted2"
+          className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted"
         >
           Statistics
         </h3>
-        {statistics.length > 0 ? (
-          <DetailRows rows={statistics} />
-        ) : (
-          <p className="mt-1 border-y border-border/70 py-2.5 text-xs leading-relaxed text-muted">
-            {UNTRACKED_RUN_NOTE}
-          </p>
-        )}
+        <DetailRows rows={statistics} />
         {profile.note ? (
-          <p className="mt-2 text-xs leading-relaxed text-muted">{profile.note}</p>
+          <p className="mt-2 text-[13px] leading-relaxed text-muted">{profile.note}</p>
         ) : null}
       </section>
     </>
@@ -294,8 +339,12 @@ export function ModelBenchmarkDetails({
         expanded={open}
         controlsId={detailsId}
         onToggle={() => {
-          if (!open) updatePosition();
-          setOpen((current) => !current);
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          setPosition(null);
+          setOpen(true);
         }}
       />
       {open && typeof document !== "undefined"
@@ -305,7 +354,7 @@ export function ModelBenchmarkDetails({
               id={detailsId}
               role="region"
               aria-label={`${displayName} run details`}
-              className={`fixed z-30 overflow-visible rounded-lg border border-border bg-card shadow-[0_18px_45px_-30px_rgba(0,0,0,0.65)] ${
+              className={`fixed z-30 overflow-visible rounded-lg border border-border bg-card shadow-soft ${
                 position ? "opacity-100" : "pointer-events-none opacity-0"
               }`}
               style={{

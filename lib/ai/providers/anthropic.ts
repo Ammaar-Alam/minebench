@@ -279,6 +279,7 @@ export async function anthropicGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
@@ -329,7 +330,7 @@ export async function anthropicGenerateText(params: {
   let structuredMode: "native_format" | "forced_tool" = "native_format";
   let didUseStreaming = false;
   let selectedAdaptiveEffort: AnthropicEffort | null = null;
-  let selectedAdaptiveTokenBudget: number | null = null;
+  let selectedTokenBudget: number | null = null;
   try {
     requestLoop: for (const tok of tokenBudgetCandidates(maxTokens)) {
       betaLoop: for (const betaHeader of betaHeaders) {
@@ -399,7 +400,7 @@ export async function anthropicGenerateText(params: {
 
           if (res.ok) {
             if (usesAdaptiveThinking) selectedAdaptiveEffort = effort ?? null;
-            if (usesAdaptiveThinking) selectedAdaptiveTokenBudget = tok;
+            selectedTokenBudget = tok;
             break requestLoop;
           }
           lastBody = await res.text().catch(() => "");
@@ -454,10 +455,15 @@ export async function anthropicGenerateText(params: {
     throw new Error(`Anthropic error ${res.status}: ${body}`);
   }
 
+  const acceptedOutputTokens = selectedTokenBudget ?? maxTokens;
+  params.onAcceptedOutputTokens?.(acceptedOutputTokens);
+
   if (usesAdaptiveThinking && selectedAdaptiveEffort) {
-    const budget = selectedAdaptiveTokenBudget ?? maxTokens;
     params.onTrace?.(
-      withMaxOutputTokens(`Anthropic reasoning effort in use: '${selectedAdaptiveEffort}'.`, budget),
+      withMaxOutputTokens(
+        `Anthropic reasoning effort in use: '${selectedAdaptiveEffort}'.`,
+        acceptedOutputTokens,
+      ),
     );
   }
 

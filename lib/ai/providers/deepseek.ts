@@ -76,6 +76,7 @@ export async function deepseekGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("Missing DEEPSEEK_API_KEY");
@@ -153,6 +154,7 @@ export async function deepseekGenerateText(params: {
   }
 
   const budget = selectedTokenBudget ?? maxTokens;
+  params.onAcceptedOutputTokens?.(budget);
   params.onTrace?.(
     withMaxOutputTokens(
       `DeepSeek reasoning mode in use: ${describeThinkingConfig(thinkingConfig)}; structured_output=${useJsonOutput ? "json_object" : "none"}.`,

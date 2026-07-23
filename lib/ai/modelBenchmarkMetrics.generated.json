@@ -1,0 +1,429 @@
+{
+  "version": 1,
+  "models": {
+    "openai_gpt_5_6_sol": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 96024838
+    },
+    "openai_gpt_5_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 44122801
+    },
+    "openai_gpt_5_5_pro": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 80476585
+    },
+    "openai_gpt_5_4": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 20315356
+    },
+    "openai_gpt_5_4_pro": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 35598742
+    },
+    "openai_gpt_5_4_mini": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 16877680
+    },
+    "openai_gpt_5_4_nano": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 40953722
+    },
+    "openai_gpt_5_3_codex": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 8442964
+    },
+    "openai_gpt_5_2": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 419836
+    },
+    "openai_gpt_5_2_pro": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 1779464
+    },
+    "openai_gpt_5_2_codex": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 33921
+    },
+    "openai_gpt_5_mini": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 44951
+    },
+    "openai_gpt_5_nano": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 5648
+    },
+    "openai_gpt_4_1": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 1097348
+    },
+    "openai_gpt_4_5_web_harness": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 1265171
+    },
+    "openai_gpt_4o": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 3671
+    },
+    "openai_gpt_oss_120b": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 24083
+    },
+    "anthropic_claude_fable_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 32141218
+    },
+    "anthropic_claude_sonnet_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 17070108
+    },
+    "anthropic_claude_4_5_sonnet": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 700330
+    },
+    "anthropic_claude_4_6_sonnet": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 244621
+    },
+    "anthropic_claude_4_5_opus": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 510035
+    },
+    "anthropic_claude_4_6_opus": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 1888206
+    },
+    "anthropic_claude_4_7_opus": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 33287244
+    },
+    "anthropic_claude_4_8_opus": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 41892685
+    },
+    "gemini_3_6_flash": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 40685116
+    },
+    "gemini_3_5_flash_lite": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 28596980
+    },
+    "gemini_3_5_flash": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 41597630
+    },
+    "gemini_3_1_pro": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 28654084
+    },
+    "gemini_3_0_flash": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 22514741
+    },
+    "gemini_3_1_flash_lite": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 2383285
+    },
+    "gemini_2_5_pro": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 11666
+    },
+    "gemma_4_31b": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 12140912
+    },
+    "moonshot_kimi_k3": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 21536057
+    },
+    "moonshot_kimi_k2": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 315132
+    },
+    "moonshot_kimi_k2_6": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 11896480
+    },
+    "moonshot_kimi_k2_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 2554755
+    },
+    "deepseek_v4_pro": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 24223465
+    },
+    "deepseek_v3_2": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 2691428
+    },
+    "xai_grok_4_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 50629098
+    },
+    "xai_grok_4_3": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 9733939
+    },
+    "xai_grok_4_1": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 458395
+    },
+    "xai_grok_4_20": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 52227991
+    },
+    "zai_glm_5_2": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 20756795
+    },
+    "zai_glm_5_1": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 5453430
+    },
+    "zai_glm_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 339113
+    },
+    "zai_glm_4_7": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 29346
+    },
+    "qwen_qwen3_max_thinking": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 54136
+    },
+    "qwen_qwen3_5_397b_a17b": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 1516336
+    },
+    "minimax_m2_7": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 8165693
+    },
+    "minimax_m2_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 948040
+    },
+    "meta_llama_4_maverick": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 495800
+    },
+    "gemini_3_0_pro": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 0,
+      "configurationSampleCount": 0,
+      "configurationIsConsistent": false,
+      "averageJsonSizeBytes": 2087458
+    }
+  }
+}

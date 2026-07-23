@@ -105,6 +105,7 @@ export async function geminiGenerateText(params: {
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
+  onAcceptedOutputTokens?: (tokens: number) => void;
 }): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
@@ -176,6 +177,7 @@ export async function geminiGenerateText(params: {
     }
 
     const budget = successBudget ?? basePayload.generationConfig.maxOutputTokens;
+    params.onAcceptedOutputTokens?.(budget);
     params.onTrace?.(withMaxOutputTokens(thinkingConfigLine, budget));
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
