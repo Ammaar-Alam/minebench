@@ -135,7 +135,7 @@ function DetailRows({ rows }: { rows: readonly ModelRunParameter[] }) {
       {rows.map((row) => (
         <div
           key={row.label}
-          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-[13px]"
+          className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] gap-3 py-2.5 text-[13px]"
         >
           <dt className="text-muted">{row.label}</dt>
           <dd className="text-right font-medium tabular-nums text-fg/95 [overflow-wrap:anywhere]">

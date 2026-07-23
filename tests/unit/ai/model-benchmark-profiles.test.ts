@@ -3,6 +3,7 @@ import {
   HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS,
   MODEL_BENCHMARK_PROFILES,
   getModelBenchmarkProfile,
+  resolveBenchmarkOutputCapTokens,
 } from "../../../lib/ai/modelBenchmarkProfiles";
 import {
   MODEL_CATALOG,
@@ -25,6 +26,41 @@ assert.ok(
 );
 assert.deepEqual(gpt56.totalCost, { usd: 710.82 });
 assert.equal(gpt56.buildCount, 15);
+
+assert.equal(
+  resolveBenchmarkOutputCapTokens("openai_gpt_5_6_sol", {
+    expectedBuildCount: 15,
+    finalizedBuildCount: 15,
+    inferenceSampleCount: 15,
+    configurationSampleCount: 0,
+    configurationIsConsistent: false,
+  }),
+  128_000,
+  "complete historical timing without cap telemetry should keep GPT 5.6's known cap",
+);
+assert.equal(
+  resolveBenchmarkOutputCapTokens("openai_gpt_5_6_sol", {
+    expectedBuildCount: 15,
+    finalizedBuildCount: 15,
+    inferenceSampleCount: 15,
+    configurationSampleCount: 15,
+    configurationIsConsistent: true,
+    outputCapTokens: 64_000,
+  }),
+  64_000,
+  "a complete configuration cohort should replace the historical cap",
+);
+assert.equal(
+  resolveBenchmarkOutputCapTokens("openai_gpt_5_6_sol", {
+    expectedBuildCount: 15,
+    finalizedBuildCount: 15,
+    inferenceSampleCount: 15,
+    configurationSampleCount: 15,
+    configurationIsConsistent: false,
+  }),
+  undefined,
+  "a complete mixed-cap cohort should not fall back to a single historical cap",
+);
 
 const gemini36Flash = getModelBenchmarkProfile("gemini_3_6_flash");
 assert.equal(gemini36Flash?.sourceRelease, "3.10.0");

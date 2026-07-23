@@ -320,7 +320,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
 };
 
-type GeneratedModelBenchmarkMetrics = {
+export type GeneratedModelBenchmarkMetrics = {
   expectedBuildCount: number;
   finalizedBuildCount: number;
   inferenceSampleCount: number;
@@ -334,6 +334,20 @@ type GeneratedModelBenchmarkMetrics = {
 const GENERATED_MODEL_METRICS = generatedMetrics.models as Partial<
   Record<ModelKey, GeneratedModelBenchmarkMetrics>
 >;
+
+export function resolveBenchmarkOutputCapTokens(
+  modelKey: ModelKey,
+  generated?: GeneratedModelBenchmarkMetrics,
+): number | undefined {
+  const generatedConfigurationCohortIsComplete =
+    generated &&
+    generated.expectedBuildCount > 0 &&
+    generated.configurationSampleCount === generated.expectedBuildCount;
+
+  return generatedConfigurationCohortIsComplete
+    ? generated.outputCapTokens
+    : HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS[modelKey];
+}
 
 export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
   (Object.entries(MODEL_RUN_PARAMETERS) as [ModelKey, ModelRunParameters][]).map(
@@ -352,10 +366,7 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
         {
           parameters,
           ...metadata,
-          outputCapTokens:
-            generatedTimingCohortIsComplete
-              ? generated.outputCapTokens
-              : HISTORICAL_ACCEPTED_OUTPUT_CAP_TOKENS[modelKey],
+          outputCapTokens: resolveBenchmarkOutputCapTokens(modelKey, generated),
           averageInference:
             generatedTimingCohortIsComplete
               ? generated.averageInferenceMs === undefined

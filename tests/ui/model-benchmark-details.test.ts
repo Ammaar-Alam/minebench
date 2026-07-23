@@ -106,7 +106,7 @@ assert.ok(
     !detailsSource.includes("divide-y divide-border/60 border-y") &&
     detailsSource.includes("mt-4 border-t border-border/70 pt-4") &&
     detailsSource.includes(
-      'className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)] gap-4 py-2.5 text-[13px]"',
+      'className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] gap-3 py-2.5 text-[13px]"',
     ) &&
     detailsSource.includes('<dt className="text-muted">{row.label}</dt>') &&
     !detailsSource.includes('<dt className="text-muted2">{row.label}</dt>') &&
