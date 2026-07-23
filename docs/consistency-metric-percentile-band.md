@@ -101,7 +101,9 @@ For each prompt \(p\), MineBench fits a prompt-local Bradley-Terry model on that
 {\exp(\hat{\theta}_{i,p}) + \exp(\hat{\theta}_{j,p})}
 \]
 
-The implementation also estimates \(s_{i,p}^2\), an approximate posterior variance for each prompt-local ability, from the stabilized inverse information matrix of the prompt-local comparison graph. Disconnected prompt components are aligned back onto the global \(\alpha_i\) scale before shrinkage.
+Each observed model-pair edge receives a weak symmetric prior: `0.5` pseudo-points for each model, equivalent to one tied pseudo-comparison. The same augmented edge total is used in the information matrix. This keeps ability and variance estimates finite when observed outcomes have complete or near separation, such as a model with zero wins on a prompt.
+
+The implementation then estimates \(s_{i,p}^2\), an approximate posterior variance for each prompt-local ability, from the stabilized inverse information matrix of the prompt-local comparison graph. Disconnected prompt components are aligned back onto the global \(\alpha_i\) scale before shrinkage.
 
 ## 3. Prompt-Level Shrinkage
 
@@ -133,7 +135,7 @@ And the shrunk prompt-local ability:
 \alpha_i + \rho_{i,p}(\hat{\theta}_{i,p} - \alpha_i)
 \]
 
-High-confidence prompt evidence moves farther from the global anchor. Sparse or noisy prompt evidence stays closer to the model's global ability.
+High-confidence prompt evidence moves farther from the global anchor. Sparse or noisy prompt evidence stays closer to the model's global ability. The symmetric edge prior prevents a separated model from contributing effectively infinite variance and forcing the entire prompt's \(\tau_p^2\) to zero.
 
 ## 4. Prompt-Strength Percentile
 

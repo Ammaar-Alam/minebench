@@ -26,6 +26,8 @@ const BT_MAX_ITERS = 600;
 const BT_CONVERGENCE_EPSILON = 1e-9;
 const BT_PSEUDOINVERSE_RIDGE = 1e-9;
 const BT_VARIANCE_FLOOR = 1e-6;
+const BT_EDGE_PRIOR_POINTS = 0.5;
+const BT_EDGE_PRIOR_TOTAL = 1;
 
 type NumberLike = number | bigint | string | null;
 
@@ -243,7 +245,7 @@ function percentileFromRank(rank: number, total: number): number {
   return ((total - rank) / (total - 1)) * 100;
 }
 
-function promptStrengthConsistency(values: number[]): number | null {
+export function promptStrengthConsistency(values: number[]): number | null {
   if (values.length < MIN_PROMPTS_FOR_CONSISTENCY) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const tailCount = Math.max(1, Math.ceil(CONSISTENCY_TAIL_SHARE * sorted.length));
@@ -417,7 +419,7 @@ type BradleyTerryFitRow = {
   displayName: string;
 };
 
-function fitBradleyTerryConnectedComponent(
+export function fitBradleyTerryConnectedComponent(
   modelIds: string[],
   pairRows: PairwiseRow[],
   displayNames: Map<string, string>,
@@ -445,10 +447,10 @@ function fitBradleyTerryConnectedComponent(
     const i = indexById.get(row.modelAId);
     const j = indexById.get(row.modelBId);
     if (i == null || j == null) continue;
-    points[i][j] += row.pointsA;
-    points[j][i] += row.pointsB;
-    totals[i][j] += row.total;
-    totals[j][i] += row.total;
+    points[i][j] += row.pointsA + BT_EDGE_PRIOR_POINTS;
+    points[j][i] += row.pointsB + BT_EDGE_PRIOR_POINTS;
+    totals[i][j] += row.total + BT_EDGE_PRIOR_TOTAL;
+    totals[j][i] += row.total + BT_EDGE_PRIOR_TOTAL;
   }
 
   let pi = Array(n).fill(1);
@@ -529,14 +531,16 @@ function fitBradleyTerry(
   return rows.sort((a, b) => b.theta - a.theta || a.displayName.localeCompare(b.displayName));
 }
 
-function shrinkPromptStrengthRows(
+export function shrinkPromptStrengthRows(
   rows: BradleyTerryFitRow[],
   displayNames: Map<string, string>,
   alphaByModelId: Map<string, number>,
 ): RankedPromptStrengthRow[] {
   if (rows.length === 0) return [];
 
-  const rawSorted = [...rows].sort((a, b) => b.theta - a.theta || a.displayName.localeCompare(b.displayName));
+  const rawSorted = [...rows].sort((a, b) =>
+    b.theta - a.theta || a.displayName.localeCompare(b.displayName),
+  );
   const rawRankById = new Map(
     rawSorted.map((row, index) => [
       row.id,
