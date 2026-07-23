@@ -236,11 +236,13 @@ const MODEL_BENCHMARK_METADATA: Partial<
   gemini_3_6_flash: {
     sourceRelease: "3.10.0",
     averageInferenceTime: "1m 41.9s (101.9s)",
+    totalCost: "$2.84",
     buildCount: 15,
   },
   gemini_3_5_flash_lite: {
     sourceRelease: "3.10.0",
     averageInferenceTime: "25.7s",
+    totalCost: "$0.38",
     buildCount: 15,
   },
   gemini_3_5_flash: {
