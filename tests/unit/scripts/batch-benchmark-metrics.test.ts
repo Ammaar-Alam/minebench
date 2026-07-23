@@ -76,6 +76,17 @@ assert.equal(
   createHash("sha256").update(castleJson).digest("hex"),
 );
 assert.equal(readLedger().jobs["openai_gpt_5_6_sol/castle"]?.state, "succeeded");
+store.markInterrupted(castle, "Interrupted after generation finalized.");
+assert.equal(
+  readLedger().jobs["openai_gpt_5_6_sol/castle"]?.state,
+  "succeeded",
+  "an upload-window signal must not overwrite a finalized generation",
+);
+assert.equal(
+  readLedger().jobs["openai_gpt_5_6_sol/castle"]?.interruptedRunCount,
+  0,
+  "a finalized generation must not add an interrupted run",
+);
 assert.equal(
   readdirSync(join(uploads, "castle")).some((name) => name.endsWith(".tmp")),
   false,

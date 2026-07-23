@@ -359,6 +359,13 @@ export class BenchmarkMetricsStore {
 
   markInterrupted(job: BenchmarkMetricJob, reason: string, now = new Date()): void {
     this.updateRecord(job, (current) => {
+      if (
+        current &&
+        current.state !== "running" &&
+        current.state !== "finalizing"
+      ) {
+        return current;
+      }
       const startedAt = current?.startedAt ?? now.toISOString();
       const elapsed = Math.max(0, now.getTime() - Date.parse(startedAt));
       return {

@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  buildBenchmarkMetricJobs,
+  getBenchmarkPromptSlugs,
   getCandidateModels,
   getImportOnlyModelsForGenerationJobs,
   getJobsToGenerate,
@@ -15,6 +17,40 @@ function job(modelKey: ModelKey) {
 }
 
 async function main() {
+  const benchmarkPromptSlugs = getBenchmarkPromptSlugs();
+  assert.deepEqual(benchmarkPromptSlugs, [
+    "arcade",
+    "astronaut",
+    "carrier",
+    "castle",
+    "cottage",
+    "fighter-jet",
+    "floating",
+    "knight",
+    "locomotive",
+    "phoenix",
+    "shipwreck",
+    "skyscraper",
+    "steampunk",
+    "treehouse",
+    "worldtree",
+  ]);
+  const metricPromptTexts = new Map<string, string | null>(
+    benchmarkPromptSlugs.map((slug) => [slug, `Build prompt for ${slug}`]),
+  );
+  metricPromptTexts.set("local-only", "A local-only prompt");
+  const metricJobs = buildBenchmarkMetricJobs(metricPromptTexts, ["openai_gpt_5_6_sol"]);
+  assert.deepEqual(
+    metricJobs.map((candidate) => candidate.promptSlug),
+    benchmarkPromptSlugs,
+    "generated metrics must stay tied to the canonical benchmark prompt cohort",
+  );
+  assert.equal(
+    metricJobs.some((candidate) => candidate.promptSlug === "local-only"),
+    false,
+    "custom upload folders must not change the published benchmark cohort",
+  );
+
   const placeholderRoot = mkdtempSync(join(tmpdir(), "minebench-batch-placeholder-"));
   const placeholderPath = join(placeholderRoot, "build.json");
   writeFileSync(placeholderPath, "{}\n");

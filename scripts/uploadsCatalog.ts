@@ -6,9 +6,11 @@ export const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 export const PROMPT_TEXT_FILENAME = "prompt.txt";
 const IGNORED_UPLOAD_DIRS = new Set(["tool-runs", "local"]);
 
-// All curated prompts with short slugs for filenames.
-// Add your custom prompts here to make them importable by scripts.
-export const PROMPT_MAP: Record<string, string> = {
+// The fixed prompt cohort used to publish model-level benchmark metrics.
+export const BENCHMARK_PROMPT_MAP: Record<string, string> = {
+  arcade:
+    "A classic arcade cabinet with a joystick and three buttons on the control panel, a screen showing simple graphics, coin slot on the front, and artwork on the sides",
+  astronaut: "An astronaut",
   steampunk:
     "A steampunk airship with a wooden hull, large brass propellers on each side, a balloon made of patchwork fabric above the deck, hanging ropes and ladders, and a glass-enclosed bridge at the front",
   carrier:
@@ -20,6 +22,7 @@ export const PROMPT_MAP: Record<string, string> = {
   cottage: "A cozy cottage",
   worldtree:
     "A massive world tree: an enormous trunk with roots visible above ground forming archways, multiple levels of thick branches like platforms, glowing fruit hanging from smaller branches, and vines draping down",
+  "fighter-jet": "A fighter jet",
   floating:
     "A floating island ecosystem: a chunk of earth suspended in air with waterfalls pouring off multiple edges, a small forest on top, exposed roots and rocks hanging underneath, and smaller floating rocks nearby connected by ancient chain bridges",
   shipwreck:
@@ -29,6 +32,11 @@ export const PROMPT_MAP: Record<string, string> = {
   knight: "A knight in armor",
   castle:
     "A medieval stone castle with curtain walls forming a square, four tall corner towers with battlements, a central keep, a gatehouse with an archway and portcullis, and a surrounding moat with a small drawbridge.",
+};
+
+// Add custom prompts here to make them importable by scripts without changing the benchmark cohort.
+export const PROMPT_MAP: Record<string, string> = {
+  ...BENCHMARK_PROMPT_MAP,
 };
 
 // Model key to short filename slug.

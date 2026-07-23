@@ -37,7 +37,13 @@ import { prepareArenaBuildFromBuild, type ArenaBuildSource } from "../lib/arena/
 import { isArtifactEligibleBuild } from "../lib/arena/buildDeliveryPolicy";
 import { iterateArenaBuildStreamEvents, uploadArenaBuildStreamArtifact, encodeArenaBuildStreamEvent } from "../lib/arena/buildStream";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
-import { MODEL_SLUG, PROMPT_MAP, listUploadPromptSlugs, readUploadPromptText } from "./uploadsCatalog";
+import {
+  BENCHMARK_PROMPT_MAP,
+  MODEL_SLUG,
+  PROMPT_MAP,
+  listUploadPromptSlugs,
+  readUploadPromptText,
+} from "./uploadsCatalog";
 import {
   BenchmarkMetricsStore,
   createBenchmarkRunConfiguration,
@@ -338,6 +344,10 @@ function getAllPromptSlugs(): string[] {
   const slugs = new Set<string>(Object.keys(PROMPT_MAP));
   for (const slug of listUploadPromptSlugs()) slugs.add(slug);
   return Array.from(slugs).sort();
+}
+
+export function getBenchmarkPromptSlugs(): string[] {
+  return Object.keys(BENCHMARK_PROMPT_MAP).sort();
 }
 
 function resolvePromptText(promptSlug: string): string | null {
@@ -823,12 +833,11 @@ function printUploadCommands(jobs: Job[]) {
   }
 }
 
-function buildBenchmarkMetricJobs(
-  promptSlugs: string[],
+export function buildBenchmarkMetricJobs(
   promptTextBySlug: Map<string, string | null>,
   modelKeys: ModelKey[],
 ): Job[] {
-  return promptSlugs.flatMap((promptSlug) =>
+  return getBenchmarkPromptSlugs().flatMap((promptSlug) =>
     modelKeys.map((modelKey) => {
       const modelSlug = MODEL_SLUG[modelKey];
       return {
@@ -960,7 +969,6 @@ Upload notes:
   const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilters, opts.modelFilters);
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
   const metricJobs = buildBenchmarkMetricJobs(
-    promptSlugs,
     promptTextBySlug,
     selectedModelKeys,
   );
@@ -1095,6 +1103,7 @@ Upload notes:
                 metricsStore,
                 controller.signal,
               );
+              active.delete(jobLabel(job));
               const elapsed = formatDuration(result.generationTimeMs);
               if (result.ok) {
                 const fileLink = formatFileLink(job.filePath);
