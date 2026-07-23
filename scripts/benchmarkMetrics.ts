@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 import type { ModelKey } from "../lib/ai/modelCatalog";
+import { parseVoxelBuildSpec } from "../lib/voxel/validate";
 
 export type BenchmarkMetricJob = {
   promptSlug: string;
@@ -172,7 +173,8 @@ function verifiedArtifact(filePath: string): { bytes: number; hash: string } | n
   if (!finalizedArtifact(filePath)) return null;
   const text = fs.readFileSync(filePath, "utf8");
   try {
-    JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    if (!parseVoxelBuildSpec(parsed).ok) return null;
   } catch {
     return null;
   }
@@ -535,15 +537,10 @@ export class BenchmarkMetricsStore {
       const uniqueJobs = Array.from(
         new Map(modelJobs.map((job) => [job.promptSlug, job])).values(),
       );
-      const artifacts = uniqueJobs.map((job) => {
-        const sample = ledger.jobs[jobKey(job)]?.sample;
-        return {
-          job,
-          artifact: isBenchmarkSample(sample)
-            ? verifiedArtifact(job.filePath)
-            : finalizedArtifact(job.filePath),
-        };
-      });
+      const artifacts = uniqueJobs.map((job) => ({
+        job,
+        artifact: verifiedArtifact(job.filePath),
+      }));
       const finalized = artifacts.filter(({ artifact }) => artifact !== null);
       const timingSamples: BenchmarkSample[] = [];
       const configuredSamples: BenchmarkSample[] = [];

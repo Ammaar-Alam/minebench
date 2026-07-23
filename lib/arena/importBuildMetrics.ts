@@ -11,3 +11,7 @@ export function parseGenerationTimeMs(
   }
   return { ok: true, value };
 }
+
+export function resolveImportedGenerationTimeMs(value: number | null): number {
+  return value ?? 0;
+}

@@ -39,7 +39,11 @@ function readLedger() {
 }
 
 const castle = job("castle");
-const castleJson = JSON.stringify({ version: "1.0", blocks: [{ x: 1, y: 2, z: 3 }] }, null, 2);
+const castleJson = JSON.stringify(
+  { version: "1.0", blocks: [{ x: 1, y: 2, z: 3, type: "stone" }] },
+  null,
+  2,
+);
 const castleConfiguration = createBenchmarkRunConfiguration({
   promptText: castle.promptText!,
   providerRoute: "direct",
@@ -134,7 +138,13 @@ assert.equal(
 );
 
 const correctedCastleJson = JSON.stringify(
-  { version: "1.0", blocks: [{ x: 1, y: 2, z: 3 }, { x: 4, y: 5, z: 6 }] },
+  {
+    version: "1.0",
+    blocks: [
+      { x: 1, y: 2, z: 3, type: "stone" },
+      { x: 4, y: 5, z: 6, type: "stone" },
+    ],
+  },
   null,
   2,
 );
@@ -148,7 +158,11 @@ assert.equal(
 );
 
 const phoenix = job("phoenix");
-const phoenixJson = JSON.stringify({ version: "1.0", blocks: [{ x: 7, y: 8, z: 9 }] }, null, 2);
+const phoenixJson = JSON.stringify(
+  { version: "1.0", blocks: [{ x: 7, y: 8, z: 9, type: "stone" }] },
+  null,
+  2,
+);
 mkdirSync(join(uploads, "phoenix"), { recursive: true });
 writeFileSync(phoenix.filePath, phoenixJson, { flag: "w" });
 const phoenixSample = {
@@ -191,7 +205,11 @@ const mixedRoute = job("mixed-route");
 store.markRunning(mixedRoute);
 store.finalizeSuccess(
   mixedRoute,
-  JSON.stringify({ version: "1.0", blocks: [{ x: 10, y: 11, z: 12 }] }, null, 2),
+  JSON.stringify(
+    { version: "1.0", blocks: [{ x: 10, y: 11, z: 12, type: "stone" }] },
+    null,
+    2,
+  ),
   {
     inferenceTimeMs: 200_000,
     attemptCount: 1,
@@ -213,7 +231,11 @@ const mixedCap = job("mixed-cap");
 store.markRunning(mixedCap);
 store.finalizeSuccess(
   mixedCap,
-  JSON.stringify({ version: "1.0", blocks: [{ x: 13, y: 14, z: 15 }] }, null, 2),
+  JSON.stringify(
+    { version: "1.0", blocks: [{ x: 13, y: 14, z: 15, type: "stone" }] },
+    null,
+    2,
+  ),
   {
     inferenceTimeMs: 300_000,
     attemptCount: 1,
@@ -299,7 +321,24 @@ assert.equal(
   "a placeholder cohort must not rewrite committed metrics",
 );
 
-const checkoutJson = JSON.stringify({ version: "1.0", blocks: [{ x: 1, y: 1, z: 1 }] });
+writeFileSync(checkoutJob.filePath, JSON.stringify({ error: "provider request failed" }));
+const providerErrorMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);
+assert.equal(providerErrorMetrics.models.openai_gpt_5_6_sol?.finalizedBuildCount, 0);
+assert.equal(
+  providerErrorMetrics.models.openai_gpt_5_6_sol?.averageJsonSizeBytes,
+  undefined,
+  "structured provider errors must not contribute JSON-size metrics",
+);
+assert.equal(
+  readFileSync(checkoutMetricsPath, "utf8"),
+  committedContents,
+  "an invalid artifact cohort must not rewrite committed metrics",
+);
+
+const checkoutJson = JSON.stringify({
+  version: "1.0",
+  blocks: [{ x: 1, y: 1, z: 1, type: "stone" }],
+});
 writeFileSync(checkoutJob.filePath, checkoutJson);
 const localCompleteMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);
 assert.equal(localCompleteMetrics.models.openai_gpt_5_6_sol?.inferenceSampleCount, 0);

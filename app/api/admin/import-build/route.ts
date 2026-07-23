@@ -12,7 +12,10 @@ import { createHash } from "node:crypto";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
-import { parseGenerationTimeMs } from "@/lib/arena/importBuildMetrics";
+import {
+  parseGenerationTimeMs,
+  resolveImportedGenerationTimeMs,
+} from "@/lib/arena/importBuildMetrics";
 
 export const runtime = "nodejs";
 
@@ -300,7 +303,7 @@ export async function POST(req: Request) {
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
           voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
-          generationTimeMs: generationTime.value ?? existing.generationTimeMs,
+          generationTimeMs: resolveImportedGenerationTimeMs(generationTime.value),
         },
       })
     : await prisma.build.create({
@@ -318,7 +321,7 @@ export async function POST(req: Request) {
           voxelCompressedByteSize: storageEnvelope.ok ? storageEnvelope.ref.compressedByteSize ?? null : null,
           voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
-          generationTimeMs: generationTime.value ?? 0,
+          generationTimeMs: resolveImportedGenerationTimeMs(generationTime.value),
         },
       });
 
