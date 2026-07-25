@@ -389,9 +389,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
 };
 
 // Canonical shape of lib/ai/modelBenchmarkMetrics.generated.json, written by
-// scripts/benchmarkMetrics.ts and read here to build public profiles. Every
-// field is optional past the first three because a model benchmarked before a
-// counter existed simply omits it, which the UI renders as "Not tracked".
+// scripts/benchmarkMetrics.ts and read here to build public profiles
+// Fields past the first three are optional because a model benchmarked before a
+// counter existed omits it, which the UI renders as "Not tracked"
 export type GeneratedModelBenchmarkMetrics = {
   expectedBuildCount: number;
   finalizedBuildCount: number;
@@ -471,8 +471,8 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
         generated &&
         generated.expectedBuildCount > 0 &&
         generated.inferenceSampleCount === generated.expectedBuildCount;
-      // Public attempts count every response the provider returned, including
-      // ones later rejected, so the cohort must have tracked all of its jobs
+      // Public attempts count every returned response, including rejected ones,
+      // so the cohort must have tracked all of its jobs
       const generatedCompletedAttemptHistoryIsComplete =
         generated &&
         generated.expectedBuildCount > 0 &&

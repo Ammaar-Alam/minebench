@@ -35,10 +35,10 @@ export type BenchmarkSample = {
 
 type BenchmarkJobState = "running" | "finalizing" | "succeeded" | "failed" | "interrupted";
 
-// Counters that accumulate across every invocation of a job, including runs
-// that failed, were interrupted, or were resumed later. A counter left
-// undefined means this job predates that counter, which keeps a partially
-// tracked cohort from reporting a total that undercounts real history.
+// Counters accumulating across every invocation of a job, including runs that
+// failed, were interrupted, or resumed later
+// Undefined means the job predates that counter, which keeps a partially tracked
+// cohort from reporting a total that undercounts real history
 type BenchmarkJobCounters = {
   // Provider calls issued, including calls that never returned model output
   providerCallCount?: number;
@@ -81,9 +81,9 @@ const ZEROED_COUNTERS = [
   "interruptedRunCount",
 ] as const satisfies readonly (keyof BenchmarkJobCounters)[];
 
-// Carries every cumulative counter forward untouched. Lifecycle transitions
-// spread this and then override only the counters they actually change, so a
-// new counter needs one field here instead of an edit in every mark method.
+// Carries every cumulative counter forward untouched
+// Transitions spread this and override only what they change, so a new counter
+// needs one field here instead of an edit in every mark method
 function carriedCounters(current: BenchmarkJobRecord | undefined): BenchmarkJobCounters {
   return {
     providerCallCount: current?.providerCallCount,
@@ -253,9 +253,9 @@ function comparableConfigurationKey(configuration: BenchmarkRunConfiguration): s
   });
 }
 
-// Adds to a cumulative counter while preserving the untracked state: a job that
-// never recorded this counter stays undefined rather than reporting a total that
-// silently omits its earlier runs.
+// Adds to a cumulative counter while preserving the untracked state
+// A job that never recorded this counter stays undefined rather than reporting a
+// total silently omitting its earlier runs
 function addToCounter(
   current: BenchmarkJobRecord | undefined,
   counter: keyof BenchmarkJobCounters,
@@ -274,8 +274,8 @@ function appendUniqueAttempt(attempts: number[] | undefined, attempt: number): n
   return Array.from(next).sort((a, b) => a - b);
 }
 
-// A response already recorded for this attempt is now known to be rejected.
-// Returns the updated attempt list plus the resulting cumulative count.
+// A response already recorded for this attempt is now known to be rejected
+// Returns the updated attempt list plus the resulting cumulative count
 function rejectAttempt(
   current: BenchmarkJobRecord | undefined,
   attempt: number,
@@ -341,9 +341,9 @@ function trackingJobCount(
   return records.filter((record) => isNonNegativeInteger(record?.[counter])).length;
 }
 
-// Totals a counter only when every job in the cohort tracked it. A partial
-// cohort omits the field entirely rather than publishing a total that silently
-// excludes the untracked jobs.
+// Totals a counter only when every job in the cohort tracked it
+// A partial cohort omits the field rather than publishing a total that silently
+// excludes the untracked jobs
 function sumTrackedCounters(
   records: (BenchmarkJobRecord | undefined)[],
   expectedBuildCount: number,
@@ -386,9 +386,9 @@ function configurationMatchesJob(
 }
 
 // Ledgers written before the rename stored provider calls as totalAttemptCount,
-// which read as "attempts" while the public statistic counts returned
-// responses. Adopting the value in place keeps a partly generated cohort from
-// losing its call history.
+// which read as "attempts" while the public statistic counts returned responses
+// Adopting the value in place keeps a partly generated cohort from losing its
+// call history
 function migrateLegacyCounters(record: BenchmarkJobRecord): void {
   const legacy = record as BenchmarkJobRecord & { totalAttemptCount?: number };
   if (legacy.totalAttemptCount === undefined) return;
@@ -506,8 +506,8 @@ export class BenchmarkMetricsStore {
       }
       return {
         ...carriedCounters(current),
-        // A job with no prior record starts every counter at zero, so its
-        // cohort can report exact totals
+        // A job with no prior record starts every counter at zero so its cohort
+        // can report exact totals
         ...(current
           ? {}
           : Object.fromEntries(ZEROED_COUNTERS.map((counter) => [counter, 0]))),
@@ -670,8 +670,8 @@ export class BenchmarkMetricsStore {
     this.markCompletedAttempt(job, sample.attemptCount);
     this.updateRecord(job, (current) => {
       const retryCount = Math.max(0, sample.attemptCount - 1);
-      // A caller that never reported attempts still implies the attempts the
-      // accepted sample took, so backfill what the callbacks did not observe
+      // An accepted sample implies the attempts it took, so backfill whatever
+      // the callbacks did not observe
       const unreportedFailures = Math.max(0, retryCount - (current?.retryCount ?? 0));
       const unreportedCalls = Math.max(
         0,
@@ -889,9 +889,9 @@ export class BenchmarkMetricsStore {
 
       const previous = persisted.models[modelKey];
       // Timing, configuration, and cap fields describe one measured cohort, so
-      // they only refresh together once every prompt has a timing sample.
-      // Otherwise the published values stay as recorded by the run that
-      // produced the full cohort.
+      // they refresh together only once every prompt has a timing sample
+      // Otherwise published values stay as recorded by the run that produced the
+      // full cohort
       const completeTimingCohort =
         timingSamples.length === expectedBuildCount && expectedBuildCount > 0;
       const next: GeneratedModelBenchmarkMetrics = {

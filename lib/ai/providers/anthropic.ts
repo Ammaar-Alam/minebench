@@ -1,4 +1,4 @@
-import { claudeCapabilities } from "@/lib/ai/claudeModels";
+import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -17,7 +17,7 @@ type AnthropicStreamEvent = {
   delta?: { type?: unknown; text?: unknown; partial_json?: unknown } | unknown;
 };
 
-type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+type AnthropicEffort = ClaudeEffort;
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
@@ -140,27 +140,17 @@ function parseThinkingBudget(): number | null {
   return budget;
 }
 
-function parseEffortEnv(
-  envVar: string,
-  opts: { defaultEffort: AnthropicEffort; allowMax: boolean; allowXhigh: boolean },
-): AnthropicEffort {
-  const raw = (process.env[envVar] ?? "").trim().toLowerCase();
-  if (raw === "low" || raw === "medium" || raw === "high") return raw;
-  if (raw === "xhigh") return opts.allowXhigh ? "xhigh" : "high";
-  if (raw === "max") return opts.allowMax ? "max" : "high";
-  return opts.defaultEffort;
-}
-
-function effortFallbacks(initial: AnthropicEffort, opts: { allowMax: boolean; allowXhigh: boolean }): AnthropicEffort[] {
-  const ordered: AnthropicEffort[] = opts.allowMax
-    ? opts.allowXhigh
-      ? ["max", "xhigh", "high", "medium", "low"]
-      : ["max", "high", "medium", "low"]
-    : opts.allowXhigh
-      ? ["xhigh", "high", "medium", "low"]
-      : ["high", "medium", "low"];
-  const startIndex = Math.max(0, ordered.indexOf(initial));
-  return ordered.slice(startIndex);
+// Starts the ladder at the requested level, or at its head when the request
+// names a level this model does not accept
+function effortFallbacks(
+  ladder: readonly AnthropicEffort[],
+  requested: string | undefined,
+): AnthropicEffort[] {
+  const startIndex = Math.max(
+    0,
+    ladder.findIndex((effort) => effort === requested),
+  );
+  return ladder.slice(startIndex);
 }
 
 function looksLikeEffortConfigError(body: string): boolean {
@@ -179,15 +169,11 @@ function looksLikeEffortConfigError(body: string): boolean {
 }
 
 function parseAdaptiveEfforts(modelId: string): AnthropicEffort[] {
-  const { xhighEffort, effortEnvVar } = claudeCapabilities(modelId);
-  const preferred = effortEnvVar
-    ? parseEffortEnv(effortEnvVar, {
-        defaultEffort: "max",
-        allowMax: true,
-        allowXhigh: xhighEffort,
-      })
-    : "max";
-  return effortFallbacks(preferred, { allowMax: true, allowXhigh: xhighEffort });
+  const { effortLadder, effortEnvVar } = claudeCapabilities(modelId);
+  const requested = effortEnvVar
+    ? (process.env[effortEnvVar] ?? "").trim().toLowerCase()
+    : undefined;
+  return effortFallbacks(effortLadder, requested);
 }
 
 export async function anthropicGenerateText(params: {

@@ -98,8 +98,8 @@ function formatCost(cost: BenchmarkCost): string {
   return `$${cost.usd.toFixed(2)}`;
 }
 
-// Models benchmarked before attempt tracking can only be divided by their build
-// count, so the unit follows whichever denominator was actually measured
+// Unit follows whichever denominator was measured, since models benchmarked
+// before attempt tracking can only divide by build count
 function formatCostDetail(profile: ModelBenchmarkProfile): string | undefined {
   if (!profile.totalCost) return undefined;
   if (profile.totalAttempts) {
@@ -183,9 +183,9 @@ function DetailRows({ rows }: { rows: readonly ModelRunParameter[] }) {
   );
 }
 
-// A statistic with a detail reveals it on hover or keyboard focus. The value and
-// its detail are announced together from the wrapper, so the visual bubble stays
-// out of the accessibility tree.
+// A statistic with a detail reveals it on hover or keyboard focus
+// Value and detail are announced together from the wrapper, so the visual bubble
+// stays out of the accessibility tree
 function StatisticValue({ row }: { row: ModelRunParameter }) {
   if (!row.detail) return <span className="text-fg/95">{row.value}</span>;
 

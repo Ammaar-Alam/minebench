@@ -1,4 +1,4 @@
-import { claudeCapabilities } from "@/lib/ai/claudeModels";
+import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -136,14 +136,7 @@ function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
 }
 
 function openRouterTemperaturePayload(modelId: string, temperature?: number): { temperature?: number } {
-  const normalized = modelId.toLowerCase();
-  const usesDefaultSampling =
-    normalized.startsWith("openai/gpt-5.6") ||
-    normalized === "moonshotai/kimi-k3" ||
-    normalized === "google/gemini-3.6-flash" ||
-    normalized === "google/gemini-3.5-flash-lite" ||
-    claudeCapabilities(normalized).defaultSamplingOnly;
-  if (usesDefaultSampling) return {};
+  if (modelUsesDefaultSampling(modelId)) return {};
   return { temperature: temperature ?? 0.2 };
 }
 

@@ -1,7 +1,7 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
-import { claudeCapabilities } from "@/lib/ai/claudeModels";
 import { extractBestVoxelBuildJson, extractFirstJsonObject } from "@/lib/ai/jsonExtract";
+import { modelOutputCeiling, modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { getModelByKey, ModelKey, ModelCatalogEntry } from "@/lib/ai/modelCatalog";
 import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
@@ -51,78 +51,11 @@ function parseOptionalIntEnvVar(name: string): number | undefined {
   return Math.floor(parsed);
 }
 
-function defaultOutputTokenRequestForModel(modelId: string): number | undefined {
-  if (modelId === "kimi-k3" || modelId === "moonshotai/kimi-k3") return 1_048_576;
-  if (modelId === "grok-4.5" || modelId === "x-ai/grok-4.5") return 500_000;
-  if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
-  if (
-    modelId === "deepseek-v4-pro" ||
-    modelId === "deepseek-v4-flash" ||
-    modelId === "deepseek/deepseek-v4-pro" ||
-    modelId === "deepseek/deepseek-v4-flash"
-  ) {
-    return 384_000;
-  }
-  return undefined;
-}
-
-function maxOutputTokenCapForModel(modelId: string): number | undefined {
-  // OpenAI's GPT-5 family models use max_output_tokens as a total
-  // generation budget that includes reasoning tokens. Most GPT-5 variants in
-  // MineBench are currently capped at 128k output tokens, with the older
-  // gpt-5-pro alias remaining at 272k.
-  if (modelId === "gpt-5-pro") return 272_000;
-  if (modelId.startsWith("gpt-5")) return 128_000;
-  if (modelId === "kimi-k3" || modelId === "moonshotai/kimi-k3") return 1_048_576;
-  if (
-    modelId === "gemini-3.6-flash" ||
-    modelId === "google/gemini-3.6-flash" ||
-    modelId === "gemini-3.5-flash-lite" ||
-    modelId === "google/gemini-3.5-flash-lite" ||
-    modelId === "gemini-3.5-flash" ||
-    modelId === "google/gemini-3.5-flash" ||
-    modelId === "gemini-3-flash-preview" ||
-    modelId === "google/gemini-3-flash-preview"
-  ) {
-    return 65_536;
-  }
-  if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
-  if (modelId === "grok-4.5" || modelId === "x-ai/grok-4.5") return 500_000;
-  if (
-    modelId === "deepseek-v4-pro" ||
-    modelId === "deepseek-v4-flash" ||
-    modelId === "deepseek/deepseek-v4-pro" ||
-    modelId === "deepseek/deepseek-v4-flash"
-  ) {
-    return 384_000;
-  }
-  if (modelId === "deepseek/deepseek-v3.2") return 65_536;
-  if (modelId === "glm-5.2" || modelId === "glm-5.1" || modelId === "glm-5") {
-    return 131_072;
-  }
-  const claudeOutputMax = claudeCapabilities(modelId).maxOutputTokens;
-  if (claudeOutputMax !== null) return claudeOutputMax;
-  // MiniMax M2.7's OpenAI-compatible route rejects the larger MineBench default
-  // output budgets. Keep a lower completion budget so the prompt plus output
-  // stays within the model's effective request limit.
-  if (modelId === "MiniMax-M2.7") return 131_072;
-  if (
-    modelId === "grok-4-1-fast" ||
-    modelId === "grok-4-1-fast-reasoning" ||
-    modelId === "x-ai/grok-4.1-fast"
-  ) {
-    return 30_000;
-  }
-  return undefined;
-}
-
 function defaultMaxOutputTokens(_gridSize: 64 | 256 | 512, modelId: string): number {
+  const ceiling = modelOutputCeiling(modelId);
   const requested =
-    parseOptionalIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS) ??
-    defaultOutputTokenRequestForModel(modelId) ??
-    DEFAULT_MAX_OUTPUT_TOKENS;
-  const cap = maxOutputTokenCapForModel(modelId);
-  return typeof cap === "number" ? Math.min(requested, cap) : requested;
+    parseOptionalIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS) ?? ceiling ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  return ceiling === undefined ? requested : Math.min(requested, ceiling);
 }
 
 function defaultMaxReasoningTokens(modelId: string, maxOutputTokens: number): number | undefined {
@@ -149,19 +82,6 @@ const DEFAULT_TEMPERATURE = 1.0;
 function formatOptionalInteger(value: number | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
   return String(Math.floor(value));
-}
-
-function usesDefaultSamplingForModel(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
-  return (
-    normalized.startsWith("gpt-5.6") ||
-    normalized.startsWith("openai/gpt-5.6") ||
-    normalized === "kimi-k3" ||
-    normalized === "moonshotai/kimi-k3" ||
-    normalized === "google/gemini-3.6-flash" ||
-    normalized === "google/gemini-3.5-flash-lite" ||
-    claudeCapabilities(normalized).defaultSamplingOnly
-  );
 }
 
 function describeRequestedThinkingMode(opts: {
@@ -282,7 +202,7 @@ function providerRequestTraceLine(opts: {
         : 0.6
       : opts.route === "direct" && opts.provider === "gemini" && opts.modelId.startsWith("gemini-3")
       ? "default"
-      : usesDefaultSamplingForModel(opts.modelId)
+      : modelUsesDefaultSampling(opts.modelId)
       ? "default"
       : DEFAULT_TEMPERATURE;
   return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${temperature}.`;

@@ -31,23 +31,41 @@ builds.
 
 ## 2. Describe the request
 
-Most models need nothing here. Reach for these only when the provider rejects a
-MineBench default.
+Most models need nothing here. Reach for these only when the model differs from
+the MineBench defaults.
 
-- **Output ceiling** — `maxOutputTokenCapForModel` in
-  `lib/ai/generateVoxelBuild.ts`, when the model caps below the MineBench request
+- **Output ceiling and sampling** — `lib/ai/modelRequestProfiles.ts`. Add the
+  model's IDs to an `OUTPUT_CEILINGS` group when it accepts more or less than the
+  MineBench default request, and to `DEFAULT_SAMPLING_IDS` when it rejects a
+  non-default `temperature`. Both the direct and OpenRouter ID go in the same
+  group, since a ceiling belongs to the model rather than the route.
 - **Reasoning or thinking** — `lib/ai/reasoningProfiles.ts`, which resolves the
   effort ladder and env-var override for both routes
-- **Sampling** — `usesDefaultSamplingForModel` in `lib/ai/generateVoxelBuild.ts`
-  and `openRouterTemperaturePayload` in `lib/ai/providers/openrouter.ts`, when the
-  provider rejects a non-default `temperature`
 
-Claude models are the exception: `lib/ai/claudeModels.ts` resolves output
-ceiling, sampling, thinking mode, xhigh support, the 1M beta header, and the
-effort env var from the model ID. A new Claude release usually needs no code
-change beyond an `EFFORT_ENV_VARS` entry. Adjust a threshold there only when
-Anthropic changes what a generation supports, and cover it in
-`tests/unit/ai/claude-capabilities.test.ts`.
+Claude models are the exception: `lib/ai/claudeModels.ts` resolves the effort
+ladder, sampling policy, thinking mode, output ceiling, the 1M beta header, and
+the effort env var from the model ID, for both the direct and OpenRouter routes.
+Add one row to `CLAUDE_RELEASES`:
+
+```ts
+"opus-5.0": {
+  effortLadder: FULL_EFFORT_LADDER,
+  defaultSamplingOnly: true,
+  maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
+  effortEnvVar: "ANTHROPIC_OPUS_5_EFFORT",
+},
+```
+
+Nothing is inherited from the previous release. A model with no row resolves to
+no capabilities, and `tests/unit/ai/claude-capabilities.test.ts` fails if a
+catalogued Anthropic model has no row — so the output cap and effort levels have
+to come from the model card rather than from whatever the last release did.
+
+`effortLadder` is the exact set of levels the model accepts, highest first;
+generation starts at the head and walks down when the provider rejects a level.
+Use `FULL_EFFORT_LADDER` or `NO_XHIGH_LADDER` if the model matches one, otherwise
+spell out the levels. An empty ladder means the model has no adaptive effort
+control and needs `legacyManualThinking`.
 
 If the provider is new entirely, add an adapter under `lib/ai/providers/`
 following `anthropic.ts` or `openai.ts`, then dispatch to it from

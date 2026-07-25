@@ -1,6 +1,6 @@
-import { claudeCapabilities } from "@/lib/ai/claudeModels";
+import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
 
-export type AnthropicAdaptiveEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type AnthropicAdaptiveEffort = ClaudeEffort;
 export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 export type GeminiThinkingConfig = {
@@ -27,23 +27,20 @@ function isGemini3FlashFamily(modelId: string): boolean {
   return /(?:^|\/)gemini-3(?:[.-]\d+)?-flash/.test(modelId);
 }
 
+// Explicit override passes through so an unsupported value raises
+// Env override degrades to the model's highest level instead, since it is a
+// run-wide default that should not fail a model capping lower
 function anthropicAdaptiveEffortOverride(modelId: string, override?: string): string | undefined {
   const normalizedOverride = normalizeReasoningOverride(override);
   if (normalizedOverride) return normalizedOverride;
 
-  const { xhighEffort, effortEnvVar } = claudeCapabilities(modelId);
+  const { effortLadder, effortEnvVar } = claudeCapabilities(modelId);
   const normalizedEnv = effortEnvVar
     ? normalizeReasoningOverride(process.env[effortEnvVar])
     : undefined;
   if (!normalizedEnv) return undefined;
-  if (normalizedEnv === "low" || normalizedEnv === "medium" || normalizedEnv === "high") {
-    return normalizedEnv;
-  }
-  if (normalizedEnv === "xhigh") {
-    return xhighEffort ? "xhigh" : "high";
-  }
-  if (normalizedEnv === "max") return "max";
-  return undefined;
+  if (effortLadder.some((effort) => effort === normalizedEnv)) return normalizedEnv;
+  return effortLadder[0];
 }
 
 function descendingAttempts<T extends string>(
@@ -111,9 +108,7 @@ function anthropicAdaptiveAttempts(
 ): AnthropicAdaptiveEffort[] {
   return descendingAttempts(
     label,
-    claudeCapabilities(modelId).xhighEffort
-      ? ["max", "xhigh", "high", "medium", "low"]
-      : ["max", "high", "medium", "low"],
+    claudeCapabilities(modelId).effortLadder,
     anthropicAdaptiveEffortOverride(modelId, override),
   );
 }
