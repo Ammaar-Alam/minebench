@@ -105,7 +105,8 @@ directory, such as `uploads/arcade/RAW/`. Attempt artifacts use names such as
 the `.json` extension. These files include responses that fail extraction,
 tool-call validation, execution, or build validation and trigger another
 attempt. A new run for the same prompt and model replaces its prior attempt
-artifacts, while the existing canonical final RAW artifact remains unchanged.
+artifacts. After generation returns, the unnumbered canonical RAW artifact is
+also replaced with the new run's successful or final failed response.
 
 ### Import a converted build into the local database
 
