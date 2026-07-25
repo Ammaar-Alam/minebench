@@ -486,7 +486,10 @@ export type GenerateVoxelBuildParams = {
   preferOpenRouter?: boolean;
   reasoning?: string;
   abortSignal?: AbortSignal;
+  // Fired before every provider call so interrupted attempts remain observable
+  onAttempt?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => void;
+  // Fired after response text returns and before parsing or execution
   onRawResponse?: (attempt: number, rawText: string) => void;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
@@ -501,6 +504,7 @@ export type GenerateVoxelBuildResult =
       generationTimeMs: number;
       acceptedOutputTokens?: number;
       providerRoute?: "direct" | "openrouter";
+      requestConfiguration?: string;
       rawText: string;
     }
   | {
@@ -510,6 +514,7 @@ export type GenerateVoxelBuildResult =
       generationTimeMs: number;
       acceptedOutputTokens?: number;
       providerRoute?: "direct" | "openrouter";
+      requestConfiguration?: string;
     };
 
 // call the direct provider (OpenAI, Anthropic, etc.)
@@ -709,6 +714,7 @@ async function providerGenerateText(args: {
   onProviderTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
   onProviderRoute?: (route: "direct" | "openrouter") => void;
+  onRequestConfiguration?: (configuration: string) => void;
 }): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
@@ -795,23 +801,25 @@ async function providerGenerateText(args: {
     if (model.provider === "xai" && !directXaiReasoningEffortAttempts) {
       xaiAutomaticReasoningForModel(model.modelId, args.reasoning);
     }
+    const requestConfiguration = providerRequestTraceLine({
+      route: "direct",
+      provider: model.provider,
+      modelId: model.modelId,
+      maxOutputTokens: args.maxOutputTokens,
+      reasoningMaxTokens: args.reasoningMaxTokens,
+      reasoningEffortAttempts:
+        directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
+      adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
+      geminiThinkingConfig: directGeminiThinkingConfig,
+      moonshotThinkingConfig: directMoonshotThinkingConfig,
+      deepseekThinkingConfig: directDeepSeekThinkingConfig,
+    });
+    // Reuse the normalized request description as the benchmark configuration fingerprint
     args.onProviderTrace?.(
-      `Routing via direct ${model.provider} provider (${model.modelId}). ` +
-        providerRequestTraceLine({
-          route: "direct",
-          provider: model.provider,
-          modelId: model.modelId,
-          maxOutputTokens: args.maxOutputTokens,
-          reasoningMaxTokens: args.reasoningMaxTokens,
-          reasoningEffortAttempts:
-            directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
-          adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
-          geminiThinkingConfig: directGeminiThinkingConfig,
-          moonshotThinkingConfig: directMoonshotThinkingConfig,
-          deepseekThinkingConfig: directDeepSeekThinkingConfig,
-        }),
+      `Routing via direct ${model.provider} provider (${model.modelId}). ${requestConfiguration}`,
     );
     args.onProviderRoute?.("direct");
+    args.onRequestConfiguration?.(requestConfiguration);
     try {
       return await callDirectProvider({
         provider: model.provider,
@@ -884,19 +892,21 @@ async function providerGenerateText(args: {
           args.reasoning,
         );
 
+  const requestConfiguration = providerRequestTraceLine({
+    route: "openrouter",
+    provider: "openrouter",
+    modelId: model.openRouterModelId,
+    maxOutputTokens: args.maxOutputTokens,
+    reasoningMaxTokens: args.reasoningMaxTokens,
+    reasoningEffortAttempts: openRouterReasoningEffortAttempts,
+    openRouterReasoningEnabled,
+  });
+  // Keep OpenRouter and direct routes on the same configuration capture contract
   args.onProviderTrace?.(
-    `Routing via OpenRouter (${model.openRouterModelId}). ` +
-      providerRequestTraceLine({
-        route: "openrouter",
-        provider: "openrouter",
-        modelId: model.openRouterModelId,
-        maxOutputTokens: args.maxOutputTokens,
-        reasoningMaxTokens: args.reasoningMaxTokens,
-        reasoningEffortAttempts: openRouterReasoningEffortAttempts,
-        openRouterReasoningEnabled,
-      }),
+    `Routing via OpenRouter (${model.openRouterModelId}). ${requestConfiguration}`,
   );
   args.onProviderRoute?.("openrouter");
+  args.onRequestConfiguration?.(requestConfiguration);
 
   return openrouterGenerateText({
     modelId: model.openRouterModelId,
@@ -1028,6 +1038,7 @@ export async function generateVoxelBuild(
   let lastError = "";
   let acceptedOutputTokens: number | undefined;
   let providerRoute: "direct" | "openrouter" | undefined;
+  let requestConfiguration: string | undefined;
   const start = Date.now();
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -1044,6 +1055,7 @@ export async function generateVoxelBuild(
             : "");
 
     if (attempt > 1) params.onRetry?.(attempt, lastError);
+    params.onAttempt?.(attempt);
 
     try {
       const { text } = await providerGenerateText({
@@ -1065,6 +1077,9 @@ export async function generateVoxelBuild(
         },
         onProviderRoute: (route) => {
           providerRoute = route;
+        },
+        onRequestConfiguration: (configuration) => {
+          requestConfiguration = configuration;
         },
       });
       previousText = text;
@@ -1166,6 +1181,7 @@ export async function generateVoxelBuild(
         generationTimeMs,
         acceptedOutputTokens,
         providerRoute,
+        requestConfiguration,
         rawText: text,
       };
     } catch (err) {
@@ -1185,6 +1201,7 @@ export async function generateVoxelBuild(
     generationTimeMs: Date.now() - start,
     acceptedOutputTokens,
     providerRoute,
+    requestConfiguration,
   };
 }
 

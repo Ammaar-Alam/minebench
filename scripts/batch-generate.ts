@@ -496,6 +496,10 @@ async function generateAndSave(
     preferOpenRouter,
     reasoning: reasoning ?? undefined,
     abortSignal: signal,
+    onAttempt: (attempt) => {
+      // Persist before the provider call so SIGINT still leaves an exact attempt count
+      metricsStore.markAttempt(job, attempt);
+    },
     onRetry: (attempt, reason) => {
       attemptCount = Math.max(attemptCount, attempt);
       metricsStore.markRetry(job, attempt);
@@ -504,6 +508,15 @@ async function generateAndSave(
       console.log(`    ↻ [${label}] retry ${attempt}: ${msg}`);
     },
     onRawResponse: (attempt, rawText) => {
+      // A returned response counts even when parsing, validation, or voxel execution rejects it
+      try {
+        metricsStore.markCompletedAttempt(job, attempt);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `    ⚠️  [${label}] Could not track completed attempt ${attempt}: ${message}`,
+        );
+      }
       try {
         const raw = writeRawResponse(job, rawText, { attempt });
         const relativePath = path.relative(process.cwd(), raw.filePath);
@@ -560,6 +573,7 @@ async function generateAndSave(
             promptText: job.promptText,
             providerRoute: result.providerRoute,
             reasoningOverride: reasoning,
+            requestConfiguration: result.requestConfiguration,
             toolsEnabled: enableTools,
           })
         : undefined,
@@ -933,7 +947,13 @@ function printBenchmarkSummary(
     );
     console.log(`    Average JSON size: ${formatBytes(summary.averageJsonSizeBytes)}`);
     console.log(
-      `    Failed: ${summary.failedCount} · Interrupted: ${summary.interruptedCount} · Running: ${summary.runningCount}`,
+      `    Total attempts: ${summary.completedAttemptCount ?? "Not tracked"} (${summary.completedAttemptTrackingJobCount ?? 0}/${summary.expectedBuildCount} jobs tracked)`,
+    );
+    console.log(
+      `    Provider calls: ${summary.totalAttemptCount ?? "Not tracked"} (${summary.attemptTrackingJobCount ?? 0}/${summary.expectedBuildCount} jobs tracked)`,
+    );
+    console.log(
+      `    Rejected responses: ${summary.rejectedResponseCount ?? "Not tracked"} · Failed calls: ${summary.failedAttemptCount ?? "Not tracked"} · Failed runs: ${summary.failedCount} · Interrupted runs: ${summary.interruptedCount} · Running: ${summary.runningCount}`,
     );
     console.log("    Total cost: Manual");
   }
