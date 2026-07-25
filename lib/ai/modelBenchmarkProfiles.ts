@@ -4,6 +4,7 @@ import generatedMetrics from "@/lib/ai/modelBenchmarkMetrics.generated.json";
 export type ModelRunParameter = {
   label: string;
   value: string;
+  detail?: string;
 };
 
 export type ModelRunParameters = readonly [ModelRunParameter, ...ModelRunParameter[]];
@@ -41,6 +42,7 @@ export type ModelBenchmarkProfile = {
   averageInference?: BenchmarkDuration;
   averageJsonSizeBytes?: number;
   totalCost?: BenchmarkCost;
+  totalAttempts?: number;
   buildCount?: number;
   note?: string;
 };
@@ -316,6 +318,11 @@ const MODEL_BENCHMARK_METADATA: Partial<
     totalCost: { usd: 41.52 },
     buildCount: 15,
   },
+  anthropic_claude_opus_5: {
+    sourceRelease: "3.11.0",
+    totalCost: { usd: 89.97 },
+    buildCount: 15,
+  },
   gemini_3_6_flash: {
     sourceRelease: "3.10.0",
     averageInference: { milliseconds: 101_900 },
@@ -389,6 +396,13 @@ export type GeneratedModelBenchmarkMetrics = {
   expectedBuildCount: number;
   finalizedBuildCount: number;
   inferenceSampleCount: number;
+  finalizedAttemptSampleCount?: number;
+  finalizedAttemptCount?: number;
+  attemptTrackingJobCount?: number;
+  totalAttemptCount?: number;
+  completedAttemptTrackingJobCount?: number;
+  completedAttemptCount?: number;
+  rejectedResponseCount?: number;
   averageInferenceMs?: number;
   averageJsonSizeBytes?: number;
   outputCapTokens?: number;
@@ -396,6 +410,9 @@ export type GeneratedModelBenchmarkMetrics = {
   outputCapIsConsistent?: boolean;
   configurationSampleCount?: number;
   configurationIsConsistent?: boolean;
+  failedAttemptCount?: number;
+  failedRunCount?: number;
+  interruptedRunCount?: number;
 };
 
 const GENERATED_MODEL_METRICS = generatedMetrics.models as Partial<
@@ -451,6 +468,12 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
         generated &&
         generated.expectedBuildCount > 0 &&
         generated.inferenceSampleCount === generated.expectedBuildCount;
+      // Public attempts count every completed response, including rejected outputs
+      const generatedCompletedAttemptHistoryIsComplete =
+        generated &&
+        generated.expectedBuildCount > 0 &&
+        generated.completedAttemptTrackingJobCount === generated.expectedBuildCount &&
+        generated.completedAttemptCount !== undefined;
 
       return [
         modelKey,
@@ -466,6 +489,9 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
               : metadata?.averageInference,
           averageJsonSizeBytes:
             generatedIsComplete ? generated.averageJsonSizeBytes : undefined,
+          totalAttempts: generatedCompletedAttemptHistoryIsComplete
+            ? generated.completedAttemptCount
+            : undefined,
           buildCount:
             generatedIsComplete ? generated.finalizedBuildCount : metadata?.buildCount,
         },

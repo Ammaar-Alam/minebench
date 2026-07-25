@@ -102,12 +102,12 @@ async function main() {
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
   ]);
-  assert.deepEqual(benchmarkProfile.outputCap, {
-    kind: "unavailable",
-    reason: "accepted-cap-unrecorded",
-  });
-  assert.equal(benchmarkProfile.averageJsonSizeBytes, undefined);
-  assert.equal(benchmarkProfile.buildCount, undefined);
+  assert.deepEqual(benchmarkProfile.outputCap, { kind: "exact", tokens: 128_000 });
+  assert.deepEqual(benchmarkProfile.averageInference, { milliseconds: 1_930_169 });
+  assert.equal(benchmarkProfile.averageJsonSizeBytes, 95_421_017);
+  assert.deepEqual(benchmarkProfile.totalCost, { usd: 89.97 });
+  assert.equal(benchmarkProfile.totalAttempts, 37);
+  assert.equal(benchmarkProfile.buildCount, 15);
 
   assert.deepEqual(anthropicAdaptiveEffortAttempts(model.modelId), [
     "max",
@@ -131,6 +131,7 @@ async function main() {
   ]);
 
   const directTraces: string[] = [];
+  const directAttempts: number[] = [];
   const directRawResponses: Array<{ attempt: number; rawText: string }> = [];
   queuedResponseTexts.push("not valid JSON", validBuildJson());
   const directResult = await generateVoxelBuild({
@@ -142,6 +143,7 @@ async function main() {
     enableTools: false,
     providerKeys: { anthropic: "test-anthropic-key" },
     allowServerKeys: false,
+    onAttempt: (attempt) => directAttempts.push(attempt),
     onRawResponse: (attempt, rawText) => {
       directRawResponses.push({ attempt, rawText });
     },
@@ -149,10 +151,15 @@ async function main() {
   });
 
   assert.equal(directResult.acceptedOutputTokens, 128_000);
+  assert.equal(
+    directResult.requestConfiguration,
+    "Request config: max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=adaptive_effort=max->xhigh->high->medium->low, temperature=default.",
+  );
   assert.deepEqual(directRawResponses, [
     { attempt: 1, rawText: "not valid JSON" },
     { attempt: 2, rawText: validBuildJson() },
   ]);
+  assert.deepEqual(directAttempts, [1, 2]);
   const directRequest = capturedRequests.find((request) =>
     request.url.includes("api.anthropic.com"),
   );
@@ -197,6 +204,11 @@ async function main() {
   });
 
   assert.equal(openRouterResult.acceptedOutputTokens, 128_000);
+  assert.ok(
+    openRouterResult.requestConfiguration?.includes(
+      "thinking_mode=effort_fallback=max->xhigh->high->medium->low->disabled",
+    ),
+  );
   const openRouterRequest = capturedRequests.find((request) =>
     request.url.includes("openrouter.test"),
   )?.body;

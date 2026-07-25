@@ -424,6 +424,28 @@
       "configurationSampleCount": 0,
       "configurationIsConsistent": false,
       "averageJsonSizeBytes": 2087458
+    },
+    "anthropic_claude_opus_5": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 15,
+      "finalizedAttemptSampleCount": 15,
+      "finalizedAttemptCount": 22,
+      "attemptTrackingJobCount": 15,
+      "totalAttemptCount": 47,
+      "completedAttemptTrackingJobCount": 15,
+      "completedAttemptCount": 37,
+      "rejectedResponseCount": 22,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageJsonSizeBytes": 95421017,
+      "averageInferenceMs": 1930169,
+      "outputCapTokens": 128000,
+      "failedAttemptCount": 31,
+      "failedRunCount": 4,
+      "interruptedRunCount": 1
     }
   }
 }

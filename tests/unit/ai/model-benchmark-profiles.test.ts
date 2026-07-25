@@ -105,14 +105,13 @@ assert.deepEqual(opus48?.totalCost, { usd: 41.52 });
 assert.equal(opus48?.buildCount, 15);
 
 const opus5 = getModelBenchmarkProfile("anthropic_claude_opus_5");
-assert.deepEqual(opus5?.outputCap, {
-  kind: "unavailable",
-  reason: "accepted-cap-unrecorded",
-});
-assert.equal(opus5?.averageInference, undefined);
-assert.equal(opus5?.averageJsonSizeBytes, undefined);
-assert.equal(opus5?.totalCost, undefined);
-assert.equal(opus5?.buildCount, undefined);
+assert.equal(opus5?.sourceRelease, "3.11.0");
+assert.deepEqual(opus5?.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(opus5?.averageInference, { milliseconds: 1_930_169 });
+assert.equal(opus5?.averageJsonSizeBytes, 95_421_017);
+assert.deepEqual(opus5?.totalCost, { usd: 89.97 });
+assert.equal(opus5?.totalAttempts, 37);
+assert.equal(opus5?.buildCount, 15);
 
 const gpt55 = getModelBenchmarkProfile("openai_gpt_5_5");
 assert.deepEqual(gpt55?.averageInference, { milliseconds: 624_000 });
