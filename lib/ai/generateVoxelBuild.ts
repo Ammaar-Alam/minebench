@@ -487,6 +487,7 @@ export type GenerateVoxelBuildParams = {
   reasoning?: string;
   abortSignal?: AbortSignal;
   onRetry?: (attempt: number, reason: string) => void;
+  onRawResponse?: (attempt: number, rawText: string) => void;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
 };
@@ -1067,6 +1068,14 @@ export async function generateVoxelBuild(
         },
       });
       previousText = text;
+      try {
+        params.onRawResponse?.(attempt, text);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        params.onProviderTrace?.(
+          `Raw response callback failed for attempt ${attempt}: ${message}`,
+        );
+      }
 
       const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
       if (!json) {

@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildBenchmarkMetricJobs,
+  clearRawAttemptResponses,
   getBenchmarkPromptSlugs,
   getCandidateModels,
   getImportOnlyModelsForGenerationJobs,
   getJobsToGenerate,
   isEmptyPlaceholder,
+  writeRawResponse,
 } from "../../../scripts/batch-generate";
 import type { ModelKey } from "../../../lib/ai/modelCatalog";
 import { BENCHMARK_PROMPT_MAP } from "../../../scripts/uploadsCatalog";
@@ -66,6 +74,49 @@ async function main() {
     isEmptyPlaceholder(placeholderPath),
     true,
     "CRLF-terminated placeholders should remain missing generation jobs",
+  );
+
+  const rawUploadsRoot = mkdtempSync(join(tmpdir(), "minebench-batch-raw-"));
+  const rawJob = { promptSlug: "arcade", modelSlug: "opus-5" };
+  const invalidAttempt = writeRawResponse(rawJob, "not valid JSON", {
+    attempt: 1,
+    uploadsDir: rawUploadsRoot,
+  });
+  assert.equal(
+    invalidAttempt.filePath,
+    join(
+      rawUploadsRoot,
+      "arcade",
+      "RAW",
+      "arcade-opus-5-RAW-attempt-01.txt",
+    ),
+  );
+  assert.equal(readFileSync(invalidAttempt.filePath, "utf8"), "not valid JSON");
+
+  const validAttempt = writeRawResponse(rawJob, '{"tool":"voxel.exec"}', {
+    attempt: 2,
+    uploadsDir: rawUploadsRoot,
+  });
+  assert.equal(
+    validAttempt.filePath,
+    join(
+      rawUploadsRoot,
+      "arcade",
+      "RAW",
+      "arcade-opus-5-RAW-attempt-02.json",
+    ),
+  );
+  assert.equal(readFileSync(validAttempt.filePath, "utf8"), '{"tool":"voxel.exec"}');
+
+  const canonicalRaw = writeRawResponse(rawJob, '{"tool":"voxel.exec"}', {
+    uploadsDir: rawUploadsRoot,
+  });
+  clearRawAttemptResponses(rawJob, rawUploadsRoot);
+  assert.equal(existsSync(canonicalRaw.filePath), true);
+  assert.deepEqual(
+    readdirSync(join(rawUploadsRoot, "arcade", "RAW")),
+    ["arcade-opus-5-RAW.json"],
+    "a new run should clear only prior attempt artifacts",
   );
 
   assert.ok(

@@ -15,6 +15,7 @@ type CapturedRequest = {
 };
 
 const capturedRequests: CapturedRequest[] = [];
+const queuedResponseTexts: string[] = [];
 const originalFetch = globalThis.fetch;
 const originalEnv = {
   anthropicStreamResponses: process.env.ANTHROPIC_STREAM_RESPONSES,
@@ -45,6 +46,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 
   const url = String(input);
   const body = JSON.parse(init.body as string) as Record<string, unknown>;
+  const responseText = queuedResponseTexts.shift() ?? validBuildJson();
   capturedRequests.push({
     url,
     headers: normalizeHeaders(init.headers),
@@ -54,7 +56,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (url.includes("api.anthropic.com")) {
     return new Response(
       JSON.stringify({
-        content: [{ type: "text", text: validBuildJson() }],
+        content: [{ type: "text", text: responseText }],
       }),
       {
         status: 200,
@@ -68,7 +70,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
       choices: [
         {
           message: {
-            content: validBuildJson(),
+            content: responseText,
           },
         },
       ],
@@ -129,18 +131,28 @@ async function main() {
   ]);
 
   const directTraces: string[] = [];
+  const directRawResponses: Array<{ attempt: number; rawText: string }> = [];
+  queuedResponseTexts.push("not valid JSON", validBuildJson());
   const directResult = await generateVoxelBuild({
     modelKey: "anthropic_claude_opus_5",
     prompt: "small tower",
     gridSize: 64,
     palette: "simple",
+    maxAttempts: 2,
     enableTools: false,
     providerKeys: { anthropic: "test-anthropic-key" },
     allowServerKeys: false,
+    onRawResponse: (attempt, rawText) => {
+      directRawResponses.push({ attempt, rawText });
+    },
     onProviderTrace: (message) => directTraces.push(message),
   });
 
   assert.equal(directResult.acceptedOutputTokens, 128_000);
+  assert.deepEqual(directRawResponses, [
+    { attempt: 1, rawText: "not valid JSON" },
+    { attempt: 2, rawText: validBuildJson() },
+  ]);
   const directRequest = capturedRequests.find((request) =>
     request.url.includes("api.anthropic.com"),
   );
@@ -170,11 +182,13 @@ async function main() {
 
   capturedRequests.length = 0;
   const openRouterTraces: string[] = [];
+  queuedResponseTexts.push(validBuildJson());
   const openRouterResult = await generateVoxelBuild({
     modelKey: "anthropic_claude_opus_5",
     prompt: "small tower",
     gridSize: 64,
     palette: "simple",
+    maxAttempts: 1,
     enableTools: false,
     preferOpenRouter: true,
     providerKeys: { openrouter: "test-openrouter-key" },
@@ -225,11 +239,13 @@ async function main() {
   assert.deepEqual(openRouterReasoningEffortAttempts(model.openRouterModelId), [
     "low",
   ]);
+  queuedResponseTexts.push(validBuildJson());
   await generateVoxelBuild({
     modelKey: "anthropic_claude_opus_5",
     prompt: "small tower",
     gridSize: 64,
     palette: "simple",
+    maxAttempts: 1,
     enableTools: false,
     providerKeys: { anthropic: "test-anthropic-key" },
     allowServerKeys: false,

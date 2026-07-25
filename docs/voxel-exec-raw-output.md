@@ -99,6 +99,14 @@ pnpm batch:generate --generate --prompt castle --model sonnet
 
 Tool mode is the default. `--notools` is a fallback path for debugging or direct-output comparisons.
 
+Each completed provider attempt is written immediately under the prompt's RAW
+directory, such as `uploads/arcade/RAW/`. Attempt artifacts use names such as
+`arcade-opus-5-RAW-attempt-01.txt`; an attempt that is itself valid JSON uses
+the `.json` extension. These files include responses that fail extraction,
+tool-call validation, execution, or build validation and trigger another
+attempt. A new run for the same prompt and model replaces its prior attempt
+artifacts, while the existing canonical final RAW artifact remains unchanged.
+
 ### Import a converted build into the local database
 
 ```bash

@@ -102,16 +102,38 @@ function getJsonPath(promptSlug: string, modelSlug: string): string {
   return path.join(UPLOADS_DIR, promptSlug, `${promptSlug}-${modelSlug}.json`);
 }
 
-function getRawDir(promptSlug: string): string {
-  return path.join(UPLOADS_DIR, promptSlug, "RAW");
+type RawResponseJob = Pick<Job, "promptSlug" | "modelSlug">;
+
+type RawResponseWriteOptions = {
+  attempt?: number;
+  uploadsDir?: string;
+};
+
+function getRawDir(promptSlug: string, uploadsDir = UPLOADS_DIR): string {
+  return path.join(uploadsDir, promptSlug, "RAW");
 }
 
-function getRawResponsePath(job: Job, ext: "json" | "txt"): string {
-  return path.join(getRawDir(job.promptSlug), `${job.promptSlug}-${job.modelSlug}-RAW.${ext}`);
+function getRawResponsePath(
+  job: RawResponseJob,
+  ext: "json" | "txt",
+  options: RawResponseWriteOptions = {},
+): string {
+  const attemptSuffix =
+    options.attempt === undefined
+      ? ""
+      : `-attempt-${String(options.attempt).padStart(2, "0")}`;
+  return path.join(
+    getRawDir(job.promptSlug, options.uploadsDir),
+    `${job.promptSlug}-${job.modelSlug}-RAW${attemptSuffix}.${ext}`,
+  );
 }
 
-function writeRawResponse(job: Job, rawText: string): { filePath: string; isJson: boolean } {
-  const rawDir = getRawDir(job.promptSlug);
+export function writeRawResponse(
+  job: RawResponseJob,
+  rawText: string,
+  options: RawResponseWriteOptions = {},
+): { filePath: string; isJson: boolean } {
+  const rawDir = getRawDir(job.promptSlug, options.uploadsDir);
   ensureDir(rawDir);
 
   let isJson = false;
@@ -122,14 +144,30 @@ function writeRawResponse(job: Job, rawText: string): { filePath: string; isJson
     isJson = false;
   }
 
-  const nextPath = getRawResponsePath(job, isJson ? "json" : "txt");
-  const stalePath = getRawResponsePath(job, isJson ? "txt" : "json");
+  const nextPath = getRawResponsePath(job, isJson ? "json" : "txt", options);
+  const stalePath = getRawResponsePath(job, isJson ? "txt" : "json", options);
   fs.writeFileSync(nextPath, rawText);
   if (fs.existsSync(stalePath)) {
     fs.unlinkSync(stalePath);
   }
 
   return { filePath: nextPath, isJson };
+}
+
+export function clearRawAttemptResponses(
+  job: RawResponseJob,
+  uploadsDir = UPLOADS_DIR,
+): void {
+  const rawDir = getRawDir(job.promptSlug, uploadsDir);
+  if (!fs.existsSync(rawDir)) return;
+
+  const prefix = `${job.promptSlug}-${job.modelSlug}-RAW-attempt-`;
+  for (const name of fs.readdirSync(rawDir)) {
+    const suffix = name.startsWith(prefix) ? name.slice(prefix.length) : "";
+    if (/^\d+\.(?:json|txt)$/.test(suffix)) {
+      fs.unlinkSync(path.join(rawDir, name));
+    }
+  }
 }
 
 function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
@@ -447,6 +485,7 @@ async function generateAndSave(
 
   const label = jobLabel(job);
   let attemptCount = 1;
+  clearRawAttemptResponses(job);
   const result = await generateVoxelBuild({
     modelKey: job.modelKey,
     prompt: job.promptText,
@@ -463,6 +502,20 @@ async function generateAndSave(
       const msg = (reason ?? "").trim();
       if (!msg) return;
       console.log(`    ↻ [${label}] retry ${attempt}: ${msg}`);
+    },
+    onRawResponse: (attempt, rawText) => {
+      try {
+        const raw = writeRawResponse(job, rawText, { attempt });
+        const relativePath = path.relative(process.cwd(), raw.filePath);
+        console.log(
+          `    💾 [${label}] Saved raw attempt ${attempt}: ${relativePath}`,
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `    ⚠️  [${label}] Could not save raw attempt ${attempt}: ${message}`,
+        );
+      }
     },
     onProviderTrace: (message) => {
       const msg = message.trim();
