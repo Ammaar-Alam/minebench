@@ -2,8 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
+import type { GeneratedModelBenchmarkMetrics } from "../lib/ai/modelBenchmarkProfiles";
 import type { ModelKey } from "../lib/ai/modelCatalog";
 import { parseVoxelBuildSpec } from "../lib/voxel/validate";
+
+export type { GeneratedModelBenchmarkMetrics };
 
 export type BenchmarkMetricJob = {
   promptSlug: string;
@@ -32,59 +35,80 @@ export type BenchmarkSample = {
 
 type BenchmarkJobState = "running" | "finalizing" | "succeeded" | "failed" | "interrupted";
 
-type BenchmarkJobRecord = {
+// Counters that accumulate across every invocation of a job, including runs
+// that failed, were interrupted, or were resumed later. A counter left
+// undefined means this job predates that counter, which keeps a partially
+// tracked cohort from reporting a total that undercounts real history.
+type BenchmarkJobCounters = {
+  // Provider calls issued, including calls that never returned model output
+  providerCallCount?: number;
+  // Responses the provider returned, whether later accepted or rejected
+  completedAttemptCount?: number;
+  // Returned responses that failed extraction, validation, or execution
+  rejectedResponseCount?: number;
+  // Attempts that ended without a usable response, including terminal failures
+  failedAttemptCount?: number;
+  failedRunCount?: number;
+  interruptedRunCount?: number;
+};
+
+type BenchmarkJobRecord = BenchmarkJobCounters & {
   state: BenchmarkJobState;
   startedAt: string;
   endedAt?: string;
   retryCount: number;
-  // Current invocation count used to reconcile retry and terminal states
+  // Highest attempt started by the active invocation, used to reconcile retry
+  // and terminal states against the cumulative counters
   runAttemptCount?: number;
-  // Response attempt numbers de-duplicate callbacks within the active invocation
+  // Attempt numbers seen this invocation, so a repeated callback does not
+  // double-count a response
   completedRunAttempts?: number[];
   rejectedRunAttempts?: number[];
-  // Cumulative count retained across failed, interrupted, and resumed invocations
-  totalAttemptCount?: number;
-  // Completed responses exclude calls that fail before returning model output
-  completedAttemptCount?: number;
-  rejectedResponseCount?: number;
   error?: string;
   lastRunDurationMs?: number;
-  failedAttemptCount?: number;
-  failedRunCount?: number;
-  interruptedRunCount?: number;
   ownerPid?: number;
   sample?: BenchmarkSample;
   pendingSample?: BenchmarkSample;
 };
 
+// Counters that a fresh job starts at zero, keyed for table-driven carry-over
+const ZEROED_COUNTERS = [
+  "providerCallCount",
+  "completedAttemptCount",
+  "rejectedResponseCount",
+  "failedAttemptCount",
+  "failedRunCount",
+  "interruptedRunCount",
+] as const satisfies readonly (keyof BenchmarkJobCounters)[];
+
+// Carries every cumulative counter forward untouched. Lifecycle transitions
+// spread this and then override only the counters they actually change, so a
+// new counter needs one field here instead of an edit in every mark method.
+function carriedCounters(current: BenchmarkJobRecord | undefined): BenchmarkJobCounters {
+  return {
+    providerCallCount: current?.providerCallCount,
+    completedAttemptCount: current?.completedAttemptCount,
+    rejectedResponseCount: current?.rejectedResponseCount,
+    failedAttemptCount: current?.failedAttemptCount,
+    failedRunCount: current?.failedRunCount ?? 0,
+    interruptedRunCount: current?.interruptedRunCount ?? 0,
+  };
+}
+
+// Fields identifying the active invocation, reset by markRunning
+function carriedRunState(
+  current: BenchmarkJobRecord | undefined,
+): Pick<BenchmarkJobRecord, "runAttemptCount" | "completedRunAttempts" | "rejectedRunAttempts"> {
+  return {
+    runAttemptCount: current?.runAttemptCount,
+    completedRunAttempts: current?.completedRunAttempts,
+    rejectedRunAttempts: current?.rejectedRunAttempts,
+  };
+}
+
 type BenchmarkLedger = {
   version: 1;
   jobs: Record<string, BenchmarkJobRecord>;
-};
-
-export type GeneratedModelBenchmarkMetrics = {
-  expectedBuildCount: number;
-  finalizedBuildCount: number;
-  inferenceSampleCount: number;
-  // Finalized cohort attempts replace the prior sample for a prompt
-  finalizedAttemptSampleCount?: number;
-  finalizedAttemptCount?: number;
-  // Cumulative attempt coverage is tracked independently from finalized samples
-  attemptTrackingJobCount?: number;
-  totalAttemptCount?: number;
-  completedAttemptTrackingJobCount?: number;
-  completedAttemptCount?: number;
-  rejectedResponseCount?: number;
-  averageInferenceMs?: number;
-  averageJsonSizeBytes?: number;
-  outputCapTokens?: number;
-  outputCapSampleCount?: number;
-  outputCapIsConsistent?: boolean;
-  configurationSampleCount?: number;
-  configurationIsConsistent?: boolean;
-  failedAttemptCount?: number;
-  failedRunCount?: number;
-  interruptedRunCount?: number;
 };
 
 type GeneratedBenchmarkMetrics = {
@@ -229,20 +253,125 @@ function comparableConfigurationKey(configuration: BenchmarkRunConfiguration): s
   });
 }
 
-function incrementFailedAttemptCount(
+// Adds to a cumulative counter while preserving the untracked state: a job that
+// never recorded this counter stays undefined rather than reporting a total that
+// silently omits its earlier runs.
+function addToCounter(
   current: BenchmarkJobRecord | undefined,
+  counter: keyof BenchmarkJobCounters,
   increment: number,
 ): number | undefined {
-  if (increment <= 0) return current?.failedAttemptCount;
+  const value = current?.[counter];
+  if (increment <= 0) return value;
   if (!current) return increment;
-  if (!isNonNegativeInteger(current.failedAttemptCount)) return undefined;
-  return current.failedAttemptCount + increment;
+  if (!isNonNegativeInteger(value)) return undefined;
+  return value + increment;
 }
 
 function appendUniqueAttempt(attempts: number[] | undefined, attempt: number): number[] {
   const next = new Set(attempts ?? []);
   next.add(attempt);
   return Array.from(next).sort((a, b) => a - b);
+}
+
+// A response already recorded for this attempt is now known to be rejected.
+// Returns the updated attempt list plus the resulting cumulative count.
+function rejectAttempt(
+  current: BenchmarkJobRecord | undefined,
+  attempt: number,
+): { rejectedRunAttempts: number[] | undefined; rejectedResponseCount: number | undefined } {
+  const responded = (current?.completedRunAttempts ?? []).includes(attempt);
+  if (!responded) {
+    return {
+      rejectedRunAttempts: current?.rejectedRunAttempts,
+      rejectedResponseCount: current?.rejectedResponseCount,
+    };
+  }
+
+  const rejectedRunAttempts = appendUniqueAttempt(current?.rejectedRunAttempts, attempt);
+  const newlyRejected = rejectedRunAttempts.length - (current?.rejectedRunAttempts?.length ?? 0);
+  return {
+    rejectedRunAttempts,
+    rejectedResponseCount: addToCounter(current, "rejectedResponseCount", newlyRejected),
+  };
+}
+
+// Fields measured from one finalized cohort, refreshed as a set
+const COHORT_MEASUREMENT_FIELDS = [
+  "inferenceSampleCount",
+  "configurationSampleCount",
+  "configurationIsConsistent",
+  "outputCapSampleCount",
+  "outputCapIsConsistent",
+  "averageInferenceMs",
+  "finalizedAttemptCount",
+  "outputCapTokens",
+] as const satisfies readonly (keyof GeneratedModelBenchmarkMetrics)[];
+
+// Coverage denominator published alongside a counter, so a reader can tell an
+// exact total from one the cohort could not fully track
+const COUNTER_COVERAGE_FIELDS = {
+  providerCallCount: "providerCallTrackingJobCount",
+  completedAttemptCount: "completedAttemptTrackingJobCount",
+} as const satisfies Partial<
+  Record<keyof BenchmarkJobCounters, keyof GeneratedModelBenchmarkMetrics>
+>;
+
+// Counters accumulated across every run, plus the denominators they publish
+const CUMULATIVE_COUNTER_FIELDS = [
+  ...ZEROED_COUNTERS,
+  ...Object.values(COUNTER_COVERAGE_FIELDS),
+] as const satisfies readonly (keyof GeneratedModelBenchmarkMetrics)[];
+
+function pickDefined<K extends keyof GeneratedModelBenchmarkMetrics>(
+  metrics: GeneratedModelBenchmarkMetrics,
+  fields: readonly K[],
+): Partial<Pick<GeneratedModelBenchmarkMetrics, K>> {
+  const picked: Partial<Pick<GeneratedModelBenchmarkMetrics, K>> = {};
+  for (const field of fields) {
+    if (metrics[field] !== undefined) picked[field] = metrics[field];
+  }
+  return picked;
+}
+
+function trackingJobCount(
+  records: (BenchmarkJobRecord | undefined)[],
+  counter: keyof BenchmarkJobCounters,
+): number {
+  return records.filter((record) => isNonNegativeInteger(record?.[counter])).length;
+}
+
+// Totals a counter only when every job in the cohort tracked it. A partial
+// cohort omits the field entirely rather than publishing a total that silently
+// excludes the untracked jobs.
+function sumTrackedCounters(
+  records: (BenchmarkJobRecord | undefined)[],
+  expectedBuildCount: number,
+): BenchmarkJobCounters {
+  if (records.length !== expectedBuildCount) return {};
+
+  const totals: BenchmarkJobCounters = {};
+  for (const counter of ZEROED_COUNTERS) {
+    if (trackingJobCount(records, counter) !== expectedBuildCount) continue;
+    totals[counter] = records.reduce((sum, record) => sum + (record?.[counter] ?? 0), 0);
+  }
+  return totals;
+}
+
+// Publishes a denominator only for counters that produced a total
+function counterCoverage(
+  records: (BenchmarkJobRecord | undefined)[],
+  totals: BenchmarkJobCounters,
+): Partial<GeneratedModelBenchmarkMetrics> {
+  const coverage: Partial<GeneratedModelBenchmarkMetrics> = {};
+  for (const [counter, field] of Object.entries(COUNTER_COVERAGE_FIELDS) as [
+    keyof BenchmarkJobCounters,
+    (typeof COUNTER_COVERAGE_FIELDS)[keyof typeof COUNTER_COVERAGE_FIELDS],
+  ][]) {
+    if (totals[counter] === undefined) continue;
+    coverage[field] = trackingJobCount(records, counter);
+  }
+  return coverage;
 }
 
 function configurationMatchesJob(
@@ -254,6 +383,17 @@ function configurationMatchesJob(
     typeof job.promptText === "string" &&
     configuration.promptSha256 === sha256(job.promptText)
   );
+}
+
+// Ledgers written before the rename stored provider calls as totalAttemptCount,
+// which read as "attempts" while the public statistic counts returned
+// responses. Adopting the value in place keeps a partly generated cohort from
+// losing its call history.
+function migrateLegacyCounters(record: BenchmarkJobRecord): void {
+  const legacy = record as BenchmarkJobRecord & { totalAttemptCount?: number };
+  if (legacy.totalAttemptCount === undefined) return;
+  record.providerCallCount ??= legacy.totalAttemptCount;
+  delete legacy.totalAttemptCount;
 }
 
 function processIsAlive(pid: number | undefined): boolean {
@@ -282,6 +422,9 @@ export class BenchmarkMetricsStore {
     const ledger = readJsonFile<BenchmarkLedger>(this.ledgerPath, { version: 1, jobs: {} });
     if (ledger.version !== 1 || !ledger.jobs || typeof ledger.jobs !== "object") {
       return { version: 1, jobs: {} };
+    }
+    for (const record of Object.values(ledger.jobs)) {
+      migrateLegacyCounters(record);
     }
     return ledger;
   }
@@ -362,18 +505,18 @@ export class BenchmarkMetricsStore {
         throw new Error(`${job.promptSlug} × ${job.modelSlug} is already running in process ${current.ownerPid}.`);
       }
       return {
+        ...carriedCounters(current),
+        // A job with no prior record starts every counter at zero, so its
+        // cohort can report exact totals
+        ...(current
+          ? {}
+          : Object.fromEntries(ZEROED_COUNTERS.map((counter) => [counter, 0]))),
         state: "running",
         startedAt: now.toISOString(),
         retryCount: 0,
         runAttemptCount: 0,
         completedRunAttempts: [],
         rejectedRunAttempts: [],
-        totalAttemptCount: current ? current.totalAttemptCount : 0,
-        completedAttemptCount: current?.completedAttemptCount ?? 0,
-        rejectedResponseCount: current?.rejectedResponseCount ?? 0,
-        failedAttemptCount: current ? current.failedAttemptCount : 0,
-        failedRunCount: current?.failedRunCount ?? 0,
-        interruptedRunCount: current?.interruptedRunCount ?? 0,
         ownerPid: process.pid,
         sample: current?.sample,
       };
@@ -384,28 +527,13 @@ export class BenchmarkMetricsStore {
     this.updateRecord(job, (current) => {
       // onAttempt may repeat during callback recovery so only count a newly observed attempt
       const runAttemptCount = Math.max(current?.runAttemptCount ?? 0, attempt);
-      const newlyStartedAttempts = runAttemptCount - (current?.runAttemptCount ?? 0);
-      const totalAttemptCount =
-        current?.totalAttemptCount === undefined
-          ? current
-            ? undefined
-            : newlyStartedAttempts
-          : current.totalAttemptCount + newlyStartedAttempts;
+      const newlyStarted = runAttemptCount - (current?.runAttemptCount ?? 0);
       return {
-        ...current,
-        state: current?.state ?? "running",
-        startedAt: current?.startedAt ?? new Date().toISOString(),
-        retryCount: current?.retryCount ?? 0,
+        ...this.ongoingRecord(current),
         runAttemptCount,
         completedRunAttempts: current?.completedRunAttempts ?? [],
         rejectedRunAttempts: current?.rejectedRunAttempts ?? [],
-        totalAttemptCount,
-        completedAttemptCount: current?.completedAttemptCount ?? 0,
-        rejectedResponseCount: current?.rejectedResponseCount ?? 0,
-        failedAttemptCount: current ? current.failedAttemptCount : 0,
-        failedRunCount: current?.failedRunCount ?? 0,
-        interruptedRunCount: current?.interruptedRunCount ?? 0,
-        ownerPid: current?.ownerPid ?? process.pid,
+        providerCallCount: addToCounter(current, "providerCallCount", newlyStarted),
       };
     });
   }
@@ -415,29 +543,14 @@ export class BenchmarkMetricsStore {
       throw new Error(`Completed attempt must be a positive integer, received ${attempt}.`);
     }
     this.updateRecord(job, (current) => {
-      const completedRunAttempts = appendUniqueAttempt(
-        current?.completedRunAttempts,
-        attempt,
-      );
-      const isNewCompletion =
-        completedRunAttempts.length > (current?.completedRunAttempts?.length ?? 0);
-      const completedAttemptCount =
-        (current?.completedAttemptCount ?? 0) + Number(isNewCompletion);
+      const completedRunAttempts = appendUniqueAttempt(current?.completedRunAttempts, attempt);
+      const newlyCompleted =
+        completedRunAttempts.length - (current?.completedRunAttempts?.length ?? 0);
       return {
-        ...current,
-        state: current?.state ?? "running",
-        startedAt: current?.startedAt ?? new Date().toISOString(),
-        retryCount: current?.retryCount ?? 0,
-        runAttemptCount: current?.runAttemptCount,
+        ...this.ongoingRecord(current),
         completedRunAttempts,
         rejectedRunAttempts: current?.rejectedRunAttempts ?? [],
-        totalAttemptCount: current?.totalAttemptCount,
-        completedAttemptCount,
-        rejectedResponseCount: current?.rejectedResponseCount ?? 0,
-        failedAttemptCount: current ? current.failedAttemptCount : 0,
-        failedRunCount: current?.failedRunCount ?? 0,
-        interruptedRunCount: current?.interruptedRunCount ?? 0,
-        ownerPid: current?.ownerPid ?? process.pid,
+        completedAttemptCount: addToCounter(current, "completedAttemptCount", newlyCompleted),
       };
     });
   }
@@ -446,33 +559,29 @@ export class BenchmarkMetricsStore {
     this.updateRecord(job, (current) => {
       const retryCount = Math.max(current?.retryCount ?? 0, attempt - 1);
       // Starting attempt N confirms attempts before N failed
-      const newlyFailedAttempts = retryCount - (current?.retryCount ?? 0);
-      const rejectedAttempt = attempt - 1;
-      const completedRunAttempts = current?.completedRunAttempts ?? [];
-      const rejectedRunAttempts = completedRunAttempts.includes(rejectedAttempt)
-        ? appendUniqueAttempt(current?.rejectedRunAttempts, rejectedAttempt)
-        : current?.rejectedRunAttempts ?? [];
-      const newlyRejectedResponses =
-        rejectedRunAttempts.length - (current?.rejectedRunAttempts?.length ?? 0);
-      const rejectedResponseCount =
-        (current?.rejectedResponseCount ?? 0) + newlyRejectedResponses;
+      const newlyFailed = retryCount - (current?.retryCount ?? 0);
       return {
-        ...current,
-        state: current?.state ?? "running",
-        startedAt: current?.startedAt ?? new Date().toISOString(),
+        ...this.ongoingRecord(current),
+        ...rejectAttempt(current, attempt - 1),
         retryCount,
-        runAttemptCount: current?.runAttemptCount,
-        completedRunAttempts,
-        rejectedRunAttempts,
-        totalAttemptCount: current?.totalAttemptCount,
-        completedAttemptCount: current?.completedAttemptCount,
-        rejectedResponseCount,
-        failedAttemptCount: incrementFailedAttemptCount(current, newlyFailedAttempts),
-        failedRunCount: current?.failedRunCount ?? 0,
-        interruptedRunCount: current?.interruptedRunCount ?? 0,
-        ownerPid: current?.ownerPid ?? process.pid,
+        completedRunAttempts: current?.completedRunAttempts ?? [],
+        failedAttemptCount: addToCounter(current, "failedAttemptCount", newlyFailed),
       };
     });
+  }
+
+  // Baseline for a mid-run transition: keep the job running and carry every
+  // counter and attempt list forward so callers override only what changed
+  private ongoingRecord(current: BenchmarkJobRecord | undefined): BenchmarkJobRecord {
+    return {
+      ...current,
+      ...carriedCounters(current),
+      ...carriedRunState(current),
+      state: current?.state ?? "running",
+      startedAt: current?.startedAt ?? new Date().toISOString(),
+      retryCount: current?.retryCount ?? 0,
+      ownerPid: current?.ownerPid ?? process.pid,
+    };
   }
 
   markFailed(
@@ -482,41 +591,25 @@ export class BenchmarkMetricsStore {
     now = new Date(),
   ): void {
     this.updateRecord(job, (current) => {
+      // Re-failing an already failed job must not double-count the run
       const newlyFailedRuns = current?.state === "failed" ? 0 : 1;
-      // Only a started terminal attempt counts as a failed attempt
-      const newlyFailedAttempts =
-        newlyFailedRuns > 0 &&
-        (current?.runAttemptCount ?? 0) > (current?.retryCount ?? 0)
-          ? 1
-          : 0;
-      const failedRunCount =
-        (current?.failedRunCount ?? 0) + newlyFailedRuns;
       const terminalAttempt = current?.runAttemptCount ?? 0;
-      const completedRunAttempts = current?.completedRunAttempts ?? [];
-      const rejectedRunAttempts =
-        newlyFailedRuns > 0 && completedRunAttempts.includes(terminalAttempt)
-          ? appendUniqueAttempt(current?.rejectedRunAttempts, terminalAttempt)
-          : current?.rejectedRunAttempts ?? [];
-      const newlyRejectedResponses =
-        rejectedRunAttempts.length - (current?.rejectedRunAttempts?.length ?? 0);
-      const rejectedResponseCount =
-        (current?.rejectedResponseCount ?? 0) + newlyRejectedResponses;
+      // The terminal attempt only counts as failed if it actually started
+      const newlyFailedAttempts =
+        newlyFailedRuns > 0 && terminalAttempt > (current?.retryCount ?? 0) ? 1 : 0;
       return {
+        ...carriedCounters(current),
+        ...carriedRunState(current),
+        ...(newlyFailedRuns > 0 ? rejectAttempt(current, terminalAttempt) : {}),
         state: "failed",
         startedAt: current?.startedAt ?? now.toISOString(),
         endedAt: now.toISOString(),
         retryCount: current?.retryCount ?? 0,
-        runAttemptCount: current?.runAttemptCount,
-        completedRunAttempts,
-        rejectedRunAttempts,
-        totalAttemptCount: current?.totalAttemptCount,
-        completedAttemptCount: current?.completedAttemptCount,
-        rejectedResponseCount,
+        completedRunAttempts: current?.completedRunAttempts ?? [],
         error,
         lastRunDurationMs: isNonNegativeInteger(durationMs) ? durationMs : undefined,
-        failedAttemptCount: incrementFailedAttemptCount(current, newlyFailedAttempts),
-        failedRunCount,
-        interruptedRunCount: current?.interruptedRunCount ?? 0,
+        failedAttemptCount: addToCounter(current, "failedAttemptCount", newlyFailedAttempts),
+        failedRunCount: (current?.failedRunCount ?? 0) + newlyFailedRuns,
         sample: current?.sample,
       };
     });
@@ -534,23 +627,16 @@ export class BenchmarkMetricsStore {
       const startedAt = current?.startedAt ?? now.toISOString();
       const elapsed = Math.max(0, now.getTime() - Date.parse(startedAt));
       return {
+        ...carriedCounters(current),
+        ...carriedRunState(current),
         state: "interrupted",
         startedAt,
         endedAt: now.toISOString(),
         retryCount: current?.retryCount ?? 0,
-        runAttemptCount: current?.runAttemptCount,
-        completedRunAttempts: current?.completedRunAttempts,
-        rejectedRunAttempts: current?.rejectedRunAttempts,
-        totalAttemptCount: current?.totalAttemptCount,
-        completedAttemptCount: current?.completedAttemptCount,
-        rejectedResponseCount: current?.rejectedResponseCount,
         error: reason,
         lastRunDurationMs: Number.isFinite(elapsed) ? Math.round(elapsed) : undefined,
-        failedAttemptCount: current?.failedAttemptCount,
-        failedRunCount: current?.failedRunCount ?? 0,
         interruptedRunCount:
-          (current?.interruptedRunCount ?? 0) +
-          (current?.state === "interrupted" ? 0 : 1),
+          (current?.interruptedRunCount ?? 0) + (current?.state === "interrupted" ? 0 : 1),
         sample: current?.sample,
       };
     });
@@ -584,36 +670,22 @@ export class BenchmarkMetricsStore {
     this.markCompletedAttempt(job, sample.attemptCount);
     this.updateRecord(job, (current) => {
       const retryCount = Math.max(0, sample.attemptCount - 1);
-      const missingFailedAttempts = Math.max(
-        0,
-        retryCount - (current?.retryCount ?? 0),
-      );
-      const missingStartedAttempts = Math.max(
+      // A caller that never reported attempts still implies the attempts the
+      // accepted sample took, so backfill what the callbacks did not observe
+      const unreportedFailures = Math.max(0, retryCount - (current?.retryCount ?? 0));
+      const unreportedCalls = Math.max(
         0,
         sample.attemptCount - (current?.runAttemptCount ?? 0),
       );
-      const totalAttemptCount =
-        current?.totalAttemptCount === undefined
-          ? current
-            ? undefined
-            : missingStartedAttempts
-          : current.totalAttemptCount + missingStartedAttempts;
       return {
+        ...carriedCounters(current),
+        ...carriedRunState(current),
         state: "finalizing",
         startedAt: current?.startedAt ?? now.toISOString(),
         retryCount,
         runAttemptCount: sample.attemptCount,
-        completedRunAttempts: current?.completedRunAttempts,
-        rejectedRunAttempts: current?.rejectedRunAttempts,
-        totalAttemptCount,
-        completedAttemptCount: current?.completedAttemptCount,
-        rejectedResponseCount: current?.rejectedResponseCount,
-        failedAttemptCount: incrementFailedAttemptCount(
-          current,
-          missingFailedAttempts,
-        ),
-        failedRunCount: current?.failedRunCount ?? 0,
-        interruptedRunCount: current?.interruptedRunCount ?? 0,
+        providerCallCount: addToCounter(current, "providerCallCount", unreportedCalls),
+        failedAttemptCount: addToCounter(current, "failedAttemptCount", unreportedFailures),
         ownerPid: process.pid,
         sample: current?.sample,
         pendingSample: sample,
@@ -621,19 +693,12 @@ export class BenchmarkMetricsStore {
     });
     atomicWriteText(job.filePath, serializedBuild);
     this.updateRecord(job, (current) => ({
+      ...carriedCounters(current),
+      ...carriedRunState(current),
       state: "succeeded",
       startedAt: current?.startedAt ?? now.toISOString(),
       endedAt: now.toISOString(),
       retryCount: Math.max(0, sample.attemptCount - 1),
-      runAttemptCount: current?.runAttemptCount,
-      completedRunAttempts: current?.completedRunAttempts,
-      rejectedRunAttempts: current?.rejectedRunAttempts,
-      totalAttemptCount: current?.totalAttemptCount,
-      completedAttemptCount: current?.completedAttemptCount,
-      rejectedResponseCount: current?.rejectedResponseCount,
-      failedAttemptCount: current?.failedAttemptCount,
-      failedRunCount: current?.failedRunCount ?? 0,
-      interruptedRunCount: current?.interruptedRunCount ?? 0,
       sample,
     }));
     return sample;
@@ -677,38 +742,24 @@ export class BenchmarkMetricsStore {
 
         if (current.state === "finalizing" && isBenchmarkSample(current.pendingSample)) {
           const artifact = verifiedArtifact(job.filePath);
+          const resumed = {
+            ...carriedCounters(current),
+            ...carriedRunState(current),
+            startedAt: current.startedAt,
+            endedAt: now.toISOString(),
+            retryCount: current.retryCount,
+          };
           if (artifact?.hash === current.pendingSample.artifactSha256) {
             ledger.jobs[key] = {
+              ...resumed,
               state: "succeeded",
-              startedAt: current.startedAt,
-              endedAt: now.toISOString(),
-              retryCount: current.retryCount,
-              runAttemptCount: current.runAttemptCount,
-              completedRunAttempts: current.completedRunAttempts,
-              rejectedRunAttempts: current.rejectedRunAttempts,
-              totalAttemptCount: current.totalAttemptCount,
-              completedAttemptCount: current.completedAttemptCount,
-              rejectedResponseCount: current.rejectedResponseCount,
-              failedAttemptCount: current.failedAttemptCount,
-              failedRunCount: current.failedRunCount ?? 0,
-              interruptedRunCount: current.interruptedRunCount ?? 0,
               sample: current.pendingSample,
             };
           } else {
             ledger.jobs[key] = {
+              ...resumed,
               state: "interrupted",
-              startedAt: current.startedAt,
-              endedAt: now.toISOString(),
-              retryCount: current.retryCount,
-              runAttemptCount: current.runAttemptCount,
-              completedRunAttempts: current.completedRunAttempts,
-              rejectedRunAttempts: current.rejectedRunAttempts,
-              totalAttemptCount: current.totalAttemptCount,
-              completedAttemptCount: current.completedAttemptCount,
-              rejectedResponseCount: current.rejectedResponseCount,
               error: "Final artifact did not match the pending benchmark sample.",
-              failedAttemptCount: current.failedAttemptCount,
-              failedRunCount: current.failedRunCount ?? 0,
               interruptedRunCount: (current.interruptedRunCount ?? 0) + 1,
               sample: current.sample,
             };
@@ -804,41 +855,17 @@ export class BenchmarkMetricsStore {
         completeConfigurations &&
         configurationKeys.size === 1 &&
         outputCapIsConsistent;
-      const attemptTrackingJobCount = records.filter((record) =>
-        isNonNegativeInteger(record?.totalAttemptCount),
-      ).length;
-      const attemptTrackingIsComplete =
-        records.length === expectedBuildCount &&
-        attemptTrackingJobCount === expectedBuildCount;
-      const completedAttemptTrackingJobCount = records.filter((record) =>
-        isNonNegativeInteger(record?.completedAttemptCount),
-      ).length;
-      const completedAttemptTrackingIsComplete =
-        records.length === expectedBuildCount &&
-        completedAttemptTrackingJobCount === expectedBuildCount;
-      const rejectedResponseTrackingIsComplete =
-        records.length === expectedBuildCount &&
-        records.every((record) => isNonNegativeInteger(record?.rejectedResponseCount));
-      const failedAttemptTrackingIsComplete =
-        records.length === expectedBuildCount &&
-        records.every((record) => isNonNegativeInteger(record?.failedAttemptCount));
-      const failedRunTrackingIsComplete =
-        records.length === expectedBuildCount &&
-        records.every((record) => isNonNegativeInteger(record?.failedRunCount));
-      const interruptedRunTrackingIsComplete =
-        records.length === expectedBuildCount &&
-        records.every((record) => isNonNegativeInteger(record?.interruptedRunCount));
+      const counterTotals = sumTrackedCounters(records, expectedBuildCount);
       const metrics: GeneratedModelBenchmarkMetrics = {
         expectedBuildCount,
         finalizedBuildCount,
         inferenceSampleCount: timingSamples.length,
-        finalizedAttemptSampleCount: configuredSamples.length,
-        attemptTrackingJobCount,
-        completedAttemptTrackingJobCount,
+        ...counterCoverage(records, counterTotals),
         configurationSampleCount: configuredSamples.length,
         configurationIsConsistent,
         outputCapSampleCount: outputCaps.length,
         outputCapIsConsistent,
+        ...counterTotals,
         ...(completeArtifacts
           ? { averageJsonSizeBytes: average(finalized.map(({ artifact }) => artifact!.bytes)) }
           : {}),
@@ -854,155 +881,37 @@ export class BenchmarkMetricsStore {
               ),
             }
           : {}),
-        ...(outputCapIsConsistent
-          ? { outputCapTokens: outputCaps[0] }
-          : {}),
-        ...(attemptTrackingIsComplete
-          ? {
-              // Includes every provider call, even calls that never returned model output
-              totalAttemptCount: records.reduce(
-                (sum, record) => sum + record!.totalAttemptCount!,
-                0,
-              ),
-            }
-          : {}),
-        ...(completedAttemptTrackingIsComplete
-          ? {
-              // Public attempts include accepted and rejected completed responses
-              completedAttemptCount: records.reduce(
-                (sum, record) => sum + record!.completedAttemptCount!,
-                0,
-              ),
-            }
-          : {}),
-        ...(rejectedResponseTrackingIsComplete
-          ? {
-              rejectedResponseCount: records.reduce(
-                (sum, record) => sum + record!.rejectedResponseCount!,
-                0,
-              ),
-            }
-          : {}),
-        ...(failedAttemptTrackingIsComplete
-          ? {
-              failedAttemptCount: records.reduce(
-                (sum, record) => sum + record!.failedAttemptCount!,
-                0,
-              ),
-            }
-          : {}),
-        ...(failedRunTrackingIsComplete
-          ? {
-              failedRunCount: records.reduce(
-                (sum, record) => sum + record!.failedRunCount!,
-                0,
-              ),
-            }
-          : {}),
-        ...(interruptedRunTrackingIsComplete
-          ? {
-              interruptedRunCount: records.reduce(
-                (sum, record) => sum + record!.interruptedRunCount!,
-                0,
-              ),
-            }
-          : {}),
+        ...(outputCapIsConsistent ? { outputCapTokens: outputCaps[0] } : {}),
       };
       computed.models[modelKey] = metrics;
 
       if (!completeArtifacts) continue;
 
       const previous = persisted.models[modelKey];
+      // Timing, configuration, and cap fields describe one measured cohort, so
+      // they only refresh together once every prompt has a timing sample.
+      // Otherwise the published values stay as recorded by the run that
+      // produced the full cohort.
       const completeTimingCohort =
         timingSamples.length === expectedBuildCount && expectedBuildCount > 0;
       const next: GeneratedModelBenchmarkMetrics = {
+        inferenceSampleCount: metrics.inferenceSampleCount,
+        ...previous,
         expectedBuildCount,
         finalizedBuildCount,
-        inferenceSampleCount: previous?.inferenceSampleCount ?? metrics.inferenceSampleCount,
-        ...(previous?.finalizedAttemptSampleCount === undefined
-          ? {}
-          : { finalizedAttemptSampleCount: previous.finalizedAttemptSampleCount }),
-        ...(previous?.finalizedAttemptCount === undefined
-          ? {}
-          : { finalizedAttemptCount: previous.finalizedAttemptCount }),
-        ...(previous?.attemptTrackingJobCount === undefined
-          ? {}
-          : { attemptTrackingJobCount: previous.attemptTrackingJobCount }),
-        ...(previous?.totalAttemptCount === undefined
-          ? {}
-          : { totalAttemptCount: previous.totalAttemptCount }),
-        ...(previous?.completedAttemptTrackingJobCount === undefined
-          ? {}
-          : {
-              completedAttemptTrackingJobCount:
-                previous.completedAttemptTrackingJobCount,
-            }),
-        ...(previous?.completedAttemptCount === undefined
-          ? {}
-          : { completedAttemptCount: previous.completedAttemptCount }),
-        ...(previous?.rejectedResponseCount === undefined
-          ? {}
-          : { rejectedResponseCount: previous.rejectedResponseCount }),
-        configurationSampleCount:
-          previous?.configurationSampleCount ?? metrics.configurationSampleCount,
-        configurationIsConsistent:
-          previous?.configurationIsConsistent ?? metrics.configurationIsConsistent,
-        outputCapSampleCount:
-          previous?.outputCapSampleCount ?? metrics.outputCapSampleCount,
-        outputCapIsConsistent:
-          previous?.outputCapIsConsistent ?? metrics.outputCapIsConsistent,
         averageJsonSizeBytes: metrics.averageJsonSizeBytes,
-        ...(previous?.averageInferenceMs === undefined
-          ? {}
-          : { averageInferenceMs: previous.averageInferenceMs }),
-        ...(previous?.outputCapTokens === undefined
-          ? {}
-          : { outputCapTokens: previous.outputCapTokens }),
-        ...(previous?.failedAttemptCount === undefined
-          ? {}
-          : { failedAttemptCount: previous.failedAttemptCount }),
-        ...(previous?.failedRunCount === undefined
-          ? {}
-          : { failedRunCount: previous.failedRunCount }),
-        ...(previous?.interruptedRunCount === undefined
-          ? {}
-          : { interruptedRunCount: previous.interruptedRunCount }),
+        ...(completeTimingCohort
+          ? pickDefined(metrics, COHORT_MEASUREMENT_FIELDS)
+          : {}),
+        // Cumulative counters cover the job's whole history rather than one
+        // cohort, so they refresh as soon as the cohort tracks them fully
+        ...pickDefined(metrics, CUMULATIVE_COUNTER_FIELDS),
       };
 
       if (completeTimingCohort) {
-        next.inferenceSampleCount = metrics.inferenceSampleCount;
-        next.finalizedAttemptSampleCount = metrics.finalizedAttemptSampleCount;
-        next.configurationSampleCount = metrics.configurationSampleCount;
-        next.configurationIsConsistent = metrics.configurationIsConsistent;
-        next.outputCapSampleCount = metrics.outputCapSampleCount;
-        next.outputCapIsConsistent = metrics.outputCapIsConsistent;
-        if (metrics.averageInferenceMs === undefined) delete next.averageInferenceMs;
-        else next.averageInferenceMs = metrics.averageInferenceMs;
-        if (metrics.finalizedAttemptCount === undefined) delete next.finalizedAttemptCount;
-        else next.finalizedAttemptCount = metrics.finalizedAttemptCount;
-        if (metrics.outputCapTokens === undefined) delete next.outputCapTokens;
-        else next.outputCapTokens = metrics.outputCapTokens;
-      }
-      if (metrics.totalAttemptCount !== undefined) {
-        next.attemptTrackingJobCount = metrics.attemptTrackingJobCount;
-        next.totalAttemptCount = metrics.totalAttemptCount;
-      }
-      if (metrics.completedAttemptCount !== undefined) {
-        next.completedAttemptTrackingJobCount =
-          metrics.completedAttemptTrackingJobCount;
-        next.completedAttemptCount = metrics.completedAttemptCount;
-      }
-      if (metrics.rejectedResponseCount !== undefined) {
-        next.rejectedResponseCount = metrics.rejectedResponseCount;
-      }
-      if (metrics.failedAttemptCount !== undefined) {
-        next.failedAttemptCount = metrics.failedAttemptCount;
-      }
-      if (metrics.failedRunCount !== undefined) {
-        next.failedRunCount = metrics.failedRunCount;
-      }
-      if (metrics.interruptedRunCount !== undefined) {
-        next.interruptedRunCount = metrics.interruptedRunCount;
+        for (const field of COHORT_MEASUREMENT_FIELDS) {
+          if (metrics[field] === undefined) delete next[field];
+        }
       }
 
       if (JSON.stringify(previous) !== JSON.stringify(next)) {

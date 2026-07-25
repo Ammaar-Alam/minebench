@@ -11,14 +11,12 @@ Thanks for your interest in contributing to MineBench! This document covers how 
 
 ## Ways to Contribute
 
-### Add a New AI Model Provider
+### Add a New AI Model
 
-MineBench supports multiple AI providers. To add a new one:
-
-1. Create a new provider adapter in `lib/ai/providers/`
-2. Follow the pattern of existing adapters (e.g., `openai.ts`, `anthropic.ts`)
-3. Register the provider in the model catalog
-4. Test generation with the new provider in the Sandbox
+See [Adding a Model](../docs/adding-a-model.md) for every surface a model
+touches, from the catalog entry through benchmark generation and tests. A new
+provider also needs an adapter in `lib/ai/providers/`, following the pattern of
+`openai.ts` or `anthropic.ts`.
 
 ### Submit New Benchmark Prompts
 

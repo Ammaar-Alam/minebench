@@ -1,3 +1,4 @@
+import { claudeCapabilities } from "@/lib/ai/claudeModels";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -141,10 +142,7 @@ function openRouterTemperaturePayload(modelId: string, temperature?: number): { 
     normalized === "moonshotai/kimi-k3" ||
     normalized === "google/gemini-3.6-flash" ||
     normalized === "google/gemini-3.5-flash-lite" ||
-    normalized === "anthropic/claude-fable-5" ||
-    normalized === "anthropic/claude-opus-5" ||
-    normalized === "anthropic/claude-sonnet-5" ||
-    /^anthropic\/claude-(?:opus-4[.-]8|4[.-]8-opus)(?:$|[-:])/.test(normalized);
+    claudeCapabilities(normalized).defaultSamplingOnly;
   if (usesDefaultSampling) return {};
   return { temperature: temperature ?? 0.2 };
 }

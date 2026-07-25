@@ -80,10 +80,12 @@ assert.ok(
   "every normalized field should use the compact untracked fallback",
 );
 assert.ok(
-  detailsSource.includes("profile.totalAttempts ?? profile.buildCount") &&
+  detailsSource.includes("profile.totalCost.usd / profile.totalAttempts") &&
+    detailsSource.includes("profile.totalCost.usd / profile.buildCount") &&
     detailsSource.includes('toFixed(2)} per attempt`') &&
+    detailsSource.includes('toFixed(2)} per build`') &&
     !detailsSource.includes("totalCost.usd / 15"),
-  "cost details should prefer completed attempts and fall back to each model's recorded cohort",
+  "cost details should name the denominator each model actually measured",
 );
 assert.ok(
   detailsSource.includes('v{profile.sourceRelease.replace(/^v/, "")}') &&
@@ -121,9 +123,9 @@ assert.ok(
       'className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-3 py-2 text-[12px] leading-4"',
     ) &&
     detailsSource.includes(
-      '"group relative inline-block cursor-help text-muted transition-colors hover:text-fg focus-visible:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"',
+      'className="group relative inline-block cursor-help border-b border-dotted border-current text-muted transition-colors hover:text-fg focus-visible:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"',
     ) &&
-    detailsSource.includes('style={row.detail ? { borderBottom: "1px dotted currentColor" } : undefined}') &&
+    !detailsSource.includes("borderBottom:") &&
     detailsSource.includes("duration-75 group-hover:opacity-100 group-focus-visible:opacity-100") &&
     detailsSource.includes('<dt className="text-muted">{row.label}</dt>') &&
     !detailsSource.includes('<dt className="text-muted2">{row.label}</dt>') &&
@@ -182,12 +184,12 @@ assert.ok(
     trackedMarkup.includes("Average JSON size") &&
     trackedMarkup.includes("91.58 MiB") &&
     trackedMarkup.includes("$710.82") &&
-    trackedMarkup.includes("$47.39 per attempt") &&
-    trackedMarkup.includes("border-bottom:1px dotted currentColor") &&
-    trackedMarkup.includes('role="tooltip"') &&
+    trackedMarkup.includes("$47.39 per build") &&
+    !trackedMarkup.includes("per attempt") &&
+    trackedMarkup.includes("border-dotted") &&
     !trackedMarkup.includes("title=") &&
     (trackedMarkup.match(/Not tracked/g)?.length ?? 0) === 1,
-  "GPT 5.6 Sol Pro should use its finalized prompt count when attempt tracking began later",
+  "a model without attempt tracking should divide its cost by finalized builds",
 );
 assert.ok(
   trackedMarkup.includes('<h2 class="sr-only">GPT 5.6 Sol Pro run details</h2>'),
@@ -382,6 +384,24 @@ assert.ok(
     !exactOpusMarkup.includes("~43m 20s") &&
     !exactOpusMarkup.includes("$275.00"),
   "Opus 4.7 should render its recorded time without an approximation marker",
+);
+
+const attemptTrackedMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "attempt-tracked-details",
+    modelKey: "anthropic_claude_opus_5",
+    displayName: "Claude Opus 5",
+    open: true,
+  }),
+);
+assert.ok(
+  attemptTrackedMarkup.includes("$89.97") &&
+    attemptTrackedMarkup.includes("$2.43 per attempt") &&
+    !attemptTrackedMarkup.includes("per build") &&
+    attemptTrackedMarkup.includes("37") &&
+    attemptTrackedMarkup.includes("128,000 tokens") &&
+    !attemptTrackedMarkup.includes("Not tracked"),
+  "a model with complete attempt tracking should divide its cost by completed attempts",
 );
 
 console.log("model benchmark details UI checks passed");

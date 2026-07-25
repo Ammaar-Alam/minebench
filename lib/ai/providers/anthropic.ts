@@ -1,3 +1,4 @@
+import { claudeCapabilities } from "@/lib/ai/claudeModels";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -177,104 +178,16 @@ function looksLikeEffortConfigError(body: string): boolean {
   );
 }
 
-function isLegacyManualThinkingModel(modelId: string): boolean {
-  return modelId.startsWith("claude-sonnet-4-5") || modelId.startsWith("claude-opus-4-5");
-}
-
-function isFableOrMythos5(modelId: string): boolean {
-  return /^claude-(?:fable|mythos)-5(?:-|$)/.test(modelId);
-}
-
-function isOpus5(modelId: string): boolean {
-  return /^claude-opus-5(?:-|$)/.test(modelId);
-}
-
-function isSonnet5(modelId: string): boolean {
-  return /^claude-sonnet-5(?:-|$)/.test(modelId);
-}
-
-function anthropicClaudeVersion(modelId: string): { family: "opus" | "sonnet"; major: number; minor: number } | null {
-  const match = /^claude-(opus|sonnet)-(\d+)-(\d+)(?:-|$)/.exec(modelId);
-  if (!match) return null;
-  const major = Number.parseInt(match[2] ?? "", 10);
-  const minor = Number.parseInt(match[3] ?? "", 10);
-  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
-  return { family: match[1] as "opus" | "sonnet", major, minor };
-}
-
-function omitsSamplingParameters(modelId: string): boolean {
-  if (isOpus5(modelId)) return true;
-  if (isSonnet5(modelId)) return true;
-  if (isFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.family === "opus" && (version.major > 4 || (version.major === 4 && version.minor >= 7));
-}
-
-function isAdaptiveThinkingModel(modelId: string): boolean {
-  if (isOpus5(modelId)) return true;
-  if (isSonnet5(modelId)) return true;
-  if (isFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.major > 4 || (version.major === 4 && version.minor >= 6);
-}
-
-function supportsXhighEffort(modelId: string): boolean {
-  if (isOpus5(modelId)) return true;
-  if (isSonnet5(modelId)) return true;
-  if (isFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.major > 4 || (version.major === 4 && version.minor >= 7);
-}
-
-function effortEnvVarForModel(modelId: string): string | null {
-  if (modelId.startsWith("claude-fable-5")) {
-    return "ANTHROPIC_FABLE_5_EFFORT";
-  }
-  if (modelId.startsWith("claude-opus-5")) {
-    return "ANTHROPIC_OPUS_5_EFFORT";
-  }
-  if (modelId.startsWith("claude-sonnet-5")) {
-    return "ANTHROPIC_SONNET_5_EFFORT";
-  }
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return null;
-  if (version.family === "opus" && version.major === 4 && version.minor === 8) {
-    return "ANTHROPIC_OPUS_4_8_EFFORT";
-  }
-  if (version.family === "opus" && version.major === 4 && version.minor === 7) {
-    return "ANTHROPIC_OPUS_4_7_EFFORT";
-  }
-  if (version.family === "opus" && version.major === 4 && version.minor === 6) {
-    return "ANTHROPIC_OPUS_4_6_EFFORT";
-  }
-  if (version.family === "sonnet" && version.major === 4 && version.minor === 6) {
-    return "ANTHROPIC_SONNET_4_6_EFFORT";
-  }
-  return null;
-}
-
 function parseAdaptiveEfforts(modelId: string): AnthropicEffort[] {
-  const allowXhigh = supportsXhighEffort(modelId);
-  const envVar = effortEnvVarForModel(modelId);
-  const preferred = envVar
-    ? parseEffortEnv(envVar, {
+  const { xhighEffort, effortEnvVar } = claudeCapabilities(modelId);
+  const preferred = effortEnvVar
+    ? parseEffortEnv(effortEnvVar, {
         defaultEffort: "max",
         allowMax: true,
-        allowXhigh,
+        allowXhigh: xhighEffort,
       })
     : "max";
-  return effortFallbacks(preferred, { allowMax: true, allowXhigh });
-}
-
-function supportsContext1mBeta(modelId: string): boolean {
-  return (
-    modelId.startsWith("claude-opus-4-6") ||
-    modelId.startsWith("claude-sonnet-4-5") ||
-    modelId.startsWith("claude-sonnet-4")
-  );
+  return effortFallbacks(preferred, { allowMax: true, allowXhigh: xhighEffort });
 }
 
 export async function anthropicGenerateText(params: {
@@ -303,7 +216,8 @@ export async function anthropicGenerateText(params: {
   const structuredSchema = useStructuredOutputs
     ? (sanitizeAnthropicStructuredSchema(params.jsonSchema) as Record<string, unknown>)
     : undefined;
-  const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
+  const capabilities = claudeCapabilities(params.modelId);
+  const usesAdaptiveThinking = capabilities.adaptiveThinking;
   const adaptiveEffortAttempts =
     usesAdaptiveThinking && params.adaptiveEffortAttempts && params.adaptiveEffortAttempts.length > 0
       ? params.adaptiveEffortAttempts
@@ -317,12 +231,11 @@ export async function anthropicGenerateText(params: {
   );
   const thinkingBudget = usesAdaptiveThinking
     ? null
-    : isLegacyManualThinkingModel(params.modelId)
+    : capabilities.legacyManualThinking
       ? Math.max(1024, maxTokens - 1)
       : parseThinkingBudget();
   const betaHeaders: (string | null)[] =
-    supportsContext1mBeta(params.modelId) &&
-    parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
+    capabilities.context1mBeta && parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
       ? [CONTEXT_1M_BETA, null]
       : [null];
   const tools = useStructuredOutputs
@@ -357,7 +270,7 @@ export async function anthropicGenerateText(params: {
               ? { type: "enabled" as const, budget_tokens: budget }
               : undefined;
         const temperature = thinking ? 1 : (params.temperature ?? 0.2);
-        const sampling = omitsSamplingParameters(params.modelId) ? {} : { temperature };
+        const sampling = capabilities.defaultSamplingOnly ? {} : { temperature };
         const efforts = usesAdaptiveThinking ? adaptiveEffortAttempts : [null];
         effortLoop: for (let effortIdx = 0; effortIdx < efforts.length; effortIdx += 1) {
           const effort = efforts[effortIdx];

@@ -98,12 +98,17 @@ function formatCost(cost: BenchmarkCost): string {
   return `$${cost.usd.toFixed(2)}`;
 }
 
+// Models benchmarked before attempt tracking can only be divided by their build
+// count, so the unit follows whichever denominator was actually measured
 function formatCostDetail(profile: ModelBenchmarkProfile): string | undefined {
   if (!profile.totalCost) return undefined;
-  // Fall back to finalized builds when historical attempt telemetry is unavailable
-  const denominator = profile.totalAttempts ?? profile.buildCount;
-  if (!denominator) return undefined;
-  return `$${(profile.totalCost.usd / denominator).toFixed(2)} per attempt`;
+  if (profile.totalAttempts) {
+    return `$${(profile.totalCost.usd / profile.totalAttempts).toFixed(2)} per attempt`;
+  }
+  if (profile.buildCount) {
+    return `$${(profile.totalCost.usd / profile.buildCount).toFixed(2)} per build`;
+  }
+  return undefined;
 }
 
 function formatOutputCap(outputCap: BenchmarkOutputCap): string {
@@ -169,16 +174,35 @@ function DetailRows({ rows }: { rows: readonly ModelRunParameter[] }) {
           className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-3 py-2 text-[12px] leading-4"
         >
           <dt className="text-muted">{row.label}</dt>
-          <dd
-            className="text-right font-medium tabular-nums text-fg/95 [overflow-wrap:anywhere]"
-            title={row.detail}
-            aria-label={row.detail ? `${row.value}. ${row.detail}` : undefined}
-          >
+          <dd className="text-right font-medium tabular-nums text-fg/95 [overflow-wrap:anywhere]">
             {row.value}
           </dd>
         </div>
       ))}
     </dl>
+  );
+}
+
+// A statistic with a detail reveals it on hover or keyboard focus. The value and
+// its detail are announced together from the wrapper, so the visual bubble stays
+// out of the accessibility tree.
+function StatisticValue({ row }: { row: ModelRunParameter }) {
+  if (!row.detail) return <span className="text-fg/95">{row.value}</span>;
+
+  return (
+    <span
+      className="group relative inline-block cursor-help border-b border-dotted border-current text-muted transition-colors hover:text-fg focus-visible:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      tabIndex={0}
+      aria-label={`${row.value}. ${row.detail}`}
+    >
+      {row.value}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute left-0 top-[calc(100%+0.3rem)] z-20 whitespace-nowrap rounded-md border border-border/80 bg-card px-2 py-1 text-[10px] font-medium leading-4 text-fg opacity-0 shadow-soft transition-opacity duration-75 group-hover:opacity-100 group-focus-visible:opacity-100"
+      >
+        {row.detail}
+      </span>
+    </span>
   );
 }
 
@@ -191,30 +215,8 @@ function StatisticGrid({ rows }: { rows: readonly ModelRunParameter[] }) {
           className="min-w-0 border-border/60 py-2 odd:pr-3 even:border-l even:pl-3 [&:nth-child(-n+2)]:border-b"
         >
           <dt className="text-[10px] leading-4 text-muted">{row.label}</dt>
-          <dd
-            className="mt-0.5 text-[12px] font-medium leading-4 tabular-nums"
-          >
-            <span
-              className={
-                row.detail
-                  ? "group relative inline-block cursor-help text-muted transition-colors hover:text-fg focus-visible:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
-                  : "text-fg/95"
-              }
-              style={row.detail ? { borderBottom: "1px dotted currentColor" } : undefined}
-              tabIndex={row.detail ? 0 : undefined}
-              aria-label={row.detail ? `${row.value}. ${row.detail}` : undefined}
-            >
-              {row.value}
-              {row.detail ? (
-                <span
-                  role="tooltip"
-                  aria-hidden="true"
-                  className="pointer-events-none absolute left-0 top-[calc(100%+0.3rem)] z-20 whitespace-nowrap rounded-md border border-border/80 bg-card px-2 py-1 text-[10px] font-medium leading-4 text-fg opacity-0 shadow-soft transition-opacity duration-75 group-hover:opacity-100 group-focus-visible:opacity-100"
-                >
-                  {row.detail}
-                </span>
-              ) : null}
-            </span>
+          <dd className="mt-0.5 text-[12px] font-medium leading-4 tabular-nums">
+            <StatisticValue row={row} />
           </dd>
         </div>
       ))}

@@ -223,10 +223,6 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
   openai_gpt_4o: exactOutputCap(16_384),
   openai_gpt_oss_120b: exactOutputCap(131_072),
   anthropic_claude_fable_5: exactOutputCap(128_000),
-  anthropic_claude_opus_5: {
-    kind: "unavailable",
-    reason: "accepted-cap-unrecorded",
-  },
   anthropic_claude_sonnet_5: exactOutputCap(128_000),
   anthropic_claude_4_5_sonnet: exactOutputCap(32_768),
   anthropic_claude_4_6_sonnet: {
@@ -392,16 +388,23 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
 };
 
+// Canonical shape of lib/ai/modelBenchmarkMetrics.generated.json, written by
+// scripts/benchmarkMetrics.ts and read here to build public profiles. Every
+// field is optional past the first three because a model benchmarked before a
+// counter existed simply omits it, which the UI renders as "Not tracked".
 export type GeneratedModelBenchmarkMetrics = {
   expectedBuildCount: number;
   finalizedBuildCount: number;
   inferenceSampleCount: number;
-  finalizedAttemptSampleCount?: number;
+  // Attempts across the finalized cohort only, one accepted response per prompt
   finalizedAttemptCount?: number;
-  attemptTrackingJobCount?: number;
-  totalAttemptCount?: number;
-  completedAttemptTrackingJobCount?: number;
+  // Provider calls issued, including calls that never returned model output
+  providerCallCount?: number;
+  providerCallTrackingJobCount?: number;
+  // Responses the provider returned, whether later accepted or rejected
   completedAttemptCount?: number;
+  completedAttemptTrackingJobCount?: number;
+  // Returned responses that failed extraction, validation, or execution
   rejectedResponseCount?: number;
   averageInferenceMs?: number;
   averageJsonSizeBytes?: number;
@@ -468,7 +471,8 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
         generated &&
         generated.expectedBuildCount > 0 &&
         generated.inferenceSampleCount === generated.expectedBuildCount;
-      // Public attempts count every completed response, including rejected outputs
+      // Public attempts count every response the provider returned, including
+      // ones later rejected, so the cohort must have tracked all of its jobs
       const generatedCompletedAttemptHistoryIsComplete =
         generated &&
         generated.expectedBuildCount > 0 &&

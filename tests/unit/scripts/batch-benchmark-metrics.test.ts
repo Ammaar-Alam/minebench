@@ -107,10 +107,9 @@ assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   expectedBuildCount: 1,
   finalizedBuildCount: 1,
   inferenceSampleCount: 1,
-  finalizedAttemptSampleCount: 1,
   finalizedAttemptCount: 3,
-  attemptTrackingJobCount: 1,
-  totalAttemptCount: 3,
+  providerCallTrackingJobCount: 1,
+  providerCallCount: 3,
   completedAttemptTrackingJobCount: 1,
   completedAttemptCount: 3,
   rejectedResponseCount: 2,
@@ -182,7 +181,7 @@ store.finalizeSuccess(
 summary = store.summarize([castle]).get("openai_gpt_5_6_sol");
 assert.equal(summary?.failedCount, 1, "a later success should retain the failed run count");
 assert.equal(
-  summary?.totalAttemptCount,
+  summary?.providerCallCount,
   6,
   "total attempts should retain successful, failed, and interrupted run history",
 );
@@ -252,7 +251,7 @@ ledger.jobs["openai_gpt_5_6_sol/phoenix"] = {
   runAttemptCount: 1,
   completedRunAttempts: [1],
   rejectedRunAttempts: [],
-  totalAttemptCount: 1,
+  providerCallCount: 1,
   completedAttemptCount: 1,
   rejectedResponseCount: 0,
   failedAttemptCount: 0,
@@ -276,7 +275,7 @@ assert.equal(
   2,
   "implicit and explicit reasoning inputs should aggregate when the effective request configuration matches",
 );
-assert.equal(generated.models.openai_gpt_5_6_sol?.totalAttemptCount, 7);
+assert.equal(generated.models.openai_gpt_5_6_sol?.providerCallCount, 7);
 assert.equal(generated.models.openai_gpt_5_6_sol?.completedAttemptCount, 5);
 assert.equal(generated.models.openai_gpt_5_6_sol?.rejectedResponseCount, 2);
 assert.equal(
@@ -375,10 +374,9 @@ const committedMetrics = {
       expectedBuildCount: 1,
       finalizedBuildCount: 1,
       inferenceSampleCount: 1,
-      finalizedAttemptSampleCount: 1,
       finalizedAttemptCount: 2,
-      attemptTrackingJobCount: 1,
-      totalAttemptCount: 5,
+      providerCallTrackingJobCount: 1,
+      providerCallCount: 5,
       completedAttemptTrackingJobCount: 1,
       completedAttemptCount: 4,
       rejectedResponseCount: 1,
@@ -469,7 +467,7 @@ store.markAttempt(terminalResponse, 1);
 store.markCompletedAttempt(terminalResponse, 1);
 store.markFailed(terminalResponse, "Could not find a valid JSON object");
 summary = store.summarize([terminalResponse]).get("openai_gpt_5_6_sol");
-assert.equal(summary?.totalAttemptCount, 1);
+assert.equal(summary?.providerCallCount, 1);
 assert.equal(summary?.completedAttemptCount, 1);
 assert.equal(summary?.rejectedResponseCount, 1);
 assert.equal(summary?.failedAttemptCount, 1);

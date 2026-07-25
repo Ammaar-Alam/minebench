@@ -950,7 +950,7 @@ function printBenchmarkSummary(
       `    Total attempts: ${summary.completedAttemptCount ?? "Not tracked"} (${summary.completedAttemptTrackingJobCount ?? 0}/${summary.expectedBuildCount} jobs tracked)`,
     );
     console.log(
-      `    Provider calls: ${summary.totalAttemptCount ?? "Not tracked"} (${summary.attemptTrackingJobCount ?? 0}/${summary.expectedBuildCount} jobs tracked)`,
+      `    Provider calls: ${summary.providerCallCount ?? "Not tracked"} (${summary.providerCallTrackingJobCount ?? 0}/${summary.expectedBuildCount} jobs tracked)`,
     );
     console.log(
       `    Rejected responses: ${summary.rejectedResponseCount ?? "Not tracked"} · Failed calls: ${summary.failedAttemptCount ?? "Not tracked"} · Failed runs: ${summary.failedCount} · Interrupted runs: ${summary.interruptedCount} · Running: ${summary.runningCount}`,
