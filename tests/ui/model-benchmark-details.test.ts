@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ModelBenchmarkDetailsInline } from "../../components/leaderboard/ModelBenchmarkDetails";
+import { MODEL_CATALOG } from "../../lib/ai/modelCatalog";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
@@ -56,7 +57,7 @@ assert.ok(
   detailsSource.includes("const POPOVER_GAP = 4") &&
     detailsSource.includes("fixed z-30 overflow-visible") &&
     detailsSource.includes("max-h-[calc(100dvh-2rem)] overflow-y-auto") &&
-    detailsSource.includes("rounded-[inherit] p-4"),
+    detailsSource.includes("rounded-[inherit] p-3"),
   "the anchored shell should expose its pointer while an inner viewport owns overflow",
 );
 assert.ok(
@@ -71,11 +72,18 @@ assert.ok(
 assert.ok(
   detailsSource.includes('label: "Average inference time"') &&
     detailsSource.includes('label: "Average JSON size"') &&
+    detailsSource.includes('label: "Total attempts"') &&
     detailsSource.includes('label: "Total cost"') &&
     detailsSource.includes('label: "Output cap"') &&
-    detailsSource.includes('"Benchmark predates tracking"') &&
-    !detailsSource.includes('"Not tracked"'),
-  "every normalized field should explain when its benchmark predates tracking",
+    detailsSource.includes('const NOT_TRACKED = "Not tracked"') &&
+    !detailsSource.includes('"Benchmark predates tracking"'),
+  "every normalized field should use the compact untracked fallback",
+);
+assert.ok(
+  detailsSource.includes("profile.totalAttempts ?? profile.buildCount") &&
+    detailsSource.includes('toFixed(2)} per attempt`') &&
+    !detailsSource.includes("totalCost.usd / 15"),
+  "cost details should prefer completed attempts and fall back to each model's recorded cohort",
 );
 assert.ok(
   detailsSource.includes('v{profile.sourceRelease.replace(/^v/, "")}') &&
@@ -83,16 +91,17 @@ assert.ok(
   "the release header should render canonical profile versions without workflow-state copy",
 );
 assert.ok(
-  detailsSource.includes(">\n          Parameters\n        </h3>") &&
-    detailsSource.includes(">\n          Statistics\n        </h3>") &&
+  detailsSource.indexOf(">\n          Statistics\n        </h3>") <
+    detailsSource.indexOf(">\n          Parameters\n        </h3>") &&
     detailsSource.includes('<h2 className="sr-only">{displayName} run details</h2>') &&
     detailsSource.includes("<DetailRows rows={parameters} />") &&
-    detailsSource.includes("<DetailRows rows={statistics} />"),
-  "run parameters and benchmark statistics should render as distinct sections",
+    detailsSource.includes("<StatisticGrid rows={statistics} />"),
+  "benchmark statistics should lead the compact summary before run parameters",
 );
 assert.ok(
   detailsSource.includes("Average inference") &&
     detailsSource.includes("Average JSON size") &&
+    detailsSource.includes("Total attempts") &&
     detailsSource.includes("Total cost") &&
     !detailsSource.includes("statistics.length > 0"),
   "the statistics section should always render the same normalized rows",
@@ -102,25 +111,33 @@ assert.ok(
   "benchmark tables should use the full, specific statistic labels",
 );
 assert.ok(
-  detailsSource.includes('className="mt-1 divide-y divide-border/60"') &&
-    !detailsSource.includes("divide-y divide-border/60 border-y") &&
-    detailsSource.includes("mt-4 border-t border-border/70 pt-4") &&
+  detailsSource.includes('className="mt-1 grid grid-cols-2 border-y border-border/60"') &&
     detailsSource.includes(
-      'className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] gap-3 py-2.5 text-[13px]"',
+      'className="min-w-0 border-border/60 py-2 odd:pr-3 even:border-l even:pl-3 [&:nth-child(-n+2)]:border-b"',
     ) &&
+    detailsSource.includes('className="mt-1 divide-y divide-border/60"') &&
+    !detailsSource.includes("divide-y divide-border/60 border-y") &&
+    detailsSource.includes(
+      'className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-3 py-2 text-[12px] leading-4"',
+    ) &&
+    detailsSource.includes(
+      '"group relative inline-block cursor-help text-muted transition-colors hover:text-fg focus-visible:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"',
+    ) &&
+    detailsSource.includes('style={row.detail ? { borderBottom: "1px dotted currentColor" } : undefined}') &&
+    detailsSource.includes("duration-75 group-hover:opacity-100 group-focus-visible:opacity-100") &&
     detailsSource.includes('<dt className="text-muted">{row.label}</dt>') &&
     !detailsSource.includes('<dt className="text-muted2">{row.label}</dt>') &&
-    detailsSource.includes('className="shrink-0 font-mono text-[11px] text-muted"') &&
+    detailsSource.includes('className="shrink-0 font-mono text-[10px] text-muted"') &&
     detailsSource.includes("shadow-soft") &&
     !detailsSource.includes("rgba(0,0,0"),
-  "details should use one section rule, readable metadata type, and the shared shadow token",
+  "details should use compact statistics, readable parameters, and the shared shadow token",
 );
 assert.equal(
   detailsSource.match(
-    /text-\[11px\] font-medium uppercase tracking-\[0\.14em\] text-muted/g,
+    /text-\[10px\] font-medium uppercase tracking-\[0\.12em\] text-muted/g,
   )?.length,
   2,
-  "both section headings should use the readable metadata treatment",
+  "both section headings should use the compact metadata treatment",
 );
 assert.ok(
   leaderboardSource.includes("<ModelBenchmarkDetailsTrigger") &&
@@ -165,8 +182,12 @@ assert.ok(
     trackedMarkup.includes("Average JSON size") &&
     trackedMarkup.includes("91.58 MiB") &&
     trackedMarkup.includes("$710.82") &&
-    !trackedMarkup.includes("Benchmark predates tracking"),
-  "GPT 5.6 Sol Pro should render all recorded benchmark statistics",
+    trackedMarkup.includes("$47.39 per attempt") &&
+    trackedMarkup.includes("border-bottom:1px dotted currentColor") &&
+    trackedMarkup.includes('role="tooltip"') &&
+    !trackedMarkup.includes("title=") &&
+    (trackedMarkup.match(/Not tracked/g)?.length ?? 0) === 1,
+  "GPT 5.6 Sol Pro should use its finalized prompt count when attempt tracking began later",
 );
 assert.ok(
   trackedMarkup.includes('<h2 class="sr-only">GPT 5.6 Sol Pro run details</h2>'),
@@ -186,8 +207,8 @@ assert.ok(
     removedEstimateMarkup.includes("Output cap") &&
     removedEstimateMarkup.includes("Total cost") &&
     !removedEstimateMarkup.includes("$25.00") &&
-    (removedEstimateMarkup.match(/Benchmark predates tracking/g)?.length ?? 0) === 2,
-  "removed GPT 5.4 estimates should explain that their benchmark predates tracking",
+    (removedEstimateMarkup.match(/Not tracked/g)?.length ?? 0) === 3,
+  "removed GPT 5.4 estimates should keep unavailable statistics compact",
 );
 
 const geminiMarkup = renderToStaticMarkup(
@@ -253,7 +274,6 @@ for (const [modelKey, expectedCap] of Object.entries(reconstructedCaps)) {
 const mixedCapExpectations = {
   anthropic_claude_4_5_opus: "8,192 or 32,768 tokens",
   anthropic_claude_4_6_sonnet: "32,768 or 64,000 tokens",
-  anthropic_claude_opus_5: "Accepted cap not recorded",
   moonshot_kimi_k2_5: "Accepted cap not recorded",
   meta_llama_4_maverick: "Accepted cap not recorded",
 } as const;
@@ -283,9 +303,44 @@ const untrackedMarkup = renderToStaticMarkup(
 assert.ok(
   untrackedMarkup.includes("ChatGPT web harness") &&
     untrackedMarkup.includes("Not available from web harness") &&
-    (untrackedMarkup.match(/Benchmark predates tracking/g)?.length ?? 0) === 2 &&
+    (untrackedMarkup.match(/Not tracked/g)?.length ?? 0) === 3 &&
     untrackedMarkup.includes("not directly comparable to API-generated runs"),
   "a historical web benchmark should explain missing values and keep its comparability note",
+);
+
+for (const model of MODEL_CATALOG) {
+  const markup = renderToStaticMarkup(
+    React.createElement(ModelBenchmarkDetailsInline, {
+      id: `${model.key}-attempt-details`,
+      modelKey: model.key,
+      displayName: model.displayName,
+      open: true,
+    }),
+  );
+  assert.ok(
+    markup.includes("Total attempts"),
+    `${model.displayName} should render the normalized Total attempts statistic`,
+  );
+}
+
+const opus5Markup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "opus-5-details",
+    modelKey: "anthropic_claude_opus_5",
+    displayName: "Claude Opus 5",
+    open: true,
+  }),
+);
+assert.ok(
+  opus5Markup.includes("128,000 tokens") &&
+    opus5Markup.includes("32m 10.2s") &&
+    opus5Markup.includes("91.00 MiB") &&
+    opus5Markup.includes("Total attempts") &&
+    opus5Markup.includes(">37<") &&
+    opus5Markup.includes("$89.97") &&
+    opus5Markup.includes("$2.43 per attempt") &&
+    !opus5Markup.includes("Not tracked"),
+  "Claude Opus 5 should use completed response attempts for its cost denominator",
 );
 
 const exactGlmMarkup = renderToStaticMarkup(
