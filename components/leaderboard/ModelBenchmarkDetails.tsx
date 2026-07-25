@@ -102,8 +102,8 @@ function formatCost(cost: BenchmarkCost): string {
 // before attempt tracking can only divide by build count
 function formatCostDetail(profile: ModelBenchmarkProfile): string | undefined {
   if (!profile.totalCost) return undefined;
-  if (profile.totalAttempts) {
-    return `$${(profile.totalCost.usd / profile.totalAttempts).toFixed(2)} per attempt`;
+  if (profile.totalCost.attemptCount) {
+    return `$${(profile.totalCost.usd / profile.totalCost.attemptCount).toFixed(2)} per attempt`;
   }
   if (profile.buildCount) {
     return `$${(profile.totalCost.usd / profile.buildCount).toFixed(2)} per build`;

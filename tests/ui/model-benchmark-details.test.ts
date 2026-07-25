@@ -80,12 +80,13 @@ assert.ok(
   "every normalized field should use the compact untracked fallback",
 );
 assert.ok(
-  detailsSource.includes("profile.totalCost.usd / profile.totalAttempts") &&
+  detailsSource.includes("profile.totalCost.usd / profile.totalCost.attemptCount") &&
     detailsSource.includes("profile.totalCost.usd / profile.buildCount") &&
     detailsSource.includes('toFixed(2)} per attempt`') &&
     detailsSource.includes('toFixed(2)} per build`') &&
+    !detailsSource.includes("profile.totalCost.usd / profile.totalAttempts") &&
     !detailsSource.includes("totalCost.usd / 15"),
-  "cost details should name the denominator each model actually measured",
+  "cost details should use the fixed denominator measured with each cost snapshot",
 );
 assert.ok(
   detailsSource.includes('v{profile.sourceRelease.replace(/^v/, "")}') &&
@@ -342,7 +343,7 @@ assert.ok(
     opus5Markup.includes("$89.97") &&
     opus5Markup.includes("$2.43 per attempt") &&
     !opus5Markup.includes("Not tracked"),
-  "Claude Opus 5 should use completed response attempts for its cost denominator",
+  "Claude Opus 5 should use the completed responses covered by its cost snapshot",
 );
 
 const exactGlmMarkup = renderToStaticMarkup(
@@ -401,7 +402,7 @@ assert.ok(
     attemptTrackedMarkup.includes("37") &&
     attemptTrackedMarkup.includes("128,000 tokens") &&
     !attemptTrackedMarkup.includes("Not tracked"),
-  "a model with complete attempt tracking should divide its cost by completed attempts",
+  "a priced attempt cohort should divide cost by its fixed response count",
 );
 
 console.log("model benchmark details UI checks passed");

@@ -122,7 +122,9 @@ and what the OpenRouter fallback uses.
 - `MODEL_RUN_PARAMETERS` — required. The popover reads this map's keys, so a model
   missing here has no profile at all.
 - `MODEL_BENCHMARK_METADATA` — the release that produced the cohort, plus the
-  manually tallied provider cost.
+  manually tallied provider cost. When that cost covers tracked responses, record
+  their count as `totalCost.attemptCount` so later reruns cannot change the cost
+  denominator.
 - `HISTORICAL_BENCHMARK_OUTPUT_CAPS` — only for models whose accepted cap cannot
   be recovered from a generated cohort. A model with a complete cohort resolves
   its cap from `modelBenchmarkMetrics.generated.json` and ignores this map.

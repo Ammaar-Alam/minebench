@@ -15,6 +15,8 @@ export type BenchmarkDuration = {
 
 export type BenchmarkCost = {
   usd: number;
+  // Completed responses covered by this cost snapshot
+  attemptCount?: number;
 };
 
 export type BenchmarkOutputCap =
@@ -316,7 +318,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
   anthropic_claude_opus_5: {
     sourceRelease: "3.11.0",
-    totalCost: { usd: 89.97 },
+    totalCost: { usd: 89.97, attemptCount: 37 },
     buildCount: 15,
   },
   gemini_3_6_flash: {

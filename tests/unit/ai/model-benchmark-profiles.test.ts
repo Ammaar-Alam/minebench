@@ -109,7 +109,7 @@ assert.equal(opus5?.sourceRelease, "3.11.0");
 assert.deepEqual(opus5?.outputCap, { kind: "exact", tokens: 128_000 });
 assert.deepEqual(opus5?.averageInference, { milliseconds: 1_930_169 });
 assert.equal(opus5?.averageJsonSizeBytes, 95_421_017);
-assert.deepEqual(opus5?.totalCost, { usd: 89.97 });
+assert.deepEqual(opus5?.totalCost, { usd: 89.97, attemptCount: 37 });
 assert.equal(opus5?.totalAttempts, 37);
 assert.equal(opus5?.buildCount, 15);
 

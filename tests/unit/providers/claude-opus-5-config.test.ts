@@ -105,7 +105,7 @@ async function main() {
   assert.deepEqual(benchmarkProfile.outputCap, { kind: "exact", tokens: 128_000 });
   assert.deepEqual(benchmarkProfile.averageInference, { milliseconds: 1_930_169 });
   assert.equal(benchmarkProfile.averageJsonSizeBytes, 95_421_017);
-  assert.deepEqual(benchmarkProfile.totalCost, { usd: 89.97 });
+  assert.deepEqual(benchmarkProfile.totalCost, { usd: 89.97, attemptCount: 37 });
   assert.equal(benchmarkProfile.totalAttempts, 37);
   assert.equal(benchmarkProfile.buildCount, 15);
 
