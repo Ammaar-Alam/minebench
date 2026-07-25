@@ -29,6 +29,10 @@ function isAnthropicFableOrMythos5(modelId: string): boolean {
   return /(?:^|\/)claude-(?:fable|mythos)-5(?:[.-]|$)/.test(modelId);
 }
 
+function isAnthropicOpus5(modelId: string): boolean {
+  return /(?:^|\/)claude-opus-5(?:[.-]|$)/.test(modelId);
+}
+
 function isAnthropicSonnet5(modelId: string): boolean {
   return /(?:^|\/)claude-sonnet-5(?:[.-]|$)/.test(modelId);
 }
@@ -43,6 +47,7 @@ function anthropicClaudeVersion(modelId: string): { major: number; minor: number
 }
 
 function isAnthropicAdaptiveModel(modelId: string): boolean {
+  if (isAnthropicOpus5(modelId)) return true;
   if (isAnthropicSonnet5(modelId)) return true;
   if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
@@ -51,6 +56,7 @@ function isAnthropicAdaptiveModel(modelId: string): boolean {
 }
 
 function supportsAnthropicXhighEffort(modelId: string): boolean {
+  if (isAnthropicOpus5(modelId)) return true;
   if (isAnthropicSonnet5(modelId)) return true;
   if (isAnthropicFableOrMythos5(modelId)) return true;
   const version = anthropicClaudeVersion(modelId);
@@ -60,6 +66,7 @@ function supportsAnthropicXhighEffort(modelId: string): boolean {
 
 function anthropicAdaptiveEffortEnvVar(modelId: string): string | null {
   if (isAnthropicFableOrMythos5(modelId)) return "ANTHROPIC_FABLE_5_EFFORT";
+  if (isAnthropicOpus5(modelId)) return "ANTHROPIC_OPUS_5_EFFORT";
   if (isAnthropicSonnet5(modelId)) return "ANTHROPIC_SONNET_5_EFFORT";
   const version = anthropicClaudeVersion(modelId);
   if (!version) return null;

@@ -253,6 +253,7 @@ for (const [modelKey, expectedCap] of Object.entries(reconstructedCaps)) {
 const mixedCapExpectations = {
   anthropic_claude_4_5_opus: "8,192 or 32,768 tokens",
   anthropic_claude_4_6_sonnet: "32,768 or 64,000 tokens",
+  anthropic_claude_opus_5: "Accepted cap not recorded",
   moonshot_kimi_k2_5: "Accepted cap not recorded",
   meta_llama_4_maverick: "Accepted cap not recorded",
 } as const;

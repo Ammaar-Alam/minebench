@@ -102,6 +102,8 @@ function maxOutputTokenCapForModel(modelId: string): number | undefined {
   if (
     modelId === "claude-fable-5" ||
     modelId === "anthropic/claude-fable-5" ||
+    modelId === "claude-opus-5" ||
+    modelId === "anthropic/claude-opus-5" ||
     modelId === "claude-sonnet-5" ||
     modelId === "anthropic/claude-sonnet-5" ||
     modelId.startsWith("claude-opus-4-8") ||
@@ -171,6 +173,8 @@ function usesDefaultSamplingForModel(modelId: string): boolean {
     normalized === "google/gemini-3.5-flash-lite" ||
     normalized === "claude-fable-5" ||
     normalized === "anthropic/claude-fable-5" ||
+    normalized === "claude-opus-5" ||
+    normalized === "anthropic/claude-opus-5" ||
     normalized === "claude-sonnet-5" ||
     normalized === "anthropic/claude-sonnet-5" ||
     /^claude-opus-4-(?:7|8)(?:-|$)/.test(normalized) ||

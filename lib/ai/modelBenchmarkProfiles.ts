@@ -106,6 +106,11 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
   ],
+  anthropic_claude_opus_5: [
+    { label: "Thinking", value: "Adaptive" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   anthropic_claude_sonnet_5: [
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "XHigh" },
@@ -216,6 +221,10 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
   openai_gpt_4o: exactOutputCap(16_384),
   openai_gpt_oss_120b: exactOutputCap(131_072),
   anthropic_claude_fable_5: exactOutputCap(128_000),
+  anthropic_claude_opus_5: {
+    kind: "unavailable",
+    reason: "accepted-cap-unrecorded",
+  },
   anthropic_claude_sonnet_5: exactOutputCap(128_000),
   anthropic_claude_4_5_sonnet: exactOutputCap(32_768),
   anthropic_claude_4_6_sonnet: {
