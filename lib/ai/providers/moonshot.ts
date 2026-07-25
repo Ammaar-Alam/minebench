@@ -2,6 +2,7 @@ import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import type { MoonshotThinkingConfig } from "@/lib/ai/reasoningProfiles";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type MoonshotChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -80,7 +81,7 @@ export async function moonshotGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.MOONSHOT_API_KEY;
   if (!apiKey) throw new Error("Missing MOONSHOT_API_KEY");
 
@@ -105,6 +106,8 @@ export async function moonshotGenerateText(params: {
           : defaultMoonshotTemperature(params.modelId, params.thinkingConfig);
       const topP = defaultMoonshotTopP(params.modelId);
 
+      controller.signal.throwIfAborted();
+      params.onProviderRequest?.();
       res = await fetch(url, {
         method: "POST",
         headers: {
@@ -168,6 +171,17 @@ export async function moonshotGenerateText(params: {
     ? `reasoning_effort=${params.thinkingConfig.reasoningEffort}`
     : `thinking=${params.thinkingConfig?.type ?? "default"}`;
   const structuredLabel = params.jsonSchema ? "json_schema" : "text";
+  params.onAcceptedRequestConfiguration?.({
+    apiMode: "chat_completions",
+    maxOutputTokens: budget,
+    thinkingMode: reasoningLabel,
+    temperature:
+      typeof params.temperature === "number"
+        ? params.temperature
+        : (defaultMoonshotTemperature(params.modelId, params.thinkingConfig) ?? "default"),
+    textVerbosity: "default",
+    responseFormat: structuredLabel,
+  });
   params.onTrace?.(
     withMaxOutputTokens(
       `Moonshot request config in use: ${reasoningLabel}, response_format=${structuredLabel}.`,

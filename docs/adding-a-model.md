@@ -144,6 +144,13 @@ records per-job counters in `uploads/.benchmark-metrics.json`. When every prompt
 has a finalized build, `scripts/benchmarkMetrics.ts` rolls those counters into
 `lib/ai/modelBenchmarkMetrics.generated.json`, which is committed.
 
+Provider-call telemetry fires at the adapter's outbound request boundary, so
+internal effort, token-budget, rate-limit, and transport retries each count.
+Configuration telemetry fires only after a provider accepts a request and
+records the settings used for that response. New adapters must forward both
+callbacks from `ProviderTelemetryCallbacks`; do not infer either value from the
+requested fallback ladder.
+
 A counter is published only once every job in the cohort tracked it, so a model
 benchmarked before a counter existed omits the field and the popover renders "Not
 tracked" rather than a total that undercounts real history. See

@@ -2,6 +2,7 @@ import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -149,11 +150,18 @@ function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
-  opts: { tries: number; minDelayMs: number; maxDelayMs: number },
+  opts: {
+    tries: number;
+    minDelayMs: number;
+    maxDelayMs: number;
+    onProviderRequest?: () => void;
+  },
 ): Promise<Response> {
   let lastErr: unknown = null;
   for (let i = 0; i < opts.tries; i++) {
     try {
+      init.signal?.throwIfAborted();
+      opts.onProviderRequest?.();
       const res = await fetch(url, init);
       if (res.status >= 500 || res.status === 429) {
         if (i === opts.tries - 1) return res;
@@ -188,7 +196,7 @@ export async function openrouterGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
 
@@ -220,6 +228,7 @@ export async function openrouterGenerateText(params: {
     let res: Response | null = null;
     let lastBody = "";
     let selectedReasoningLabel: string | null = null;
+    let selectedReasoningMaxTokens: number | undefined;
     let selectedReasoningTokenBudget: number | null = null;
     const tokenBudgets = tokenBudgetCandidates(maxTokens);
     for (const [tokIdx, tok] of tokenBudgets.entries()) {
@@ -282,11 +291,23 @@ export async function openrouterGenerateText(params: {
                   : {}),
               }),
             },
-            { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+            {
+              tries: 3,
+              minDelayMs: 400,
+              maxDelayMs: 2000,
+              onProviderRequest: params.onProviderRequest,
+            },
           );
 
           if (res.ok) {
-            selectedReasoningLabel = describeReasoningAttempt(cfg);
+            selectedReasoningMaxTokens =
+              cfg && typeof cfg === "object" && cfg.kind === "max_tokens"
+                ? clampReasoningBudget(cfg.maxTokens, tok)
+                : undefined;
+            selectedReasoningLabel =
+              typeof selectedReasoningMaxTokens === "number"
+                ? `max_tokens=${selectedReasoningMaxTokens}`
+                : describeReasoningAttempt(cfg);
             selectedReasoningTokenBudget = tok;
             break;
           }
@@ -337,6 +358,21 @@ export async function openrouterGenerateText(params: {
     if (res.ok && selectedReasoningLabel) {
       const budget = selectedReasoningTokenBudget ?? maxTokens;
       params.onAcceptedOutputTokens?.(budget);
+      params.onAcceptedRequestConfiguration?.({
+        apiMode: "chat_completions",
+        maxOutputTokens: budget,
+        ...(typeof selectedReasoningMaxTokens === "number"
+          ? { reasoningMaxTokens: selectedReasoningMaxTokens }
+          : {}),
+        thinkingMode: `reasoning=${selectedReasoningLabel}`,
+        temperature: modelUsesDefaultSampling(params.modelId)
+          ? "default"
+          : (params.temperature ?? 0.2),
+        textVerbosity:
+          (useDefaultVerbosity ? defaultTextVerbosity(params.modelId) : undefined) ??
+          "default",
+        responseFormat: params.jsonSchema ? "json_schema" : "text",
+      });
       params.onTrace?.(
         withMaxOutputTokens(
           `OpenRouter reasoning config in use: '${selectedReasoningLabel}'.`,

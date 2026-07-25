@@ -496,9 +496,9 @@ async function generateAndSave(
     preferOpenRouter,
     reasoning: reasoning ?? undefined,
     abortSignal: signal,
-    onAttempt: (attempt) => {
-      // Persist immediately before the provider call so SIGINT leaves an exact count
-      metricsStore.markAttempt(job, attempt);
+    onProviderRequest: (attempt) => {
+      // Persist every outbound generation request, including provider fallbacks
+      metricsStore.markProviderCall(job, attempt);
     },
     onRetry: (attempt, reason) => {
       attemptCount = Math.max(attemptCount, attempt);
@@ -953,7 +953,7 @@ function printBenchmarkSummary(
       `    Provider calls: ${summary.providerCallCount ?? "Not tracked"} (${summary.providerCallTrackingJobCount ?? 0}/${summary.expectedBuildCount} jobs tracked)`,
     );
     console.log(
-      `    Rejected responses: ${summary.rejectedResponseCount ?? "Not tracked"} · Failed calls: ${summary.failedAttemptCount ?? "Not tracked"} · Failed runs: ${summary.failedCount} · Interrupted runs: ${summary.interruptedCount} · Running: ${summary.runningCount}`,
+      `    Rejected responses: ${summary.rejectedResponseCount ?? "Not tracked"} · Failed attempts (includes rejected responses): ${summary.failedAttemptCount ?? "Not tracked"} · Failed runs: ${summary.failedCount} · Interrupted runs: ${summary.interruptedCount} · Running: ${summary.runningCount}`,
     );
     console.log("    Total cost: Manual");
   }

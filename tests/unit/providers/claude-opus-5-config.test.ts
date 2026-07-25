@@ -16,6 +16,7 @@ type CapturedRequest = {
 
 const capturedRequests: CapturedRequest[] = [];
 const queuedResponseTexts: string[] = [];
+let rejectAnthropicMaxOnce = false;
 const originalFetch = globalThis.fetch;
 const originalEnv = {
   anthropicStreamResponses: process.env.ANTHROPIC_STREAM_RESPONSES,
@@ -33,6 +34,20 @@ function validBuildJson(): string {
   });
 }
 
+function validLargeBuildJson(): string {
+  return JSON.stringify({
+    version: "1.0",
+    boxes: [],
+    lines: [],
+    blocks: Array.from({ length: 240 }, (_, index) => ({
+      x: index % 10,
+      y: Math.floor(index / 10) % 6,
+      z: Math.floor(index / 60),
+      type: "stone",
+    })),
+  });
+}
+
 function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
   if (!headers) return {};
   if (headers instanceof Headers) return Object.fromEntries(headers.entries());
@@ -46,7 +61,6 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 
   const url = String(input);
   const body = JSON.parse(init.body as string) as Record<string, unknown>;
-  const responseText = queuedResponseTexts.shift() ?? validBuildJson();
   capturedRequests.push({
     url,
     headers: normalizeHeaders(init.headers),
@@ -54,6 +68,21 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   });
 
   if (url.includes("api.anthropic.com")) {
+    const effort = (body.output_config as { effort?: unknown } | undefined)?.effort;
+    if (rejectAnthropicMaxOnce && effort === "max") {
+      rejectAnthropicMaxOnce = false;
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "output_config.effort max is unsupported",
+          },
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    const responseText = queuedResponseTexts.shift() ?? validBuildJson();
     return new Response(
       JSON.stringify({
         content: [{ type: "text", text: responseText }],
@@ -65,6 +94,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     );
   }
 
+  const responseText = queuedResponseTexts.shift() ?? validBuildJson();
   return new Response(
     JSON.stringify({
       choices: [
@@ -143,7 +173,7 @@ async function main() {
     enableTools: false,
     providerKeys: { anthropic: "test-anthropic-key" },
     allowServerKeys: false,
-    onAttempt: (attempt) => directAttempts.push(attempt),
+    onProviderRequest: (attempt) => directAttempts.push(attempt),
     onRawResponse: (attempt, rawText) => {
       directRawResponses.push({ attempt, rawText });
     },
@@ -153,7 +183,7 @@ async function main() {
   assert.equal(directResult.acceptedOutputTokens, 128_000);
   assert.equal(
     directResult.requestConfiguration,
-    "Request config: max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=adaptive_effort=max->xhigh->high->medium->low, temperature=default.",
+    "Request config: api_mode=messages, max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=adaptive_effort=max, temperature=default, text_verbosity=default, response_format=json_schema.",
   );
   assert.deepEqual(directRawResponses, [
     { attempt: 1, rawText: "not valid JSON" },
@@ -188,6 +218,35 @@ async function main() {
   );
 
   capturedRequests.length = 0;
+  rejectAnthropicMaxOnce = true;
+  const fallbackRequests: number[] = [];
+  queuedResponseTexts.push(validLargeBuildJson());
+  const fallbackResult = await generateVoxelBuild({
+    modelKey: "anthropic_claude_opus_5",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 1,
+    enableTools: false,
+    providerKeys: { anthropic: "test-anthropic-key" },
+    allowServerKeys: false,
+    onProviderRequest: (attempt) => fallbackRequests.push(attempt),
+  });
+  assert.equal(fallbackResult.ok, true, JSON.stringify(fallbackResult));
+  assert.deepEqual(fallbackRequests, [1, 1]);
+  assert.deepEqual(
+    capturedRequests.map(
+      (request) =>
+        (request.body.output_config as { effort?: unknown } | undefined)?.effort,
+    ),
+    ["max", "xhigh"],
+  );
+  assert.equal(
+    fallbackResult.requestConfiguration,
+    "Request config: api_mode=messages, max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=adaptive_effort=xhigh, temperature=default, text_verbosity=default, response_format=json_schema.",
+  );
+
+  capturedRequests.length = 0;
   const missingKeyAttempts: number[] = [];
   const missingKeyRetries: number[] = [];
   const missingKeyResult = await generateVoxelBuild({
@@ -199,7 +258,7 @@ async function main() {
     enableTools: false,
     providerKeys: {},
     allowServerKeys: false,
-    onAttempt: (attempt) => missingKeyAttempts.push(attempt),
+    onProviderRequest: (attempt) => missingKeyAttempts.push(attempt),
     onRetry: (attempt) => missingKeyRetries.push(attempt),
   });
   assert.equal(missingKeyResult.ok, false);
@@ -219,7 +278,7 @@ async function main() {
     providerKeys: { anthropic: "test-anthropic-key" },
     allowServerKeys: false,
     reasoning: "ultra",
-    onAttempt: (attempt) => invalidReasoningAttempts.push(attempt),
+    onProviderRequest: (attempt) => invalidReasoningAttempts.push(attempt),
   });
   assert.equal(invalidReasoningResult.ok, false);
   assert.match(invalidReasoningResult.error, /does not support reasoning 'ultra'/);
@@ -244,7 +303,7 @@ async function main() {
   assert.equal(openRouterResult.acceptedOutputTokens, 128_000);
   assert.ok(
     openRouterResult.requestConfiguration?.includes(
-      "thinking_mode=effort_fallback=max->xhigh->high->medium->low->disabled",
+      "thinking_mode=reasoning=max",
     ),
   );
   const openRouterRequest = capturedRequests.find((request) =>

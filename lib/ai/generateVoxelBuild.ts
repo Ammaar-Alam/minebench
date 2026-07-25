@@ -32,7 +32,11 @@ import {
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
-import type { ProviderApiKeys } from "@/lib/ai/types";
+import type {
+  AcceptedProviderRequestConfiguration,
+  ProviderApiKeys,
+  ProviderTelemetryCallbacks,
+} from "@/lib/ai/types";
 import { DEFAULT_MAX_OUTPUT_TOKENS } from "@/lib/ai/tokenBudgets";
 import {
   runVoxelExec,
@@ -82,6 +86,20 @@ const DEFAULT_TEMPERATURE = 1.0;
 function formatOptionalInteger(value: number | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "n/a";
   return String(Math.floor(value));
+}
+
+function acceptedProviderRequestConfigurationLine(
+  configuration: AcceptedProviderRequestConfiguration,
+): string {
+  return (
+    `Request config: api_mode=${configuration.apiMode}, ` +
+    `max_output_tokens=${configuration.maxOutputTokens}, ` +
+    `reasoning_max_tokens=${formatOptionalInteger(configuration.reasoningMaxTokens)}, ` +
+    `thinking_mode=${configuration.thinkingMode}, ` +
+    `temperature=${configuration.temperature}, ` +
+    `text_verbosity=${configuration.textVerbosity}, ` +
+    `response_format=${configuration.responseFormat}.`
+  );
 }
 
 function describeRequestedThinkingMode(opts: {
@@ -388,8 +406,8 @@ export type GenerateVoxelBuildParams = {
   preferOpenRouter?: boolean;
   reasoning?: string;
   abortSignal?: AbortSignal;
-  // Fired after request preflight and immediately before every provider call
-  onAttempt?: (attempt: number) => void;
+  // Fired immediately before every outbound generation request
+  onProviderRequest?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => void;
   // Fired after response text returns and before parsing or execution
   onRawResponse?: (attempt: number, rawText: string) => void;
@@ -450,7 +468,7 @@ async function callDirectProvider(args: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
       modelId: args.modelId,
@@ -466,6 +484,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -483,6 +503,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -500,6 +522,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -516,6 +540,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -533,6 +559,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -550,6 +578,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -567,6 +597,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -592,6 +624,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -616,8 +650,8 @@ async function providerGenerateText(args: {
   onProviderTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
   onProviderRoute?: (route: "direct" | "openrouter") => void;
-  onRequestConfiguration?: (configuration: string) => void;
-  onRequestStart?: () => void;
+  onAcceptedRequestConfiguration?: (configuration: string) => void;
+  onProviderRequest?: () => void;
 }): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
@@ -722,9 +756,7 @@ async function providerGenerateText(args: {
       `Routing via direct ${model.provider} provider (${model.modelId}). ${requestConfiguration}`,
     );
     args.onProviderRoute?.("direct");
-    args.onRequestConfiguration?.(requestConfiguration);
     args.signal?.throwIfAborted();
-    args.onRequestStart?.();
     try {
       return await callDirectProvider({
         provider: model.provider,
@@ -746,6 +778,12 @@ async function providerGenerateText(args: {
         onDelta: args.onDelta,
         onTrace: args.onProviderTrace,
         onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+        onProviderRequest: args.onProviderRequest,
+        onAcceptedRequestConfiguration: (configuration) => {
+          args.onAcceptedRequestConfiguration?.(
+            acceptedProviderRequestConfigurationLine(configuration),
+          );
+        },
       });
     } catch (directErr) {
       // If a direct provider key is present, do not fall back to OpenRouter.
@@ -811,9 +849,7 @@ async function providerGenerateText(args: {
     `Routing via OpenRouter (${model.openRouterModelId}). ${requestConfiguration}`,
   );
   args.onProviderRoute?.("openrouter");
-  args.onRequestConfiguration?.(requestConfiguration);
   args.signal?.throwIfAborted();
-  args.onRequestStart?.();
 
   return openrouterGenerateText({
     modelId: model.openRouterModelId,
@@ -831,6 +867,12 @@ async function providerGenerateText(args: {
     onDelta: args.onDelta,
     onTrace: args.onProviderTrace,
     onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+    onProviderRequest: args.onProviderRequest,
+    onAcceptedRequestConfiguration: (configuration) => {
+      args.onAcceptedRequestConfiguration?.(
+        acceptedProviderRequestConfigurationLine(configuration),
+      );
+    },
   });
 }
 
@@ -963,7 +1005,7 @@ export async function generateVoxelBuild(
 
     if (attempt > 1) params.onRetry?.(attempt, lastError);
 
-    let requestStarted = false;
+    let providerRequestStarted = false;
     try {
       const { text } = await providerGenerateText({
         model,
@@ -985,12 +1027,12 @@ export async function generateVoxelBuild(
         onProviderRoute: (route) => {
           providerRoute = route;
         },
-        onRequestConfiguration: (configuration) => {
+        onAcceptedRequestConfiguration: (configuration) => {
           requestConfiguration = configuration;
         },
-        onRequestStart: () => {
-          params.onAttempt?.(attempt);
-          requestStarted = true;
+        onProviderRequest: () => {
+          params.onProviderRequest?.(attempt);
+          providerRequestStarted = true;
         },
       });
       previousText = text;
@@ -1097,7 +1139,7 @@ export async function generateVoxelBuild(
       };
     } catch (err) {
       lastError = err instanceof Error ? err.message : "Provider request failed";
-      if (!requestStarted) break;
+      if (!providerRequestStarted) break;
       // Avoid expensive duplicate retries when the upstream likely processed work
       // but the client timed out waiting for headers/body.
       if (isBilledTimeoutStyleProviderError(lastError)) break;

@@ -2,6 +2,7 @@ import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type AnthropicMessageResponse = {
   content?: {
@@ -189,7 +190,7 @@ export async function anthropicGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
@@ -239,6 +240,7 @@ export async function anthropicGenerateText(params: {
   let structuredMode: "native_format" | "forced_tool" = "native_format";
   let didUseStreaming = false;
   let selectedAdaptiveEffort: AnthropicEffort | null = null;
+  let selectedBetaHeader: string | null = null;
   let selectedTokenBudget: number | null = null;
   try {
     requestLoop: for (const tok of tokenBudgetCandidates(maxTokens)) {
@@ -274,6 +276,8 @@ export async function anthropicGenerateText(params: {
               ? { effort }
               : undefined;
 
+          controller.signal.throwIfAborted();
+          params.onProviderRequest?.();
           res = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers: {
@@ -309,6 +313,7 @@ export async function anthropicGenerateText(params: {
 
           if (res.ok) {
             if (usesAdaptiveThinking) selectedAdaptiveEffort = effort ?? null;
+            selectedBetaHeader = betaHeader;
             selectedTokenBudget = tok;
             break requestLoop;
           }
@@ -366,6 +371,34 @@ export async function anthropicGenerateText(params: {
 
   const acceptedOutputTokens = selectedTokenBudget ?? maxTokens;
   params.onAcceptedOutputTokens?.(acceptedOutputTokens);
+  const acceptedThinkingBudget =
+    typeof thinkingBudget === "number"
+      ? Math.min(thinkingBudget, acceptedOutputTokens - 1)
+      : undefined;
+  params.onAcceptedRequestConfiguration?.({
+    apiMode: selectedBetaHeader ? `messages+${selectedBetaHeader}` : "messages",
+    maxOutputTokens: acceptedOutputTokens,
+    ...(typeof acceptedThinkingBudget === "number" && acceptedThinkingBudget >= 1024
+      ? { reasoningMaxTokens: acceptedThinkingBudget }
+      : {}),
+    thinkingMode: usesAdaptiveThinking
+      ? `adaptive_effort=${selectedAdaptiveEffort ?? "default"}`
+      : typeof acceptedThinkingBudget === "number" && acceptedThinkingBudget >= 1024
+        ? `thinking_budget=${acceptedThinkingBudget}`
+        : "default",
+    temperature: capabilities.defaultSamplingOnly
+      ? "default"
+      : usesAdaptiveThinking || typeof acceptedThinkingBudget === "number"
+        ? 1
+        : (params.temperature ?? 0.2),
+    textVerbosity: "default",
+    responseFormat:
+      useStructuredOutputs
+        ? structuredMode === "forced_tool"
+          ? "forced_tool"
+          : "json_schema"
+        : "text",
+  });
 
   if (usesAdaptiveThinking && selectedAdaptiveEffort) {
     params.onTrace?.(

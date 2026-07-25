@@ -45,7 +45,7 @@ const castleJson = JSON.stringify(
   2,
 );
 const effectiveRequestConfiguration =
-  "Request config: max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=reasoning_mode=pro,reasoning_effort_fallback=max->xhigh->high->medium->low->none->pro-default, temperature=default.";
+  "Request config: api_mode=responses, max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=reasoning=max, temperature=default, text_verbosity=high, response_format=json_schema.";
 const castleConfiguration = createBenchmarkRunConfiguration({
   promptText: castle.promptText!,
   providerRoute: "direct",
@@ -55,14 +55,14 @@ const castleConfiguration = createBenchmarkRunConfiguration({
 });
 
 store.markRunning(castle, new Date("2026-07-22T18:00:00.000Z"));
-store.markAttempt(castle, 1);
+store.markProviderCall(castle, 1);
 store.markCompletedAttempt(castle, 1);
 store.markCompletedAttempt(castle, 1);
 store.markRetry(castle, 2);
-store.markAttempt(castle, 2);
+store.markProviderCall(castle, 2);
 store.markCompletedAttempt(castle, 2);
 store.markRetry(castle, 3);
-store.markAttempt(castle, 3);
+store.markProviderCall(castle, 3);
 const castleSample = store.finalizeSuccess(
   castle,
   castleJson,
@@ -102,6 +102,21 @@ assert.equal(
   "atomic finalization should not leave temporary files",
 );
 
+const internalFallback = job("internal-fallback");
+store.markRunning(internalFallback);
+store.markProviderCall(internalFallback, 1);
+store.markProviderCall(internalFallback, 1);
+assert.equal(
+  readLedger().jobs["openai_gpt_5_6_sol/internal-fallback"]?.providerCallCount,
+  2,
+  "internal provider fallbacks should count each outbound request",
+);
+assert.equal(
+  readLedger().jobs["openai_gpt_5_6_sol/internal-fallback"]?.runAttemptCount,
+  1,
+  "internal provider fallbacks should remain within one outer attempt",
+);
+
 let generated = store.refreshGeneratedMetrics([castle]);
 assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   expectedBuildCount: 1,
@@ -126,7 +141,7 @@ assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
 });
 
 store.markRunning(castle, new Date("2026-07-22T19:00:00.000Z"));
-store.markAttempt(castle, 1);
+store.markProviderCall(castle, 1);
 store.markFailed(
   castle,
   "Provider quota exhausted",
@@ -158,7 +173,7 @@ assert.equal(
 assert.equal(summary?.averageInferenceMs, 1_046_000);
 
 store.markRunning(castle, new Date("2026-07-22T20:00:00.000Z"));
-store.markAttempt(castle, 1);
+store.markProviderCall(castle, 1);
 store.reconcile([castle], new Date("2026-07-22T20:00:10.000Z"));
 assert.equal(readLedger().jobs["openai_gpt_5_6_sol/castle"]?.state, "interrupted");
 summary = store.summarize([castle]).get("openai_gpt_5_6_sol");
@@ -166,7 +181,7 @@ assert.equal(summary?.interruptedCount, 1);
 assert.equal(summary?.averageInferenceMs, 1_046_000);
 
 store.markRunning(castle, new Date("2026-07-22T20:30:00.000Z"));
-store.markAttempt(castle, 1);
+store.markProviderCall(castle, 1);
 store.finalizeSuccess(
   castle,
   castleJson,
@@ -463,7 +478,7 @@ assert.equal(
 
 const terminalResponse = job("terminal-response");
 store.markRunning(terminalResponse);
-store.markAttempt(terminalResponse, 1);
+store.markProviderCall(terminalResponse, 1);
 store.markCompletedAttempt(terminalResponse, 1);
 store.markFailed(terminalResponse, "Could not find a valid JSON object");
 summary = store.summarize([terminalResponse]).get("openai_gpt_5_6_sol");

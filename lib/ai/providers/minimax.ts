@@ -1,6 +1,7 @@
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type MiniMaxChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -75,7 +76,7 @@ export async function minimaxGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.MINIMAX_API_KEY;
   if (!apiKey) throw new Error("Missing MINIMAX_API_KEY");
 
@@ -97,6 +98,8 @@ export async function minimaxGenerateText(params: {
 
   try {
     for (const tok of tokenBudgetCandidates(maxTokens)) {
+      controller.signal.throwIfAborted();
+      params.onProviderRequest?.();
       res = await fetch(url, {
         method: "POST",
         headers: {
@@ -149,6 +152,14 @@ export async function minimaxGenerateText(params: {
 
   const budget = selectedTokenBudget ?? maxTokens;
   params.onAcceptedOutputTokens?.(budget);
+  params.onAcceptedRequestConfiguration?.({
+    apiMode: "chat_completions",
+    maxOutputTokens: budget,
+    thinkingMode: "default",
+    temperature,
+    textVerbosity: "default",
+    responseFormat: "text",
+  });
   params.onTrace?.(withMaxOutputTokens("MiniMax reasoning config in use: default.", budget));
 
   if (params.onDelta) {

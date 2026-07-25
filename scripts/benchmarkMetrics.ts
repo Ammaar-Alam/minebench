@@ -523,17 +523,18 @@ export class BenchmarkMetricsStore {
     });
   }
 
-  markAttempt(job: BenchmarkMetricJob, attempt: number): void {
+  markProviderCall(job: BenchmarkMetricJob, attempt: number): void {
+    if (!isPositiveInteger(attempt)) {
+      throw new Error(`Provider call attempt must be a positive integer, received ${attempt}.`);
+    }
     this.updateRecord(job, (current) => {
-      // onAttempt may repeat during callback recovery so only count a newly observed attempt
       const runAttemptCount = Math.max(current?.runAttemptCount ?? 0, attempt);
-      const newlyStarted = runAttemptCount - (current?.runAttemptCount ?? 0);
       return {
         ...this.ongoingRecord(current),
         runAttemptCount,
         completedRunAttempts: current?.completedRunAttempts ?? [],
         rejectedRunAttempts: current?.rejectedRunAttempts ?? [],
-        providerCallCount: addToCounter(current, "providerCallCount", newlyStarted),
+        providerCallCount: addToCounter(current, "providerCallCount", 1),
       };
     });
   }
@@ -670,13 +671,8 @@ export class BenchmarkMetricsStore {
     this.markCompletedAttempt(job, sample.attemptCount);
     this.updateRecord(job, (current) => {
       const retryCount = Math.max(0, sample.attemptCount - 1);
-      // An accepted sample implies the attempts it took, so backfill whatever
-      // the callbacks did not observe
+      // Attempt transitions can be reconstructed but provider calls cannot
       const unreportedFailures = Math.max(0, retryCount - (current?.retryCount ?? 0));
-      const unreportedCalls = Math.max(
-        0,
-        sample.attemptCount - (current?.runAttemptCount ?? 0),
-      );
       return {
         ...carriedCounters(current),
         ...carriedRunState(current),
@@ -684,7 +680,6 @@ export class BenchmarkMetricsStore {
         startedAt: current?.startedAt ?? now.toISOString(),
         retryCount,
         runAttemptCount: sample.attemptCount,
-        providerCallCount: addToCounter(current, "providerCallCount", unreportedCalls),
         failedAttemptCount: addToCounter(current, "failedAttemptCount", unreportedFailures),
         ownerPid: process.pid,
         sample: current?.sample,

@@ -2,6 +2,7 @@ import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type OpenAIChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -225,11 +226,19 @@ function isTransportTimeoutError(err: unknown): boolean {
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
-  opts: { tries: number; minDelayMs: number; maxDelayMs: number; retryOnHeadersTimeout?: boolean },
+  opts: {
+    tries: number;
+    minDelayMs: number;
+    maxDelayMs: number;
+    retryOnHeadersTimeout?: boolean;
+    onProviderRequest?: () => void;
+  },
 ): Promise<Response> {
   let lastErr: unknown = null;
   for (let i = 0; i < opts.tries; i++) {
     try {
+      init.signal?.throwIfAborted();
+      opts.onProviderRequest?.();
       const res = await fetch(url, init);
       if (res.status >= 500 || res.status === 429) {
         if (i === opts.tries - 1) return res;
@@ -438,7 +447,7 @@ export async function openaiGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
@@ -569,11 +578,27 @@ export async function openaiGenerateText(params: {
               signal: controller.signal,
               body: JSON.stringify(payload),
             },
-            { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+            {
+              tries: 3,
+              minDelayMs: 400,
+              maxDelayMs: 2000,
+              onProviderRequest: params.onProviderRequest,
+            },
           );
 
           if (res.ok) {
             params.onAcceptedOutputTokens?.(tok);
+            params.onAcceptedRequestConfiguration?.({
+              apiMode: "responses",
+              maxOutputTokens: tok,
+              ...(cfg?.kind === "max_tokens"
+                ? { reasoningMaxTokens: clampReasoningBudget(cfg.maxTokens, tok) }
+                : {}),
+              thinkingMode: `reasoning=${currentReasoningLabel}`,
+              temperature: temperature ?? "default",
+              textVerbosity: textVerbosity ?? "default",
+              responseFormat: useStructuredOutput ? "json_schema" : "text",
+            });
             params.onTrace?.(
               withMaxOutputTokens(
                 `OpenAI Responses reasoning config in use: '${currentReasoningLabel}'.`,
@@ -746,6 +771,7 @@ export async function openaiGenerateText(params: {
   let lastBody = "";
   let selectedChatEffortLabel: string | null = null;
   let selectedChatTokenBudget: number | null = null;
+  let selectedChatTextVerbosity: TextVerbosity | undefined;
   for (const tok of tokenBudgetCandidates(maxOutputTokens)) {
     let tryLowerTokenBudget = false;
     const effortAttempts = reasoningEffortAttempts.length > 0 ? [...reasoningEffortAttempts, undefined] : [undefined];
@@ -783,11 +809,17 @@ export async function openaiGenerateText(params: {
               ],
             }),
           },
-          { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+          {
+            tries: 3,
+            minDelayMs: 400,
+            maxDelayMs: 2000,
+            onProviderRequest: params.onProviderRequest,
+          },
         );
         if (res.ok) {
           selectedChatEffortLabel = currentEffortLabel;
           selectedChatTokenBudget = tok;
+          selectedChatTextVerbosity = textVerbosity;
           break;
         }
         lastBody = await res.text().catch(() => "");
@@ -825,6 +857,14 @@ export async function openaiGenerateText(params: {
   if (res.ok && selectedChatEffortLabel) {
     const budget = selectedChatTokenBudget ?? maxOutputTokens;
     params.onAcceptedOutputTokens?.(budget);
+    params.onAcceptedRequestConfiguration?.({
+      apiMode: "chat_completions",
+      maxOutputTokens: budget,
+      thinkingMode: `reasoning=${selectedChatEffortLabel}`,
+      temperature: temperature ?? "default",
+      textVerbosity: selectedChatTextVerbosity ?? "default",
+      responseFormat: "json_schema",
+    });
     params.onTrace?.(
       withMaxOutputTokens(
         `OpenAI Chat reasoning config in use: '${selectedChatEffortLabel}'.`,
@@ -884,7 +924,12 @@ export async function openaiGenerateText(params: {
             ],
           }),
         },
-        { tries: 3, minDelayMs: 400, maxDelayMs: 2000 },
+        {
+          tries: 3,
+          minDelayMs: 400,
+          maxDelayMs: 2000,
+          onProviderRequest: params.onProviderRequest,
+        },
       );
 
       if (!retry.ok) {
@@ -895,6 +940,17 @@ export async function openaiGenerateText(params: {
         );
       }
 
+      params.onAcceptedOutputTokens?.(maxOutputTokens);
+      params.onAcceptedRequestConfiguration?.({
+        apiMode: "chat_completions",
+        maxOutputTokens,
+        thinkingMode: "default",
+        temperature: temperature ?? "default",
+        textVerbosity:
+          (useDefaultVerbosity ? defaultTextVerbosity(params.modelId) : undefined) ??
+          "default",
+        responseFormat: "text",
+      });
       const retryData = (await retry.json()) as OpenAIChatResponse;
       const retryText = extractTextFromChatCompletions(retryData);
       if (params.onDelta) params.onDelta(retryText);
