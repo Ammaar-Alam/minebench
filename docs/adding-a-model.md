@@ -28,10 +28,12 @@ and an entry to `MODEL_CATALOG`:
 }
 ```
 
-`modelId` is the provider's native ID; `openRouterModelId` is the fallback route
-used when the direct provider has no key or fails. Set `forceOpenRouter: true` if
-there is no direct route, or `importOnly: true` for models benchmarked through a
-web harness rather than an API.
+`modelId` is the provider's native ID; `openRouterModelId` is the alternate route
+used when the direct provider has no key or the caller explicitly selects
+OpenRouter. Errors from a selected direct route are returned without switching
+providers. Set `forceOpenRouter: true` if there is no direct route, or
+`importOnly: true` for models benchmarked through a web harness rather than an
+API.
 
 `scripts/uploadsCatalog.ts` needs a matching `MODEL_SLUG` entry. The slug names
 the build artifacts on disk (`uploads/<prompt>/<prompt>-<slug>.json`) and is what

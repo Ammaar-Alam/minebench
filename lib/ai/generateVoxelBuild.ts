@@ -388,7 +388,7 @@ export type GenerateVoxelBuildParams = {
   preferOpenRouter?: boolean;
   reasoning?: string;
   abortSignal?: AbortSignal;
-  // Fired before every provider call so interrupted attempts remain observable
+  // Fired after request preflight and immediately before every provider call
   onAttempt?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => void;
   // Fired after response text returns and before parsing or execution
@@ -599,7 +599,7 @@ async function callDirectProvider(args: {
   throw new Error("Meta direct API not supported; use OpenRouter fallback");
 }
 
-// unified provider call with OpenRouter fallback
+// unified direct and OpenRouter provider routing
 async function providerGenerateText(args: {
   model: ResolvedModel;
   system: string;
@@ -617,6 +617,7 @@ async function providerGenerateText(args: {
   onAcceptedOutputTokens?: (tokens: number) => void;
   onProviderRoute?: (route: "direct" | "openrouter") => void;
   onRequestConfiguration?: (configuration: string) => void;
+  onRequestStart?: () => void;
 }): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
@@ -722,6 +723,8 @@ async function providerGenerateText(args: {
     );
     args.onProviderRoute?.("direct");
     args.onRequestConfiguration?.(requestConfiguration);
+    args.signal?.throwIfAborted();
+    args.onRequestStart?.();
     try {
       return await callDirectProvider({
         provider: model.provider,
@@ -750,7 +753,7 @@ async function providerGenerateText(args: {
     }
   }
 
-  // use OpenRouter (either as primary when no direct key, or as fallback)
+  // use OpenRouter when selected explicitly or when no direct key is available
   if (!model.openRouterModelId) {
     throw new Error(`No OpenRouter model ID configured for ${model.key}`);
   }
@@ -809,6 +812,8 @@ async function providerGenerateText(args: {
   );
   args.onProviderRoute?.("openrouter");
   args.onRequestConfiguration?.(requestConfiguration);
+  args.signal?.throwIfAborted();
+  args.onRequestStart?.();
 
   return openrouterGenerateText({
     modelId: model.openRouterModelId,
@@ -957,8 +962,8 @@ export async function generateVoxelBuild(
             : "");
 
     if (attempt > 1) params.onRetry?.(attempt, lastError);
-    params.onAttempt?.(attempt);
 
+    let requestStarted = false;
     try {
       const { text } = await providerGenerateText({
         model,
@@ -982,6 +987,10 @@ export async function generateVoxelBuild(
         },
         onRequestConfiguration: (configuration) => {
           requestConfiguration = configuration;
+        },
+        onRequestStart: () => {
+          params.onAttempt?.(attempt);
+          requestStarted = true;
         },
       });
       previousText = text;
@@ -1088,6 +1097,7 @@ export async function generateVoxelBuild(
       };
     } catch (err) {
       lastError = err instanceof Error ? err.message : "Provider request failed";
+      if (!requestStarted) break;
       // Avoid expensive duplicate retries when the upstream likely processed work
       // but the client timed out waiting for headers/body.
       if (isBilledTimeoutStyleProviderError(lastError)) break;

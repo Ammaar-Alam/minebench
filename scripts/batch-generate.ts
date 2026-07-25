@@ -497,7 +497,7 @@ async function generateAndSave(
     reasoning: reasoning ?? undefined,
     abortSignal: signal,
     onAttempt: (attempt) => {
-      // Persist before the provider call so SIGINT still leaves an exact attempt count
+      // Persist immediately before the provider call so SIGINT leaves an exact count
       metricsStore.markAttempt(job, attempt);
     },
     onRetry: (attempt, reason) => {

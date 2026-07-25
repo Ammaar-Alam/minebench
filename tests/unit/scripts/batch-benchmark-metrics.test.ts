@@ -472,4 +472,13 @@ assert.equal(summary?.completedAttemptCount, 1);
 assert.equal(summary?.rejectedResponseCount, 1);
 assert.equal(summary?.failedAttemptCount, 1);
 
+const preflightFailure = job("preflight-failure");
+store.markRunning(preflightFailure);
+store.markFailed(preflightFailure, "Missing API key");
+summary = store.summarize([preflightFailure]).get("openai_gpt_5_6_sol");
+assert.equal(summary?.providerCallCount, 0);
+assert.equal(summary?.completedAttemptCount, 0);
+assert.equal(summary?.failedAttemptCount, 0);
+assert.equal(summary?.failedRunCount, 1);
+
 console.log("batch benchmark metric lifecycle checks passed");

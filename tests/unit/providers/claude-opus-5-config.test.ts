@@ -188,6 +188,44 @@ async function main() {
   );
 
   capturedRequests.length = 0;
+  const missingKeyAttempts: number[] = [];
+  const missingKeyRetries: number[] = [];
+  const missingKeyResult = await generateVoxelBuild({
+    modelKey: "anthropic_claude_opus_5",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 2,
+    enableTools: false,
+    providerKeys: {},
+    allowServerKeys: false,
+    onAttempt: (attempt) => missingKeyAttempts.push(attempt),
+    onRetry: (attempt) => missingKeyRetries.push(attempt),
+  });
+  assert.equal(missingKeyResult.ok, false);
+  assert.match(missingKeyResult.error, /Missing API key/);
+  assert.deepEqual(missingKeyAttempts, []);
+  assert.deepEqual(missingKeyRetries, []);
+  assert.equal(capturedRequests.length, 0);
+
+  const invalidReasoningAttempts: number[] = [];
+  const invalidReasoningResult = await generateVoxelBuild({
+    modelKey: "anthropic_claude_opus_5",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 2,
+    enableTools: false,
+    providerKeys: { anthropic: "test-anthropic-key" },
+    allowServerKeys: false,
+    reasoning: "ultra",
+    onAttempt: (attempt) => invalidReasoningAttempts.push(attempt),
+  });
+  assert.equal(invalidReasoningResult.ok, false);
+  assert.match(invalidReasoningResult.error, /does not support reasoning 'ultra'/);
+  assert.deepEqual(invalidReasoningAttempts, []);
+  assert.equal(capturedRequests.length, 0);
+
   const openRouterTraces: string[] = [];
   queuedResponseTexts.push(validBuildJson());
   const openRouterResult = await generateVoxelBuild({

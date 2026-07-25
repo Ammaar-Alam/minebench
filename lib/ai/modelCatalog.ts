@@ -72,7 +72,7 @@ export type ModelCatalogEntry = {
   modelId: string;
   displayName: string;
   enabled: boolean;
-  // optional: OpenRouter model ID for fallback when direct provider key is missing/invalid
+  // optional: alternate OpenRouter route when the direct provider key is unavailable
   openRouterModelId?: string;
   // optional: force routing via OpenRouter even if a direct provider key exists
   forceOpenRouter?: boolean;
