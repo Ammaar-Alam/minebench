@@ -504,6 +504,11 @@ export async function openaiGenerateText(params: {
     parseBooleanEnv("OPENAI_USE_BACKGROUND_MODE", isGpt5Family);
   const backgroundPollIntervalMs = parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 15_000);
   const streamForRequest = useBackgroundMode ? false : streamResponses;
+  const responsesApiMode = useBackgroundMode
+    ? "responses_background"
+    : streamForRequest
+      ? "responses_stream"
+      : "responses_sync";
   let useDefaultVerbosity = Boolean(defaultTextVerbosity(params.modelId));
 
   const controller = new AbortController();
@@ -589,7 +594,7 @@ export async function openaiGenerateText(params: {
           if (res.ok) {
             params.onAcceptedOutputTokens?.(tok);
             params.onAcceptedRequestConfiguration?.({
-              apiMode: "responses",
+              apiMode: responsesApiMode,
               maxOutputTokens: tok,
               ...(cfg?.kind === "max_tokens"
                 ? { reasoningMaxTokens: clampReasoningBudget(cfg.maxTokens, tok) }
@@ -858,7 +863,9 @@ export async function openaiGenerateText(params: {
     const budget = selectedChatTokenBudget ?? maxOutputTokens;
     params.onAcceptedOutputTokens?.(budget);
     params.onAcceptedRequestConfiguration?.({
-      apiMode: "chat_completions",
+      apiMode: streamResponses
+        ? "chat_completions_stream"
+        : "chat_completions_sync",
       maxOutputTokens: budget,
       thinkingMode: `reasoning=${selectedChatEffortLabel}`,
       temperature: temperature ?? "default",
@@ -942,7 +949,7 @@ export async function openaiGenerateText(params: {
 
       params.onAcceptedOutputTokens?.(maxOutputTokens);
       params.onAcceptedRequestConfiguration?.({
-        apiMode: "chat_completions",
+        apiMode: "chat_completions_sync",
         maxOutputTokens,
         thinkingMode: "default",
         temperature: temperature ?? "default",

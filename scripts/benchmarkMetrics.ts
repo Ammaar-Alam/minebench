@@ -20,6 +20,8 @@ export type BenchmarkRunConfiguration = {
   promptSha256: string;
   providerRoute: "direct" | "openrouter";
   reasoningOverride: string | null;
+  // Versioned only when the provider reports the settings it accepted
+  requestConfigurationVersion?: 1;
   requestConfiguration?: string;
   toolsEnabled: boolean;
 };
@@ -107,6 +109,11 @@ function carriedRunState(
 }
 
 type BenchmarkLedger = {
+  version: 2;
+  jobs: Record<string, BenchmarkJobRecord>;
+};
+
+type LegacyBenchmarkLedger = {
   version: 1;
   jobs: Record<string, BenchmarkJobRecord>;
 };
@@ -142,7 +149,10 @@ export function createBenchmarkRunConfiguration(args: {
     providerRoute: args.providerRoute,
     reasoningOverride: args.reasoningOverride,
     ...(args.requestConfiguration
-      ? { requestConfiguration: args.requestConfiguration }
+      ? {
+          requestConfigurationVersion: 1 as const,
+          requestConfiguration: args.requestConfiguration,
+        }
       : {}),
     toolsEnabled: args.toolsEnabled,
   };
@@ -179,6 +189,8 @@ function isBenchmarkRunConfiguration(value: unknown): value is BenchmarkRunConfi
     (configuration.providerRoute === "direct" || configuration.providerRoute === "openrouter") &&
     (configuration.reasoningOverride === null ||
       typeof configuration.reasoningOverride === "string") &&
+    (configuration.requestConfigurationVersion === undefined ||
+      configuration.requestConfigurationVersion === 1) &&
     (configuration.requestConfiguration === undefined ||
       (typeof configuration.requestConfiguration === "string" &&
         configuration.requestConfiguration.length > 0)) &&
@@ -380,20 +392,19 @@ function configurationMatchesJob(
 ): configuration is BenchmarkRunConfiguration {
   return (
     isBenchmarkRunConfiguration(configuration) &&
+    configuration.requestConfigurationVersion === 1 &&
+    typeof configuration.requestConfiguration === "string" &&
     typeof job.promptText === "string" &&
     configuration.promptSha256 === sha256(job.promptText)
   );
 }
 
-// Ledgers written before the rename stored provider calls as totalAttemptCount,
-// which read as "attempts" while the public statistic counts returned responses
-// Adopting the value in place keeps a partly generated cohort from losing its
-// call history
-function migrateLegacyCounters(record: BenchmarkJobRecord): void {
+// Version 1 counted outer attempts and stored requested configuration traces
+// Neither value is exact under the provider-boundary telemetry contract
+function migrateLegacyRecord(record: BenchmarkJobRecord): void {
   const legacy = record as BenchmarkJobRecord & { totalAttemptCount?: number };
-  if (legacy.totalAttemptCount === undefined) return;
-  record.providerCallCount ??= legacy.totalAttemptCount;
   delete legacy.totalAttemptCount;
+  delete record.providerCallCount;
 }
 
 function processIsAlive(pid: number | undefined): boolean {
@@ -419,14 +430,20 @@ export class BenchmarkMetricsStore {
   }
 
   private readLedger(): BenchmarkLedger {
-    const ledger = readJsonFile<BenchmarkLedger>(this.ledgerPath, { version: 1, jobs: {} });
-    if (ledger.version !== 1 || !ledger.jobs || typeof ledger.jobs !== "object") {
-      return { version: 1, jobs: {} };
+    const ledger = readJsonFile<BenchmarkLedger | LegacyBenchmarkLedger>(
+      this.ledgerPath,
+      { version: 2, jobs: {} },
+    );
+    if (!ledger.jobs || typeof ledger.jobs !== "object") {
+      return { version: 2, jobs: {} };
     }
-    for (const record of Object.values(ledger.jobs)) {
-      migrateLegacyCounters(record);
+    if (ledger.version === 1) {
+      for (const record of Object.values(ledger.jobs)) {
+        migrateLegacyRecord(record);
+      }
+      return { version: 2, jobs: ledger.jobs };
     }
-    return ledger;
+    return ledger.version === 2 ? ledger : { version: 2, jobs: {} };
   }
 
   private writeLedger(ledger: BenchmarkLedger): void {

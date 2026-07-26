@@ -271,6 +271,28 @@ function isDeterministicStructuredSchemaProviderError(message: string): boolean 
   );
 }
 
+function isDeterministicProviderPreflightError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.startsWith("missing ") ||
+    m.includes("no openrouter api key is available") ||
+    m.includes("does not support reasoning") ||
+    m.includes("does not expose a reasoning") ||
+    m.includes("does not expose an adaptive effort") ||
+    m.includes("does not expose a thinking override") ||
+    m.includes("reasons automatically and does not support") ||
+    m.includes("routing is unavailable") ||
+    m.includes("not integrated with openrouter") ||
+    m.includes("no openrouter model id configured") ||
+    m.includes("direct api not supported") ||
+    m.includes("fail-closed reasoning") ||
+    m.includes("invalid custom api server url") ||
+    m.includes("custom api server url must ") ||
+    m.includes("custom api server url is missing a hostname") ||
+    m.includes("custom api server url resolved to a private or loopback address")
+  );
+}
+
 function normalizeApiKey(raw: string | undefined): string | null {
   const v = (raw ?? "").trim();
   return v ? v : null;
@@ -1139,7 +1161,13 @@ export async function generateVoxelBuild(
       };
     } catch (err) {
       lastError = err instanceof Error ? err.message : "Provider request failed";
-      if (!providerRequestStarted) break;
+      // Retry transient work that failed safely before an outbound request
+      if (
+        !providerRequestStarted &&
+        isDeterministicProviderPreflightError(lastError)
+      ) {
+        break;
+      }
       // Avoid expensive duplicate retries when the upstream likely processed work
       // but the client timed out waiting for headers/body.
       if (isBilledTimeoutStyleProviderError(lastError)) break;

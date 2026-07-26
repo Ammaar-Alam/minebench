@@ -156,6 +156,11 @@ benchmarked before a counter existed omits the field and the popover renders "No
 tracked" rather than a total that undercounts real history. See
 `docs/voxel-exec-raw-output.md` for the raw-artifact layout.
 
+Legacy outer-attempt counters are not provider-call evidence, and requested
+fallback traces are not accepted-configuration evidence. Resuming an older
+ledger leaves those metrics untracked unless complete logs support an explicit
+migration.
+
 ## 8. Test
 
 Add a provider config test under `tests/unit/providers/` modelled on

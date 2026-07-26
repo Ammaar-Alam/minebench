@@ -33,9 +33,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   assert.equal(typeof init.body, "string", "Provider request body should be serialized JSON");
 
   const url = String(input);
+  const body = JSON.parse(init.body as string) as Record<string, unknown>;
   capturedRequests.push({
     url,
-    body: JSON.parse(init.body as string) as Record<string, unknown>,
+    body,
   });
 
   if (url.includes("/chat/completions")) {
@@ -48,6 +49,17 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
         headers: { "Content-Type": "application/json" },
       },
     );
+  }
+
+  if (body.stream === true) {
+    const event = JSON.stringify({
+      type: "response.output_text.done",
+      text: validBuildJson(),
+    });
+    return new Response(`data: ${event}\n\ndata: [DONE]\n\n`, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
   }
 
   return new Response(
@@ -111,6 +123,10 @@ async function main() {
   });
   assert.equal(directResult.acceptedOutputTokens, 128_000);
   assert.equal(directResult.providerRoute, "direct");
+  assert.ok(
+    directResult.requestConfiguration?.includes("api_mode=responses_sync"),
+    "synchronous Responses runs should record their execution mode",
+  );
 
   const request = capturedRequests.find((candidate) =>
     candidate.url.includes("api.openai.com/v1/responses"),
@@ -133,6 +149,56 @@ async function main() {
       trace.includes("temperature=default"),
     ),
     "direct trace should report the output cap, max reasoning fallback, pro mode, and default sampling",
+  );
+
+  process.env.OPENAI_USE_BACKGROUND_MODE = "1";
+  const backgroundResult = await generateVoxelBuild({
+    modelKey: "openai_gpt_5_6_sol",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    enableTools: false,
+    providerKeys: { openai: "test-openai-key" },
+    allowServerKeys: false,
+  });
+  assert.ok(
+    backgroundResult.requestConfiguration?.includes(
+      "api_mode=responses_background",
+    ),
+    "background Responses runs should record their execution mode",
+  );
+  assert.notEqual(
+    backgroundResult.requestConfiguration,
+    directResult.requestConfiguration,
+    "background and synchronous runs must not share a benchmark fingerprint",
+  );
+  const backgroundRequest = capturedRequests.find(
+    (candidate) =>
+      candidate.url.includes("api.openai.com/v1/responses") &&
+      candidate.body.background === true,
+  )?.body;
+  assert.ok(backgroundRequest, "OpenAI background request should be captured");
+  assert.equal(backgroundRequest.store, true);
+  process.env.OPENAI_USE_BACKGROUND_MODE = "0";
+
+  const streamedResult = await generateVoxelBuild({
+    modelKey: "openai_gpt_5_6_sol",
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    enableTools: false,
+    providerKeys: { openai: "test-openai-key" },
+    allowServerKeys: false,
+    onDelta: () => undefined,
+  });
+  assert.ok(
+    streamedResult.requestConfiguration?.includes("api_mode=responses_stream"),
+    "streamed Responses runs should record their execution mode",
+  );
+  assert.notEqual(
+    streamedResult.requestConfiguration,
+    directResult.requestConfiguration,
+    "streamed and synchronous runs must not share a benchmark fingerprint",
   );
 
   const openRouterTraces: string[] = [];

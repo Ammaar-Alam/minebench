@@ -45,7 +45,7 @@ const castleJson = JSON.stringify(
   2,
 );
 const effectiveRequestConfiguration =
-  "Request config: api_mode=responses, max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=reasoning=max, temperature=default, text_verbosity=high, response_format=json_schema.";
+  "Request config: api_mode=responses_sync, max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=reasoning=max, temperature=default, text_verbosity=high, response_format=json_schema.";
 const castleConfiguration = createBenchmarkRunConfiguration({
   promptText: castle.promptText!,
   providerRoute: "direct",
@@ -274,7 +274,7 @@ ledger.jobs["openai_gpt_5_6_sol/phoenix"] = {
   interruptedRunCount: 0,
   pendingSample: phoenixSample,
 };
-writeFileSync(ledgerPath, `${JSON.stringify({ version: 1, jobs: ledger.jobs }, null, 2)}\n`);
+writeFileSync(ledgerPath, `${JSON.stringify({ version: 2, jobs: ledger.jobs }, null, 2)}\n`);
 store.reconcile([castle, phoenix], new Date("2026-07-22T21:02:00.000Z"));
 assert.equal(
   readLedger().jobs["openai_gpt_5_6_sol/phoenix"]?.state,
@@ -315,6 +315,7 @@ store.finalizeSuccess(
       promptText: mixedRoute.promptText!,
       providerRoute: "openrouter",
       reasoningOverride: null,
+      requestConfiguration: effectiveRequestConfiguration,
       toolsEnabled: true,
     }),
   },
@@ -347,6 +348,8 @@ store.finalizeSuccess(
       promptText: mixedCap.promptText!,
       providerRoute: "direct",
       reasoningOverride: null,
+      requestConfiguration:
+        "Request config: api_mode=responses_sync, max_output_tokens=64000, reasoning_max_tokens=n/a, thinking_mode=reasoning=max, temperature=default, text_verbosity=high, response_format=json_schema.",
       toolsEnabled: true,
     }),
   },
@@ -495,5 +498,78 @@ assert.equal(summary?.providerCallCount, 0);
 assert.equal(summary?.completedAttemptCount, 0);
 assert.equal(summary?.failedAttemptCount, 0);
 assert.equal(summary?.failedRunCount, 1);
+
+const legacyRoot = mkdtempSync(join(tmpdir(), "minebench-legacy-benchmark-metrics-"));
+const legacyJob: BenchmarkMetricJob = {
+  ...job("legacy"),
+  filePath: join(legacyRoot, "uploads", "legacy", "legacy-gpt-5-6-sol.json"),
+};
+const legacyJson = JSON.stringify({
+  version: "1.0",
+  blocks: [{ x: 1, y: 2, z: 3, type: "stone" }],
+});
+mkdirSync(join(legacyRoot, "uploads", "legacy"), { recursive: true });
+writeFileSync(legacyJob.filePath, legacyJson);
+const legacyConfiguration = {
+  promptSha256: createHash("sha256").update(legacyJob.promptText!).digest("hex"),
+  providerRoute: "direct",
+  reasoningOverride: "max",
+  requestConfiguration:
+    "Request config: max_output_tokens=128000, thinking_mode=adaptive_effort=max->xhigh.",
+  toolsEnabled: true,
+};
+const legacyLedgerPath = join(legacyRoot, "uploads", ".benchmark-metrics.json");
+writeFileSync(
+  legacyLedgerPath,
+  `${JSON.stringify(
+    {
+      version: 1,
+      jobs: {
+        "openai_gpt_5_6_sol/legacy": {
+          state: "succeeded",
+          startedAt: "2026-07-22T18:00:00.000Z",
+          endedAt: "2026-07-22T18:01:00.000Z",
+          retryCount: 2,
+          totalAttemptCount: 3,
+          providerCallCount: 3,
+          completedAttemptCount: 3,
+          rejectedResponseCount: 2,
+          failedAttemptCount: 2,
+          failedRunCount: 0,
+          interruptedRunCount: 0,
+          sample: {
+            inferenceTimeMs: 60_000,
+            jsonBytes: Buffer.byteLength(legacyJson),
+            artifactSha256: createHash("sha256").update(legacyJson).digest("hex"),
+            attemptCount: 3,
+            acceptedOutputTokens: 128_000,
+            configuration: legacyConfiguration,
+          },
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`,
+);
+const legacyStore = new BenchmarkMetricsStore({
+  ledgerPath: legacyLedgerPath,
+  generatedMetricsPath: join(legacyRoot, "modelBenchmarkMetrics.generated.json"),
+});
+const legacyMetrics =
+  legacyStore.refreshGeneratedMetrics([legacyJob]).models.openai_gpt_5_6_sol;
+assert.equal(
+  legacyMetrics?.providerCallCount,
+  undefined,
+  "outer attempts from a version 1 ledger must not publish as provider calls",
+);
+assert.equal(legacyMetrics?.providerCallTrackingJobCount, undefined);
+assert.equal(
+  legacyMetrics?.configurationSampleCount,
+  0,
+  "requested fallback traces must not publish as accepted configurations",
+);
+assert.equal(legacyMetrics?.configurationIsConsistent, false);
+assert.equal(legacyMetrics?.averageInferenceMs, undefined);
 
 console.log("batch benchmark metric lifecycle checks passed");
