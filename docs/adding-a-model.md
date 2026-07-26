@@ -163,7 +163,8 @@ tracked" rather than a total that undercounts real history. See
 Legacy outer-attempt counters are not provider-call evidence, and requested
 fallback traces are not accepted-configuration evidence. Resuming an older
 ledger leaves those metrics untracked unless complete logs support an explicit
-migration.
+migration. A status refresh preserves the committed cohort measurements until
+every prompt has accepted configuration and output-cap provenance.
 
 ## 8. Test
 

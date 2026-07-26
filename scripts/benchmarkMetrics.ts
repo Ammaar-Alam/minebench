@@ -857,6 +857,8 @@ export class BenchmarkMetricsStore {
       const completeArtifacts = finalizedBuildCount === expectedBuildCount && expectedBuildCount > 0;
       const completeConfigurations =
         configuredSamples.length === expectedBuildCount && expectedBuildCount > 0;
+      const completeMeasurementProvenance =
+        completeConfigurations && outputCaps.length === expectedBuildCount;
       const configurationKeys = new Set(
         configuredSamples.map((sample) => comparableConfigurationKey(sample.configuration!)),
       );
@@ -902,19 +904,15 @@ export class BenchmarkMetricsStore {
       if (!completeArtifacts) continue;
 
       const previous = persisted.models[modelKey];
-      // Timing, configuration, and cap fields describe one measured cohort, so
-      // they refresh together only once every prompt has a timing sample
-      // Otherwise published values stay as recorded by the run that produced the
-      // full cohort
-      const completeTimingCohort =
-        timingSamples.length === expectedBuildCount && expectedBuildCount > 0;
+      // Replace cohort measurements together only with complete
+      // provider-accepted configuration and output-cap provenance
       const next: GeneratedModelBenchmarkMetrics = {
         inferenceSampleCount: metrics.inferenceSampleCount,
         ...previous,
         expectedBuildCount,
         finalizedBuildCount,
         averageJsonSizeBytes: metrics.averageJsonSizeBytes,
-        ...(completeTimingCohort
+        ...(completeMeasurementProvenance
           ? pickDefined(metrics, COHORT_MEASUREMENT_FIELDS)
           : {}),
         // Cumulative counters cover the job's whole history rather than one
@@ -922,7 +920,7 @@ export class BenchmarkMetricsStore {
         ...pickDefined(metrics, CUMULATIVE_COUNTER_FIELDS),
       };
 
-      if (completeTimingCohort) {
+      if (completeMeasurementProvenance) {
         for (const field of COHORT_MEASUREMENT_FIELDS) {
           if (metrics[field] === undefined) delete next[field];
         }

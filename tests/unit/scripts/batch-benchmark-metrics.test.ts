@@ -545,6 +545,14 @@ const legacyConfiguration = {
   toolsEnabled: true,
 };
 const legacyLedgerPath = join(legacyRoot, "uploads", ".benchmark-metrics.json");
+const legacyGeneratedMetricsPath = join(
+  legacyRoot,
+  "modelBenchmarkMetrics.generated.json",
+);
+writeFileSync(
+  legacyGeneratedMetricsPath,
+  `${JSON.stringify(committedMetrics, null, 2)}\n`,
+);
 writeFileSync(
   legacyLedgerPath,
   `${JSON.stringify(
@@ -580,7 +588,7 @@ writeFileSync(
 );
 const legacyStore = new BenchmarkMetricsStore({
   ledgerPath: legacyLedgerPath,
-  generatedMetricsPath: join(legacyRoot, "modelBenchmarkMetrics.generated.json"),
+  generatedMetricsPath: legacyGeneratedMetricsPath,
 });
 const legacyMetrics =
   legacyStore.refreshGeneratedMetrics([legacyJob]).models.openai_gpt_5_6_sol;
@@ -597,5 +605,27 @@ assert.equal(
 );
 assert.equal(legacyMetrics?.configurationIsConsistent, false);
 assert.equal(legacyMetrics?.averageInferenceMs, undefined);
+const migratedGeneratedMetrics = JSON.parse(
+  readFileSync(legacyGeneratedMetricsPath, "utf8"),
+) as {
+  models: {
+    openai_gpt_5_6_sol: Record<string, number | boolean>;
+  };
+};
+assert.equal(
+  migratedGeneratedMetrics.models.openai_gpt_5_6_sol.averageInferenceMs,
+  456_000,
+  "a legacy ledger must not erase committed timing",
+);
+assert.equal(
+  migratedGeneratedMetrics.models.openai_gpt_5_6_sol.outputCapTokens,
+  128_000,
+  "a legacy ledger must not erase the committed output cap",
+);
+assert.equal(
+  migratedGeneratedMetrics.models.openai_gpt_5_6_sol.configurationSampleCount,
+  1,
+  "a legacy ledger must preserve the committed configuration cohort",
+);
 
 console.log("batch benchmark metric lifecycle checks passed");
