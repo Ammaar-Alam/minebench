@@ -10,6 +10,12 @@ import {
   databaseUnavailableHeaders,
   isDatabaseUnavailableError,
 } from "@/lib/db/errors";
+import {
+  SANDBOX_COMPARISON_MODEL_PARAMS,
+  SANDBOX_COMPARISON_SLOTS,
+  type SandboxComparisonSelection,
+  normalizeSandboxComparisonSelection,
+} from "@/lib/sandbox/benchmarkComparison";
 import { prisma } from "@/lib/prisma";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 
@@ -63,34 +69,9 @@ type BenchmarkResponse = {
     text: string;
   } | null;
   models: ModelOption[];
-  selectedModels: {
-    a: string | null;
-    b: string | null;
-  };
-  builds: {
-    a: BenchmarkBuild | null;
-    b: BenchmarkBuild | null;
-  };
+  selectedModels: SandboxComparisonSelection<string | null>;
+  builds: SandboxComparisonSelection<BenchmarkBuild | null>;
 };
-
-function pickPair(models: ModelOption[], requestedA?: string, requestedB?: string) {
-  if (models.length < 2) return { a: null as string | null, b: null as string | null };
-
-  const has = (key: string | undefined) => Boolean(key && models.some((m) => m.key === key));
-  const first = models[0]?.key ?? null;
-  const second = models[1]?.key ?? null;
-
-  let a = has(requestedA) ? (requestedA as string) : first;
-  let b = has(requestedB) ? (requestedB as string) : null;
-
-  if (!a) return { a: null, b: null };
-  if (!b || b === a) {
-    b = models.find((m) => m.key !== a)?.key ?? null;
-  }
-
-  if (!b) return { a: null, b: null };
-  return { a, b };
-}
 
 function shouldInlineInAdaptiveMode(hints: ArenaBuildLoadHints): boolean {
   if (getInitialAdaptiveDeliveryClass(hints) !== "inline") return false;
@@ -107,8 +88,12 @@ export async function GET(req: Request) {
   try {
     const url = new URL(req.url);
     const requestedPromptId = url.searchParams.get("promptId") ?? undefined;
-    const requestedModelA = url.searchParams.get("modelA") ?? undefined;
-    const requestedModelB = url.searchParams.get("modelB") ?? undefined;
+    const requestedModels = Object.fromEntries(
+      SANDBOX_COMPARISON_SLOTS.map((slot) => [
+        slot,
+        url.searchParams.get(SANDBOX_COMPARISON_MODEL_PARAMS[slot]) ?? undefined,
+      ]),
+    ) as Partial<SandboxComparisonSelection<string | undefined>>;
 
     const grouped = await prisma.build.groupBy({
       by: ["promptId", "modelId"],
@@ -188,17 +173,23 @@ export async function GET(req: Request) {
       eloRating: Number(m.eloRating),
     }));
 
-    const selection = pickPair(models, requestedModelA, requestedModelB);
+    const selection = normalizeSandboxComparisonSelection(
+      models.map((model) => model.key),
+      requestedModels,
+    );
     const modelIdByKey = new Map(modelRows.map((m) => [m.key, m.id]));
-    const selectedModelAId = selection.a ? modelIdByKey.get(selection.a) ?? null : null;
-    const selectedModelBId = selection.b ? modelIdByKey.get(selection.b) ?? null : null;
+    const selectedModelIds = SANDBOX_COMPARISON_SLOTS.flatMap((slot) => {
+      const modelKey = selection[slot];
+      const modelId = modelKey ? modelIdByKey.get(modelKey) : null;
+      return modelId ? [modelId] : [];
+    });
 
     const compatiblePromptIds =
-      selectedModelAId && selectedModelBId
+      selectedModelIds.length >= 2
         ? promptOptions
             .filter((p) => {
               const ids = modelIdsByPromptId.get(p.id);
-              return Boolean(ids?.has(selectedModelAId) && ids?.has(selectedModelBId));
+              return Boolean(ids && selectedModelIds.every((modelId) => ids.has(modelId)));
             })
             .map((p) => p.id)
         : [];
@@ -209,128 +200,102 @@ export async function GET(req: Request) {
         promptOptions[0]
       : promptOptions.find((p) => compatiblePromptIds.includes(p.id)) ?? promptOptions[0];
 
-    const [buildA, buildB] = await Promise.all([
-      selection.a
-        ? prisma.build.findFirst({
-            where: {
-              promptId: selectedPrompt.id,
-              gridSize: ARENA_GRID_SIZE,
-              palette: ARENA_PALETTE,
-              mode: ARENA_MODE,
-              model: { key: selection.a },
-            },
-            select: {
-              id: true,
-              gridSize: true,
-              palette: true,
-              mode: true,
-              blockCount: true,
-              generationTimeMs: true,
-              voxelByteSize: true,
-              voxelCompressedByteSize: true,
-              voxelSha256: true,
-              arenaBuildHints: true,
-              model: {
-                select: {
-                  key: true,
-                  provider: true,
-                  displayName: true,
-                  eloRating: true,
-                },
-              },
-            },
-          })
-        : null,
-      selection.b
-        ? prisma.build.findFirst({
-            where: {
-              promptId: selectedPrompt.id,
-              gridSize: ARENA_GRID_SIZE,
-              palette: ARENA_PALETTE,
-              mode: ARENA_MODE,
-              model: { key: selection.b },
-            },
-            select: {
-              id: true,
-              gridSize: true,
-              palette: true,
-              mode: true,
-              blockCount: true,
-              generationTimeMs: true,
-              voxelByteSize: true,
-              voxelCompressedByteSize: true,
-              voxelSha256: true,
-              arenaBuildHints: true,
-              model: {
-                select: {
-                  key: true,
-                  provider: true,
-                  displayName: true,
-                  eloRating: true,
-                },
-              },
-            },
-          })
-        : null,
-    ]);
+    const selectedModelKeys = SANDBOX_COMPARISON_SLOTS.flatMap((slot) => {
+      const modelKey = selection[slot];
+      return modelKey ? [modelKey] : [];
+    });
+    const selectedBuildRows = await prisma.build.findMany({
+      where: {
+        promptId: selectedPrompt.id,
+        gridSize: ARENA_GRID_SIZE,
+        palette: ARENA_PALETTE,
+        mode: ARENA_MODE,
+        model: { key: { in: selectedModelKeys } },
+      },
+      select: {
+        id: true,
+        gridSize: true,
+        palette: true,
+        mode: true,
+        blockCount: true,
+        generationTimeMs: true,
+        voxelByteSize: true,
+        voxelCompressedByteSize: true,
+        voxelSha256: true,
+        arenaBuildHints: true,
+        model: {
+          select: {
+            key: true,
+            provider: true,
+            displayName: true,
+            eloRating: true,
+          },
+        },
+      },
+    });
+    const buildByModelKey = new Map(
+      selectedBuildRows.map((build) => [build.model.key, build]),
+    );
+    const buildRows = SANDBOX_COMPARISON_SLOTS.map((slot) => {
+      const modelKey = selection[slot];
+      return modelKey ? buildByModelKey.get(modelKey) ?? null : null;
+    });
+    const builds = Object.fromEntries(
+      SANDBOX_COMPARISON_SLOTS.map((slot, index) => [slot, buildRows[index] ?? null]),
+    ) as SandboxComparisonSelection<(typeof buildRows)[number]>;
+    const hints = Object.fromEntries(
+      SANDBOX_COMPARISON_SLOTS.map((slot) => [
+        slot,
+        builds[slot] ? deriveArenaBuildLoadHints(builds[slot]) : null,
+      ]),
+    ) as SandboxComparisonSelection<ArenaBuildLoadHints | null>;
+    const shouldPrepare = Object.fromEntries(
+      SANDBOX_COMPARISON_SLOTS.map((slot) => {
+        const slotHints = hints[slot];
+        const shouldProbe = Boolean(slotHints && slotHints.initialEstimatedBytes == null);
+        return [slot, slotHints ? shouldInlineInAdaptiveMode(slotHints) || shouldProbe : false];
+      }),
+    ) as SandboxComparisonSelection<boolean>;
+    const prepared = Object.fromEntries(
+      SANDBOX_COMPARISON_SLOTS.map((slot) => [slot, null]),
+    ) as SandboxComparisonSelection<Awaited<ReturnType<typeof prepareArenaBuild>> | null>;
 
-    const hintsA = buildA ? deriveArenaBuildLoadHints(buildA) : null;
-    const hintsB = buildB ? deriveArenaBuildLoadHints(buildB) : null;
-    const shouldProbeA = Boolean(hintsA && hintsA.initialEstimatedBytes == null);
-    const shouldProbeB = Boolean(hintsB && hintsB.initialEstimatedBytes == null);
-    const shouldPrepareA = hintsA ? shouldInlineInAdaptiveMode(hintsA) || shouldProbeA : false;
-    const shouldPrepareB = hintsB ? shouldInlineInAdaptiveMode(hintsB) || shouldProbeB : false;
-
-    let preparedA: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
-    let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
-
-    if (shouldPrepareA || shouldPrepareB) {
+    if (SANDBOX_COMPARISON_SLOTS.some((slot) => shouldPrepare[slot])) {
       try {
-        const [buildAForPrepare, buildBForPrepare] = await Promise.all([
-          shouldPrepareA && buildA
-            ? prisma.build.findUnique({
-                where: { id: buildA.id },
-                select: {
-                  id: true,
-                  gridSize: true,
-                  palette: true,
-                  blockCount: true,
-                  voxelByteSize: true,
-                  voxelCompressedByteSize: true,
-                  voxelSha256: true,
-                  arenaBuildHints: true,
-                  voxelData: true,
-                  voxelStorageBucket: true,
-                  voxelStoragePath: true,
-                  voxelStorageEncoding: true,
-                },
-              })
-            : Promise.resolve(null),
-          shouldPrepareB && buildB
-            ? prisma.build.findUnique({
-                where: { id: buildB.id },
-                select: {
-                  id: true,
-                  gridSize: true,
-                  palette: true,
-                  blockCount: true,
-                  voxelByteSize: true,
-                  voxelCompressedByteSize: true,
-                  voxelSha256: true,
-                  arenaBuildHints: true,
-                  voxelData: true,
-                  voxelStorageBucket: true,
-                  voxelStoragePath: true,
-                  voxelStorageEncoding: true,
-                },
-              })
-            : Promise.resolve(null),
-        ]);
-
-        [preparedA, preparedB] = await Promise.all([
-          buildAForPrepare ? prepareArenaBuild(buildAForPrepare) : Promise.resolve(null),
-          buildBForPrepare ? prepareArenaBuild(buildBForPrepare) : Promise.resolve(null),
-        ]);
+        const prepareBuildIds = SANDBOX_COMPARISON_SLOTS.flatMap((slot) => {
+          const build = builds[slot];
+          return shouldPrepare[slot] && build ? [build.id] : [];
+        });
+        const buildsForPrepare = await prisma.build.findMany({
+          where: { id: { in: prepareBuildIds } },
+          select: {
+            id: true,
+            gridSize: true,
+            palette: true,
+            blockCount: true,
+            voxelByteSize: true,
+            voxelCompressedByteSize: true,
+            voxelSha256: true,
+            arenaBuildHints: true,
+            voxelData: true,
+            voxelStorageBucket: true,
+            voxelStoragePath: true,
+            voxelStorageEncoding: true,
+          },
+        });
+        const prepareBuildById = new Map(
+          buildsForPrepare.map((build) => [build.id, build]),
+        );
+        const preparedRows = await Promise.all(
+          SANDBOX_COMPARISON_SLOTS.map((slot) => {
+            const buildId = builds[slot]?.id;
+            const build = buildId ? prepareBuildById.get(buildId) : null;
+            return build ? prepareArenaBuild(build) : Promise.resolve(null);
+          }),
+        );
+        for (const [index, slot] of SANDBOX_COMPARISON_SLOTS.entries()) {
+          prepared[slot] = preparedRows[index] ?? null;
+        }
       } catch (err) {
         console.warn("sandbox benchmark inline prepare failed", err);
       }
@@ -405,10 +370,12 @@ export async function GET(req: Request) {
       },
       models,
       selectedModels: selection,
-      builds: {
-        a: toBenchmarkBuild(buildA, hintsA, preparedA),
-        b: toBenchmarkBuild(buildB, hintsB, preparedB),
-      },
+      builds: Object.fromEntries(
+        SANDBOX_COMPARISON_SLOTS.map((slot) => [
+          slot,
+          toBenchmarkBuild(builds[slot], hints[slot], prepared[slot]),
+        ]),
+      ) as SandboxComparisonSelection<BenchmarkBuild | null>,
     };
 
     return NextResponse.json(body, { headers: { "Cache-Control": "no-store" } });
