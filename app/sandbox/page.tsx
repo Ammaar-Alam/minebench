@@ -42,7 +42,9 @@ export default async function SandboxPage({
 }) {
   const sp = (await searchParams) ?? {};
   const promptParam = sp.prompt;
-  const prompt = typeof promptParam === "string" ? promptParam : undefined;
+  const hasComparisonState = sp.models !== undefined || sp.promptId !== undefined;
+  const prompt =
+    !hasComparisonState && typeof promptParam === "string" ? promptParam : undefined;
   return (
     <>
       <script

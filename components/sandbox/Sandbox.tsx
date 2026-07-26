@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { SandboxBenchmark } from "@/components/sandbox/SandboxBenchmark";
 import { SandboxLive } from "@/components/sandbox/SandboxLive";
+import { buildSandboxModePath, readSandboxUrlMode } from "@/lib/deepLinks";
 
 type SandboxMode = "benchmark" | "live";
 
@@ -63,18 +65,46 @@ function ModeSegmentedControl({
 }
 
 export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
+  const searchParams = useSearchParams();
+  const searchKey = searchParams.toString();
+  const livePrompt =
+    searchParams.get("prompt") ?? (searchKey ? undefined : initialPrompt);
   const [mode, setMode] = useState<SandboxMode>(() =>
-    initialPrompt && initialPrompt.trim() ? "live" : "benchmark",
+    readSandboxUrlMode(new URLSearchParams(searchKey)),
   );
+
+  useEffect(() => {
+    setMode(readSandboxUrlMode(new URLSearchParams(searchKey)));
+  }, [searchKey]);
+
+  function handleModeChange(nextMode: SandboxMode) {
+    setMode(nextMode);
+    const nextPath = buildSandboxModePath(
+      new URLSearchParams(window.location.search),
+      nextMode,
+    );
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (nextPath !== currentPath) {
+      window.history.pushState(null, "", nextPath);
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
         <span className="mb-eyebrow">Sandbox</span>
-        <ModeSegmentedControl value={mode} onChange={setMode} className="w-full sm:w-[360px]" />
+        <ModeSegmentedControl
+          value={mode}
+          onChange={handleModeChange}
+          className="w-full sm:w-[360px]"
+        />
       </div>
 
-      {mode === "benchmark" ? <SandboxBenchmark /> : <SandboxLive initialPrompt={initialPrompt} />}
+      {mode === "benchmark" ? (
+        <SandboxBenchmark />
+      ) : (
+        <SandboxLive key={livePrompt ?? "default"} initialPrompt={livePrompt} />
+      )}
     </div>
   );
 }

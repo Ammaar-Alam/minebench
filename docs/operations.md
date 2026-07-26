@@ -154,6 +154,13 @@ Reference prompt template:
 
 ### Public Routes
 
+- Sandbox comparison:
+  - `/sandbox?models=openai_gpt_5_6_sol,openai_gpt_5_5_pro&promptId=cmk5zdnbr0009kx270qtc8zh3`
+  - `models` preserves the order of two to four distinct model keys
+  - invalid model or prompt values are replaced with the canonical comparison state
+- Leaderboard build:
+  - `/leaderboard/anthropic_claude_opus_5?build=cms0r3yrd001al7adwbzwha24`
+  - invalid or model-mismatched build IDs are removed while the model page remains visible
 - `POST /api/generate`
   - body: `{ prompt, gridSize, palette, modelKeys, providerKeys? }`
   - response: `application/x-ndjson` stream (`hello`, `start`, `retry`, `delta`, `result`, `error`, `ping`)
