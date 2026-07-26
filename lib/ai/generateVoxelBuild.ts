@@ -1010,7 +1010,23 @@ export async function generateVoxelBuild(
   let acceptedOutputTokens: number | undefined;
   let providerRoute: "direct" | "openrouter" | undefined;
   let requestConfiguration: string | undefined;
-  const start = Date.now();
+  let callbackDurationMs = 0;
+  const start = performance.now();
+  const invokeCallback = <Args extends unknown[]>(
+    callback: ((...args: Args) => void) | undefined,
+    ...args: Args
+  ): void => {
+    if (!callback) return;
+    const callbackStartedAt = performance.now();
+    try {
+      callback(...args);
+    } finally {
+      // Caller persistence and logging are not model inference work
+      callbackDurationMs += performance.now() - callbackStartedAt;
+    }
+  };
+  const measuredInferenceTimeMs = (): number =>
+    Math.max(0, Math.round(performance.now() - start - callbackDurationMs));
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const user =
@@ -1025,7 +1041,7 @@ export async function generateVoxelBuild(
             ? `\n\nReminder: return ONLY the ${VOXEL_EXEC_TOOL_NAME} tool call JSON (not the build JSON).`
             : "");
 
-    if (attempt > 1) params.onRetry?.(attempt, lastError);
+    if (attempt > 1) invokeCallback(params.onRetry, attempt, lastError);
 
     let providerRequestStarted = false;
     try {
@@ -1041,8 +1057,12 @@ export async function generateVoxelBuild(
         allowServerKeys,
         preferOpenRouter: params.preferOpenRouter,
         signal: params.abortSignal,
-        onDelta: params.onDelta,
-        onProviderTrace: params.onProviderTrace,
+        onDelta: params.onDelta
+          ? (delta) => invokeCallback(params.onDelta, delta)
+          : undefined,
+        onProviderTrace: params.onProviderTrace
+          ? (message) => invokeCallback(params.onProviderTrace, message)
+          : undefined,
         onAcceptedOutputTokens: (tokens) => {
           acceptedOutputTokens = tokens;
         },
@@ -1053,16 +1073,17 @@ export async function generateVoxelBuild(
           requestConfiguration = configuration;
         },
         onProviderRequest: () => {
-          params.onProviderRequest?.(attempt);
+          invokeCallback(params.onProviderRequest, attempt);
           providerRequestStarted = true;
         },
       });
       previousText = text;
       try {
-        params.onRawResponse?.(attempt, text);
+        invokeCallback(params.onRawResponse, attempt, text);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        params.onProviderTrace?.(
+        invokeCallback(
+          params.onProviderTrace,
           `Raw response callback failed for attempt ${attempt}: ${message}`,
         );
       }
@@ -1147,7 +1168,7 @@ export async function generateVoxelBuild(
         continue;
       }
 
-      const generationTimeMs = Date.now() - start;
+      const generationTimeMs = measuredInferenceTimeMs();
       return {
         ok: true,
         build: spec.value,
@@ -1180,7 +1201,7 @@ export async function generateVoxelBuild(
     ok: false,
     error: lastError || "Generation failed",
     rawText: previousText,
-    generationTimeMs: Date.now() - start,
+    generationTimeMs: measuredInferenceTimeMs(),
     acceptedOutputTokens,
     providerRoute,
     requestConfiguration,

@@ -151,6 +151,10 @@ records the settings used for that response. New adapters must forward both
 callbacks from `ProviderTelemetryCallbacks`; do not infer either value from the
 requested fallback ladder.
 
+Inference timing excludes telemetry callbacks, including ledger and raw-response
+writes. A retry counts as a failed attempt only when its preceding attempt
+reached the outbound request boundary.
+
 A counter is published only once every job in the cohort tracked it, so a model
 benchmarked before a counter existed omits the field and the popover renders "Not
 tracked" rather than a total that undercounts real history. See

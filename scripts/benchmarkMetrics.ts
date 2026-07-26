@@ -576,8 +576,13 @@ export class BenchmarkMetricsStore {
   markRetry(job: BenchmarkMetricJob, attempt: number): void {
     this.updateRecord(job, (current) => {
       const retryCount = Math.max(current?.retryCount ?? 0, attempt - 1);
-      // Starting attempt N confirms attempts before N failed
-      const newlyFailed = retryCount - (current?.retryCount ?? 0);
+      const priorAttempt = attempt - 1;
+      // A retry fails only a preceding attempt that reached a provider request
+      const newlyFailed =
+        retryCount > (current?.retryCount ?? 0) &&
+        (current?.runAttemptCount ?? 0) >= priorAttempt
+          ? 1
+          : 0;
       return {
         ...this.ongoingRecord(current),
         ...rejectAttempt(current, attempt - 1),
@@ -688,8 +693,6 @@ export class BenchmarkMetricsStore {
     this.markCompletedAttempt(job, sample.attemptCount);
     this.updateRecord(job, (current) => {
       const retryCount = Math.max(0, sample.attemptCount - 1);
-      // Attempt transitions can be reconstructed but provider calls cannot
-      const unreportedFailures = Math.max(0, retryCount - (current?.retryCount ?? 0));
       return {
         ...carriedCounters(current),
         ...carriedRunState(current),
@@ -697,7 +700,6 @@ export class BenchmarkMetricsStore {
         startedAt: current?.startedAt ?? now.toISOString(),
         retryCount,
         runAttemptCount: sample.attemptCount,
-        failedAttemptCount: addToCounter(current, "failedAttemptCount", unreportedFailures),
         ownerPid: process.pid,
         sample: current?.sample,
         pendingSample: sample,

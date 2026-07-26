@@ -163,7 +163,11 @@ async function main() {
   const directTraces: string[] = [];
   const directAttempts: number[] = [];
   const directRawResponses: Array<{ attempt: number; rawText: string }> = [];
+  const callbackDelayMs = 75;
+  const delayedCallbackCount = 5;
+  const callbackWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
   queuedResponseTexts.push("not valid JSON", validBuildJson());
+  const directWallStartedAt = performance.now();
   const directResult = await generateVoxelBuild({
     modelKey: "anthropic_claude_opus_5",
     prompt: "small tower",
@@ -173,14 +177,27 @@ async function main() {
     enableTools: false,
     providerKeys: { anthropic: "test-anthropic-key" },
     allowServerKeys: false,
-    onProviderRequest: (attempt) => directAttempts.push(attempt),
+    onProviderRequest: (attempt) => {
+      Atomics.wait(callbackWaitBuffer, 0, 0, callbackDelayMs);
+      directAttempts.push(attempt);
+    },
     onRawResponse: (attempt, rawText) => {
+      Atomics.wait(callbackWaitBuffer, 0, 0, callbackDelayMs);
       directRawResponses.push({ attempt, rawText });
+    },
+    onRetry: () => {
+      Atomics.wait(callbackWaitBuffer, 0, 0, callbackDelayMs);
     },
     onProviderTrace: (message) => directTraces.push(message),
   });
+  const directWallTimeMs = performance.now() - directWallStartedAt;
 
   assert.equal(directResult.acceptedOutputTokens, 128_000);
+  assert.ok(
+    directWallTimeMs - directResult.generationTimeMs >=
+      callbackDelayMs * delayedCallbackCount - 40,
+    "synchronous telemetry callbacks must stay outside inference timing",
+  );
   assert.equal(
     directResult.requestConfiguration,
     "Request config: api_mode=messages, max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=adaptive_effort=max, temperature=default, text_verbosity=default, response_format=json_schema.",

@@ -499,6 +499,32 @@ assert.equal(summary?.completedAttemptCount, 0);
 assert.equal(summary?.failedAttemptCount, 0);
 assert.equal(summary?.failedRunCount, 1);
 
+const preflightRetries = job("preflight-retries");
+store.markRunning(preflightRetries);
+store.markRetry(preflightRetries, 2);
+store.markRetry(preflightRetries, 3);
+store.markFailed(preflightRetries, "hostname did not resolve");
+summary = store.summarize([preflightRetries]).get("openai_gpt_5_6_sol");
+assert.equal(summary?.providerCallCount, 0);
+assert.equal(summary?.completedAttemptCount, 0);
+assert.equal(summary?.failedAttemptCount, 0);
+assert.equal(summary?.failedRunCount, 1);
+
+const recoveredPreflightRetry = job("recovered-preflight-retry");
+store.markRunning(recoveredPreflightRetry);
+store.markRetry(recoveredPreflightRetry, 2);
+store.markProviderCall(recoveredPreflightRetry, 2);
+store.markCompletedAttempt(recoveredPreflightRetry, 2);
+store.finalizeSuccess(recoveredPreflightRetry, castleJson, {
+  inferenceTimeMs: 30_000,
+  attemptCount: 2,
+});
+summary = store.summarize([recoveredPreflightRetry]).get("openai_gpt_5_6_sol");
+assert.equal(summary?.providerCallCount, 1);
+assert.equal(summary?.completedAttemptCount, 1);
+assert.equal(summary?.failedAttemptCount, 0);
+assert.equal(summary?.failedRunCount, 0);
+
 const legacyRoot = mkdtempSync(join(tmpdir(), "minebench-legacy-benchmark-metrics-"));
 const legacyJob: BenchmarkMetricJob = {
   ...job("legacy"),
