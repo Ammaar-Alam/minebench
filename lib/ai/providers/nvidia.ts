@@ -5,6 +5,7 @@ import type { ClientRequest, IncomingHttpHeaders, RequestOptions } from "node:ht
 import net from "node:net";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type NvidiaChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -354,6 +355,7 @@ async function postToResolvedApi(params: {
   body: string;
   signal: AbortSignal;
   stream: boolean;
+  onProviderRequest?: () => void;
 }): Promise<NodeHttpResponse> {
   return await new Promise<NodeHttpResponse>((resolve, reject) => {
     if (params.signal.aborted) {
@@ -394,6 +396,7 @@ async function postToResolvedApi(params: {
       req.destroy(error);
     };
 
+    params.onProviderRequest?.();
     const req = (isHttps
       ? https.request(
           {
@@ -479,7 +482,7 @@ export async function openAiCompatibleGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const serviceLabel = params.serviceLabel ?? "Custom API";
   const apiKey = params.apiKey ?? process.env.CUSTOM_API_KEY;
   if (!apiKey) throw new Error(`Missing ${serviceLabel} API key`);
@@ -504,6 +507,7 @@ export async function openAiCompatibleGenerateText(params: {
         apiKey,
         signal: controller.signal,
         stream: Boolean(params.onDelta),
+        onProviderRequest: params.onProviderRequest,
         body: JSON.stringify({
           model: params.modelId,
           messages: [
@@ -566,6 +570,16 @@ export async function openAiCompatibleGenerateText(params: {
 
   const budget = selectedTokenBudget ?? maxTokens;
   params.onAcceptedOutputTokens?.(budget);
+  params.onAcceptedRequestConfiguration?.({
+    apiMode: "chat_completions",
+    maxOutputTokens: budget,
+    thinkingMode: params.reasoningEffort
+      ? `reasoning=${params.reasoningEffort}`
+      : "default",
+    temperature: params.temperature ?? 0.2,
+    textVerbosity: "default",
+    responseFormat: useStructuredOutput ? "json_schema" : "text",
+  });
   params.onTrace?.(
     withMaxOutputTokens(
       useStructuredOutput

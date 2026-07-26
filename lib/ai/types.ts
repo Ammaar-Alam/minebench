@@ -15,6 +15,25 @@ export type ProviderApiKeys = {
   custom?: string;
 };
 
+export type AcceptedProviderRequestConfiguration = {
+  apiMode: string;
+  maxOutputTokens: number;
+  reasoningMaxTokens?: number;
+  thinkingMode: string;
+  temperature: number | "default" | "n/a";
+  textVerbosity: string;
+  responseFormat: string;
+};
+
+export type ProviderTelemetryCallbacks = {
+  // Fired immediately before each outbound generation request
+  onProviderRequest?: () => void;
+  // Fired after the provider accepts the settings used for a response
+  onAcceptedRequestConfiguration?: (
+    configuration: AcceptedProviderRequestConfiguration,
+  ) => void;
+};
+
 export type GenerateModelRequest =
   | {
       id: string;

@@ -4,6 +4,7 @@ import generatedMetrics from "@/lib/ai/modelBenchmarkMetrics.generated.json";
 export type ModelRunParameter = {
   label: string;
   value: string;
+  detail?: string;
 };
 
 export type ModelRunParameters = readonly [ModelRunParameter, ...ModelRunParameter[]];
@@ -14,6 +15,8 @@ export type BenchmarkDuration = {
 
 export type BenchmarkCost = {
   usd: number;
+  // Completed responses covered by this cost snapshot
+  attemptCount?: number;
 };
 
 export type BenchmarkOutputCap =
@@ -41,6 +44,7 @@ export type ModelBenchmarkProfile = {
   averageInference?: BenchmarkDuration;
   averageJsonSizeBytes?: number;
   totalCost?: BenchmarkCost;
+  totalAttempts?: number;
   buildCount?: number;
   note?: string;
 };
@@ -102,6 +106,11 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning effort", value: "XHigh" },
   ],
   anthropic_claude_fable_5: [
+    { label: "Thinking", value: "Adaptive" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Provider default" },
+  ],
+  anthropic_claude_opus_5: [
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Provider default" },
@@ -307,6 +316,11 @@ const MODEL_BENCHMARK_METADATA: Partial<
     totalCost: { usd: 41.52 },
     buildCount: 15,
   },
+  anthropic_claude_opus_5: {
+    sourceRelease: "3.11.0",
+    totalCost: { usd: 89.97, attemptCount: 37 },
+    buildCount: 15,
+  },
   gemini_3_6_flash: {
     sourceRelease: "3.10.0",
     averageInference: { milliseconds: 101_900 },
@@ -376,10 +390,24 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
 };
 
+// Canonical shape of lib/ai/modelBenchmarkMetrics.generated.json, written by
+// scripts/benchmarkMetrics.ts and read here to build public profiles
+// Fields past the first three are optional because a model benchmarked before a
+// counter existed omits it, which the UI renders as "Not tracked"
 export type GeneratedModelBenchmarkMetrics = {
   expectedBuildCount: number;
   finalizedBuildCount: number;
   inferenceSampleCount: number;
+  // Attempts across the finalized cohort only, one accepted response per prompt
+  finalizedAttemptCount?: number;
+  // Provider calls issued, including calls that never returned model output
+  providerCallCount?: number;
+  providerCallTrackingJobCount?: number;
+  // Responses the provider returned, whether later accepted or rejected
+  completedAttemptCount?: number;
+  completedAttemptTrackingJobCount?: number;
+  // Returned responses that failed extraction, validation, or execution
+  rejectedResponseCount?: number;
   averageInferenceMs?: number;
   averageJsonSizeBytes?: number;
   outputCapTokens?: number;
@@ -387,6 +415,9 @@ export type GeneratedModelBenchmarkMetrics = {
   outputCapIsConsistent?: boolean;
   configurationSampleCount?: number;
   configurationIsConsistent?: boolean;
+  failedAttemptCount?: number;
+  failedRunCount?: number;
+  interruptedRunCount?: number;
 };
 
 const GENERATED_MODEL_METRICS = generatedMetrics.models as Partial<
@@ -442,6 +473,13 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
         generated &&
         generated.expectedBuildCount > 0 &&
         generated.inferenceSampleCount === generated.expectedBuildCount;
+      // Public attempts count every returned response, including rejected ones,
+      // so the cohort must have tracked all of its jobs
+      const generatedCompletedAttemptHistoryIsComplete =
+        generated &&
+        generated.expectedBuildCount > 0 &&
+        generated.completedAttemptTrackingJobCount === generated.expectedBuildCount &&
+        generated.completedAttemptCount !== undefined;
 
       return [
         modelKey,
@@ -457,6 +495,9 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
               : metadata?.averageInference,
           averageJsonSizeBytes:
             generatedIsComplete ? generated.averageJsonSizeBytes : undefined,
+          totalAttempts: generatedCompletedAttemptHistoryIsComplete
+            ? generated.completedAttemptCount
+            : undefined,
           buildCount:
             generatedIsComplete ? generated.finalizedBuildCount : metadata?.buildCount,
         },

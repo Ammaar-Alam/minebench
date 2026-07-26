@@ -2,6 +2,7 @@ import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { DeepSeekThinkingConfig } from "@/lib/ai/reasoningProfiles";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type DeepSeekChatResponse = {
   choices?: {
@@ -77,7 +78,7 @@ export async function deepseekGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("Missing DEEPSEEK_API_KEY");
 
@@ -96,6 +97,8 @@ export async function deepseekGenerateText(params: {
   let selectedTokenBudget: number | null = null;
   try {
     for (const tok of tokenBudgetCandidates(maxTokens)) {
+      controller.signal.throwIfAborted();
+      params.onProviderRequest?.();
       res = await fetch(url, {
         method: "POST",
         headers: {
@@ -155,6 +158,15 @@ export async function deepseekGenerateText(params: {
 
   const budget = selectedTokenBudget ?? maxTokens;
   params.onAcceptedOutputTokens?.(budget);
+  params.onAcceptedRequestConfiguration?.({
+    apiMode: "chat_completions",
+    maxOutputTokens: budget,
+    thinkingMode: describeThinkingConfig(thinkingConfig),
+    temperature:
+      thinkingConfig.type === "disabled" ? (params.temperature ?? 0.2) : "n/a",
+    textVerbosity: "default",
+    responseFormat: useJsonOutput ? "json_object" : "text",
+  });
   params.onTrace?.(
     withMaxOutputTokens(
       `DeepSeek reasoning mode in use: ${describeThinkingConfig(thinkingConfig)}; structured_output=${useJsonOutput ? "json_object" : "none"}.`,

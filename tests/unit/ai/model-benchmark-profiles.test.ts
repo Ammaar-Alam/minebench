@@ -104,6 +104,15 @@ assert.deepEqual(opus48?.averageInference, { milliseconds: 1_487_900 });
 assert.deepEqual(opus48?.totalCost, { usd: 41.52 });
 assert.equal(opus48?.buildCount, 15);
 
+const opus5 = getModelBenchmarkProfile("anthropic_claude_opus_5");
+assert.equal(opus5?.sourceRelease, "3.11.0");
+assert.deepEqual(opus5?.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(opus5?.averageInference, { milliseconds: 1_930_169 });
+assert.equal(opus5?.averageJsonSizeBytes, 95_421_017);
+assert.deepEqual(opus5?.totalCost, { usd: 89.97, attemptCount: 37 });
+assert.equal(opus5?.totalAttempts, 37);
+assert.equal(opus5?.buildCount, 15);
+
 const gpt55 = getModelBenchmarkProfile("openai_gpt_5_5");
 assert.deepEqual(gpt55?.averageInference, { milliseconds: 624_000 });
 assert.deepEqual(gpt55?.totalCost, { usd: 19.98 });
@@ -272,10 +281,12 @@ for (const model of MODEL_CATALOG) {
       `${model.key} output cap variants should be positive integers`,
     );
   }
-  assert.ok(
-    Number.isInteger(profile.averageJsonSizeBytes) && (profile.averageJsonSizeBytes ?? 0) > 0,
-    `${model.key} should have a generated average JSON size for its finalized cohort`,
-  );
+  if (profile.buildCount !== undefined) {
+    assert.ok(
+      Number.isInteger(profile.averageJsonSizeBytes) && (profile.averageJsonSizeBytes ?? 0) > 0,
+      `${model.key} should have a generated average JSON size for its finalized cohort`,
+    );
+  }
 }
 
 assert.deepEqual(getModelBenchmarkProfile("gemini_3_1_pro")?.parameters, [

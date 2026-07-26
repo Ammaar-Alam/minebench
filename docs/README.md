@@ -5,6 +5,7 @@ Use this index to find implementation-accurate docs for Arena ranking, generatio
 ## Guides
 
 - [Local Development](./local-development.md)
+- [Adding a Model](./adding-a-model.md)
 - [Operations and API Reference](./operations.md)
 - [Deployment](./deployment.md)
 - [Build Export and Import Guide](./build-export-import.md)

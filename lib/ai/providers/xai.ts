@@ -1,4 +1,5 @@
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 export function xaiRequestConfigForModel(
   modelId: string,
@@ -29,7 +30,7 @@ export async function xaiGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.XAI_API_KEY;
   if (!apiKey) throw new Error("Missing XAI_API_KEY");
 
@@ -55,5 +56,7 @@ export async function xaiGenerateText(params: {
     onDelta: params.onDelta,
     onTrace: params.onTrace,
     onAcceptedOutputTokens: params.onAcceptedOutputTokens,
+    onProviderRequest: params.onProviderRequest,
+    onAcceptedRequestConfiguration: params.onAcceptedRequestConfiguration,
   });
 }

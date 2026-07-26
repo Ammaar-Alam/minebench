@@ -1,4 +1,6 @@
-export type AnthropicAdaptiveEffort = "low" | "medium" | "high" | "xhigh" | "max";
+import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
+
+export type AnthropicAdaptiveEffort = ClaudeEffort;
 export type GeminiThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 export type GeminiThinkingConfig = {
@@ -25,74 +27,20 @@ function isGemini3FlashFamily(modelId: string): boolean {
   return /(?:^|\/)gemini-3(?:[.-]\d+)?-flash/.test(modelId);
 }
 
-function isAnthropicFableOrMythos5(modelId: string): boolean {
-  return /(?:^|\/)claude-(?:fable|mythos)-5(?:[.-]|$)/.test(modelId);
-}
-
-function isAnthropicSonnet5(modelId: string): boolean {
-  return /(?:^|\/)claude-sonnet-5(?:[.-]|$)/.test(modelId);
-}
-
-function anthropicClaudeVersion(modelId: string): { major: number; minor: number } | null {
-  const match = /(?:^|\/)claude-(?:opus|sonnet)-(\d+)[.-](\d+)(?:[.-]|$)/.exec(modelId);
-  if (!match) return null;
-  const major = Number.parseInt(match[1] ?? "", 10);
-  const minor = Number.parseInt(match[2] ?? "", 10);
-  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
-  return { major, minor };
-}
-
-function isAnthropicAdaptiveModel(modelId: string): boolean {
-  if (isAnthropicSonnet5(modelId)) return true;
-  if (isAnthropicFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.major > 4 || (version.major === 4 && version.minor >= 6);
-}
-
-function supportsAnthropicXhighEffort(modelId: string): boolean {
-  if (isAnthropicSonnet5(modelId)) return true;
-  if (isAnthropicFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.major > 4 || (version.major === 4 && version.minor >= 7);
-}
-
-function anthropicAdaptiveEffortEnvVar(modelId: string): string | null {
-  if (isAnthropicFableOrMythos5(modelId)) return "ANTHROPIC_FABLE_5_EFFORT";
-  if (isAnthropicSonnet5(modelId)) return "ANTHROPIC_SONNET_5_EFFORT";
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return null;
-  if (modelId.includes("claude-opus-4") && version.major === 4 && version.minor === 8) {
-    return "ANTHROPIC_OPUS_4_8_EFFORT";
-  }
-  if (modelId.includes("claude-opus-4") && version.major === 4 && version.minor === 7) {
-    return "ANTHROPIC_OPUS_4_7_EFFORT";
-  }
-  if (modelId.includes("claude-opus-4") && version.major === 4 && version.minor === 6) {
-    return "ANTHROPIC_OPUS_4_6_EFFORT";
-  }
-  if (modelId.includes("claude-sonnet-4") && version.major === 4 && version.minor === 6) {
-    return "ANTHROPIC_SONNET_4_6_EFFORT";
-  }
-  return null;
-}
-
+// Explicit override passes through so an unsupported value raises
+// Env override degrades to the model's highest level instead, since it is a
+// run-wide default that should not fail a model capping lower
 function anthropicAdaptiveEffortOverride(modelId: string, override?: string): string | undefined {
   const normalizedOverride = normalizeReasoningOverride(override);
   if (normalizedOverride) return normalizedOverride;
 
-  const envVar = anthropicAdaptiveEffortEnvVar(modelId);
-  const normalizedEnv = envVar ? normalizeReasoningOverride(process.env[envVar]) : undefined;
+  const { effortLadder, effortEnvVar } = claudeCapabilities(modelId);
+  const normalizedEnv = effortEnvVar
+    ? normalizeReasoningOverride(process.env[effortEnvVar])
+    : undefined;
   if (!normalizedEnv) return undefined;
-  if (normalizedEnv === "low" || normalizedEnv === "medium" || normalizedEnv === "high") {
-    return normalizedEnv;
-  }
-  if (normalizedEnv === "xhigh") {
-    return supportsAnthropicXhighEffort(modelId) ? "xhigh" : "high";
-  }
-  if (normalizedEnv === "max") return "max";
-  return undefined;
+  if (effortLadder.some((effort) => effort === normalizedEnv)) return normalizedEnv;
+  return effortLadder[0];
 }
 
 function descendingAttempts<T extends string>(
@@ -151,25 +99,34 @@ export function openAiReasoningEffortAttempts(
   return undefined;
 }
 
+// Shared by the direct Anthropic route and the OpenRouter fallback so both
+// descend the same effort ladder for a given model
+function anthropicAdaptiveAttempts(
+  label: string,
+  modelId: string,
+  override?: string,
+): AnthropicAdaptiveEffort[] {
+  return descendingAttempts(
+    label,
+    claudeCapabilities(modelId).effortLadder,
+    anthropicAdaptiveEffortOverride(modelId, override),
+  );
+}
+
 export function anthropicAdaptiveEffortAttempts(
   modelId: string,
   override?: string,
 ): AnthropicAdaptiveEffort[] | undefined {
-  if (!isAnthropicAdaptiveModel(modelId)) {
+  const label = `Anthropic model ${modelId}`;
+  if (!claudeCapabilities(modelId).adaptiveThinking) {
     const normalized = normalizeReasoningOverride(override);
     if (normalized) {
-      throw new Error(`Anthropic model ${modelId} does not expose an adaptive effort override.`);
+      throw new Error(`${label} does not expose an adaptive effort override.`);
     }
     return undefined;
   }
 
-  return descendingAttempts(
-    `Anthropic model ${modelId}`,
-    supportsAnthropicXhighEffort(modelId)
-      ? ["max", "xhigh", "high", "medium", "low"]
-      : ["max", "high", "medium", "low"],
-    anthropicAdaptiveEffortOverride(modelId, override),
-  );
+  return anthropicAdaptiveAttempts(label, modelId, override);
 }
 
 export function geminiThinkingConfigForModel(
@@ -390,14 +347,8 @@ export function openRouterReasoningEffortAttempts(
   if (modelId.startsWith("openai/gpt-5")) {
     return descendingAttempts(label, ["xhigh", "high"], override);
   }
-  if (isAnthropicAdaptiveModel(modelId)) {
-    return descendingAttempts(
-      label,
-      supportsAnthropicXhighEffort(modelId)
-        ? ["max", "xhigh", "high", "medium", "low"]
-        : ["max", "high", "medium", "low"],
-      anthropicAdaptiveEffortOverride(modelId, override),
-    );
+  if (claudeCapabilities(modelId).adaptiveThinking) {
+    return anthropicAdaptiveAttempts(label, modelId, override);
   }
   if (modelId === "z-ai/glm-5.2") {
     const normalized = normalizeReasoningOverride(override);

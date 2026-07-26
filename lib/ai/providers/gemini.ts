@@ -2,6 +2,7 @@ import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { GeminiThinkingConfig } from "@/lib/ai/reasoningProfiles";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -106,7 +107,7 @@ export async function geminiGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for Gemini JSON mode");
@@ -154,6 +155,8 @@ export async function geminiGenerateText(params: {
       };
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (params.onDelta) headers.Accept = "text/event-stream";
+      controller.signal.throwIfAborted();
+      params.onProviderRequest?.();
       res = await fetch(url, {
         method: "POST",
         headers,
@@ -178,6 +181,23 @@ export async function geminiGenerateText(params: {
 
     const budget = successBudget ?? basePayload.generationConfig.maxOutputTokens;
     params.onAcceptedOutputTokens?.(budget);
+    params.onAcceptedRequestConfiguration?.({
+      apiMode: method,
+      maxOutputTokens: budget,
+      ...(typeof thinkingConfig?.thinkingBudget === "number"
+        ? { reasoningMaxTokens: thinkingConfig.thinkingBudget }
+        : {}),
+      thinkingMode: thinkingConfig?.thinkingLevel
+        ? `thinking_level=${thinkingConfig.thinkingLevel}`
+        : typeof thinkingConfig?.thinkingBudget === "number"
+          ? `thinking_budget=${thinkingConfig.thinkingBudget}`
+          : "default",
+      temperature: usesDefaultSampling(params.modelId)
+        ? "default"
+        : (params.temperature ?? 0.2),
+      textVerbosity: "default",
+      responseFormat: "json_schema",
+    });
     params.onTrace?.(withMaxOutputTokens(thinkingConfigLine, budget));
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {

@@ -1,6 +1,7 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
 import { extractBestVoxelBuildJson, extractFirstJsonObject } from "@/lib/ai/jsonExtract";
+import { modelOutputCeiling, modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { getModelByKey, ModelKey, ModelCatalogEntry } from "@/lib/ai/modelCatalog";
 import { makeVoxelBuildJsonSchema } from "@/lib/ai/voxelBuildJsonSchema";
@@ -31,7 +32,11 @@ import {
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
-import type { ProviderApiKeys } from "@/lib/ai/types";
+import type {
+  AcceptedProviderRequestConfiguration,
+  ProviderApiKeys,
+  ProviderTelemetryCallbacks,
+} from "@/lib/ai/types";
 import { DEFAULT_MAX_OUTPUT_TOKENS } from "@/lib/ai/tokenBudgets";
 import {
   runVoxelExec,
@@ -50,88 +55,11 @@ function parseOptionalIntEnvVar(name: string): number | undefined {
   return Math.floor(parsed);
 }
 
-function defaultOutputTokenRequestForModel(modelId: string): number | undefined {
-  if (modelId === "kimi-k3" || modelId === "moonshotai/kimi-k3") return 1_048_576;
-  if (modelId === "grok-4.5" || modelId === "x-ai/grok-4.5") return 500_000;
-  if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
-  if (
-    modelId === "deepseek-v4-pro" ||
-    modelId === "deepseek-v4-flash" ||
-    modelId === "deepseek/deepseek-v4-pro" ||
-    modelId === "deepseek/deepseek-v4-flash"
-  ) {
-    return 384_000;
-  }
-  return undefined;
-}
-
-function maxOutputTokenCapForModel(modelId: string): number | undefined {
-  // OpenAI's GPT-5 family models use max_output_tokens as a total
-  // generation budget that includes reasoning tokens. Most GPT-5 variants in
-  // MineBench are currently capped at 128k output tokens, with the older
-  // gpt-5-pro alias remaining at 272k.
-  if (modelId === "gpt-5-pro") return 272_000;
-  if (modelId.startsWith("gpt-5")) return 128_000;
-  if (modelId === "kimi-k3" || modelId === "moonshotai/kimi-k3") return 1_048_576;
-  if (
-    modelId === "gemini-3.6-flash" ||
-    modelId === "google/gemini-3.6-flash" ||
-    modelId === "gemini-3.5-flash-lite" ||
-    modelId === "google/gemini-3.5-flash-lite" ||
-    modelId === "gemini-3.5-flash" ||
-    modelId === "google/gemini-3.5-flash" ||
-    modelId === "gemini-3-flash-preview" ||
-    modelId === "google/gemini-3-flash-preview"
-  ) {
-    return 65_536;
-  }
-  if (modelId === "grok-4.3" || modelId === "x-ai/grok-4.3") return 1_000_000;
-  if (modelId === "grok-4.5" || modelId === "x-ai/grok-4.5") return 500_000;
-  if (
-    modelId === "deepseek-v4-pro" ||
-    modelId === "deepseek-v4-flash" ||
-    modelId === "deepseek/deepseek-v4-pro" ||
-    modelId === "deepseek/deepseek-v4-flash"
-  ) {
-    return 384_000;
-  }
-  if (modelId === "deepseek/deepseek-v3.2") return 65_536;
-  if (modelId === "glm-5.2" || modelId === "glm-5.1" || modelId === "glm-5") {
-    return 131_072;
-  }
-  if (
-    modelId === "claude-fable-5" ||
-    modelId === "anthropic/claude-fable-5" ||
-    modelId === "claude-sonnet-5" ||
-    modelId === "anthropic/claude-sonnet-5" ||
-    modelId.startsWith("claude-opus-4-8") ||
-    modelId === "anthropic/claude-opus-4.8" ||
-    modelId.startsWith("claude-opus-4-7") ||
-    modelId === "anthropic/claude-opus-4.7"
-  ) {
-    return 128_000;
-  }
-  // MiniMax M2.7's OpenAI-compatible route rejects the larger MineBench default
-  // output budgets. Keep a lower completion budget so the prompt plus output
-  // stays within the model's effective request limit.
-  if (modelId === "MiniMax-M2.7") return 131_072;
-  if (
-    modelId === "grok-4-1-fast" ||
-    modelId === "grok-4-1-fast-reasoning" ||
-    modelId === "x-ai/grok-4.1-fast"
-  ) {
-    return 30_000;
-  }
-  return undefined;
-}
-
 function defaultMaxOutputTokens(_gridSize: 64 | 256 | 512, modelId: string): number {
+  const ceiling = modelOutputCeiling(modelId);
   const requested =
-    parseOptionalIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS) ??
-    defaultOutputTokenRequestForModel(modelId) ??
-    DEFAULT_MAX_OUTPUT_TOKENS;
-  const cap = maxOutputTokenCapForModel(modelId);
-  return typeof cap === "number" ? Math.min(requested, cap) : requested;
+    parseOptionalIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS) ?? ceiling ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  return ceiling === undefined ? requested : Math.min(requested, ceiling);
 }
 
 function defaultMaxReasoningTokens(modelId: string, maxOutputTokens: number): number | undefined {
@@ -160,21 +88,17 @@ function formatOptionalInteger(value: number | undefined): string {
   return String(Math.floor(value));
 }
 
-function usesDefaultSamplingForModel(modelId: string): boolean {
-  const normalized = modelId.toLowerCase();
+function acceptedProviderRequestConfigurationLine(
+  configuration: AcceptedProviderRequestConfiguration,
+): string {
   return (
-    normalized.startsWith("gpt-5.6") ||
-    normalized.startsWith("openai/gpt-5.6") ||
-    normalized === "kimi-k3" ||
-    normalized === "moonshotai/kimi-k3" ||
-    normalized === "google/gemini-3.6-flash" ||
-    normalized === "google/gemini-3.5-flash-lite" ||
-    normalized === "claude-fable-5" ||
-    normalized === "anthropic/claude-fable-5" ||
-    normalized === "claude-sonnet-5" ||
-    normalized === "anthropic/claude-sonnet-5" ||
-    /^claude-opus-4-(?:7|8)(?:-|$)/.test(normalized) ||
-    /^anthropic\/claude-opus-4[.-](?:7|8)(?:$|[-:])/.test(normalized)
+    `Request config: api_mode=${configuration.apiMode}, ` +
+    `max_output_tokens=${configuration.maxOutputTokens}, ` +
+    `reasoning_max_tokens=${formatOptionalInteger(configuration.reasoningMaxTokens)}, ` +
+    `thinking_mode=${configuration.thinkingMode}, ` +
+    `temperature=${configuration.temperature}, ` +
+    `text_verbosity=${configuration.textVerbosity}, ` +
+    `response_format=${configuration.responseFormat}.`
   );
 }
 
@@ -296,7 +220,7 @@ function providerRequestTraceLine(opts: {
         : 0.6
       : opts.route === "direct" && opts.provider === "gemini" && opts.modelId.startsWith("gemini-3")
       ? "default"
-      : usesDefaultSamplingForModel(opts.modelId)
+      : modelUsesDefaultSampling(opts.modelId)
       ? "default"
       : DEFAULT_TEMPERATURE;
   return `Request config: max_output_tokens=${Math.floor(opts.maxOutputTokens)}, reasoning_max_tokens=${formatOptionalInteger(opts.reasoningMaxTokens)}, thinking_mode=${thinkingMode}, temperature=${temperature}.`;
@@ -344,6 +268,28 @@ function isDeterministicStructuredSchemaProviderError(message: string): boolean 
     (m.includes("json_schema") && m.includes("not supported")) ||
     (m.includes("structured output") && m.includes("not supported")) ||
     (m.includes("structured output") && m.includes("invalid"))
+  );
+}
+
+function isDeterministicProviderPreflightError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.startsWith("missing ") ||
+    m.includes("no openrouter api key is available") ||
+    m.includes("does not support reasoning") ||
+    m.includes("does not expose a reasoning") ||
+    m.includes("does not expose an adaptive effort") ||
+    m.includes("does not expose a thinking override") ||
+    m.includes("reasons automatically and does not support") ||
+    m.includes("routing is unavailable") ||
+    m.includes("not integrated with openrouter") ||
+    m.includes("no openrouter model id configured") ||
+    m.includes("direct api not supported") ||
+    m.includes("fail-closed reasoning") ||
+    m.includes("invalid custom api server url") ||
+    m.includes("custom api server url must ") ||
+    m.includes("custom api server url is missing a hostname") ||
+    m.includes("custom api server url resolved to a private or loopback address")
   );
 }
 
@@ -482,7 +428,11 @@ export type GenerateVoxelBuildParams = {
   preferOpenRouter?: boolean;
   reasoning?: string;
   abortSignal?: AbortSignal;
+  // Fired immediately before every outbound generation request
+  onProviderRequest?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => void;
+  // Fired after response text returns and before parsing or execution
+  onRawResponse?: (attempt: number, rawText: string) => void;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
 };
@@ -496,6 +446,7 @@ export type GenerateVoxelBuildResult =
       generationTimeMs: number;
       acceptedOutputTokens?: number;
       providerRoute?: "direct" | "openrouter";
+      requestConfiguration?: string;
       rawText: string;
     }
   | {
@@ -505,6 +456,7 @@ export type GenerateVoxelBuildResult =
       generationTimeMs: number;
       acceptedOutputTokens?: number;
       providerRoute?: "direct" | "openrouter";
+      requestConfiguration?: string;
     };
 
 // call the direct provider (OpenAI, Anthropic, etc.)
@@ -538,7 +490,7 @@ async function callDirectProvider(args: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
       modelId: args.modelId,
@@ -554,6 +506,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -571,6 +525,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -588,6 +544,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -604,6 +562,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -621,6 +581,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -638,6 +600,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -655,6 +619,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -680,6 +646,8 @@ async function callDirectProvider(args: {
       onDelta: args.onDelta,
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
 
@@ -687,7 +655,7 @@ async function callDirectProvider(args: {
   throw new Error("Meta direct API not supported; use OpenRouter fallback");
 }
 
-// unified provider call with OpenRouter fallback
+// unified direct and OpenRouter provider routing
 async function providerGenerateText(args: {
   model: ResolvedModel;
   system: string;
@@ -704,6 +672,8 @@ async function providerGenerateText(args: {
   onProviderTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
   onProviderRoute?: (route: "direct" | "openrouter") => void;
+  onAcceptedRequestConfiguration?: (configuration: string) => void;
+  onProviderRequest?: () => void;
 }): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
@@ -790,23 +760,25 @@ async function providerGenerateText(args: {
     if (model.provider === "xai" && !directXaiReasoningEffortAttempts) {
       xaiAutomaticReasoningForModel(model.modelId, args.reasoning);
     }
+    const requestConfiguration = providerRequestTraceLine({
+      route: "direct",
+      provider: model.provider,
+      modelId: model.modelId,
+      maxOutputTokens: args.maxOutputTokens,
+      reasoningMaxTokens: args.reasoningMaxTokens,
+      reasoningEffortAttempts:
+        directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
+      adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
+      geminiThinkingConfig: directGeminiThinkingConfig,
+      moonshotThinkingConfig: directMoonshotThinkingConfig,
+      deepseekThinkingConfig: directDeepSeekThinkingConfig,
+    });
+    // Reuse the normalized request description as the benchmark configuration fingerprint
     args.onProviderTrace?.(
-      `Routing via direct ${model.provider} provider (${model.modelId}). ` +
-        providerRequestTraceLine({
-          route: "direct",
-          provider: model.provider,
-          modelId: model.modelId,
-          maxOutputTokens: args.maxOutputTokens,
-          reasoningMaxTokens: args.reasoningMaxTokens,
-          reasoningEffortAttempts:
-            directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
-          adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
-          geminiThinkingConfig: directGeminiThinkingConfig,
-          moonshotThinkingConfig: directMoonshotThinkingConfig,
-          deepseekThinkingConfig: directDeepSeekThinkingConfig,
-        }),
+      `Routing via direct ${model.provider} provider (${model.modelId}). ${requestConfiguration}`,
     );
     args.onProviderRoute?.("direct");
+    args.signal?.throwIfAborted();
     try {
       return await callDirectProvider({
         provider: model.provider,
@@ -828,6 +800,12 @@ async function providerGenerateText(args: {
         onDelta: args.onDelta,
         onTrace: args.onProviderTrace,
         onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+        onProviderRequest: args.onProviderRequest,
+        onAcceptedRequestConfiguration: (configuration) => {
+          args.onAcceptedRequestConfiguration?.(
+            acceptedProviderRequestConfigurationLine(configuration),
+          );
+        },
       });
     } catch (directErr) {
       // If a direct provider key is present, do not fall back to OpenRouter.
@@ -835,7 +813,7 @@ async function providerGenerateText(args: {
     }
   }
 
-  // use OpenRouter (either as primary when no direct key, or as fallback)
+  // use OpenRouter when selected explicitly or when no direct key is available
   if (!model.openRouterModelId) {
     throw new Error(`No OpenRouter model ID configured for ${model.key}`);
   }
@@ -879,19 +857,21 @@ async function providerGenerateText(args: {
           args.reasoning,
         );
 
+  const requestConfiguration = providerRequestTraceLine({
+    route: "openrouter",
+    provider: "openrouter",
+    modelId: model.openRouterModelId,
+    maxOutputTokens: args.maxOutputTokens,
+    reasoningMaxTokens: args.reasoningMaxTokens,
+    reasoningEffortAttempts: openRouterReasoningEffortAttempts,
+    openRouterReasoningEnabled,
+  });
+  // Keep OpenRouter and direct routes on the same configuration capture contract
   args.onProviderTrace?.(
-    `Routing via OpenRouter (${model.openRouterModelId}). ` +
-      providerRequestTraceLine({
-        route: "openrouter",
-        provider: "openrouter",
-        modelId: model.openRouterModelId,
-        maxOutputTokens: args.maxOutputTokens,
-        reasoningMaxTokens: args.reasoningMaxTokens,
-        reasoningEffortAttempts: openRouterReasoningEffortAttempts,
-        openRouterReasoningEnabled,
-      }),
+    `Routing via OpenRouter (${model.openRouterModelId}). ${requestConfiguration}`,
   );
   args.onProviderRoute?.("openrouter");
+  args.signal?.throwIfAborted();
 
   return openrouterGenerateText({
     modelId: model.openRouterModelId,
@@ -909,6 +889,12 @@ async function providerGenerateText(args: {
     onDelta: args.onDelta,
     onTrace: args.onProviderTrace,
     onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+    onProviderRequest: args.onProviderRequest,
+    onAcceptedRequestConfiguration: (configuration) => {
+      args.onAcceptedRequestConfiguration?.(
+        acceptedProviderRequestConfigurationLine(configuration),
+      );
+    },
   });
 }
 
@@ -1023,7 +1009,24 @@ export async function generateVoxelBuild(
   let lastError = "";
   let acceptedOutputTokens: number | undefined;
   let providerRoute: "direct" | "openrouter" | undefined;
-  const start = Date.now();
+  let requestConfiguration: string | undefined;
+  let callbackDurationMs = 0;
+  const start = performance.now();
+  const invokeCallback = <Args extends unknown[]>(
+    callback: ((...args: Args) => void) | undefined,
+    ...args: Args
+  ): void => {
+    if (!callback) return;
+    const callbackStartedAt = performance.now();
+    try {
+      callback(...args);
+    } finally {
+      // Caller persistence and logging are not model inference work
+      callbackDurationMs += performance.now() - callbackStartedAt;
+    }
+  };
+  const measuredInferenceTimeMs = (): number =>
+    Math.max(0, Math.round(performance.now() - start - callbackDurationMs));
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const user =
@@ -1038,8 +1041,9 @@ export async function generateVoxelBuild(
             ? `\n\nReminder: return ONLY the ${VOXEL_EXEC_TOOL_NAME} tool call JSON (not the build JSON).`
             : "");
 
-    if (attempt > 1) params.onRetry?.(attempt, lastError);
+    if (attempt > 1) invokeCallback(params.onRetry, attempt, lastError);
 
+    let providerRequestStarted = false;
     try {
       const { text } = await providerGenerateText({
         model,
@@ -1053,16 +1057,36 @@ export async function generateVoxelBuild(
         allowServerKeys,
         preferOpenRouter: params.preferOpenRouter,
         signal: params.abortSignal,
-        onDelta: params.onDelta,
-        onProviderTrace: params.onProviderTrace,
+        onDelta: params.onDelta
+          ? (delta) => invokeCallback(params.onDelta, delta)
+          : undefined,
+        onProviderTrace: params.onProviderTrace
+          ? (message) => invokeCallback(params.onProviderTrace, message)
+          : undefined,
         onAcceptedOutputTokens: (tokens) => {
           acceptedOutputTokens = tokens;
         },
         onProviderRoute: (route) => {
           providerRoute = route;
         },
+        onAcceptedRequestConfiguration: (configuration) => {
+          requestConfiguration = configuration;
+        },
+        onProviderRequest: () => {
+          invokeCallback(params.onProviderRequest, attempt);
+          providerRequestStarted = true;
+        },
       });
       previousText = text;
+      try {
+        invokeCallback(params.onRawResponse, attempt, text);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        invokeCallback(
+          params.onProviderTrace,
+          `Raw response callback failed for attempt ${attempt}: ${message}`,
+        );
+      }
 
       const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
       if (!json) {
@@ -1144,7 +1168,7 @@ export async function generateVoxelBuild(
         continue;
       }
 
-      const generationTimeMs = Date.now() - start;
+      const generationTimeMs = measuredInferenceTimeMs();
       return {
         ok: true,
         build: spec.value,
@@ -1153,10 +1177,18 @@ export async function generateVoxelBuild(
         generationTimeMs,
         acceptedOutputTokens,
         providerRoute,
+        requestConfiguration,
         rawText: text,
       };
     } catch (err) {
       lastError = err instanceof Error ? err.message : "Provider request failed";
+      // Retry transient work that failed safely before an outbound request
+      if (
+        !providerRequestStarted &&
+        isDeterministicProviderPreflightError(lastError)
+      ) {
+        break;
+      }
       // Avoid expensive duplicate retries when the upstream likely processed work
       // but the client timed out waiting for headers/body.
       if (isBilledTimeoutStyleProviderError(lastError)) break;
@@ -1169,9 +1201,10 @@ export async function generateVoxelBuild(
     ok: false,
     error: lastError || "Generation failed",
     rawText: previousText,
-    generationTimeMs: Date.now() - start,
+    generationTimeMs: measuredInferenceTimeMs(),
     acceptedOutputTokens,
     providerRoute,
+    requestConfiguration,
   };
 }
 

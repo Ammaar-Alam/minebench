@@ -1,6 +1,8 @@
+import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type AnthropicMessageResponse = {
   content?: {
@@ -16,7 +18,7 @@ type AnthropicStreamEvent = {
   delta?: { type?: unknown; text?: unknown; partial_json?: unknown } | unknown;
 };
 
-type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
+type AnthropicEffort = ClaudeEffort;
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
@@ -139,27 +141,17 @@ function parseThinkingBudget(): number | null {
   return budget;
 }
 
-function parseEffortEnv(
-  envVar: string,
-  opts: { defaultEffort: AnthropicEffort; allowMax: boolean; allowXhigh: boolean },
-): AnthropicEffort {
-  const raw = (process.env[envVar] ?? "").trim().toLowerCase();
-  if (raw === "low" || raw === "medium" || raw === "high") return raw;
-  if (raw === "xhigh") return opts.allowXhigh ? "xhigh" : "high";
-  if (raw === "max") return opts.allowMax ? "max" : "high";
-  return opts.defaultEffort;
-}
-
-function effortFallbacks(initial: AnthropicEffort, opts: { allowMax: boolean; allowXhigh: boolean }): AnthropicEffort[] {
-  const ordered: AnthropicEffort[] = opts.allowMax
-    ? opts.allowXhigh
-      ? ["max", "xhigh", "high", "medium", "low"]
-      : ["max", "high", "medium", "low"]
-    : opts.allowXhigh
-      ? ["xhigh", "high", "medium", "low"]
-      : ["high", "medium", "low"];
-  const startIndex = Math.max(0, ordered.indexOf(initial));
-  return ordered.slice(startIndex);
+// Starts the ladder at the requested level, or at its head when the request
+// names a level this model does not accept
+function effortFallbacks(
+  ladder: readonly AnthropicEffort[],
+  requested: string | undefined,
+): AnthropicEffort[] {
+  const startIndex = Math.max(
+    0,
+    ladder.findIndex((effort) => effort === requested),
+  );
+  return ladder.slice(startIndex);
 }
 
 function looksLikeEffortConfigError(body: string): boolean {
@@ -177,94 +169,12 @@ function looksLikeEffortConfigError(body: string): boolean {
   );
 }
 
-function isLegacyManualThinkingModel(modelId: string): boolean {
-  return modelId.startsWith("claude-sonnet-4-5") || modelId.startsWith("claude-opus-4-5");
-}
-
-function isFableOrMythos5(modelId: string): boolean {
-  return /^claude-(?:fable|mythos)-5(?:-|$)/.test(modelId);
-}
-
-function isSonnet5(modelId: string): boolean {
-  return /^claude-sonnet-5(?:-|$)/.test(modelId);
-}
-
-function anthropicClaudeVersion(modelId: string): { family: "opus" | "sonnet"; major: number; minor: number } | null {
-  const match = /^claude-(opus|sonnet)-(\d+)-(\d+)(?:-|$)/.exec(modelId);
-  if (!match) return null;
-  const major = Number.parseInt(match[2] ?? "", 10);
-  const minor = Number.parseInt(match[3] ?? "", 10);
-  if (!Number.isFinite(major) || !Number.isFinite(minor)) return null;
-  return { family: match[1] as "opus" | "sonnet", major, minor };
-}
-
-function omitsSamplingParameters(modelId: string): boolean {
-  if (isSonnet5(modelId)) return true;
-  if (isFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.family === "opus" && (version.major > 4 || (version.major === 4 && version.minor >= 7));
-}
-
-function isAdaptiveThinkingModel(modelId: string): boolean {
-  if (isSonnet5(modelId)) return true;
-  if (isFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.major > 4 || (version.major === 4 && version.minor >= 6);
-}
-
-function supportsXhighEffort(modelId: string): boolean {
-  if (isSonnet5(modelId)) return true;
-  if (isFableOrMythos5(modelId)) return true;
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return false;
-  return version.major > 4 || (version.major === 4 && version.minor >= 7);
-}
-
-function effortEnvVarForModel(modelId: string): string | null {
-  if (modelId.startsWith("claude-fable-5")) {
-    return "ANTHROPIC_FABLE_5_EFFORT";
-  }
-  if (modelId.startsWith("claude-sonnet-5")) {
-    return "ANTHROPIC_SONNET_5_EFFORT";
-  }
-  const version = anthropicClaudeVersion(modelId);
-  if (!version) return null;
-  if (version.family === "opus" && version.major === 4 && version.minor === 8) {
-    return "ANTHROPIC_OPUS_4_8_EFFORT";
-  }
-  if (version.family === "opus" && version.major === 4 && version.minor === 7) {
-    return "ANTHROPIC_OPUS_4_7_EFFORT";
-  }
-  if (version.family === "opus" && version.major === 4 && version.minor === 6) {
-    return "ANTHROPIC_OPUS_4_6_EFFORT";
-  }
-  if (version.family === "sonnet" && version.major === 4 && version.minor === 6) {
-    return "ANTHROPIC_SONNET_4_6_EFFORT";
-  }
-  return null;
-}
-
 function parseAdaptiveEfforts(modelId: string): AnthropicEffort[] {
-  const allowXhigh = supportsXhighEffort(modelId);
-  const envVar = effortEnvVarForModel(modelId);
-  const preferred = envVar
-    ? parseEffortEnv(envVar, {
-        defaultEffort: "max",
-        allowMax: true,
-        allowXhigh,
-      })
-    : "max";
-  return effortFallbacks(preferred, { allowMax: true, allowXhigh });
-}
-
-function supportsContext1mBeta(modelId: string): boolean {
-  return (
-    modelId.startsWith("claude-opus-4-6") ||
-    modelId.startsWith("claude-sonnet-4-5") ||
-    modelId.startsWith("claude-sonnet-4")
-  );
+  const { effortLadder, effortEnvVar } = claudeCapabilities(modelId);
+  const requested = effortEnvVar
+    ? (process.env[effortEnvVar] ?? "").trim().toLowerCase()
+    : undefined;
+  return effortFallbacks(effortLadder, requested);
 }
 
 export async function anthropicGenerateText(params: {
@@ -280,7 +190,7 @@ export async function anthropicGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-}): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
 
@@ -293,7 +203,8 @@ export async function anthropicGenerateText(params: {
   const structuredSchema = useStructuredOutputs
     ? (sanitizeAnthropicStructuredSchema(params.jsonSchema) as Record<string, unknown>)
     : undefined;
-  const usesAdaptiveThinking = isAdaptiveThinkingModel(params.modelId);
+  const capabilities = claudeCapabilities(params.modelId);
+  const usesAdaptiveThinking = capabilities.adaptiveThinking;
   const adaptiveEffortAttempts =
     usesAdaptiveThinking && params.adaptiveEffortAttempts && params.adaptiveEffortAttempts.length > 0
       ? params.adaptiveEffortAttempts
@@ -307,12 +218,11 @@ export async function anthropicGenerateText(params: {
   );
   const thinkingBudget = usesAdaptiveThinking
     ? null
-    : isLegacyManualThinkingModel(params.modelId)
+    : capabilities.legacyManualThinking
       ? Math.max(1024, maxTokens - 1)
       : parseThinkingBudget();
   const betaHeaders: (string | null)[] =
-    supportsContext1mBeta(params.modelId) &&
-    parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
+    capabilities.context1mBeta && parseBooleanEnv("ANTHROPIC_ENABLE_1M_CONTEXT_BETA", true)
       ? [CONTEXT_1M_BETA, null]
       : [null];
   const tools = useStructuredOutputs
@@ -330,6 +240,7 @@ export async function anthropicGenerateText(params: {
   let structuredMode: "native_format" | "forced_tool" = "native_format";
   let didUseStreaming = false;
   let selectedAdaptiveEffort: AnthropicEffort | null = null;
+  let selectedBetaHeader: string | null = null;
   let selectedTokenBudget: number | null = null;
   try {
     requestLoop: for (const tok of tokenBudgetCandidates(maxTokens)) {
@@ -347,7 +258,7 @@ export async function anthropicGenerateText(params: {
               ? { type: "enabled" as const, budget_tokens: budget }
               : undefined;
         const temperature = thinking ? 1 : (params.temperature ?? 0.2);
-        const sampling = omitsSamplingParameters(params.modelId) ? {} : { temperature };
+        const sampling = capabilities.defaultSamplingOnly ? {} : { temperature };
         const efforts = usesAdaptiveThinking ? adaptiveEffortAttempts : [null];
         effortLoop: for (let effortIdx = 0; effortIdx < efforts.length; effortIdx += 1) {
           const effort = efforts[effortIdx];
@@ -365,6 +276,8 @@ export async function anthropicGenerateText(params: {
               ? { effort }
               : undefined;
 
+          controller.signal.throwIfAborted();
+          params.onProviderRequest?.();
           res = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
             headers: {
@@ -400,6 +313,7 @@ export async function anthropicGenerateText(params: {
 
           if (res.ok) {
             if (usesAdaptiveThinking) selectedAdaptiveEffort = effort ?? null;
+            selectedBetaHeader = betaHeader;
             selectedTokenBudget = tok;
             break requestLoop;
           }
@@ -457,6 +371,34 @@ export async function anthropicGenerateText(params: {
 
   const acceptedOutputTokens = selectedTokenBudget ?? maxTokens;
   params.onAcceptedOutputTokens?.(acceptedOutputTokens);
+  const acceptedThinkingBudget =
+    typeof thinkingBudget === "number"
+      ? Math.min(thinkingBudget, acceptedOutputTokens - 1)
+      : undefined;
+  params.onAcceptedRequestConfiguration?.({
+    apiMode: selectedBetaHeader ? `messages+${selectedBetaHeader}` : "messages",
+    maxOutputTokens: acceptedOutputTokens,
+    ...(typeof acceptedThinkingBudget === "number" && acceptedThinkingBudget >= 1024
+      ? { reasoningMaxTokens: acceptedThinkingBudget }
+      : {}),
+    thinkingMode: usesAdaptiveThinking
+      ? `adaptive_effort=${selectedAdaptiveEffort ?? "default"}`
+      : typeof acceptedThinkingBudget === "number" && acceptedThinkingBudget >= 1024
+        ? `thinking_budget=${acceptedThinkingBudget}`
+        : "default",
+    temperature: capabilities.defaultSamplingOnly
+      ? "default"
+      : usesAdaptiveThinking || typeof acceptedThinkingBudget === "number"
+        ? 1
+        : (params.temperature ?? 0.2),
+    textVerbosity: "default",
+    responseFormat:
+      useStructuredOutputs
+        ? structuredMode === "forced_tool"
+          ? "forced_tool"
+          : "json_schema"
+        : "text",
+  });
 
   if (usesAdaptiveThinking && selectedAdaptiveEffort) {
     params.onTrace?.(

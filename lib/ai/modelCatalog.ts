@@ -29,6 +29,7 @@ export type ModelKey =
   | "openai_gpt_4o"
   | "openai_gpt_oss_120b"
   | "anthropic_claude_fable_5"
+  | "anthropic_claude_opus_5"
   | "anthropic_claude_sonnet_5"
   | "anthropic_claude_4_5_sonnet"
   | "anthropic_claude_4_6_sonnet"
@@ -71,7 +72,7 @@ export type ModelCatalogEntry = {
   modelId: string;
   displayName: string;
   enabled: boolean;
-  // optional: OpenRouter model ID for fallback when direct provider key is missing/invalid
+  // optional: alternate OpenRouter route when the direct provider key is unavailable
   openRouterModelId?: string;
   // optional: force routing via OpenRouter even if a direct provider key exists
   forceOpenRouter?: boolean;
@@ -223,6 +224,14 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Claude Fable 5",
     enabled: true,
     openRouterModelId: "anthropic/claude-fable-5",
+  },
+  {
+    key: "anthropic_claude_opus_5",
+    provider: "anthropic",
+    modelId: "claude-opus-5",
+    displayName: "Claude Opus 5",
+    enabled: true,
+    openRouterModelId: "anthropic/claude-opus-5",
   },
   {
     key: "anthropic_claude_sonnet_5",

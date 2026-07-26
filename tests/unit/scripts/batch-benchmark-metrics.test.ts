@@ -44,16 +44,25 @@ const castleJson = JSON.stringify(
   null,
   2,
 );
+const effectiveRequestConfiguration =
+  "Request config: api_mode=responses_sync, max_output_tokens=128000, reasoning_max_tokens=n/a, thinking_mode=reasoning=max, temperature=default, text_verbosity=high, response_format=json_schema.";
 const castleConfiguration = createBenchmarkRunConfiguration({
   promptText: castle.promptText!,
   providerRoute: "direct",
   reasoningOverride: null,
+  requestConfiguration: effectiveRequestConfiguration,
   toolsEnabled: true,
 });
 
 store.markRunning(castle, new Date("2026-07-22T18:00:00.000Z"));
+store.markProviderCall(castle, 1);
+store.markCompletedAttempt(castle, 1);
+store.markCompletedAttempt(castle, 1);
 store.markRetry(castle, 2);
+store.markProviderCall(castle, 2);
+store.markCompletedAttempt(castle, 2);
 store.markRetry(castle, 3);
+store.markProviderCall(castle, 3);
 const castleSample = store.finalizeSuccess(
   castle,
   castleJson,
@@ -93,11 +102,32 @@ assert.equal(
   "atomic finalization should not leave temporary files",
 );
 
+const internalFallback = job("internal-fallback");
+store.markRunning(internalFallback);
+store.markProviderCall(internalFallback, 1);
+store.markProviderCall(internalFallback, 1);
+assert.equal(
+  readLedger().jobs["openai_gpt_5_6_sol/internal-fallback"]?.providerCallCount,
+  2,
+  "internal provider fallbacks should count each outbound request",
+);
+assert.equal(
+  readLedger().jobs["openai_gpt_5_6_sol/internal-fallback"]?.runAttemptCount,
+  1,
+  "internal provider fallbacks should remain within one outer attempt",
+);
+
 let generated = store.refreshGeneratedMetrics([castle]);
 assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   expectedBuildCount: 1,
   finalizedBuildCount: 1,
   inferenceSampleCount: 1,
+  finalizedAttemptCount: 3,
+  providerCallTrackingJobCount: 1,
+  providerCallCount: 3,
+  completedAttemptTrackingJobCount: 1,
+  completedAttemptCount: 3,
+  rejectedResponseCount: 2,
   configurationSampleCount: 1,
   configurationIsConsistent: true,
   outputCapSampleCount: 1,
@@ -105,9 +135,13 @@ assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   averageJsonSizeBytes: Buffer.byteLength(castleJson),
   averageInferenceMs: 1_046_000,
   outputCapTokens: 128_000,
+  failedAttemptCount: 2,
+  failedRunCount: 0,
+  interruptedRunCount: 0,
 });
 
 store.markRunning(castle, new Date("2026-07-22T19:00:00.000Z"));
+store.markProviderCall(castle, 1);
 store.markFailed(
   castle,
   "Provider quota exhausted",
@@ -121,9 +155,25 @@ assert.equal(
 );
 let summary = store.summarize([castle]).get("openai_gpt_5_6_sol");
 assert.equal(summary?.failedCount, 1);
+assert.equal(
+  summary?.failedAttemptCount,
+  3,
+  "failed attempts should include two retry-triggering failures and the terminal failed run",
+);
+assert.equal(
+  summary?.completedAttemptCount,
+  3,
+  "a provider failure without response text must not count as a completed attempt",
+);
+assert.equal(
+  summary?.rejectedResponseCount,
+  2,
+  "a provider failure without response text must not count as a rejected response",
+);
 assert.equal(summary?.averageInferenceMs, 1_046_000);
 
 store.markRunning(castle, new Date("2026-07-22T20:00:00.000Z"));
+store.markProviderCall(castle, 1);
 store.reconcile([castle], new Date("2026-07-22T20:00:10.000Z"));
 assert.equal(readLedger().jobs["openai_gpt_5_6_sol/castle"]?.state, "interrupted");
 summary = store.summarize([castle]).get("openai_gpt_5_6_sol");
@@ -131,6 +181,7 @@ assert.equal(summary?.interruptedCount, 1);
 assert.equal(summary?.averageInferenceMs, 1_046_000);
 
 store.markRunning(castle, new Date("2026-07-22T20:30:00.000Z"));
+store.markProviderCall(castle, 1);
 store.finalizeSuccess(
   castle,
   castleJson,
@@ -144,6 +195,21 @@ store.finalizeSuccess(
 );
 summary = store.summarize([castle]).get("openai_gpt_5_6_sol");
 assert.equal(summary?.failedCount, 1, "a later success should retain the failed run count");
+assert.equal(
+  summary?.providerCallCount,
+  6,
+  "total attempts should retain successful, failed, and interrupted run history",
+);
+assert.equal(
+  summary?.completedAttemptCount,
+  4,
+  "completed attempts should retain valid and rejected response history only",
+);
+assert.equal(
+  summary?.finalizedAttemptCount,
+  1,
+  "a resumed success should replace the finalized cohort's prior attempt count",
+);
 assert.equal(
   summary?.interruptedCount,
   1,
@@ -187,7 +253,8 @@ const phoenixSample = {
   configuration: createBenchmarkRunConfiguration({
     promptText: phoenix.promptText!,
     providerRoute: "direct",
-    reasoningOverride: null,
+    reasoningOverride: "max",
+    requestConfiguration: effectiveRequestConfiguration,
     toolsEnabled: true,
   }),
 };
@@ -196,9 +263,18 @@ ledger.jobs["openai_gpt_5_6_sol/phoenix"] = {
   state: "finalizing",
   startedAt: "2026-07-22T21:00:00.000Z",
   retryCount: 0,
+  runAttemptCount: 1,
+  completedRunAttempts: [1],
+  rejectedRunAttempts: [],
+  providerCallCount: 1,
+  completedAttemptCount: 1,
+  rejectedResponseCount: 0,
+  failedAttemptCount: 0,
+  failedRunCount: 0,
+  interruptedRunCount: 0,
   pendingSample: phoenixSample,
 };
-writeFileSync(ledgerPath, `${JSON.stringify({ version: 1, jobs: ledger.jobs }, null, 2)}\n`);
+writeFileSync(ledgerPath, `${JSON.stringify({ version: 2, jobs: ledger.jobs }, null, 2)}\n`);
 store.reconcile([castle, phoenix], new Date("2026-07-22T21:02:00.000Z"));
 assert.equal(
   readLedger().jobs["openai_gpt_5_6_sol/phoenix"]?.state,
@@ -209,6 +285,14 @@ assert.equal(
 generated = store.refreshGeneratedMetrics([castle, phoenix]);
 assert.equal(generated.models.openai_gpt_5_6_sol?.finalizedBuildCount, 2);
 assert.equal(generated.models.openai_gpt_5_6_sol?.inferenceSampleCount, 2);
+assert.equal(
+  generated.models.openai_gpt_5_6_sol?.finalizedAttemptCount,
+  2,
+  "implicit and explicit reasoning inputs should aggregate when the effective request configuration matches",
+);
+assert.equal(generated.models.openai_gpt_5_6_sol?.providerCallCount, 7);
+assert.equal(generated.models.openai_gpt_5_6_sol?.completedAttemptCount, 5);
+assert.equal(generated.models.openai_gpt_5_6_sol?.rejectedResponseCount, 2);
 assert.equal(
   generated.models.openai_gpt_5_6_sol?.averageInferenceMs,
   Math.round((1_046_000 + 100_000) / 2),
@@ -231,6 +315,7 @@ store.finalizeSuccess(
       promptText: mixedRoute.promptText!,
       providerRoute: "openrouter",
       reasoningOverride: null,
+      requestConfiguration: effectiveRequestConfiguration,
       toolsEnabled: true,
     }),
   },
@@ -263,6 +348,8 @@ store.finalizeSuccess(
       promptText: mixedCap.promptText!,
       providerRoute: "direct",
       reasoningOverride: null,
+      requestConfiguration:
+        "Request config: api_mode=responses_sync, max_output_tokens=64000, reasoning_max_tokens=n/a, thinking_mode=reasoning=max, temperature=default, text_verbosity=high, response_format=json_schema.",
       toolsEnabled: true,
     }),
   },
@@ -305,6 +392,12 @@ const committedMetrics = {
       expectedBuildCount: 1,
       finalizedBuildCount: 1,
       inferenceSampleCount: 1,
+      finalizedAttemptCount: 2,
+      providerCallTrackingJobCount: 1,
+      providerCallCount: 5,
+      completedAttemptTrackingJobCount: 1,
+      completedAttemptCount: 4,
+      rejectedResponseCount: 1,
       configurationSampleCount: 1,
       configurationIsConsistent: true,
       outputCapSampleCount: 1,
@@ -312,6 +405,9 @@ const committedMetrics = {
       averageInferenceMs: 456_000,
       averageJsonSizeBytes: 123_456,
       outputCapTokens: 128_000,
+      failedAttemptCount: 1,
+      failedRunCount: 0,
+      interruptedRunCount: 0,
     },
   },
 };
@@ -381,6 +477,155 @@ assert.equal(
   refreshedCommittedMetrics.models.openai_gpt_5_6_sol.outputCapTokens,
   128_000,
   "a complete artifact cohort without its gitignored ledger should preserve the committed cap",
+);
+
+const terminalResponse = job("terminal-response");
+store.markRunning(terminalResponse);
+store.markProviderCall(terminalResponse, 1);
+store.markCompletedAttempt(terminalResponse, 1);
+store.markFailed(terminalResponse, "Could not find a valid JSON object");
+summary = store.summarize([terminalResponse]).get("openai_gpt_5_6_sol");
+assert.equal(summary?.providerCallCount, 1);
+assert.equal(summary?.completedAttemptCount, 1);
+assert.equal(summary?.rejectedResponseCount, 1);
+assert.equal(summary?.failedAttemptCount, 1);
+
+const preflightFailure = job("preflight-failure");
+store.markRunning(preflightFailure);
+store.markFailed(preflightFailure, "Missing API key");
+summary = store.summarize([preflightFailure]).get("openai_gpt_5_6_sol");
+assert.equal(summary?.providerCallCount, 0);
+assert.equal(summary?.completedAttemptCount, 0);
+assert.equal(summary?.failedAttemptCount, 0);
+assert.equal(summary?.failedRunCount, 1);
+
+const preflightRetries = job("preflight-retries");
+store.markRunning(preflightRetries);
+store.markRetry(preflightRetries, 2);
+store.markRetry(preflightRetries, 3);
+store.markFailed(preflightRetries, "hostname did not resolve");
+summary = store.summarize([preflightRetries]).get("openai_gpt_5_6_sol");
+assert.equal(summary?.providerCallCount, 0);
+assert.equal(summary?.completedAttemptCount, 0);
+assert.equal(summary?.failedAttemptCount, 0);
+assert.equal(summary?.failedRunCount, 1);
+
+const recoveredPreflightRetry = job("recovered-preflight-retry");
+store.markRunning(recoveredPreflightRetry);
+store.markRetry(recoveredPreflightRetry, 2);
+store.markProviderCall(recoveredPreflightRetry, 2);
+store.markCompletedAttempt(recoveredPreflightRetry, 2);
+store.finalizeSuccess(recoveredPreflightRetry, castleJson, {
+  inferenceTimeMs: 30_000,
+  attemptCount: 2,
+});
+summary = store.summarize([recoveredPreflightRetry]).get("openai_gpt_5_6_sol");
+assert.equal(summary?.providerCallCount, 1);
+assert.equal(summary?.completedAttemptCount, 1);
+assert.equal(summary?.failedAttemptCount, 0);
+assert.equal(summary?.failedRunCount, 0);
+
+const legacyRoot = mkdtempSync(join(tmpdir(), "minebench-legacy-benchmark-metrics-"));
+const legacyJob: BenchmarkMetricJob = {
+  ...job("legacy"),
+  filePath: join(legacyRoot, "uploads", "legacy", "legacy-gpt-5-6-sol.json"),
+};
+const legacyJson = JSON.stringify({
+  version: "1.0",
+  blocks: [{ x: 1, y: 2, z: 3, type: "stone" }],
+});
+mkdirSync(join(legacyRoot, "uploads", "legacy"), { recursive: true });
+writeFileSync(legacyJob.filePath, legacyJson);
+const legacyConfiguration = {
+  promptSha256: createHash("sha256").update(legacyJob.promptText!).digest("hex"),
+  providerRoute: "direct",
+  reasoningOverride: "max",
+  requestConfiguration:
+    "Request config: max_output_tokens=128000, thinking_mode=adaptive_effort=max->xhigh.",
+  toolsEnabled: true,
+};
+const legacyLedgerPath = join(legacyRoot, "uploads", ".benchmark-metrics.json");
+const legacyGeneratedMetricsPath = join(
+  legacyRoot,
+  "modelBenchmarkMetrics.generated.json",
+);
+writeFileSync(
+  legacyGeneratedMetricsPath,
+  `${JSON.stringify(committedMetrics, null, 2)}\n`,
+);
+writeFileSync(
+  legacyLedgerPath,
+  `${JSON.stringify(
+    {
+      version: 1,
+      jobs: {
+        "openai_gpt_5_6_sol/legacy": {
+          state: "succeeded",
+          startedAt: "2026-07-22T18:00:00.000Z",
+          endedAt: "2026-07-22T18:01:00.000Z",
+          retryCount: 2,
+          totalAttemptCount: 3,
+          providerCallCount: 3,
+          completedAttemptCount: 3,
+          rejectedResponseCount: 2,
+          failedAttemptCount: 2,
+          failedRunCount: 0,
+          interruptedRunCount: 0,
+          sample: {
+            inferenceTimeMs: 60_000,
+            jsonBytes: Buffer.byteLength(legacyJson),
+            artifactSha256: createHash("sha256").update(legacyJson).digest("hex"),
+            attemptCount: 3,
+            acceptedOutputTokens: 128_000,
+            configuration: legacyConfiguration,
+          },
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`,
+);
+const legacyStore = new BenchmarkMetricsStore({
+  ledgerPath: legacyLedgerPath,
+  generatedMetricsPath: legacyGeneratedMetricsPath,
+});
+const legacyMetrics =
+  legacyStore.refreshGeneratedMetrics([legacyJob]).models.openai_gpt_5_6_sol;
+assert.equal(
+  legacyMetrics?.providerCallCount,
+  undefined,
+  "outer attempts from a version 1 ledger must not publish as provider calls",
+);
+assert.equal(legacyMetrics?.providerCallTrackingJobCount, undefined);
+assert.equal(
+  legacyMetrics?.configurationSampleCount,
+  0,
+  "requested fallback traces must not publish as accepted configurations",
+);
+assert.equal(legacyMetrics?.configurationIsConsistent, false);
+assert.equal(legacyMetrics?.averageInferenceMs, undefined);
+const migratedGeneratedMetrics = JSON.parse(
+  readFileSync(legacyGeneratedMetricsPath, "utf8"),
+) as {
+  models: {
+    openai_gpt_5_6_sol: Record<string, number | boolean>;
+  };
+};
+assert.equal(
+  migratedGeneratedMetrics.models.openai_gpt_5_6_sol.averageInferenceMs,
+  456_000,
+  "a legacy ledger must not erase committed timing",
+);
+assert.equal(
+  migratedGeneratedMetrics.models.openai_gpt_5_6_sol.outputCapTokens,
+  128_000,
+  "a legacy ledger must not erase the committed output cap",
+);
+assert.equal(
+  migratedGeneratedMetrics.models.openai_gpt_5_6_sol.configurationSampleCount,
+  1,
+  "a legacy ledger must preserve the committed configuration cohort",
 );
 
 console.log("batch benchmark metric lifecycle checks passed");
