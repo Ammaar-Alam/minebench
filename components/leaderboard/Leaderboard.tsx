@@ -1,12 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LeaderboardResponse } from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { ErrorState } from "@/components/ErrorState";
 import { getConsistencyBand } from "@/lib/arena/consistencyBands";
 import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
+import { matchesLeaderboardModelQuery } from "@/lib/leaderboardSearch";
 import { formatAge, readStale, writeStale } from "@/lib/staleCache";
 import {
   ModelBenchmarkDetails,
@@ -64,6 +65,39 @@ function ChevronRight({ className }: { className?: string }) {
       strokeLinejoin="round"
     >
       <path d="M6 4l4 4-4 4" />
+    </svg>
+  );
+}
+
+function SearchIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+    >
+      <circle cx="8.5" cy="8.5" r="5.25" />
+      <path d="m12.4 12.4 4.1 4.1" />
+    </svg>
+  );
+}
+
+function CloseIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+    >
+      <path d="m4 4 8 8M12 4l-8 8" />
     </svg>
   );
 }
@@ -181,6 +215,21 @@ function MovementMark({ badge }: { badge: MovementBadge | null }) {
   );
 }
 
+function ModelSearchEmptyState({ onClear }: { onClear: () => void }) {
+  return (
+    <div className="flex min-h-40 flex-col items-center justify-center gap-3 px-6 py-8 text-center">
+      <span className="text-sm font-medium text-muted">No matching models.</span>
+      <button
+        type="button"
+        onClick={onClear}
+        className="mb-btn mb-btn-ghost h-11 rounded-full px-4 text-xs"
+      >
+        Clear
+      </button>
+    </div>
+  );
+}
+
 export function Leaderboard() {
   const [data, setData] = useState<LeaderboardResponse | null>(null);
   const [dataAgeMs, setDataAgeMs] = useState<number | null>(null);
@@ -193,6 +242,8 @@ export function Leaderboard() {
   const [navigatingModelKey, setNavigatingModelKey] = useState<string | null>(null);
   const [showDetailed, setShowDetailed] = useState(false);
   const [expandedMobileModelKey, setExpandedMobileModelKey] = useState<string | null>(null);
+  const [modelQuery, setModelQuery] = useState("");
+  const modelSearchInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   const activeModelCount = data?.models.length ?? 0;
   const topModel = data?.models[0] ?? null;
@@ -206,6 +257,15 @@ export function Leaderboard() {
     : null;
   const renderedVotes =
     data?.models.reduce((sum, model) => sum + summarizeArenaVotes(model).totalVotes, 0) ?? 0;
+  const visibleModels = useMemo(
+    () => data?.models.filter((model) => matchesLeaderboardModelQuery(model, modelQuery)) ?? [],
+    [data, modelQuery],
+  );
+  const hasModelQuery = modelQuery.trim().length > 0;
+  const modelSearchStatus =
+    data && hasModelQuery
+      ? `${visibleModels.length} ${visibleModels.length === 1 ? "model" : "models"} found.`
+      : "";
 
   useEffect(() => {
     const controller = new AbortController();
@@ -284,6 +344,12 @@ export function Leaderboard() {
     setReloadToken((n) => n + 1);
   }, []);
 
+  const clearModelQuery = useCallback(() => {
+    setModelQuery("");
+    setExpandedMobileModelKey(null);
+    modelSearchInputRef.current?.focus();
+  }, []);
+
   const getModelPath = (modelKey: string) => `/leaderboard/${encodeURIComponent(modelKey)}`;
   const navigateToModel = (modelKey: string) => {
     if (navigatingModelKey === modelKey) return;
@@ -296,41 +362,49 @@ export function Leaderboard() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 sm:gap-5">
-      <div className="mb-panel shrink-0 px-5 py-5 before:hidden sm:px-8 sm:py-5 lg:px-10">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
+      <div className="mb-panel shrink-0 px-5 py-5 ring-inset before:hidden">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center xl:grid-cols-[minmax(0,1fr)_auto_auto] xl:gap-x-6 xl:gap-y-0">
           {topModel ? (
-            <div className="mb-model-reveal mb-model-reveal-in flex min-w-0 items-center gap-4 sm:gap-5">
+            <div className="mb-leaderboard-champion mb-model-reveal mb-model-reveal-in order-1 inline-flex min-h-[72px] max-w-full min-w-0 self-start items-center gap-2 py-0 pl-0 pr-2 min-[340px]:min-h-20 min-[340px]:gap-3 min-[340px]:pr-3 sm:order-none sm:col-span-2 sm:gap-4 sm:pr-4 xl:col-span-1">
               <span
                 aria-hidden="true"
-                className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-accent/10 ring-1 ring-accent/35 sm:h-12 sm:w-12"
+                className="relative flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-full bg-accent/10 ring-1 ring-accent/35 min-[340px]:h-20 min-[340px]:w-20"
               >
                 <span
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-0 rounded-full shadow-[0_0_0_4px_hsl(var(--accent)/0.06),0_10px_24px_-10px_hsl(var(--accent)/0.45)]"
                 />
-                <span className="relative text-center font-mono text-sm font-semibold leading-none tracking-tight text-accent tabular-nums sm:text-base">
+                <span className="relative -translate-y-px text-center font-mono text-2xl font-semibold leading-none text-accent tabular-nums sm:text-[1.75rem]">
                   1
                 </span>
               </span>
-              <div className="flex min-w-0 flex-col gap-1.5">
-                <div className="flex min-w-0 items-baseline gap-x-3 gap-y-0.5">
+              <div className="flex min-w-0 flex-col gap-1.5 py-1.5">
+                <div className="flex min-w-0 items-baseline gap-x-2 gap-y-0.5">
                   <span className="truncate font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
                     {topModel.displayName}
                   </span>
                   {/* Mobile-only small rating; desktop gets the hero Elo to the right. */}
-                  <span className="font-mono text-sm font-medium text-muted sm:hidden">
+                  <span className="hidden font-mono text-sm font-medium text-muted min-[340px]:inline sm:hidden">
                     {Math.round(topModel.rankScore).toLocaleString()}
                   </span>
                 </div>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[11px] text-muted2">
-                  {topRecord ? <span>{topRecord}</span> : null}
-                  {topWinRate != null ? (
-                    <>
-                      <span aria-hidden="true" className="text-muted/30">·</span>
-                      <span>{formatPercent(topWinRate)} wins</span>
-                    </>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono text-[11px] text-muted2">
+                  {topRecord || topWinRate != null ? (
+                    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                      {topRecord ? (
+                        <span className="hidden sm:inline">{topRecord}</span>
+                      ) : null}
+                      {topRecord && topWinRate != null ? (
+                        <span
+                          aria-hidden="true"
+                          className="hidden text-muted/30 sm:inline"
+                        >
+                          ·
+                        </span>
+                      ) : null}
+                      {topWinRate != null ? <span>{formatPercent(topWinRate)} wins</span> : null}
+                    </span>
                   ) : null}
-                  <span aria-hidden="true" className="text-muted/30">·</span>
                   <span className="inline-flex items-center gap-1.5">
                     <span
                       aria-hidden="true"
@@ -354,11 +428,11 @@ export function Leaderboard() {
               </div>
             </div>
           ) : (
-            <div aria-hidden="true" className="h-12" />
+            <div aria-hidden="true" className="order-1 h-12 sm:order-none sm:col-span-2 xl:col-span-1" />
           )}
-          <div className="flex flex-wrap items-center gap-2 sm:ml-auto sm:shrink-0 sm:gap-3">
+          <div className="order-3 flex w-full min-w-0 flex-wrap items-center gap-3 sm:order-none sm:w-auto sm:justify-self-start">
             {activeModelCount > 0 ? (
-              <span className="mb-model-reveal mb-model-reveal-in inline-flex items-center gap-2 font-mono text-[11px] text-muted2">
+              <span className="mb-model-reveal-in inline-flex min-h-8 items-center gap-2 px-1 font-mono text-[11px] text-muted2">
                 <span className="relative h-1.5 w-1.5 shrink-0" aria-hidden="true">
                   <span className="absolute inset-0 rounded-full bg-success" />
                   <span className="absolute inset-0 animate-ping rounded-full bg-success/60 motion-reduce:animate-none" />
@@ -366,8 +440,8 @@ export function Leaderboard() {
                 <span className="text-fg">Live</span>
                 <span className="text-muted/40">·</span>
                 <span>{activeModelCount} models</span>
-                <span className="text-muted/40">·</span>
-                <span>{renderedVotes.toLocaleString()} votes</span>
+                <span className="hidden text-muted/40 sm:inline">·</span>
+                <span className="hidden sm:inline">{renderedVotes.toLocaleString()} votes</span>
               </span>
             ) : null}
             {isStale && refreshError ? (
@@ -376,7 +450,7 @@ export function Leaderboard() {
                 onClick={handleRetry}
                 disabled={retrying}
                 aria-live="polite"
-                className="mb-refresh-retry inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[11px] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40 disabled:cursor-not-allowed disabled:opacity-60"
+                className="mb-refresh-retry inline-flex h-11 items-center gap-1.5 rounded-full px-3 font-mono text-[11px] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-warn" aria-hidden="true" />
                 <span>
@@ -384,14 +458,66 @@ export function Leaderboard() {
                 </span>
               </button>
             ) : null}
+          </div>
+          <div className="order-2 flex w-full min-w-0 items-center gap-3 sm:order-none sm:w-auto sm:justify-self-end">
             <button
               type="button"
               onClick={() => setShowDetailed((v) => !v)}
+              aria-label={showDetailed ? "Hide details" : "Show details"}
               aria-pressed={showDetailed}
-              className={`mb-btn mb-details-toggle h-7 rounded-full px-2.5 text-[11px] ${showDetailed ? "mb-btn-primary" : "mb-btn-ghost"}`}
+              className={`mb-btn mb-details-toggle hidden h-11 rounded-full bg-transparent px-3.5 text-[11px] ring-1 ring-inset sm:inline-flex ${
+                showDetailed
+                  ? "text-accent ring-accent/45"
+                  : "text-muted ring-border/60 hover:text-fg hover:ring-border"
+              }`}
             >
-              {showDetailed ? "Hide details" : "Show details"}
+              Details
             </button>
+            <div
+              role="search"
+              aria-label="Leaderboard models"
+              className="relative h-11 w-full rounded-full bg-bg/70 text-sm ring-1 ring-inset ring-border transition-colors hover:bg-bg/80 focus-within:ring-2 focus-within:ring-accent/50 sm:w-56 md:w-64 xl:w-72"
+            >
+              <label htmlFor="leaderboard-model-search" className="sr-only">
+                Search models
+              </label>
+              <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted2" />
+              <input
+                ref={modelSearchInputRef}
+                id="leaderboard-model-search"
+                type="search"
+                value={modelQuery}
+                onChange={(event) => {
+                  setModelQuery(event.target.value);
+                  setExpandedMobileModelKey(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && modelQuery) {
+                    event.preventDefault();
+                    clearModelQuery();
+                  }
+                }}
+                placeholder="Find a model"
+                autoComplete="off"
+                spellCheck={false}
+                aria-controls="leaderboard-models"
+                aria-describedby="leaderboard-search-status"
+                className="mb-leaderboard-search-input h-full w-full appearance-none bg-transparent pl-10 pr-11 text-sm text-fg outline-none placeholder:text-muted2"
+              />
+              {modelQuery ? (
+                <button
+                  type="button"
+                  onClick={clearModelQuery}
+                  aria-label="Clear model search"
+                  className="absolute inset-y-0 right-0 grid w-11 place-items-center rounded-full text-muted2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
+                >
+                  <CloseIcon className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+            <span id="leaderboard-search-status" role="status" aria-live="polite" className="sr-only">
+              {modelSearchStatus}
+            </span>
           </div>
         </div>
       </div>
@@ -417,9 +543,12 @@ export function Leaderboard() {
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
         <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
-        <div className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
+        <div
+          id="leaderboard-models"
+          className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]"
+        >
           <div className="relative z-[2] space-y-2.5 p-2.5 sm:hidden">
-	            {data?.models.map((m, index) => {
+	            {visibleModels.map((m) => {
 	              const voteSummary = summarizeArenaVotes(m);
 	              const consistency = m.consistency ?? 0;
 	              const coveragePercent = Math.round((m.promptCoverage ?? 0) * 100);
@@ -437,9 +566,9 @@ export function Leaderboard() {
 	                >
 	                  <div className="flex items-start justify-between gap-3">
 	                    <div className="flex min-w-0 items-start gap-3">
-	                      <div className="flex w-9 flex-col items-center gap-0.5 pt-0.5">
-	                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/65 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
-	                          {index + 1}
+		                      <div className="flex w-9 flex-col items-center gap-0.5 pt-0.5">
+		                        <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/65 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
+		                          {m.rank}
 	                        </span>
 	                        <MovementMark badge={moveBadge} />
 	                      </div>
@@ -554,8 +683,11 @@ export function Leaderboard() {
                     <span>{m.bothBadCount.toLocaleString()} both bad</span>
                   </div>
 	                </div>
-              );
-            })}
+	              );
+	            })}
+            {data && visibleModels.length === 0 ? (
+              <ModelSearchEmptyState onClear={clearModelQuery} />
+            ) : null}
             {!data ? (
               <div className="mx-auto w-fit animate-pulse rounded-full bg-border/22 px-4 py-1.5 font-mono text-xs text-muted">
                 Loading…
@@ -673,9 +805,9 @@ export function Leaderboard() {
               </tr>
             </thead>
             <tbody>
-	              {data?.models.map((m, index) => {
-	                const voteSummary = summarizeArenaVotes(m);
-	                const tier = index === 0 ? "champion" : index < 3 ? "top" : "base";
+		              {visibleModels.map((m, resultIndex) => {
+		                const voteSummary = summarizeArenaVotes(m);
+		                const tier = m.rank === 1 ? "champion" : m.rank <= 3 ? "top" : "base";
 	                const moveBadge = movementBadge(m);
 	                return (
 	                  <tr
@@ -686,13 +818,13 @@ export function Leaderboard() {
                     className={`mb-leaderboard-row group mb-card-enter ${
                       navigatingModelKey === m.key ? "opacity-75" : ""
                     }`}
-                    style={{ animationDelay: `${Math.min(index, 10) * 34}ms` }}
+                    style={{ animationDelay: `${Math.min(resultIndex, 10) * 34}ms` }}
                   >
 	                    <td className="mb-leaderboard-model-cell px-3 py-3 sm:px-3.5 sm:py-3.5">
 	                      <div className="flex items-start gap-3">
-	                        <div className="mt-0.5 flex w-9 flex-col items-center gap-0.5">
-	                          <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/62 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
-	                            {index + 1}
+		                        <div className="mt-0.5 flex w-9 flex-col items-center gap-0.5">
+		                          <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/62 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
+		                            {m.rank}
 	                          </span>
 	                          <MovementMark badge={moveBadge} />
 	                        </div>
@@ -818,8 +950,15 @@ export function Leaderboard() {
                       </div>
                     </td>
                   </tr>
-                );
-              })}
+	                );
+	              })}
+              {data && visibleModels.length === 0 ? (
+                <tr>
+                  <td colSpan={showDetailed ? 9 : 6}>
+                    <ModelSearchEmptyState onClear={clearModelQuery} />
+                  </td>
+                </tr>
+              ) : null}
               {!data ? (
                 <tr role="status" aria-live="polite">
                   <td className="px-3 py-6 text-muted sm:px-4" colSpan={showDetailed ? 9 : 6}>

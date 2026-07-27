@@ -32,5 +32,11 @@ assert.ok(
   /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.mb-leaderboard-rating-detail/.test(cssSource),
   "rating detail motion should respect reduced-motion preferences",
 );
+assert.ok(
+  leaderboardSource.includes('aria-label={showDetailed ? "Hide details" : "Show details"}') &&
+    leaderboardSource.includes("mb-details-toggle hidden") &&
+    />\s*Details\s*<\/button>/.test(leaderboardSource),
+  "the details disclosure should keep a stable label and stay out of the mobile card layout",
+);
 
 console.log("leaderboard details UI checks passed");

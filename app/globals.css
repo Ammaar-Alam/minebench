@@ -348,6 +348,12 @@
     color: hsl(var(--fg) / 0.82);
   }
 
+  .mb-leaderboard-search-input::-webkit-search-cancel-button,
+  .mb-leaderboard-search-input::-webkit-search-decoration {
+    display: none;
+    -webkit-appearance: none;
+  }
+
   /* Applied to the optional detail columns (th + td) so they fade in when
      the Details toggle flips on. The header row's min-height keeps its
      size stable across the toggle, so only the cell contents animate. */
@@ -1225,6 +1231,13 @@
   @media (prefers-reduced-motion: reduce) {
     html {
       scroll-behavior: auto;
+    }
+
+    .mb-model-reveal-in,
+    .mb-card-enter {
+      animation: none;
+      opacity: 1;
+      transform: none;
     }
 
     .mb-reveal-highlight-a,
