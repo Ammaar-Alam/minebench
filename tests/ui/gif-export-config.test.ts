@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
+import { getSandboxGifExportPanelGrid } from "../../lib/sandbox/gifExportLayout";
 
 const SOURCE_PATH = "components/sandbox/SandboxGifExportButton.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
+const benchmarkSourceText = readFileSync("components/sandbox/SandboxBenchmark.tsx", "utf8");
 const sourceFile = ts.createSourceFile(SOURCE_PATH, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
 function readNumericConst(name: string): number {
@@ -36,14 +38,16 @@ function readNumericConst(name: string): number {
   return value;
 }
 
-function readRenderProfiles(): Record<string, Array<{ width: number; height: number }>> {
+function readRenderProfiles(
+  name = "EXPORT_RENDER_PROFILES",
+): Record<string, Array<{ width: number; height: number }>> {
   let profiles: Record<string, Array<{ width: number; height: number }>> | null = null;
 
   const visit = (node: ts.Node) => {
     if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
-      node.name.text === "EXPORT_RENDER_PROFILES" &&
+      node.name.text === name &&
       node.initializer &&
       ts.isObjectLiteralExpression(node.initializer)
     ) {
@@ -81,7 +85,46 @@ function readRenderProfiles(): Record<string, Array<{ width: number; height: num
   };
 
   visit(sourceFile);
-  assert.ok(profiles, "EXPORT_RENDER_PROFILES should be defined");
+  assert.ok(profiles, `${name} should be defined`);
+  return profiles;
+}
+
+function readProfileArray(name: string): Array<{ width: number; height: number }> {
+  let profiles: Array<{ width: number; height: number }> | null = null;
+
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.name.text === name &&
+      node.initializer
+    ) {
+      const initializer = ts.isAsExpression(node.initializer)
+        ? node.initializer.expression
+        : node.initializer;
+      if (!ts.isArrayLiteralExpression(initializer)) return;
+      profiles = initializer.elements.map((element) => {
+        assert.ok(ts.isObjectLiteralExpression(element), "render profile entries should be objects");
+        const values = Object.fromEntries(
+          element.properties.flatMap((property) => {
+            if (
+              !ts.isPropertyAssignment(property) ||
+              !ts.isIdentifier(property.name) ||
+              !ts.isNumericLiteral(property.initializer)
+            ) {
+              return [];
+            }
+            return [[property.name.text, Number(property.initializer.text)]];
+          }),
+        );
+        return { width: values.width ?? 0, height: values.height ?? 0 };
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+
+  visit(sourceFile);
+  assert.ok(profiles, `${name} should be defined`);
   return profiles;
 }
 
@@ -102,9 +145,58 @@ assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_LONG_EDGE"), 640);
 const profiles = readRenderProfiles();
 assert.deepEqual(profiles.wide?.[0], { width: 1440, height: 810 });
 assert.deepEqual(profiles.vertical?.[0], { width: 810, height: 1440 });
+const multiRowWideProfiles = readProfileArray("MULTI_ROW_WIDE_RENDER_PROFILES");
+assert.deepEqual(multiRowWideProfiles[0], { width: 1440, height: 1080 });
+for (const profile of multiRowWideProfiles) {
+  const panelHeight = (profile.height - 107 - 22 - 16) / 2;
+  assert.ok(panelHeight >= 220, "multi-row wide profiles should preserve usable panel height");
+}
+assert.deepEqual(getSandboxGifExportPanelGrid(1, "single"), {
+  columns: 1,
+  rows: 1,
+  rowColumns: [1],
+});
+assert.deepEqual(getSandboxGifExportPanelGrid(2, "wide"), {
+  columns: 2,
+  rows: 1,
+  rowColumns: [2],
+});
+assert.deepEqual(getSandboxGifExportPanelGrid(2, "vertical"), {
+  columns: 1,
+  rows: 2,
+  rowColumns: [1, 1],
+});
+assert.deepEqual(getSandboxGifExportPanelGrid(3, "wide"), {
+  columns: 2,
+  rows: 2,
+  rowColumns: [2, 1],
+});
+assert.deepEqual(getSandboxGifExportPanelGrid(3, "vertical"), {
+  columns: 2,
+  rows: 2,
+  rowColumns: [2, 1],
+});
+assert.deepEqual(getSandboxGifExportPanelGrid(4, "wide"), {
+  columns: 2,
+  rows: 2,
+  rowColumns: [2, 2],
+});
+assert.deepEqual(getSandboxGifExportPanelGrid(4, "vertical"), {
+  columns: 2,
+  rows: 2,
+  rowColumns: [2, 2],
+});
 assert.ok(
   sourceText.includes("frame / runtime.frameCount"),
   "GIF frame sampling should omit the duplicate endpoint for a seamless loop",
+);
+assert.ok(
+  sourceText.includes("targets.length > 1"),
+  "GIF export should treat every multi-model layout as a comparison",
+);
+assert.ok(
+  !benchmarkSourceText.includes("autoRotate="),
+  "comparison cards should use the shared viewer spin control",
 );
 
 console.log("gif export config checks passed");

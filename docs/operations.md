@@ -162,7 +162,7 @@ Reference prompt template:
   - body: `{ matchupId, choice }`
   - `choice`: `A | B | TIE | BOTH_BAD`
 - `GET /api/arena/prompts`
-- `GET /api/sandbox/benchmark?promptId=&modelA=&modelB=`
+- `GET /api/sandbox/benchmark?promptId=&modelA=&modelB=&modelC=&modelD=`
 - `GET /api/leaderboard`
 
 ### Admin Routes

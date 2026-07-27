@@ -3,6 +3,10 @@
 import type { RefObject } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import {
+  getSandboxGifExportPanelGrid,
+  type SandboxGifExportLayoutFormat,
+} from "@/lib/sandbox/gifExportLayout";
 
 export type SandboxGifExportTarget = {
   viewerRef: RefObject<VoxelViewerHandle | null>;
@@ -21,7 +25,7 @@ type Props = {
 };
 
 type GifExportFormat = "wide" | "vertical";
-type GifExportLayoutFormat = GifExportFormat | "single";
+type GifExportLayoutFormat = SandboxGifExportLayoutFormat;
 
 const GIF_DELAY_TICK_MS = 10;
 const MAX_IN_FLIGHT_FRAMES = 4;
@@ -63,6 +67,12 @@ const EXPORT_RENDER_PROFILES: Record<
     { width: 540, height: 960 },
   ],
 };
+const MULTI_ROW_WIDE_RENDER_PROFILES = [
+  { width: 1440, height: 1080 },
+  { width: 1280, height: 960 },
+  { width: 960, height: 720 },
+  { width: 800, height: 600 },
+] as const;
 
 const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
@@ -96,6 +106,16 @@ type GifExportRuntime = {
   paletteSampleLongEdge: number;
 };
 type GifExportRotationBases = number[];
+
+function getExportRenderProfiles(
+  format: GifExportLayoutFormat,
+  targetCount: number,
+): ReadonlyArray<GifRenderProfile> {
+  if (format === "wide" && targetCount > 2) {
+    return MULTI_ROW_WIDE_RENDER_PROFILES;
+  }
+  return EXPORT_RENDER_PROFILES[format];
+}
 
 function buildFrameDelaySchedule(frameCount: number, frameDelayMs: number): number[] {
   const delayTicks = Math.max(1, Math.round(frameDelayMs / GIF_DELAY_TICK_MS));
@@ -242,49 +262,49 @@ function buildExportLayout(
   promptText: string,
   format: GifExportLayoutFormat,
 ): ExportLayout {
-  const panelGap = count === 1 ? 0 : PANEL_GAP;
+  const safeCount = Math.max(1, Math.min(4, count));
+  const panelGap = safeCount === 1 ? 0 : PANEL_GAP;
+  const grid = getSandboxGifExportPanelGrid(safeCount, format);
   ctx.font = HEADER_PROMPT_FONT;
   const normalizedPrompt = promptText.replace(/\s+/g, " ").trim();
   const promptMaxWidth = width - 56;
   const allPromptLines = wrapTextLines(ctx, `Prompt: ${normalizedPrompt || "sandbox prompt"}`, promptMaxWidth);
   const maxPanelTop =
-    format === "vertical"
-      ? height - EXPORT_MARGIN_BOTTOM - panelGap * (count - 1) - MIN_EXPORT_PANEL_HEIGHT * count
-      : height - EXPORT_MARGIN_BOTTOM - MIN_EXPORT_PANEL_HEIGHT;
+    height -
+    EXPORT_MARGIN_BOTTOM -
+    panelGap * (grid.rows - 1) -
+    MIN_EXPORT_PANEL_HEIGHT * grid.rows;
   // free-form prompts still need room for viewers
   const maxPromptLines = Math.floor((maxPanelTop - 84) / HEADER_PROMPT_LINE_HEIGHT);
   const promptLines = capPromptLines(ctx, allPromptLines, maxPromptLines, promptMaxWidth);
   const panelTop = Math.max(104, 60 + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24);
-  const panelRects =
-    format === "vertical"
-      ? Array.from({ length: count }, (_, idx) => {
-          const panelWidth = width - EXPORT_MARGIN_X * 2;
-          const panelHeight =
-            (height - panelTop - EXPORT_MARGIN_BOTTOM - panelGap * (count - 1)) / count;
-          return {
-            x: EXPORT_MARGIN_X,
-            y: panelTop + idx * (panelHeight + panelGap),
-            width: panelWidth,
-            height: panelHeight,
-          };
-        })
-      : Array.from({ length: count }, (_, idx) => {
-          const panelWidth = (width - EXPORT_MARGIN_X * 2 - panelGap * (count - 1)) / count;
-          const panelHeight = height - panelTop - EXPORT_MARGIN_BOTTOM;
-          return {
-            x: EXPORT_MARGIN_X + idx * (panelWidth + panelGap),
-            y: panelTop,
-            width: panelWidth,
-            height: panelHeight,
-          };
-        });
+  const panelWidth =
+    (width - EXPORT_MARGIN_X * 2 - panelGap * (grid.columns - 1)) / grid.columns;
+  const panelHeight =
+    (height - panelTop - EXPORT_MARGIN_BOTTOM - panelGap * (grid.rows - 1)) / grid.rows;
+  const panelRects: ExportLayout["panelRects"] = [];
+
+  for (let row = 0; row < grid.rows; row += 1) {
+    const columnsInRow = grid.rowColumns[row] ?? grid.columns;
+    const rowWidth = panelWidth * columnsInRow + panelGap * Math.max(0, columnsInRow - 1);
+    const rowX = EXPORT_MARGIN_X + (width - EXPORT_MARGIN_X * 2 - rowWidth) / 2;
+
+    for (let column = 0; column < columnsInRow && panelRects.length < safeCount; column += 1) {
+      panelRects.push({
+        x: rowX + column * (panelWidth + panelGap),
+        y: panelTop + row * (panelHeight + panelGap),
+        width: panelWidth,
+        height: panelHeight,
+      });
+    }
+  }
 
   return {
     width,
     height,
     panelRects,
     header: {
-      title: count === 2 ? "MineBench Comparison" : "MineBench Build",
+      title: safeCount > 1 ? "MineBench Comparison" : "MineBench Build",
       promptLines,
       urlText: "minebench.ai",
     },
@@ -459,12 +479,6 @@ function drawPanel(
   ctx.textBaseline = "top";
   ctx.fillText(target.company.toUpperCase(), x + PANEL_PAD, y + 12);
 
-  const modelLine =
-    target.modelName.length > 24 ? `${target.modelName.slice(0, 23)}...` : target.modelName;
-  ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
-  ctx.font = '700 23px "Sora", "Avenir Next", "Segoe UI", sans-serif';
-  ctx.fillText(modelLine, x + PANEL_PAD, y + 27);
-
   const blockLabel = `${target.blockCount.toLocaleString()} blocks`;
   ctx.font = '600 11px "IBM Plex Sans", "Segoe UI", sans-serif';
   const badgeWidth = Math.ceil(ctx.measureText(blockLabel).width + 16);
@@ -478,6 +492,15 @@ function drawPanel(
   ctx.stroke();
   ctx.fillStyle = "rgba(226, 232, 240, 0.96)";
   ctx.fillText(blockLabel, badgeX + 8, badgeY + 5);
+
+  ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
+  ctx.font = '700 23px "Sora", "Avenir Next", "Segoe UI", sans-serif';
+  const modelLine = fitTextWithEllipsis(
+    ctx,
+    target.modelName,
+    Math.max(1, width - PANEL_PAD * 2 - badgeWidth - 8),
+  );
+  ctx.fillText(modelLine, x + PANEL_PAD, y + 27);
 
   ctx.save();
   roundedRectPath(ctx, captureX, captureY, captureWidth, captureHeight, CAPTURE_RADIUS);
@@ -828,7 +851,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
   const exportAbortRef = useRef<AbortController | null>(null);
 
   const hasTargets = targets.length > 0;
-  const canChooseFormat = targets.length === 2;
+  const canChooseFormat = targets.length > 1;
   const exportFormat: GifExportLayoutFormat = canChooseFormat ? format : "single";
 
   useEffect(() => {
@@ -849,7 +872,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
     exportAbortRef.current = abortController;
     await waitForNextPaint();
     try {
-      const profiles = EXPORT_RENDER_PROFILES[exportFormat];
+      const profiles = getExportRenderProfiles(exportFormat, targets.length);
       const runtime = getExportRuntime(exportFormat);
       setProgress({ done: 0, total: runtime.frameCount });
       let finalBlob: Blob | null = null;
@@ -915,10 +938,14 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
         throw new Error("GIF export failed");
       }
 
-      const modelToken = targets.map((t) => sanitizeFilePart(t.modelName) || "model").join("-vs-");
+      const modelToken = targets
+        .map((target) => sanitizeFilePart(target.modelName) || "model")
+        .join("-vs-")
+        .slice(0, 120)
+        .replace(/-+$/g, "");
       const promptToken = sanitizeFilePart(promptText ?? "sandbox");
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const typeToken = targets.length === 2 ? "compare" : "build";
+      const typeToken = targets.length > 1 ? "compare" : "build";
       const formatToken =
         exportFormat === "vertical" ? "vertical" : exportFormat === "single" ? "viewer" : "wide";
       const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.gif`;
@@ -945,7 +972,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       : progress
         ? `Rendering ${Math.max(0, progress.done)}/${progress.total}`
         : "Rendering..."
-    : (label ?? (targets.length === 2 ? "Export comparison GIF" : "Export GIF"));
+    : (label ?? (targets.length > 1 ? "Export comparison GIF" : "Export GIF"));
   const buttonTitle = error ?? displayLabel;
   const busy = exporting || optimizing;
   const isUnavailable = !hasTargets;

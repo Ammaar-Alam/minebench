@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   SandboxGifExportButton,
   type SandboxGifExportTarget,
@@ -16,11 +23,18 @@ import type {
   ArenaBuildStreamEvent,
   ArenaBuildVariant,
 } from "@/lib/arena/types";
+import {
+  SANDBOX_COMPARISON_MODEL_PARAMS,
+  SANDBOX_COMPARISON_SLOTS,
+  type SandboxComparisonSelection,
+  type SandboxComparisonSlot,
+  createSandboxComparisonSelection,
+  getActiveSandboxComparisonSlots,
+} from "@/lib/sandbox/benchmarkComparison";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
-type Slot = "a" | "b";
 
 type BenchmarkPromptOption = {
   id: string;
@@ -62,14 +76,8 @@ type BenchmarkResponse = {
     text: string;
   } | null;
   models: BenchmarkModelOption[];
-  selectedModels: {
-    a: string | null;
-    b: string | null;
-  };
-  builds: {
-    a: BenchmarkBuild | null;
-    b: BenchmarkBuild | null;
-  };
+  selectedModels: SandboxComparisonSelection<string | null>;
+  builds: SandboxComparisonSelection<BenchmarkBuild | null>;
 };
 
 type BuildVariantResponse = {
@@ -119,6 +127,18 @@ type CachedBuild = {
 
 const DEFAULT_MODEL_A = "openai_gpt_5_5";
 const DEFAULT_MODEL_B = "openai_gpt_5_5_pro";
+const DEFAULT_MODEL_SELECTION: SandboxComparisonSelection<string> = {
+  a: DEFAULT_MODEL_A,
+  b: DEFAULT_MODEL_B,
+  c: "",
+  d: "",
+};
+const COMPARISON_SLOT_LABELS: SandboxComparisonSelection<string> = {
+  a: "Model 1",
+  b: "Model 2",
+  c: "Model 3",
+  d: "Model 4",
+};
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_SNAPSHOT_TIMEOUT_MS ?? "12000",
   10,
@@ -214,11 +234,13 @@ async function readWithTimeout<T>(
   });
 }
 
-function SelectChevron() {
+function SelectChevron({ withTrailingAction = false }: { withTrailingAction?: boolean }) {
   return (
     <svg
       aria-hidden="true"
-      className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+      className={`pointer-events-none absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted ${
+        withTrailingAction ? "right-14" : "right-3"
+      }`}
       viewBox="0 0 24 24"
       fill="none"
     >
@@ -267,6 +289,36 @@ function createEmptySlotState(): SlotHydrationState {
   };
 }
 
+function createEmptySlotStates(): SandboxComparisonSelection<SlotHydrationState> {
+  return {
+    a: createEmptySlotState(),
+    b: createEmptySlotState(),
+    c: createEmptySlotState(),
+    d: createEmptySlotState(),
+  };
+}
+
+function createEmptyBuilds(): SandboxComparisonSelection<null> {
+  return createSandboxComparisonSelection(null);
+}
+
+function createModelSelectionFromKeys(modelKeys: string[]): SandboxComparisonSelection<string> {
+  const selection = createSandboxComparisonSelection("");
+  for (const [index, modelKey] of modelKeys.slice(0, SANDBOX_COMPARISON_SLOTS.length).entries()) {
+    const slot = SANDBOX_COMPARISON_SLOTS[index];
+    if (slot) selection[slot] = modelKey;
+  }
+  return selection;
+}
+
+function toNullableModelSelection(
+  selection: SandboxComparisonSelection<string>,
+): SandboxComparisonSelection<string | null> {
+  return Object.fromEntries(
+    SANDBOX_COMPARISON_SLOTS.map((slot) => [slot, selection[slot] || null]),
+  ) as SandboxComparisonSelection<string | null>;
+}
+
 function toSlotProgressTotal(build: BenchmarkBuild | null): number | null {
   if (!build) return null;
   if (build.metrics.blockCount > 0) return build.metrics.blockCount;
@@ -301,14 +353,15 @@ async function readBuildVariantJson(res: Response): Promise<BuildVariantResponse
 
 async function fetchBenchmarkResponse(args: {
   promptId?: string;
-  modelA?: string;
-  modelB?: string;
+  models?: Partial<SandboxComparisonSelection<string>>;
   signal?: AbortSignal;
 }): Promise<BenchmarkResponse> {
   const params = new URLSearchParams();
   if (args.promptId) params.set("promptId", args.promptId);
-  if (args.modelA) params.set("modelA", args.modelA);
-  if (args.modelB) params.set("modelB", args.modelB);
+  for (const slot of SANDBOX_COMPARISON_SLOTS) {
+    const modelKey = args.models?.[slot];
+    if (modelKey) params.set(SANDBOX_COMPARISON_MODEL_PARAMS[slot], modelKey);
+  }
 
   const query = params.toString();
   const url = query ? `/api/sandbox/benchmark?${query}` : "/api/sandbox/benchmark";
@@ -634,25 +687,36 @@ function getVoxelBlockCount(build: unknown): number {
 
 export function SandboxBenchmark() {
   const [promptId, setPromptId] = useState("");
-  const [modelPair, setModelPair] = useState({ a: DEFAULT_MODEL_A, b: DEFAULT_MODEL_B });
+  const [modelSelection, setModelSelection] =
+    useState<SandboxComparisonSelection<string>>(DEFAULT_MODEL_SELECTION);
   const [data, setData] = useState<BenchmarkResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectionReloading, setSelectionReloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [slotState, setSlotState] = useState<Record<Slot, SlotHydrationState>>({
-    a: createEmptySlotState(),
-    b: createEmptySlotState(),
-  });
+  const [slotState, setSlotState] =
+    useState<SandboxComparisonSelection<SlotHydrationState>>(createEmptySlotStates);
 
   const requestIdRef = useRef(0);
   const hydrationRunIdRef = useRef(0);
   const loadAbortRef = useRef<AbortController | null>(null);
-  const slotAbortRef = useRef<Record<Slot, AbortController | null>>({ a: null, b: null });
+  const slotAbortRef =
+    useRef<SandboxComparisonSelection<AbortController | null>>(
+      createSandboxComparisonSelection(null),
+    );
   const buildCacheRef = useRef<Map<string, CachedBuild>>(new Map());
 
   const viewerARef = useRef<VoxelViewerHandle | null>(null);
   const viewerBRef = useRef<VoxelViewerHandle | null>(null);
+  const viewerCRef = useRef<VoxelViewerHandle | null>(null);
+  const viewerDRef = useRef<VoxelViewerHandle | null>(null);
+  const pendingModelFocusRef = useRef<SandboxComparisonSlot | null>(null);
+  const viewerRefs: SandboxComparisonSelection<RefObject<VoxelViewerHandle | null>> = {
+    a: viewerARef,
+    b: viewerBRef,
+    c: viewerCRef,
+    d: viewerDRef,
+  };
 
   const setCachedBuild = useCallback((ref: ArenaBuildRef, value: CachedBuild) => {
     const cache = buildCacheRef.current;
@@ -671,23 +735,19 @@ export function SandboxBenchmark() {
   }, []);
 
   const clearVisibleBuilds = useCallback(() => {
-    for (const slot of ["a", "b"] as const) {
+    for (const slot of SANDBOX_COMPARISON_SLOTS) {
       slotAbortRef.current[slot]?.abort();
       slotAbortRef.current[slot] = null;
     }
     hydrationRunIdRef.current += 1;
-    setSlotState({
-      a: createEmptySlotState(),
-      b: createEmptySlotState(),
-    });
+    setSlotState(createEmptySlotStates());
   }, []);
 
   const runLoad = useCallback(
     async (
       args: {
         promptId?: string;
-        modelA?: string;
-        modelB?: string;
+        models?: Partial<SandboxComparisonSelection<string>>;
       },
       opts?: { initial?: boolean; bypassCache?: boolean },
     ) => {
@@ -708,10 +768,14 @@ export function SandboxBenchmark() {
         setSelectionReloading(false);
         setData(nextData);
         setPromptId(nextData.selectedPrompt?.id ?? "");
-        setModelPair({
-          a: nextData.selectedModels.a ?? "",
-          b: nextData.selectedModels.b ?? "",
-        });
+        setModelSelection(
+          Object.fromEntries(
+            SANDBOX_COMPARISON_SLOTS.map((slot) => [
+              slot,
+              nextData.selectedModels[slot] ?? "",
+            ]),
+          ) as SandboxComparisonSelection<string>,
+        );
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
         if (requestId !== requestIdRef.current) return;
@@ -719,10 +783,14 @@ export function SandboxBenchmark() {
           err instanceof Error ? err.message : "Failed to load benchmark comparison data";
         setSelectionReloading(false);
         setError(message);
-        setSlotState({
-          a: { ...createEmptySlotState(), phase: "error", error: message },
-          b: { ...createEmptySlotState(), phase: "error", error: message },
-        });
+        setSlotState(
+          Object.fromEntries(
+            SANDBOX_COMPARISON_SLOTS.map((slot) => [
+              slot,
+              { ...createEmptySlotState(), phase: "error", error: message },
+            ]),
+          ) as SandboxComparisonSelection<SlotHydrationState>,
+        );
       } finally {
         if (requestId !== requestIdRef.current) return;
         if (loadAbortRef.current === loadAbort) {
@@ -738,8 +806,7 @@ export function SandboxBenchmark() {
   useEffect(() => {
     void runLoad(
       {
-        modelA: DEFAULT_MODEL_A,
-        modelB: DEFAULT_MODEL_B,
+        models: DEFAULT_MODEL_SELECTION,
       },
       { initial: true },
     );
@@ -747,29 +814,29 @@ export function SandboxBenchmark() {
 
   useEffect(() => {
     const runId = ++hydrationRunIdRef.current;
-    const effectControllers: Partial<Record<Slot, AbortController>> = {};
+    const effectControllers: Partial<
+      SandboxComparisonSelection<AbortController>
+    > = {};
     const abortRef = slotAbortRef.current;
 
-    for (const slot of ["a", "b"] as const) {
+    for (const slot of SANDBOX_COMPARISON_SLOTS) {
       abortRef[slot]?.abort();
       abortRef[slot] = null;
     }
 
     if (!data) {
-      setSlotState({
-        a: createEmptySlotState(),
-        b: createEmptySlotState(),
-      });
+      setSlotState(createEmptySlotStates());
       return;
     }
 
-    const nextState: Record<Slot, SlotHydrationState> = {
-      a: createEmptySlotState(),
-      b: createEmptySlotState(),
-    };
-    const hydrateQueue: Array<{ slot: Slot; lane: BenchmarkBuild }> = [];
+    const nextState = createEmptySlotStates();
+    const hydrateQueue: Array<{
+      slot: SandboxComparisonSlot;
+      lane: BenchmarkBuild;
+    }> = [];
 
-    for (const slot of ["a", "b"] as const) {
+    for (const slot of SANDBOX_COMPARISON_SLOTS) {
+      if (!data.selectedModels[slot]) continue;
       const lane = data.builds[slot];
       if (!lane) {
         nextState[slot] = {
@@ -951,7 +1018,7 @@ export function SandboxBenchmark() {
     }
 
     return () => {
-      for (const slot of ["a", "b"] as const) {
+      for (const slot of SANDBOX_COMPARISON_SLOTS) {
         const controller = effectControllers[slot];
         controller?.abort();
         if (abortRef[slot] === controller) {
@@ -973,6 +1040,23 @@ export function SandboxBenchmark() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([label, models]) => ({ label, models }));
   }, [data?.models]);
+  const activeSlots = getActiveSandboxComparisonSlots(modelSelection);
+  const nextAvailableSlot =
+    activeSlots.length < (data?.models.length ?? 0)
+      ? SANDBOX_COMPARISON_SLOTS.find((slot) => !modelSelection[slot])
+      : undefined;
+  const visibleSelectorSlots = nextAvailableSlot
+    ? [...activeSlots, nextAvailableSlot]
+    : activeSlots;
+
+  useEffect(() => {
+    const slot = pendingModelFocusRef.current;
+    if (!slot || modelSelection[slot] || loading || refreshing) return;
+    const target = document.getElementById(`sandbox-model-${slot}`);
+    if (!target) return;
+    target.focus();
+    pendingModelFocusRef.current = null;
+  }, [loading, modelSelection, refreshing]);
 
   function handlePromptChange(nextPromptId: string) {
     setPromptId(nextPromptId);
@@ -984,44 +1068,56 @@ export function SandboxBenchmark() {
       return {
         ...prev,
         selectedPrompt: selectedPrompt ? { id: selectedPrompt.id, text: selectedPrompt.text } : prev.selectedPrompt,
-        builds: { a: null, b: null },
+        builds: createEmptyBuilds(),
       };
     });
     void runLoad(
       {
         promptId: nextPromptId,
-        modelA: modelPair.a,
-        modelB: modelPair.b,
+        models: modelSelection,
       },
       { initial: false },
     );
   }
 
-  function handleModelChange(slot: "a" | "b", modelKey: string) {
-    if (!modelKey) return;
-    const other = slot === "a" ? modelPair.b : modelPair.a;
-    if (modelKey === other) return;
-    const nextPair = slot === "a" ? { a: modelKey, b: other } : { a: other, b: modelKey };
-    setModelPair(nextPair);
+  function loadModelSelection(nextSelection: SandboxComparisonSelection<string>) {
+    setModelSelection(nextSelection);
     setSelectionReloading(true);
     clearVisibleBuilds();
     setData((prev) =>
       prev
         ? {
             ...prev,
-            selectedModels: nextPair,
-            builds: { a: null, b: null },
+            selectedModels: toNullableModelSelection(nextSelection),
+            builds: createEmptyBuilds(),
           }
         : prev,
     );
     void runLoad(
       {
         promptId,
-        modelA: nextPair.a,
-        modelB: nextPair.b,
+        models: nextSelection,
       },
       { initial: false },
     );
+  }
+
+  function handleModelChange(slot: SandboxComparisonSlot, modelKey: string) {
+    if (!modelKey) return;
+    const duplicate = SANDBOX_COMPARISON_SLOTS.some(
+      (otherSlot) => otherSlot !== slot && modelSelection[otherSlot] === modelKey,
+    );
+    if (duplicate) return;
+    loadModelSelection({ ...modelSelection, [slot]: modelKey });
+  }
+
+  function handleRemoveModel(slot: SandboxComparisonSlot) {
+    if (slot === "a" || slot === "b") return;
+    const remaining = activeSlots
+      .filter((candidate) => candidate !== slot)
+      .map((candidate) => modelSelection[candidate]);
+    pendingModelFocusRef.current = SANDBOX_COMPARISON_SLOTS[remaining.length] ?? null;
+    loadModelSelection(createModelSelectionFromKeys(remaining));
   }
 
   function handleRandomPrompt() {
@@ -1051,15 +1147,14 @@ export function SandboxBenchmark() {
   const gridSize = toGridSize(data?.settings.gridSize ?? 256);
   const palette = toPalette(data?.settings.palette ?? "simple");
 
-  const compareTargets: SandboxGifExportTarget[] = data
-    ? (["a", "b"] as const)
+  const readyCompareTargets: SandboxGifExportTarget[] = data
+    ? activeSlots
         .map((slot) => {
           const build = data.builds[slot];
           const laneState = slotState[slot];
           if (!build || laneState.phase !== "ready" || !laneState.build) return null;
-          const viewerRef = slot === "a" ? viewerARef : viewerBRef;
           return {
-            viewerRef,
+            viewerRef: viewerRefs[slot],
             modelName: build.model.displayName,
             company: providerLabel(build.model.provider),
             blockCount: build.metrics.blockCount,
@@ -1067,16 +1162,18 @@ export function SandboxBenchmark() {
         })
         .filter((target): target is SandboxGifExportTarget => Boolean(target))
     : [];
+  const compareTargets =
+    readyCompareTargets.length === activeSlots.length ? readyCompareTargets : [];
 
   const cards = data
-    ? (["a", "b"] as const).map((slot) => {
+    ? activeSlots.map((slot) => {
         const build = data.builds[slot];
         const laneState = slotState[slot];
-        const selectedModelKey = slot === "a" ? modelPair.a : modelPair.b;
+        const selectedModelKey = modelSelection[slot];
         const fallbackModel = data.models.find((m) => m.key === selectedModelKey);
         const model = build?.model ?? fallbackModel;
-        const viewerRef = slot === "a" ? viewerARef : viewerBRef;
-        const title = model ? model.displayName : slot === "a" ? "Model A" : "Model B";
+        const viewerRef = viewerRefs[slot];
+        const title = model ? model.displayName : COMPARISON_SLOT_LABELS[slot];
 
         const hasRenderableBuild = Boolean(laneState.build);
         const isHydrating = laneState.phase === "loading" || (!build && selectionReloading);
@@ -1159,7 +1256,7 @@ export function SandboxBenchmark() {
               Compare arena builds directly
             </div>
             <div className="text-sm text-muted">
-              Pick a curated benchmark prompt and compare two models side by side.
+              Choose up to four models
             </div>
           </div>
 
@@ -1167,7 +1264,13 @@ export function SandboxBenchmark() {
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={selectedPromptText}
-              cancelKey={`${promptId}:${modelPair.a}:${modelPair.b}:${data?.builds.a?.buildId ?? "none"}:${data?.builds.b?.buildId ?? "none"}`}
+              cancelKey={[
+                promptId,
+                ...activeSlots.flatMap((slot) => [
+                  modelSelection[slot],
+                  data?.builds[slot]?.buildId ?? "none",
+                ]),
+              ].join(":")}
               label="Export GIF"
               className="h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
             />
@@ -1181,8 +1284,7 @@ export function SandboxBenchmark() {
                 void runLoad(
                   {
                     promptId,
-                    modelA: modelPair.a,
-                    modelB: modelPair.b,
+                    models: modelSelection,
                   },
                   { initial: false, bypassCache: true },
                 );
@@ -1228,8 +1330,7 @@ export function SandboxBenchmark() {
                 void runLoad(
                   {
                     promptId,
-                    modelA: modelPair.a || undefined,
-                    modelB: modelPair.b || undefined,
+                    models: modelSelection,
                   },
                   { initial: true },
                 )
@@ -1340,52 +1441,82 @@ export function SandboxBenchmark() {
           </div>
         </div>
 
-        <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted">Model A</span>
-            <div className="relative">
-              <select
-                className="mb-field h-11 w-full appearance-none pr-10"
-                value={modelPair.a}
-                onChange={(e) => handleModelChange("a", e.target.value)}
-                disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
-              >
-                {modelGroups.map((group) => (
-                  <optgroup key={group.label} label={group.label}>
-                    {group.models.map((model) => (
-                      <option key={model.key} value={model.key} disabled={model.key === modelPair.b}>
-                        {model.displayName}
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+          {visibleSelectorSlots.map((slot) => {
+            const selectedModelKey = modelSelection[slot];
+            const active = Boolean(selectedModelKey);
+            const removable = slot === "c" || slot === "d";
+            const selectId = `sandbox-model-${slot}`;
+            return (
+              <div key={slot} className="flex min-w-0 flex-col gap-1">
+                <label htmlFor={selectId} className="text-xs font-medium text-muted">
+                  {COMPARISON_SLOT_LABELS[slot]}
+                </label>
+                <div className="relative min-w-0">
+                  <select
+                    id={selectId}
+                    className={`mb-field h-11 w-full appearance-none ${
+                      active && removable ? "pr-20" : "pr-10"
+                    } ${
+                      active ? "" : "border-dashed text-muted"
+                    }`}
+                    value={selectedModelKey ?? ""}
+                    onChange={(event) => handleModelChange(slot, event.target.value)}
+                    disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
+                  >
+                    {!active ? (
+                      <option value="" disabled>
+                        Add model
                       </option>
+                    ) : null}
+                    {modelGroups.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.models.map((model) => {
+                          const selectedElsewhere = SANDBOX_COMPARISON_SLOTS.some(
+                            (otherSlot) =>
+                              otherSlot !== slot &&
+                              modelSelection[otherSlot] === model.key,
+                          );
+                          return (
+                            <option
+                              key={model.key}
+                              value={model.key}
+                              disabled={selectedElsewhere}
+                            >
+                              {model.displayName}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
                     ))}
-                  </optgroup>
-                ))}
-              </select>
-              <SelectChevron />
-            </div>
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted">Model B</span>
-            <div className="relative">
-              <select
-                className="mb-field h-11 w-full appearance-none pr-10"
-                value={modelPair.b}
-                onChange={(e) => handleModelChange("b", e.target.value)}
-                disabled={loading || refreshing || (data?.models.length ?? 0) < 2}
-              >
-                {modelGroups.map((group) => (
-                  <optgroup key={group.label} label={group.label}>
-                    {group.models.map((model) => (
-                      <option key={model.key} value={model.key} disabled={model.key === modelPair.a}>
-                        {model.displayName}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <SelectChevron />
-            </div>
-          </label>
+                  </select>
+                  <SelectChevron withTrailingAction={active && removable} />
+                  {active && removable ? (
+                    <button
+                      type="button"
+                      className="absolute inset-y-px right-px inline-flex w-11 items-center justify-center rounded-r-[0.7rem] border-l border-border/60 text-muted transition-colors hover:bg-danger/10 hover:text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-45"
+                      aria-label={`Remove ${COMPARISON_SLOT_LABELS[slot]}`}
+                      onClick={() => handleRemoveModel(slot)}
+                      disabled={loading || refreshing}
+                    >
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 24 24"
+                        className="h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="1.8"
+                      >
+                        <path d="m8 8 8 8M16 8l-8 8" />
+                      </svg>
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
