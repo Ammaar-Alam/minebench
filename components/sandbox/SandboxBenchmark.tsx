@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import {
   type RefObject,
   useCallback,
@@ -31,6 +32,10 @@ import {
   createSandboxComparisonSelection,
   getActiveSandboxComparisonSlots,
 } from "@/lib/sandbox/benchmarkComparison";
+import {
+  buildSandboxComparisonPath,
+  parseSandboxComparisonDeepLink,
+} from "@/lib/deepLinks";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 type Palette = "simple" | "advanced";
@@ -309,6 +314,13 @@ function createModelSelectionFromKeys(modelKeys: string[]): SandboxComparisonSel
     if (slot) selection[slot] = modelKey;
   }
   return selection;
+}
+
+function getSelectedModelKeys(selection: SandboxComparisonSelection<string>): string[] {
+  return SANDBOX_COMPARISON_SLOTS.flatMap((slot) => {
+    const modelKey = selection[slot];
+    return modelKey ? [modelKey] : [];
+  });
 }
 
 function toNullableModelSelection(
@@ -686,6 +698,12 @@ function getVoxelBlockCount(build: unknown): number {
 }
 
 export function SandboxBenchmark() {
+  const searchParams = useSearchParams();
+  const searchKey = searchParams.toString();
+  const requestedDeepLink = useMemo(
+    () => parseSandboxComparisonDeepLink(new URLSearchParams(searchKey)),
+    [searchKey],
+  );
   const [promptId, setPromptId] = useState("");
   const [modelSelection, setModelSelection] =
     useState<SandboxComparisonSelection<string>>(DEFAULT_MODEL_SELECTION);
@@ -699,6 +717,8 @@ export function SandboxBenchmark() {
 
   const requestIdRef = useRef(0);
   const hydrationRunIdRef = useRef(0);
+  const hasLoadedRef = useRef(false);
+  const skippedSearchKeyRef = useRef<string | null>(null);
   const loadAbortRef = useRef<AbortController | null>(null);
   const slotAbortRef =
     useRef<SandboxComparisonSelection<AbortController | null>>(
@@ -717,6 +737,17 @@ export function SandboxBenchmark() {
     c: viewerCRef,
     d: viewerDRef,
   };
+
+  useEffect(() => {
+    const abortRef = slotAbortRef.current;
+    return () => {
+      loadAbortRef.current?.abort();
+      for (const slot of SANDBOX_COMPARISON_SLOTS) {
+        abortRef[slot]?.abort();
+      }
+      hydrationRunIdRef.current += 1;
+    };
+  }, []);
 
   const setCachedBuild = useCallback((ref: ArenaBuildRef, value: CachedBuild) => {
     const cache = buildCacheRef.current;
@@ -749,7 +780,7 @@ export function SandboxBenchmark() {
         promptId?: string;
         models?: Partial<SandboxComparisonSelection<string>>;
       },
-      opts?: { initial?: boolean; bypassCache?: boolean },
+      opts?: { initial?: boolean; bypassCache?: boolean; syncUrl?: boolean },
     ) => {
       const requestId = ++requestIdRef.current;
       loadAbortRef.current?.abort();
@@ -776,6 +807,25 @@ export function SandboxBenchmark() {
             ]),
           ) as SandboxComparisonSelection<string>,
         );
+
+        if (opts?.syncUrl) {
+          const nextPath = buildSandboxComparisonPath(
+            new URLSearchParams(window.location.search),
+            SANDBOX_COMPARISON_SLOTS.flatMap((slot) => {
+              const modelKey = nextData.selectedModels[slot];
+              return modelKey ? [modelKey] : [];
+            }),
+            nextData.selectedPrompt?.id ?? null,
+          );
+          const currentPath = `${window.location.pathname}${window.location.search}`;
+          if (nextPath !== currentPath) {
+            skippedSearchKeyRef.current = new URL(
+              nextPath,
+              window.location.origin,
+            ).searchParams.toString();
+            window.history.replaceState(null, "", nextPath);
+          }
+        }
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
         if (requestId !== requestIdRef.current) return;
@@ -804,13 +854,29 @@ export function SandboxBenchmark() {
   );
 
   useEffect(() => {
+    if (skippedSearchKeyRef.current === searchKey) {
+      skippedSearchKeyRef.current = null;
+      return;
+    }
+    skippedSearchKeyRef.current = null;
+
+    const initial = !hasLoadedRef.current;
+    hasLoadedRef.current = true;
+    if (!initial) {
+      setSelectionReloading(true);
+      clearVisibleBuilds();
+    }
     void runLoad(
       {
-        models: DEFAULT_MODEL_SELECTION,
+        promptId: requestedDeepLink.promptId ?? undefined,
+        models:
+          requestedDeepLink.modelKeys.length > 0
+            ? createModelSelectionFromKeys(requestedDeepLink.modelKeys)
+            : DEFAULT_MODEL_SELECTION,
       },
-      { initial: true },
+      { initial, syncUrl: true },
     );
-  }, [runLoad]);
+  }, [clearVisibleBuilds, requestedDeepLink, runLoad, searchKey]);
 
   useEffect(() => {
     const runId = ++hydrationRunIdRef.current;
@@ -1058,6 +1124,21 @@ export function SandboxBenchmark() {
     pendingModelFocusRef.current = null;
   }, [loading, modelSelection, refreshing]);
 
+  function pushComparisonUrl(
+    nextPromptId: string,
+    nextSelection: SandboxComparisonSelection<string>,
+  ) {
+    const nextPath = buildSandboxComparisonPath(
+      new URLSearchParams(window.location.search),
+      getSelectedModelKeys(nextSelection),
+      nextPromptId || null,
+    );
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (nextPath !== currentPath) {
+      window.history.pushState(null, "", nextPath);
+    }
+  }
+
   function handlePromptChange(nextPromptId: string) {
     setPromptId(nextPromptId);
     setSelectionReloading(true);
@@ -1071,13 +1152,7 @@ export function SandboxBenchmark() {
         builds: createEmptyBuilds(),
       };
     });
-    void runLoad(
-      {
-        promptId: nextPromptId,
-        models: modelSelection,
-      },
-      { initial: false },
-    );
+    pushComparisonUrl(nextPromptId, modelSelection);
   }
 
   function loadModelSelection(nextSelection: SandboxComparisonSelection<string>) {
@@ -1093,13 +1168,7 @@ export function SandboxBenchmark() {
           }
         : prev,
     );
-    void runLoad(
-      {
-        promptId,
-        models: nextSelection,
-      },
-      { initial: false },
-    );
+    pushComparisonUrl(promptId, nextSelection);
   }
 
   function handleModelChange(slot: SandboxComparisonSlot, modelKey: string) {
@@ -1326,15 +1395,18 @@ export function SandboxBenchmark() {
               error={new Error(error)}
               title="Couldn't load benchmark"
               hint={error}
-              onRetry={() =>
+              onRetry={() => {
                 void runLoad(
                   {
-                    promptId,
-                    models: modelSelection,
+                    promptId: requestedDeepLink.promptId ?? undefined,
+                    models:
+                      requestedDeepLink.modelKeys.length > 0
+                        ? createModelSelectionFromKeys(requestedDeepLink.modelKeys)
+                        : DEFAULT_MODEL_SELECTION,
                   },
-                  { initial: true },
-                )
-              }
+                  { initial: true, syncUrl: true },
+                );
+              }}
               retrying={loading || refreshing}
             />
           </div>

@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import type {
   ModelDetailStats,
   ModelOpponentBreakdown,
@@ -38,6 +39,7 @@ import {
 } from "@/components/sandbox/SandboxGifExportButton";
 import { getConsistencyBand, getConsistencyLabel } from "@/lib/arena/consistencyBands";
 import { ModelBenchmarkDetails } from "@/components/leaderboard/ModelBenchmarkDetails";
+import { buildLeaderboardBuildPath } from "@/lib/deepLinks";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -1098,6 +1100,9 @@ function SectionHeader({
 }
 
 export function ModelDetail({ data }: { data: ModelDetailStats }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const requestedBuildId = searchParams.get("build");
   const [hoveredCurveIndex, setHoveredCurveIndex] = useState<number | null>(null);
   const [showAllOpponents, setShowAllOpponents] = useState(false);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
@@ -1204,16 +1209,57 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           ? "mb-curve-tooltip-right"
           : "mb-curve-tooltip-center";
 
+  const setPromptWithUrl = useCallback(
+    (prompt: ModelPromptBreakdown | null) => {
+      setActivePrompt(prompt);
+      const nextPath = buildLeaderboardBuildPath(
+        pathname,
+        new URLSearchParams(window.location.search),
+        prompt?.build?.buildId ?? null,
+      );
+      const currentPath = `${window.location.pathname}${window.location.search}`;
+      if (nextPath !== currentPath) {
+        window.history.pushState(null, "", nextPath);
+      }
+    },
+    [pathname],
+  );
+
+  useEffect(() => {
+    if (!requestedBuildId) {
+      setActivePrompt((current) => (current?.build ? null : current));
+      return;
+    }
+
+    const requestedPrompt =
+      promptBreakdown.find((prompt) => prompt.build?.buildId === requestedBuildId) ?? null;
+    if (requestedPrompt) {
+      setActivePrompt(requestedPrompt);
+      return;
+    }
+
+    setActivePrompt(null);
+    const nextPath = buildLeaderboardBuildPath(
+      pathname,
+      new URLSearchParams(window.location.search),
+      null,
+    );
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    if (nextPath !== currentPath) {
+      window.history.replaceState(null, "", nextPath);
+    }
+  }, [pathname, promptBreakdown, requestedBuildId]);
+
   useEffect(() => {
     if (!activePrompt) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      setActivePrompt(null);
+      setPromptWithUrl(null);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activePrompt]);
+  }, [activePrompt, setPromptWithUrl]);
 
   const activePromptIndex = useMemo(() => {
     if (!activePrompt) return -1;
@@ -1234,13 +1280,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
   const handlePromptPrev = useCallback(() => {
     if (activePromptIndex <= 0) return;
-    setActivePrompt(promptBreakdown[activePromptIndex - 1]);
-  }, [activePromptIndex, promptBreakdown]);
+    setPromptWithUrl(promptBreakdown[activePromptIndex - 1]);
+  }, [activePromptIndex, promptBreakdown, setPromptWithUrl]);
 
   const handlePromptNext = useCallback(() => {
     if (activePromptIndex < 0 || activePromptIndex >= promptBreakdown.length - 1) return;
-    setActivePrompt(promptBreakdown[activePromptIndex + 1]);
-  }, [activePromptIndex, promptBreakdown]);
+    setPromptWithUrl(promptBreakdown[activePromptIndex + 1]);
+  }, [activePromptIndex, promptBreakdown, setPromptWithUrl]);
 
   // focus close on open, return focus to the prompt card on close so keyboard
   // users resume where they were. only fires on the open/close transitions so
@@ -1943,13 +1989,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   aria-label={`Open prompt details for ${prompt.promptText}`}
                   onClick={(event) => {
                     lastPromptTriggerRef.current = event.currentTarget;
-                    setActivePrompt(prompt);
+                    setPromptWithUrl(prompt);
                   }}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
                     lastPromptTriggerRef.current = event.currentTarget;
-                    setActivePrompt(prompt);
+                    setPromptWithUrl(prompt);
                   }}
                   className="relative mb-card-enter h-full cursor-pointer rounded-2xl bg-bg/40 p-3.5 ring-1 ring-border/60 transition duration-200 hover:-translate-y-0.5 hover:bg-bg/55 hover:ring-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:p-4"
                 >
@@ -2061,7 +2107,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             type="button"
             aria-label="Close"
             className="absolute inset-0 bg-bg/60 backdrop-blur-sm"
-            onClick={() => setActivePrompt(null)}
+            onClick={() => setPromptWithUrl(null)}
           />
           <div
             ref={modalSurfaceRef}
@@ -2083,7 +2129,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                 type="button"
                 ref={modalCloseRef}
                 className="mb-btn mb-btn-ghost h-9 shrink-0 rounded-full px-3 text-xs sm:px-4"
-                onClick={() => setActivePrompt(null)}
+                onClick={() => setPromptWithUrl(null)}
                 aria-label="Close prompt details"
               >
                 <svg
