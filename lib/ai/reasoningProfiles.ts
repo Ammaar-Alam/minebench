@@ -242,7 +242,7 @@ export function deepseekThinkingConfigForModel(
     return { type: "enabled", reasoningEffort: "high" };
   }
 
-  if (normalized === "low") {
+  if (normalized === "low" && isFlashModel) {
     return { type: "enabled", reasoningEffort: "low" };
   }
 
@@ -262,7 +262,7 @@ export function deepseekThinkingConfigForModel(
   }
 
   throw new Error(
-    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high, low, disabled.`,
+    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high${isFlashModel ? ", low" : ""}, disabled.`,
   );
 }
 

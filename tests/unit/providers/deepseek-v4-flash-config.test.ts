@@ -68,6 +68,10 @@ async function main() {
     type: "enabled",
     reasoningEffort: "high",
   });
+  assert.throws(
+    () => deepseekThinkingConfigForModel("deepseek-v4-pro", "low"),
+    /Supported values: max, high, disabled\./,
+  );
   assert.deepEqual(openRouterReasoningEffortAttempts(model.openRouterModelId), [
     "max",
     "high",
