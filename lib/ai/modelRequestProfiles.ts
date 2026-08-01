@@ -19,6 +19,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
       "deepseek-v4-flash",
       "deepseek/deepseek-v4-pro",
       "deepseek/deepseek-v4-flash",
+      "deepseek/deepseek-v4-flash-0731",
     ],
   },
   { tokens: 272_000, ids: ["gpt-5-pro"] },

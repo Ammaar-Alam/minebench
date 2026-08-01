@@ -165,6 +165,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Enabled" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  deepseek_v4_flash_0731: [
+    { label: "Thinking", value: "Enabled" },
+    { label: "Reasoning effort", value: "Max" },
+  ],
   deepseek_v3_2: [
     { label: "Reasoning", value: "Provider default" },
   ],
@@ -367,6 +371,10 @@ const MODEL_BENCHMARK_METADATA: Partial<
   deepseek_v4_pro: {
     sourceRelease: "3.3.2",
     totalCost: { usd: 3.92 },
+  },
+  deepseek_v4_flash_0731: {
+    sourceRelease: "3.12.0",
+    totalCost: { usd: 0.28, attemptCount: 24 },
   },
   anthropic_claude_4_7_opus: {
     sourceRelease: "v3.0.0",

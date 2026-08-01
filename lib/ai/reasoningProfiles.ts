@@ -15,7 +15,7 @@ export type MoonshotThinkingConfig = {
 
 export type DeepSeekThinkingConfig = {
   type: "enabled" | "disabled";
-  reasoningEffort?: "high" | "max";
+  reasoningEffort?: "low" | "high" | "max";
 };
 
 function normalizeReasoningOverride(value?: string): string | undefined {
@@ -213,9 +213,10 @@ export function deepseekThinkingConfigForModel(
   override?: string,
 ): DeepSeekThinkingConfig | undefined {
   const normalized = normalizeReasoningOverride(override);
+  const isFlashModel = modelId === "deepseek-v4-flash";
   const supportsThinking =
     modelId === "deepseek-v4-pro" ||
-    modelId === "deepseek-v4-flash" ||
+    isFlashModel ||
     modelId === "deepseek-reasoner";
 
   if (!supportsThinking) {
@@ -232,12 +233,20 @@ export function deepseekThinkingConfigForModel(
     normalized === "on" ||
     normalized === "true" ||
     normalized === "max" ||
-    normalized === "xhigh"
+    (normalized === "xhigh" && !isFlashModel)
   ) {
     return { type: "enabled", reasoningEffort: "max" };
   }
 
   if (normalized === "high") {
+    return { type: "enabled", reasoningEffort: "high" };
+  }
+
+  if (normalized === "low" && isFlashModel) {
+    return { type: "enabled", reasoningEffort: "low" };
+  }
+
+  if (normalized === "xhigh" && isFlashModel) {
     return { type: "enabled", reasoningEffort: "high" };
   }
 
@@ -253,7 +262,7 @@ export function deepseekThinkingConfigForModel(
   }
 
   throw new Error(
-    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high, disabled.`,
+    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high${isFlashModel ? ", low" : ""}, disabled.`,
   );
 }
 
@@ -358,6 +367,17 @@ export function openRouterReasoningEffortAttempts(
     if (normalized === "high") return ["high"];
     throw new Error(
       `${label} does not support reasoning '${override}'. Supported values: max, xhigh, high.`,
+    );
+  }
+  if (modelId === "deepseek/deepseek-v4-flash-0731") {
+    const normalized = normalizeReasoningOverride(override);
+    if (!normalized || normalized === "max" || normalized === "xhigh") {
+      return ["max", "high", "low"];
+    }
+    if (normalized === "high") return ["high", "low"];
+    if (normalized === "low") return ["low"];
+    throw new Error(
+      `${label} does not support reasoning '${override}'. Supported values: max, xhigh, high, low.`,
     );
   }
   if (
