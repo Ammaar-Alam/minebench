@@ -93,6 +93,13 @@ async function main() {
     { label: "Thinking", value: "Enabled" },
     { label: "Reasoning effort", value: "Max" },
   ]);
+  assert.equal(profile?.sourceRelease, "3.12.0");
+  assert.deepEqual(profile?.outputCap, { kind: "exact", tokens: 384000 });
+  assert.deepEqual(profile?.averageInference, { milliseconds: 526265 });
+  assert.equal(profile?.averageJsonSizeBytes, 18416164);
+  assert.equal(profile?.totalAttempts, 24);
+  assert.equal(profile?.buildCount, 15);
+  assert.deepEqual(profile?.totalCost, { usd: 0.28, attemptCount: 24 });
 
   const directTraces: string[] = [];
   await generateVoxelBuild({

@@ -372,6 +372,10 @@ const MODEL_BENCHMARK_METADATA: Partial<
     sourceRelease: "3.3.2",
     totalCost: { usd: 3.92 },
   },
+  deepseek_v4_flash_0731: {
+    sourceRelease: "3.12.0",
+    totalCost: { usd: 0.28, attemptCount: 24 },
+  },
   anthropic_claude_4_7_opus: {
     sourceRelease: "v3.0.0",
     averageInference: { milliseconds: 2_600_000 },

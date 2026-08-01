@@ -445,6 +445,27 @@
       "failedAttemptCount": 31,
       "failedRunCount": 4,
       "interruptedRunCount": 1
+    },
+    "deepseek_v4_flash_0731": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "averageJsonSizeBytes": 18416164,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 526265,
+      "finalizedAttemptCount": 25,
+      "outputCapTokens": 384000,
+      "providerCallCount": 25,
+      "completedAttemptCount": 24,
+      "rejectedResponseCount": 9,
+      "failedAttemptCount": 10,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }
