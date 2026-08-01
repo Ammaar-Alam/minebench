@@ -124,6 +124,7 @@ Copy `.env.example` to `.env` and set what you need.
 - Grok 4.3 uses the native xAI API, reasons automatically, rejects `reasoning_effort`, and uses a `max_tokens` request of up to 1000000 unless `MINEBENCH_MAX_OUTPUT_TOKENS` lowers it; MineBench does not send a thinking override for this model.
 - Grok 4.5 uses the native xAI API with `reasoning_effort=high` and `max_completion_tokens=500000`. The token request is bounded by the model's 500000-token context window, so input and reasoning reduce the visible output available. OpenRouter fallback uses `x-ai/grok-4.5` with the same reasoning level and `max_tokens` request.
 - DeepSeek V4 Pro uses the native DeepSeek API with JSON Output mode, defaults to `thinking=max` and `max_tokens=384000`; use `pnpm batch:generate --reasoning high` only when intentionally lowering effort.
+- DeepSeek V4 Flash 0731 uses the native DeepSeek model ID `deepseek-v4-flash`, supports `reasoning_effort=low|high|max`, and MineBench defaults to `max` with a 384000-token output cap. Its OpenRouter fallback uses the exact `deepseek/deepseek-v4-flash-0731` route and requests `max` reasoning first, with `high` and `low` fallbacks.
 - `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`, `MINIMAX_BASE_URL`, `XAI_BASE_URL`
 - `AI_DEBUG=1` (logs raw model output on failures)
 - `MINEBENCH_TOOL_OUTPUT_DIR`, `MINEBENCH_TOOL_TIMEOUT_MS`, `MINEBENCH_TOOL_MAX_*` (advanced `voxel.exec` controls)
