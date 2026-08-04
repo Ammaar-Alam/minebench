@@ -194,6 +194,7 @@ const MODEL_RUN_PARAMETERS = {
   zai_glm_4_7: PROVIDER_DEFAULT,
   qwen_qwen3_max_thinking: OPENROUTER_XHIGH,
   qwen_qwen3_5_397b_a17b: OPENROUTER_XHIGH,
+  qwen_qwen3_8_max: OPENROUTER_XHIGH,
   minimax_m2_7: [
     { label: "Reasoning effort", value: "XHigh" },
   ],

@@ -205,6 +205,17 @@ const reconstructedExactOutputCaps = {
   zai_glm_4_7: 65_536,
   minimax_m2_5: 131_072,
 } as const;
+
+const qwen38 = getModelBenchmarkProfile("qwen_qwen3_8_max");
+assert.deepEqual(qwen38?.parameters, [
+  { label: "Reasoning effort", value: "XHigh" },
+]);
+assert.deepEqual(
+  qwen38?.outputCap,
+  { kind: "unavailable", reason: "predates-tracking" },
+  "Qwen 3.8 Max should not publish an accepted benchmark cap before generation",
+);
+
 for (const [modelKey, tokens] of Object.entries(reconstructedExactOutputCaps)) {
   assert.deepEqual(
     HISTORICAL_BENCHMARK_OUTPUT_CAPS[

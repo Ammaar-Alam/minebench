@@ -11,6 +11,7 @@ for (const [direct, routed] of [
   ["kimi-k3", "moonshotai/kimi-k3"],
   ["grok-4.5", "x-ai/grok-4.5"],
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
+  ["qwen3.8-max", "qwen/qwen3.8-max"],
   ["gemini-3.6-flash", "google/gemini-3.6-flash"],
 ] as const) {
   assert.equal(
@@ -23,6 +24,8 @@ for (const [direct, routed] of [
 assert.equal(modelOutputCeiling("kimi-k3"), 1_048_576);
 assert.equal(modelOutputCeiling("grok-4.3"), 1_000_000);
 assert.equal(modelOutputCeiling("claude-opus-5"), 128_000);
+assert.equal(modelOutputCeiling("qwen3.8-max"), 131_072);
+assert.equal(modelOutputCeiling("qwen/qwen3.8-max"), 131_072);
 assert.equal(modelOutputCeiling("MiniMax-M2.7"), 131_072);
 assert.equal(modelOutputCeiling("grok-4-1-fast"), 30_000);
 
