@@ -245,6 +245,21 @@ assert.ok(
   "GPT 5.6 Luna Pro should render its canonical benchmark total and finalized-build rate",
 );
 
+const qwenMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "qwen-details",
+    modelKey: "qwen_qwen3_8_max",
+    displayName: "Qwen 3.8 Max",
+    open: true,
+  }),
+);
+assert.ok(
+  qwenMarkup.includes("$11.53") &&
+    !qwenMarkup.includes("per build") &&
+    !qwenMarkup.includes("per attempt"),
+  "Qwen 3.8 Max should render its canonical benchmark total without an inferred denominator",
+);
+
 const gemini30Markup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
     id: "gemini-3-0-details",
