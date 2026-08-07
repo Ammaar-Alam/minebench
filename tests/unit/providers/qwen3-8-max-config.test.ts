@@ -104,7 +104,7 @@ async function main() {
   assert.equal(request.model, "qwen/qwen3.8-max");
   assert.equal(request.max_tokens, 131072);
   assert.deepEqual(request.reasoning, { effort: "xhigh" });
-  assert.equal(request.temperature, 1);
+  assert.equal(Object.hasOwn(request, "temperature"), false);
   assert.deepEqual(request.provider, { require_parameters: true });
 
   const responseFormat = request.response_format as {
@@ -120,9 +120,9 @@ async function main() {
       trace.includes("Routing via OpenRouter (qwen/qwen3.8-max)") &&
       trace.includes("max_output_tokens=131072") &&
       trace.includes("effort_fallback=xhigh->high->medium->low->minimal->disabled") &&
-      trace.includes("temperature=1"),
+      trace.includes("temperature=default"),
     ),
-    "OpenRouter trace should report Qwen 3.8 Max's output cap and effort ladder",
+    "OpenRouter trace should report Qwen 3.8 Max's output cap, effort ladder, and provider-default sampling",
   );
 
   console.log("Qwen 3.8 Max config checks passed");

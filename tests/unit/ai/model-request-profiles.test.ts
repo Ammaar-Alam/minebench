@@ -43,6 +43,8 @@ assert.equal(modelUsesDefaultSampling("kimi-k3"), true);
 assert.equal(modelUsesDefaultSampling("gpt-5.6-sol"), true);
 assert.equal(modelUsesDefaultSampling("claude-opus-5"), true);
 assert.equal(modelUsesDefaultSampling("anthropic/claude-opus-4.8"), true);
+assert.equal(modelUsesDefaultSampling("qwen3.8-max"), true);
+assert.equal(modelUsesDefaultSampling("qwen/qwen3.8-max"), true);
 assert.equal(modelUsesDefaultSampling("gpt-4o"), false);
 assert.equal(modelUsesDefaultSampling("claude-sonnet-4-6"), false);
 
