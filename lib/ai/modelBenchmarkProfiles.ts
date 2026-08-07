@@ -194,6 +194,7 @@ const MODEL_RUN_PARAMETERS = {
   zai_glm_4_7: PROVIDER_DEFAULT,
   qwen_qwen3_max_thinking: OPENROUTER_XHIGH,
   qwen_qwen3_5_397b_a17b: OPENROUTER_XHIGH,
+  qwen_qwen3_8_max: OPENROUTER_XHIGH,
   minimax_m2_7: [
     { label: "Reasoning effort", value: "XHigh" },
   ],
@@ -280,6 +281,10 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  qwen_qwen3_8_max: {
+    sourceRelease: "3.12.0",
+    totalCost: { usd: 11.53 },
+  },
   openai_gpt_5_6_sol: {
     sourceRelease: "3.9.0",
     averageInference: { milliseconds: 1_516_200 },

@@ -22,6 +22,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
       "deepseek/deepseek-v4-flash-0731",
     ],
   },
+  { tokens: 131_072, ids: ["qwen3.8-max", "qwen/qwen3.8-max"] },
   { tokens: 272_000, ids: ["gpt-5-pro"] },
   // MiniMax M2.7 rejects the larger MineBench default on its OpenAI-compatible route
   { tokens: 131_072, ids: ["glm-5.2", "glm-5.1", "glm-5", "minimax-m2.7"] },
@@ -56,10 +57,13 @@ const OUTPUT_CEILING_PREFIXES: readonly { prefix: string; tokens: number }[] = [
   { prefix: "gpt-5", tokens: 128_000 },
 ];
 
-// Models rejecting a non-default temperature, top_p, or top_k
+// Models that should use provider-default sampling instead of MineBench's
+// shared temperature, including models that reject sampling overrides
 const DEFAULT_SAMPLING_IDS: readonly string[] = [
   "kimi-k3",
   "moonshotai/kimi-k3",
+  "qwen3.8-max",
+  "qwen/qwen3.8-max",
   "google/gemini-3.6-flash",
   "google/gemini-3.5-flash-lite",
 ];
