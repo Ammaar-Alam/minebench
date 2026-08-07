@@ -206,6 +206,7 @@ const MODEL_RUN_PARAMETERS = {
   minimax_m2_5: [
     { label: "Reasoning effort", value: "XHigh" },
   ],
+  meta_muse_spark_1_2: OPENROUTER_XHIGH,
   meta_llama_4_maverick: PROVIDER_DEFAULT,
 } satisfies Record<ModelKey, ModelRunParameters>;
 
@@ -393,6 +394,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
   deepseek_v4_flash_0731: {
     sourceRelease: "3.12.0",
     totalCost: { usd: 0.28, attemptCount: 24 },
+  },
+  meta_muse_spark_1_2: {
+    totalCost: { usd: 2.61, attemptCount: 17 },
   },
   anthropic_claude_4_7_opus: {
     sourceRelease: "v3.0.0",

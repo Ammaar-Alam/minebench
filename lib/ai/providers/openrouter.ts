@@ -192,6 +192,7 @@ export async function openrouterGenerateText(params: {
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   reasoningEffortAttempts?: string[];
+  requireReasoning?: boolean;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
@@ -207,7 +208,7 @@ export async function openrouterGenerateText(params: {
     enabled: params.enableReasoning,
     efforts: params.reasoningEffortAttempts,
     maxTokens: params.reasoningMaxTokens,
-    failClosed: params.modelId === "moonshotai/kimi-k3",
+    failClosed: params.requireReasoning || params.modelId === "moonshotai/kimi-k3",
   });
   let useDefaultVerbosity = Boolean(defaultTextVerbosity(params.modelId));
 

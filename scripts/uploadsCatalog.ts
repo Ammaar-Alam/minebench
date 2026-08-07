@@ -97,6 +97,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   qwen_qwen3_8_max: "qwen3-8-max",
   minimax_m2_7: "minimax-m2-7",
   minimax_m2_5: "minimax-m2-5",
+  meta_muse_spark_1_2: "muse-spark-1-2",
   meta_llama_4_maverick: "llama-4-maverick",
 };
 

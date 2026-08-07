@@ -487,6 +487,27 @@
       "interruptedRunCount": 8,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "meta_muse_spark_1_2": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "averageJsonSizeBytes": 15042435,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 237533,
+      "finalizedAttemptCount": 17,
+      "outputCapTokens": 131072,
+      "providerCallCount": 17,
+      "completedAttemptCount": 17,
+      "rejectedResponseCount": 2,
+      "failedAttemptCount": 2,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

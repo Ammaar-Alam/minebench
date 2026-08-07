@@ -478,6 +478,7 @@ export async function openAiCompatibleGenerateText(params: {
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   serviceLabel?: string;
+  requireStructuredOutput?: boolean;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
@@ -539,6 +540,7 @@ export async function openAiCompatibleGenerateText(params: {
       selectedTokenBudget = tok;
       lastBody = await readResponseText(res.body).catch(() => "");
       if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
+        if (params.requireStructuredOutput) break;
         useStructuredOutput = false;
         params.onTrace?.("Custom API structured output rejected; falling back to plain text output for this request.");
         continue;

@@ -9,6 +9,7 @@ import { anthropicGenerateText } from "@/lib/ai/providers/anthropic";
 import { deepseekGenerateText } from "@/lib/ai/providers/deepseek";
 import { geminiGenerateText } from "@/lib/ai/providers/gemini";
 import { minimaxGenerateText } from "@/lib/ai/providers/minimax";
+import { metaGenerateText } from "@/lib/ai/providers/meta";
 import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
@@ -23,6 +24,8 @@ import {
   geminiThinkingConfigForModel,
   MoonshotThinkingConfig,
   moonshotThinkingConfigForModel,
+  metaReasoningEffortAttempts,
+  modelRequiresReasoning,
   openAiReasoningEffortAttempts,
   openRouterReasoningEnabledForModel,
   openRouterReasoningEffortAttempts as openRouterReasoningEffortAttemptsForModel,
@@ -113,11 +116,13 @@ function describeRequestedThinkingMode(opts: {
   geminiThinkingConfig?: GeminiThinkingConfig;
   moonshotThinkingConfig?: MoonshotThinkingConfig;
   deepseekThinkingConfig?: DeepSeekThinkingConfig;
+  reasoningRequired?: boolean;
 }): string {
   if (opts.route === "openrouter") {
     if (opts.modelId === "x-ai/grok-4.3") return "automatic";
     if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
-      return `effort_fallback=${opts.reasoningEffortAttempts.join("->")}->disabled`;
+      const finalFallback = opts.reasoningRequired ? "" : "->disabled";
+      return `effort_fallback=${opts.reasoningEffortAttempts.join("->")}${finalFallback}`;
     }
     if (typeof opts.reasoningMaxTokens === "number") {
       return `reasoning_max_tokens<=${Math.floor(opts.reasoningMaxTokens)}`;
@@ -156,6 +161,13 @@ function describeRequestedThinkingMode(opts: {
   }
   if (opts.provider === "minimax") return "default";
   if (opts.provider === "custom") return "default";
+
+  if (opts.provider === "meta") {
+    if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
+      return `reasoning_effort=${opts.reasoningEffortAttempts[0]}`;
+    }
+    return "default";
+  }
 
   if (opts.provider === "openai") {
     const usesProReasoning = opts.modelId.startsWith("gpt-5.6");
@@ -201,6 +213,7 @@ function providerRequestTraceLine(opts: {
   geminiThinkingConfig?: GeminiThinkingConfig;
   moonshotThinkingConfig?: MoonshotThinkingConfig;
   deepseekThinkingConfig?: DeepSeekThinkingConfig;
+  reasoningRequired?: boolean;
 }): string {
   const thinkingMode =
     opts.route === "openrouter" && opts.openRouterReasoningEnabled
@@ -307,6 +320,7 @@ type ProviderKeyName =
   | "deepseek"
   | "minimax"
   | "xai"
+  | "meta"
   | "openrouter"
   | "custom";
 
@@ -326,6 +340,8 @@ function envVarForProviderKey(provider: ProviderKeyName): string {
       return "MINIMAX_API_KEY";
     case "xai":
       return "XAI_API_KEY";
+    case "meta":
+      return "META_MODEL_API_KEY";
     case "openrouter":
       return "OPENROUTER_API_KEY";
     case "custom":
@@ -349,6 +365,8 @@ function envVarForDirectProvider(provider: DirectProvider): string | null {
       return envVarForProviderKey("minimax");
     case "xai":
       return envVarForProviderKey("xai");
+    case "meta":
+      return envVarForProviderKey("meta");
     case "custom":
       return envVarForProviderKey("custom");
     default:
@@ -367,7 +385,7 @@ function effectiveApiKey(opts: {
   allowServerKeys: boolean;
 }): string | null {
   const provider = opts.provider;
-  if (provider === "zai" || provider === "qwen" || provider === "meta") return null; // only supported via OpenRouter fallback
+  if (provider === "zai" || provider === "qwen") return null; // only supported via OpenRouter fallback
 
   const directKey = normalizeApiKey(
     provider === "openrouter"
@@ -386,9 +404,11 @@ function effectiveApiKey(opts: {
                   ? opts.providerKeys?.minimax
                   : provider === "xai"
                     ? opts.providerKeys?.xai
-                  : provider === "custom"
-                    ? opts.providerKeys?.custom
-                  : undefined,
+                    : provider === "meta"
+                      ? opts.providerKeys?.meta
+                      : provider === "custom"
+                        ? opts.providerKeys?.custom
+                        : undefined,
   );
   if (directKey) return directKey;
 
@@ -402,6 +422,7 @@ function effectiveApiKey(opts: {
   if (provider === "deepseek") return serverApiKey("deepseek");
   if (provider === "minimax") return serverApiKey("minimax");
   if (provider === "xai") return serverApiKey("xai");
+  if (provider === "meta") return serverApiKey("meta");
   if (provider === "custom") return serverApiKey("custom");
 
   return null;
@@ -625,6 +646,25 @@ async function callDirectProvider(args: {
     });
   }
 
+  if (args.provider === "meta") {
+    return metaGenerateText({
+      modelId: args.modelId,
+      apiKey: args.apiKey,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      reasoningEffortAttempts: args.reasoningEffortAttempts,
+      temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
+      signal: args.signal,
+      onDelta: args.onDelta,
+      onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
+    });
+  }
+
   // Z.AI models are currently OpenRouter-only in MineBench
   if (args.provider === "zai") {
     throw new Error("Z.AI direct API not supported; use OpenRouter fallback");
@@ -652,8 +692,7 @@ async function callDirectProvider(args: {
     });
   }
 
-  // Meta models are currently OpenRouter-only in MineBench
-  throw new Error("Meta direct API not supported; use OpenRouter fallback");
+  throw new Error(`Direct API not supported for provider ${args.provider}`);
 }
 
 // unified direct and OpenRouter provider routing
@@ -742,6 +781,10 @@ async function providerGenerateText(args: {
       model.provider === "xai"
         ? xaiReasoningEffortAttempts(model.modelId, args.reasoning)
         : undefined;
+    const directMetaReasoningEffortAttempts =
+      model.provider === "meta"
+        ? metaReasoningEffortAttempts(model.modelId, args.reasoning)
+        : undefined;
     const directAnthropicAdaptiveEffortAttempts =
       model.provider === "anthropic"
         ? anthropicAdaptiveEffortAttempts(model.modelId, args.reasoning)
@@ -768,7 +811,9 @@ async function providerGenerateText(args: {
       maxOutputTokens: args.maxOutputTokens,
       reasoningMaxTokens: args.reasoningMaxTokens,
       reasoningEffortAttempts:
-        directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
+        directOpenAiReasoningEffortAttempts ??
+        directXaiReasoningEffortAttempts ??
+        directMetaReasoningEffortAttempts,
       adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
       geminiThinkingConfig: directGeminiThinkingConfig,
       moonshotThinkingConfig: directMoonshotThinkingConfig,
@@ -792,7 +837,9 @@ async function providerGenerateText(args: {
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
         reasoningEffortAttempts:
-          directOpenAiReasoningEffortAttempts ?? directXaiReasoningEffortAttempts,
+          directOpenAiReasoningEffortAttempts ??
+          directXaiReasoningEffortAttempts ??
+          directMetaReasoningEffortAttempts,
         adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
         geminiThinkingConfig: directGeminiThinkingConfig,
         moonshotThinkingConfig: directMoonshotThinkingConfig,
@@ -866,6 +913,7 @@ async function providerGenerateText(args: {
     reasoningMaxTokens: args.reasoningMaxTokens,
     reasoningEffortAttempts: openRouterReasoningEffortAttempts,
     openRouterReasoningEnabled,
+    reasoningRequired: modelRequiresReasoning(model.openRouterModelId),
   });
   // Keep OpenRouter and direct routes on the same configuration capture contract
   args.onProviderTrace?.(
@@ -886,6 +934,7 @@ async function providerGenerateText(args: {
     temperature: DEFAULT_TEMPERATURE,
     jsonSchema: args.jsonSchema,
     reasoningEffortAttempts: openRouterReasoningEffortAttempts,
+    requireReasoning: modelRequiresReasoning(model.openRouterModelId),
     signal: args.signal,
     onDelta: args.onDelta,
     onTrace: args.onProviderTrace,

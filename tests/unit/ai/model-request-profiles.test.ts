@@ -13,6 +13,7 @@ for (const [direct, routed] of [
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
   ["qwen3.8-max", "qwen/qwen3.8-max"],
   ["gemini-3.6-flash", "google/gemini-3.6-flash"],
+  ["muse-spark-1.2", "meta/muse-spark-1.2"],
 ] as const) {
   assert.equal(
     modelOutputCeiling(direct),
@@ -28,6 +29,8 @@ assert.equal(modelOutputCeiling("qwen3.8-max"), 131_072);
 assert.equal(modelOutputCeiling("qwen/qwen3.8-max"), 131_072);
 assert.equal(modelOutputCeiling("MiniMax-M2.7"), 131_072);
 assert.equal(modelOutputCeiling("grok-4-1-fast"), 30_000);
+assert.equal(modelOutputCeiling("muse-spark-1.2"), 131_072);
+assert.equal(modelOutputCeiling("meta/muse-spark-1.2"), 131_072);
 
 // A model with no declared ceiling runs on the MineBench default
 assert.equal(modelOutputCeiling("gpt-4o"), undefined);
