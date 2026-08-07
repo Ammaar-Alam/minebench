@@ -17,14 +17,12 @@ assert.deepEqual(gpt56Luna.parameters, [
   { label: "Reasoning effort", value: "Max" },
   { label: "Text verbosity", value: "High" },
 ]);
-assert.deepEqual(gpt56Luna.outputCap, {
-  kind: "unavailable",
-  reason: "accepted-cap-unrecorded",
-});
-assert.equal(gpt56Luna.averageInference, undefined);
-assert.equal(gpt56Luna.averageJsonSizeBytes, undefined);
+assert.deepEqual(gpt56Luna.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(gpt56Luna.averageInference, { milliseconds: 804_533 });
+assert.equal(gpt56Luna.averageJsonSizeBytes, 59_966_032);
 assert.equal(gpt56Luna.totalCost, undefined);
-assert.equal(gpt56Luna.buildCount, undefined);
+assert.equal(gpt56Luna.totalAttempts, 24);
+assert.equal(gpt56Luna.buildCount, 15);
 
 const gpt56 = getModelBenchmarkProfile("openai_gpt_5_6_sol");
 assert.ok(gpt56, "GPT 5.6 Sol Pro should have verified benchmark details");
