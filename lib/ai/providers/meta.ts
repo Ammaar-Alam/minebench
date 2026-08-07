@@ -32,7 +32,7 @@ export async function metaGenerateText(params: {
     temperature: params.temperature,
     jsonSchema: params.jsonSchema,
     serviceLabel: "Meta Model API",
-    trustedBaseUrl: true,
+    requireStructuredOutput: true,
     signal: params.signal,
     onDelta: params.onDelta,
     onTrace: params.onTrace,

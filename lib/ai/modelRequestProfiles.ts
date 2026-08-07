@@ -23,12 +23,18 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
     ],
   },
   { tokens: 272_000, ids: ["gpt-5-pro"] },
+  // MiniMax M2.7 rejects the larger MineBench default on its OpenAI-compatible route
   {
     tokens: 131_072,
-    ids: ["muse-spark-1.2", "meta/muse-spark-1.2"],
+    ids: [
+      "glm-5.2",
+      "glm-5.1",
+      "glm-5",
+      "minimax-m2.7",
+      "muse-spark-1.2",
+      "meta/muse-spark-1.2",
+    ],
   },
-  // MiniMax M2.7 rejects the larger MineBench default on its OpenAI-compatible route
-  { tokens: 131_072, ids: ["glm-5.2", "glm-5.1", "glm-5", "minimax-m2.7"] },
   {
     tokens: 65_536,
     ids: [

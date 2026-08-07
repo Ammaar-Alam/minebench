@@ -433,34 +433,6 @@ async function postToResolvedApi(params: {
   });
 }
 
-async function postToTrustedApi(params: {
-  url: URL;
-  apiKey: string;
-  body: string;
-  signal: AbortSignal;
-  stream: boolean;
-  onProviderRequest?: () => void;
-}): Promise<NodeHttpResponse> {
-  params.signal.throwIfAborted();
-  params.onProviderRequest?.();
-  const response = await fetch(params.url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      "Content-Type": "application/json",
-      Accept: params.stream ? "text/event-stream" : "application/json",
-    },
-    body: params.body,
-    signal: params.signal,
-  });
-
-  return {
-    status: response.status,
-    headers: response.headers,
-    body: response.body as unknown as AsyncIterable<Uint8Array>,
-  };
-}
-
 export async function assertSafeCustomApiUrl(rawUrl: string): Promise<void> {
   await resolveCustomApiTarget(rawUrl);
 }
@@ -506,7 +478,7 @@ export async function openAiCompatibleGenerateText(params: {
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
   serviceLabel?: string;
-  trustedBaseUrl?: boolean;
+  requireStructuredOutput?: boolean;
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
@@ -518,8 +490,7 @@ export async function openAiCompatibleGenerateText(params: {
 
   const rawBaseUrl = params.baseUrl ?? process.env.CUSTOM_API_BASE_URL;
   if (!rawBaseUrl) throw new Error(`Missing ${serviceLabel} API server URL`);
-  const trustedUrl = params.trustedBaseUrl ? buildChatCompletionsUrl(rawBaseUrl) : null;
-  const target = params.trustedBaseUrl ? null : await resolveCustomApiTarget(rawBaseUrl);
+  const target = await resolveCustomApiTarget(rawBaseUrl);
   const controller = new AbortController();
   const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
@@ -532,46 +503,36 @@ export async function openAiCompatibleGenerateText(params: {
 
   try {
     for (const tok of tokenBudgetCandidates(maxTokens)) {
-      const body = JSON.stringify({
-        model: params.modelId,
-        messages: [
-          { role: "system", content: params.system },
-          { role: "user", content: params.user },
-        ],
+      res = await postToResolvedApi({
+        target,
+        apiKey,
+        signal: controller.signal,
         stream: Boolean(params.onDelta),
-        temperature: params.temperature ?? 0.2,
-        [params.maxTokensParameter ?? "max_tokens"]: tok,
-        ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
-        ...(useStructuredOutput && params.jsonSchema
-          ? {
-              response_format: {
-                type: "json_schema",
-                json_schema: {
-                  name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-                  strict: true,
-                  schema: params.jsonSchema,
+        onProviderRequest: params.onProviderRequest,
+        body: JSON.stringify({
+          model: params.modelId,
+          messages: [
+            { role: "system", content: params.system },
+            { role: "user", content: params.user },
+          ],
+          stream: Boolean(params.onDelta),
+          temperature: params.temperature ?? 0.2,
+          [params.maxTokensParameter ?? "max_tokens"]: tok,
+          ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
+          ...(useStructuredOutput && params.jsonSchema
+            ? {
+                response_format: {
+                  type: "json_schema",
+                  json_schema: {
+                    name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+                    strict: true,
+                    schema: params.jsonSchema,
+                  },
                 },
-              },
-            }
-          : {}),
+              }
+            : {}),
+        }),
       });
-      res = trustedUrl
-        ? await postToTrustedApi({
-            url: trustedUrl,
-            apiKey,
-            signal: controller.signal,
-            stream: Boolean(params.onDelta),
-            onProviderRequest: params.onProviderRequest,
-            body,
-          })
-        : await postToResolvedApi({
-            target: target!,
-            apiKey,
-            signal: controller.signal,
-            stream: Boolean(params.onDelta),
-            onProviderRequest: params.onProviderRequest,
-            body,
-          });
       if (res.status >= 200 && res.status < 300) {
         selectedTokenBudget = tok;
         break;
@@ -579,10 +540,9 @@ export async function openAiCompatibleGenerateText(params: {
       selectedTokenBudget = tok;
       lastBody = await readResponseText(res.body).catch(() => "");
       if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
+        if (params.requireStructuredOutput) break;
         useStructuredOutput = false;
-        params.onTrace?.(
-          `${serviceLabel} structured output rejected; falling back to plain text output for this request.`,
-        );
+        params.onTrace?.("Custom API structured output rejected; falling back to plain text output for this request.");
         continue;
       }
       if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
@@ -601,7 +561,7 @@ export async function openAiCompatibleGenerateText(params: {
   }
 
   if (!res) {
-    throw new Error(`${serviceLabel} request failed`);
+    throw new Error("Custom API request failed");
   }
 
   if (res.status < 200 || res.status >= 300) {

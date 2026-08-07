@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import dns from "node:dns/promises";
+import http from "node:http";
+import type { IncomingMessage, RequestOptions } from "node:http";
+import https from "node:https";
 import { generateVoxelBuild } from "../../../lib/ai/generateVoxelBuild";
 import { getModelBenchmarkProfile } from "../../../lib/ai/modelBenchmarkProfiles";
 import { getModelByKey } from "../../../lib/ai/modelCatalog";
@@ -17,11 +21,14 @@ type CapturedRequest = {
 
 const capturedRequests: CapturedRequest[] = [];
 const originalFetch = globalThis.fetch;
+const originalLookup = dns.lookup;
+const originalHttpsRequest = https.request;
 const originalEnv = {
   maxOutputTokens: process.env.MINEBENCH_MAX_OUTPUT_TOKENS,
   metaBaseUrl: process.env.META_MODEL_API_BASE_URL,
   openRouterBaseUrl: process.env.OPENROUTER_BASE_URL,
 };
+let rejectMetaStructuredOutput = false;
 let rejectOpenRouterEffortsAboveMinimal = false;
 
 function validBuildJson(): string {
@@ -33,7 +40,43 @@ function validBuildJson(): string {
   });
 }
 
+const metaServer = http.createServer(async (request, response) => {
+  let rawBody = "";
+  for await (const chunk of request) rawBody += chunk.toString();
+
+  capturedRequests.push({
+    url: `https://${request.headers.host}${request.url}`,
+    authorization: request.headers.authorization ?? null,
+    body: JSON.parse(rawBody) as Record<string, unknown>,
+  });
+
+  response.setHeader("Content-Type", "application/json");
+  if (rejectMetaStructuredOutput) {
+    response.statusCode = 400;
+    response.end(JSON.stringify({ error: { message: "response_format unsupported" } }));
+    return;
+  }
+
+  response.end(
+    JSON.stringify({ choices: [{ message: { content: validBuildJson() } }] }),
+  );
+});
+
+Object.defineProperty(dns, "lookup", {
+  configurable: true,
+  value: async () => [{ address: "93.184.216.34", family: 4 }],
+});
+
+Object.defineProperty(https, "request", {
+  configurable: true,
+  value: ((
+    options: RequestOptions,
+    callback: (response: IncomingMessage) => void,
+  ) => http.request({ ...options, hostname: "127.0.0.1", family: 4 }, callback)) as typeof https.request,
+});
+
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  assert.ok(String(input).includes("openrouter.test"), "Only OpenRouter should use fetch");
   assert.ok(init?.body, "Provider request should include a JSON body");
   assert.equal(typeof init.body, "string", "Provider request body should be serialized JSON");
 
@@ -74,8 +117,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
 }) as typeof fetch;
 
 async function main() {
+  await new Promise<void>((resolve) => metaServer.listen(0, "127.0.0.1", resolve));
+  const address = metaServer.address();
+  assert.ok(address && typeof address !== "string");
+
   process.env.MINEBENCH_MAX_OUTPUT_TOKENS = "999999";
-  process.env.META_MODEL_API_BASE_URL = "https://meta.test/v1";
+  process.env.META_MODEL_API_BASE_URL = `https://meta.test:${address.port}/v1`;
   process.env.OPENROUTER_BASE_URL = "https://openrouter.test/api";
 
   const model = getModelByKey("meta_muse_spark_1_2");
@@ -132,7 +179,7 @@ async function main() {
     candidate.url.includes("meta.test"),
   );
   assert.ok(directRequest, "Direct Meta Model API request should be captured");
-  assert.equal(directRequest.url, "https://meta.test/v1/chat/completions");
+  assert.equal(directRequest.url, `https://meta.test:${address.port}/v1/chat/completions`);
   assert.equal(directRequest.authorization, "Bearer test-meta-key");
   assert.equal(directRequest.body.model, "muse-spark-1.2");
   assert.equal(directRequest.body.max_completion_tokens, 131072);
@@ -149,6 +196,25 @@ async function main() {
     ),
     "Direct Meta trace should report xhigh reasoning and the output cap",
   );
+
+  rejectMetaStructuredOutput = true;
+  const strictFailureStart = capturedRequests.length;
+  const strictFailure = await generateVoxelBuild({
+    modelKey: model.key,
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 1,
+    enableTools: false,
+    providerKeys: { meta: "test-meta-key" },
+    allowServerKeys: false,
+  });
+  assert.equal(strictFailure.ok, false);
+  assert.match(strictFailure.error, /Meta Model API error 400.*response_format unsupported/);
+  const strictFailureRequests = capturedRequests.slice(strictFailureStart);
+  assert.equal(strictFailureRequests.length, 1, "Meta must not retry without response_format");
+  assertStructuredOutput(strictFailureRequests[0].body);
+  rejectMetaStructuredOutput = false;
 
   const explicitOpenRouterStart = capturedRequests.length;
   const explicitOpenRouterResult = await generateVoxelBuild({
@@ -227,8 +293,21 @@ function assertStructuredOutput(body: Record<string, unknown>): void {
 }
 
 main()
-  .finally(() => {
+  .finally(async () => {
     globalThis.fetch = originalFetch;
+    Object.defineProperty(dns, "lookup", {
+      configurable: true,
+      value: originalLookup,
+    });
+    Object.defineProperty(https, "request", {
+      configurable: true,
+      value: originalHttpsRequest,
+    });
+    if (metaServer.listening) {
+      await new Promise<void>((resolve, reject) => {
+        metaServer.close((error) => error ? reject(error) : resolve());
+      });
+    }
     for (const [name, value] of Object.entries({
       MINEBENCH_MAX_OUTPUT_TOKENS: originalEnv.maxOutputTokens,
       META_MODEL_API_BASE_URL: originalEnv.metaBaseUrl,

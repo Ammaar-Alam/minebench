@@ -813,7 +813,6 @@ async function providerGenerateText(args: {
         directOpenAiReasoningEffortAttempts ??
         directXaiReasoningEffortAttempts ??
         directMetaReasoningEffortAttempts,
-      reasoningRequired: modelRequiresReasoning(model.modelId),
       adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
       geminiThinkingConfig: directGeminiThinkingConfig,
       moonshotThinkingConfig: directMoonshotThinkingConfig,
