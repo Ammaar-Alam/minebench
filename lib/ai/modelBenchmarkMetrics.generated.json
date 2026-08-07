@@ -508,6 +508,20 @@
       "interruptedRunCount": 0,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "qwen_qwen3_8_max": {
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "inferenceSampleCount": 5,
+      "averageJsonSizeBytes": 15361898,
+      "providerCallCount": 90,
+      "completedAttemptCount": 40,
+      "rejectedResponseCount": 34,
+      "failedAttemptCount": 37,
+      "failedRunCount": 0,
+      "interruptedRunCount": 47,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

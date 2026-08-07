@@ -297,6 +297,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   },
   qwen_qwen3_8_max: {
     sourceRelease: "3.12.0",
+    averageInference: { milliseconds: 1_463_039 },
     totalCost: { usd: 11.53 },
   },
   openai_gpt_5_6_sol: {

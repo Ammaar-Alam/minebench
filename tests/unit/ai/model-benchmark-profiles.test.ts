@@ -241,7 +241,10 @@ assert.deepEqual(qwen38?.parameters, [
   { label: "Reasoning effort", value: "XHigh" },
 ]);
 assert.equal(qwen38?.sourceRelease, "3.12.0");
+assert.deepEqual(qwen38?.averageInference, { milliseconds: 1_463_039 });
+assert.equal(qwen38?.averageJsonSizeBytes, 15_361_898);
 assert.deepEqual(qwen38?.totalCost, { usd: 11.53 });
+assert.equal(qwen38?.totalAttempts, 40);
 assert.deepEqual(
   qwen38?.outputCap,
   { kind: "unavailable", reason: "predates-tracking" },

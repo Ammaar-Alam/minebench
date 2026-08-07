@@ -254,10 +254,8 @@ const qwenMarkup = renderToStaticMarkup(
   }),
 );
 assert.ok(
-  qwenMarkup.includes("$11.53") &&
-    !qwenMarkup.includes("per build") &&
-    !qwenMarkup.includes("per attempt"),
-  "Qwen 3.8 Max should render its canonical benchmark total without an inferred denominator",
+  qwenMarkup.includes("$11.53") && qwenMarkup.includes("$0.77 per build"),
+  "Qwen 3.8 Max should render its canonical benchmark total and finalized-build rate",
 );
 
 const gemini30Markup = renderToStaticMarkup(
