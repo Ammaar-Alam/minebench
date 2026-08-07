@@ -122,11 +122,15 @@ For larger production payloads, the recommended path is `pnpm batch:generate --u
 
 `runVoxelExec(...)` executes model JavaScript in a Node `vm` sandbox with time and primitive-count limits.
 
-By default the runtime writes a build artifact to one of these locations:
+The runtime returns its intermediate build in memory. It only writes a diagnostic
+tool-run artifact when persistence is explicitly requested through:
 
-1. `MINEBENCH_TOOL_OUTPUT_DIR` if set
-2. `uploads/tool-runs/`
-3. the system temp directory fallback
+1. `outputDir` in a direct `runVoxelExec(...)` call
+2. `MINEBENCH_TOOL_OUTPUT_DIR`
+
+This avoids serializing a potentially much larger pre-validation block list during
+normal generation. Batch generation already preserves the model's RAW tool call
+and the validated final build separately.
 
 Relevant runtime controls:
 

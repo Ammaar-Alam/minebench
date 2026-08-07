@@ -467,6 +467,27 @@
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
     },
+    "openai_gpt_5_6_luna": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "averageJsonSizeBytes": 59966032,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 804533,
+      "finalizedAttemptCount": 24,
+      "outputCapTokens": 128000,
+      "providerCallCount": 32,
+      "completedAttemptCount": 24,
+      "rejectedResponseCount": 9,
+      "failedAttemptCount": 9,
+      "failedRunCount": 0,
+      "interruptedRunCount": 8,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
+    },
     "meta_muse_spark_1_2": {
       "inferenceSampleCount": 15,
       "expectedBuildCount": 15,

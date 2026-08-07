@@ -10,6 +10,21 @@ import {
   resolveModelDisplayName,
 } from "../../../lib/ai/modelCatalog";
 
+const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
+assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
+assert.deepEqual(gpt56Luna.parameters, [
+  { label: "Reasoning mode", value: "Pro" },
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Text verbosity", value: "High" },
+]);
+assert.deepEqual(gpt56Luna.outputCap, { kind: "exact", tokens: 128_000 });
+assert.equal(gpt56Luna.sourceRelease, "3.12.0");
+assert.deepEqual(gpt56Luna.averageInference, { milliseconds: 804_533 });
+assert.equal(gpt56Luna.averageJsonSizeBytes, 59_966_032);
+assert.deepEqual(gpt56Luna.totalCost, { usd: 1.15 });
+assert.equal(gpt56Luna.totalAttempts, 24);
+assert.equal(gpt56Luna.buildCount, 15);
+
 const gpt56 = getModelBenchmarkProfile("openai_gpt_5_6_sol");
 assert.ok(gpt56, "GPT 5.6 Sol Pro should have verified benchmark details");
 assert.deepEqual(gpt56.parameters, [
@@ -220,6 +235,19 @@ const reconstructedExactOutputCaps = {
   zai_glm_4_7: 65_536,
   minimax_m2_5: 131_072,
 } as const;
+
+const qwen38 = getModelBenchmarkProfile("qwen_qwen3_8_max");
+assert.deepEqual(qwen38?.parameters, [
+  { label: "Reasoning effort", value: "XHigh" },
+]);
+assert.equal(qwen38?.sourceRelease, "3.12.0");
+assert.deepEqual(qwen38?.totalCost, { usd: 11.53 });
+assert.deepEqual(
+  qwen38?.outputCap,
+  { kind: "unavailable", reason: "predates-tracking" },
+  "Qwen 3.8 Max should not publish an accepted benchmark cap before generation",
+);
+
 for (const [modelKey, tokens] of Object.entries(reconstructedExactOutputCaps)) {
   assert.deepEqual(
     HISTORICAL_BENCHMARK_OUTPUT_CAPS[

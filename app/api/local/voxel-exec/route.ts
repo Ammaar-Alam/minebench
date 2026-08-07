@@ -3,6 +3,7 @@ import { z } from "zod";
 import { maxBlocksForGrid } from "@/lib/ai/limits";
 import { runVoxelExec } from "@/lib/ai/tools/voxelExec";
 import { getPalette } from "@/lib/blocks/palettes";
+import { getErrorMessage } from "@/lib/errorMessage";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 export const runtime = "nodejs";
@@ -94,7 +95,7 @@ export async function POST(req: Request) {
     });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Tool execution failed" },
+      { error: getErrorMessage(err, "Tool execution failed") },
       { status: 400 },
     );
   }

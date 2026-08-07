@@ -436,6 +436,9 @@ export function openRouterReasoningEffortAttempts(
   ) {
     return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
   }
+  if (modelId === "qwen/qwen3.8-max") {
+    return descendingAttempts(label, ["xhigh", "high", "medium", "low", "minimal"], override);
+  }
   if (modelId === "openai/gpt-oss-120b") {
     return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
   }

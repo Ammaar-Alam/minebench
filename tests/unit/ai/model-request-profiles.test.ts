@@ -11,6 +11,7 @@ for (const [direct, routed] of [
   ["kimi-k3", "moonshotai/kimi-k3"],
   ["grok-4.5", "x-ai/grok-4.5"],
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
+  ["qwen3.8-max", "qwen/qwen3.8-max"],
   ["gemini-3.6-flash", "google/gemini-3.6-flash"],
   ["muse-spark-1.2", "meta/muse-spark-1.2"],
 ] as const) {
@@ -24,6 +25,8 @@ for (const [direct, routed] of [
 assert.equal(modelOutputCeiling("kimi-k3"), 1_048_576);
 assert.equal(modelOutputCeiling("grok-4.3"), 1_000_000);
 assert.equal(modelOutputCeiling("claude-opus-5"), 128_000);
+assert.equal(modelOutputCeiling("qwen3.8-max"), 131_072);
+assert.equal(modelOutputCeiling("qwen/qwen3.8-max"), 131_072);
 assert.equal(modelOutputCeiling("MiniMax-M2.7"), 131_072);
 assert.equal(modelOutputCeiling("grok-4-1-fast"), 30_000);
 assert.equal(modelOutputCeiling("muse-spark-1.2"), 131_072);
@@ -36,13 +39,18 @@ assert.equal(modelOutputCeiling("claude-opus-4-6"), undefined);
 // GPT-5 raises the direct budget because the native ceiling covers reasoning
 // plus output, while OpenRouter counts visible output alone
 assert.equal(modelOutputCeiling("gpt-5.4"), 128_000);
+assert.equal(modelOutputCeiling("gpt-5.6-luna"), 128_000);
 assert.equal(modelOutputCeiling("gpt-5-pro"), 272_000);
 assert.equal(modelOutputCeiling("openai/gpt-5.4"), undefined);
 
 assert.equal(modelUsesDefaultSampling("kimi-k3"), true);
 assert.equal(modelUsesDefaultSampling("gpt-5.6-sol"), true);
+assert.equal(modelUsesDefaultSampling("gpt-5.6-luna"), true);
+assert.equal(modelUsesDefaultSampling("openai/gpt-5.6-luna-pro"), true);
 assert.equal(modelUsesDefaultSampling("claude-opus-5"), true);
 assert.equal(modelUsesDefaultSampling("anthropic/claude-opus-4.8"), true);
+assert.equal(modelUsesDefaultSampling("qwen3.8-max"), true);
+assert.equal(modelUsesDefaultSampling("qwen/qwen3.8-max"), true);
 assert.equal(modelUsesDefaultSampling("gpt-4o"), false);
 assert.equal(modelUsesDefaultSampling("claude-sonnet-4-6"), false);
 

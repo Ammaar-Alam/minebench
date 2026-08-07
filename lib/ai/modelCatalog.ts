@@ -11,6 +11,7 @@ export type Provider =
   | "meta";
 
 export type ModelKey =
+  | "openai_gpt_5_6_luna"
   | "openai_gpt_5_6_sol"
   | "openai_gpt_5_5"
   | "openai_gpt_5_5_pro"
@@ -63,6 +64,7 @@ export type ModelKey =
   | "zai_glm_4_7"
   | "qwen_qwen3_max_thinking"
   | "qwen_qwen3_5_397b_a17b"
+  | "qwen_qwen3_8_max"
   | "minimax_m2_7"
   | "minimax_m2_5"
   | "meta_muse_spark_1_2"
@@ -83,6 +85,14 @@ export type ModelCatalogEntry = {
 };
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
+  {
+    key: "openai_gpt_5_6_luna",
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    displayName: "GPT 5.6 Luna Pro",
+    enabled: true,
+    openRouterModelId: "openai/gpt-5.6-luna-pro",
+  },
   {
     key: "openai_gpt_5_6_sol",
     provider: "openai",
@@ -504,6 +514,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Qwen 3.5 397B A17B",
     enabled: true,
     openRouterModelId: "qwen/qwen3.5-397b-a17b",
+    forceOpenRouter: true,
+  },
+  {
+    key: "qwen_qwen3_8_max",
+    provider: "qwen",
+    modelId: "qwen3.8-max",
+    displayName: "Qwen 3.8 Max",
+    enabled: true,
+    openRouterModelId: "qwen/qwen3.8-max",
     forceOpenRouter: true,
   },
   {
