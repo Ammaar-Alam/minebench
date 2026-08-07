@@ -44,6 +44,7 @@ import {
   voxelExecToolCallJsonSchema,
   voxelExecToolCallSchema,
 } from "@/lib/ai/tools/voxelExec";
+import { getErrorMessage } from "@/lib/errorMessage";
 
 const INT_ENV_MAX_OUTPUT_TOKENS = "MINEBENCH_MAX_OUTPUT_TOKENS";
 
@@ -1081,7 +1082,7 @@ export async function generateVoxelBuild(
       try {
         invokeCallback(params.onRawResponse, attempt, text);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = getErrorMessage(err, String(err));
         invokeCallback(
           params.onProviderTrace,
           `Raw response callback failed for attempt ${attempt}: ${message}`,
@@ -1181,7 +1182,7 @@ export async function generateVoxelBuild(
         rawText: text,
       };
     } catch (err) {
-      lastError = err instanceof Error ? err.message : "Provider request failed";
+      lastError = getErrorMessage(err, "Provider request failed");
       // Retry transient work that failed safely before an outbound request
       if (
         !providerRequestStarted &&
