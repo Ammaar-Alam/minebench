@@ -10,6 +10,22 @@ import {
   resolveModelDisplayName,
 } from "../../../lib/ai/modelCatalog";
 
+const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
+assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
+assert.deepEqual(gpt56Luna.parameters, [
+  { label: "Reasoning mode", value: "Pro" },
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Text verbosity", value: "High" },
+]);
+assert.deepEqual(gpt56Luna.outputCap, {
+  kind: "unavailable",
+  reason: "accepted-cap-unrecorded",
+});
+assert.equal(gpt56Luna.averageInference, undefined);
+assert.equal(gpt56Luna.averageJsonSizeBytes, undefined);
+assert.equal(gpt56Luna.totalCost, undefined);
+assert.equal(gpt56Luna.buildCount, undefined);
+
 const gpt56 = getModelBenchmarkProfile("openai_gpt_5_6_sol");
 assert.ok(gpt56, "GPT 5.6 Sol Pro should have verified benchmark details");
 assert.deepEqual(gpt56.parameters, [

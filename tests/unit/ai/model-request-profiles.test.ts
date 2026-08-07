@@ -36,11 +36,14 @@ assert.equal(modelOutputCeiling("claude-opus-4-6"), undefined);
 // GPT-5 raises the direct budget because the native ceiling covers reasoning
 // plus output, while OpenRouter counts visible output alone
 assert.equal(modelOutputCeiling("gpt-5.4"), 128_000);
+assert.equal(modelOutputCeiling("gpt-5.6-luna"), 128_000);
 assert.equal(modelOutputCeiling("gpt-5-pro"), 272_000);
 assert.equal(modelOutputCeiling("openai/gpt-5.4"), undefined);
 
 assert.equal(modelUsesDefaultSampling("kimi-k3"), true);
 assert.equal(modelUsesDefaultSampling("gpt-5.6-sol"), true);
+assert.equal(modelUsesDefaultSampling("gpt-5.6-luna"), true);
+assert.equal(modelUsesDefaultSampling("openai/gpt-5.6-luna-pro"), true);
 assert.equal(modelUsesDefaultSampling("claude-opus-5"), true);
 assert.equal(modelUsesDefaultSampling("anthropic/claude-opus-4.8"), true);
 assert.equal(modelUsesDefaultSampling("qwen3.8-max"), true);

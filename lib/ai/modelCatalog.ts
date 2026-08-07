@@ -11,6 +11,7 @@ export type Provider =
   | "meta";
 
 export type ModelKey =
+  | "openai_gpt_5_6_luna"
   | "openai_gpt_5_6_sol"
   | "openai_gpt_5_5"
   | "openai_gpt_5_5_pro"
@@ -83,6 +84,14 @@ export type ModelCatalogEntry = {
 };
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
+  {
+    key: "openai_gpt_5_6_luna",
+    provider: "openai",
+    modelId: "gpt-5.6-luna",
+    displayName: "GPT 5.6 Luna Pro",
+    enabled: true,
+    openRouterModelId: "openai/gpt-5.6-luna-pro",
+  },
   {
     key: "openai_gpt_5_6_sol",
     provider: "openai",

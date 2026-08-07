@@ -76,6 +76,11 @@ const OPENROUTER_XHIGH: ModelRunParameters = [
 ];
 
 const MODEL_RUN_PARAMETERS = {
+  openai_gpt_5_6_luna: [
+    { label: "Reasoning mode", value: "Pro" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Text verbosity", value: "High" },
+  ],
   openai_gpt_5_6_sol: [
     { label: "Reasoning mode", value: "Pro" },
     { label: "Reasoning effort", value: "Max" },
@@ -213,6 +218,10 @@ const exactOutputCap = (tokens: number): BenchmarkOutputCap => ({
 export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
   Record<ModelKey, BenchmarkOutputCap>
 > = {
+  openai_gpt_5_6_luna: {
+    kind: "unavailable",
+    reason: "accepted-cap-unrecorded",
+  },
   openai_gpt_5_6_sol: exactOutputCap(128_000),
   openai_gpt_5_5: exactOutputCap(128_000),
   openai_gpt_5_5_pro: exactOutputCap(128_000),
