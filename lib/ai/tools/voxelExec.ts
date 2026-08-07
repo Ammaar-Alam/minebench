@@ -9,6 +9,7 @@ import type { PaletteMode } from "@/lib/ai/types";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 export const VOXEL_EXEC_TOOL_NAME = "voxel.exec" as const;
+export const DEFAULT_VOXEL_EXEC_TIMEOUT_MS = 30_000;
 
 export const voxelExecToolCallSchema = z.object({
   tool: z.literal(VOXEL_EXEC_TOOL_NAME),
@@ -55,7 +56,7 @@ export type VoxelExecRunParams = {
 };
 
 export type VoxelExecRunResult = {
-  filePath: string;
+  filePath: string | null;
   // Expanded block count after validation/dedup is computed elsewhere; this is raw spec counts.
   blockCount: number;
   boxCount: number;
@@ -64,12 +65,12 @@ export type VoxelExecRunResult = {
   build: VoxelBuild;
 };
 
-function pickOutputDir(preferred: string | undefined): string {
+function pickOutputDir(preferred: string | undefined): string | null {
   const candidates: string[] = [];
   if (preferred) candidates.push(preferred);
   if (process.env.MINEBENCH_TOOL_OUTPUT_DIR) candidates.push(process.env.MINEBENCH_TOOL_OUTPUT_DIR);
-  candidates.push(path.join(process.cwd(), "uploads", "tool-runs"));
-  candidates.push(path.join(os.tmpdir(), "minebench-tool-runs"));
+
+  if (candidates.length === 0) return null;
 
   for (const dir of candidates) {
     try {
@@ -81,7 +82,7 @@ function pickOutputDir(preferred: string | undefined): string {
     }
   }
 
-  // Should be unreachable, but keep a safe fallback.
+  // Preserve an explicitly requested artifact even if its preferred directory is unavailable.
   return path.join(os.tmpdir(), "minebench-tool-runs");
 }
 
@@ -138,7 +139,10 @@ function makeRng(seed: number | undefined): () => number {
 export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const timeoutMs = Math.max(
     250,
-    Math.min(60_000, Math.floor(Number(process.env.MINEBENCH_TOOL_TIMEOUT_MS ?? 12_000))),
+    Math.min(
+      60_000,
+      Math.floor(Number(process.env.MINEBENCH_TOOL_TIMEOUT_MS ?? DEFAULT_VOXEL_EXEC_TIMEOUT_MS)),
+    ),
   );
   const maxBoxes = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
   const maxLines = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_LINES");
@@ -238,9 +242,15 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   };
 
   const outDir = pickOutputDir(params.outputDir);
-  const runId = typeof crypto.randomUUID === "function" ? crypto.randomUUID() : crypto.randomBytes(16).toString("hex");
-  const filePath = path.join(outDir, `voxel-exec-${Date.now()}-${runId}.json`);
-  fs.writeFileSync(filePath, JSON.stringify(build));
+  let filePath: string | null = null;
+  if (outDir) {
+    const runId =
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : crypto.randomBytes(16).toString("hex");
+    filePath = path.join(outDir, `voxel-exec-${Date.now()}-${runId}.json`);
+    fs.writeFileSync(filePath, JSON.stringify(build));
+  }
 
   return {
     filePath,
