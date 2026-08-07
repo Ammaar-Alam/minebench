@@ -232,6 +232,19 @@ assert.ok(
   "a fully tracked Gemini model should render every normalized statistic row",
 );
 
+const lunaMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "gpt-5-6-luna-details",
+    modelKey: "openai_gpt_5_6_luna",
+    displayName: "GPT 5.6 Luna Pro",
+    open: true,
+  }),
+);
+assert.ok(
+  lunaMarkup.includes("$1.15") && lunaMarkup.includes("$0.08 per build"),
+  "GPT 5.6 Luna Pro should render its canonical benchmark total and finalized-build rate",
+);
+
 const gemini30Markup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
     id: "gemini-3-0-details",

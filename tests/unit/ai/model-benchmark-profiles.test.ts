@@ -18,9 +18,10 @@ assert.deepEqual(gpt56Luna.parameters, [
   { label: "Text verbosity", value: "High" },
 ]);
 assert.deepEqual(gpt56Luna.outputCap, { kind: "exact", tokens: 128_000 });
+assert.equal(gpt56Luna.sourceRelease, "3.12.0");
 assert.deepEqual(gpt56Luna.averageInference, { milliseconds: 804_533 });
 assert.equal(gpt56Luna.averageJsonSizeBytes, 59_966_032);
-assert.equal(gpt56Luna.totalCost, undefined);
+assert.deepEqual(gpt56Luna.totalCost, { usd: 1.15 });
 assert.equal(gpt56Luna.totalAttempts, 24);
 assert.equal(gpt56Luna.buildCount, 15);
 

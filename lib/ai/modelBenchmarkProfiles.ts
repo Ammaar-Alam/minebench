@@ -290,6 +290,10 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  openai_gpt_5_6_luna: {
+    sourceRelease: "3.12.0",
+    totalCost: { usd: 1.15 },
+  },
   openai_gpt_5_6_sol: {
     sourceRelease: "3.9.0",
     averageInference: { milliseconds: 1_516_200 },
