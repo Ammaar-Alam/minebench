@@ -15,6 +15,7 @@ function providerKeyStatus(overrides: Partial<SeedProviderKeyStatus>): SeedProvi
     deepseek: false,
     minimax: false,
     xai: false,
+    meta: false,
     openrouter: false,
     ...overrides,
   };
@@ -50,6 +51,32 @@ assert.equal(
     providerKeys: providerKeyStatus({ anthropic: true }),
   }),
   true,
+);
+
+const museSpark12 = getModelByKey("meta_muse_spark_1_2");
+assert.equal(
+  isCatalogModelGeneratableForSeed({
+    model: museSpark12,
+    providerKeys: providerKeyStatus({ meta: true }),
+  }),
+  true,
+  "Muse Spark 1.2 should be seed-generatable with a direct Meta key",
+);
+assert.equal(
+  isCatalogModelGeneratableForSeed({
+    model: museSpark12,
+    providerKeys: providerKeyStatus({ openrouter: true }),
+  }),
+  true,
+  "Muse Spark 1.2 should retain OpenRouter fallback for seeding",
+);
+assert.equal(
+  isCatalogModelGeneratableForSeed({
+    model: museSpark12,
+    providerKeys: providerKeyStatus({}),
+  }),
+  false,
+  "Muse Spark 1.2 should be skipped when neither route has a key",
 );
 
 console.log("seed model catalog checks passed");

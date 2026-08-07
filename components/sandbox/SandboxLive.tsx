@@ -134,6 +134,7 @@ function loadProviderKeysFromStorage(): ProviderApiKeys {
     set("deepseek");
     set("minimax");
     set("xai");
+    set("meta");
     set("custom");
     return keys;
   } catch {
@@ -621,6 +622,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       setKey("deepseek", providerKeys.deepseek);
       setKey("minimax", providerKeys.minimax);
       setKey("xai", providerKeys.xai);
+      setKey("meta", providerKeys.meta);
       setKey("custom", providerKeys.custom);
 
       const res = await fetch("/api/generate", {
@@ -1264,6 +1266,19 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                       autoComplete="off"
                       spellCheck={false}
                       placeholder="Paste your xAI key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Meta Model API</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.meta ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, meta: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your Meta Model API key"
                     />
                   </label>
                 </div>

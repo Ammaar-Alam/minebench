@@ -529,7 +529,6 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "Muse Spark 1.2",
     enabled: true,
     openRouterModelId: "meta/muse-spark-1.2",
-    forceOpenRouter: true,
   },
   {
     key: "meta_llama_4_maverick",

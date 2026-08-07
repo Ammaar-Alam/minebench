@@ -99,6 +99,31 @@ export function openAiReasoningEffortAttempts(
   return undefined;
 }
 
+export function metaReasoningEffortAttempts(
+  modelId: string,
+  override?: string,
+): string[] | undefined {
+  const label = `Meta model ${modelId}`;
+  if (modelId === "muse-spark-1.2") {
+    return descendingAttempts(
+      label,
+      ["xhigh", "high", "medium", "low", "minimal"],
+      override,
+    );
+  }
+
+  const normalized = normalizeReasoningOverride(override);
+  if (normalized) {
+    throw new Error(`${label} does not expose a reasoning-effort override.`);
+  }
+  return undefined;
+}
+
+export function modelRequiresReasoning(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return normalized === "muse-spark-1.2" || normalized === "meta/muse-spark-1.2";
+}
+
 // Shared by the direct Anthropic route and the OpenRouter fallback so both
 // descend the same effort ladder for a given model
 function anthropicAdaptiveAttempts(

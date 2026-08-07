@@ -11,6 +11,7 @@ export type ProviderApiKeys = {
   deepseek?: string;
   minimax?: string;
   xai?: string;
+  meta?: string;
   openrouter?: string;
   custom?: string;
 };
