@@ -178,11 +178,14 @@ assert.deepEqual(museSpark12?.parameters, [
 ]);
 assert.deepEqual(
   museSpark12?.outputCap,
-  { kind: "unavailable", reason: "predates-tracking" },
-  "Muse Spark 1.2 should not publish an accepted benchmark cap before generation",
+  { kind: "exact", tokens: 131_072 },
 );
 assert.equal(museSpark12?.sourceRelease, undefined);
-assert.equal(museSpark12?.buildCount, undefined);
+assert.deepEqual(museSpark12?.averageInference, { milliseconds: 237_533 });
+assert.equal(museSpark12?.averageJsonSizeBytes, 15_042_435);
+assert.deepEqual(museSpark12?.totalCost, { usd: 2.61, attemptCount: 17 });
+assert.equal(museSpark12?.totalAttempts, 17);
+assert.equal(museSpark12?.buildCount, 15);
 
 const gpt45WebHarness = getModelBenchmarkProfile("openai_gpt_4_5_web_harness");
 assert.deepEqual(gpt45WebHarness?.parameters, [

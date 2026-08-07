@@ -377,6 +377,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
     sourceRelease: "3.12.0",
     totalCost: { usd: 0.28, attemptCount: 24 },
   },
+  meta_muse_spark_1_2: {
+    totalCost: { usd: 2.61, attemptCount: 17 },
+  },
   anthropic_claude_4_7_opus: {
     sourceRelease: "v3.0.0",
     averageInference: { milliseconds: 2_600_000 },
