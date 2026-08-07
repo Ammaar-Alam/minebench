@@ -12,6 +12,7 @@ for (const [direct, routed] of [
   ["grok-4.5", "x-ai/grok-4.5"],
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
   ["gemini-3.6-flash", "google/gemini-3.6-flash"],
+  ["muse-spark-1.2", "meta/muse-spark-1.2"],
 ] as const) {
   assert.equal(
     modelOutputCeiling(direct),
@@ -25,6 +26,8 @@ assert.equal(modelOutputCeiling("grok-4.3"), 1_000_000);
 assert.equal(modelOutputCeiling("claude-opus-5"), 128_000);
 assert.equal(modelOutputCeiling("MiniMax-M2.7"), 131_072);
 assert.equal(modelOutputCeiling("grok-4-1-fast"), 30_000);
+assert.equal(modelOutputCeiling("muse-spark-1.2"), 131_072);
+assert.equal(modelOutputCeiling("meta/muse-spark-1.2"), 131_072);
 
 // A model with no declared ceiling runs on the MineBench default
 assert.equal(modelOutputCeiling("gpt-4o"), undefined);

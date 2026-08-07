@@ -398,6 +398,13 @@ export function openRouterReasoningEffortAttempts(
   if (modelId === "google/gemma-4-31b-it") {
     return descendingAttempts(label, ["high"], override);
   }
+  if (modelId === "meta/muse-spark-1.2") {
+    return descendingAttempts(
+      label,
+      ["xhigh", "high", "medium", "low", "minimal"],
+      override,
+    );
+  }
   if (
     modelId === "qwen/qwen3-max-thinking" ||
     modelId === "qwen/qwen3.5-397b-a17b"

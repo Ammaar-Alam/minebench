@@ -200,6 +200,7 @@ const MODEL_RUN_PARAMETERS = {
   minimax_m2_5: [
     { label: "Reasoning effort", value: "XHigh" },
   ],
+  meta_muse_spark_1_2: OPENROUTER_XHIGH,
   meta_llama_4_maverick: PROVIDER_DEFAULT,
 } satisfies Record<ModelKey, ModelRunParameters>;
 

@@ -65,6 +65,7 @@ export type ModelKey =
   | "qwen_qwen3_5_397b_a17b"
   | "minimax_m2_7"
   | "minimax_m2_5"
+  | "meta_muse_spark_1_2"
   | "meta_llama_4_maverick";
 
 export type ModelCatalogEntry = {
@@ -520,6 +521,15 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     displayName: "MiniMax M2.5",
     enabled: true,
     openRouterModelId: "minimax/minimax-m2.5",
+  },
+  {
+    key: "meta_muse_spark_1_2",
+    provider: "meta",
+    modelId: "muse-spark-1.2",
+    displayName: "Muse Spark 1.2",
+    enabled: true,
+    openRouterModelId: "meta/muse-spark-1.2",
+    forceOpenRouter: true,
   },
   {
     key: "meta_llama_4_maverick",

@@ -172,6 +172,18 @@ assert.equal(
   "release workflow state should not appear in user-facing version metadata",
 );
 
+const museSpark12 = getModelBenchmarkProfile("meta_muse_spark_1_2");
+assert.deepEqual(museSpark12?.parameters, [
+  { label: "Reasoning effort", value: "XHigh" },
+]);
+assert.deepEqual(
+  museSpark12?.outputCap,
+  { kind: "unavailable", reason: "predates-tracking" },
+  "Muse Spark 1.2 should not publish an accepted benchmark cap before generation",
+);
+assert.equal(museSpark12?.sourceRelease, undefined);
+assert.equal(museSpark12?.buildCount, undefined);
+
 const gpt45WebHarness = getModelBenchmarkProfile("openai_gpt_4_5_web_harness");
 assert.deepEqual(gpt45WebHarness?.parameters, [
   { label: "Source", value: "ChatGPT web harness" },
