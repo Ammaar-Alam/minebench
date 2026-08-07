@@ -210,6 +210,8 @@ const qwen38 = getModelBenchmarkProfile("qwen_qwen3_8_max");
 assert.deepEqual(qwen38?.parameters, [
   { label: "Reasoning effort", value: "XHigh" },
 ]);
+assert.equal(qwen38?.sourceRelease, "3.12.0");
+assert.deepEqual(qwen38?.totalCost, { usd: 11.53 });
 assert.deepEqual(
   qwen38?.outputCap,
   { kind: "unavailable", reason: "predates-tracking" },
