@@ -71,6 +71,7 @@ function pickOutputDir(preferred: string | undefined): string | null {
   if (process.env.MINEBENCH_TOOL_OUTPUT_DIR) candidates.push(process.env.MINEBENCH_TOOL_OUTPUT_DIR);
 
   if (candidates.length === 0) return null;
+  candidates.push(path.join(os.tmpdir(), "minebench-tool-runs"));
 
   for (const dir of candidates) {
     try {
@@ -82,8 +83,7 @@ function pickOutputDir(preferred: string | undefined): string | null {
     }
   }
 
-  // Preserve an explicitly requested artifact even if its preferred directory is unavailable.
-  return path.join(os.tmpdir(), "minebench-tool-runs");
+  return null;
 }
 
 function toInt(n: unknown): number {
