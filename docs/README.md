@@ -9,6 +9,7 @@ Use this index to find implementation-accurate docs for Arena ranking, generatio
 - [Operations and API Reference](./operations.md)
 - [Deployment](./deployment.md)
 - [Build Export and Import Guide](./build-export-import.md)
+- [Frequently Asked Questions](https://minebench.ai/faq)
 
 ## Core
 
