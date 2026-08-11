@@ -5,7 +5,7 @@ import { breadcrumbJsonLd, DEFAULT_OG_IMAGE } from "@/lib/seo";
 export const metadata: Metadata = {
   title: "Sandbox",
   description:
-    "Generate and compare AI voxel builds from custom prompts in the MineBench sandbox.",
+    "Compare, generate, and import AI voxel builds in the MineBench sandbox.",
   keywords: [
     "ai voxel generator",
     "voxel build generator",
@@ -18,14 +18,14 @@ export const metadata: Metadata = {
   openGraph: {
     title: "MineBench Sandbox | AI Voxel Generator",
     description:
-      "Generate and compare AI voxel builds from custom prompts in the MineBench sandbox.",
+      "Compare, generate, and import AI voxel builds in the MineBench sandbox.",
     url: "/sandbox",
     images: [{ url: DEFAULT_OG_IMAGE, alt: "MineBench sandbox voxel build generation" }],
   },
   twitter: {
     title: "MineBench Sandbox | AI Voxel Generator",
     description:
-      "Generate and compare AI voxel builds from custom prompts in the MineBench sandbox.",
+      "Compare, generate, and import AI voxel builds in the MineBench sandbox.",
     images: [DEFAULT_OG_IMAGE],
   },
 };

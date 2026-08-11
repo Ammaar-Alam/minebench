@@ -1,8 +1,8 @@
 "use client";
 
-import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { SandboxGifExportButton, type SandboxGifExportTarget } from "@/components/sandbox/SandboxGifExportButton";
-import { buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
+import { buildSystemPrompt, buildUserPrompt, buildWebPrompt } from "@/lib/ai/prompts";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -90,6 +90,7 @@ function CopyButton({
   tone = "ghost",
   icon,
   className,
+  description,
 }: {
   label: string;
   text: string;
@@ -97,8 +98,10 @@ function CopyButton({
   tone?: "ghost" | "primary";
   icon?: ReactNode;
   className?: string;
+  description?: string;
 }) {
   const [status, setStatus] = useState<"idle" | "copied" | "error">("idle");
+  const descriptionId = useId();
 
   async function copy() {
     try {
@@ -129,21 +132,33 @@ function CopyButton({
   }
 
   return (
-    <button
-      type="button"
-      className={cx(
-        "mb-btn h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs",
-        tone === "primary" ? "mb-btn-primary" : "mb-btn-ghost",
-        className,
-      )}
-      disabled={disabled}
-      onClick={copy}
-    >
-      <span className="inline-flex items-center gap-1.5">
-        {icon}
-        <span>{status === "copied" ? "Copied" : status === "error" ? "Copy failed" : label}</span>
-      </span>
-    </button>
+    <span className="group relative z-20 inline-flex">
+      <button
+        type="button"
+        aria-describedby={description ? descriptionId : undefined}
+        className={cx(
+          "mb-btn h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs",
+          tone === "primary" ? "mb-btn-primary" : "mb-btn-ghost",
+          className,
+        )}
+        disabled={disabled}
+        onClick={copy}
+      >
+        <span className="inline-flex items-center gap-1.5">
+          {icon}
+          <span>{status === "copied" ? "Copied" : status === "error" ? "Copy failed" : label}</span>
+        </span>
+      </button>
+      {description ? (
+        <span
+          id={descriptionId}
+          role="tooltip"
+          className="pointer-events-none invisible absolute bottom-[calc(100%+0.625rem)] right-0 z-50 w-64 rounded-xl bg-card px-3 py-2.5 text-left text-[11px] leading-relaxed text-fg/90 opacity-0 shadow-2xl ring-1 ring-border transition-opacity after:absolute after:-bottom-1 after:right-8 after:h-2 after:w-2 after:rotate-45 after:border-b after:border-r after:border-border after:bg-card group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 sm:w-72"
+        >
+          {description}
+        </span>
+      ) : null}
+    </span>
   );
 }
 
@@ -251,9 +266,20 @@ export function LocalLab() {
   );
   const userPrompt = useMemo(() => buildUserPrompt(taskPrompt.trim()), [taskPrompt]);
 
-  const combinedPrompt = useMemo(() => {
+  const apiPrompt = useMemo(() => {
     return `SYSTEM:\n${systemPrompt}\n\nUSER:\n${userPrompt}`;
   }, [systemPrompt, userPrompt]);
+  const webPrompt = useMemo(
+    () =>
+      buildWebPrompt({
+        gridSize,
+        minBlocks: MIN_BLOCKS_BY_GRID[gridSize],
+        maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
+        palette,
+        prompt: taskPrompt,
+      }),
+    [gridSize, palette, taskPrompt],
+  );
 
   const modelOutputRef = useRef<HTMLTextAreaElement | null>(null);
   const bufferedOutputRef = useRef<string | null>(null);
@@ -262,6 +288,7 @@ export function LocalLab() {
     chars: 0,
   });
   const [statusNote, setStatusNote] = useState<string | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [rendered, setRendered] = useState<{
     kind: "idle" | "loading" | "ready" | "error";
     build: VoxelBuild | null;
@@ -399,6 +426,29 @@ export function LocalLab() {
     setStatusNote(null);
   }
 
+  async function loadJsonFile(file: File) {
+    if (!file.name.toLowerCase().endsWith(".json") && file.type !== "application/json") {
+      setStatusNote("Drop a JSON file.");
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      if (!trimOuterWhitespace(text)) {
+        setStatusNote(`${file.name} is empty.`);
+        return;
+      }
+
+      const buffered = text.length >= LARGE_PASTE_CHAR_THRESHOLD;
+      bufferedOutputRef.current = buffered ? text : null;
+      if (modelOutputRef.current) modelOutputRef.current.value = buffered ? "" : text;
+      setInputStats({ mode: buffered ? "buffered" : "editor", chars: text.length });
+      setStatusNote(`${file.name} ready.`);
+    } catch {
+      setStatusNote(`Couldn't read ${file.name}.`);
+    }
+  }
+
   function renderFromText(text: string) {
     const trimmed = trimOuterWhitespace(text);
     if (!trimmed) {
@@ -510,10 +560,10 @@ export function LocalLab() {
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="font-display text-[1.85rem] font-semibold tracking-tight text-fg sm:text-[2.1rem]">
-              Test models locally
+              Import a build
             </div>
             <div className="mt-1 text-sm text-muted">
-              Tweak the prompt, run it in your model, paste the JSON back here to see the build.
+              Run the prompt anywhere, then import the result here.
             </div>
           </div>
 
@@ -582,7 +632,7 @@ export function LocalLab() {
               <div className="min-w-0">
                 <div className="text-sm font-semibold text-fg">System prompt</div>
                 <div className="text-xs text-muted">
-                  This is what the benchmark uses. Edit freely — the default is one click away.
+                  Adjust it to see how models respond when different qualities are emphasized.
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -613,7 +663,7 @@ export function LocalLab() {
 
             <textarea
               aria-label="System prompt"
-              className="mb-field mt-3 min-h-[178px] flex-1 font-mono text-[12px] leading-snug"
+              className="mb-field mb-prompt-scroll mt-3 min-h-[178px] flex-1 font-mono text-[12px] leading-snug"
               value={systemPrompt}
               spellCheck={false}
               onChange={(e) => {
@@ -631,18 +681,32 @@ export function LocalLab() {
                 <div className="text-sm font-semibold text-fg">User prompt</div>
                 <div className="text-xs text-muted">What you want the model to build.</div>
               </div>
-              <CopyButton
-                label="Copy both"
-                text={combinedPrompt}
-                disabled={!taskPrompt.trim()}
-                tone="primary"
-                icon={
-                  <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-                    <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                    <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-                  </svg>
-                }
-              />
+              <div className="flex flex-wrap items-center gap-2">
+                <CopyButton
+                  label="Copy for API"
+                  text={apiPrompt}
+                  disabled={!taskPrompt.trim()}
+                  icon={
+                    <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                      <rect x="8" y="8" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                      <rect x="5" y="5" width="11" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
+                    </svg>
+                  }
+                />
+                <CopyButton
+                  label="Copy for web"
+                  text={webPrompt}
+                  disabled={!taskPrompt.trim()}
+                  tone="primary"
+                  description="Optimized for the web harness. It asks the model to create a downloadable JSON file you can import here."
+                  icon={
+                    <svg aria-hidden="true" className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
+                      <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z" stroke="currentColor" strokeWidth="1.8" />
+                      <path d="M3 12h18M12 3c2.4 2.45 3.6 5.45 3.6 9S14.4 18.55 12 21c-2.4-2.45-3.6-5.45-3.6-9S9.6 5.45 12 3Z" stroke="currentColor" strokeWidth="1.8" />
+                    </svg>
+                  }
+                />
+              </div>
             </div>
 
             <input
@@ -660,13 +724,6 @@ export function LocalLab() {
               )}
             </div>
 
-            <p className="mt-3 text-[11px] leading-relaxed text-muted">
-              Running this through a chat UI (chatgpt.com, claude.ai, etc.)? Ask for a JSON file or artifact
-              attachment — otherwise the model will hit its output limit on raw text.
-            </p>
-            <div className="mt-1.5 rounded-lg border border-border/70 bg-bg/45 p-2 font-mono text-[11px] leading-snug text-muted">
-              Return only the final voxel object as a JSON file/artifact attachment.
-            </div>
           </div>
         </div>
 
@@ -674,8 +731,8 @@ export function LocalLab() {
           <div className="mb-panel flex flex-col gap-3 p-4 sm:p-5">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-sm font-semibold text-fg">Paste JSON</div>
-                <div className="text-xs text-muted">Drop the model&apos;s JSON output here. Cmd/Ctrl+Enter to render.</div>
+                <div className="text-sm font-semibold text-fg">Import JSON</div>
+                <div className="text-xs text-muted">Paste or drop a JSON file.</div>
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -704,9 +761,30 @@ export function LocalLab() {
             <textarea
               ref={modelOutputRef}
               aria-label="Paste model JSON output"
-              className="mb-field min-h-[150px] flex-1 font-mono text-[12px] leading-snug"
+              className={cx(
+                "mb-field mb-prompt-scroll min-h-[150px] flex-1 font-mono text-[12px] leading-snug",
+                isDraggingFile ? "border-accent ring-2 ring-accent/20" : "",
+              )}
               placeholder='{"version":"1.0","boxes":[],"lines":[],"blocks":[{"x":0,"y":0,"z":0,"type":"stone"}]}'
               spellCheck={false}
+              onDragEnter={(e) => {
+                if (!e.dataTransfer.types.includes("Files")) return;
+                e.preventDefault();
+                setIsDraggingFile(true);
+              }}
+              onDragOver={(e) => {
+                if (!e.dataTransfer.types.includes("Files")) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                setIsDraggingFile(true);
+              }}
+              onDragLeave={() => setIsDraggingFile(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDraggingFile(false);
+                const file = e.dataTransfer.files[0];
+                if (file) void loadJsonFile(file);
+              }}
               onPaste={(e) => {
                 const pasted = e.clipboardData?.getData("text") ?? "";
                 if (!pasted || pasted.length < LARGE_PASTE_CHAR_THRESHOLD) return;

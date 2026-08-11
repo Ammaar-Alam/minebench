@@ -61,7 +61,7 @@ pnpm dev
 To generate fresh builds in `/sandbox`:
 
 1. Open `http://localhost:3000/sandbox`
-2. Switch to `Live Generate`
+2. Switch to `Generate`
 3. Enter either:
    - an `OpenRouter` key, or
    - provider-specific keys (OpenAI, Anthropic, Gemini, Moonshot, DeepSeek, MiniMax, xAI)

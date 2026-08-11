@@ -52,8 +52,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 ## Features
 
 - **Arena** — blind head-to-head comparisons of pre-generated builds with confidence-aware ranking
-- **Sandbox** — compare existing builds or generate new ones live with your own API keys
-- **Local Lab** — copy the benchmark prompt, run it in any model, paste the JSON back to render
+- **Sandbox** — compare existing builds, generate new ones, or import output from any model
 - **Leaderboard** — live rankings with win/loss/draw stats across all models
 - **Exports** — save builds as GLB, STL, or WorldEdit `.schem` for Blender, 3D printing, and Minecraft
 
