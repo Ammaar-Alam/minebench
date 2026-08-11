@@ -103,6 +103,69 @@ ${prompt}
 </build_request>`;
 }
 
+export function buildWebPrompt(opts: {
+  gridSize: number;
+  maxBlocks: number;
+  minBlocks: number;
+  palette: "simple" | "advanced";
+  prompt: string;
+}): string {
+  const center = Math.floor(opts.gridSize / 2);
+  const blockList = getPalette(opts.palette)
+    .map((block) => `- ${block.id}: ${block.name}`)
+    .join("\n");
+
+  return `You are a master 3D voxel architect. Create an immediately recognizable, structurally articulated build with true depth, strong proportions, and thoughtful detail.
+
+## Output format
+
+Return only valid JSON with no markdown or explanation. If the chat interface supports files or artifacts, return the JSON as a downloadable file instead of printing a very large object into the conversation.
+
+{
+  "version": "1.0",
+  "boxes": [{ "x1": 0, "y1": 0, "z1": 0, "x2": 10, "y2": 5, "z2": 10, "type": "block_id" }],
+  "lines": [{ "from": { "x": 0, "y": 0, "z": 0 }, "to": { "x": 0, "y": 10, "z": 0 }, "type": "block_id" }],
+  "blocks": [{ "x": 0, "y": 0, "z": 0, "type": "block_id" }]
+}
+
+- Always include boxes, lines, and blocks, using empty arrays when needed.
+- Use boxes for filled volumes and broad surfaces.
+- Use lines for beams, poles, rails, and other long thin elements.
+- Use individual blocks for details and irregular accents.
+
+## Spatial requirements
+
+- Build a true 3D object, not a flat image or decorated rectangle.
+- Decompose the subject into connected parts that protrude, recess, overlap, and read clearly from multiple angles.
+- Establish the primary silhouette and proportions before adding secondary structure and surface detail.
+- Use negative space for openings, gaps, windows, arches, and separation between parts.
+- Add environmental context only when it strengthens the requested subject and overall composition.
+
+## Quality criteria
+
+The build will be judged on recognizability, 3D structure, prompt fidelity, proportions, detail quality, composition, and overall impression. Concentrate detail around silhouette edges, focal features, joints, openings, and other areas that define the subject.
+
+## Constraints
+
+- Grid coordinates are integers in [0, ${opts.gridSize - 1}].
+- Y is vertical and Y=0 is ground.
+- Center the build around x=${center}, z=${center}.
+- Minimum ${opts.minBlocks.toLocaleString("en-US")} blocks.
+- Maximum ${opts.maxBlocks.toLocaleString("en-US")} blocks after boxes and lines are expanded.
+- Every block type must come from the selected ${opts.palette} palette below.
+- Do not use an air block. Leave coordinates empty to create open space.
+
+## Available blocks
+
+${blockList}
+
+## Build request
+
+${opts.prompt.trim()}
+
+Before producing the file, plan the complete structure, coordinate bounds, materials, scene composition, and construction order internally. Return only the final JSON object as a file or artifact when possible.`;
+}
+
 export function buildRepairPrompt(params: { error: string; previousOutput: string; originalPrompt: string }): string {
   return `Your previous output was invalid.
 Reason: ${params.error}

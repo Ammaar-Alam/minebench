@@ -71,6 +71,14 @@ assert.equal(
   "benchmark",
 );
 assert.equal(
+  readSandboxUrlMode(new URLSearchParams("mode=import")),
+  "import",
+);
+assert.equal(
+  readSandboxUrlMode(new URLSearchParams("mode=import&prompt=build+a+castle")),
+  "import",
+);
+assert.equal(
   buildSandboxModePath(
     new URLSearchParams("models=model-a,model-b&promptId=prompt-1&utm_source=share"),
     "live",
@@ -83,6 +91,19 @@ assert.equal(
     "benchmark",
   ),
   "/sandbox",
+);
+assert.equal(
+  buildSandboxModePath(
+    new URLSearchParams(
+      "models=model-a,model-b&promptId=prompt-1&prompt=old+prompt&utm_source=share",
+    ),
+    "import",
+  ),
+  "/sandbox?utm_source=share&mode=import",
+);
+assert.equal(
+  buildSandboxModePath(new URLSearchParams("mode=import"), "live"),
+  "/sandbox?mode=live",
 );
 
 assert.equal(

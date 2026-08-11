@@ -143,10 +143,10 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
         question: "Can models that are not on the official leaderboard be tested?",
         answer: [
           "Yes.",
-          "The Local Lab allows MineBench instructions to be used with models that are not directly integrated. The model can generate the expected output externally, and the result can then be loaded into MineBench and rendered.",
+          "The Sandbox Import workspace allows MineBench instructions to be used with models that are not directly integrated. The model can generate the expected output externally, and the result can then be loaded into MineBench and rendered.",
           "Those generations are useful for experimentation but should not be treated as official leaderboard results unless they were produced under the same controlled settings.",
         ],
-        links: [{ label: "Open Local Lab", href: "/local" }],
+        links: [{ label: "Open Import", href: "/sandbox?mode=import" }],
       },
       {
         id: "why-is-a-model-missing",

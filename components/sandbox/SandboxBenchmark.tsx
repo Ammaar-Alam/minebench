@@ -130,8 +130,8 @@ type CachedBuild = {
   variant: ArenaBuildVariant;
 };
 
-const DEFAULT_MODEL_A = "openai_gpt_5_5";
-const DEFAULT_MODEL_B = "openai_gpt_5_5_pro";
+const DEFAULT_MODEL_A = "openai_gpt_5_5_pro";
+const DEFAULT_MODEL_B = "openai_gpt_5_6_sol";
 const DEFAULT_MODEL_SELECTION: SandboxComparisonSelection<string> = {
   a: DEFAULT_MODEL_A,
   b: DEFAULT_MODEL_B,

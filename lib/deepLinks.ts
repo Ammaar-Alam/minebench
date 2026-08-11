@@ -5,7 +5,7 @@ export type SandboxComparisonDeepLink = {
   modelKeys: string[];
   promptId: string | null;
 };
-export type SandboxUrlMode = "benchmark" | "live";
+export type SandboxUrlMode = "benchmark" | "live" | "import";
 
 function buildPath(pathname: string, params: URLSearchParams): string {
   const query = params.toString();
@@ -63,6 +63,7 @@ export function buildSandboxComparisonPath(
 
 export function readSandboxUrlMode(params: URLSearchParams): SandboxUrlMode {
   if (params.has("models") || params.has("promptId")) return "benchmark";
+  if (params.get("mode") === "import") return "import";
   if (params.get("mode") === "live" || params.get("prompt")?.trim()) return "live";
   return "benchmark";
 }
@@ -77,6 +78,12 @@ export function buildSandboxModePath(
     params.delete("promptId");
     for (const param of SANDBOX_LEGACY_MODEL_PARAMS) params.delete(param);
     params.set("mode", "live");
+  } else if (mode === "import") {
+    params.delete("models");
+    params.delete("promptId");
+    params.delete("prompt");
+    for (const param of SANDBOX_LEGACY_MODEL_PARAMS) params.delete(param);
+    params.set("mode", "import");
   } else {
     params.delete("prompt");
     params.delete("mode");

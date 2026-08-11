@@ -234,7 +234,6 @@ export function SiteHeader() {
             <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               <NavLink href="/" label="Arena" />
               <NavLink href="/sandbox" label="Sandbox" />
-              <NavLink href="/local" label="Local" />
               <NavLink href="/leaderboard" label="Leaderboard" />
               <NavLink href="/faq" label="FAQ" />
               <div className="mx-0.5 h-5 w-px shrink-0 bg-border/50 sm:mx-1" aria-hidden="true" />
