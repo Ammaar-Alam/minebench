@@ -7,6 +7,7 @@ import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
 import { createVoxelGroupAsync, VoxelGroup } from "@/lib/voxel/mesh";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
 
 export type VoxelViewerBuildProgress = {
   processedBlocks: number;
@@ -951,11 +952,16 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
     camera.position.set(10, 8, 10);
 
-    const renderer = new THREE.WebGLRenderer({
-      antialias: false,
-      alpha: true,
-      powerPreference: "high-performance",
-    });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({
+        antialias: false,
+        alpha: true,
+        powerPreference: "high-performance",
+      });
+    } catch {
+      throw new Error(VOXEL_VIEWER_WEBGL_ERROR);
+    }
     // mobile retina is much more fragment-shader bound; cap lower to keep memory + frame time down
     renderer.setPixelRatio(getViewerPixelRatio());
     // important: keep canvas css size in sync with the mount, otherwise we end up showing only a corner
