@@ -6,6 +6,7 @@ const PUBLIC_ROUTES = [
   { path: "/", priority: 1, changeFrequency: "daily" },
   { path: "/sandbox", priority: 0.9, changeFrequency: "daily" },
   { path: "/leaderboard", priority: 0.8, changeFrequency: "hourly" },
+  { path: "/faq", priority: 0.7, changeFrequency: "monthly" },
 ] as const;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {

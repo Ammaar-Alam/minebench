@@ -70,6 +70,33 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 
 ![MineBench leaderboard showing model rankings](.github/assets/readme/leaderboard-dark.png)
 
+## Frequently Asked Questions
+
+The full FAQ is available at **[minebench.ai/faq](https://minebench.ai/faq)**. Every answer has a stable link for sharing or citation.
+
+### About MineBench
+
+- [What is MineBench?](https://minebench.ai/faq#what-is-minebench)
+- [How do models actually create the builds?](https://minebench.ai/faq#how-do-models-create-builds)
+- [Why do some models add objects or scenery that were not explicitly requested?](https://minebench.ai/faq#why-do-models-add-extra-scenery)
+
+### Methodology
+
+- [How are models ranked if there is no single correct build?](https://minebench.ai/faq#how-are-models-ranked)
+- [Can models train on MineBench or “benchmax” it?](https://minebench.ai/faq#can-minebench-be-contaminated-or-benchmaxxed)
+- [How do grid size, block limits, and different leaderboard settings work?](https://minebench.ai/faq#how-do-grid-size-block-limits-and-leaderboard-settings-work)
+- [Why not add more prompts, grid sizes, block-limited settings, and other evaluation modes?](https://minebench.ai/faq#why-not-add-more-evaluation-modes)
+- [Are generations one-shot?](https://minebench.ai/faq#are-generations-one-shot)
+
+### Using MineBench
+
+- [Can I compare different models directly?](https://minebench.ai/faq#can-i-compare-models-directly)
+- [Can models that are not on the official leaderboard be tested?](https://minebench.ai/faq#can-unofficial-models-be-tested)
+- [Why isn't a particular model on the leaderboard?](https://minebench.ai/faq#why-is-a-model-missing)
+- [Can MineBench builds be exported?](https://minebench.ai/faq#can-i-export-builds)
+- [Is MineBench using Minecraft MCP, Blender MCP, or a coding agent?](https://minebench.ai/faq#is-this-minecraft-mcp-blender-mcp-or-a-coding-agent)
+- [How can MineBench be supported or contributed to?](https://minebench.ai/faq#how-can-i-support-or-contribute)
+
 ## Supported Models
 
 MineBench currently benchmarks models from OpenAI, Anthropic, Google, Moonshot, DeepSeek, MiniMax, xAI, Z.AI, Qwen, Meta, and any model available through OpenRouter.
