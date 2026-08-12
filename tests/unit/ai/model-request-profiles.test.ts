@@ -5,6 +5,7 @@ import {
   modelOutputCeiling,
   modelUsesDefaultSampling,
 } from "../../../lib/ai/modelRequestProfiles";
+import { tokenBudgetCandidates } from "../../../lib/ai/tokenBudgets";
 
 // A ceiling belongs to the model, so both routes resolve the same number
 for (const [direct, routed] of [
@@ -25,7 +26,7 @@ for (const [direct, routed] of [
 
 assert.equal(modelOutputCeiling("kimi-k3"), 1_048_576);
 assert.equal(modelOutputCeiling("grok-4.3"), 1_000_000);
-assert.equal(modelOutputCeiling("grok-4.6"), 500_000);
+assert.equal(modelOutputCeiling("grok-4.6"), 496_000);
 assert.equal(modelOutputCeiling("claude-opus-5"), 128_000);
 assert.equal(modelOutputCeiling("qwen3.8-max"), 131_072);
 assert.equal(modelOutputCeiling("qwen/qwen3.8-max"), 131_072);
@@ -33,6 +34,7 @@ assert.equal(modelOutputCeiling("MiniMax-M2.7"), 131_072);
 assert.equal(modelOutputCeiling("grok-4-1-fast"), 30_000);
 assert.equal(modelOutputCeiling("muse-spark-1.2"), 131_072);
 assert.equal(modelOutputCeiling("meta/muse-spark-1.2"), 131_072);
+assert.deepEqual(tokenBudgetCandidates(500_000).slice(0, 3), [500_000, 496_000, 353_000]);
 
 // A model with no declared ceiling runs on the MineBench default
 assert.equal(modelOutputCeiling("gpt-4o"), undefined);

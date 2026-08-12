@@ -52,6 +52,7 @@ export async function xaiGenerateText(params: {
     reasoningEffort: requestConfig.reasoningEffort,
     temperature: modelUsesDefaultSampling(params.modelId) ? undefined : params.temperature,
     jsonSchema: params.jsonSchema,
+    requireStructuredOutput: params.modelId === "grok-4.6",
     serviceLabel: "xAI",
     signal: params.signal,
     onDelta: params.onDelta,

@@ -12,6 +12,7 @@ import {
   xaiReasoningEffortAttempts,
 } from "../../../lib/ai/reasoningProfiles";
 import { xaiRequestConfigForModel } from "../../../lib/ai/providers/xai";
+import { voxelExecToolCallJsonSchema } from "../../../lib/ai/tools/voxelExec";
 import { MODEL_SLUG } from "../../../scripts/uploadsCatalog";
 
 type CapturedRequest = {
@@ -29,12 +30,17 @@ const originalEnv = {
   xaiBaseUrl: process.env.XAI_BASE_URL,
 };
 
-function validBuildJson(): string {
+let rejectXaiStructuredOutput = false;
+
+function validToolCallJson(): string {
   return JSON.stringify({
-    version: "1.0",
-    boxes: [],
-    lines: [],
-    blocks: [{ x: 0, y: 0, z: 0, type: "stone" }],
+    tool: "voxel.exec",
+    input: {
+      code: 'box(0, 0, 0, 4, 4, 4, "stone");',
+      gridSize: 64,
+      palette: "simple",
+      seed: 123,
+    },
   });
 }
 
@@ -46,7 +52,7 @@ function assertStructuredOutput(body: Record<string, unknown>): void {
   assert.equal(responseFormat.type, "json_schema");
   assert.equal(responseFormat.json_schema?.name, "voxel_build_response");
   assert.equal(responseFormat.json_schema?.strict, true);
-  assert.ok(responseFormat.json_schema?.schema);
+  assert.deepEqual(responseFormat.json_schema?.schema, voxelExecToolCallJsonSchema());
 }
 
 const xaiServer = http.createServer(async (request, response) => {
@@ -58,7 +64,12 @@ const xaiServer = http.createServer(async (request, response) => {
     body: JSON.parse(rawBody) as Record<string, unknown>,
   });
   response.setHeader("Content-Type", "application/json");
-  response.end(JSON.stringify({ choices: [{ message: { content: validBuildJson() } }] }));
+  if (rejectXaiStructuredOutput) {
+    response.statusCode = 400;
+    response.end(JSON.stringify({ error: { message: "response_format unsupported" } }));
+    return;
+  }
+  response.end(JSON.stringify({ choices: [{ message: { content: validToolCallJson() } }] }));
 });
 
 Object.defineProperty(dns, "lookup", {
@@ -83,7 +94,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   });
 
   return new Response(
-    JSON.stringify({ choices: [{ message: { content: validBuildJson() } }] }),
+    JSON.stringify({ choices: [{ message: { content: validToolCallJson() } }] }),
     { status: 200, headers: { "Content-Type": "application/json" } },
   );
 }) as typeof fetch;
@@ -135,20 +146,20 @@ async function main() {
     gridSize: 64,
     palette: "simple",
     maxAttempts: 1,
-    enableTools: false,
+    enableTools: true,
     providerKeys: { xai: "test-xai-key" },
     allowServerKeys: false,
     onProviderTrace: (message) => directTraces.push(message),
   });
   assert.equal(directResult.providerRoute, "direct");
-  assert.equal(directResult.acceptedOutputTokens, 500_000);
+  assert.equal(directResult.acceptedOutputTokens, 496_000);
 
   const directRequest = capturedRequests.find((candidate) =>
     candidate.url.includes("xai.test"),
   );
   assert.ok(directRequest, "Direct xAI request should be captured");
   assert.equal(directRequest.body.model, "grok-4.6");
-  assert.equal(directRequest.body.max_completion_tokens, 500000);
+  assert.equal(directRequest.body.max_completion_tokens, 496000);
   assert.equal("max_tokens" in directRequest.body, false);
   assert.equal(directRequest.body.reasoning_effort, "xhigh");
   assert.equal("temperature" in directRequest.body, false);
@@ -156,7 +167,7 @@ async function main() {
   assert.ok(
     directTraces.some((trace) =>
       trace.includes("Routing via direct xai provider (grok-4.6)") &&
-      trace.includes("max_output_tokens=500000") &&
+      trace.includes("max_output_tokens=496000") &&
       trace.includes("thinking_mode=reasoning_effort=xhigh") &&
       trace.includes("temperature=default"),
     ),
@@ -170,7 +181,7 @@ async function main() {
     gridSize: 64,
     palette: "simple",
     maxAttempts: 1,
-    enableTools: false,
+    enableTools: true,
     preferOpenRouter: true,
     providerKeys: { openrouter: "test-openrouter-key" },
     allowServerKeys: false,
@@ -183,7 +194,7 @@ async function main() {
     .find((candidate) => candidate.url.includes("openrouter.test"));
   assert.ok(openRouterRequest, "OpenRouter request should be captured");
   assert.equal(openRouterRequest.body.model, "x-ai/grok-4.6");
-  assert.equal(openRouterRequest.body.max_tokens, 500000);
+  assert.equal(openRouterRequest.body.max_tokens, 496000);
   assert.deepEqual(openRouterRequest.body.reasoning, { effort: "xhigh" });
   assert.equal("temperature" in openRouterRequest.body, false);
   assert.deepEqual(openRouterRequest.body.provider, { require_parameters: true });
@@ -196,6 +207,25 @@ async function main() {
       trace.includes("temperature=default"),
     ),
   );
+
+  rejectXaiStructuredOutput = true;
+  const strictFailureStart = capturedRequests.length;
+  const strictFailure = await generateVoxelBuild({
+    modelKey: model.key,
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 1,
+    enableTools: true,
+    providerKeys: { xai: "test-xai-key" },
+    allowServerKeys: false,
+  });
+  assert.equal(strictFailure.ok, false);
+  assert.match(strictFailure.error, /xAI error 400.*response_format unsupported/);
+  const strictFailureRequests = capturedRequests.slice(strictFailureStart);
+  assert.equal(strictFailureRequests.length, 1, "Grok 4.6 must not retry without response_format");
+  assertStructuredOutput(strictFailureRequests[0].body);
+  rejectXaiStructuredOutput = false;
 
   console.log("Grok 4.6 config checks passed");
 }
