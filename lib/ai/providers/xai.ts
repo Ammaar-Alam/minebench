@@ -1,3 +1,4 @@
+import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
@@ -8,10 +9,10 @@ export function xaiRequestConfigForModel(
   maxTokensParameter: "max_tokens" | "max_completion_tokens";
   reasoningEffort?: string;
 } {
-  if (modelId === "grok-4.5") {
+  if (modelId === "grok-4.6" || modelId === "grok-4.5") {
     return {
       maxTokensParameter: "max_completion_tokens",
-      reasoningEffort: reasoningEffort ?? "high",
+      reasoningEffort: reasoningEffort ?? (modelId === "grok-4.6" ? "xhigh" : "high"),
     };
   }
   return { maxTokensParameter: "max_tokens" };
@@ -49,7 +50,7 @@ export async function xaiGenerateText(params: {
     maxOutputTokens: params.maxOutputTokens,
     maxTokensParameter: requestConfig.maxTokensParameter,
     reasoningEffort: requestConfig.reasoningEffort,
-    temperature: params.temperature,
+    temperature: modelUsesDefaultSampling(params.modelId) ? undefined : params.temperature,
     jsonSchema: params.jsonSchema,
     serviceLabel: "xAI",
     signal: params.signal,

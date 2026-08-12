@@ -516,7 +516,7 @@ export async function openAiCompatibleGenerateText(params: {
             { role: "user", content: params.user },
           ],
           stream: Boolean(params.onDelta),
-          temperature: params.temperature ?? 0.2,
+          ...(params.temperature === undefined ? {} : { temperature: params.temperature }),
           [params.maxTokensParameter ?? "max_tokens"]: tok,
           ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
           ...(useStructuredOutput && params.jsonSchema
@@ -578,7 +578,7 @@ export async function openAiCompatibleGenerateText(params: {
     thinkingMode: params.reasoningEffort
       ? `reasoning=${params.reasoningEffort}`
       : "default",
-    temperature: params.temperature ?? 0.2,
+    temperature: params.temperature ?? "default",
     textVerbosity: "default",
     responseFormat: useStructuredOutput ? "json_schema" : "text",
   });
