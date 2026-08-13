@@ -1042,10 +1042,10 @@ Upload notes:
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
   const metricJobs = buildBenchmarkMetricJobs(selectedModelKeys);
   const metricsStore = new BenchmarkMetricsStore();
-  const metricWarnings = metricsStore.reconcile(metricJobs, new Date(), {
+  const metricReconciliation = metricsStore.reconcile(metricJobs, new Date(), {
     verifySucceededArtifacts: false,
   });
-  for (const warning of metricWarnings) console.warn(`  ⚠️  ${warning}`);
+  for (const warning of metricReconciliation.warnings) console.warn(`  ⚠️  ${warning}`);
 
   if (opts.openrouter && opts.generate) {
     if (!process.env.OPENROUTER_API_KEY) {
@@ -1246,7 +1246,10 @@ Upload notes:
   }
   printBenchmarkSummary(
     metricsStore.summarize(metricJobs, {
-      refreshArtifacts: opts.upload || (opts.generate && jobsToGenerate.length > 0),
+      refreshArtifacts:
+        metricReconciliation.recoveredFinalization ||
+        opts.upload ||
+        (opts.generate && jobsToGenerate.length > 0),
     }),
   );
 }

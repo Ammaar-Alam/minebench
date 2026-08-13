@@ -228,7 +228,10 @@ const correctedCastleJson = JSON.stringify(
   2,
 );
 writeFileSync(castle.filePath, correctedCastleJson);
-store.reconcile([castle], new Date(), { verifySucceededArtifacts: false });
+const startupReconciliation = store.reconcile([castle], new Date(), {
+  verifySucceededArtifacts: false,
+});
+assert.equal(startupReconciliation.recoveredFinalization, false);
 assert.equal(
   store.getSample(castle)?.jsonBytes,
   Buffer.byteLength(castleJson),
@@ -281,7 +284,8 @@ ledger.jobs["openai_gpt_5_6_sol/phoenix"] = {
   pendingSample: phoenixSample,
 };
 writeFileSync(ledgerPath, `${JSON.stringify({ version: 2, jobs: ledger.jobs }, null, 2)}\n`);
-store.reconcile([castle, phoenix], new Date("2026-07-22T21:02:00.000Z"));
+const recovery = store.reconcile([castle, phoenix], new Date("2026-07-22T21:02:00.000Z"));
+assert.equal(recovery.recoveredFinalization, true);
 assert.equal(
   readLedger().jobs["openai_gpt_5_6_sol/phoenix"]?.state,
   "succeeded",

@@ -722,11 +722,12 @@ export class BenchmarkMetricsStore {
     jobs: BenchmarkMetricJob[],
     now = new Date(),
     options: { verifySucceededArtifacts?: boolean } = {},
-  ): string[] {
+  ): { warnings: string[]; recoveredFinalization: boolean } {
     return this.withLedgerLock(() => {
       const ledger = this.readLedger();
       const warnings: string[] = [];
       let changed = false;
+      let recoveredFinalization = false;
 
       for (const job of jobs) {
         const key = jobKey(job);
@@ -773,6 +774,7 @@ export class BenchmarkMetricsStore {
               state: "succeeded",
               sample: current.pendingSample,
             };
+            recoveredFinalization = true;
           } else {
             ledger.jobs[key] = {
               ...resumed,
@@ -811,7 +813,7 @@ export class BenchmarkMetricsStore {
       }
 
       if (changed) this.writeLedger(ledger);
-      return warnings;
+      return { warnings, recoveredFinalization };
     });
   }
 
