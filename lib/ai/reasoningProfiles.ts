@@ -121,7 +121,12 @@ export function metaReasoningEffortAttempts(
 
 export function modelRequiresReasoning(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
-  return normalized === "muse-spark-1.2" || normalized === "meta/muse-spark-1.2";
+  return (
+    normalized === "grok-4.6" ||
+    normalized === "x-ai/grok-4.6" ||
+    normalized === "muse-spark-1.2" ||
+    normalized === "meta/muse-spark-1.2"
+  );
 }
 
 // Shared by the direct Anthropic route and the OpenRouter fallback so both
@@ -333,19 +338,20 @@ export function xaiReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const normalized = normalizeReasoningOverride(override);
+  const isGrok46 = modelId === "grok-4.6" || modelId === "x-ai/grok-4.6";
   const isGrok45 = modelId === "grok-4.5" || modelId === "x-ai/grok-4.5";
 
-  if (!isGrok45) return undefined;
+  if (!isGrok46 && !isGrok45) return undefined;
 
-  if (!normalized || normalized === "max" || normalized === "xhigh" || normalized === "high") {
-    return ["high", "medium", "low"];
-  }
-  if (normalized === "medium") return ["medium", "low"];
-  if (normalized === "low") return ["low"];
+  const allowed = isGrok46
+    ? ["xhigh", "high", "medium", "low"]
+    : ["high", "medium", "low"];
+  const mappedOverride =
+    normalized === "max" || (isGrok45 && normalized === "xhigh")
+      ? undefined
+      : normalized;
 
-  throw new Error(
-    `xAI model ${modelId} does not support reasoning '${override}'. Supported values: max, high, medium, low.`,
-  );
+  return descendingAttempts(`xAI model ${modelId}`, allowed, mappedOverride);
 }
 
 export function openRouterReasoningEffortAttempts(
@@ -363,7 +369,7 @@ export function openRouterReasoningEffortAttempts(
       override,
     );
   }
-  if (modelId === "x-ai/grok-4.5") {
+  if (modelId === "x-ai/grok-4.6" || modelId === "x-ai/grok-4.5") {
     return xaiReasoningEffortAttempts(modelId, override);
   }
   if (modelId === "openai/gpt-5.5-pro") {

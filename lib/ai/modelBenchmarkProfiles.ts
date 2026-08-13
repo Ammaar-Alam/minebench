@@ -177,6 +177,10 @@ const MODEL_RUN_PARAMETERS = {
   deepseek_v3_2: [
     { label: "Reasoning", value: "Provider default" },
   ],
+  xai_grok_4_6: [
+    { label: "Reasoning effort", value: "XHigh" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   xai_grok_4_5: [
     { label: "Reasoning effort", value: "High" },
   ],
@@ -291,6 +295,10 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  xai_grok_4_6: {
+    sourceRelease: "3.13.0",
+    totalCost: { usd: 11.22 },
+  },
   openai_gpt_5_6_luna: {
     sourceRelease: "3.12.0",
     totalCost: { usd: 1.15 },

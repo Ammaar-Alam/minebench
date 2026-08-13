@@ -25,6 +25,20 @@ assert.deepEqual(gpt56Luna.totalCost, { usd: 1.15 });
 assert.equal(gpt56Luna.totalAttempts, 24);
 assert.equal(gpt56Luna.buildCount, 15);
 
+const grok46 = getModelBenchmarkProfile("xai_grok_4_6");
+assert.ok(grok46, "Grok 4.6 should have verified benchmark details");
+assert.deepEqual(grok46.parameters, [
+  { label: "Reasoning effort", value: "XHigh" },
+  { label: "Sampling", value: "Provider default" },
+]);
+assert.deepEqual(grok46.outputCap, { kind: "exact", tokens: 496_000 });
+assert.equal(grok46.sourceRelease, "3.13.0");
+assert.deepEqual(grok46.averageInference, { milliseconds: 623_697 });
+assert.equal(grok46.averageJsonSizeBytes, 103_678_079);
+assert.deepEqual(grok46.totalCost, { usd: 11.22 });
+assert.equal(grok46.totalAttempts, 20);
+assert.equal(grok46.buildCount, 15);
+
 const gpt56 = getModelBenchmarkProfile("openai_gpt_5_6_sol");
 assert.ok(gpt56, "GPT 5.6 Sol Pro should have verified benchmark details");
 assert.deepEqual(gpt56.parameters, [

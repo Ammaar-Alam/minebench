@@ -84,6 +84,7 @@ export const MODEL_SLUG: Record<ModelKey, string> = {
   deepseek_v4_pro: "deepseek-v4-pro",
   deepseek_v4_flash_0731: "deepseek-v4-flash-0731",
   deepseek_v3_2: "deepseek-v3-2",
+  xai_grok_4_6: "grok-4-6",
   xai_grok_4_5: "grok-4-5",
   xai_grok_4_3: "grok-4-3",
   xai_grok_4_1: "grok-4-1",

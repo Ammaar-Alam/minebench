@@ -11,6 +11,7 @@ import { claudeCapabilities } from "@/lib/ai/claudeModels";
 const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
   { tokens: 1_048_576, ids: ["kimi-k3", "moonshotai/kimi-k3"] },
   { tokens: 1_000_000, ids: ["grok-4.3", "x-ai/grok-4.3"] },
+  { tokens: 496_000, ids: ["grok-4.6", "x-ai/grok-4.6"] },
   { tokens: 500_000, ids: ["grok-4.5", "x-ai/grok-4.5"] },
   {
     tokens: 384_000,
@@ -70,6 +71,8 @@ const OUTPUT_CEILING_PREFIXES: readonly { prefix: string; tokens: number }[] = [
 // Models that should use provider-default sampling instead of MineBench's
 // shared temperature, including models that reject sampling overrides
 const DEFAULT_SAMPLING_IDS: readonly string[] = [
+  "grok-4.6",
+  "x-ai/grok-4.6",
   "kimi-k3",
   "moonshotai/kimi-k3",
   "qwen3.8-max",
