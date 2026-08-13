@@ -31,6 +31,7 @@ const originalEnv = {
 };
 
 let rejectXaiStructuredOutput = false;
+let rejectXaiXhigh = false;
 
 function validToolCallJson(): string {
   return JSON.stringify({
@@ -59,11 +60,17 @@ const xaiServer = http.createServer(async (request, response) => {
   let rawBody = "";
   for await (const chunk of request) rawBody += chunk.toString();
 
+  const body = JSON.parse(rawBody) as Record<string, unknown>;
   capturedRequests.push({
     url: `https://${request.headers.host}${request.url}`,
-    body: JSON.parse(rawBody) as Record<string, unknown>,
+    body,
   });
   response.setHeader("Content-Type", "application/json");
+  if (rejectXaiXhigh && body.reasoning_effort === "xhigh") {
+    response.statusCode = 400;
+    response.end(JSON.stringify({ error: { message: "reasoning_effort xhigh unsupported" } }));
+    return;
+  }
   if (rejectXaiStructuredOutput) {
     response.statusCode = 400;
     response.end(JSON.stringify({ error: { message: "response_format unsupported" } }));
@@ -172,6 +179,33 @@ async function main() {
       trace.includes("temperature=default"),
     ),
   );
+
+  rejectXaiXhigh = true;
+  const fallbackStart = capturedRequests.length;
+  const fallbackTraces: string[] = [];
+  const fallbackResult = await generateVoxelBuild({
+    modelKey: model.key,
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 1,
+    enableTools: true,
+    providerKeys: { xai: "test-xai-key" },
+    allowServerKeys: false,
+    onProviderTrace: (message) => fallbackTraces.push(message),
+  });
+  assert.equal(fallbackResult.acceptedOutputTokens, 496_000);
+  assert.deepEqual(
+    capturedRequests.slice(fallbackStart).map((request) => request.body.reasoning_effort),
+    ["xhigh", "high"],
+  );
+  assert.ok(
+    fallbackTraces.some((trace) =>
+      trace.includes("xAI reasoning config 'xhigh' rejected") &&
+      trace.includes("falling back to 'high'"),
+    ),
+  );
+  rejectXaiXhigh = false;
 
   const openRouterStart = capturedRequests.length;
   const openRouterTraces: string[] = [];
