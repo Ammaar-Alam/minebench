@@ -599,6 +599,14 @@ export function findCatalogEntryById(modelId: string): ModelCatalogEntry | undef
   return CATALOG_BY_ID.get(modelId.trim().toLowerCase());
 }
 
+// Accepts a canonical key or slug; used by admin tooling and scripts
+export function findCatalogEntryBySlugOrKey(value: string): ModelCatalogEntry | undefined {
+  const normalized = value.trim();
+  return MODEL_CATALOG.find(
+    (model) => model.key === normalized || model.slug === normalized,
+  );
+}
+
 export function getModelByKey(key: ModelKey): ModelCatalogEntry {
   const found = MODEL_CATALOG.find((m) => m.key === key);
   if (!found) throw new Error(`Unknown model key: ${key}`);

@@ -33,8 +33,8 @@ function parseArgs(argv: string[]): Args {
   const prefixRaw =
     prefixIndex >= 0
       ? args[prefixIndex + 1]
-      : process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v2";
-  const prefix = normalizePrefix(prefixRaw ?? "arena-stream/v2");
+      : process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v3-gzip";
+  const prefix = normalizePrefix(prefixRaw ?? "arena-stream/v3-gzip");
 
   const bucketIndex = args.indexOf("--bucket");
   const bucketRaw =

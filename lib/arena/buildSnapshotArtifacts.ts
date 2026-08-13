@@ -221,7 +221,7 @@ function isSnapshotArtifactEnabled(): boolean {
   );
 }
 
-function getSnapshotArtifactRef(
+export function getSnapshotArtifactRef(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,

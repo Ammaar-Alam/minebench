@@ -7,12 +7,18 @@ import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts
 import { ensureArenaBuildSnapshotArtifacts } from "../lib/arena/buildSnapshotArtifacts";
 import type { ArenaBuildVariant } from "../lib/arena/types";
 
-type Args = {
-  dryRun: boolean;
-  limit: number;
-  all: boolean;
-  buildIds: string[];
-};
+import {
+  arenaMaintenanceWhere,
+  describeScope,
+  parseArenaMaintenanceArgs,
+  type ArenaMaintenanceArgs,
+} from "./arenaMaintenanceCli";
+import {
+  ARTIFACT_STATUS_BUILD_SELECT,
+  getArenaBuildArtifactStatuses,
+} from "../lib/arena/artifactCoverage";
+
+type Args = ArenaMaintenanceArgs;
 
 type BuildRow = {
   id: string;
@@ -32,27 +38,7 @@ type BuildPayloadRow = BuildRow & {
 };
 
 function parseArgs(argv: string[]): Args {
-  const args = argv.slice(2);
-  const dryRun = args.includes("--dry-run");
-  const all = args.includes("--all");
-
-  const limitIndex = args.indexOf("--limit");
-  const parsedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1] ?? "", 10) : NaN;
-  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 250;
-
-  const buildIds: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] !== "--build") continue;
-    const next = args[i + 1]?.trim();
-    if (next) buildIds.push(next);
-  }
-
-  return {
-    dryRun,
-    limit,
-    all,
-    buildIds,
-  };
+  return parseArenaMaintenanceArgs(argv.slice(2));
 }
 
 async function loadBuildPayloadRow(
@@ -116,40 +102,39 @@ async function main() {
   console.log("Precomputing arena snapshot artifacts");
   console.log(`- dry run: ${opts.dryRun ? "yes" : "no"}`);
   console.log(`- limit: ${opts.all ? "all" : opts.limit}`);
-  if (opts.buildIds.length > 0) {
-    console.log(`- build filter: ${opts.buildIds.join(", ")}`);
-  }
+  for (const line of describeScope(opts)) console.log(line);
   console.log("");
 
   try {
-    const where =
-      opts.buildIds.length > 0
-        ? { id: { in: opts.buildIds } }
-        : {
-            gridSize: 256,
-            palette: "simple",
-            mode: "precise",
-            model: { enabled: true, isBaseline: false },
-            prompt: { active: true },
-          };
-
-    const rows = await prisma.build.findMany({
-      where,
+    let rows = await prisma.build.findMany({
+      where: arenaMaintenanceWhere(opts),
       orderBy: { createdAt: "desc" },
       take: opts.all ? undefined : opts.limit,
       select: {
-        id: true,
+        ...ARTIFACT_STATUS_BUILD_SELECT,
         gridSize: true,
         palette: true,
-        blockCount: true,
-        voxelByteSize: true,
-        voxelCompressedByteSize: true,
-        voxelSha256: true,
         voxelStorageBucket: true,
         voxelStoragePath: true,
         voxelStorageEncoding: true,
       },
     });
+
+    if (opts.missingOnly) {
+      const statuses = await getArenaBuildArtifactStatuses(rows);
+      const needsWork = new Set(
+        statuses
+          .filter(
+            (status) =>
+              status.needsSnapshotCompute ||
+              status.missing.some((requirement) => requirement.kind === "snapshot"),
+          )
+          .map((status) => status.buildId),
+      );
+      const skipped = rows.length - needsWork.size;
+      rows = rows.filter((row) => needsWork.has(row.id));
+      if (skipped > 0) console.log(`Skipping ${skipped} build(s) with snapshot artifacts present.`);
+    }
 
     if (rows.length === 0) {
       console.log("No matching builds found.");

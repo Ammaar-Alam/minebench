@@ -1,18 +1,20 @@
 #!/usr/bin/env -S tsx
 
 import "dotenv/config";
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import {
   getPreparedArenaBuildMetadataUpdate,
   prepareArenaBuild,
 } from "../lib/arena/buildArtifacts";
 
-type Args = {
-  dryRun: boolean;
-  limit: number;
-  all: boolean;
-  buildIds: string[];
-};
+import {
+  arenaMaintenanceWhere,
+  describeScope,
+  parseArenaMaintenanceArgs,
+  type ArenaMaintenanceArgs,
+} from "./arenaMaintenanceCli";
+
+type Args = ArenaMaintenanceArgs;
 
 type BuildRow = {
   id: string;
@@ -33,27 +35,7 @@ type BuildPayloadRow = BuildRow & {
 };
 
 function parseArgs(argv: string[]): Args {
-  const args = argv.slice(2);
-  const dryRun = args.includes("--dry-run");
-  const all = args.includes("--all");
-
-  const limitIndex = args.indexOf("--limit");
-  const parsedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1] ?? "", 10) : NaN;
-  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 250;
-
-  const buildIds: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] !== "--build") continue;
-    const next = args[i + 1]?.trim();
-    if (next) buildIds.push(next);
-  }
-
-  return {
-    dryRun,
-    limit,
-    all,
-    buildIds,
-  };
+  return parseArenaMaintenanceArgs(argv.slice(2));
 }
 
 async function loadBuildPayloadRow(
@@ -99,22 +81,25 @@ async function main() {
   console.log("Backfilling arena build metadata");
   console.log(`- dry run: ${opts.dryRun ? "yes" : "no"}`);
   console.log(`- limit: ${opts.all ? "all" : opts.limit}`);
-  if (opts.buildIds.length > 0) {
-    console.log(`- build filter: ${opts.buildIds.join(", ")}`);
-  }
+  for (const line of describeScope(opts)) console.log(line);
   console.log("");
 
   try {
-    const where =
-      opts.buildIds.length > 0
-        ? { id: { in: opts.buildIds } }
-        : {
-            gridSize: 256,
-            palette: "simple",
-            mode: "precise",
-            model: { enabled: true, isBaseline: false },
-            prompt: { active: true },
-          };
+    const cohortWhere = arenaMaintenanceWhere(opts);
+    // Missing-only: rows the metadata pass has not covered yet
+    const where = opts.missingOnly
+      ? {
+          AND: [
+            cohortWhere,
+            {
+              OR: [
+                { voxelSha256: null },
+                { arenaBuildHints: { equals: Prisma.AnyNull } },
+              ],
+            },
+          ],
+        }
+      : cohortWhere;
 
     const rows = await prisma.build.findMany({
       where,

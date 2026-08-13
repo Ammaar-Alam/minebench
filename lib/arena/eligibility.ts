@@ -4,6 +4,22 @@ export const ARENA_BUILD_GRID_SIZE = 256;
 export const ARENA_BUILD_PALETTE = "simple";
 export const ARENA_BUILD_MODE = "precise";
 
+// Prisma filter for the arena benchmark cohort, shared by the maintenance
+// scripts and the admin status route so the scope cannot drift between them
+export function arenaCohortBuildWhere(modelKeys?: readonly string[]) {
+  return {
+    gridSize: ARENA_BUILD_GRID_SIZE,
+    palette: ARENA_BUILD_PALETTE,
+    mode: ARENA_BUILD_MODE,
+    model: {
+      enabled: true,
+      isBaseline: false,
+      ...(modelKeys && modelKeys.length > 0 ? { key: { in: [...modelKeys] } } : {}),
+    },
+    prompt: { active: true },
+  };
+}
+
 type EligiblePromptRow = {
   promptId: string;
 };
