@@ -1039,12 +1039,21 @@ Upload notes:
   }
 
   const allJobs = buildJobList(promptSlugs, promptTextBySlug, opts.promptFilters, opts.modelFilters);
+  const missing = getMissingJobs(allJobs);
+  const jobsToGenerate = getJobsToGenerate({
+    generate: opts.generate,
+    overwrite: opts.overwrite,
+    modelFilters: opts.modelFilters,
+    allJobs,
+    missingJobs: missing,
+  });
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
   const metricJobs = buildBenchmarkMetricJobs(selectedModelKeys);
   const metricsStore = new BenchmarkMetricsStore();
-  const metricWarnings = metricsStore.reconcile(metricJobs);
-  for (const warning of metricWarnings) console.warn(`  ⚠️  ${warning}`);
-  metricsStore.refreshGeneratedMetrics(metricJobs);
+  const metricReconciliation = metricsStore.reconcile(metricJobs, new Date(), {
+    verifySucceededArtifacts: opts.upload || jobsToGenerate.length > 0,
+  });
+  for (const warning of metricReconciliation.warnings) console.warn(`  ⚠️  ${warning}`);
 
   if (opts.openrouter && opts.generate) {
     if (!process.env.OPENROUTER_API_KEY) {
@@ -1063,7 +1072,6 @@ Upload notes:
 
   printStatus(allJobs);
 
-  const missing = getMissingJobs(allJobs);
   const existing = allJobs.filter((j) => !isEmptyPlaceholder(j.filePath));
   console.log(`\n🔍 Missing builds: ${missing.length}`);
 
@@ -1082,13 +1090,6 @@ Upload notes:
   }
 
   // generate missing builds only if --generate flag is set
-  const jobsToGenerate = getJobsToGenerate({
-    generate: opts.generate,
-    overwrite: opts.overwrite,
-    modelFilters: opts.modelFilters,
-    allJobs,
-    missingJobs: missing,
-  });
   if (opts.generate) {
     const importOnlyModels = getImportOnlyModelsForGenerationJobs(jobsToGenerate);
     if (importOnlyModels.length > 0) {
@@ -1243,7 +1244,14 @@ Upload notes:
   if (!opts.upload) {
     printUploadCommands(allJobs);
   }
-  printBenchmarkSummary(metricsStore.summarize(metricJobs));
+  printBenchmarkSummary(
+    metricsStore.summarize(metricJobs, {
+      refreshArtifacts:
+        metricReconciliation.refreshRequired ||
+        opts.upload ||
+        (opts.generate && jobsToGenerate.length > 0),
+    }),
+  );
 }
 
 const isDirectRun = process.argv[1]

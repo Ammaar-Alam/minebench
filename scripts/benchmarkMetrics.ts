@@ -71,6 +71,7 @@ type BenchmarkJobRecord = BenchmarkJobCounters & {
   ownerPid?: number;
   sample?: BenchmarkSample;
   pendingSample?: BenchmarkSample;
+  generatedMetricsDirty?: boolean;
 };
 
 // Counters that a fresh job starts at zero, keyed for table-driven carry-over
@@ -97,14 +98,18 @@ function carriedCounters(current: BenchmarkJobRecord | undefined): BenchmarkJobC
   };
 }
 
-// Fields identifying the active invocation, reset by markRunning
+// Fields carried across lifecycle transitions
 function carriedRunState(
   current: BenchmarkJobRecord | undefined,
-): Pick<BenchmarkJobRecord, "runAttemptCount" | "completedRunAttempts" | "rejectedRunAttempts"> {
+): Pick<
+  BenchmarkJobRecord,
+  "runAttemptCount" | "completedRunAttempts" | "rejectedRunAttempts" | "generatedMetricsDirty"
+> {
   return {
     runAttemptCount: current?.runAttemptCount,
     completedRunAttempts: current?.completedRunAttempts,
     rejectedRunAttempts: current?.rejectedRunAttempts,
+    generatedMetricsDirty: current?.generatedMetricsDirty,
   };
 }
 
@@ -536,6 +541,7 @@ export class BenchmarkMetricsStore {
         rejectedRunAttempts: [],
         ownerPid: process.pid,
         sample: current?.sample,
+        generatedMetricsDirty: true,
       };
     });
   }
@@ -703,6 +709,7 @@ export class BenchmarkMetricsStore {
         ownerPid: process.pid,
         sample: current?.sample,
         pendingSample: sample,
+        generatedMetricsDirty: true,
       };
     });
     atomicWriteText(job.filePath, serializedBuild);
@@ -714,15 +721,21 @@ export class BenchmarkMetricsStore {
       endedAt: now.toISOString(),
       retryCount: Math.max(0, sample.attemptCount - 1),
       sample,
+      generatedMetricsDirty: true,
     }));
     return sample;
   }
 
-  reconcile(jobs: BenchmarkMetricJob[], now = new Date()): string[] {
+  reconcile(
+    jobs: BenchmarkMetricJob[],
+    now = new Date(),
+    options: { verifySucceededArtifacts?: boolean } = {},
+  ): { warnings: string[]; refreshRequired: boolean } {
     return this.withLedgerLock(() => {
       const ledger = this.readLedger();
       const warnings: string[] = [];
       let changed = false;
+      let refreshRequired = false;
 
       for (const job of jobs) {
         const key = jobKey(job);
@@ -740,6 +753,8 @@ export class BenchmarkMetricsStore {
           continue;
         }
 
+        if (current.generatedMetricsDirty !== false) refreshRequired = true;
+
         if (current.state === "running") {
           ledger.jobs[key] = {
             ...current,
@@ -749,8 +764,10 @@ export class BenchmarkMetricsStore {
             lastRunDurationMs: Math.max(0, now.getTime() - Date.parse(current.startedAt)),
             interruptedRunCount: (current.interruptedRunCount ?? 0) + 1,
             ownerPid: undefined,
+            generatedMetricsDirty: true,
           };
           changed = true;
+          refreshRequired = true;
           continue;
         }
 
@@ -768,7 +785,9 @@ export class BenchmarkMetricsStore {
               ...resumed,
               state: "succeeded",
               sample: current.pendingSample,
+              generatedMetricsDirty: true,
             };
+            refreshRequired = true;
           } else {
             ledger.jobs[key] = {
               ...resumed,
@@ -776,13 +795,17 @@ export class BenchmarkMetricsStore {
               error: "Final artifact did not match the pending benchmark sample.",
               interruptedRunCount: (current.interruptedRunCount ?? 0) + 1,
               sample: current.sample,
+              generatedMetricsDirty: true,
             };
+            refreshRequired = true;
           }
           changed = true;
           continue;
         }
 
-        if (!isBenchmarkSample(current.sample)) continue;
+        if (!isBenchmarkSample(current.sample) || options.verifySucceededArtifacts === false) {
+          continue;
+        }
         const artifact = verifiedArtifact(job.filePath);
         if (!artifact) {
           warnings.push(`${job.promptSlug} × ${job.modelSlug}: final JSON is missing or invalid.`);
@@ -799,13 +822,55 @@ export class BenchmarkMetricsStore {
               jsonBytes: artifact.bytes,
               artifactSha256: artifact.hash,
             },
+            generatedMetricsDirty: true,
           };
           changed = true;
+          refreshRequired = true;
         }
       }
 
       if (changed) this.writeLedger(ledger);
-      return warnings;
+      return { warnings, refreshRequired };
+    });
+  }
+
+  private persistGeneratedMetrics(
+    jobsByModel: ReadonlyMap<ModelKey, BenchmarkMetricJob[]>,
+    aggregatedLedger: BenchmarkLedger,
+    updates: ReadonlyMap<ModelKey, GeneratedModelBenchmarkMetrics>,
+  ): void {
+    this.withLedgerLock(() => {
+      const ledger = this.readLedger();
+      const recordIsCurrent = (job: BenchmarkMetricJob) => {
+        const key = jobKey(job);
+        return JSON.stringify(ledger.jobs[key]) === JSON.stringify(aggregatedLedger.jobs[key]);
+      };
+      const persisted = readJsonFile<GeneratedBenchmarkMetrics>(
+        this.generatedMetricsPath,
+        { version: 1, models: {} },
+      );
+      let metricsChanged = false;
+      for (const [modelKey, metrics] of updates) {
+        const modelJobs = jobsByModel.get(modelKey) ?? [];
+        if (modelJobs.some((job) => !recordIsCurrent(job))) continue;
+        if (JSON.stringify(persisted.models[modelKey]) === JSON.stringify(metrics)) continue;
+        persisted.models[modelKey] = metrics;
+        metricsChanged = true;
+      }
+      if (metricsChanged) atomicWriteJson(this.generatedMetricsPath, persisted);
+
+      // Dirty markers acknowledge the generated write and must follow it
+      let ledgerChanged = false;
+      for (const modelJobs of jobsByModel.values()) {
+        for (const job of modelJobs) {
+          const key = jobKey(job);
+          const current = ledger.jobs[key];
+          if (!current || current.generatedMetricsDirty === false || !recordIsCurrent(job)) continue;
+          ledger.jobs[key] = { ...current, generatedMetricsDirty: false };
+          ledgerChanged = true;
+        }
+      }
+      if (ledgerChanged) this.writeLedger(ledger);
     });
   }
 
@@ -819,7 +884,7 @@ export class BenchmarkMetricsStore {
       version: 1,
       models: { ...persisted.models },
     };
-    let persistedChanged = false;
+    const persistedUpdates = new Map<ModelKey, GeneratedModelBenchmarkMetrics>();
     const jobsByModel = new Map<ModelKey, BenchmarkMetricJob[]>();
     for (const job of jobs) {
       const group = jobsByModel.get(job.modelKey) ?? [];
@@ -927,17 +992,24 @@ export class BenchmarkMetricsStore {
       }
 
       if (JSON.stringify(previous) !== JSON.stringify(next)) {
-        persisted.models[modelKey] = next;
-        persistedChanged = true;
+        persistedUpdates.set(modelKey, next);
       }
     }
 
-    if (persistedChanged) atomicWriteJson(this.generatedMetricsPath, persisted);
+    this.persistGeneratedMetrics(jobsByModel, ledger, persistedUpdates);
     return computed;
   }
 
-  summarize(jobs: BenchmarkMetricJob[]): Map<ModelKey, BenchmarkModelSummary> {
-    const generated = this.refreshGeneratedMetrics(jobs);
+  summarize(
+    jobs: BenchmarkMetricJob[],
+    options: { refreshArtifacts?: boolean } = {},
+  ): Map<ModelKey, BenchmarkModelSummary> {
+    const generated = options.refreshArtifacts === false
+      ? readJsonFile<GeneratedBenchmarkMetrics>(
+          this.generatedMetricsPath,
+          { version: 1, models: {} },
+        )
+      : this.refreshGeneratedMetrics(jobs);
     const ledger = this.readLedger();
     const summaries = new Map<ModelKey, BenchmarkModelSummary>();
 
