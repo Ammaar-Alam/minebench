@@ -1,4 +1,5 @@
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
+import { openAiReasoningEffortAttempts } from "@/lib/ai/reasoningProfiles";
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -467,20 +468,9 @@ export async function openaiGenerateText(params: {
     params.modelId === "gpt-5-pro" ||
     params.modelId === "gpt-5.2-codex" ||
     params.modelId === "gpt-5.3-codex";
-  const defaultReasoningEffortAttempts: string[] = isGpt5Family
-    ? isGpt56
-      ? ["max", "xhigh", "high", "medium", "low", "none"]
-      : isGpt55Pro
-      ? ["xhigh", "high", "medium"]
-      : params.modelId.startsWith("gpt-5.5")
-        ? ["xhigh", "high", "medium", "low", "none"]
-        : params.modelId.startsWith("gpt-5.4-pro")
-          ? ["xhigh", "high", "medium"]
-          : params.modelId === "gpt-5-pro"
-            ? ["high"]
-            : ["xhigh", "high"]
-    : isGptOssFamily
-      ? ["xhigh", "high", "medium", "low"]
+  const defaultReasoningEffortAttempts: string[] =
+    isGpt5Family || isGptOssFamily
+      ? openAiReasoningEffortAttempts(params.modelId) ?? []
       : [];
   const reasoningEffortAttempts =
     params.reasoningEffortAttempts && params.reasoningEffortAttempts.length > 0

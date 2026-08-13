@@ -53,6 +53,7 @@ function descendingAttempts<T extends string>(
   label: string,
   allowed: readonly T[],
   override?: string,
+  supported?: string,
 ): T[] {
   const normalized = normalizeReasoningOverride(override);
   if (!normalized) return [...allowed];
@@ -60,11 +61,114 @@ function descendingAttempts<T extends string>(
   const startIndex = allowed.indexOf(normalized as T);
   if (startIndex < 0) {
     throw new Error(
-      `${label} does not support reasoning '${override}'. Supported values: ${allowed.join(", ")}.`,
+      `${label} does not support reasoning '${override}'. Supported values: ${supported ?? allowed.join(", ")}.`,
     );
   }
 
   return [...allowed.slice(startIndex)];
+}
+
+// One effort ladder per model or family, shared by the direct route and the
+// OpenRouter route so both descend the same values
+//
+// Resolution is exact `ids` first (either namespace), then the first matching
+// `prefixes` rule in array order, so a specific release must sit above its
+// broader family. `aliases` map an accepted override onto a ladder entry, or
+// onto the ladder head when null (e.g. 'max' meaning "highest available").
+type EffortLadderRule = {
+  ids?: readonly string[];
+  prefixes?: readonly string[];
+  ladder: readonly string[];
+  aliases?: Readonly<Record<string, string | null>>;
+  supported?: string;
+};
+
+const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
+  {
+    prefixes: ["gpt-5.6", "openai/gpt-5.6"],
+    ladder: ["max", "xhigh", "high", "medium", "low", "none"],
+  },
+  {
+    prefixes: ["gpt-5.5-pro"],
+    ids: ["openai/gpt-5.5-pro"],
+    ladder: ["xhigh", "high", "medium"],
+  },
+  {
+    prefixes: ["gpt-5.5"],
+    ids: ["openai/gpt-5.5"],
+    ladder: ["xhigh", "high", "medium", "low", "none"],
+  },
+  {
+    prefixes: ["gpt-5.4-pro"],
+    ids: ["openai/gpt-5.4-pro"],
+    ladder: ["xhigh", "high", "medium"],
+  },
+  { ids: ["gpt-5-pro", "openai/gpt-5-pro"], ladder: ["high"] },
+  { prefixes: ["gpt-5", "openai/gpt-5"], ladder: ["xhigh", "high"] },
+  {
+    prefixes: ["gpt-oss"],
+    ids: ["openai/gpt-oss-120b"],
+    ladder: ["xhigh", "high", "medium", "low"],
+  },
+  {
+    ids: ["muse-spark-1.2", "meta/muse-spark-1.2"],
+    ladder: ["xhigh", "high", "medium", "low", "minimal"],
+  },
+  {
+    ids: ["grok-4.6", "x-ai/grok-4.6"],
+    ladder: ["xhigh", "high", "medium", "low"],
+    aliases: { max: null },
+  },
+  {
+    ids: ["grok-4.5", "x-ai/grok-4.5"],
+    ladder: ["high", "medium", "low"],
+    aliases: { max: null, xhigh: null },
+  },
+  { ids: ["moonshotai/kimi-k3"], ladder: ["max"] },
+  {
+    ids: ["z-ai/glm-5.2"],
+    ladder: ["xhigh", "high"],
+    aliases: { max: null },
+    supported: "max, xhigh, high",
+  },
+  { ids: ["z-ai/glm-5.1", "z-ai/glm-5"], ladder: ["xhigh", "high", "medium", "low"] },
+  {
+    ids: ["deepseek/deepseek-v4-flash-0731"],
+    ladder: ["max", "high", "low"],
+    aliases: { xhigh: null },
+    supported: "max, xhigh, high, low",
+  },
+  {
+    ids: ["qwen/qwen3-max-thinking", "qwen/qwen3.5-397b-a17b"],
+    ladder: ["xhigh", "high", "medium", "low"],
+  },
+  { ids: ["qwen/qwen3.8-max"], ladder: ["xhigh", "high", "medium", "low", "minimal"] },
+  { ids: ["google/gemma-4-31b-it"], ladder: ["high"] },
+  {
+    ids: ["minimax/minimax-m2.7", "minimax/minimax-m2.5"],
+    ladder: ["xhigh", "high", "medium", "low", "minimal"],
+  },
+];
+
+function effortLadderRuleFor(modelId: string): EffortLadderRule | undefined {
+  const exact = EFFORT_LADDER_RULES.find((rule) => rule.ids?.includes(modelId));
+  if (exact) return exact;
+  return EFFORT_LADDER_RULES.find((rule) =>
+    rule.prefixes?.some((prefix) => modelId.startsWith(prefix)),
+  );
+}
+
+function ladderAttempts(
+  label: string,
+  rule: EffortLadderRule,
+  override?: string,
+): string[] {
+  const normalized = normalizeReasoningOverride(override);
+  const aliased =
+    normalized !== undefined && rule.aliases && normalized in rule.aliases
+      ? rule.aliases[normalized] ?? undefined
+      : normalized;
+  return descendingAttempts(label, rule.ladder, aliased, rule.supported);
 }
 
 export function openAiReasoningEffortAttempts(
@@ -72,31 +176,8 @@ export function openAiReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `OpenAI model ${modelId}`;
-  if (modelId.startsWith("gpt-5.6")) {
-    return descendingAttempts(
-      label,
-      ["max", "xhigh", "high", "medium", "low", "none"],
-      override,
-    );
-  }
-  if (modelId.startsWith("gpt-5.5-pro")) {
-    return descendingAttempts(label, ["xhigh", "high", "medium"], override);
-  }
-  if (modelId.startsWith("gpt-5.5")) {
-    return descendingAttempts(label, ["xhigh", "high", "medium", "low", "none"], override);
-  }
-  if (modelId.startsWith("gpt-5.4-pro")) {
-    return descendingAttempts(label, ["xhigh", "high", "medium"], override);
-  }
-  if (modelId === "gpt-5-pro") {
-    return descendingAttempts(label, ["high"], override);
-  }
-  if (modelId.startsWith("gpt-5")) {
-    return descendingAttempts(label, ["xhigh", "high"], override);
-  }
-  if (modelId.startsWith("gpt-oss")) {
-    return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
-  }
+  const rule = effortLadderRuleFor(modelId);
+  if (rule) return ladderAttempts(label, rule, override);
 
   const normalized = normalizeReasoningOverride(override);
   if (normalized) {
@@ -111,11 +192,7 @@ export function metaReasoningEffortAttempts(
 ): string[] | undefined {
   const label = `Meta model ${modelId}`;
   if (modelId === "muse-spark-1.2") {
-    return descendingAttempts(
-      label,
-      ["xhigh", "high", "medium", "low", "minimal"],
-      override,
-    );
+    return ladderAttempts(label, effortLadderRuleFor(modelId)!, override);
   }
 
   const normalized = normalizeReasoningOverride(override);
@@ -344,21 +421,14 @@ export function xaiReasoningEffortAttempts(
   modelId: string,
   override?: string,
 ): string[] | undefined {
-  const normalized = normalizeReasoningOverride(override);
-  const isGrok46 = modelId === "grok-4.6" || modelId === "x-ai/grok-4.6";
-  const isGrok45 = modelId === "grok-4.5" || modelId === "x-ai/grok-4.5";
+  const isExplicitEffortModel =
+    modelId === "grok-4.6" ||
+    modelId === "x-ai/grok-4.6" ||
+    modelId === "grok-4.5" ||
+    modelId === "x-ai/grok-4.5";
+  if (!isExplicitEffortModel) return undefined;
 
-  if (!isGrok46 && !isGrok45) return undefined;
-
-  const allowed = isGrok46
-    ? ["xhigh", "high", "medium", "low"]
-    : ["high", "medium", "low"];
-  const mappedOverride =
-    normalized === "max" || (isGrok45 && normalized === "xhigh")
-      ? undefined
-      : normalized;
-
-  return descendingAttempts(`xAI model ${modelId}`, allowed, mappedOverride);
+  return ladderAttempts(`xAI model ${modelId}`, effortLadderRuleFor(modelId)!, override);
 }
 
 export function openRouterReasoningEffortAttempts(
@@ -366,63 +436,11 @@ export function openRouterReasoningEffortAttempts(
   override?: string,
 ): string[] | undefined {
   const label = `OpenRouter model ${modelId}`;
-  if (modelId === "moonshotai/kimi-k3") {
-    return descendingAttempts(label, ["max"], override);
-  }
-  if (modelId.startsWith("openai/gpt-5.6")) {
-    return descendingAttempts(
-      label,
-      ["max", "xhigh", "high", "medium", "low", "none"],
-      override,
-    );
-  }
   if (modelId === "x-ai/grok-4.6" || modelId === "x-ai/grok-4.5") {
     return xaiReasoningEffortAttempts(modelId, override);
   }
-  if (modelId === "openai/gpt-5.5-pro") {
-    return descendingAttempts(label, ["xhigh", "high", "medium"], override);
-  }
-  if (modelId === "openai/gpt-5.5") {
-    return descendingAttempts(label, ["xhigh", "high", "medium", "low", "none"], override);
-  }
-  if (modelId === "openai/gpt-5.4-pro") {
-    return descendingAttempts(label, ["xhigh", "high", "medium"], override);
-  }
-  if (modelId === "openai/gpt-5-pro") {
-    return descendingAttempts(label, ["high"], override);
-  }
-  if (modelId.startsWith("openai/gpt-5")) {
-    return descendingAttempts(label, ["xhigh", "high"], override);
-  }
   if (claudeCapabilities(modelId).adaptiveThinking) {
     return anthropicAdaptiveAttempts(label, modelId, override);
-  }
-  if (modelId === "z-ai/glm-5.2") {
-    const normalized = normalizeReasoningOverride(override);
-    if (!normalized || normalized === "max" || normalized === "xhigh") {
-      return ["xhigh", "high"];
-    }
-    if (normalized === "high") return ["high"];
-    throw new Error(
-      `${label} does not support reasoning '${override}'. Supported values: max, xhigh, high.`,
-    );
-  }
-  if (modelId === "deepseek/deepseek-v4-flash-0731") {
-    const normalized = normalizeReasoningOverride(override);
-    if (!normalized || normalized === "max" || normalized === "xhigh") {
-      return ["max", "high", "low"];
-    }
-    if (normalized === "high") return ["high", "low"];
-    if (normalized === "low") return ["low"];
-    throw new Error(
-      `${label} does not support reasoning '${override}'. Supported values: max, xhigh, high, low.`,
-    );
-  }
-  if (
-    modelId === "z-ai/glm-5.1" ||
-    modelId === "z-ai/glm-5"
-  ) {
-    return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
   }
   if (modelId.startsWith("google/gemini-3")) {
     return descendingAttempts(
@@ -433,38 +451,9 @@ export function openRouterReasoningEffortAttempts(
       override,
     );
   }
-  if (modelId === "google/gemma-4-31b-it") {
-    return descendingAttempts(label, ["high"], override);
-  }
-  if (modelId === "meta/muse-spark-1.2") {
-    return descendingAttempts(
-      label,
-      ["xhigh", "high", "medium", "low", "minimal"],
-      override,
-    );
-  }
-  if (
-    modelId === "qwen/qwen3-max-thinking" ||
-    modelId === "qwen/qwen3.5-397b-a17b"
-  ) {
-    return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
-  }
-  if (modelId === "qwen/qwen3.8-max") {
-    return descendingAttempts(label, ["xhigh", "high", "medium", "low", "minimal"], override);
-  }
-  if (modelId === "openai/gpt-oss-120b") {
-    return descendingAttempts(label, ["xhigh", "high", "medium", "low"], override);
-  }
-  if (
-    modelId === "minimax/minimax-m2.7" ||
-    modelId === "minimax/minimax-m2.5"
-  ) {
-    return descendingAttempts(
-      label,
-      ["xhigh", "high", "medium", "low", "minimal"],
-      override,
-    );
-  }
+
+  const rule = effortLadderRuleFor(modelId);
+  if (rule) return ladderAttempts(label, rule, override);
 
   const normalized = normalizeReasoningOverride(override);
   if (normalized) {
