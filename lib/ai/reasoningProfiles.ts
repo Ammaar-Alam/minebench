@@ -27,6 +27,12 @@ function isGemini3FlashFamily(modelId: string): boolean {
   return /(?:^|\/)gemini-3(?:[.-]\d+)?-flash/.test(modelId);
 }
 
+function gemini3FlashThinkingLevels(modelId: string): readonly GeminiThinkingLevel[] {
+  return modelId.endsWith("gemini-3.7-flash")
+    ? ["high", "medium", "low"]
+    : ["high", "medium", "low", "minimal"];
+}
+
 // Explicit override passes through so an unsupported value raises
 // Env override degrades to the model's highest level instead, since it is a
 // run-wide default that should not fail a model capping lower
@@ -124,6 +130,7 @@ export function modelRequiresReasoning(modelId: string): boolean {
   return (
     normalized === "grok-4.6" ||
     normalized === "x-ai/grok-4.6" ||
+    normalized === "google/gemini-3.7-flash" ||
     normalized === "muse-spark-1.2" ||
     normalized === "meta/muse-spark-1.2"
   );
@@ -167,7 +174,7 @@ export function geminiThinkingConfigForModel(
 
   if (modelId.startsWith("gemini-3")) {
     const allowed: readonly GeminiThinkingLevel[] = isGemini3FlashFamily(modelId)
-      ? ["high", "medium", "low", "minimal"]
+      ? gemini3FlashThinkingLevels(modelId)
       : ["high", "low"];
     if (!normalized) return { thinkingLevel: "high" };
     if (!allowed.includes(normalized as GeminiThinkingLevel)) {
@@ -421,7 +428,7 @@ export function openRouterReasoningEffortAttempts(
     return descendingAttempts(
       label,
       isGemini3FlashFamily(modelId)
-        ? ["high", "medium", "low", "minimal"]
+        ? gemini3FlashThinkingLevels(modelId)
         : ["high", "medium", "low"],
       override,
     );

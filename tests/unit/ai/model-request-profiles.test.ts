@@ -14,6 +14,7 @@ for (const [direct, routed] of [
   ["grok-4.5", "x-ai/grok-4.5"],
   ["deepseek-v4-pro", "deepseek/deepseek-v4-pro"],
   ["qwen3.8-max", "qwen/qwen3.8-max"],
+  ["gemini-3.7-flash", "google/gemini-3.7-flash"],
   ["gemini-3.6-flash", "google/gemini-3.6-flash"],
   ["muse-spark-1.2", "meta/muse-spark-1.2"],
 ] as const) {

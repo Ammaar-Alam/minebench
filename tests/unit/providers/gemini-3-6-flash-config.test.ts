@@ -20,15 +20,27 @@ type ExpectedModel = {
   displayName: string;
   openRouterModelId: string;
   slug: string;
+  supportsMinimalThinking: boolean;
+  requiresReasoning?: boolean;
 };
 
 const expectedModels: ExpectedModel[] = [
+  {
+    key: "gemini_3_7_flash",
+    modelId: "gemini-3.7-flash",
+    displayName: "Gemini 3.7 Flash",
+    openRouterModelId: "google/gemini-3.7-flash",
+    slug: "gemini-3-7-flash",
+    supportsMinimalThinking: false,
+    requiresReasoning: true,
+  },
   {
     key: "gemini_3_6_flash",
     modelId: "gemini-3.6-flash",
     displayName: "Gemini 3.6 Flash",
     openRouterModelId: "google/gemini-3.6-flash",
     slug: "gemini-3-6-flash",
+    supportsMinimalThinking: true,
   },
   {
     key: "gemini_3_5_flash_lite",
@@ -36,6 +48,7 @@ const expectedModels: ExpectedModel[] = [
     displayName: "Gemini 3.5 Flash-Lite",
     openRouterModelId: "google/gemini-3.5-flash-lite",
     slug: "gemini-3-5-flash-lite",
+    supportsMinimalThinking: true,
   },
 ];
 
@@ -123,19 +136,32 @@ async function main() {
     assert.deepEqual(geminiThinkingConfigForModel(model.modelId), {
       thinkingLevel: "high",
     });
-    assert.deepEqual(geminiThinkingConfigForModel(model.modelId, "minimal"), {
-      thinkingLevel: "minimal",
-    });
+    if (expected.supportsMinimalThinking) {
+      assert.deepEqual(geminiThinkingConfigForModel(model.modelId, "minimal"), {
+        thinkingLevel: "minimal",
+      });
+    } else {
+      assert.throws(
+        () => geminiThinkingConfigForModel(model.modelId, "minimal"),
+        /Supported values: high, medium, low/,
+      );
+    }
     assert.throws(
       () => geminiThinkingConfigForModel(model.modelId, "max"),
-      /Supported values: high, medium, low, minimal/,
+      new RegExp(
+        `Supported values: high, medium, low${expected.supportsMinimalThinking ? ", minimal" : ""}`,
+      ),
     );
-    assert.deepEqual(openRouterReasoningEffortAttempts(expected.openRouterModelId), [
+    const reasoningEfforts = [
       "high",
       "medium",
       "low",
-      "minimal",
-    ]);
+      ...(expected.supportsMinimalThinking ? ["minimal"] : []),
+    ];
+    assert.deepEqual(
+      openRouterReasoningEffortAttempts(expected.openRouterModelId),
+      reasoningEfforts,
+    );
 
     const directTraces: string[] = [];
     await generateVoxelBuild({
@@ -224,7 +250,9 @@ async function main() {
       openRouterTraces.some((trace) =>
         trace.includes(`Routing via OpenRouter (${expected.openRouterModelId})`) &&
         trace.includes("max_output_tokens=65536") &&
-        trace.includes("effort_fallback=high->medium->low->minimal->disabled") &&
+        trace.includes(
+          `effort_fallback=${reasoningEfforts.join("->")}${expected.requiresReasoning ? "" : "->disabled"}`,
+        ) &&
         trace.includes("temperature=default"),
       ),
       `OpenRouter ${expected.displayName} trace should report the output cap and highest reasoning effort`,
