@@ -162,6 +162,9 @@ export async function POST(req: Request) {
   const mode = (url.searchParams.get("mode") ?? "precise").trim();
   if (!mode) return NextResponse.json({ error: "Invalid mode (must be non-empty)" }, { status: 400 });
 
+  // Importing builds never activates a model: a new model stays staged
+  // (disabled) with partial builds, and publish tooling flips enabled only
+  // after every cohort artifact passes verification
   const modelEntry = getModelByKey(modelKey);
   const model = await prisma.model.upsert({
     where: { key: modelEntry.key },
@@ -170,14 +173,13 @@ export async function POST(req: Request) {
       provider: modelEntry.provider,
       modelId: modelEntry.modelId,
       displayName: modelEntry.displayName,
-      enabled: true,
+      enabled: false,
       isBaseline: false,
     },
     update: {
       provider: modelEntry.provider,
       modelId: modelEntry.modelId,
       displayName: modelEntry.displayName,
-      enabled: true,
     },
   });
 

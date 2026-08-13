@@ -35,7 +35,20 @@ const regularModel = getModelByKey("anthropic_claude_sonnet_5");
 const regularModelUpsert = modelCatalogSeedUpsertArgs(regularModel);
 
 assert.equal(regularModelUpsert.create.enabled, true);
-assert.equal(regularModelUpsert.update.enabled, true);
+assert.equal(
+  Object.hasOwn(regularModelUpsert.update, "enabled"),
+  false,
+  "seed updates must not activate a staged model; publish verification owns activation",
+);
+
+const retiredModel = getModelByKey("gemini_3_0_pro");
+assert.equal(retiredModel.enabled, false);
+const retiredModelUpsert = modelCatalogSeedUpsertArgs(retiredModel);
+assert.equal(
+  retiredModelUpsert.update.enabled,
+  false,
+  "seed updates should still retire a model the catalog disabled",
+);
 
 assert.equal(
   isCatalogModelGeneratableForSeed({

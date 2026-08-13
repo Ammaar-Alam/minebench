@@ -35,7 +35,10 @@ export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
       provider: m.provider,
       modelId: m.modelId,
       displayName: m.displayName,
-      ...(m.importOnly ? {} : { enabled: m.enabled }),
+      // Seeding may retire a model the catalog disabled, but never activates
+      // one: a staged (disabled) model goes live only through publish
+      // verification, so a partial cohort cannot reach public surfaces
+      ...(m.importOnly || m.enabled ? {} : { enabled: false }),
     },
   };
 }

@@ -794,7 +794,7 @@ async function finalizeStorageImport(
   token: string,
   ref: BuildStorageReference,
   generationTimeMs?: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; buildId?: string; error?: string }> {
   const url = new URL(`${PROD_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
@@ -813,14 +813,25 @@ async function finalizeStorageImport(
   });
 
   const text = await resp.text();
-  if (resp.ok) return { ok: true };
+  if (resp.ok) {
+    // The response's buildId is held for this run only; it is environment
+    // state, not benchmark provenance, so it never enters the ledger
+    let buildId: string | undefined;
+    try {
+      const parsed = JSON.parse(text) as { buildId?: unknown };
+      if (typeof parsed.buildId === "string") buildId = parsed.buildId;
+    } catch {
+      // response body is informational; a missing id is not a failure
+    }
+    return { ok: true, buildId };
+  }
   return { ok: false, error: `Finalize import failed (HTTP ${resp.status}): ${text}` };
 }
 
 async function uploadBuild(
   job: Job,
   generationTimeMs?: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; buildId?: string; error?: string }> {
   if (!job.promptText) {
     return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
   }
