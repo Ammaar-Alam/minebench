@@ -411,6 +411,25 @@ export async function fetchArenaBuildSnapshotArtifact(
   }
 }
 
+export async function fetchArenaBuildSnapshotArtifactPayload(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string | null,
+  opts?: { signal?: AbortSignal },
+): Promise<SnapshotArtifactPayload | null> {
+  const bytes = await fetchArenaBuildSnapshotArtifact(buildId, variant, checksum, opts);
+  if (!bytes) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(bytes).toString("utf8")) as SnapshotArtifactPayload;
+    if (payload?.buildId !== buildId || payload.variant !== variant) return null;
+    const normalizedChecksum = checksum?.trim() || null;
+    if (normalizedChecksum && payload.checksum !== normalizedChecksum) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
 export async function createArenaBuildSnapshotArtifactSignedUrl(
   buildId: string,
   variant: ArenaBuildVariant,

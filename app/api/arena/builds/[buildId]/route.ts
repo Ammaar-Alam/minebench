@@ -28,7 +28,7 @@ const SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
   10,
 );
 const SNAPSHOT_ARTIFACT_FETCH_ENABLED =
-  (process.env.ARENA_SNAPSHOT_ARTIFACT_FETCH_ENABLED ?? "0").trim() === "1";
+  (process.env.ARENA_SNAPSHOT_ARTIFACT_FETCH_ENABLED ?? "1").trim() === "1";
 const SNAPSHOT_ARTIFACT_REDIRECT_ENABLED =
   (process.env.ARENA_SNAPSHOT_ARTIFACT_REDIRECT_ENABLED ?? "1").trim() !== "0";
 const SNAPSHOT_PREVIEW_ARTIFACT_REDIRECT_ENABLED =
@@ -281,7 +281,6 @@ export async function GET(
   const artifactAllowed =
     SNAPSHOT_ARTIFACT_FETCH_ENABLED &&
     url.searchParams.get("artifact") !== "0" &&
-    Boolean(expectedChecksum) &&
     Boolean(storedChecksum);
   const shellHints = deriveArenaBuildLoadHints({
     blockCount: buildMeta.blockCount,
@@ -364,6 +363,35 @@ export async function GET(
     return new Response(Buffer.from(cachedJsonResponse), { headers });
   }
 
+  // storage-first: the checksum-addressed artifact is the canonical snapshot
+  try {
+    if (artifactAllowed && canServeSnapshotArtifact) {
+      const artifactStartedAt = timing.start();
+      const artifactBytes = await withTimeout(
+        (signal) =>
+          fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal }),
+        SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
+        "snapshot artifact fetch",
+      );
+      if (artifactBytes) {
+        timing.end("artifact_hit", artifactStartedAt);
+        timing.end("total", requestStartedAt);
+        const headers = new Headers({
+          "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": String(artifactBytes.byteLength),
+          "x-build-delivery-class": deliveryClass,
+          "x-build-source": "artifact",
+        });
+        timing.apply(headers);
+        return new Response(Buffer.from(artifactBytes), { headers });
+      }
+      timing.end("artifact_miss", artifactStartedAt);
+    }
+  } catch (error) {
+    console.warn("arena snapshot artifact fetch failed", error);
+  }
+
   const persistedResponseBytes = jsonCacheKey
     ? await getOrCreateJsonResponse(jsonCacheKey, async () => {
         // snapshot json bodies live outside the meta cache to avoid retaining
@@ -386,6 +414,8 @@ export async function GET(
       })
     : null;
   if (persistedResponseBytes) {
+    // fallback hits must reach zero during the soak before columns can drop
+    console.log(`arena snapshot db fallback (build) build=${buildId} variant=${variant}`);
     timing.end("total", requestStartedAt);
     const headers = createJsonHeaders({
       byteLength: persistedResponseBytes.byteLength,
@@ -414,34 +444,6 @@ export async function GET(
       },
       { status: 503, headers },
     );
-  }
-
-  try {
-    if (artifactAllowed && canServeSnapshotArtifact) {
-      const artifactStartedAt = timing.start();
-      const artifactBytes = await withTimeout(
-        (signal) =>
-          fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal }),
-        SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
-        "snapshot artifact fetch",
-      );
-      if (artifactBytes) {
-        timing.end("artifact_hit", artifactStartedAt);
-        timing.end("total", requestStartedAt);
-        const headers = new Headers({
-          "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
-          "Content-Type": "application/json; charset=utf-8",
-          "Content-Length": String(artifactBytes.byteLength),
-          "x-build-delivery-class": deliveryClass,
-          "x-build-source": "artifact",
-        });
-        timing.apply(headers);
-        return new Response(Buffer.from(artifactBytes), { headers });
-      }
-      timing.end("artifact_miss", artifactStartedAt);
-    }
-  } catch (error) {
-    console.warn("arena snapshot artifact fetch failed", error);
   }
 
   if (variant === "full" && shellHints.deliveryClass === "stream-artifact") {
