@@ -1,3 +1,4 @@
+import { withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
@@ -139,12 +140,6 @@ function defaultTextVerbosity(modelId: string): TextVerbosity | undefined {
 function openRouterTemperaturePayload(modelId: string, temperature?: number): { temperature?: number } {
   if (modelUsesDefaultSampling(modelId)) return {};
   return { temperature: temperature ?? 0.2 };
-}
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 async function fetchWithRetry(

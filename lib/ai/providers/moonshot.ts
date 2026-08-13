@@ -1,3 +1,4 @@
+import { requestIdFromResponse, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import type { MoonshotThinkingConfig } from "@/lib/ai/reasoningProfiles";
@@ -17,10 +18,6 @@ function extractTextFromChat(data: MoonshotChatResponse): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) return content.map((c) => String(c ?? "")).join("");
   return "";
-}
-
-function requestIdFromResponse(res: Response): string | null {
-  return res.headers.get("x-request-id") ?? res.headers.get("request-id") ?? null;
 }
 
 function looksLikeTokenLimitError(body: string): boolean {
@@ -60,12 +57,6 @@ function buildStructuredResponseFormat(modelId: string, jsonSchema?: Record<stri
       schema: jsonSchema,
     },
   };
-}
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 export async function moonshotGenerateText(params: {

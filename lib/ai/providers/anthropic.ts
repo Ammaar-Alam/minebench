@@ -1,3 +1,4 @@
+import { parseBooleanEnv, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { claudeCapabilities, type ClaudeEffort } from "@/lib/ai/claudeModels";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
@@ -22,15 +23,6 @@ type AnthropicEffort = ClaudeEffort;
 
 const CONTEXT_1M_BETA = "context-1m-2025-08-07";
 const STRUCTURED_OUTPUT_TOOL_NAME = "emit_structured_json";
-const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
-const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
-}
-
 function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
   return (
@@ -120,15 +112,6 @@ function sanitizeAnthropicStructuredSchema(schema: unknown): unknown {
   }
 
   return output;
-}
-
-function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
-  if (!raw) return defaultValue;
-  const normalized = raw.trim().toLowerCase();
-  if (TRUE_VALUES.has(normalized)) return true;
-  if (FALSE_VALUES.has(normalized)) return false;
-  return defaultValue;
 }
 
 function parseThinkingBudget(): number | null {

@@ -1,3 +1,4 @@
+import { parseBooleanEnv, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { openAiReasoningEffortAttempts } from "@/lib/ai/reasoningProfiles";
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
@@ -43,18 +44,6 @@ type OpenAIChatCompletionsStreamChunk = {
 };
 
 type TextVerbosity = "low" | "medium" | "high";
-
-const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
-const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
-
-function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
-  if (!raw) return defaultValue;
-  const normalized = raw.trim().toLowerCase();
-  if (TRUE_VALUES.has(normalized)) return true;
-  if (FALSE_VALUES.has(normalized)) return false;
-  return defaultValue;
-}
 
 function parseIntEnv(name: string, defaultValue: number): number {
   const raw = process.env[name];
@@ -372,12 +361,6 @@ function describeReasoningConfigAttempt(
   if (!cfg) return "disabled";
   if (cfg.kind === "effort") return cfg.effort;
   return `max_tokens=${clampReasoningBudget(cfg.maxTokens, completionBudget)}`;
-}
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 function clampReasoningBudget(maxTokens: number, completionBudget: number): number {

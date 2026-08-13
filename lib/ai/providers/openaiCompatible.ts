@@ -1,3 +1,4 @@
+import { withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
@@ -225,12 +226,6 @@ function looksLikeStructuredOutputUnsupportedError(body: string): boolean {
       (b.includes("unsupported") || b.includes("invalid") || b.includes("unknown"))) ||
     (b.includes("schema") && b.includes("unsupported"))
   );
-}
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 export async function openAiCompatibleGenerateText(params: {
