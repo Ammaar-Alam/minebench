@@ -585,6 +585,20 @@ export type ModelCatalogEntry = Omit<ModelCatalogEntryShape, "key"> & { key: Mod
 
 export const MODEL_CATALOG: readonly ModelCatalogEntry[] = CATALOG;
 
+const CATALOG_BY_ID = new Map<string, ModelCatalogEntry>();
+for (const model of MODEL_CATALOG) {
+  CATALOG_BY_ID.set(model.modelId.toLowerCase(), model);
+  if (model.openRouterModelId) {
+    CATALOG_BY_ID.set(model.openRouterModelId.toLowerCase(), model);
+  }
+}
+
+// Exact identity lookup across both route namespaces; family-prefix fallbacks
+// belong to the capability tables, not to identity
+export function findCatalogEntryById(modelId: string): ModelCatalogEntry | undefined {
+  return CATALOG_BY_ID.get(modelId.trim().toLowerCase());
+}
+
 export function getModelByKey(key: ModelKey): ModelCatalogEntry {
   const found = MODEL_CATALOG.find((m) => m.key === key);
   if (!found) throw new Error(`Unknown model key: ${key}`);
