@@ -6,7 +6,7 @@ import { expectedScore } from "@/lib/arena/rating";
 import {
   deriveArenaBuildLoadHints,
   getCachedPreparedArenaBuild,
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   pickInitialBuild,
   prepareArenaBuild,
   type PreparedArenaBuild,
@@ -133,9 +133,10 @@ async function prepareArenaBuildById(buildId: string) {
 async function persistPreparedArenaBuildMetadata(
   prepared: PreparedArenaBuild,
 ): Promise<boolean> {
+  console.log(`arena metadata heal (matchup) build=${prepared.buildId}`);
   const result = await prisma.build.updateMany({
     where: prepared.payloadIdentity,
-    data: getPreparedArenaBuildMetadataUpdate(prepared),
+    data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
   });
   invalidateArenaBuildMeta(prepared.buildId);
   return result.count > 0;

@@ -4,7 +4,7 @@ import type { ArenaBuildVariant } from "@/lib/arena/types";
 import {
   deriveArenaBuildLoadHints,
   getCachedPreparedArenaBuild,
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
@@ -510,10 +510,11 @@ export async function GET(
   const voxelBuild = pickBuildVariant(prepared, variant);
   after(async () => {
     // write metadata and artifacts off the response path
+    console.log(`arena metadata heal (build) build=${prepared.buildId}`);
     const marked = await prisma.build
       .updateMany({
         where: prepared.payloadIdentity,
-        data: getPreparedArenaBuildMetadataUpdate(prepared),
+        data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
       })
       .catch(() => null);
     if (!marked || marked.count === 0) return;

@@ -14,7 +14,7 @@ import {
 import {
   deriveArenaBuildLoadHints,
   getCachedPreparedArenaBuild,
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
@@ -441,10 +441,11 @@ export async function GET(
           if (closed || request.signal.aborted) return;
 
           if (!cachedPrepared) {
+            console.log(`arena metadata heal (stream) build=${buildId}`);
             const marked = await prisma.build
               .updateMany({
                 where: prepared.payloadIdentity,
-                data: getPreparedArenaBuildMetadataUpdate(prepared),
+                data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
               })
               .catch((err) => {
                 console.warn("arena stream metadata update failed", err);
