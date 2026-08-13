@@ -38,6 +38,7 @@
     "atlas:audit": "node scripts/audit-texture-pack.mjs",
     "batch:generate": "tsx scripts/batch-generate.ts",
     "batch:status": "tsx scripts/batch-generate.ts",
+    "model:publish": "tsx scripts/model-publish.ts",
     "tool:convert": "tsx scripts/convert-voxel-tool-call.ts",
     "uploads:sync": "tsx scripts/sync-uploads-from-db.ts",
     "prompt": "tsx scripts/prompt.ts",
