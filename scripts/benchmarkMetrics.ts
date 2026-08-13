@@ -718,7 +718,11 @@ export class BenchmarkMetricsStore {
     return sample;
   }
 
-  reconcile(jobs: BenchmarkMetricJob[], now = new Date()): string[] {
+  reconcile(
+    jobs: BenchmarkMetricJob[],
+    now = new Date(),
+    options: { verifySucceededArtifacts?: boolean } = {},
+  ): string[] {
     return this.withLedgerLock(() => {
       const ledger = this.readLedger();
       const warnings: string[] = [];
@@ -782,7 +786,9 @@ export class BenchmarkMetricsStore {
           continue;
         }
 
-        if (!isBenchmarkSample(current.sample)) continue;
+        if (!isBenchmarkSample(current.sample) || options.verifySucceededArtifacts === false) {
+          continue;
+        }
         const artifact = verifiedArtifact(job.filePath);
         if (!artifact) {
           warnings.push(`${job.promptSlug} × ${job.modelSlug}: final JSON is missing or invalid.`);
@@ -936,8 +942,16 @@ export class BenchmarkMetricsStore {
     return computed;
   }
 
-  summarize(jobs: BenchmarkMetricJob[]): Map<ModelKey, BenchmarkModelSummary> {
-    const generated = this.refreshGeneratedMetrics(jobs);
+  summarize(
+    jobs: BenchmarkMetricJob[],
+    options: { refreshArtifacts?: boolean } = {},
+  ): Map<ModelKey, BenchmarkModelSummary> {
+    const generated = options.refreshArtifacts === false
+      ? readJsonFile<GeneratedBenchmarkMetrics>(
+          this.generatedMetricsPath,
+          { version: 1, models: {} },
+        )
+      : this.refreshGeneratedMetrics(jobs);
     const ledger = this.readLedger();
     const summaries = new Map<ModelKey, BenchmarkModelSummary>();
 

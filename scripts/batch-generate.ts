@@ -1042,9 +1042,10 @@ Upload notes:
   const selectedModelKeys = Array.from(new Set(allJobs.map((j) => j.modelKey)));
   const metricJobs = buildBenchmarkMetricJobs(selectedModelKeys);
   const metricsStore = new BenchmarkMetricsStore();
-  const metricWarnings = metricsStore.reconcile(metricJobs);
+  const metricWarnings = metricsStore.reconcile(metricJobs, new Date(), {
+    verifySucceededArtifacts: false,
+  });
   for (const warning of metricWarnings) console.warn(`  ⚠️  ${warning}`);
-  metricsStore.refreshGeneratedMetrics(metricJobs);
 
   if (opts.openrouter && opts.generate) {
     if (!process.env.OPENROUTER_API_KEY) {
@@ -1243,7 +1244,11 @@ Upload notes:
   if (!opts.upload) {
     printUploadCommands(allJobs);
   }
-  printBenchmarkSummary(metricsStore.summarize(metricJobs));
+  printBenchmarkSummary(
+    metricsStore.summarize(metricJobs, {
+      refreshArtifacts: opts.generate && jobsToGenerate.length > 0,
+    }),
+  );
 }
 
 const isDirectRun = process.argv[1]

@@ -228,6 +228,12 @@ const correctedCastleJson = JSON.stringify(
   2,
 );
 writeFileSync(castle.filePath, correctedCastleJson);
+store.reconcile([castle], new Date(), { verifySucceededArtifacts: false });
+assert.equal(
+  store.getSample(castle)?.jsonBytes,
+  Buffer.byteLength(castleJson),
+  "startup reconciliation should not rescan finalized artifacts",
+);
 store.reconcile([castle]);
 assert.equal(store.getSample(castle)?.jsonBytes, Buffer.byteLength(correctedCastleJson));
 assert.equal(
@@ -417,6 +423,16 @@ const checkoutStore = new BenchmarkMetricsStore({
   generatedMetricsPath: checkoutMetricsPath,
 });
 const committedContents = readFileSync(checkoutMetricsPath, "utf8");
+const persistedSummary = checkoutStore
+  .summarize([checkoutJob], { refreshArtifacts: false })
+  .get("openai_gpt_5_6_sol");
+assert.equal(persistedSummary?.averageInferenceMs, 456_000);
+assert.equal(persistedSummary?.averageJsonSizeBytes, 123_456);
+assert.equal(
+  readFileSync(checkoutMetricsPath, "utf8"),
+  committedContents,
+  "a persisted summary should not scan or rewrite local artifacts",
+);
 const emptyCheckoutMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);
 assert.equal(emptyCheckoutMetrics.models.openai_gpt_5_6_sol?.finalizedBuildCount, 0);
 assert.equal(
