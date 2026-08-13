@@ -1246,7 +1246,7 @@ Upload notes:
   }
   printBenchmarkSummary(
     metricsStore.summarize(metricJobs, {
-      refreshArtifacts: opts.generate && jobsToGenerate.length > 0,
+      refreshArtifacts: opts.upload || (opts.generate && jobsToGenerate.length > 0),
     }),
   );
 }
