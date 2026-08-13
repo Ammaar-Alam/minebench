@@ -1,5 +1,5 @@
 import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
-import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
+import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatible";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 export function xaiRequestConfigForModel(

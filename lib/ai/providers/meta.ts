@@ -1,4 +1,4 @@
-import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
+import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatible";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 const DEFAULT_META_MODEL_API_BASE_URL = "https://api.meta.ai/v1";
