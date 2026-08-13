@@ -300,6 +300,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  gemini_3_7_flash: {
+    totalCost: { usd: 1.46 },
+  },
   xai_grok_4_6: {
     sourceRelease: "3.13.0",
     totalCost: { usd: 11.22 },
@@ -361,7 +364,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   gemini_3_6_flash: {
     sourceRelease: "3.10.0",
     averageInference: { milliseconds: 101_900 },
-    totalCost: { usd: 2.84 },
+    totalCost: { usd: 3.22 },
     buildCount: 15,
   },
   gemini_3_5_flash_lite: {

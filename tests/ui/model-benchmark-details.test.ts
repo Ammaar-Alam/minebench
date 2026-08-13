@@ -228,7 +228,7 @@ assert.ok(
     geminiMarkup.includes("1m 41.9s") &&
     geminiMarkup.includes("Average JSON size") &&
     geminiMarkup.includes("Total cost") &&
-    geminiMarkup.includes("$2.84"),
+    geminiMarkup.includes("$3.22"),
   "a fully tracked Gemini model should render every normalized statistic row",
 );
 

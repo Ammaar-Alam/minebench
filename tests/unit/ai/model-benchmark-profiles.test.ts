@@ -111,8 +111,21 @@ assert.deepEqual(
 const gemini36Flash = getModelBenchmarkProfile("gemini_3_6_flash");
 assert.equal(gemini36Flash?.sourceRelease, "3.10.0");
 assert.deepEqual(gemini36Flash?.averageInference, { milliseconds: 101_900 });
-assert.deepEqual(gemini36Flash?.totalCost, { usd: 2.84 });
+assert.deepEqual(gemini36Flash?.totalCost, { usd: 3.22 });
 assert.equal(gemini36Flash?.buildCount, 15);
+
+const gemini37Flash = getModelBenchmarkProfile("gemini_3_7_flash");
+assert.ok(gemini37Flash, "Gemini 3.7 Flash should have verified benchmark details");
+assert.deepEqual(gemini37Flash.parameters, [
+  { label: "Thinking level", value: "High" },
+  { label: "Sampling", value: "Provider default" },
+]);
+assert.deepEqual(gemini37Flash.outputCap, { kind: "exact", tokens: 65_536 });
+assert.deepEqual(gemini37Flash.averageInference, { milliseconds: 65_219 });
+assert.equal(gemini37Flash.averageJsonSizeBytes, 51_459_756);
+assert.deepEqual(gemini37Flash.totalCost, { usd: 1.46 });
+assert.equal(gemini37Flash.totalAttempts, 19);
+assert.equal(gemini37Flash.buildCount, 15);
 
 const gemini35FlashLite = getModelBenchmarkProfile("gemini_3_5_flash_lite");
 assert.equal(gemini35FlashLite?.sourceRelease, "3.10.0");
