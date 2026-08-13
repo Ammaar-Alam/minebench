@@ -543,6 +543,27 @@
       "interruptedRunCount": 33,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "gemini_3_7_flash": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "averageJsonSizeBytes": 51459756,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 65219,
+      "finalizedAttemptCount": 19,
+      "outputCapTokens": 65536,
+      "providerCallCount": 19,
+      "completedAttemptCount": 19,
+      "rejectedResponseCount": 4,
+      "failedAttemptCount": 4,
+      "failedRunCount": 45,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

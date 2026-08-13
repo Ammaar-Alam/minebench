@@ -142,6 +142,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  gemini_3_7_flash: [
+    { label: "Thinking level", value: "High" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   gemini_3_6_flash: [
     { label: "Thinking level", value: "High" },
     { label: "Sampling", value: "Provider default" },
@@ -257,6 +261,7 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
   anthropic_claude_4_6_opus: exactOutputCap(131_072),
   anthropic_claude_4_7_opus: exactOutputCap(128_000),
   anthropic_claude_4_8_opus: exactOutputCap(128_000),
+  gemini_3_7_flash: exactOutputCap(65_536),
   gemini_3_6_flash: exactOutputCap(65_536),
   gemini_3_5_flash_lite: exactOutputCap(65_536),
   gemini_3_5_flash: exactOutputCap(65_536),
@@ -295,6 +300,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  gemini_3_7_flash: {
+    totalCost: { usd: 1.46 },
+  },
   xai_grok_4_6: {
     sourceRelease: "3.13.0",
     totalCost: { usd: 11.22 },
@@ -356,7 +364,7 @@ const MODEL_BENCHMARK_METADATA: Partial<
   gemini_3_6_flash: {
     sourceRelease: "3.10.0",
     averageInference: { milliseconds: 101_900 },
-    totalCost: { usd: 2.84 },
+    totalCost: { usd: 3.22 },
     buildCount: 15,
   },
   gemini_3_5_flash_lite: {
