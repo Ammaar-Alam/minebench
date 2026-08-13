@@ -444,6 +444,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
 export type GeneratedModelBenchmarkMetrics = {
   expectedBuildCount: number;
   finalizedBuildCount: number;
+  // Identity of the prompt cohort this model was finalized against; count
+  // alone cannot distinguish two different cohorts of the same size
+  promptCohortId?: string;
   inferenceSampleCount: number;
   // Attempts across the finalized cohort only, one accepted response per prompt
   finalizedAttemptCount?: number;

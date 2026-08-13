@@ -144,6 +144,17 @@ export async function POST(req: Request) {
   });
   invalidateArenaCoverageCache();
 
+  // Active prompts outside the cohort stay untouched (imported custom prompts
+  // are legitimate) but get surfaced so cohort drift is visible
+  const curatedSet = new Set(CURATED_PROMPTS);
+  const activePrompts = await prisma.prompt.findMany({
+    where: { active: true },
+    select: { text: true },
+  });
+  const activePromptsOutsideCohort = activePrompts
+    .map((prompt) => prompt.text)
+    .filter((text) => !curatedSet.has(text));
+
   if (!generateBuilds) {
     const [promptCount, modelCount] = await Promise.all([
       prisma.prompt.count({ where: { active: true } }),
@@ -155,6 +166,7 @@ export async function POST(req: Request) {
       done: true,
       seeded: 0,
       promptCount,
+      activePromptsOutsideCohort,
       modelCount,
       settings: ARENA_SETTINGS,
       db: getDbInfo(),

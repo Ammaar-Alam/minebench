@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { GeneratedModelBenchmarkMetrics } from "../lib/ai/modelBenchmarkProfiles";
 import type { ModelKey } from "../lib/ai/modelCatalog";
+import { BENCHMARK_PROMPT_MAP, promptCohortId } from "../lib/benchmark/prompts";
 import { parseVoxelBuildSpec } from "../lib/voxel/validate";
 
 export type { GeneratedModelBenchmarkMetrics };
@@ -976,6 +977,14 @@ export class BenchmarkMetricsStore {
         ...previous,
         expectedBuildCount,
         finalizedBuildCount,
+        promptCohortId: promptCohortId(
+          Object.fromEntries(
+            uniqueJobs.map((job) => [
+              job.promptSlug,
+              job.promptText ?? BENCHMARK_PROMPT_MAP[job.promptSlug] ?? "",
+            ]),
+          ),
+        ),
         averageJsonSizeBytes: metrics.averageJsonSizeBytes,
         ...(completeMeasurementProvenance
           ? pickDefined(metrics, COHORT_MEASUREMENT_FIELDS)
