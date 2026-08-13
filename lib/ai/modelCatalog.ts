@@ -10,74 +10,15 @@ export type Provider =
   | "minimax"
   | "meta";
 
-export type ModelKey =
-  | "openai_gpt_5_6_luna"
-  | "openai_gpt_5_6_sol"
-  | "openai_gpt_5_5"
-  | "openai_gpt_5_5_pro"
-  | "openai_gpt_5_4"
-  | "openai_gpt_5_4_pro"
-  | "openai_gpt_5_4_mini"
-  | "openai_gpt_5_4_nano"
-  | "openai_gpt_5_3_codex"
-  | "openai_gpt_5_2"
-  | "openai_gpt_5_2_pro"
-  | "openai_gpt_5_2_codex"
-  | "openai_gpt_5_mini"
-  | "openai_gpt_5_nano"
-  | "openai_gpt_4_1"
-  | "openai_gpt_4_5_web_harness"
-  | "openai_gpt_4o"
-  | "openai_gpt_oss_120b"
-  | "anthropic_claude_fable_5"
-  | "anthropic_claude_opus_5"
-  | "anthropic_claude_sonnet_5"
-  | "anthropic_claude_4_5_sonnet"
-  | "anthropic_claude_4_6_sonnet"
-  | "anthropic_claude_4_5_opus"
-  | "anthropic_claude_4_6_opus"
-  | "anthropic_claude_4_7_opus"
-  | "anthropic_claude_4_8_opus"
-  | "gemini_3_7_flash"
-  | "gemini_3_6_flash"
-  | "gemini_3_5_flash_lite"
-  | "gemini_3_5_flash"
-  | "gemini_3_0_pro"
-  | "gemini_3_1_pro"
-  | "gemini_3_0_flash"
-  | "gemini_3_1_flash_lite"
-  | "gemini_2_5_pro"
-  | "gemma_4_31b"
-  | "moonshot_kimi_k3"
-  | "moonshot_kimi_k2"
-  | "moonshot_kimi_k2_6"
-  | "moonshot_kimi_k2_5"
-  | "deepseek_v4_pro"
-  | "deepseek_v4_flash_0731"
-  | "deepseek_v3_2"
-  | "xai_grok_4_6"
-  | "xai_grok_4_5"
-  | "xai_grok_4_3"
-  | "xai_grok_4_1"
-  | "xai_grok_4_20"
-  | "zai_glm_5_2"
-  | "zai_glm_5_1"
-  | "zai_glm_5"
-  | "zai_glm_4_7"
-  | "qwen_qwen3_max_thinking"
-  | "qwen_qwen3_5_397b_a17b"
-  | "qwen_qwen3_8_max"
-  | "minimax_m2_7"
-  | "minimax_m2_5"
-  | "meta_muse_spark_1_2"
-  | "meta_llama_4_maverick";
-
-export type ModelCatalogEntry = {
-  key: ModelKey;
+// ModelKey derives from CATALOG below; adding a model is one entry here
+type ModelCatalogEntryShape = {
+  key: string;
   provider: Provider;
   modelId: string;
   displayName: string;
   enabled: boolean;
+  // short filename slug used for upload artifacts and --model selection
+  slug: string;
   // optional: alternate OpenRouter route when the direct provider key is unavailable
   openRouterModelId?: string;
   // optional: force routing via OpenRouter even if a direct provider key exists
@@ -86,9 +27,10 @@ export type ModelCatalogEntry = {
   importOnly?: boolean;
 };
 
-export const MODEL_CATALOG: ModelCatalogEntry[] = [
+const CATALOG = [
   {
     key: "openai_gpt_5_6_luna",
+    slug: "gpt-5-6-luna",
     provider: "openai",
     modelId: "gpt-5.6-luna",
     displayName: "GPT 5.6 Luna Pro",
@@ -97,6 +39,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_6_sol",
+    slug: "gpt-5-6-sol",
     provider: "openai",
     modelId: "gpt-5.6-sol",
     displayName: "GPT 5.6 Sol Pro",
@@ -105,6 +48,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_5",
+    slug: "gpt-5-5",
     provider: "openai",
     modelId: "gpt-5.5-2026-04-23",
     displayName: "GPT 5.5",
@@ -113,6 +57,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_5_pro",
+    slug: "gpt-5-5-pro",
     provider: "openai",
     modelId: "gpt-5.5-pro-2026-04-23",
     displayName: "GPT 5.5 Pro",
@@ -121,6 +66,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_4",
+    slug: "gpt-5-4",
     provider: "openai",
     modelId: "gpt-5.4-2026-03-05",
     displayName: "GPT 5.4",
@@ -129,6 +75,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_4_pro",
+    slug: "gpt-5-4-pro",
     provider: "openai",
     modelId: "gpt-5.4-pro-2026-03-05",
     displayName: "GPT 5.4 Pro",
@@ -137,6 +84,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_4_mini",
+    slug: "gpt-5-4-mini",
     provider: "openai",
     modelId: "gpt-5.4-mini",
     displayName: "GPT 5.4 Mini",
@@ -145,6 +93,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_4_nano",
+    slug: "gpt-5-4-nano",
     provider: "openai",
     modelId: "gpt-5.4-nano",
     displayName: "GPT 5.4 Nano",
@@ -153,6 +102,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_3_codex",
+    slug: "gpt-5-3-codex",
     provider: "openai",
     modelId: "gpt-5.3-codex",
     displayName: "GPT 5.3 Codex",
@@ -161,6 +111,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_2",
+    slug: "gpt-5-2",
     provider: "openai",
     modelId: "gpt-5.2",
     displayName: "GPT 5.2",
@@ -169,6 +120,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_2_pro",
+    slug: "gpt-5-2-pro",
     provider: "openai",
     modelId: "gpt-5.2-pro",
     displayName: "GPT 5.2 Pro",
@@ -177,6 +129,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_2_codex",
+    slug: "gpt-5-2-codex",
     provider: "openai",
     modelId: "gpt-5.2-codex",
     displayName: "GPT 5.2 Codex",
@@ -185,6 +138,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_mini",
+    slug: "gpt-5-mini",
     provider: "openai",
     modelId: "gpt-5-mini",
     displayName: "GPT 5 Mini",
@@ -193,6 +147,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_5_nano",
+    slug: "gpt-5-nano",
     provider: "openai",
     modelId: "gpt-5-nano",
     displayName: "GPT 5 Nano",
@@ -201,6 +156,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_4_1",
+    slug: "gpt-4-1",
     provider: "openai",
     modelId: "gpt-4.1",
     displayName: "GPT 4.1",
@@ -209,6 +165,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_4_5_web_harness",
+    slug: "gpt-4-5-web-harness",
     provider: "openai",
     modelId: "gpt-4.5-preview",
     displayName: "GPT 4.5 (web harness)",
@@ -217,6 +174,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_4o",
+    slug: "gpt-4o",
     provider: "openai",
     modelId: "gpt-4o",
     displayName: "GPT 4o",
@@ -225,6 +183,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "openai_gpt_oss_120b",
+    slug: "gpt-oss-120b",
     provider: "openai",
     modelId: "gpt-oss-120b",
     displayName: "GPT OSS 120B",
@@ -233,6 +192,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_fable_5",
+    slug: "claude-fable-5",
     provider: "anthropic",
     modelId: "claude-fable-5",
     displayName: "Claude Fable 5",
@@ -241,6 +201,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_opus_5",
+    slug: "opus-5",
     provider: "anthropic",
     modelId: "claude-opus-5",
     displayName: "Claude Opus 5",
@@ -249,6 +210,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_sonnet_5",
+    slug: "sonnet-5",
     provider: "anthropic",
     modelId: "claude-sonnet-5",
     displayName: "Claude Sonnet 5",
@@ -257,6 +219,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_4_5_sonnet",
+    slug: "sonnet",
     provider: "anthropic",
     modelId: "claude-sonnet-4-5",
     displayName: "Claude 4.5 Sonnet",
@@ -265,6 +228,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_4_6_sonnet",
+    slug: "sonnet-4-6",
     provider: "anthropic",
     modelId: "claude-sonnet-4-6",
     displayName: "Claude 4.6 Sonnet",
@@ -273,6 +237,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_4_5_opus",
+    slug: "opus",
     provider: "anthropic",
     modelId: "claude-opus-4-5",
     displayName: "Claude 4.5 Opus",
@@ -281,6 +246,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_4_6_opus",
+    slug: "opus-4-6",
     provider: "anthropic",
     modelId: "claude-opus-4-6",
     displayName: "Claude 4.6 Opus",
@@ -289,6 +255,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_4_7_opus",
+    slug: "opus-4-7",
     provider: "anthropic",
     modelId: "claude-opus-4-7",
     displayName: "Claude 4.7 Opus",
@@ -297,6 +264,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "anthropic_claude_4_8_opus",
+    slug: "opus-4-8",
     provider: "anthropic",
     modelId: "claude-opus-4-8",
     displayName: "Claude 4.8 Opus",
@@ -305,6 +273,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_7_flash",
+    slug: "gemini-3-7-flash",
     provider: "gemini",
     modelId: "gemini-3.7-flash",
     displayName: "Gemini 3.7 Flash",
@@ -313,6 +282,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_6_flash",
+    slug: "gemini-3-6-flash",
     provider: "gemini",
     modelId: "gemini-3.6-flash",
     displayName: "Gemini 3.6 Flash",
@@ -321,6 +291,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_5_flash_lite",
+    slug: "gemini-3-5-flash-lite",
     provider: "gemini",
     modelId: "gemini-3.5-flash-lite",
     displayName: "Gemini 3.5 Flash-Lite",
@@ -329,6 +300,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_5_flash",
+    slug: "gemini-3-5-flash",
     provider: "gemini",
     modelId: "gemini-3.5-flash",
     displayName: "Gemini 3.5 Flash",
@@ -337,6 +309,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_0_pro",
+    slug: "gemini-pro",
     provider: "gemini",
     modelId: "gemini-3-pro-preview",
     displayName: "Gemini 3.0 Pro",
@@ -345,6 +318,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_1_pro",
+    slug: "gemini-3-1-pro",
     provider: "gemini",
     modelId: "gemini-3.1-pro-preview",
     displayName: "Gemini 3.1 Pro",
@@ -353,6 +327,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_0_flash",
+    slug: "gemini-flash",
     provider: "gemini",
     modelId: "gemini-3-flash-preview",
     displayName: "Gemini 3.0 Flash",
@@ -361,6 +336,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_3_1_flash_lite",
+    slug: "gemini-3-1-flash-lite",
     provider: "gemini",
     modelId: "gemini-3.1-flash-lite-preview",
     displayName: "Gemini 3.1 Flash-Lite",
@@ -369,6 +345,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemini_2_5_pro",
+    slug: "gemini-2-5-pro",
     provider: "gemini",
     modelId: "gemini-2.5-pro",
     displayName: "Gemini 2.5 Pro",
@@ -377,6 +354,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "gemma_4_31b",
+    slug: "gemma-4-31b",
     provider: "gemini",
     modelId: "gemma-4-31b-it",
     displayName: "Gemma 4 31B",
@@ -385,6 +363,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "moonshot_kimi_k3",
+    slug: "kimi-k3",
     provider: "moonshot",
     modelId: "kimi-k3",
     displayName: "Kimi K3",
@@ -393,6 +372,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "moonshot_kimi_k2",
+    slug: "kimi-k2",
     provider: "moonshot",
     modelId: "kimi-k2-0905-preview",
     displayName: "Kimi K2",
@@ -401,6 +381,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "moonshot_kimi_k2_6",
+    slug: "kimi-k2-6",
     provider: "moonshot",
     modelId: "kimi-k2.6",
     displayName: "Kimi K2.6",
@@ -409,6 +390,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "moonshot_kimi_k2_5",
+    slug: "kimi-k2-5",
     provider: "moonshot",
     modelId: "moonshotai/kimi-k2.5",
     displayName: "Kimi K2.5",
@@ -418,6 +400,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "deepseek_v4_pro",
+    slug: "deepseek-v4-pro",
     provider: "deepseek",
     modelId: "deepseek-v4-pro",
     displayName: "DeepSeek V4 Pro",
@@ -425,6 +408,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "deepseek_v4_flash_0731",
+    slug: "deepseek-v4-flash-0731",
     provider: "deepseek",
     modelId: "deepseek-v4-flash",
     displayName: "DeepSeek V4 Flash 0731",
@@ -433,6 +417,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "deepseek_v3_2",
+    slug: "deepseek-v3-2",
     provider: "deepseek",
     modelId: "deepseek/deepseek-v3.2",
     displayName: "DeepSeek V3.2",
@@ -442,6 +427,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "xai_grok_4_6",
+    slug: "grok-4-6",
     provider: "xai",
     modelId: "grok-4.6",
     displayName: "Grok 4.6",
@@ -450,6 +436,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "xai_grok_4_5",
+    slug: "grok-4-5",
     provider: "xai",
     modelId: "grok-4.5",
     displayName: "Grok 4.5",
@@ -458,6 +445,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "xai_grok_4_3",
+    slug: "grok-4-3",
     provider: "xai",
     modelId: "grok-4.3",
     displayName: "Grok 4.3",
@@ -466,6 +454,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "xai_grok_4_1",
+    slug: "grok-4-1",
     provider: "xai",
     modelId: "grok-4-1-fast-reasoning",
     displayName: "Grok 4.1 Fast",
@@ -474,6 +463,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "xai_grok_4_20",
+    slug: "grok-4-20",
     provider: "xai",
     modelId: "grok-4.20-0309-reasoning",
     displayName: "Grok 4.20",
@@ -482,6 +472,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "zai_glm_5_2",
+    slug: "glm-5-2",
     provider: "zai",
     modelId: "glm-5.2",
     displayName: "Z.AI GLM 5.2",
@@ -491,6 +482,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "zai_glm_5_1",
+    slug: "glm-5-1",
     provider: "zai",
     modelId: "glm-5.1",
     displayName: "Z.AI GLM 5.1",
@@ -500,6 +492,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "zai_glm_5",
+    slug: "glm-5",
     provider: "zai",
     modelId: "glm-5",
     displayName: "Z.AI GLM 5",
@@ -509,6 +502,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "zai_glm_4_7",
+    slug: "glm-4-7",
     provider: "zai",
     modelId: "glm-4.7",
     displayName: "Z.AI GLM 4.7",
@@ -518,6 +512,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "qwen_qwen3_max_thinking",
+    slug: "qwen3-max-thinking",
     provider: "qwen",
     modelId: "qwen3-max-thinking",
     displayName: "Qwen3 Max Thinking",
@@ -527,6 +522,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "qwen_qwen3_5_397b_a17b",
+    slug: "qwen3-5-397b-a17b",
     provider: "qwen",
     modelId: "qwen3.5-397b-a17b",
     displayName: "Qwen 3.5 397B A17B",
@@ -536,6 +532,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "qwen_qwen3_8_max",
+    slug: "qwen3-8-max",
     provider: "qwen",
     modelId: "qwen3.8-max",
     displayName: "Qwen 3.8 Max",
@@ -545,6 +542,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "minimax_m2_7",
+    slug: "minimax-m2-7",
     provider: "minimax",
     modelId: "MiniMax-M2.7",
     displayName: "MiniMax M2.7",
@@ -553,6 +551,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "minimax_m2_5",
+    slug: "minimax-m2-5",
     provider: "minimax",
     modelId: "MiniMax-M2.5",
     displayName: "MiniMax M2.5",
@@ -561,6 +560,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "meta_muse_spark_1_2",
+    slug: "muse-spark-1-2",
     provider: "meta",
     modelId: "muse-spark-1.2",
     displayName: "Muse Spark 1.2",
@@ -569,6 +569,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     key: "meta_llama_4_maverick",
+    slug: "llama-4-maverick",
     provider: "meta",
     modelId: "llama-4-maverick",
     displayName: "Llama 4 Maverick",
@@ -576,7 +577,13 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     openRouterModelId: "meta-llama/llama-4-maverick",
     forceOpenRouter: true,
   },
-];
+] as const satisfies readonly ModelCatalogEntryShape[];
+
+export type ModelKey = (typeof CATALOG)[number]["key"];
+
+export type ModelCatalogEntry = Omit<ModelCatalogEntryShape, "key"> & { key: ModelKey };
+
+export const MODEL_CATALOG: readonly ModelCatalogEntry[] = CATALOG;
 
 export function getModelByKey(key: ModelKey): ModelCatalogEntry {
   const found = MODEL_CATALOG.find((m) => m.key === key);

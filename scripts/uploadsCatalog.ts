@@ -1,6 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
-import type { ModelKey } from "../lib/ai/modelCatalog";
+import { MODEL_CATALOG, type ModelKey } from "../lib/ai/modelCatalog";
 
 export const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 export const PROMPT_TEXT_FILENAME = "prompt.txt";
@@ -39,69 +39,10 @@ export const PROMPT_MAP: Record<string, string> = {
   ...BENCHMARK_PROMPT_MAP,
 };
 
-// Model key to short filename slug.
-export const MODEL_SLUG: Record<ModelKey, string> = {
-  openai_gpt_5_6_luna: "gpt-5-6-luna",
-  openai_gpt_5_6_sol: "gpt-5-6-sol",
-  openai_gpt_5_5: "gpt-5-5",
-  openai_gpt_5_5_pro: "gpt-5-5-pro",
-  openai_gpt_5_4: "gpt-5-4",
-  openai_gpt_5_4_pro: "gpt-5-4-pro",
-  openai_gpt_5_4_mini: "gpt-5-4-mini",
-  openai_gpt_5_4_nano: "gpt-5-4-nano",
-  openai_gpt_5_3_codex: "gpt-5-3-codex",
-  openai_gpt_5_2: "gpt-5-2",
-  openai_gpt_5_2_pro: "gpt-5-2-pro",
-  openai_gpt_5_2_codex: "gpt-5-2-codex",
-  openai_gpt_5_mini: "gpt-5-mini",
-  openai_gpt_5_nano: "gpt-5-nano",
-  openai_gpt_4_1: "gpt-4-1",
-  openai_gpt_4_5_web_harness: "gpt-4-5-web-harness",
-  openai_gpt_4o: "gpt-4o",
-  openai_gpt_oss_120b: "gpt-oss-120b",
-  anthropic_claude_fable_5: "claude-fable-5",
-  anthropic_claude_opus_5: "opus-5",
-  anthropic_claude_sonnet_5: "sonnet-5",
-  anthropic_claude_4_5_sonnet: "sonnet",
-  anthropic_claude_4_6_sonnet: "sonnet-4-6",
-  anthropic_claude_4_5_opus: "opus",
-  anthropic_claude_4_6_opus: "opus-4-6",
-  anthropic_claude_4_7_opus: "opus-4-7",
-  anthropic_claude_4_8_opus: "opus-4-8",
-  gemini_3_7_flash: "gemini-3-7-flash",
-  gemini_3_6_flash: "gemini-3-6-flash",
-  gemini_3_5_flash_lite: "gemini-3-5-flash-lite",
-  gemini_3_5_flash: "gemini-3-5-flash",
-  gemini_3_0_pro: "gemini-pro",
-  gemini_3_1_pro: "gemini-3-1-pro",
-  gemini_3_0_flash: "gemini-flash",
-  gemini_3_1_flash_lite: "gemini-3-1-flash-lite",
-  gemini_2_5_pro: "gemini-2-5-pro",
-  gemma_4_31b: "gemma-4-31b",
-  moonshot_kimi_k3: "kimi-k3",
-  moonshot_kimi_k2: "kimi-k2",
-  moonshot_kimi_k2_6: "kimi-k2-6",
-  moonshot_kimi_k2_5: "kimi-k2-5",
-  deepseek_v4_pro: "deepseek-v4-pro",
-  deepseek_v4_flash_0731: "deepseek-v4-flash-0731",
-  deepseek_v3_2: "deepseek-v3-2",
-  xai_grok_4_6: "grok-4-6",
-  xai_grok_4_5: "grok-4-5",
-  xai_grok_4_3: "grok-4-3",
-  xai_grok_4_1: "grok-4-1",
-  xai_grok_4_20: "grok-4-20",
-  zai_glm_5_2: "glm-5-2",
-  zai_glm_5_1: "glm-5-1",
-  zai_glm_5: "glm-5",
-  zai_glm_4_7: "glm-4-7",
-  qwen_qwen3_max_thinking: "qwen3-max-thinking",
-  qwen_qwen3_5_397b_a17b: "qwen3-5-397b-a17b",
-  qwen_qwen3_8_max: "qwen3-8-max",
-  minimax_m2_7: "minimax-m2-7",
-  minimax_m2_5: "minimax-m2-5",
-  meta_muse_spark_1_2: "muse-spark-1-2",
-  meta_llama_4_maverick: "llama-4-maverick",
-};
+// Model key to short filename slug, derived from the catalog
+export const MODEL_SLUG = Object.fromEntries(
+  MODEL_CATALOG.map((model) => [model.key, model.slug]),
+) as Record<ModelKey, string>;
 
 export const MODEL_KEY_BY_SLUG = Object.fromEntries(
   (Object.entries(MODEL_SLUG) as [ModelKey, string][]).map(([key, slug]) => [slug, key])
