@@ -460,7 +460,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
 
   if (result.processedCount <= 0) return result;
 
-  invalidateArenaStatsCache();
   for (const cacheUpdate of result.cacheUpdates) {
     recordArenaVoteInSamplingCache(cacheUpdate);
   }
@@ -479,21 +478,27 @@ export async function drainArenaVoteJobs(opts?: {
   const maxMs = Math.max(250, opts?.maxMs ?? JOB_DRAIN_MAX_MS);
   const deadlineAt = Date.now() + maxMs;
 
-  while (processedCount < maxJobs) {
-    const remainingMs = deadlineAt - Date.now();
-    // always let a fresh drain try one batch
-    if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
-    const remainingJobs = maxJobs - processedCount;
-    const result = await processArenaVoteJobBatch(remainingJobs);
-    if (result.lockSkipped) {
-      lockSkipped = true;
-      break;
+  try {
+    while (processedCount < maxJobs) {
+      const remainingMs = deadlineAt - Date.now();
+      // always let a fresh drain try one batch
+      if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
+      const remainingJobs = maxJobs - processedCount;
+      const result = await processArenaVoteJobBatch(remainingJobs);
+      if (result.lockSkipped) {
+        lockSkipped = true;
+        break;
+      }
+      const processed = result.processedCount;
+      if (processed <= 0) break;
+      processedCount += processed;
+      batches += 1;
+      if (processed < Math.max(1, JOB_BATCH_LIMIT)) break;
     }
-    const processed = result.processedCount;
-    if (processed <= 0) break;
-    processedCount += processed;
-    batches += 1;
-    if (processed < Math.max(1, JOB_BATCH_LIMIT)) break;
+  } finally {
+    // ratings moved: leaderboard, prompt signals, and model detail are all stale.
+    // once per drain, and even on a late-batch failure committed data stays visible
+    if (processedCount > 0) invalidateArenaStatsCache();
   }
 
   return { processedCount, batches, lockSkipped };

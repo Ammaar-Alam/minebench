@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { ARENA_SHOWN_JOB_DRAIN_LOCK_KEY } from "@/lib/arena/advisoryLocks";
 import { settleArenaMatchupShown } from "@/lib/arena/coverage";
-import { invalidateArenaStatsCache } from "@/lib/arena/stats";
+import { invalidateArenaModelDetailStatsCache } from "@/lib/arena/stats";
 import { ARENA_WRITE_RETRY_MAX_ATTEMPTS, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { prisma } from "@/lib/prisma";
 
@@ -156,7 +156,6 @@ async function processArenaShownJobBatch(limit = JOB_BATCH_LIMIT): Promise<Shown
   if (result.processedCount <= 0) return result;
 
   settleArenaMatchupShown(result.increments);
-  invalidateArenaStatsCache();
   return result;
 }
 
@@ -172,20 +171,25 @@ export async function drainArenaShownJobs(opts?: {
   const maxMs = Math.max(250, opts?.maxMs ?? JOB_DRAIN_MAX_MS);
   const deadlineAt = Date.now() + maxMs;
 
-  while (processedCount < maxJobs) {
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
-    const remainingJobs = maxJobs - processedCount;
-    const result = await processArenaShownJobBatch(remainingJobs);
-    if (result.lockSkipped) {
-      lockSkipped = true;
-      break;
+  try {
+    while (processedCount < maxJobs) {
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
+      const remainingJobs = maxJobs - processedCount;
+      const result = await processArenaShownJobBatch(remainingJobs);
+      if (result.lockSkipped) {
+        lockSkipped = true;
+        break;
+      }
+      const processed = result.processedCount;
+      if (processed <= 0) break;
+      processedCount += processed;
+      batches += 1;
+      if (processed < Math.max(1, JOB_BATCH_LIMIT)) break;
     }
-    const processed = result.processedCount;
-    if (processed <= 0) break;
-    processedCount += processed;
-    batches += 1;
-    if (processed < Math.max(1, JOB_BATCH_LIMIT)) break;
+  } finally {
+    // once per drain, and even on a late-batch failure committed counts stay visible
+    if (processedCount > 0) invalidateArenaModelDetailStatsCache();
   }
 
   return { processedCount, batches, lockSkipped };
