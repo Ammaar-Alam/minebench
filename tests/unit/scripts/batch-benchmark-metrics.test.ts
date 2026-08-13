@@ -85,6 +85,11 @@ assert.equal(
   createHash("sha256").update(castleJson).digest("hex"),
 );
 assert.equal(readLedger().jobs["openai_gpt_5_6_sol/castle"]?.state, "succeeded");
+assert.equal(
+  store.reconcile([castle], new Date(), { verifySucceededArtifacts: false }).refreshRequired,
+  true,
+  "a finalized sample must remain pending until generated metrics refresh",
+);
 store.markInterrupted(castle, "Interrupted after generation finalized.");
 assert.equal(
   readLedger().jobs["openai_gpt_5_6_sol/castle"]?.state,
@@ -118,6 +123,11 @@ assert.equal(
 );
 
 let generated = store.refreshGeneratedMetrics([castle]);
+assert.equal(
+  store.reconcile([castle], new Date(), { verifySucceededArtifacts: false }).refreshRequired,
+  false,
+  "a successful generated-metrics refresh should clear the pending marker",
+);
 assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   expectedBuildCount: 1,
   finalizedBuildCount: 1,
@@ -139,6 +149,24 @@ assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   failedRunCount: 0,
   interruptedRunCount: 0,
 });
+
+const unmarkedV2Ledger = readLedger();
+delete unmarkedV2Ledger.jobs["openai_gpt_5_6_sol/castle"]?.generatedMetricsDirty;
+writeFileSync(
+  ledgerPath,
+  `${JSON.stringify({ version: 2, jobs: unmarkedV2Ledger.jobs }, null, 2)}\n`,
+);
+assert.equal(
+  store.reconcile([castle], new Date(), { verifySucceededArtifacts: false }).refreshRequired,
+  true,
+  "an unmarked version 2 record must receive one generated-metrics refresh",
+);
+store.refreshGeneratedMetrics([castle]);
+assert.equal(
+  store.reconcile([castle], new Date(), { verifySucceededArtifacts: false }).refreshRequired,
+  false,
+  "the migration refresh must persist its acknowledgement",
+);
 
 store.markRunning(castle, new Date("2026-07-22T19:00:00.000Z"));
 store.markProviderCall(castle, 1);
@@ -231,7 +259,7 @@ writeFileSync(castle.filePath, correctedCastleJson);
 const startupReconciliation = store.reconcile([castle], new Date(), {
   verifySucceededArtifacts: false,
 });
-assert.equal(startupReconciliation.recoveredFinalization, false);
+assert.equal(startupReconciliation.refreshRequired, false);
 assert.equal(
   store.getSample(castle)?.jsonBytes,
   Buffer.byteLength(castleJson),
@@ -285,7 +313,7 @@ ledger.jobs["openai_gpt_5_6_sol/phoenix"] = {
 };
 writeFileSync(ledgerPath, `${JSON.stringify({ version: 2, jobs: ledger.jobs }, null, 2)}\n`);
 const recovery = store.reconcile([castle, phoenix], new Date("2026-07-22T21:02:00.000Z"));
-assert.equal(recovery.recoveredFinalization, true);
+assert.equal(recovery.refreshRequired, true);
 assert.equal(
   readLedger().jobs["openai_gpt_5_6_sol/phoenix"]?.state,
   "succeeded",
@@ -647,5 +675,46 @@ assert.equal(
   1,
   "a legacy ledger must preserve the committed configuration cohort",
 );
+
+const concurrentRoot = mkdtempSync(join(tmpdir(), "minebench-benchmark-concurrent-"));
+const concurrentLedgerPath = join(concurrentRoot, ".benchmark-metrics.json");
+const concurrentMetricsPath = join(concurrentRoot, "modelBenchmarkMetrics.generated.json");
+const concurrentStore = new BenchmarkMetricsStore({
+  ledgerPath: concurrentLedgerPath,
+  generatedMetricsPath: concurrentMetricsPath,
+});
+const concurrentJobs: BenchmarkMetricJob[] = [
+  { ...job("castle"), modelKey: "openai_gpt_5_6_sol" },
+  {
+    ...job("castle"),
+    modelKey: "xai_grok_4_6",
+    modelSlug: "grok-4-6",
+    filePath: join(concurrentRoot, "castle-grok-4-6.json"),
+  },
+];
+for (const concurrentJob of concurrentJobs) concurrentStore.markRunning(concurrentJob);
+const concurrentLedger = concurrentStore["readLedger"]();
+for (const [index, concurrentJob] of concurrentJobs.entries()) {
+  concurrentStore["persistGeneratedMetrics"](
+    new Map([[concurrentJob.modelKey, [concurrentJob]]]),
+    concurrentLedger,
+    new Map([
+      [
+        concurrentJob.modelKey,
+        { expectedBuildCount: 1, finalizedBuildCount: 1, inferenceSampleCount: index + 1 },
+      ],
+    ]),
+  );
+}
+const concurrentMetrics = JSON.parse(readFileSync(concurrentMetricsPath, "utf8")) as {
+  models: Record<string, { inferenceSampleCount: number }>;
+};
+assert.equal(concurrentMetrics.models.openai_gpt_5_6_sol?.inferenceSampleCount, 1);
+assert.equal(concurrentMetrics.models.xai_grok_4_6?.inferenceSampleCount, 2);
+const concurrentFinalLedger = JSON.parse(readFileSync(concurrentLedgerPath, "utf8")) as {
+  jobs: Record<string, { generatedMetricsDirty?: boolean }>;
+};
+assert.equal(concurrentFinalLedger.jobs["openai_gpt_5_6_sol/castle"]?.generatedMetricsDirty, false);
+assert.equal(concurrentFinalLedger.jobs["xai_grok_4_6/castle"]?.generatedMetricsDirty, false);
 
 console.log("batch benchmark metric lifecycle checks passed");
