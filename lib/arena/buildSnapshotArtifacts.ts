@@ -520,3 +520,27 @@ export async function createArenaBuildSnapshotArtifactSignedUrl(
     artifactSignedUrlInflight.delete(cacheKey);
   }
 }
+
+// Healing tracked separately from the prepared cache. The prepared cache has no
+// TTL, so gating repair on "did we just prepare this" means one failed upload
+// is never retried for the life of the process. Keyed by build and checksum so
+// a re-import re-arms it; recorded only on success, and also when the policy
+// says this build needs no snapshot at all.
+const healedSnapshotArtifacts = new Set<string>();
+
+export async function healArenaBuildSnapshotArtifactsOnce(
+  prepared: PreparedArenaBuild,
+): Promise<void> {
+  const checksum = prepared.checksum?.trim();
+  if (!checksum) return;
+  const key = `${prepared.buildId}:${checksum}`;
+  if (healedSnapshotArtifacts.has(key)) return;
+
+  try {
+    await ensureArenaBuildSnapshotArtifacts(prepared);
+    healedSnapshotArtifacts.add(key);
+  } catch (error) {
+    // leave the key unset so the next miss retries
+    console.warn("arena snapshot artifact heal failed", error);
+  }
+}

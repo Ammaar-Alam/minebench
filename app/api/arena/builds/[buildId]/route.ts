@@ -10,7 +10,7 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
-  ensureArenaBuildSnapshotArtifacts,
+  healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
 import {
@@ -436,7 +436,9 @@ export async function GET(
     if (!marked || marked.count === 0) return;
     // drop stale meta cache so the next request sees the freshly written checksum
     invalidateArenaBuildMeta(prepared.buildId);
-    await ensureArenaBuildSnapshotArtifacts(prepared);
+    // dedupes on success and retries after a failure, so warm cache hits do not
+    // re-upload and a transient failure is not permanent
+    await healArenaBuildSnapshotArtifactsOnce(prepared);
   });
 
   const responseBytes = jsonBytes(

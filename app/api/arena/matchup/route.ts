@@ -13,7 +13,7 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
-  ensureArenaBuildSnapshotArtifacts,
+  healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifactPayload,
 } from "@/lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
@@ -959,9 +959,7 @@ export async function GET(req: Request) {
           // builds that live-prepared after an artifact miss, since ensure
           // upserts unconditionally and warm traffic would re-upload snapshots.
           if (livePreparedBuildIds.has(prepared.buildId)) {
-            await ensureArenaBuildSnapshotArtifacts(prepared).catch((err) => {
-              console.warn("arena snapshot artifact heal (matchup) failed", err);
-            });
+            await healArenaBuildSnapshotArtifactsOnce(prepared);
           }
         }),
       );
