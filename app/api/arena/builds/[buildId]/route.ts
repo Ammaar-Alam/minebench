@@ -51,8 +51,9 @@ const JSON_RESPONSE_CACHE_MAX_WEIGHT = Number.parseInt(
 
 type CachedJsonResponse = {
   bytes: Uint8Array;
-  // which path produced this body, so a cached fallback still reports as one
-  source: "db-snapshot" | "live";
+  // which path produced this body; only live prepares are cached now that
+  // snapshots are served from storage
+  source: "live";
   byteWeight: number;
   touchedAt: number;
 };

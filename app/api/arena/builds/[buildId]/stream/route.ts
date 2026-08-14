@@ -18,6 +18,7 @@ import {
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
+import { ensureArenaBuildSnapshotArtifacts } from "@/lib/arena/buildSnapshotArtifacts";
 import { getArenaBuildMeta, invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
@@ -456,7 +457,18 @@ export async function GET(
               safeClose();
               return;
             }
-            if (marked) invalidateArenaBuildMeta(buildId);
+            if (marked) {
+              invalidateArenaBuildMeta(buildId);
+              // A snapshot-class build reaches this route only after its snapshot
+              // artifact was missing. The matchup healer cannot cover that case:
+              // when only the full object is absent it still serves the preview
+              // artifact, so no live prepare happens there and the full snapshot
+              // would stay missing while every full hydration retried and fell
+              // back to this stream.
+              void ensureArenaBuildSnapshotArtifacts(prepared).catch((err) => {
+                console.warn("arena snapshot artifact heal (stream) failed", err);
+              });
+            }
           }
 
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {
