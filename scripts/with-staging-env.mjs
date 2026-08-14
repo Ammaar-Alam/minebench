@@ -22,6 +22,14 @@ if (argv.length === 0) {
 }
 
 const staging = dotenv.parse(fs.readFileSync(envPath, "utf8"));
+// The storage sync requires the staging bucket to match production's, because
+// restored rows keep production's voxelStorageBucket value. Default to the
+// same source bucket here so publishing writes where the refresh populated.
+const productionEnvPath = path.join(repoRoot, ".env");
+const production = fs.existsSync(productionEnvPath)
+  ? dotenv.parse(fs.readFileSync(productionEnvPath, "utf8"))
+  : {};
+const sourceBucket = production.SUPABASE_STORAGE_BUCKET?.trim() || "builds";
 
 function required(name) {
   const value = staging[name]?.trim();
@@ -38,7 +46,7 @@ const stagingEnv = {
   DIRECT_URL: directUrl,
   SUPABASE_URL: required("STAGING_SUPABASE_URL"),
   SUPABASE_SERVICE_ROLE_KEY: required("STAGING_SUPABASE_SERVICE_ROLE_KEY"),
-  SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || "builds",
+  SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || sourceBucket,
   MINEBENCH_SITE_URL: required("STAGING_SITE_URL"),
   // preview deployments are behind Vercel deployment protection
   ...(staging.STAGING_VERCEL_BYPASS_SECRET?.trim()

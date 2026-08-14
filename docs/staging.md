@@ -25,6 +25,7 @@ Local credentials for the tooling live in `.env.staging.local` (git-ignored):
 
 ```
 STAGING_DIRECT_URL=            # alpha branch direct Postgres connection
+STAGING_DATABASE_URL=          # alpha branch pooled connection (what the deployment uses)
 STAGING_SUPABASE_URL=
 STAGING_SUPABASE_SERVICE_ROLE_KEY=
 # STAGING_SUPABASE_STORAGE_BUCKET= (defaults to SUPABASE_STORAGE_BUCKET)
