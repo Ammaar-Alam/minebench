@@ -174,6 +174,15 @@ async function main() {
   if (target.url === source.url) {
     fail("Refusing to sync: staging SUPABASE_URL matches production");
   }
+  // Restored Build rows keep production's voxelStorageBucket value and the app
+  // reads that column directly, so a renamed target bucket would leave every
+  // storage-backed build pointing at a bucket staging does not use
+  if (target.bucket !== source.bucket) {
+    fail(
+      `Refusing to sync: staging bucket "${target.bucket}" differs from production "${source.bucket}". ` +
+        "Restored database rows reference the production bucket name, so the names must match.",
+    );
+  }
 
   console.log(`Source: ${source.url} bucket=${source.bucket} prefix=${prefix || "<all>"}`);
   console.log(`Target: ${target.url} bucket=${target.bucket}`);
@@ -182,9 +191,26 @@ async function main() {
     listObjects(source, prefix),
     force ? Promise.resolve(new Map()) : listObjects(target, prefix),
   ]);
-  const pending = Array.from(sourceObjects.keys()).filter(
-    (objectPath) => force || !targetObjects.has(objectPath),
-  );
+  // An overwritten build reuses its storage path, so path existence alone is
+  // not proof the bodies match: the database refresh would bring the new
+  // checksum while staging kept serving the old object. Compare content
+  // identity (etag when present, else size) and recopy when it differs.
+  const contentKey = (meta) => {
+    if (!meta || typeof meta !== "object") return null;
+    const etag = typeof meta.eTag === "string" ? meta.eTag.replace(/"/g, "") : null;
+    const size = typeof meta.size === "number" ? String(meta.size) : null;
+    return etag ?? size;
+  };
+  const pending = Array.from(sourceObjects.entries())
+    .filter(([objectPath, meta]) => {
+      if (force || !targetObjects.has(objectPath)) return true;
+      const sourceKey = contentKey(meta);
+      const targetKey = contentKey(targetObjects.get(objectPath));
+      // unknown metadata on either side means we cannot prove equality
+      if (sourceKey == null || targetKey == null) return true;
+      return sourceKey !== targetKey;
+    })
+    .map(([objectPath]) => objectPath);
   console.log(
     `Objects: ${sourceObjects.size} in source, ${targetObjects.size} in target, ${pending.length} to copy`,
   );
