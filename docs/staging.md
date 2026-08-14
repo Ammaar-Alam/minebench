@@ -84,6 +84,14 @@ starts from the standard baseline.
 Merging the model's code PR to `master` on its own does not expose it — a
 catalog entry seeds as disabled, and only a publish activates it.
 
+The alpha deployment sits behind Vercel deployment protection, so it is private
+to logged-in team members — which is what makes it a safe place to review an
+unreleased model. Scripted calls to its API therefore need an automation bypass
+secret: generate one under Vercel → Settings → Deployment Protection →
+Protection Bypass for Automation, then add it to `.env.staging.local` as
+`STAGING_VERCEL_BYPASS_SECRET`. Without it, `staging:publish` cannot reach the
+import endpoint. Production is unaffected.
+
 Any command can be pointed at alpha the same way:
 
 ```bash

@@ -40,6 +40,10 @@ const stagingEnv = {
   SUPABASE_SERVICE_ROLE_KEY: required("STAGING_SUPABASE_SERVICE_ROLE_KEY"),
   SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || "builds",
   MINEBENCH_SITE_URL: required("STAGING_SITE_URL"),
+  // preview deployments are behind Vercel deployment protection
+  ...(staging.STAGING_VERCEL_BYPASS_SECRET?.trim()
+    ? { VERCEL_AUTOMATION_BYPASS_SECRET: staging.STAGING_VERCEL_BYPASS_SECRET.trim() }
+    : {}),
 };
 
 console.log(`Running against alpha staging: ${stagingEnv.MINEBENCH_SITE_URL}`);
