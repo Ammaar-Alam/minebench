@@ -793,6 +793,10 @@ export async function GET(req: Request) {
   let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
   let persistedInitialBuildA: ArenaMatchup["a"]["build"] | null = null;
   let persistedInitialBuildB: ArenaMatchup["b"]["build"] | null = null;
+  // Only builds that actually reached a live prepare are missing an artifact.
+  // A warm cache hit proves nothing about storage, and healing it would
+  // re-upload multi-megabyte snapshots on ordinary matchup traffic.
+  const livePreparedBuildIds = new Set<string>();
   const prepareStartedAt = performance.now();
   if (shouldPrepareA || shouldPrepareB) {
     preparedA = shouldPrepareA && checksumA ? getCachedPreparedArenaBuild(buildA.id, checksumA) : null;
@@ -842,6 +846,13 @@ export async function GET(req: Request) {
           ? resolveInitialBuildSnapshot(buildB.id, shellHintsB, buildBForPrepare)
           : Promise.resolve(null),
       ]);
+
+      if (shouldPrepareA && !preparedA && !persistedInitialBuildA && buildAForPrepare) {
+        livePreparedBuildIds.add(buildA.id);
+      }
+      if (shouldPrepareB && !preparedB && !persistedInitialBuildB && buildBForPrepare) {
+        livePreparedBuildIds.add(buildB.id);
+      }
 
       [preparedA, preparedB] = await Promise.all([
 	        preparedA || persistedInitialBuildA
@@ -944,11 +955,14 @@ export async function GET(req: Request) {
           const persisted = await persistPreparedArenaBuildMetadata(prepared).catch(() => false);
           if (!persisted) return;
           // An inlined build is answered here, so the client never visits the
-          // build route that would upload the missing artifact. Without this,
-          // every cold matchup repeats the same miss and full payload parse.
-          await ensureArenaBuildSnapshotArtifacts(prepared).catch((err) => {
-            console.warn("arena snapshot artifact heal (matchup) failed", err);
-          });
+          // build route that would upload the missing artifact. Restricted to
+          // builds that live-prepared after an artifact miss, since ensure
+          // upserts unconditionally and warm traffic would re-upload snapshots.
+          if (livePreparedBuildIds.has(prepared.buildId)) {
+            await ensureArenaBuildSnapshotArtifacts(prepared).catch((err) => {
+              console.warn("arena snapshot artifact heal (matchup) failed", err);
+            });
+          }
         }),
       );
     });
