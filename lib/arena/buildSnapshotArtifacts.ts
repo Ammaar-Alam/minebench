@@ -31,9 +31,8 @@ const ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY = normalizePrefix(
     getArenaPreviewTargetBlocks(),
   ].join("-"),
 );
-const ARENA_SNAPSHOT_ARTIFACT_BUCKET = (
-  process.env.ARENA_SNAPSHOT_ARTIFACT_BUCKET ?? getBuildStorageBucketFromEnv()
-).trim();
+const ARENA_SNAPSHOT_ARTIFACT_BUCKET =
+  process.env.ARENA_SNAPSHOT_ARTIFACT_BUCKET?.trim() || getBuildStorageBucketFromEnv();
 const ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS",
   1_000,

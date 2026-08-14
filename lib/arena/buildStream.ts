@@ -50,9 +50,8 @@ const ARENA_STREAM_ARTIFACTS_ENABLED = readBoolEnv("ARENA_STREAM_ARTIFACTS_ENABL
 const ARENA_STREAM_ARTIFACT_PREFIX = normalizePrefix(
   process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v3-gzip",
 );
-const ARENA_STREAM_ARTIFACT_BUCKET = (
-  process.env.ARENA_STREAM_ARTIFACT_BUCKET ?? getBuildStorageBucketFromEnv()
-).trim();
+const ARENA_STREAM_ARTIFACT_BUCKET =
+  process.env.ARENA_STREAM_ARTIFACT_BUCKET?.trim() || getBuildStorageBucketFromEnv();
 const ARENA_STREAM_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_STREAM_ARTIFACT_MISS_TTL_MS",
   1_000,
