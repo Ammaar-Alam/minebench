@@ -376,15 +376,22 @@ export async function GET(
       if (artifactBytes) {
         timing.end("artifact_hit", artifactStartedAt);
         timing.end("total", requestStartedAt);
+        // the stored object is gzip; proxying it verbatim to a gzip-capable
+        // client keeps snapshot-class fallbacks off the uncompressed path
+        const body = shouldGzip ? gzipSync(Buffer.from(artifactBytes)) : artifactBytes;
         const headers = new Headers({
           "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
           "Content-Type": "application/json; charset=utf-8",
-          "Content-Length": String(artifactBytes.byteLength),
+          "Content-Length": String(body.byteLength),
           "x-build-delivery-class": deliveryClass,
           "x-build-source": "artifact",
         });
+        if (shouldGzip) {
+          headers.set("Content-Encoding", "gzip");
+          headers.set("Vary", "Accept-Encoding");
+        }
         timing.apply(headers);
-        return new Response(Buffer.from(artifactBytes), { headers });
+        return new Response(Buffer.from(body), { headers });
       }
       timing.end("artifact_miss", artifactStartedAt);
     }

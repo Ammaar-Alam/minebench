@@ -6,7 +6,8 @@
 import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { parseVoxelBuildSpec } from "../lib/voxel/validate";
+import { validateVoxelBuild } from "../lib/voxel/validate";
+import { getPalette } from "../lib/blocks/palettes";
 
 type VoxelBlock = { x: number; y: number; z: number; type: string };
 type VoxelBuild = { version: string; blocks: VoxelBlock[] };
@@ -104,13 +105,22 @@ function main() {
   );
   for (const file of files) {
     const raw = readFileSync(file);
-    // uploads hold the model's box/block spec; delivery serves expanded blocks
-    const parsed = parseVoxelBuildSpec(JSON.parse(raw.toString("utf8")));
-    if (!parsed.ok) {
-      console.error(`- ${file}: ${parsed.error}, skipping`);
+    // uploads hold the model's box/line/block spec; delivery serves the fully
+    // expanded blocks, so benchmark the same expansion production performs
+    const validated = validateVoxelBuild(JSON.parse(raw.toString("utf8")), {
+      gridSize: 256,
+      palette: getPalette("simple"),
+      maxBlocks: Number.MAX_SAFE_INTEGER,
+    });
+    if (!validated.ok) {
+      console.error(`- ${file}: ${validated.error}, skipping`);
       continue;
     }
-    const build = parsed.value as VoxelBuild;
+    const build = validated.value.build as VoxelBuild;
+    if (build.blocks.length === 0) {
+      console.error(`- ${file}: expanded to zero blocks, skipping`);
+      continue;
+    }
 
     const jsonBytes = Buffer.from(JSON.stringify(build));
     const gzipJson = timed(() => gzipSync(jsonBytes));
