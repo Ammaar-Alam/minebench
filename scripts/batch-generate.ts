@@ -1092,10 +1092,18 @@ Upload notes:
       console.log("\n📤 No existing builds to upload.");
     } else {
       console.log("\n📤 Uploading existing builds...");
+      let uploadFailures = 0;
       for (const job of existing) {
         process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
         const result = await uploadBuild(job, metricsStore.getSample(job)?.inferenceTimeMs);
         console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
+        if (!result.ok) uploadFailures += 1;
+      }
+      if (uploadFailures > 0) {
+        // publication treats a zero exit as a complete import, so a partial
+        // upload has to fail the command rather than only printing
+        console.error(`\n${uploadFailures} upload(s) failed.`);
+        process.exitCode = 1;
       }
     }
   }

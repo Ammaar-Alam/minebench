@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { prisma } from "../lib/prisma";
 import {
   activatePublishedModel,
+  assertPublicationTargetsAgree,
   missingCohortArtifacts,
   resolvePublicationModel,
   runPublicationStep,
@@ -68,6 +69,14 @@ async function main() {
   console.log(`- dry run: ${opts.dryRun ? "yes" : "no"}`);
   console.log(`- cohort: ${promptSlugs.length} prompts`);
   console.log("");
+
+  // Uploads and verification must address the same environment before any
+  // write happens; a dry run performs no writes so it can skip the network call
+  if (!opts.dryRun) {
+    await assertPublicationTargetsAgree(
+      process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai",
+    );
+  }
 
   // Hard-fail before any step when the local cohort is incomplete
   const missingArtifacts = missingCohortArtifacts(entry, promptSlugs, UPLOADS_DIR);

@@ -121,3 +121,44 @@ export async function verifyPublicationCoverage(modelKey: string) {
 export async function activatePublishedModel(modelKey: string): Promise<void> {
   await prisma.model.update({ where: { key: modelKey }, data: { enabled: true } });
 }
+
+// The upload step imports through an HTTP endpoint while every later step runs
+// Prisma against DATABASE_URL. Those can point at different environments, in
+// which case publication would overwrite one environment's builds and then
+// verify and activate another. The deployment reports the database it is
+// actually using, so compare that against ours before writing anything.
+export async function assertPublicationTargetsAgree(siteUrl: string): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL;
+  if (!databaseUrl) throw new Error("Missing DATABASE_URL for publication");
+  const localHost = new URL(databaseUrl).hostname.toLowerCase();
+
+  const token = process.env.ADMIN_TOKEN;
+  if (!token) throw new Error("Missing ADMIN_TOKEN for publication preflight");
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+
+  const resp = await fetch(`${siteUrl.replace(/\/+$/, "")}/api/admin/status`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+    },
+    cache: "no-store",
+  });
+  if (!resp.ok) {
+    throw new Error(
+      `Publication preflight could not read ${siteUrl}/api/admin/status (${resp.status}). ` +
+        "Confirm the site URL, ADMIN_TOKEN, and deployment protection bypass.",
+    );
+  }
+
+  const status = (await resp.json()) as { db?: { host?: string } };
+  const remoteHost = status.db?.host?.toLowerCase();
+  if (!remoteHost) throw new Error("Publication preflight got no database host from the deployment");
+  if (remoteHost !== localHost) {
+    throw new Error(
+      `Publication target mismatch: uploads go to ${siteUrl} (database ${remoteHost}) ` +
+        `but verification and activation would run against ${localHost}. ` +
+        "Point MINEBENCH_SITE_URL and DATABASE_URL at the same environment.",
+    );
+  }
+  console.log(`- publication target: ${siteUrl} (database ${remoteHost})`);
+}
