@@ -2,6 +2,7 @@
 
 import "dotenv/config";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { prisma } from "../lib/prisma";
 import {
   activatePublishedModel,
@@ -76,21 +77,24 @@ async function main() {
   const siteUrl = (process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai").replace(/\/+$/, "");
   // the uploader reads this too, so the checked target is the one it uses
   process.env.MINEBENCH_SITE_URL = siteUrl;
+  let matchupStateCacheTtlMs = 0;
   if (!opts.dryRun) {
-    await assertPublicationTargetsAgree(siteUrl);
+    ({ matchupStateCacheTtlMs } = await assertPublicationTargetsAgree(siteUrl));
   }
 
-  // Hard-fail before any step when the local cohort is incomplete
-  const missingArtifacts = missingCohortArtifacts(entry, promptSlugs, UPLOADS_DIR);
-  if (missingArtifacts.length > 0) {
-    console.error(`Missing ${missingArtifacts.length} benchmark artifact(s):`);
-    for (const filePath of missingArtifacts) console.error(`- ${filePath}`);
-    console.error(
-      entry.importOnly
-        ? `\n${entry.displayName} is import-only: drop the build JSON into each uploads/<prompt>/ folder, then re-run.`
-        : "\nGenerate them first: pnpm batch:generate --generate --model " + entry.slug,
-    );
-    process.exit(1);
+  if (!opts.skipUpload) {
+    // Hard-fail before any step when the local cohort is incomplete
+    const missingArtifacts = missingCohortArtifacts(entry, promptSlugs, UPLOADS_DIR);
+    if (missingArtifacts.length > 0) {
+      console.error(`Missing ${missingArtifacts.length} benchmark artifact(s):`);
+      for (const filePath of missingArtifacts) console.error(`- ${filePath}`);
+      console.error(
+        entry.importOnly
+          ? `\n${entry.displayName} is import-only: drop the build JSON into each uploads/<prompt>/ folder, then re-run.`
+          : "\nGenerate them first: pnpm batch:generate --generate --model " + entry.slug,
+      );
+      process.exit(1);
+    }
   }
 
   const scriptsDir = path.dirname(new URL(import.meta.url).pathname);
@@ -127,6 +131,12 @@ async function main() {
           `- staged ${entry.displayName} before overwriting its cohort; ` +
             "it is reactivated after verification, and stays staged if publication fails",
         );
+        if (matchupStateCacheTtlMs > 0) {
+          console.log(
+            `- waiting ${matchupStateCacheTtlMs}ms for deployed matchup caches to expire`,
+          );
+          await delay(matchupStateCacheTtlMs);
+        }
       }
     }
 

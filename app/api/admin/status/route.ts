@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getArenaShownJobStatus } from "@/lib/arena/shownJobs";
 import { getArenaArtifactCoverage } from "@/lib/arena/artifactCoverage";
+import { ARENA_MATCHUP_STATE_CACHE_TTL_MS } from "@/lib/arena/coverage";
 import { findCatalogEntryBySlugOrKey } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
 import { supabaseProjectRefFromDatabaseUrl } from "@/lib/db/identity";
@@ -120,6 +121,7 @@ export async function GET(req: Request) {
       {
         ok: true,
         db: getDbInfo(),
+        arena: { matchupStateCacheTtlMs: ARENA_MATCHUP_STATE_CACHE_TTL_MS },
         counts: {
           prompts: { total: promptTotal, active: promptActive },
           models: { total: modelTotal, enabled: modelEnabled },

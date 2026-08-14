@@ -146,7 +146,9 @@ export async function activatePublishedModel(modelKey: string): Promise<void> {
 // which case publication would overwrite one environment's builds and then
 // verify and activate another. The deployment reports the database it is
 // actually using, so compare that against ours before writing anything.
-export async function assertPublicationTargetsAgree(siteUrl: string): Promise<void> {
+export async function assertPublicationTargetsAgree(
+  siteUrl: string,
+): Promise<{ matchupStateCacheTtlMs: number }> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL;
   if (!databaseUrl) throw new Error("Missing DATABASE_URL for publication");
   const local = databaseIdentityFromUrl(databaseUrl);
@@ -172,6 +174,7 @@ export async function assertPublicationTargetsAgree(siteUrl: string): Promise<vo
 
   const status = (await resp.json()) as {
     db?: { projectRef?: string | null; host?: string; port?: string; database?: string };
+    arena?: { matchupStateCacheTtlMs?: number };
   };
   if (!status.db?.host) {
     throw new Error("Publication preflight got no database identity from the deployment");
@@ -182,6 +185,14 @@ export async function assertPublicationTargetsAgree(siteUrl: string): Promise<vo
     port: status.db.port ?? "5432",
     database: (status.db.database ?? "postgres").toLowerCase(),
   };
+  const matchupStateCacheTtlMs = status.arena?.matchupStateCacheTtlMs;
+  if (
+    typeof matchupStateCacheTtlMs !== "number" ||
+    !Number.isInteger(matchupStateCacheTtlMs) ||
+    matchupStateCacheTtlMs < 0
+  ) {
+    throw new Error("Publication preflight got no valid matchup cache TTL from the deployment");
+  }
 
   if (!isSameDatabaseTarget(local, remote)) {
     const describe = (id: typeof remote) =>
@@ -226,4 +237,5 @@ export async function assertPublicationTargetsAgree(siteUrl: string): Promise<vo
   console.log(
     `- publication target: ${siteUrl} (${remote.projectRef ?? `${remote.host}:${remote.port}`})`,
   );
+  return { matchupStateCacheTtlMs };
 }

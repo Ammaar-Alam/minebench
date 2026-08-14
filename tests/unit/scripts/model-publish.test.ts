@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  assertPublicationTargetsAgree,
   missingCohortArtifacts,
   resolvePublicationModel,
 } from "../../../lib/benchmark/publication";
@@ -41,4 +42,50 @@ try {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 
-console.log("model publish resolution checks passed");
+const envKeys = [
+  "DATABASE_URL",
+  "ADMIN_TOKEN",
+  "SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_URL",
+] as const;
+const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+const originalFetch = globalThis.fetch;
+
+async function main() {
+  try {
+    process.env.DATABASE_URL = "postgresql://user:pass@db.example.test:5432/minebench";
+    process.env.ADMIN_TOKEN = "test-admin-token";
+    delete process.env.SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    globalThis.fetch = async () =>
+      Response.json({
+        db: { host: "db.example.test", port: "5432", database: "minebench" },
+        arena: { matchupStateCacheTtlMs: 12_345 },
+      });
+    assert.deepEqual(await assertPublicationTargetsAgree("https://minebench.test"), {
+      matchupStateCacheTtlMs: 12_345,
+    });
+
+    globalThis.fetch = async () =>
+      Response.json({ db: { host: "db.example.test", port: "5432", database: "minebench" } });
+    await assert.rejects(
+      assertPublicationTargetsAgree("https://minebench.test"),
+      /no valid matchup cache TTL/,
+    );
+
+    console.log("model publish resolution checks passed");
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of envKeys) {
+      const value = originalEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

@@ -5,9 +5,15 @@ import {
 } from "@/lib/arena/advisoryLocks";
 import { prisma } from "@/lib/prisma";
 
-const MATCHUP_STATE_CACHE_TTL_MS = readIntEnv("ARENA_MATCHUP_STATE_CACHE_TTL_MS", 60_000);
+export const ARENA_MATCHUP_STATE_CACHE_TTL_MS = readIntEnv(
+  "ARENA_MATCHUP_STATE_CACHE_TTL_MS",
+  60_000,
+);
 const PENDING_SHOWN_COUNT_TTL_MS = readIntEnv("ARENA_PENDING_SHOWN_COUNT_TTL_MS", 90_000);
-const APPLIED_VOTE_JOB_DEDUPE_WINDOW_MS = Math.max(MATCHUP_STATE_CACHE_TTL_MS, 120_000);
+const APPLIED_VOTE_JOB_DEDUPE_WINDOW_MS = Math.max(
+  ARENA_MATCHUP_STATE_CACHE_TTL_MS,
+  120_000,
+);
 
 const ARENA_GRID_SIZE = 256;
 const ARENA_PALETTE = "simple";
@@ -725,7 +731,7 @@ export async function getArenaMatchupSamplingStateWithMeta(): Promise<ArenaMatch
       if (matchupStateVersion === refreshVersion) {
         matchupStateCache = {
           value: result.state,
-          expiresAt: Date.now() + MATCHUP_STATE_CACHE_TTL_MS,
+          expiresAt: now + ARENA_MATCHUP_STATE_CACHE_TTL_MS,
         };
       }
       return result;
