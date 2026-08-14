@@ -12,6 +12,7 @@ const repoRoot = process.cwd();
 const pgDumpBin = process.env.PG_DUMP_BIN ?? "/opt/homebrew/opt/libpq/bin/pg_dump";
 const psqlBin = process.env.PSQL_BIN ?? "/opt/homebrew/opt/libpq/bin/psql";
 const tmpDumpPath = path.join("/tmp", `minebench-staging-${Date.now()}.sql`);
+const sanitizedDumpPath = `${tmpDumpPath}.sanitized`;
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -88,12 +89,25 @@ function main() {
     normalizedProdUrl,
   ]);
 
-  const sanitizedSql = fs
-    .readFileSync(tmpDumpPath, "utf8")
-    .replace(/^SET transaction_timeout = 0;\n/gm, "")
-    .replace(/^CREATE SCHEMA public;\n/gm, "")
-    .replace(/^ALTER SCHEMA public OWNER TO .*;\n/gm, "");
-  fs.writeFileSync(tmpDumpPath, sanitizedSql, "utf8");
+  // stream-sanitize: dumps can exceed node's max string length
+  const sanitizedFd = fs.openSync(sanitizedDumpPath, "w");
+  try {
+    const sedResult = spawnSync(
+      "sed",
+      [
+        "-e", "/^SET transaction_timeout = 0;$/d",
+        "-e", "/^CREATE SCHEMA public;$/d",
+        "-e", "/^ALTER SCHEMA public OWNER TO /d",
+        tmpDumpPath,
+      ],
+      { stdio: ["ignore", sanitizedFd, "inherit"] },
+    );
+    if (sedResult.status !== 0) {
+      fail(`sed failed with exit code ${sedResult.status ?? 1}`);
+    }
+  } finally {
+    fs.closeSync(sanitizedFd);
+  }
 
   run(psqlBin, [
     normalizedStagingUrl,
@@ -108,7 +122,7 @@ function main() {
     "-v",
     "ON_ERROR_STOP=1",
     "-f",
-    tmpDumpPath,
+    sanitizedDumpPath,
   ]);
 
   console.log("Staging DB refresh complete");
@@ -117,7 +131,9 @@ function main() {
 try {
   main();
 } finally {
-  if (fs.existsSync(tmpDumpPath)) {
-    fs.unlinkSync(tmpDumpPath);
+  for (const tempPath of [tmpDumpPath, sanitizedDumpPath]) {
+    if (fs.existsSync(tempPath)) {
+      fs.unlinkSync(tempPath);
+    }
   }
 }

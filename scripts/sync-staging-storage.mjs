@@ -157,7 +157,7 @@ async function main() {
       "SUPABASE_SERVICE_ROLE_KEY in .env",
       prodEnv.SUPABASE_SERVICE_ROLE_KEY,
     ),
-    bucket: requireValue("SUPABASE_STORAGE_BUCKET in .env", prodEnv.SUPABASE_STORAGE_BUCKET),
+    bucket: (prodEnv.SUPABASE_STORAGE_BUCKET ?? "builds").trim(),
   };
   const target = {
     url: requireValue(
@@ -168,7 +168,7 @@ async function main() {
       "STAGING_SUPABASE_SERVICE_ROLE_KEY in .env.staging.local",
       stagingEnv.STAGING_SUPABASE_SERVICE_ROLE_KEY,
     ),
-    bucket: (stagingEnv.STAGING_SUPABASE_STORAGE_BUCKET ?? source.bucket).trim(),
+    bucket: (stagingEnv.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || source.bucket),
   };
 
   if (target.url === source.url) {
