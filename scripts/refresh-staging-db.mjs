@@ -19,9 +19,12 @@ function parseEnvFile(filePath) {
   return dotenv.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+class RefreshError extends Error {}
+
+// Throw rather than exit so the finally block still removes the dumps: an
+// error path is exactly when a production snapshot must not be left in /tmp
 function fail(message) {
-  console.error(message);
-  process.exit(1);
+  throw new RefreshError(message);
 }
 
 function assertUrl(name, value) {
@@ -43,6 +46,18 @@ function run(command, args, opts = {}) {
   }
 }
 
+// Supabase exposes one project through a direct host and a shared regional
+// pooler host, so hostnames alone cannot decide identity. Mirrors
+// supabaseProjectRefFromDatabaseUrl in lib/db/identity.ts, which a plain .mjs
+// script cannot import.
+function supabaseProjectRef(url) {
+  const user = decodeURIComponent(url.username || "");
+  const pooled = user.match(/^postgres\.([a-z0-9]{16,})$/i);
+  if (pooled) return pooled[1].toLowerCase();
+  const direct = url.hostname.match(/^db\.([a-z0-9]{16,})\.supabase\.(co|com|net)$/i);
+  return direct ? direct[1].toLowerCase() : null;
+}
+
 // Equivalent spellings of one endpoint must not read as different hosts, or
 // the guard below waves through a DROP SCHEMA against production
 function canonicalEndpoint(url) {
@@ -54,6 +69,12 @@ function canonicalEndpoint(url) {
 }
 
 function sameDatabaseEndpoint(a, b) {
+  // the project ref survives the direct/pooled difference, so a production
+  // project named through either endpoint is recognized as production
+  const leftRef = supabaseProjectRef(a);
+  const rightRef = supabaseProjectRef(b);
+  if (leftRef && rightRef) return leftRef === rightRef;
+
   const left = canonicalEndpoint(a);
   const right = canonicalEndpoint(b);
   return (
@@ -148,6 +169,9 @@ function main() {
 
 try {
   main();
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
 } finally {
   for (const tempPath of [tmpDumpPath, sanitizedDumpPath]) {
     if (fs.existsSync(tempPath)) {

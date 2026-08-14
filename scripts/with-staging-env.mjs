@@ -48,6 +48,11 @@ const stagingEnv = {
   SUPABASE_SERVICE_ROLE_KEY: required("STAGING_SUPABASE_SERVICE_ROLE_KEY"),
   SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || sourceBucket,
   MINEBENCH_SITE_URL: required("STAGING_SITE_URL"),
+  // the alpha deployment may carry its own branch-scoped ADMIN_TOKEN; without
+  // this the child inherits production's and every admin call 401s
+  ...(staging.STAGING_ADMIN_TOKEN?.trim()
+    ? { ADMIN_TOKEN: staging.STAGING_ADMIN_TOKEN.trim() }
+    : {}),
   // preview deployments are behind Vercel deployment protection
   ...(staging.STAGING_VERCEL_BYPASS_SECRET?.trim()
     ? { VERCEL_AUTOMATION_BYPASS_SECRET: staging.STAGING_VERCEL_BYPASS_SECRET.trim() }
