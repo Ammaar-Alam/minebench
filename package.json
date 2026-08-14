@@ -50,7 +50,9 @@
     "arena:stream:precompute": "tsx scripts/precompute-arena-stream-artifacts.ts",
     "arena:stream:clear": "tsx scripts/clear-arena-stream-artifacts.ts",
     "arena:jobs:prune": "tsx scripts/prune-arena-job-history.ts",
-    "arena:artifacts:audit": "tsx scripts/audit-arena-artifacts.ts"
+    "arena:artifacts:audit": "tsx scripts/audit-arena-artifacts.ts",
+    "staging:db:refresh": "node scripts/refresh-staging-db.mjs",
+    "staging:storage:sync": "node scripts/sync-staging-storage.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
