@@ -57,7 +57,9 @@ import { validateVoxelBuild } from "../lib/voxel/validate";
 import "dotenv/config";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-const PROD_URL = "https://minebench.ai";
+// Import target. Defaults to production; publication and the staging wrapper
+// point this at the deployment they verified against.
+const SITE_URL = (process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai").replace(/\/+$/, "");
 const DEFAULT_STORAGE_BUCKET = "builds";
 const DEFAULT_STORAGE_PREFIX = "imports";
 
@@ -625,7 +627,7 @@ async function uploadBuildLegacy(
   gzipped: Buffer<ArrayBufferLike>,
   generationTimeMs?: number,
 ): Promise<{ ok: boolean; error?: string }> {
-  const url = new URL(`${PROD_URL}/api/admin/import-build`);
+  const url = new URL(`${SITE_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
@@ -795,7 +797,7 @@ async function finalizeStorageImport(
   ref: BuildStorageReference,
   generationTimeMs?: number,
 ): Promise<{ ok: boolean; buildId?: string; error?: string }> {
-  const url = new URL(`${PROD_URL}/api/admin/import-build`);
+  const url = new URL(`${SITE_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");

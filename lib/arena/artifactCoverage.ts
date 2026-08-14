@@ -91,7 +91,12 @@ export async function probeStorageObjects(refs: readonly ArtifactRef[]): Promise
 }
 
 // Computes the determinable artifact requirements for one build row
-export function expectedArtifactRequirements(row: ArenaBuildArtifactStatusRow): {
+export function expectedArtifactRequirements(
+  row: ArenaBuildArtifactStatusRow,
+  // callers with their own --min-bytes must discover work against that same
+  // threshold, or builds between it and the env default are never selected
+  streamMinBytes?: number,
+): {
   missingCoreMetadata: boolean;
   needsSnapshotCompute: boolean;
   required: ArtifactRequirement[];
@@ -123,8 +128,12 @@ export function expectedArtifactRequirements(row: ArenaBuildArtifactStatusRow): 
     required.push({ kind: "snapshot", variant: "preview", refs: [previewSnapshotRef] });
   }
 
+  const effectiveStreamMinBytes =
+    typeof streamMinBytes === "number" && streamMinBytes > 0
+      ? streamMinBytes
+      : getArenaArtifactMinBytes();
   const streamEligible =
-    checksum != null && estimatedBytes != null && estimatedBytes >= getArenaArtifactMinBytes();
+    checksum != null && estimatedBytes != null && estimatedBytes >= effectiveStreamMinBytes;
   if (streamEligible) {
     for (const variant of ["full", "preview"] as const) {
       const refs = getArenaBuildStreamArtifactFetchRefs(row.id, variant, checksum);
@@ -141,8 +150,12 @@ export function expectedArtifactRequirements(row: ArenaBuildArtifactStatusRow): 
 
 export async function getArenaBuildArtifactStatuses(
   rows: readonly ArenaBuildArtifactStatusRow[],
+  streamMinBytes?: number,
 ): Promise<ArenaBuildArtifactStatus[]> {
-  const expectations = rows.map((row) => ({ row, ...expectedArtifactRequirements(row) }));
+  const expectations = rows.map((row) => ({
+    row,
+    ...expectedArtifactRequirements(row, streamMinBytes),
+  }));
   const allRefs = expectations.flatMap((entry) =>
     entry.required.flatMap((requirement) => requirement.refs),
   );

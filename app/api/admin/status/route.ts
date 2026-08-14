@@ -5,6 +5,7 @@ import { getArenaShownJobStatus } from "@/lib/arena/shownJobs";
 import { getArenaArtifactCoverage } from "@/lib/arena/artifactCoverage";
 import { findCatalogEntryBySlugOrKey } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
+import { supabaseProjectRefFromDatabaseUrl } from "@/lib/db/identity";
 
 export const runtime = "nodejs";
 
@@ -30,6 +31,7 @@ function getDbInfo() {
   try {
     const u = new URL(url);
     return {
+      projectRef: supabaseProjectRefFromDatabaseUrl(url),
       host: u.hostname,
       port: u.port || "5432",
       database: u.pathname.replace(/^\//, "") || "unknown",

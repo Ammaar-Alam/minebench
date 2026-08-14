@@ -9,6 +9,7 @@ import {
 import { getArenaArtifactCoverage } from "@/lib/arena/artifactCoverage";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 import { BENCHMARK_PROMPT_MAP } from "@/lib/benchmark/prompts";
+import { databaseIdentityFromUrl, isSameDatabaseTarget } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
 
 // Model publication: upload the benchmark cohort, run the artifact maintenance
@@ -130,7 +131,8 @@ export async function activatePublishedModel(modelKey: string): Promise<void> {
 export async function assertPublicationTargetsAgree(siteUrl: string): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL;
   if (!databaseUrl) throw new Error("Missing DATABASE_URL for publication");
-  const localHost = new URL(databaseUrl).hostname.toLowerCase();
+  const local = databaseIdentityFromUrl(databaseUrl);
+  if (!local) throw new Error("Could not parse DATABASE_URL for the publication preflight");
 
   const token = process.env.ADMIN_TOKEN;
   if (!token) throw new Error("Missing ADMIN_TOKEN for publication preflight");
@@ -150,15 +152,29 @@ export async function assertPublicationTargetsAgree(siteUrl: string): Promise<vo
     );
   }
 
-  const status = (await resp.json()) as { db?: { host?: string } };
-  const remoteHost = status.db?.host?.toLowerCase();
-  if (!remoteHost) throw new Error("Publication preflight got no database host from the deployment");
-  if (remoteHost !== localHost) {
+  const status = (await resp.json()) as {
+    db?: { projectRef?: string | null; host?: string; port?: string; database?: string };
+  };
+  if (!status.db?.host) {
+    throw new Error("Publication preflight got no database identity from the deployment");
+  }
+  const remote = {
+    projectRef: status.db.projectRef ?? null,
+    host: status.db.host.toLowerCase(),
+    port: status.db.port ?? "5432",
+    database: (status.db.database ?? "postgres").toLowerCase(),
+  };
+
+  if (!isSameDatabaseTarget(local, remote)) {
+    const describe = (id: typeof remote) =>
+      id.projectRef ? `project ${id.projectRef}` : `${id.host}:${id.port}/${id.database}`;
     throw new Error(
-      `Publication target mismatch: uploads go to ${siteUrl} (database ${remoteHost}) ` +
-        `but verification and activation would run against ${localHost}. ` +
+      `Publication target mismatch: uploads go to ${siteUrl} (${describe(remote)}) ` +
+        `but verification and activation would run against ${describe(local)}. ` +
         "Point MINEBENCH_SITE_URL and DATABASE_URL at the same environment.",
     );
   }
-  console.log(`- publication target: ${siteUrl} (database ${remoteHost})`);
+  console.log(
+    `- publication target: ${siteUrl} (${remote.projectRef ?? `${remote.host}:${remote.port}`})`,
+  );
 }

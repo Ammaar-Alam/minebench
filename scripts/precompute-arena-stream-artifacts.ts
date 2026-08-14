@@ -152,7 +152,8 @@ async function main() {
     });
 
     if (opts.missingOnly) {
-      const statuses = await getArenaBuildArtifactStatuses(rows);
+      // derive requirements from the requested threshold, not the env default
+      const statuses = await getArenaBuildArtifactStatuses(rows, opts.minBytes);
       const needsWork = new Set(
         statuses
           .filter((status) =>
@@ -164,18 +165,7 @@ async function main() {
           .map((status) => status.buildId),
       );
       const skipped = rows.length - needsWork.size;
-      // discovery must use the same effective threshold as the processing loop
-      // below, or --min-bytes either starves qualifying builds or fills the
-      // limit with builds that are immediately skipped
-      rows = rows.filter((row) => {
-        if (!needsWork.has(row.id)) return false;
-        const estimatedBytes = estimateArenaBuildBytes({
-          blockCount: row.blockCount,
-          voxelByteSize: row.voxelByteSize,
-          voxelCompressedByteSize: row.voxelCompressedByteSize,
-        });
-        return estimatedBytes != null && estimatedBytes >= opts.minBytes;
-      });
+      rows = rows.filter((row) => needsWork.has(row.id));
       if (!opts.all && rows.length > opts.limit) rows = rows.slice(0, opts.limit);
       if (skipped > 0) console.log(`Skipping ${skipped} build(s) with stream artifacts present.`);
     }

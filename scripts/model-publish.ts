@@ -72,10 +72,11 @@ async function main() {
 
   // Uploads and verification must address the same environment before any
   // write happens; a dry run performs no writes so it can skip the network call
+  const siteUrl = (process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai").replace(/\/+$/, "");
+  // the uploader reads this too, so the checked target is the one it uses
+  process.env.MINEBENCH_SITE_URL = siteUrl;
   if (!opts.dryRun) {
-    await assertPublicationTargetsAgree(
-      process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai",
-    );
+    await assertPublicationTargetsAgree(siteUrl);
   }
 
   // Hard-fail before any step when the local cohort is incomplete
