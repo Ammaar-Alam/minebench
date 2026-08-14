@@ -3,7 +3,11 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { gzipSync } from "node:zlib";
-import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts";
+import {
+  getPreparedArenaBuildMetadataUpdate,
+  pickBuildVariant,
+  prepareArenaBuild,
+} from "../lib/arena/buildArtifacts";
 import { ensureArenaBuildSnapshotArtifacts } from "../lib/arena/buildSnapshotArtifacts";
 import type { ArenaBuildVariant } from "../lib/arena/types";
 
@@ -181,6 +185,17 @@ async function main() {
         }
 
         const result = await ensureArenaBuildSnapshotArtifacts(prepared);
+        // Record what now exists. Coverage treats a marker that disagrees with
+        // voxelSha256 as missing, and the missing-only metadata backfill skips
+        // rows whose checksum and hints are already set, so without this a
+        // stale marker survives its own recomputation and the build stays in
+        // missingBuildIds forever. Writing on the skipped path too clears a
+        // stale marker for builds that need no snapshot at all.
+        await prisma.build.update({
+          where: { id: row.id },
+          data: getPreparedArenaBuildMetadataUpdate(prepared),
+        });
+
         if (result.skipped) {
           skipped += 1;
           console.log(`- skip ${row.id}: snapshot artifacts not needed`);
