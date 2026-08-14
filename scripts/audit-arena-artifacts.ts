@@ -186,6 +186,25 @@ function verifyStreamPayload(
       if (complete) return `stream artifact has a chunk after complete at line ${index + 1}`;
       const blocks = event.blocks;
       if (!Array.isArray(blocks)) return `stream chunk at line ${index + 1} has no blocks array`;
+      // Production trusts the stream's serverValidated flag and skips voxel
+      // validation, gating readiness on array length alone, so malformed or
+      // null entries render as missing or phantom geometry while still
+      // enabling voting. Spot-check entries in every chunk.
+      for (const at of [0, Math.floor(blocks.length / 2), blocks.length - 1]) {
+        if (blocks.length === 0) break;
+        const block = blocks[at] as { x?: unknown; y?: unknown; z?: unknown; type?: unknown } | null;
+        if (!block || typeof block !== "object") {
+          return `stream chunk at line ${index + 1} has a non-object block at ${at}`;
+        }
+        if (
+          typeof block.x !== "number" ||
+          typeof block.y !== "number" ||
+          typeof block.z !== "number" ||
+          typeof block.type !== "string"
+        ) {
+          return `stream chunk at line ${index + 1} has a malformed block at ${at}`;
+        }
+      }
       // chunk indexes are 1-based (iterateArenaBuildChunks yields index + 1)
       if (typeof event.index === "number" && event.index !== seenChunks + 1) {
         return `stream chunk out of order at line ${index + 1} (index ${event.index}, expected ${seenChunks + 1})`;
