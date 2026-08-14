@@ -810,6 +810,31 @@ assert.equal(
   1,
   "a v2 sample must survive ledger validation on reload",
 );
+
+// Gemini reports dynamic thinking as a -1 budget; that sample must survive too
+const dynamicThinkingConfiguration = createBenchmarkRunConfiguration({
+  promptText: "Build prompt for structured",
+  providerRoute: "direct",
+  reasoningOverride: null,
+  requestConfiguration: effectiveRequestConfiguration,
+  acceptedConfiguration: { ...acceptedConfiguration, reasoningMaxTokens: -1 },
+  toolsEnabled: true,
+});
+const dynamicJob: BenchmarkMetricJob = {
+  ...job("structured"),
+  filePath: join(structuredRoot, "uploads", "structured", "structured-gpt-5-6-sol.json"),
+};
+structuredStore.finalizeSuccess(dynamicJob, castleJson, {
+  inferenceTimeMs: 45_000,
+  attemptCount: 1,
+  acceptedOutputTokens: 128_000,
+  configuration: dynamicThinkingConfiguration,
+});
+assert.equal(
+  structuredStore.summarize([dynamicJob]).get("openai_gpt_5_6_sol")?.configurationSampleCount,
+  1,
+  "a dynamic-thinking (-1) budget must not invalidate the sample",
+);
 assert.equal(structuredSummary?.configurationIsConsistent, true);
 
 console.log("batch benchmark metric lifecycle checks passed");

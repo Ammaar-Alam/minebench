@@ -174,6 +174,9 @@ export function createBenchmarkRunConfiguration(args: {
   };
 }
 
+// Gemini represents dynamic thinking as a -1 budget rather than a token count
+const DYNAMIC_REASONING_BUDGET = -1;
+
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -204,7 +207,11 @@ function isAcceptedConfigurationRecord(
   return (
     typeof record.apiMode === "string" &&
     isPositiveInteger(record.maxOutputTokens) &&
-    (record.reasoningMaxTokens === undefined || isPositiveInteger(record.reasoningMaxTokens)) &&
+    // -1 is Gemini's dynamic-thinking sentinel, which providers pass through
+    // verbatim; rejecting it would silently drop the whole sample on reload
+    (record.reasoningMaxTokens === undefined ||
+      record.reasoningMaxTokens === DYNAMIC_REASONING_BUDGET ||
+      isPositiveInteger(record.reasoningMaxTokens)) &&
     typeof record.thinkingMode === "string" &&
     (typeof record.temperature === "number" ||
       record.temperature === "default" ||
