@@ -191,10 +191,23 @@ async function main() {
         // stale marker survives its own recomputation and the build stays in
         // missingBuildIds forever. Writing on the skipped path too clears a
         // stale marker for builds that need no snapshot at all.
-        await prisma.build.update({
-          where: { id: row.id },
+        //
+        // Guarded on the checksum observed when the row was loaded: an
+        // import-build overwrite can land while this build is being prepared,
+        // and an unconditional write would restore the previous checksum,
+        // hints, and snapshot over the newly stored payload, leaving a row that
+        // coverage could approve against the superseded artifact.
+        const marked = await prisma.build.updateMany({
+          where: { id: row.id, voxelSha256: row.voxelSha256 },
           data: getPreparedArenaBuildMetadataUpdate(prepared),
         });
+        if (marked.count === 0) {
+          skipped += 1;
+          console.log(
+            `- skip ${row.id}: payload changed during maintenance, leaving it for the next pass`,
+          );
+          continue;
+        }
 
         if (result.skipped) {
           skipped += 1;
