@@ -576,6 +576,7 @@ async function generateAndSave(
             providerRoute: result.providerRoute,
             reasoningOverride: reasoning,
             requestConfiguration: result.requestConfiguration,
+            acceptedConfiguration: result.acceptedRequestConfiguration,
             toolsEnabled: enableTools,
           })
         : undefined,

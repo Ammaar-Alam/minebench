@@ -37,6 +37,7 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import type {
   AcceptedProviderRequestConfiguration,
+  AcceptedRequestConfigurationRecord,
   ProviderApiKeys,
   ProviderTelemetryCallbacks,
 } from "@/lib/ai/types";
@@ -469,6 +470,7 @@ export type GenerateVoxelBuildResult =
       acceptedOutputTokens?: number;
       providerRoute?: "direct" | "openrouter";
       requestConfiguration?: string;
+      acceptedRequestConfiguration?: AcceptedRequestConfigurationRecord;
       rawText: string;
     }
   | {
@@ -479,6 +481,7 @@ export type GenerateVoxelBuildResult =
       acceptedOutputTokens?: number;
       providerRoute?: "direct" | "openrouter";
       requestConfiguration?: string;
+      acceptedRequestConfiguration?: AcceptedRequestConfigurationRecord;
     };
 
 // call the direct provider (OpenAI, Anthropic, etc.)
@@ -713,6 +716,9 @@ async function providerGenerateText(args: {
   onAcceptedOutputTokens?: (tokens: number) => void;
   onProviderRoute?: (route: "direct" | "openrouter") => void;
   onAcceptedRequestConfiguration?: (configuration: string) => void;
+  onAcceptedStructuredRequestConfiguration?: (
+    configuration: AcceptedRequestConfigurationRecord,
+  ) => void;
   onProviderRequest?: () => void;
 }): Promise<{ text: string }> {
   const { model } = args;
@@ -853,6 +859,11 @@ async function providerGenerateText(args: {
           args.onAcceptedRequestConfiguration?.(
             acceptedProviderRequestConfigurationLine(configuration),
           );
+          args.onAcceptedStructuredRequestConfiguration?.({
+            ...configuration,
+            providerRoute: "direct",
+            resolvedModelId: model.modelId,
+          });
         },
       });
     } catch (directErr) {
@@ -944,6 +955,11 @@ async function providerGenerateText(args: {
       args.onAcceptedRequestConfiguration?.(
         acceptedProviderRequestConfigurationLine(configuration),
       );
+      args.onAcceptedStructuredRequestConfiguration?.({
+        ...configuration,
+        providerRoute: "openrouter",
+        resolvedModelId: model.openRouterModelId ?? model.modelId,
+      });
     },
   });
 }
@@ -1060,6 +1076,7 @@ export async function generateVoxelBuild(
   let acceptedOutputTokens: number | undefined;
   let providerRoute: "direct" | "openrouter" | undefined;
   let requestConfiguration: string | undefined;
+  let acceptedRequestConfiguration: AcceptedRequestConfigurationRecord | undefined;
   let callbackDurationMs = 0;
   const start = performance.now();
   const invokeCallback = <Args extends unknown[]>(
@@ -1121,6 +1138,9 @@ export async function generateVoxelBuild(
         },
         onAcceptedRequestConfiguration: (configuration) => {
           requestConfiguration = configuration;
+        },
+        onAcceptedStructuredRequestConfiguration: (configuration) => {
+          acceptedRequestConfiguration = configuration;
         },
         onProviderRequest: () => {
           invokeCallback(params.onProviderRequest, attempt);
@@ -1228,6 +1248,7 @@ export async function generateVoxelBuild(
         acceptedOutputTokens,
         providerRoute,
         requestConfiguration,
+        acceptedRequestConfiguration,
         rawText: text,
       };
     } catch (err) {
@@ -1255,6 +1276,7 @@ export async function generateVoxelBuild(
     acceptedOutputTokens,
     providerRoute,
     requestConfiguration,
+    acceptedRequestConfiguration,
   };
 }
 

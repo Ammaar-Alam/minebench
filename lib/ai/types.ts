@@ -26,6 +26,13 @@ export type AcceptedProviderRequestConfiguration = {
   responseFormat: string;
 };
 
+// The provider-accepted configuration plus routing identity, recorded as
+// structured research provenance alongside the prose trace line
+export type AcceptedRequestConfigurationRecord = AcceptedProviderRequestConfiguration & {
+  providerRoute: "direct" | "openrouter";
+  resolvedModelId: string;
+};
+
 export type ProviderTelemetryCallbacks = {
   // Fired immediately before each outbound generation request
   onProviderRequest?: () => void;
