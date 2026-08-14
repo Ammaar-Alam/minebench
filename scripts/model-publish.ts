@@ -9,6 +9,7 @@ import {
   missingCohortArtifacts,
   resolvePublicationModel,
   runPublicationStep,
+  stagePublishedModel,
   verifyPublicationCoverage,
   type PublicationStepResult,
 } from "../lib/benchmark/publication";
@@ -116,6 +117,19 @@ async function main() {
   // Upload is an idempotent reconcile: storage upserts plus import-build
   // overwrite, and it already pre-writes stream artifacts for large builds
   if (!opts.skipUpload) {
+    // Take an already-live model off public surfaces before its builds are
+    // replaced. Without this the cohort is swapped underneath active traffic
+    // and a failure part-way leaves votes landing on a mixed old/new cohort.
+    if (!opts.dryRun) {
+      const wasLive = await stagePublishedModel(entry.key);
+      if (wasLive) {
+        console.log(
+          `- staged ${entry.displayName} before overwriting its cohort; ` +
+            "it is reactivated after verification, and stays staged if publication fails",
+        );
+      }
+    }
+
     // Scoped to the cohort prompts: batch-generate derives its prompt list
     // from every uploads/ directory as well as the benchmark map, so a model
     // filter alone would upload custom-prompt artifacts with overwrite=1 and

@@ -123,6 +123,20 @@ export async function verifyPublicationCoverage(modelKey: string) {
   return { coverage, complete, missingPromptSlugs };
 }
 
+// Republishing overwrites the cohort one build at a time while import-build
+// deliberately leaves an existing model's enabled flag alone. Staging the model
+// first keeps a half-replaced cohort off public surfaces, which is the same
+// guarantee a first publication gets. Returns whether it was live before.
+export async function stagePublishedModel(modelKey: string): Promise<boolean> {
+  const model = await prisma.model.findUnique({
+    where: { key: modelKey },
+    select: { enabled: true },
+  });
+  if (!model?.enabled) return false;
+  await prisma.model.update({ where: { key: modelKey }, data: { enabled: false } });
+  return true;
+}
+
 export async function activatePublishedModel(modelKey: string): Promise<void> {
   await prisma.model.update({ where: { key: modelKey }, data: { enabled: true } });
 }
