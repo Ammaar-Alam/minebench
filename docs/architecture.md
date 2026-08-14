@@ -16,7 +16,7 @@ erDiagram
     Model ||--o{ Matchup : "as A or B"
     Build ||--o{ Matchup : "as A or B"
     Matchup ||--o{ Vote : "receives"
-    Vote ||--|| ArenaVoteJob : "queues"
+    Vote ||--o| ArenaVoteJob : "queues"
     Model ||--o{ ArenaCoverageModelPrompt : "decisive votes"
     Prompt ||--o{ ArenaCoverageModelPrompt : ""
     Model ||--o{ ArenaCoveragePair : "as low or high"
@@ -24,7 +24,6 @@ erDiagram
 
     Model {
         string key UK
-        string slug "derived from catalog"
         boolean enabled "activation boundary"
         float eloRating
         float glickoRd
@@ -44,7 +43,9 @@ erDiagram
         string voxelSha256 "content checksum, addresses artifacts"
         json arenaBuildHints "delivery class, variants, sizes"
         json arenaSnapshotPreview "LEGACY: leaving Postgres (Phase 2.2)"
+        string arenaSnapshotPreviewChecksum "LEGACY: leaving Postgres (Phase 2.2)"
         json arenaSnapshotFull "LEGACY: leaving Postgres (Phase 2.2)"
+        string arenaSnapshotFullChecksum "LEGACY: leaving Postgres (Phase 2.2)"
     }
     Vote {
         string sessionId

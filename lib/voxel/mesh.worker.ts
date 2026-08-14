@@ -341,7 +341,7 @@ function prepareMeshData(
     }
   }
 
-  // only visible blocks are materialized as objects; hidden volume stays in the typed arrays
+  // materialize one temporary block at a time and retain only visible blocks
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const type = typeNames[typeIds[i]];
     if (!type || !allowed.has(type)) continue;

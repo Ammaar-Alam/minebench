@@ -2,7 +2,6 @@
 
 // Measures the proposed binary v4 build encoding against the current
 // gzip-JSON v3 shape on real cohort builds. Read-only; writes nothing.
-// See .agents/binary-v4-rfc-2026-08-13.md for the format spec and results.
 
 import { readFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
