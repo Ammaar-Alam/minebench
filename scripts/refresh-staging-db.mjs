@@ -87,6 +87,16 @@ function sameDatabaseEndpoint(a, b) {
   );
 }
 
+// Command lines are world-visible via ps, so the password must not travel as
+// an argument. The URL is passed without credentials and the password is
+// supplied to the child through PGPASSWORD instead.
+function splitPostgresCredentials(urlString) {
+  const url = new URL(urlString);
+  const password = decodeURIComponent(url.password || "");
+  url.password = "";
+  return { safeUrl: url.toString(), password };
+}
+
 function normalizePostgresUrlForCli(urlString) {
   const url = new URL(urlString);
   url.searchParams.delete("schema");
@@ -120,8 +130,14 @@ function main() {
   console.log(`Staging DB host: ${stagingUrl.hostname}:${stagingUrl.port || "<default>"}`);
   console.log(`Writing temporary snapshot to ${tmpDumpPath}`);
 
-  const normalizedProdUrl = normalizePostgresUrlForCli(prodDirectUrl);
-  const normalizedStagingUrl = normalizePostgresUrlForCli(stagingDirectUrl);
+  const prodCli = splitPostgresCredentials(normalizePostgresUrlForCli(prodDirectUrl));
+  const stagingCli = splitPostgresCredentials(normalizePostgresUrlForCli(stagingDirectUrl));
+  const prodEnvForCli = prodCli.password
+    ? { ...process.env, PGPASSWORD: prodCli.password }
+    : process.env;
+  const stagingEnvForCli = stagingCli.password
+    ? { ...process.env, PGPASSWORD: stagingCli.password }
+    : process.env;
 
   // pre-create the target so pg_dump writes into an owner-only file
   fs.closeSync(fs.openSync(tmpDumpPath, "w", 0o600));
@@ -132,8 +148,8 @@ function main() {
     "--schema=public",
     "--file",
     tmpDumpPath,
-    normalizedProdUrl,
-  ]);
+    prodCli.safeUrl,
+  ], { env: prodEnvForCli });
 
   // stream-sanitize: dumps can exceed node's max string length
   const sanitizedFd = fs.openSync(sanitizedDumpPath, "w", 0o600);
@@ -156,20 +172,20 @@ function main() {
   }
 
   run(psqlBin, [
-    normalizedStagingUrl,
+    stagingCli.safeUrl,
     "-v",
     "ON_ERROR_STOP=1",
     "-c",
     "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",
-  ]);
+  ], { env: stagingEnvForCli });
 
   run(psqlBin, [
-    normalizedStagingUrl,
+    stagingCli.safeUrl,
     "-v",
     "ON_ERROR_STOP=1",
     "-f",
     sanitizedDumpPath,
-  ]);
+  ], { env: stagingEnvForCli });
 
   console.log("Staging DB refresh complete");
 }
