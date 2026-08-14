@@ -1246,6 +1246,8 @@ Upload notes:
 
     console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
     if (stopSignal) process.exitCode = 130;
+    // a partial run must not read as success to callers such as model:publish
+    else if (failed > 0) process.exitCode = 1;
   } else if (missing.length > 0 && !opts.generate) {
     console.log("\n💡 Use --generate to generate missing builds.");
   } else if (missing.length === 0) {

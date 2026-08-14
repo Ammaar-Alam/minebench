@@ -138,7 +138,9 @@ async function main() {
     let rows = await prisma.build.findMany({
       where: arenaMaintenanceWhere(opts),
       orderBy: { createdAt: "desc" },
-      take: opts.all ? undefined : opts.limit,
+      // with --missing-only the limit is applied after status discovery, so a
+      // complete newest prefix cannot hide older builds that still need work
+      ...(opts.all || opts.missingOnly ? {} : { take: opts.limit }),
       select: {
         ...ARTIFACT_STATUS_BUILD_SELECT,
         gridSize: true,
@@ -163,6 +165,7 @@ async function main() {
       );
       const skipped = rows.length - needsWork.size;
       rows = rows.filter((row) => needsWork.has(row.id));
+      if (!opts.all && rows.length > opts.limit) rows = rows.slice(0, opts.limit);
       if (skipped > 0) console.log(`Skipping ${skipped} build(s) with stream artifacts present.`);
     }
 

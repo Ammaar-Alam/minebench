@@ -34,7 +34,11 @@ assert.equal(
 const regularModel = getModelByKey("anthropic_claude_sonnet_5");
 const regularModelUpsert = modelCatalogSeedUpsertArgs(regularModel);
 
-assert.equal(regularModelUpsert.create.enabled, true);
+assert.equal(
+  regularModelUpsert.create.enabled,
+  false,
+  "seed must create models staged even when the catalog marks them enabled",
+);
 assert.equal(
   Object.hasOwn(regularModelUpsert.update, "enabled"),
   false,

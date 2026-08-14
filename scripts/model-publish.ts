@@ -116,7 +116,8 @@ async function main() {
   runStep("stream precompute", "precompute-arena-stream-artifacts.ts", scope, true);
 
   console.log("\n== verification");
-  const { coverage, complete } = await verifyPublicationCoverage(entry.key);
+  const { coverage, complete, missingPromptSlugs } = await verifyPublicationCoverage(entry.key);
+  console.log(`- cohort prompts without a build: ${missingPromptSlugs.length}`);
   console.log(`- cohort builds needing work: ${coverage.missingBuildIds?.length ?? "unknown"}`);
   console.log(`- missing core metadata: ${coverage.buildsMissingCoreMetadata ?? "unknown"}`);
   console.log(`- missing snapshot artifacts: ${coverage.snapshotMissing ?? "unknown"}`);
@@ -131,6 +132,9 @@ async function main() {
       return;
     }
     console.error("\nVerification incomplete; model stays staged. Re-run to reconcile.");
+    if (missingPromptSlugs.length > 0) {
+      console.error(`Prompts with no imported build: ${missingPromptSlugs.join(", ")}`);
+    }
     if (coverage.missingBuildIds && coverage.missingBuildIds.length > 0) {
       console.error(`Builds needing work: ${coverage.missingBuildIds.join(", ")}`);
     }

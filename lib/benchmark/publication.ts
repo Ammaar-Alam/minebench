@@ -7,6 +7,8 @@ import {
   type ModelCatalogEntry,
 } from "@/lib/ai/modelCatalog";
 import { getArenaArtifactCoverage } from "@/lib/arena/artifactCoverage";
+import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
+import { BENCHMARK_PROMPT_MAP } from "@/lib/benchmark/prompts";
 import { prisma } from "@/lib/prisma";
 
 // Model publication: upload the benchmark cohort, run the artifact maintenance
@@ -88,15 +90,32 @@ export function runPublicationStep(opts: {
   };
 }
 
-// Verification green means: every cohort build has core metadata and every
-// policy-required artifact object exists
+// Verification green means: the model has a build for every prompt in the
+// cohort, every one of those builds has core metadata, and every
+// policy-required artifact object exists. Artifact coverage alone is not
+// enough, because an import that never landed leaves no row to inspect and
+// would otherwise read as a clean, empty result.
 export async function verifyPublicationCoverage(modelKey: string) {
   const coverage = await getArenaArtifactCoverage([modelKey]);
+  const expectedPromptSlugs = Object.keys(BENCHMARK_PROMPT_MAP);
+  const builtPromptTexts = new Set(
+    (
+      await prisma.build.findMany({
+        where: arenaCohortBuildWhere([modelKey]),
+        select: { prompt: { select: { text: true } } },
+      })
+    ).map((row) => row.prompt.text),
+  );
+  const missingPromptSlugs = expectedPromptSlugs.filter(
+    (slug) => !builtPromptTexts.has(BENCHMARK_PROMPT_MAP[slug]),
+  );
+
   const complete =
     coverage.error == null &&
     coverage.missingBuildIds != null &&
-    coverage.missingBuildIds.length === 0;
-  return { coverage, complete };
+    coverage.missingBuildIds.length === 0 &&
+    missingPromptSlugs.length === 0;
+  return { coverage, complete, missingPromptSlugs };
 }
 
 export async function activatePublishedModel(modelKey: string): Promise<void> {

@@ -27,7 +27,10 @@ export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
       provider: m.provider,
       modelId: m.modelId,
       displayName: m.displayName,
-      enabled: m.enabled,
+      // Seeding never activates a model, so a freshly created row starts
+      // staged even when the catalog marks it enabled; publish verification
+      // is the only path that puts a model on public surfaces
+      enabled: false,
       isBaseline: false,
       ...INITIAL_RATING_FIELDS,
     },
