@@ -43,6 +43,24 @@ function run(command, args, opts = {}) {
   }
 }
 
+// Equivalent spellings of one endpoint must not read as different hosts, or
+// the guard below waves through a DROP SCHEMA against production
+function canonicalEndpoint(url) {
+  return {
+    host: url.hostname.trim().toLowerCase().replace(/\.$/, ""),
+    port: url.port || "5432",
+    database: decodeURIComponent(url.pathname.replace(/^\/+/, "")).toLowerCase(),
+  };
+}
+
+function sameDatabaseEndpoint(a, b) {
+  const left = canonicalEndpoint(a);
+  const right = canonicalEndpoint(b);
+  return (
+    left.host === right.host && left.port === right.port && left.database === right.database
+  );
+}
+
 function normalizePostgresUrlForCli(urlString) {
   const url = new URL(urlString);
   url.searchParams.delete("schema");
@@ -68,8 +86,8 @@ function main() {
   if (["localhost", "127.0.0.1"].includes(prodUrl.hostname)) {
     fail("Refusing to snapshot: .env points at localhost, not the production DB");
   }
-  if (stagingUrl.hostname === prodUrl.hostname && stagingUrl.port === prodUrl.port) {
-    fail("Refusing to restore: staging host matches the production host");
+  if (sameDatabaseEndpoint(prodUrl, stagingUrl)) {
+    fail("Refusing to restore: staging resolves to the same database endpoint as production");
   }
 
   console.log(`Production DB host: ${prodUrl.hostname}`);
