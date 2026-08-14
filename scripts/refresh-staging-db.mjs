@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { spawnSync } from "node:child_process";
 import dotenv from "dotenv";
 
@@ -11,8 +12,12 @@ import dotenv from "dotenv";
 const repoRoot = process.cwd();
 const pgDumpBin = process.env.PG_DUMP_BIN ?? "/opt/homebrew/opt/libpq/bin/pg_dump";
 const psqlBin = process.env.PSQL_BIN ?? "/opt/homebrew/opt/libpq/bin/psql";
-const tmpDumpPath = path.join("/tmp", `minebench-staging-${Date.now()}.sql`);
-const sanitizedDumpPath = `${tmpDumpPath}.sanitized`;
+// A production dump must not be world-readable while the refresh runs, and
+// deleting it afterwards does not undo that exposure. mkdtemp creates the
+// directory as 0700 for this user only, and the files inside are opened 0600.
+const tmpDumpDir = fs.mkdtempSync(path.join(os.tmpdir(), "minebench-staging-"));
+const tmpDumpPath = path.join(tmpDumpDir, "production.sql");
+const sanitizedDumpPath = path.join(tmpDumpDir, "production.sanitized.sql");
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -118,6 +123,8 @@ function main() {
   const normalizedProdUrl = normalizePostgresUrlForCli(prodDirectUrl);
   const normalizedStagingUrl = normalizePostgresUrlForCli(stagingDirectUrl);
 
+  // pre-create the target so pg_dump writes into an owner-only file
+  fs.closeSync(fs.openSync(tmpDumpPath, "w", 0o600));
   run(pgDumpBin, [
     "--format=plain",
     "--no-owner",
@@ -129,7 +136,7 @@ function main() {
   ]);
 
   // stream-sanitize: dumps can exceed node's max string length
-  const sanitizedFd = fs.openSync(sanitizedDumpPath, "w");
+  const sanitizedFd = fs.openSync(sanitizedDumpPath, "w", 0o600);
   try {
     const sedResult = spawnSync(
       "sed",
@@ -177,5 +184,8 @@ try {
     if (fs.existsSync(tempPath)) {
       fs.unlinkSync(tempPath);
     }
+  }
+  if (fs.existsSync(tmpDumpDir)) {
+    fs.rmSync(tmpDumpDir, { recursive: true, force: true });
   }
 }
