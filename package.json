@@ -52,7 +52,10 @@
     "arena:jobs:prune": "tsx scripts/prune-arena-job-history.ts",
     "arena:artifacts:audit": "tsx scripts/audit-arena-artifacts.ts",
     "staging:db:refresh": "node scripts/refresh-staging-db.mjs",
-    "staging:storage:sync": "node scripts/sync-staging-storage.mjs"
+    "staging:storage:sync": "node scripts/sync-staging-storage.mjs",
+    "staging:run": "node scripts/with-staging-env.mjs",
+    "staging:publish": "node scripts/with-staging-env.mjs tsx scripts/model-publish.ts",
+    "staging:prisma:migrate": "node scripts/with-staging-env.mjs prisma migrate deploy"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

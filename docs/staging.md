@@ -57,6 +57,40 @@ migration.
 4. Watch the alpha deployment logs for `arena metadata heal` and
    `arena snapshot db fallback` lines when validating delivery changes.
 
+## Previewing a new model before it goes public
+
+A newly benchmarked model can be published into alpha only, so its builds and
+leaderboard position can be reviewed privately before production sees them.
+
+```bash
+pnpm staging:publish --model <slug>     # publish into alpha only
+```
+
+This runs the same publish pipeline against the alpha database, bucket, and
+deployment: upload, artifact maintenance, coverage verification, metrics, then
+activation. The model is live on the alpha site and absent from production.
+
+Review it there, then publish for real when ready:
+
+```bash
+pnpm model:publish --model <slug>       # publish to production
+```
+
+The second run reads the same `uploads/` files and produces byte-identical
+checksum-addressed artifacts, so what production serves is what was reviewed.
+Ratings do not carry over: alpha votes stay in alpha, and the production model
+starts from the standard baseline.
+
+Merging the model's code PR to `master` on its own does not expose it — a
+catalog entry seeds as disabled, and only a publish activates it.
+
+Any command can be pointed at alpha the same way:
+
+```bash
+pnpm staging:run tsx scripts/audit-arena-artifacts.ts --deep --limit 25
+pnpm staging:prisma:migrate
+```
+
 ## Promotion
 
 Alpha is always `master` plus the commits under test, so promotion is a plain
