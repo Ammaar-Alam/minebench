@@ -457,17 +457,14 @@ export async function GET(
               safeClose();
               return;
             }
-            if (marked) {
-              invalidateArenaBuildMeta(buildId);
-              // A snapshot-class build reaches this route only after its snapshot
-              // artifact was missing. The matchup healer cannot cover that case:
-              // when only the full object is absent it still serves the preview
-              // artifact, so no live prepare happens there and the full snapshot
-              // would stay missing while every full hydration retried and fell
-              // back to this stream.
-              void healArenaBuildSnapshotArtifactsOnce(prepared);
-            }
+            if (marked) invalidateArenaBuildMeta(buildId);
           }
+
+          // Reaching this route at all means the snapshot artifact was missing,
+          // so heal on every fallback rather than only the first prepare: the
+          // prepared cache has no TTL, and gating on it meant a failed upload
+          // was never retried. The success set makes repeat calls no-ops.
+          void healArenaBuildSnapshotArtifactsOnce(prepared);
 
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {
             send({

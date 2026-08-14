@@ -793,10 +793,9 @@ export async function GET(req: Request) {
   let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
   let persistedInitialBuildA: ArenaMatchup["a"]["build"] | null = null;
   let persistedInitialBuildB: ArenaMatchup["b"]["build"] | null = null;
-  // Only builds that actually reached a live prepare are missing an artifact.
-  // A warm cache hit proves nothing about storage, and healing it would
-  // re-upload multi-megabyte snapshots on ordinary matchup traffic.
-  const livePreparedBuildIds = new Set<string>();
+  // Builds whose snapshot artifact was absent for this request; healing is
+  // deduped by the success set rather than by whether we prepared here.
+  const artifactMissBuildIds = new Set<string>();
   const prepareStartedAt = performance.now();
   if (shouldPrepareA || shouldPrepareB) {
     preparedA = shouldPrepareA && checksumA ? getCachedPreparedArenaBuild(buildA.id, checksumA) : null;
@@ -847,11 +846,15 @@ export async function GET(req: Request) {
           : Promise.resolve(null),
       ]);
 
-      if (shouldPrepareA && !preparedA && !persistedInitialBuildA && buildAForPrepare) {
-        livePreparedBuildIds.add(buildA.id);
+      // An absent initial snapshot means the artifact was missing, whether or
+      // not the prepare came from cache. Healing keys off the miss rather than
+      // the prepare so a failed upload is retried on the next matchup; the
+      // success set keeps warm traffic from re-uploading.
+      if (shouldPrepareA && !persistedInitialBuildA && (buildAForPrepare || preparedA)) {
+        artifactMissBuildIds.add(buildA.id);
       }
-      if (shouldPrepareB && !preparedB && !persistedInitialBuildB && buildBForPrepare) {
-        livePreparedBuildIds.add(buildB.id);
+      if (shouldPrepareB && !persistedInitialBuildB && (buildBForPrepare || preparedB)) {
+        artifactMissBuildIds.add(buildB.id);
       }
 
       [preparedA, preparedB] = await Promise.all([
@@ -958,7 +961,7 @@ export async function GET(req: Request) {
           // build route that would upload the missing artifact. Restricted to
           // builds that live-prepared after an artifact miss, since ensure
           // upserts unconditionally and warm traffic would re-upload snapshots.
-          if (livePreparedBuildIds.has(prepared.buildId)) {
+          if (artifactMissBuildIds.has(prepared.buildId)) {
             await healArenaBuildSnapshotArtifactsOnce(prepared);
           }
         }),

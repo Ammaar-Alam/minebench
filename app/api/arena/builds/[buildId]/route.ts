@@ -330,6 +330,16 @@ export async function GET(
 
   const cachedJsonResponse = jsonCacheKey ? getCachedJsonResponseByKey(jsonCacheKey) : null;
   if (cachedJsonResponse) {
+    // This body exists because the artifact was missing when it was built, and
+    // returning it short-circuits the heal in the after() hook below. Re-arm
+    // from the prepared cache so a previously failed upload still retries; the
+    // success set makes this a no-op once the artifact exists.
+    const cachedPrepared = getCachedPreparedArenaBuild(buildId, storedChecksum);
+    if (cachedPrepared) {
+      after(async () => {
+        await healArenaBuildSnapshotArtifactsOnce(cachedPrepared);
+      });
+    }
     timing.end("total", requestStartedAt);
     const headers = createJsonHeaders({
       byteLength: cachedJsonResponse.bytes.byteLength,
