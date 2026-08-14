@@ -13,6 +13,7 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
+  ensureArenaBuildSnapshotArtifacts,
   fetchArenaBuildSnapshotArtifactPayload,
 } from "@/lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
@@ -940,7 +941,14 @@ export async function GET(req: Request) {
     after(async () => {
       await Promise.all(
         preparedForPersistence.map(async (prepared) => {
-          await persistPreparedArenaBuildMetadata(prepared).catch(() => false);
+          const persisted = await persistPreparedArenaBuildMetadata(prepared).catch(() => false);
+          if (!persisted) return;
+          // An inlined build is answered here, so the client never visits the
+          // build route that would upload the missing artifact. Without this,
+          // every cold matchup repeats the same miss and full payload parse.
+          await ensureArenaBuildSnapshotArtifacts(prepared).catch((err) => {
+            console.warn("arena snapshot artifact heal (matchup) failed", err);
+          });
         }),
       );
     });
