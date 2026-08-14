@@ -123,21 +123,72 @@ function verifyStreamPayload(
   const lines = Buffer.from(bytes).toString("utf8").split("\n").filter(Boolean);
   if (lines.length === 0) return "stream artifact is empty";
 
-  let hello: { type?: unknown; buildId?: unknown; variant?: unknown; checksum?: unknown };
-  let last: { type?: unknown };
-  try {
-    hello = JSON.parse(lines[0]);
-    last = JSON.parse(lines[lines.length - 1]);
-  } catch {
-    return "stream artifact contains invalid ndjson";
+  // Every event is parsed, not just the first and last: a truncated or
+  // malformed middle chunk still leaves a valid hello and complete pair, and
+  // clients reject the artifact on the block total. Checking the ends only
+  // would let this audit pass artifacts production falls back on.
+  let hello: {
+    type?: unknown;
+    buildId?: unknown;
+    variant?: unknown;
+    checksum?: unknown;
+    totalBlocks?: unknown;
+    chunkCount?: unknown;
+  } | null = null;
+  let complete: { type?: unknown; totalBlocks?: unknown } | null = null;
+  let seenBlocks = 0;
+  let seenChunks = 0;
+
+  for (const [index, line] of lines.entries()) {
+    let event: Record<string, unknown>;
+    try {
+      event = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      return `stream artifact has invalid ndjson at line ${index + 1}`;
+    }
+
+    if (index === 0) {
+      if (event.type !== "hello") return "stream artifact does not start with a hello event";
+      hello = event;
+      continue;
+    }
+    if (event.type === "chunk") {
+      if (complete) return `stream artifact has a chunk after complete at line ${index + 1}`;
+      const blocks = event.blocks;
+      if (!Array.isArray(blocks)) return `stream chunk at line ${index + 1} has no blocks array`;
+      // chunk indexes are 1-based (iterateArenaBuildChunks yields index + 1)
+      if (typeof event.index === "number" && event.index !== seenChunks + 1) {
+        return `stream chunk out of order at line ${index + 1} (index ${event.index}, expected ${seenChunks + 1})`;
+      }
+      seenBlocks += blocks.length;
+      seenChunks += 1;
+      continue;
+    }
+    if (event.type === "complete") {
+      complete = event;
+      continue;
+    }
   }
-  if (hello.type !== "hello") return "stream artifact does not start with a hello event";
+
+  if (!hello) return "stream artifact has no hello event";
   if (hello.buildId !== buildId) return `stream hello buildId mismatch (${String(hello.buildId)})`;
   if (hello.variant !== variant) return `stream hello variant mismatch (${String(hello.variant)})`;
   if (expectedChecksum && hello.checksum !== expectedChecksum) {
     return `stream hello checksum mismatch (${String(hello.checksum)})`;
   }
-  if (last.type !== "complete") return "stream artifact does not end with a complete event";
+  if (!complete) return "stream artifact does not end with a complete event";
+
+  const announced = typeof hello.totalBlocks === "number" ? hello.totalBlocks : null;
+  if (announced != null && announced !== seenBlocks) {
+    return `stream block total mismatch (hello ${announced}, chunks ${seenBlocks})`;
+  }
+  const completed = typeof complete.totalBlocks === "number" ? complete.totalBlocks : null;
+  if (completed != null && completed !== seenBlocks) {
+    return `stream complete total mismatch (complete ${completed}, chunks ${seenBlocks})`;
+  }
+  if (typeof hello.chunkCount === "number" && hello.chunkCount !== seenChunks) {
+    return `stream chunk count mismatch (hello ${hello.chunkCount}, seen ${seenChunks})`;
+  }
   return null;
 }
 
