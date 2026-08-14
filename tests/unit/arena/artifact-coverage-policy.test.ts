@@ -12,7 +12,7 @@ async function main() {
   const {
     ARENA_BUILD_DERIVED_METADATA_RESET,
     getArenaBuildPayloadIdentity,
-    getPreparedArenaBuildMetadataUpdate,
+    getPreparedArenaBuildCoreMetadataUpdate,
     parsePersistedArenaBuildMetadata,
     prepareArenaBuildFromBuild,
   } = await import("../../../lib/arena/buildArtifacts");
@@ -33,8 +33,6 @@ async function main() {
       initialEstimatedBytes: 1_700_000,
       fullEstimatedBytes: 20_000_000,
     },
-    arenaSnapshotPreviewChecksum: null,
-    arenaSnapshotFullChecksum: null,
   });
   const streamRequirements = expectations.required.filter(
     (requirement) => requirement.kind === "stream",
@@ -77,8 +75,6 @@ async function main() {
       initialEstimatedBytes: 3_000_000,
       fullEstimatedBytes: 3_000_000,
     },
-    arenaSnapshotPreviewChecksum: null,
-    arenaSnapshotFullChecksum: checksum,
   });
   const fullSnapshotRequirements = persistedSnapshotClass.required.filter(
     (requirement) => requirement.kind === "snapshot" && requirement.variant === "full",
@@ -106,8 +102,6 @@ async function main() {
       initialEstimatedBytes: 1_700_000,
       fullEstimatedBytes: 20_000_000,
     },
-    arenaSnapshotPreviewChecksum: null,
-    arenaSnapshotFullChecksum: null,
   });
   assert.equal(malformedChecksum.missingCoreMetadata, true);
   assert.equal(malformedChecksum.required.length, 0);
@@ -119,8 +113,6 @@ async function main() {
     voxelCompressedByteSize: 500,
     voxelSha256: checksum,
     arenaBuildHints: { deliveryClass: "snapshot" },
-    arenaSnapshotPreviewChecksum: null,
-    arenaSnapshotFullChecksum: null,
   });
   assert.equal(
     malformedHints.missingCoreMetadata,
@@ -171,11 +163,9 @@ async function main() {
     { id: "checksummed-storage-build", voxelSha256: checksum },
     "durable checksums should remain the complete payload identity",
   );
-  assert.equal(ARENA_BUILD_DERIVED_METADATA_RESET.arenaBuildHints, Prisma.DbNull);
-  assert.equal(ARENA_BUILD_DERIVED_METADATA_RESET.arenaSnapshotPreview, Prisma.DbNull);
-  assert.equal(ARENA_BUILD_DERIVED_METADATA_RESET.arenaSnapshotPreviewChecksum, null);
-  assert.equal(ARENA_BUILD_DERIVED_METADATA_RESET.arenaSnapshotFull, Prisma.DbNull);
-  assert.equal(ARENA_BUILD_DERIVED_METADATA_RESET.arenaSnapshotFullChecksum, null);
+  assert.deepEqual(ARENA_BUILD_DERIVED_METADATA_RESET, {
+    arenaBuildHints: Prisma.DbNull,
+  });
   assert.equal(
     parsePersistedArenaBuildMetadata({
       voxelSha256: checksum,
@@ -204,7 +194,7 @@ async function main() {
   );
   assert.match(repairedBuild.checksum ?? "", /^[0-9a-f]{64}$/);
   assert.equal(
-    getPreparedArenaBuildMetadataUpdate(repairedBuild).voxelSha256,
+    getPreparedArenaBuildCoreMetadataUpdate(repairedBuild).voxelSha256,
     repairedBuild.checksum,
     "checksum-less builds should receive durable metadata before token issuance",
   );

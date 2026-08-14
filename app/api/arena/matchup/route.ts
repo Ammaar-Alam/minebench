@@ -122,8 +122,6 @@ async function prepareArenaBuildById(buildId: string) {
       voxelByteSize: true,
       voxelCompressedByteSize: true,
       voxelSha256: true,
-      arenaSnapshotPreview: true,
-      arenaSnapshotFull: true,
       voxelData: true,
       voxelStorageBucket: true,
       voxelStoragePath: true,
@@ -145,39 +143,6 @@ async function persistPreparedArenaBuildMetadata(
   return result.count > 0;
 }
 
-function pickPersistedVariantBuild(
-  fullBuild: unknown | null | undefined,
-  fullChecksum: string | null | undefined,
-  previewBuild: unknown | null | undefined,
-  previewChecksum: string | null | undefined,
-  variant: "full" | "preview",
-  storedChecksum: string | null,
-): ArenaMatchup["a"]["build"] {
-  const snapshot = variant === "preview" ? previewBuild : fullBuild;
-  const snapshotChecksum = (variant === "preview" ? previewChecksum : fullChecksum)?.trim();
-  if (!snapshot || !snapshotChecksum || !storedChecksum || snapshotChecksum !== storedChecksum) return null;
-  // exact variant only, no partial-backfill promotion
-  return snapshot as ArenaMatchup["a"]["build"];
-}
-
-function pickPersistedInitialBuild(
-  hints: ArenaBuildLoadHints,
-  fullBuild: unknown | null | undefined,
-  fullChecksum: string | null | undefined,
-  previewBuild: unknown | null | undefined,
-  previewChecksum: string | null | undefined,
-  storedChecksum: string | null,
-): ArenaMatchup["a"]["build"] {
-  return pickPersistedVariantBuild(
-    fullBuild,
-    fullChecksum,
-    previewBuild,
-    previewChecksum,
-    hints.initialVariant,
-    storedChecksum,
-  );
-}
-
 const SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
   process.env.ARENA_SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS ?? "5000",
   10,
@@ -186,16 +151,11 @@ const SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
 async function resolveInitialBuildSnapshot(
   buildId: string,
   hints: ArenaBuildLoadHints,
-  row: {
-    voxelSha256: string | null;
-    arenaSnapshotPreview: unknown | null;
-    arenaSnapshotPreviewChecksum: string | null;
-    arenaSnapshotFull: unknown | null;
-    arenaSnapshotFullChecksum: string | null;
-  },
+  row: { voxelSha256: string | null },
 ): Promise<ArenaMatchup["a"]["build"]> {
   const storedChecksum = row.voxelSha256?.trim() || null;
-  // storage-first: the checksum-addressed artifact is the canonical snapshot
+  // the checksum-addressed artifact is the canonical snapshot; a miss falls
+  // through to live prepare in the caller
   try {
     const artifact = await fetchArenaBuildSnapshotArtifactPayload(
       buildId,
@@ -205,21 +165,9 @@ async function resolveInitialBuildSnapshot(
     );
     if (artifact) return artifact.voxelBuild as ArenaMatchup["a"]["build"];
   } catch {
-    // storage failure still has the db snapshot columns below
+    // storage failure falls back to live prepare
   }
-  const persisted = pickPersistedInitialBuild(
-    hints,
-    row.arenaSnapshotFull,
-    row.arenaSnapshotFullChecksum,
-    row.arenaSnapshotPreview,
-    row.arenaSnapshotPreviewChecksum,
-    storedChecksum,
-  );
-  if (persisted) {
-    // fallback hits must reach zero during the soak before columns can drop
-    console.log(`arena snapshot db fallback (matchup) build=${buildId} variant=${hints.initialVariant}`);
-  }
-  return persisted;
+  return null;
 }
 
 async function warmFullBuildArtifactUrl(
@@ -862,10 +810,6 @@ export async function GET(req: Request) {
 	                voxelByteSize: true,
                   voxelCompressedByteSize: true,
                   voxelSha256: true,
-                  arenaSnapshotPreview: true,
-                  arenaSnapshotPreviewChecksum: true,
-                  arenaSnapshotFull: true,
-                  arenaSnapshotFullChecksum: true,
                 },
               })
           : Promise.resolve(null),
@@ -880,10 +824,6 @@ export async function GET(req: Request) {
 	                voxelByteSize: true,
                   voxelCompressedByteSize: true,
                   voxelSha256: true,
-                  arenaSnapshotPreview: true,
-                  arenaSnapshotPreviewChecksum: true,
-                  arenaSnapshotFull: true,
-                  arenaSnapshotFullChecksum: true,
                 },
               })
           : Promise.resolve(null),
