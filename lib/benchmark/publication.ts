@@ -181,10 +181,26 @@ export async function assertPublicationTargetsAgree(siteUrl: string): Promise<vo
   // Uploads write to SUPABASE_URL directly, bypassing the deployment entirely,
   // so a verified database target still permits overwriting another project's
   // storage with deterministic build and artifact paths.
+  // This fails closed: an unmatched storage endpoint is refused rather than
+  // allowed, because the uploader writes to deterministic paths and a wrong
+  // target overwrites another environment's builds before anything else fails.
   const storageUrl = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
   if (storageUrl) {
     const storageRef = supabaseProjectRefFromApiUrl(storageUrl);
-    if (local.projectRef && storageRef && storageRef !== local.projectRef) {
+    if (!storageRef) {
+      throw new Error(
+        `Publication storage target could not be identified from SUPABASE_URL (${storageUrl}). ` +
+          "Publication refuses to upload to storage it cannot match against the database target.",
+      );
+    }
+    if (!local.projectRef) {
+      throw new Error(
+        `Publication storage mismatch: uploads would write to Supabase project ${storageRef}, ` +
+          "but the database target is not a Supabase project so the two cannot be matched. " +
+          "Point DATABASE_URL and SUPABASE_URL at the same environment.",
+      );
+    }
+    if (storageRef !== local.projectRef) {
       throw new Error(
         `Publication storage mismatch: uploads would write to Supabase project ${storageRef} ` +
           `while the database is project ${local.projectRef}. ` +
