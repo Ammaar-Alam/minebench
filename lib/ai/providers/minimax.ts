@@ -1,7 +1,8 @@
-import { requestIdFromResponse, withMaxOutputTokens } from "@/lib/ai/providers/shared";
-import { attachAbortSignal } from "@/lib/ai/providers/abort";
+import {
+  postChatCompletionWithTokenBudgetRetry,
+  withMaxOutputTokens,
+} from "@/lib/ai/providers/shared";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
-import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
 type MiniMaxChatResponse = {
@@ -77,71 +78,30 @@ export async function minimaxGenerateText(params: {
   // MiniMax requires temperature in (0.0, 1.0]; clamp to avoid rejection
   const rawTemp = params.temperature ?? 0.2;
   const temperature = Math.max(0.01, Math.min(rawTemp, 1.0));
-
-  const controller = new AbortController();
-  const detachAbort = attachAbortSignal(controller, params.signal);
-  const timeout: ReturnType<typeof setTimeout> | null = null;
-
-  let res: Response | null = null;
-  let lastBody = "";
   const maxTokens = params.maxOutputTokens ?? 16384;
-  let selectedTokenBudget: number | null = null;
 
-  try {
-    for (const tok of tokenBudgetCandidates(maxTokens)) {
-      controller.signal.throwIfAborted();
-      params.onProviderRequest?.();
-      res = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
-        },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: params.modelId,
-          messages: [
-            { role: "system", content: params.system },
-            { role: "user", content: params.user },
-          ],
-          stream: Boolean(params.onDelta),
-          reasoning_split: true,
-          temperature,
-          max_completion_tokens: tok,
-        }),
-      });
-      if (res.ok) {
-        selectedTokenBudget = tok;
-        break;
-      }
-      lastBody = await res.text().catch(() => "");
-      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
-      break;
-    }
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("MiniMax request timed out");
-    }
-    console.error("MiniMax network error:", err);
-    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
-    throw new Error(`MiniMax request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
-  } finally {
-    detachAbort();
-    if (timeout) clearTimeout(timeout);
-  }
+  const { res, acceptedTokenBudget: budget } = await postChatCompletionWithTokenBudgetRetry({
+    serviceLabel: "MiniMax",
+    url,
+    apiKey,
+    maxOutputTokens: maxTokens,
+    stream: Boolean(params.onDelta),
+    looksLikeTokenLimitError,
+    signal: params.signal,
+    onProviderRequest: params.onProviderRequest,
+    buildBody: (tok) => ({
+      model: params.modelId,
+      messages: [
+        { role: "system", content: params.system },
+        { role: "user", content: params.user },
+      ],
+      stream: Boolean(params.onDelta),
+      reasoning_split: true,
+      temperature,
+      max_completion_tokens: tok,
+    }),
+  });
 
-  if (!res) {
-    throw new Error("MiniMax request failed");
-  }
-
-  if (!res.ok) {
-    const body = lastBody || (await res.text().catch(() => ""));
-    const rid = requestIdFromResponse(res);
-    throw new Error(`MiniMax error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`);
-  }
-
-  const budget = selectedTokenBudget ?? maxTokens;
   params.onAcceptedOutputTokens?.(budget);
   params.onAcceptedRequestConfiguration?.({
     apiMode: "chat_completions",
