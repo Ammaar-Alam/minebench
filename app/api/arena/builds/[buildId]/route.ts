@@ -130,6 +130,13 @@ function pruneJsonResponseCache() {
   }
 }
 
+function dropCachedJsonResponse(key: string): void {
+  const cached = jsonResponseCache.get(key);
+  if (!cached) return;
+  jsonResponseCache.delete(key);
+  jsonResponseCacheWeight -= cached.byteWeight;
+}
+
 function getCachedJsonResponseByKey(key: string): CachedJsonResponse | null {
   const cached = jsonResponseCache.get(key);
   if (!cached) return null;
@@ -329,17 +336,23 @@ export async function GET(
   }
 
   const cachedJsonResponse = jsonCacheKey ? getCachedJsonResponseByKey(jsonCacheKey) : null;
-  if (cachedJsonResponse) {
-    // This body exists because the artifact was missing when it was built, and
-    // returning it short-circuits the heal in the after() hook below. Re-arm
-    // from the prepared cache so a previously failed upload still retries; the
-    // success set makes this a no-op once the artifact exists.
-    const cachedPrepared = getCachedPreparedArenaBuild(buildId, storedChecksum);
-    if (cachedPrepared) {
-      after(async () => {
-        await healArenaBuildSnapshotArtifactsOnce(cachedPrepared);
-      });
-    }
+  // This body exists because the artifact was missing when it was built, so
+  // returning it short-circuits the heal in the after() hook below. Re-arm from
+  // the prepared cache when possible; the success set makes that a no-op once
+  // the artifact exists. The two caches are sized independently, so when the
+  // prepared entry has been evicted the response entry is dropped instead and
+  // the request falls through to preparation, which heals. Otherwise a stale
+  // body could be served indefinitely with the snapshot still absent.
+  const cachedPreparedForHeal = cachedJsonResponse
+    ? getCachedPreparedArenaBuild(buildId, storedChecksum)
+    : null;
+  if (cachedJsonResponse && !cachedPreparedForHeal && jsonCacheKey) {
+    dropCachedJsonResponse(jsonCacheKey);
+  }
+  if (cachedJsonResponse && cachedPreparedForHeal) {
+    after(async () => {
+      await healArenaBuildSnapshotArtifactsOnce(cachedPreparedForHeal);
+    });
     timing.end("total", requestStartedAt);
     const headers = createJsonHeaders({
       byteLength: cachedJsonResponse.bytes.byteLength,

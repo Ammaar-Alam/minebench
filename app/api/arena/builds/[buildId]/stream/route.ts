@@ -464,7 +464,12 @@ export async function GET(
           // so heal on every fallback rather than only the first prepare: the
           // prepared cache has no TTL, and gating on it meant a failed upload
           // was never retried. The success set makes repeat calls no-ops.
-          void healArenaBuildSnapshotArtifactsOnce(prepared);
+          // Registered with after() like the stream-artifact warmup above, so a
+          // short response or an early client disconnect cannot leave the
+          // invocation suspended mid-upload and lose the repair.
+          after(async () => {
+            await healArenaBuildSnapshotArtifactsOnce(prepared);
+          });
 
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {
             send({
