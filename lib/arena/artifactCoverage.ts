@@ -113,8 +113,26 @@ export function expectedArtifactRequirements(
 
   const required: ArtifactRequirement[] = [];
 
+  // An overwrite import replaces voxelSha256 but can leave the snapshot
+  // checksum columns pointing at the previous payload. Probing those stale
+  // paths would find the old objects and report the build satisfied, so
+  // missing-only maintenance would skip it and verification could activate a
+  // model whose current payload has no snapshot at all. A marker that does not
+  // match the current checksum is treated as absent.
+  const fullSnapshotChecksum =
+    row.arenaSnapshotFullChecksum && row.arenaSnapshotFullChecksum === checksum
+      ? row.arenaSnapshotFullChecksum
+      : null;
+  const previewSnapshotChecksum =
+    row.arenaSnapshotPreviewChecksum && row.arenaSnapshotPreviewChecksum === checksum
+      ? row.arenaSnapshotPreviewChecksum
+      : null;
+  const snapshotChecksumStale =
+    (row.arenaSnapshotFullChecksum != null && fullSnapshotChecksum == null) ||
+    (row.arenaSnapshotPreviewChecksum != null && previewSnapshotChecksum == null);
+
   const fullSnapshotRef = isSnapshotClass
-    ? getSnapshotArtifactRef(row.id, "full", row.arenaSnapshotFullChecksum)
+    ? getSnapshotArtifactRef(row.id, "full", fullSnapshotChecksum)
     : null;
   if (fullSnapshotRef) {
     required.push({ kind: "snapshot", variant: "full", refs: [fullSnapshotRef] });
@@ -122,7 +140,7 @@ export function expectedArtifactRequirements(
   const previewSnapshotRef = getSnapshotArtifactRef(
     row.id,
     "preview",
-    row.arenaSnapshotPreviewChecksum,
+    previewSnapshotChecksum,
   );
   if (previewSnapshotRef) {
     required.push({ kind: "snapshot", variant: "preview", refs: [previewSnapshotRef] });
@@ -143,7 +161,8 @@ export function expectedArtifactRequirements(
 
   return {
     missingCoreMetadata,
-    needsSnapshotCompute: isSnapshotClass && row.arenaSnapshotFullChecksum == null,
+    needsSnapshotCompute:
+      (isSnapshotClass && fullSnapshotChecksum == null) || snapshotChecksumStale,
     required,
   };
 }
