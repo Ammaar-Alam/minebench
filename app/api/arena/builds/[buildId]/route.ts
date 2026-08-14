@@ -510,12 +510,13 @@ export async function GET(
   const voxelBuild = pickBuildVariant(prepared, variant);
   after(async () => {
     // write metadata and artifacts off the response path
-    await prisma.build
-      .update({
-        where: { id: prepared.buildId },
+    const marked = await prisma.build
+      .updateMany({
+        where: prepared.payloadIdentity,
         data: getPreparedArenaBuildMetadataUpdate(prepared),
       })
-      .catch(() => undefined);
+      .catch(() => null);
+    if (!marked || marked.count === 0) return;
     // drop stale meta cache so the next request sees the freshly written checksum
     invalidateArenaBuildMeta(prepared.buildId);
     await ensureArenaBuildSnapshotArtifacts(prepared);

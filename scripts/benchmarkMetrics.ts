@@ -4,7 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { GeneratedModelBenchmarkMetrics } from "../lib/ai/modelBenchmarkProfiles";
 import type { ModelKey } from "../lib/ai/modelCatalog";
-import { BENCHMARK_PROMPT_MAP, promptCohortId } from "../lib/benchmark/prompts";
+import { promptCohortId } from "../lib/benchmark/promptCohortId";
+import { BENCHMARK_PROMPT_MAP } from "../lib/benchmark/prompts";
 import { parseVoxelBuildSpec } from "../lib/voxel/validate";
 
 export type { GeneratedModelBenchmarkMetrics };
@@ -392,16 +393,25 @@ function counterCoverage(
   return coverage;
 }
 
-function configurationMatchesJob(
+function promptProvenanceMatchesJob(
   configuration: BenchmarkRunConfiguration | undefined,
   job: BenchmarkMetricJob,
 ): configuration is BenchmarkRunConfiguration {
   return (
     isBenchmarkRunConfiguration(configuration) &&
-    configuration.requestConfigurationVersion === 1 &&
-    typeof configuration.requestConfiguration === "string" &&
     typeof job.promptText === "string" &&
     configuration.promptSha256 === sha256(job.promptText)
+  );
+}
+
+function configurationMatchesJob(
+  configuration: BenchmarkRunConfiguration | undefined,
+  job: BenchmarkMetricJob,
+): configuration is BenchmarkRunConfiguration {
+  return (
+    promptProvenanceMatchesJob(configuration, job) &&
+    configuration.requestConfigurationVersion === 1 &&
+    typeof configuration.requestConfiguration === "string"
   );
 }
 
@@ -903,6 +913,7 @@ export class BenchmarkMetricsStore {
       }));
       const finalized = artifacts.filter(({ artifact }) => artifact !== null);
       const timingSamples: BenchmarkSample[] = [];
+      let promptProvenanceSampleCount = 0;
       const configuredSamples: BenchmarkSample[] = [];
       const outputCaps: number[] = [];
       const records = uniqueJobs.map((job) => ledger.jobs[jobKey(job)]);
@@ -913,6 +924,9 @@ export class BenchmarkMetricsStore {
         if (!isBenchmarkSample(sample)) continue;
         if (!("hash" in artifact) || sample.artifactSha256 !== artifact.hash) continue;
         timingSamples.push(sample);
+        if (promptProvenanceMatchesJob(sample.configuration, job)) {
+          promptProvenanceSampleCount += 1;
+        }
         if (!configurationMatchesJob(sample.configuration, job)) continue;
         configuredSamples.push(sample);
         if (sample.acceptedOutputTokens !== undefined) outputCaps.push(sample.acceptedOutputTokens);
@@ -921,6 +935,8 @@ export class BenchmarkMetricsStore {
       const expectedBuildCount = uniqueJobs.length;
       const finalizedBuildCount = finalized.length;
       const completeArtifacts = finalizedBuildCount === expectedBuildCount && expectedBuildCount > 0;
+      const completePromptProvenance =
+        promptProvenanceSampleCount === expectedBuildCount && expectedBuildCount > 0;
       const completeConfigurations =
         configuredSamples.length === expectedBuildCount && expectedBuildCount > 0;
       const completeMeasurementProvenance =
@@ -977,14 +993,18 @@ export class BenchmarkMetricsStore {
         ...previous,
         expectedBuildCount,
         finalizedBuildCount,
-        promptCohortId: promptCohortId(
-          Object.fromEntries(
-            uniqueJobs.map((job) => [
-              job.promptSlug,
-              job.promptText ?? BENCHMARK_PROMPT_MAP[job.promptSlug] ?? "",
-            ]),
-          ),
-        ),
+        ...(completePromptProvenance
+          ? {
+              promptCohortId: promptCohortId(
+                Object.fromEntries(
+                  uniqueJobs.map((job) => [
+                    job.promptSlug,
+                    job.promptText ?? BENCHMARK_PROMPT_MAP[job.promptSlug] ?? "",
+                  ]),
+                ),
+              ),
+            }
+          : {}),
         averageJsonSizeBytes: metrics.averageJsonSizeBytes,
         ...(completeMeasurementProvenance
           ? pickDefined(metrics, COHORT_MEASUREMENT_FIELDS)

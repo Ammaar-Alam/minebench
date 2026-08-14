@@ -1,7 +1,7 @@
 // Supabase exposes one database through two endpoint shapes: a direct
 // connection at db.<ref>.supabase.co and a pooled connection whose hostname is
 // shared by every project in a region, with the project carried in the
-// username as postgres.<ref>. Comparing hostnames is therefore both too weak
+// username as <role>.<ref>. Comparing hostnames is therefore both too weak
 // (two projects can share a pooler host) and too strict (the same project
 // looks different through each endpoint). The project ref is the stable
 // identity, and it is not a secret.
@@ -15,7 +15,10 @@ export function supabaseProjectRefFromDatabaseUrl(databaseUrl: string): string |
   }
 
   const user = decodeURIComponent(url.username || "");
-  const pooledMatch = user.match(/^postgres\.([a-z0-9]{16,})$/i);
+  const hostname = url.hostname.replace(/\.$/, "");
+  const pooledMatch = /\.pooler\.supabase\.(co|com|net)$/i.test(hostname)
+    ? user.match(/^.+\.([a-z0-9]{16,})$/i)
+    : null;
   if (pooledMatch) return pooledMatch[1].toLowerCase();
 
   const directMatch = url.hostname.match(/^db\.([a-z0-9]{16,})\.supabase\.(co|com|net)$/i);
@@ -29,6 +32,7 @@ export type DatabaseIdentity = {
   host: string;
   port: string;
   database: string;
+  schema: string;
 };
 
 export function databaseIdentityFromUrl(databaseUrl: string): DatabaseIdentity | null {
@@ -43,15 +47,27 @@ export function databaseIdentityFromUrl(databaseUrl: string): DatabaseIdentity |
     host: url.hostname.toLowerCase().replace(/\.$/, ""),
     port: url.port || "5432",
     database: decodeURIComponent(url.pathname.replace(/^\/+/, "")).toLowerCase() || "postgres",
+    schema: (url.searchParams.get("schema")?.trim() || "public").toLowerCase(),
   };
 }
 
+export function isLoopbackDatabaseUrl(databaseUrl: string): boolean {
+  const identity = databaseIdentityFromUrl(databaseUrl);
+  return (
+    identity != null &&
+    (identity.host === "localhost" ||
+      identity.host === "127.0.0.1" ||
+      identity.host === "[::1]")
+  );
+}
+
 // Same database? Prefer the project ref, which survives the direct/pooled
-// difference. Without a ref on both sides, fall back to the full endpoint
-// triple rather than the hostname alone.
+// difference. Database and schema remain part of the identity even when both
+// endpoints expose a project ref.
 export function isSameDatabaseTarget(a: DatabaseIdentity, b: DatabaseIdentity): boolean {
-  if (a.projectRef && b.projectRef) return a.projectRef === b.projectRef;
-  return a.host === b.host && a.port === b.port && a.database === b.database;
+  if (a.database !== b.database || a.schema !== b.schema) return false;
+  if (a.projectRef || b.projectRef) return a.projectRef === b.projectRef;
+  return a.host === b.host && a.port === b.port;
 }
 
 // The uploader writes to SUPABASE_URL independently of the database, so a

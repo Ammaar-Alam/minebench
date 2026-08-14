@@ -19,7 +19,11 @@ const INITIAL_RATING_FIELDS = {
   conservativeRating: 800,
 };
 
-export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
+export function modelCatalogSeedUpsertArgs(
+  m: ModelCatalogEntry,
+  enableCatalogModels: boolean,
+) {
+  const preserveEnabled = m.importOnly || (!enableCatalogModels && m.enabled);
   return {
     where: { key: m.key },
     create: {
@@ -27,10 +31,9 @@ export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
       provider: m.provider,
       modelId: m.modelId,
       displayName: m.displayName,
-      // Seeding never activates a model, so a freshly created row starts
-      // staged even when the catalog marks it enabled; publish verification
-      // is the only path that puts a model on public surfaces
-      enabled: false,
+      // Local seeds mirror the catalog so the arena is immediately usable
+      // Remote seeds stay staged until publication verification completes
+      enabled: enableCatalogModels ? m.enabled : false,
       isBaseline: false,
       ...INITIAL_RATING_FIELDS,
     },
@@ -38,12 +41,15 @@ export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
       provider: m.provider,
       modelId: m.modelId,
       displayName: m.displayName,
-      // Seeding may retire a model the catalog disabled, but never activates
-      // one: a staged (disabled) model goes live only through publish
-      // verification, so a partial cohort cannot reach public surfaces
-      ...(m.importOnly || m.enabled ? {} : { enabled: false }),
+      ...(preserveEnabled ? {} : { enabled: m.enabled }),
     },
   };
+}
+
+export function getCatalogSeedGenerationModelKeys(
+  models: readonly ModelCatalogEntry[],
+): string[] {
+  return models.filter((model) => model.enabled).map((model) => model.key);
 }
 
 export function isCatalogModelGeneratableForSeed(args: {

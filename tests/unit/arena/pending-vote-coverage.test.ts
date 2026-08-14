@@ -9,6 +9,47 @@ import {
 } from "../../../lib/arena/coverage";
 
 const coverageSource = readFileSync("lib/arena/coverage.ts", "utf8");
+const matchupSource = readFileSync("app/api/arena/matchup/route.ts", "utf8");
+const metadataPersistenceIndex = matchupSource.indexOf(
+  "async function persistPreparedArenaBuildMetadata",
+);
+const checksumRepairIndex = matchupSource.indexOf("const checksumRepairs =");
+const matchupTokenIndex = matchupSource.indexOf(
+  "const matchupId = createArenaMatchupToken",
+);
+assert.equal(
+  coverageSource.includes("filterArenaMatchupEligibleBuilds"),
+  false,
+  "sampling and prompt APIs should retain the same checksum-repairable build predicate",
+);
+assert.match(
+  matchupSource,
+  /const shouldPrepareA =\s*!checksumA \|\|[\s\S]*const shouldPrepareB =\s*!checksumB \|\|/,
+  "matchup issuance should prepare builds with missing or malformed checksums",
+);
+assert.ok(
+  checksumRepairIndex >= 0 && matchupTokenIndex > checksumRepairIndex,
+  "repaired checksums must persist before a versioned matchup token is issued",
+);
+assert.ok(
+  matchupSource
+    .slice(checksumRepairIndex, matchupTokenIndex)
+    .includes("value?.payloadIdentity.voxelSha256"),
+  "checksum repair should follow the payload identity observed during preparation",
+);
+assert.ok(
+  metadataPersistenceIndex >= 0 &&
+    matchupSource.slice(metadataPersistenceIndex, checksumRepairIndex).includes(
+      "data: getPreparedArenaBuildMetadataUpdate(prepared)",
+    ),
+  "checksum repair should persist the same prepared metadata used by maintenance",
+);
+assert.ok(
+  matchupSource
+    .slice(checksumRepairIndex, matchupTokenIndex)
+    .includes("invalidateArenaCoverageCache()"),
+  "checksum repair should invalidate cached null metadata before the next matchup",
+);
 const migrationSources = readdirSync("prisma/migrations")
   .filter((entry) => entry !== "migration_lock.toml")
   .map((entry) => `prisma/migrations/${entry}/migration.sql`)

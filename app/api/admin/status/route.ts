@@ -6,7 +6,8 @@ import { getArenaArtifactCoverage } from "@/lib/arena/artifactCoverage";
 import { ARENA_MATCHUP_STATE_CACHE_TTL_MS } from "@/lib/arena/coverage";
 import { findCatalogEntryBySlugOrKey } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
-import { supabaseProjectRefFromDatabaseUrl } from "@/lib/db/identity";
+import { databaseIdentityFromUrl } from "@/lib/db/identity";
+import { getSupabaseStorageReadiness } from "@/lib/storage/buildPayload";
 
 export const runtime = "nodejs";
 
@@ -31,11 +32,10 @@ function getDbInfo() {
   if (!url) return null;
   try {
     const u = new URL(url);
+    const identity = databaseIdentityFromUrl(url);
+    if (!identity) throw new Error("Invalid database URL");
     return {
-      projectRef: supabaseProjectRefFromDatabaseUrl(url),
-      host: u.hostname,
-      port: u.port || "5432",
-      database: u.pathname.replace(/^\//, "") || "unknown",
+      ...identity,
       pgbouncer: u.searchParams.get("pgbouncer") === "true",
       connectionLimit: u.searchParams.get("connection_limit"),
       poolTimeout: u.searchParams.get("pool_timeout"),
@@ -45,6 +45,7 @@ function getDbInfo() {
       host: "unknown",
       port: "unknown",
       database: "unknown",
+      schema: "unknown",
       pgbouncer: false,
       connectionLimit: null,
       poolTimeout: null,
@@ -99,6 +100,7 @@ export async function GET(req: Request) {
       artifactCoverage,
       voteJobs,
       shownJobs,
+      storage,
     ] = await Promise.all([
       prisma.prompt.count(),
       prisma.prompt.count({ where: { active: true } }),
@@ -110,6 +112,7 @@ export async function GET(req: Request) {
       getArenaArtifactCoverage(modelKeys),
       getArenaVoteJobStatus(),
       getArenaShownJobStatus(),
+      getSupabaseStorageReadiness(),
     ]);
     timing.end("artifact_status", artifactStartedAt);
     timing.end("total", requestStartedAt);
@@ -130,6 +133,7 @@ export async function GET(req: Request) {
           votes: { total: voteTotal },
         },
         artifacts: { ...(modelEntry ? { modelKey: modelEntry.key } : {}), ...artifactCoverage },
+        storage,
         voteJobs,
         shownJobs,
       },

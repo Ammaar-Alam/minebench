@@ -2,16 +2,23 @@
 
 import "dotenv/config";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { prisma } from "../lib/prisma";
 import {
+  acquireModelPublicationLock,
   activatePublishedModel,
+  assertRatedModelCohortUnchanged,
+  assertDeployedPublicationCoverage,
   assertPublicationTargetsAgree,
   missingCohortArtifacts,
+  publicationNeedsCacheDrain,
+  publicationShouldRestoreAfterGuardFailure,
   resolvePublicationModel,
   runPublicationStep,
   stagePublishedModel,
   verifyPublicationCoverage,
+  type ModelPublicationLock,
   type PublicationStepResult,
 } from "../lib/benchmark/publication";
 import { BENCHMARK_PROMPT_MAP, UPLOADS_DIR } from "./uploadsCatalog";
@@ -35,6 +42,8 @@ type Args = {
   dryRun: boolean;
   skipUpload: boolean;
 };
+
+let publicationLock: ModelPublicationLock | null = null;
 
 function parseArgs(argv: string[]): Args {
   const args = argv.slice(2);
@@ -93,13 +102,20 @@ async function main() {
           ? `\n${entry.displayName} is import-only: drop the build JSON into each uploads/<prompt>/ folder, then re-run.`
           : "\nGenerate them first: pnpm batch:generate --generate --model " + entry.slug,
       );
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
   }
 
-  const scriptsDir = path.dirname(new URL(import.meta.url).pathname);
+  const scriptsDir = path.dirname(fileURLToPath(import.meta.url));
   const steps: PublicationStepResult[] = [];
-  const runStep = (name: string, script: string, args: string[], supportsDryRun: boolean) => {
+  const runStep = async (
+    name: string,
+    script: string,
+    args: string[],
+    supportsDryRun: boolean,
+  ) => {
+    await publicationLock?.assertHeld();
     console.log(`\n== ${name}`);
     const result = runPublicationStep({
       name,
@@ -110,25 +126,31 @@ async function main() {
     });
     steps.push(result);
     if (result.ranFor !== "skipped" && result.exitCode !== 0) {
-      console.error(`Step failed: ${name} (exit ${result.exitCode})`);
-      process.exit(1);
+      throw new Error(`Step failed: ${name} (exit ${result.exitCode})`);
     }
     if (result.ranFor === "skipped") {
       console.log(`(skipped on dry-run: ${name} has no side-effect-free mode)`);
     }
+    await publicationLock?.assertHeld();
   };
+
+  if (!opts.dryRun) {
+    publicationLock = await acquireModelPublicationLock(entry.key);
+    console.log("- publication lock: acquired");
+  }
 
   // Upload is an idempotent reconcile: storage upserts plus import-build
   // overwrite, and it already pre-writes stream artifacts for large builds
   if (!opts.skipUpload) {
+    await assertRatedModelCohortUnchanged(entry, promptSlugs, UPLOADS_DIR);
     // Take an already-live model off public surfaces before its builds are
     // replaced. Without this the cohort is swapped underneath active traffic
     // and a failure part-way leaves votes landing on a mixed old/new cohort.
     if (!opts.dryRun) {
-      const wasLive = await stagePublishedModel(entry.key);
-      if (wasLive) {
+      const stageState = await stagePublishedModel(entry.key);
+      if (publicationNeedsCacheDrain(stageState)) {
         console.log(
-          `- staged ${entry.displayName} before overwriting its cohort; ` +
+          `- ${stageState === "staged" ? "staged" : "resuming staged"} ${entry.displayName} before overwriting its cohort; ` +
             "it is reactivated after verification, and stays staged if publication fails",
         );
         if (matchupStateCacheTtlMs > 0) {
@@ -138,13 +160,23 @@ async function main() {
           await delay(matchupStateCacheTtlMs);
         }
       }
+      await publicationLock?.assertHeld();
+      // Repeat after draining votes that may have committed during staging
+      try {
+        await assertRatedModelCohortUnchanged(entry, promptSlugs, UPLOADS_DIR);
+      } catch (error) {
+        if (publicationShouldRestoreAfterGuardFailure(stageState)) {
+          await activatePublishedModel(entry.key);
+        }
+        throw error;
+      }
     }
 
     // Scoped to the cohort prompts: batch-generate derives its prompt list
     // from every uploads/ directory as well as the benchmark map, so a model
     // filter alone would upload custom-prompt artifacts with overwrite=1 and
     // could overwrite unrelated builds or fail publication on one of them.
-    runStep(
+    await runStep(
       "upload cohort",
       "batch-generate.ts",
       ["--upload", "--model", entry.slug, "--prompt", ...promptSlugs],
@@ -153,9 +185,9 @@ async function main() {
   }
 
   const scope = ["--model", entry.slug, "--missing-only", "--all"];
-  runStep("metadata backfill", "backfill-arena-build-metadata.ts", scope, true);
-  runStep("snapshot precompute", "precompute-arena-snapshot-artifacts.ts", scope, true);
-  runStep("stream precompute", "precompute-arena-stream-artifacts.ts", scope, true);
+  await runStep("metadata backfill", "backfill-arena-build-metadata.ts", scope, true);
+  await runStep("snapshot precompute", "precompute-arena-snapshot-artifacts.ts", scope, true);
+  await runStep("stream precompute", "precompute-arena-stream-artifacts.ts", scope, true);
 
   console.log("\n== verification");
   const { coverage, complete, missingPromptSlugs } = await verifyPublicationCoverage(entry.key);
@@ -180,12 +212,18 @@ async function main() {
     if (coverage.missingBuildIds && coverage.missingBuildIds.length > 0) {
       console.error(`Builds needing work: ${coverage.missingBuildIds.join(", ")}`);
     }
-    process.exit(1);
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!opts.dryRun) {
+    await assertDeployedPublicationCoverage(siteUrl, entry.key);
+    console.log("- deployed artifact policy: complete");
   }
 
   // Metrics refresh only after verification; a status run folds the ledger
   // into the committed generated metrics when the cohort is complete
-  runStep("metrics refresh", "batch-generate.ts", ["--model", entry.slug], false);
+  await runStep("metrics refresh", "batch-generate.ts", ["--model", entry.slug], false);
 
   if (opts.dryRun) {
     console.log("\nDry run complete: no uploads, writes, metrics, or activation performed.");
@@ -198,8 +236,10 @@ async function main() {
   });
   if (!model) {
     console.error("Model row missing after upload; aborting before activation.");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
+  await publicationLock?.assertHeld();
   if (model.enabled) {
     console.log("\nModel already active; publication reconciled.");
   } else {
@@ -214,4 +254,12 @@ main()
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
   })
-  .finally(() => prisma.$disconnect().catch(() => undefined));
+  .finally(async () => {
+    try {
+      await publicationLock?.release();
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    }
+    await prisma.$disconnect().catch(() => undefined);
+  });

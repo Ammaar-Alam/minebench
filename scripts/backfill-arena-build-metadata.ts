@@ -1,9 +1,10 @@
 #!/usr/bin/env -S tsx
 
 import "dotenv/config";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 import {
   getPreparedArenaBuildMetadataUpdate,
+  parsePersistedArenaBuildMetadata,
   prepareArenaBuild,
 } from "../lib/arena/buildArtifacts";
 
@@ -86,25 +87,10 @@ async function main() {
 
   try {
     const cohortWhere = arenaMaintenanceWhere(opts);
-    // Missing-only: rows the metadata pass has not covered yet
-    const where = opts.missingOnly
-      ? {
-          AND: [
-            cohortWhere,
-            {
-              OR: [
-                { voxelSha256: null },
-                { arenaBuildHints: { equals: Prisma.AnyNull } },
-              ],
-            },
-          ],
-        }
-      : cohortWhere;
-
-    const rows = await prisma.build.findMany({
-      where,
+    let rows = await prisma.build.findMany({
+      where: cohortWhere,
       orderBy: { createdAt: "desc" },
-      take: opts.all ? undefined : opts.limit,
+      take: opts.missingOnly || opts.all ? undefined : opts.limit,
       select: {
         id: true,
         gridSize: true,
@@ -119,6 +105,14 @@ async function main() {
         arenaBuildHints: true,
       },
     });
+
+    if (opts.missingOnly) {
+      // JSON filters cannot identify malformed non-null hints
+      rows = rows.filter((row) => {
+        return !parsePersistedArenaBuildMetadata(row).complete;
+      });
+      if (!opts.all && rows.length > opts.limit) rows = rows.slice(0, opts.limit);
+    }
 
     if (rows.length === 0) {
       console.log("No matching builds found.");
@@ -142,10 +136,14 @@ async function main() {
           continue;
         }
 
-        await prisma.build.update({
-          where: { id: row.id },
+        const result = await prisma.build.updateMany({
+          where: prepared.payloadIdentity,
           data,
         });
+        if (result.count === 0) {
+          console.log(`- skip ${row.id}: payload changed during maintenance`);
+          continue;
+        }
         updated += 1;
         console.log(`- updated ${row.id}`);
       } catch (err) {

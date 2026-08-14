@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { getModelByKey } from "../../../lib/ai/modelCatalog";
 import {
+  getCatalogSeedGenerationModelKeys,
   isCatalogModelGeneratableForSeed,
   modelCatalogSeedUpsertArgs,
   type SeedProviderKeyStatus,
@@ -22,7 +23,7 @@ function providerKeyStatus(overrides: Partial<SeedProviderKeyStatus>): SeedProvi
 }
 
 const importedWebHarnessModel = getModelByKey("openai_gpt_4_5_web_harness");
-const importedWebHarnessUpsert = modelCatalogSeedUpsertArgs(importedWebHarnessModel);
+const importedWebHarnessUpsert = modelCatalogSeedUpsertArgs(importedWebHarnessModel, false);
 
 assert.equal(importedWebHarnessUpsert.create.enabled, false);
 assert.equal(
@@ -32,7 +33,7 @@ assert.equal(
 );
 
 const regularModel = getModelByKey("anthropic_claude_sonnet_5");
-const regularModelUpsert = modelCatalogSeedUpsertArgs(regularModel);
+const regularModelUpsert = modelCatalogSeedUpsertArgs(regularModel, false);
 
 assert.equal(
   regularModelUpsert.create.enabled,
@@ -47,11 +48,51 @@ assert.equal(
 
 const retiredModel = getModelByKey("gemini_3_0_pro");
 assert.equal(retiredModel.enabled, false);
-const retiredModelUpsert = modelCatalogSeedUpsertArgs(retiredModel);
+const retiredModelUpsert = modelCatalogSeedUpsertArgs(retiredModel, false);
 assert.equal(
   retiredModelUpsert.update.enabled,
   false,
   "seed updates should still retire a model the catalog disabled",
+);
+
+const localRegularModelUpsert = modelCatalogSeedUpsertArgs(regularModel, true);
+assert.equal(localRegularModelUpsert.create.enabled, true);
+assert.equal(
+  localRegularModelUpsert.update.enabled,
+  true,
+  "local seed updates should restore arena eligibility for catalog-enabled models",
+);
+
+const localImportedWebHarnessUpsert = modelCatalogSeedUpsertArgs(
+  importedWebHarnessModel,
+  true,
+);
+assert.equal(localImportedWebHarnessUpsert.create.enabled, false);
+assert.equal(
+  Object.hasOwn(localImportedWebHarnessUpsert.update, "enabled"),
+  false,
+  "local seed updates should preserve an imported model's arena eligibility",
+);
+
+const localRetiredModelUpsert = modelCatalogSeedUpsertArgs(retiredModel, true);
+assert.equal(localRetiredModelUpsert.create.enabled, false);
+assert.equal(
+  localRetiredModelUpsert.update.enabled,
+  false,
+  "local seed updates should preserve the catalog retirement state",
+);
+
+const seedGenerationModelKeys = getCatalogSeedGenerationModelKeys([
+  regularModel,
+  retiredModel,
+  importedWebHarnessModel,
+]);
+assert.equal(seedGenerationModelKeys.includes(regularModel.key), true);
+assert.equal(seedGenerationModelKeys.includes(importedWebHarnessModel.key), false);
+assert.equal(
+  seedGenerationModelKeys.includes(retiredModel.key),
+  false,
+  "fresh seed generation should select staged catalog models without reviving retired ones",
 );
 
 assert.equal(

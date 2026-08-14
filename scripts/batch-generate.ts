@@ -601,6 +601,15 @@ function getUploadCommand(job: Job): string {
   return `pnpm batch:generate --upload --prompt ${job.promptSlug} --model ${job.modelSlug}`;
 }
 
+export function getAdminImportHeaders(token: string): Record<string, string> {
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+  };
+}
+
 function supportsTerminalHyperlinks(): boolean {
   if (!process.stdout.isTTY) return false;
   if ((process.env.TERM ?? "").toLowerCase() === "dumb") return false;
@@ -648,10 +657,7 @@ async function uploadBuildLegacy(
     return { ok: resp.ok, status: resp.status, text };
   }
 
-  const baseHeaders = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
+  const baseHeaders = getAdminImportHeaders(token);
 
   const gzipAttempt = await doUpload({
     headers: { ...baseHeaders, "Content-Encoding": "gzip" },
@@ -807,10 +813,7 @@ async function finalizeStorageImport(
 
   const resp = await fetch(url.toString(), {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    headers: getAdminImportHeaders(token),
     body: JSON.stringify({ storage: ref }),
   });
 

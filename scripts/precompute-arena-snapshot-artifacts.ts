@@ -192,13 +192,10 @@ async function main() {
         // missingBuildIds forever. Writing on the skipped path too clears a
         // stale marker for builds that need no snapshot at all.
         //
-        // Guarded on the checksum observed when the row was loaded: an
-        // import-build overwrite can land while this build is being prepared,
-        // and an unconditional write would restore the previous checksum,
-        // hints, and snapshot over the newly stored payload, leaving a row that
-        // coverage could approve against the superseded artifact.
+        // Guarded on the payload identity observed when the row was loaded
+        // Storage identity protects rows that do not have a checksum yet
         const marked = await prisma.build.updateMany({
-          where: { id: row.id, voxelSha256: row.voxelSha256 },
+          where: prepared.payloadIdentity,
           data: getPreparedArenaBuildMetadataUpdate(prepared),
         });
         if (marked.count === 0) {

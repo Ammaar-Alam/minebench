@@ -5,7 +5,11 @@ import { PrismaClient } from "@prisma/client";
 import { gzipSync } from "node:zlib";
 import { estimateArenaBuildBytes, getArenaArtifactMinBytes } from "../lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
-import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts";
+import {
+  deriveArenaBuildLoadHints,
+  pickBuildVariant,
+  prepareArenaBuild,
+} from "../lib/arena/buildArtifacts";
 import {
   encodeArenaBuildStreamEvent,
   iterateArenaBuildStreamEvents,
@@ -36,6 +40,7 @@ type BuildRow = {
   voxelByteSize: number | null;
   voxelCompressedByteSize: number | null;
   voxelSha256: string | null;
+  arenaBuildHints: unknown | null;
   voxelStorageBucket: string | null;
   voxelStoragePath: string | null;
   voxelStorageEncoding: string | null;
@@ -108,6 +113,7 @@ async function loadBuildPayloadRow(
       voxelByteSize: true,
       voxelCompressedByteSize: true,
       voxelSha256: true,
+      arenaBuildHints: true,
       voxelData: true,
       voxelStorageBucket: true,
       voxelStoragePath: true,
@@ -189,13 +195,17 @@ async function main() {
           voxelByteSize: row.voxelByteSize,
           voxelCompressedByteSize: row.voxelCompressedByteSize,
         });
+        const shellHints = deriveArenaBuildLoadHints(row);
         let prepared: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
         let payloadRow: BuildPayloadRow | null = null;
-        let effectiveBytes = estimatedBytes;
+        let artifactRequired = shellHints.deliveryClass === "stream-artifact";
+        let effectiveBytes =
+          Math.max(shellHints.fullEstimatedBytes ?? 0, estimatedBytes ?? 0) || null;
         if (effectiveBytes == null) {
           payloadRow = await loadBuildPayloadRow(prisma, row);
           prepared = await prepareArenaBuild(payloadRow);
           effectiveBytes = prepared.hints.fullEstimatedBytes;
+          artifactRequired ||= prepared.hints.deliveryClass === "stream-artifact";
         }
         if (effectiveBytes == null) {
           payloadRow = payloadRow ?? (await loadBuildPayloadRow(prisma, row));
@@ -209,7 +219,7 @@ async function main() {
           continue;
         }
 
-        if (effectiveBytes < opts.minBytes) {
+        if (!artifactRequired && effectiveBytes < opts.minBytes) {
           skippedSmall += 1;
           console.log(
             `- skip ${row.id}: estimated ${effectiveBytes.toLocaleString()} bytes (< ${opts.minBytes.toLocaleString()})`,

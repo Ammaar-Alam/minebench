@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 // The fixed prompt cohort used to publish model-level benchmark metrics.
 // This is the single source for the benchmark cohort: batch generation, seed,
 // and cohort identity all derive from it.
@@ -30,15 +28,5 @@ export const BENCHMARK_PROMPT_MAP: Record<string, string> = {
     "A medieval stone castle with curtain walls forming a square, four tall corner towers with battlements, a central keep, a gatehouse with an archway and portcullis, and a surrounding moat with a small drawbridge.",
 };
 
-// Deterministic identity for a prompt cohort: two cohorts with the same count
-// but different prompts hash differently. Versioned so a future serialization
-// change cannot silently collide with historical values.
-export function promptCohortId(
-  promptMap: Readonly<Record<string, string>> = BENCHMARK_PROMPT_MAP,
-): string {
-  const pairs = Object.entries(promptMap)
-    .map(([slug, text]) => [slug, text] as const)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const digest = createHash("sha256").update(JSON.stringify(pairs)).digest("hex");
-  return `prompts-v1:${digest.slice(0, 16)}`;
-}
+// Unit coverage keeps this identity aligned with the prompt map
+export const BENCHMARK_PROMPT_COHORT_ID = "prompts-v1:bd8c28367f8a97f2";

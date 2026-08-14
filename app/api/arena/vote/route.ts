@@ -84,50 +84,54 @@ export async function POST(req: Request) {
 
   try {
     const lookupStartedAt = timing.start();
-    if (matchupId.includes(".") && !hasArenaMatchupSigningSecret()) {
+    if (!hasArenaMatchupSigningSecret()) {
       return respondJson(
         { error: "Arena matchup token signing is not configured." },
         { status: 503, headers: { "Retry-After": "1" } },
       );
     }
     const tokenMatchup = parseArenaMatchupToken(matchupId);
-    const dbMatchupId = tokenMatchup?.id ?? matchupId;
-    const matchup = tokenMatchup
-      ? {
-          id: tokenMatchup.id,
-          promptId: tokenMatchup.promptId,
-          modelAId: tokenMatchup.modelAId,
-          modelBId: tokenMatchup.modelBId,
-          buildAId: tokenMatchup.buildAId,
-          buildBId: tokenMatchup.buildBId,
-          samplingLane: tokenMatchup.samplingLane ?? null,
-          samplingReason: tokenMatchup.samplingReason ?? null,
-        }
-      : await prisma.matchup.findUnique({
-          where: { id: dbMatchupId },
-          select: {
-            id: true,
-            promptId: true,
-            modelAId: true,
-            modelBId: true,
-            buildAId: true,
-            buildBId: true,
-            samplingLane: true,
-            samplingReason: true,
-          },
-        });
     timing.end("lookup", lookupStartedAt);
-
-    if (!matchup) return respondJson({ error: "Matchup not found" }, { status: 404 });
-
+    if (!tokenMatchup) return respondJson({ error: "Matchup not found" }, { status: 404 });
+    const dbMatchupId = tokenMatchup.id;
+    const matchup = {
+      promptId: tokenMatchup.promptId,
+      modelAId: tokenMatchup.modelAId,
+      modelBId: tokenMatchup.modelBId,
+      buildAId: tokenMatchup.buildAId,
+      buildBId: tokenMatchup.buildBId,
+      samplingLane: tokenMatchup.samplingLane ?? null,
+      samplingReason: tokenMatchup.samplingReason ?? null,
+    };
     res = NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
     const sessionId = getOrSetSessionId(res, req);
     const txStartedAt = timing.start();
     const voteId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
-    const insertedJobs = await withArenaWriteRetry(async () => {
-      return prisma.$queryRaw<Array<{ voteId: string }>>(Prisma.sql`
-        WITH inserted_matchup AS (
+    const validMatchupSql = Prisma.sql`
+      SELECT 1
+      FROM "Build" AS build_a
+      INNER JOIN "Model" AS model_a ON model_a."id" = build_a."modelId"
+      CROSS JOIN "Build" AS build_b
+      INNER JOIN "Model" AS model_b ON model_b."id" = build_b."modelId"
+      WHERE build_a."id" = ${tokenMatchup.buildAId}
+        AND build_a."promptId" = ${tokenMatchup.promptId}
+        AND build_a."modelId" = ${tokenMatchup.modelAId}
+        AND BTRIM(build_a."voxelSha256") = ${tokenMatchup.buildAChecksum}
+        AND model_a."enabled" = true
+        AND build_b."id" = ${tokenMatchup.buildBId}
+        AND build_b."promptId" = ${tokenMatchup.promptId}
+        AND build_b."modelId" = ${tokenMatchup.modelBId}
+        AND BTRIM(build_b."voxelSha256") = ${tokenMatchup.buildBChecksum}
+        AND model_b."enabled" = true
+      FOR SHARE OF build_a, build_b, model_a, model_b
+    `;
+    const [voteWrite] = await withArenaWriteRetry(async () => {
+      return prisma.$queryRaw<Array<{ validMatchup: boolean; voteId: string | null }>>(Prisma.sql`
+        WITH valid_matchup AS (
+          ${validMatchupSql}
+        ),
+        inserted_matchup AS (
           INSERT INTO "Matchup" (
             "id",
             "promptId",
@@ -138,7 +142,7 @@ export async function POST(req: Request) {
             "samplingLane",
             "samplingReason"
           )
-          VALUES (
+          SELECT
             ${dbMatchupId},
             ${matchup.promptId},
             ${matchup.modelAId},
@@ -147,7 +151,7 @@ export async function POST(req: Request) {
             ${matchup.buildBId},
             ${matchup.samplingLane},
             ${matchup.samplingReason}
-          )
+          FROM valid_matchup
           ON CONFLICT ("id") DO NOTHING
         ),
         inserted_vote AS (
@@ -157,32 +161,43 @@ export async function POST(req: Request) {
             "sessionId",
             "choice"
           )
-          VALUES (${voteId}, ${dbMatchupId}, ${sessionId}, ${choice})
+          SELECT ${voteId}, ${dbMatchupId}, ${sessionId}, ${choice}
+          FROM valid_matchup
           ON CONFLICT ("matchupId", "sessionId") DO NOTHING
           RETURNING "id"
-        )
-        INSERT INTO "ArenaVoteJob" (
-          "id",
-          "voteId",
-          "matchupId",
-          "promptId",
-          "modelAId",
-          "modelBId",
-          "choice"
+        ),
+        inserted_job AS (
+          INSERT INTO "ArenaVoteJob" (
+            "id",
+            "voteId",
+            "matchupId",
+            "promptId",
+            "modelAId",
+            "modelBId",
+            "choice"
+          )
+          SELECT
+            ${jobId},
+            "id",
+            ${dbMatchupId},
+            ${matchup.promptId},
+            ${matchup.modelAId},
+            ${matchup.modelBId},
+            ${choice}
+          FROM inserted_vote
+          RETURNING "voteId"
         )
         SELECT
-          ${jobId},
-          "id",
-          ${dbMatchupId},
-          ${matchup.promptId},
-          ${matchup.modelAId},
-          ${matchup.modelBId},
-          ${choice}
-        FROM inserted_vote
-        RETURNING "voteId"
+          EXISTS (SELECT 1 FROM valid_matchup) AS "validMatchup",
+          (SELECT "voteId" FROM inserted_job LIMIT 1) AS "voteId"
       `);
     });
-    queuedVoteJobs = insertedJobs.length;
+    timing.end("tx", txStartedAt);
+    if (!voteWrite?.validMatchup) {
+      return respondJson({ error: "Matchup is no longer active" }, { status: 409 });
+    }
+
+    queuedVoteJobs = voteWrite.voteId ? 1 : 0;
     if (queuedVoteJobs > 0) {
       queuedVoteJobInput = {
         voteJobId: jobId,
@@ -192,7 +207,6 @@ export async function POST(req: Request) {
         choice,
       };
     }
-    timing.end("tx", txStartedAt);
   } catch (err) {
     if (res && isDuplicateVoteError(err)) {
       if (!finalized) {

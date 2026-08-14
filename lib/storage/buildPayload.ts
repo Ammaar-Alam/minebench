@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import { supabaseProjectRefFromApiUrl } from "@/lib/db/identity";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 export const DEFAULT_BUILD_STORAGE_BUCKET = "builds";
@@ -31,6 +32,13 @@ type LoadBuildPayloadOptions = {
 type SupabaseStorageConfig = {
   url: string;
   serviceRoleKey: string;
+};
+
+export type SupabaseStorageReadiness = {
+  projectRef: string | null;
+  bucket: string | null;
+  ready: boolean;
+  error: string | null;
 };
 
 function trimTrailingSlashes(value: string): string {
@@ -93,6 +101,64 @@ export function hasSupabaseStorageConfig(): boolean {
 
 export function getBuildStorageBucketFromEnv(): string {
   return (process.env.SUPABASE_STORAGE_BUCKET ?? DEFAULT_BUILD_STORAGE_BUCKET).trim();
+}
+
+export async function getSupabaseStorageReadiness(): Promise<SupabaseStorageReadiness> {
+  const rawUrl = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
+  const projectRef = rawUrl ? supabaseProjectRefFromApiUrl(rawUrl) : null;
+  const bucket = getBuildStorageBucketFromEnv();
+
+  let config: SupabaseStorageConfig;
+  try {
+    config = getSupabaseStorageConfig();
+  } catch (error) {
+    return {
+      projectRef,
+      bucket: bucket || null,
+      ready: false,
+      error: error instanceof Error ? error.message : "Storage configuration is invalid",
+    };
+  }
+  if (!bucket) {
+    return {
+      projectRef,
+      bucket: null,
+      ready: false,
+      error: "Missing SUPABASE_STORAGE_BUCKET for storage-backed build payloads",
+    };
+  }
+
+  try {
+    const resp = await fetch(
+      `${config.url}/storage/v1/object/list/${encodeURIComponent(bucket)}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          apikey: config.serviceRoleKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prefix: "", limit: 1, offset: 0 }),
+        cache: "no-store",
+      },
+    );
+    if (!resp.ok) {
+      return {
+        projectRef,
+        bucket,
+        ready: false,
+        error: `Storage list probe failed (${resp.status})`,
+      };
+    }
+    return { projectRef, bucket, ready: true, error: null };
+  } catch (error) {
+    return {
+      projectRef,
+      bucket,
+      ready: false,
+      error: error instanceof Error ? error.message : "Storage list probe failed",
+    };
+  }
 }
 
 export function normalizeBuildStoragePath(rawPath: string): string {

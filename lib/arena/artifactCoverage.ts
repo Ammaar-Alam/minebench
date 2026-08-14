@@ -5,6 +5,7 @@ import {
   estimateArenaBuildBytes,
   getArenaArtifactMinBytes,
 } from "@/lib/arena/buildDeliveryPolicy";
+import { parsePersistedArenaBuildMetadata } from "@/lib/arena/buildArtifacts";
 import { getSnapshotArtifactRef } from "@/lib/arena/buildSnapshotArtifacts";
 import { getArenaBuildStreamArtifactFetchRefs } from "@/lib/arena/buildStream";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
@@ -13,7 +14,7 @@ import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 // scripts (--missing-only), the admin status route, and publish verification.
 // Requirements come from the delivery policy, never from a fixed count: full
 // snapshots exist only for inline/snapshot classes, preview snapshots only
-// where the metadata pass recorded a smaller preview, and stream artifacts
+// where persisted load hints record a smaller preview, and stream artifacts
 // only for builds at or above the artifact byte threshold.
 
 export type ArtifactRef = { bucket: string; path: string };
@@ -50,7 +51,7 @@ export const ARTIFACT_STATUS_BUILD_SELECT = {
 
 export type ArenaBuildArtifactStatus = {
   buildId: string;
-  // voxelSha256 or load hints absent: the metadata pass has not run
+  // valid voxelSha256 and load hints are required metadata
   missingCoreMetadata: boolean;
   // snapshot-class build whose snapshot checksums are not recorded yet
   needsSnapshotCompute: boolean;
@@ -101,14 +102,16 @@ export function expectedArtifactRequirements(
   needsSnapshotCompute: boolean;
   required: ArtifactRequirement[];
 } {
-  const checksum = row.voxelSha256?.trim() || null;
-  const missingCoreMetadata = !checksum || row.arenaBuildHints == null;
+  const { checksum, loadHints, complete } = parsePersistedArenaBuildMetadata(row);
+  const missingCoreMetadata = !complete;
   const estimatedBytes = estimateArenaBuildBytes({
     blockCount: row.blockCount,
     voxelByteSize: row.voxelByteSize,
     voxelCompressedByteSize: row.voxelCompressedByteSize,
   });
-  const deliveryClass = classifyArenaBuildDelivery(estimatedBytes);
+  const deliveryClass = loadHints?.deliveryClass ?? classifyArenaBuildDelivery(estimatedBytes);
+  const fullEstimatedBytes =
+    Math.max(loadHints?.fullEstimatedBytes ?? 0, estimatedBytes ?? 0) || null;
   const isSnapshotClass = deliveryClass === "inline" || deliveryClass === "snapshot";
 
   const required: ArtifactRequirement[] = [];
@@ -137,13 +140,15 @@ export function expectedArtifactRequirements(
   if (fullSnapshotRef) {
     required.push({ kind: "snapshot", variant: "full", refs: [fullSnapshotRef] });
   }
-  const previewSnapshotRef = getSnapshotArtifactRef(
-    row.id,
-    "preview",
-    previewSnapshotChecksum,
-  );
-  if (previewSnapshotRef) {
-    required.push({ kind: "snapshot", variant: "preview", refs: [previewSnapshotRef] });
+  const previewNeeded =
+    loadHints != null && loadHints.previewBlockCount < loadHints.fullBlockCount;
+  if (previewNeeded && checksum) {
+    const previewSnapshotRef = getSnapshotArtifactRef(row.id, "preview", checksum);
+    required.push({
+      kind: "snapshot",
+      variant: "preview",
+      refs: previewSnapshotRef ? [previewSnapshotRef] : [],
+    });
   }
 
   const effectiveStreamMinBytes =
@@ -151,11 +156,13 @@ export function expectedArtifactRequirements(
       ? streamMinBytes
       : getArenaArtifactMinBytes();
   const streamEligible =
-    checksum != null && estimatedBytes != null && estimatedBytes >= effectiveStreamMinBytes;
+    checksum != null &&
+    (deliveryClass === "stream-artifact" ||
+      (fullEstimatedBytes != null && fullEstimatedBytes >= effectiveStreamMinBytes));
   if (streamEligible) {
     for (const variant of ["full", "preview"] as const) {
       const refs = getArenaBuildStreamArtifactFetchRefs(row.id, variant, checksum);
-      if (refs.length > 0) required.push({ kind: "stream", variant, refs });
+      required.push({ kind: "stream", variant, refs });
     }
   }
 

@@ -1,5 +1,6 @@
 import type { ModelKey } from "@/lib/ai/modelCatalog";
 import generatedMetrics from "@/lib/ai/modelBenchmarkMetrics.generated.json";
+import { BENCHMARK_PROMPT_COHORT_ID } from "@/lib/benchmark/prompts";
 
 export type ModelRunParameter = {
   label: string;
@@ -474,10 +475,23 @@ const GENERATED_MODEL_METRICS = generatedMetrics.models as Partial<
   Record<ModelKey, GeneratedModelBenchmarkMetrics>
 >;
 
+export function resolveCurrentGeneratedBenchmarkMetrics(
+  generated?: GeneratedModelBenchmarkMetrics,
+): GeneratedModelBenchmarkMetrics | undefined {
+  if (
+    generated?.promptCohortId !== undefined &&
+    generated.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID
+  ) {
+    return undefined;
+  }
+  return generated;
+}
+
 export function resolveBenchmarkOutputCap(
   modelKey: ModelKey,
-  generated?: GeneratedModelBenchmarkMetrics,
+  candidate?: GeneratedModelBenchmarkMetrics,
 ): BenchmarkOutputCap {
+  const generated = resolveCurrentGeneratedBenchmarkMetrics(candidate);
   const generatedOutputCapCohortIsComplete =
     generated &&
     generated.expectedBuildCount > 0 &&
@@ -515,7 +529,9 @@ export function resolveBenchmarkOutputCap(
 export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
   (Object.entries(MODEL_RUN_PARAMETERS) as [ModelKey, ModelRunParameters][]).map(
     ([modelKey, parameters]) => {
-      const generated = GENERATED_MODEL_METRICS[modelKey];
+      const generated = resolveCurrentGeneratedBenchmarkMetrics(
+        GENERATED_MODEL_METRICS[modelKey],
+      );
       const metadata = MODEL_BENCHMARK_METADATA[modelKey];
       const generatedIsComplete =
         generated && generated.finalizedBuildCount === generated.expectedBuildCount;

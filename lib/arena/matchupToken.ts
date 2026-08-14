@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
 
 type CompactArenaMatchupTokenPayload = {
   i: string;
@@ -7,6 +8,8 @@ type CompactArenaMatchupTokenPayload = {
   mb: string;
   ba: string;
   bb: string;
+  ca: string;
+  cb: string;
   l?: string;
   r?: string;
   t: number;
@@ -19,6 +22,8 @@ export type ArenaMatchupTokenPayload = {
   modelBId: string;
   buildAId: string;
   buildBId: string;
+  buildAChecksum: string;
+  buildBChecksum: string;
   samplingLane?: string;
   samplingReason?: string;
   issuedAt: number;
@@ -78,6 +83,8 @@ function toCompactPayload(input: ArenaMatchupTokenPayload): CompactArenaMatchupT
     mb: input.modelBId,
     ba: input.buildAId,
     bb: input.buildBId,
+    ca: input.buildAChecksum,
+    cb: input.buildBChecksum,
     l: input.samplingLane,
     r: input.samplingReason,
     t: input.issuedAt,
@@ -85,6 +92,8 @@ function toCompactPayload(input: ArenaMatchupTokenPayload): CompactArenaMatchupT
 }
 
 function fromCompactPayload(input: CompactArenaMatchupTokenPayload): ArenaMatchupTokenPayload | null {
+  const buildAChecksum = normalizeArenaBuildChecksum(input.ca);
+  const buildBChecksum = normalizeArenaBuildChecksum(input.cb);
   if (
     !input.i ||
     !input.p ||
@@ -92,6 +101,8 @@ function fromCompactPayload(input: CompactArenaMatchupTokenPayload): ArenaMatchu
     !input.mb ||
     !input.ba ||
     !input.bb ||
+    !buildAChecksum ||
+    !buildBChecksum ||
     typeof input.t !== "number"
   ) {
     return null;
@@ -104,6 +115,8 @@ function fromCompactPayload(input: CompactArenaMatchupTokenPayload): ArenaMatchu
     modelBId: input.mb,
     buildAId: input.ba,
     buildBId: input.bb,
+    buildAChecksum,
+    buildBChecksum,
     samplingLane: input.l,
     samplingReason: input.r,
     issuedAt: input.t,
@@ -111,8 +124,15 @@ function fromCompactPayload(input: CompactArenaMatchupTokenPayload): ArenaMatchu
 }
 
 export function createArenaMatchupToken(input: Omit<ArenaMatchupTokenPayload, "id" | "issuedAt">): string {
+  const buildAChecksum = normalizeArenaBuildChecksum(input.buildAChecksum);
+  const buildBChecksum = normalizeArenaBuildChecksum(input.buildBChecksum);
+  if (!buildAChecksum || !buildBChecksum) {
+    throw new Error("Arena matchup build checksums must be SHA-256 values");
+  }
   const payload = toCompactPayload({
     ...input,
+    buildAChecksum,
+    buildBChecksum,
     id: randomUUID(),
     issuedAt: Date.now(),
   });

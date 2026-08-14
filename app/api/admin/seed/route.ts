@@ -7,9 +7,11 @@ import { createHash } from "node:crypto";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 import {
+  getCatalogSeedGenerationModelKeys,
   isCatalogModelGeneratableForSeed,
   modelCatalogSeedUpsertArgs,
 } from "@/lib/admin/seedModelCatalog";
+import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 
 export const runtime = "nodejs";
 
@@ -111,6 +113,7 @@ export async function POST(req: Request) {
   const batchSizeRaw = Number(url.searchParams.get("batchSize") ?? "2");
   const batchSize = Math.max(1, Math.min(MAX_BATCH, Number.isFinite(batchSizeRaw) ? batchSizeRaw : 2));
   const keyStatus = providerKeyStatus();
+  const enableCatalogModels = isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? "");
 
   await prisma.$transaction(async (tx) => {
     await tx.model.upsert({
@@ -131,7 +134,7 @@ export async function POST(req: Request) {
     });
 
     for (const m of MODEL_CATALOG) {
-      await tx.model.upsert(modelCatalogSeedUpsertArgs(m));
+      await tx.model.upsert(modelCatalogSeedUpsertArgs(m, enableCatalogModels));
     }
 
     for (const text of CURATED_PROMPTS) {
@@ -181,7 +184,10 @@ export async function POST(req: Request) {
   });
 
   const modelsAll = await prisma.model.findMany({
-    where: { enabled: true, isBaseline: false },
+    where: {
+      key: { in: getCatalogSeedGenerationModelKeys(MODEL_CATALOG) },
+      isBaseline: false,
+    },
     orderBy: { createdAt: "asc" },
   });
 

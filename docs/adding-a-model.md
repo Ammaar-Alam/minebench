@@ -134,8 +134,12 @@ missing-only, verifies policy-aware artifact coverage
 (`/api/admin/status?modelKey=<slug>` shows the same view), refreshes the
 generated metrics, and only then activates the model. Imported models stay
 staged (disabled) until verification passes, so a partial cohort never reaches
-public surfaces. Commit `lib/ai/modelBenchmarkMetrics.generated.json` after
-publication.
+public surfaces. Real publications use `DIRECT_URL` to hold a per-model database
+lock through activation; configure it as a direct or session-mode connection.
+Commit `lib/ai/modelBenchmarkMetrics.generated.json` after
+publication. Once a model has vote history, publication permits only
+payload-identical cohort reconciliation; publish changed builds under a new
+model identity or explicitly reset the vote and derived rating history first.
 
 Provider-call telemetry fires at the adapter's outbound request boundary, so
 internal effort, token-budget, rate-limit, and transport retries each count.
