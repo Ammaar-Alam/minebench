@@ -16,11 +16,25 @@ ALTER TABLE "ArenaCoveragePair" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "ArenaCoveragePairPrompt" ENABLE ROW LEVEL SECURITY;
 
 -- Explicit deny policies document intent for the security advisor
--- Server access uses the table owner and service role, which are unaffected
+-- Server access uses the table owner and service role, which are unaffected.
+-- anon and authenticated are Supabase-provisioned roles: a local Postgres from
+-- compose.yaml has neither, and CREATE POLICY resolves roles at execution
+-- time, so the policy is scoped to whichever of them actually exists.
 DO $$
 DECLARE
   tbl text;
+  client_roles text;
 BEGIN
+  SELECT string_agg(quote_ident(rolname), ', ')
+    INTO client_roles
+    FROM pg_roles
+   WHERE rolname IN ('anon', 'authenticated');
+
+  IF client_roles IS NULL THEN
+    RAISE NOTICE 'Skipping deny policies: neither anon nor authenticated exists';
+    RETURN;
+  END IF;
+
   FOREACH tbl IN ARRAY ARRAY[
     'Model', 'Prompt', 'Build', 'Matchup', 'Vote',
     'ArenaVoteJob', 'ArenaShownJob', 'ModelRankSnapshot',
@@ -28,8 +42,9 @@ BEGIN
     '_prisma_migrations'
   ] LOOP
     EXECUTE format(
-      'CREATE POLICY "deny_client_access" ON %I FOR ALL TO anon, authenticated USING (false) WITH CHECK (false)',
-      tbl
+      'CREATE POLICY "deny_client_access" ON %I FOR ALL TO %s USING (false) WITH CHECK (false)',
+      tbl,
+      client_roles
     );
   END LOOP;
 END $$;

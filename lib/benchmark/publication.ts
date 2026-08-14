@@ -9,7 +9,11 @@ import {
 import { getArenaArtifactCoverage } from "@/lib/arena/artifactCoverage";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 import { BENCHMARK_PROMPT_MAP } from "@/lib/benchmark/prompts";
-import { databaseIdentityFromUrl, isSameDatabaseTarget } from "@/lib/db/identity";
+import {
+  databaseIdentityFromUrl,
+  isSameDatabaseTarget,
+  supabaseProjectRefFromApiUrl,
+} from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
 
 // Model publication: upload the benchmark cohort, run the artifact maintenance
@@ -39,9 +43,9 @@ export function resolvePublicationModel(value: string): ModelCatalogEntry {
   if (!entry) {
     throw new Error(`Unknown model key or slug: '${value}'. Pass the exact catalog key or slug.`);
   }
-  if (entry.importOnly) {
-    throw new Error(`${entry.displayName} is import-only; publish its imported builds instead.`);
-  }
+  // import-only models cannot be generated through provider APIs, but their
+  // supplied cohort still has to be uploaded, verified, and activated, and
+  // publication is the only path that activates anything
   return entry;
 }
 
@@ -174,6 +178,21 @@ export async function assertPublicationTargetsAgree(siteUrl: string): Promise<vo
         "Point MINEBENCH_SITE_URL and DATABASE_URL at the same environment.",
     );
   }
+  // Uploads write to SUPABASE_URL directly, bypassing the deployment entirely,
+  // so a verified database target still permits overwriting another project's
+  // storage with deterministic build and artifact paths.
+  const storageUrl = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (storageUrl) {
+    const storageRef = supabaseProjectRefFromApiUrl(storageUrl);
+    if (local.projectRef && storageRef && storageRef !== local.projectRef) {
+      throw new Error(
+        `Publication storage mismatch: uploads would write to Supabase project ${storageRef} ` +
+          `while the database is project ${local.projectRef}. ` +
+          "Point SUPABASE_URL at the same environment as DATABASE_URL.",
+      );
+    }
+  }
+
   console.log(
     `- publication target: ${siteUrl} (${remote.projectRef ?? `${remote.host}:${remote.port}`})`,
   );

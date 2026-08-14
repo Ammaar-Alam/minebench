@@ -53,3 +53,17 @@ export function isSameDatabaseTarget(a: DatabaseIdentity, b: DatabaseIdentity): 
   if (a.projectRef && b.projectRef) return a.projectRef === b.projectRef;
   return a.host === b.host && a.port === b.port && a.database === b.database;
 }
+
+// The uploader writes to SUPABASE_URL independently of the database, so a
+// publication can address one project's database while overwriting another's
+// storage. This derives the project ref from the storage endpoint so the two
+// can be compared.
+export function supabaseProjectRefFromApiUrl(apiUrl: string): string | null {
+  try {
+    const { hostname } = new URL(apiUrl);
+    const match = hostname.match(/^([a-z0-9]{16,})\.supabase\.(co|com|net)$/i);
+    return match ? match[1].toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}

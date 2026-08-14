@@ -84,7 +84,11 @@ async function main() {
   if (missingArtifacts.length > 0) {
     console.error(`Missing ${missingArtifacts.length} benchmark artifact(s):`);
     for (const filePath of missingArtifacts) console.error(`- ${filePath}`);
-    console.error("\nGenerate them first: pnpm batch:generate --generate --model " + entry.slug);
+    console.error(
+      entry.importOnly
+        ? `\n${entry.displayName} is import-only: drop the build JSON into each uploads/<prompt>/ folder, then re-run.`
+        : "\nGenerate them first: pnpm batch:generate --generate --model " + entry.slug,
+    );
     process.exit(1);
   }
 

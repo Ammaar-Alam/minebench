@@ -13,7 +13,13 @@ assert.equal(resolvePublicationModel("gemini-3-7-flash").key, "gemini_3_7_flash"
 assert.equal(resolvePublicationModel("gemini_3_7_flash").key, "gemini_3_7_flash");
 assert.throws(() => resolvePublicationModel("gemini"), /Unknown model key or slug/);
 assert.throws(() => resolvePublicationModel("gemini-3-7"), /Unknown model key or slug/);
-assert.throws(() => resolvePublicationModel("gpt-4-5-web-harness"), /import-only/);
+// import-only models cannot be generated, but publication is the only path
+// that activates a staged model, so they must resolve here
+assert.equal(
+  resolvePublicationModel("gpt-4-5-web-harness").importOnly,
+  true,
+  "import-only models must be publishable once their cohort is supplied",
+);
 
 // Cohort completeness reports every absent or empty artifact
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "publish-test-"));
