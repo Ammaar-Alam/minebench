@@ -1088,24 +1088,22 @@ Upload notes:
   const existing = allJobs.filter((j) => !isEmptyPlaceholder(j.filePath));
   console.log(`\n🔍 Missing builds: ${missing.length}`);
 
+  // Upload failures from either path must reach the exit status: publication
+  // treats a zero exit as a complete import.
+  let uploadFailureCount = 0;
+
   // upload existing builds if requested
   if (opts.upload) {
     if (existing.length === 0) {
       console.log("\n📤 No existing builds to upload.");
     } else {
       console.log("\n📤 Uploading existing builds...");
-      let uploadFailures = 0;
+      // shared with the generated-build upload below via uploadFailureCount
       for (const job of existing) {
         process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
         const result = await uploadBuild(job, metricsStore.getSample(job)?.inferenceTimeMs);
         console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
-        if (!result.ok) uploadFailures += 1;
-      }
-      if (uploadFailures > 0) {
-        // publication treats a zero exit as a complete import, so a partial
-        // upload has to fail the command rather than only printing
-        console.error(`\n${uploadFailures} upload(s) failed.`);
-        process.exitCode = 1;
+        if (!result.ok) uploadFailureCount += 1;
       }
     }
   }
@@ -1212,6 +1210,7 @@ Upload notes:
                       ? `    ✅ [${jobLabel(job)}] Upload complete`
                       : `    ❌ [${jobLabel(job)}] Upload failed: ${uploadResult.error}`,
                   );
+                  if (!uploadResult.ok) uploadFailureCount += 1;
                 }
               } else if (controller.signal.aborted) {
                 console.log(`    ⏸ [${jobLabel(job)}] Interrupted after ${elapsed}`);
@@ -1256,12 +1255,18 @@ Upload notes:
 
     console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
     if (stopSignal) process.exitCode = 130;
-    // a partial run must not read as success to callers such as model:publish
     else if (failed > 0) process.exitCode = 1;
   } else if (missing.length > 0 && !opts.generate) {
     console.log("\n💡 Use --generate to generate missing builds.");
   } else if (missing.length === 0) {
     console.log("✨ All builds already exist!");
+  }
+
+  // One report for both upload paths. Publication treats a zero exit as a
+  // complete import, so any failed upload has to fail the command.
+  if (uploadFailureCount > 0) {
+    console.error(`\n${uploadFailureCount} upload(s) failed.`);
+    if (process.exitCode !== 130) process.exitCode = 1;
   }
 
   if (!opts.upload) {

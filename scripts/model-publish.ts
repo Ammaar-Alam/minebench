@@ -116,10 +116,14 @@ async function main() {
   // Upload is an idempotent reconcile: storage upserts plus import-build
   // overwrite, and it already pre-writes stream artifacts for large builds
   if (!opts.skipUpload) {
+    // Scoped to the cohort prompts: batch-generate derives its prompt list
+    // from every uploads/ directory as well as the benchmark map, so a model
+    // filter alone would upload custom-prompt artifacts with overwrite=1 and
+    // could overwrite unrelated builds or fail publication on one of them.
     runStep(
       "upload cohort",
       "batch-generate.ts",
-      ["--upload", "--model", entry.slug],
+      ["--upload", "--model", entry.slug, "--prompt", ...promptSlugs],
       false,
     );
   }

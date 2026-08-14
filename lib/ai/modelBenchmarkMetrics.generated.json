@@ -426,9 +426,9 @@
       "averageJsonSizeBytes": 2087458
     },
     "anthropic_claude_opus_5": {
+      "inferenceSampleCount": 15,
       "expectedBuildCount": 15,
       "finalizedBuildCount": 15,
-      "inferenceSampleCount": 15,
       "finalizedAttemptCount": 22,
       "providerCallTrackingJobCount": 15,
       "providerCallCount": 47,
@@ -444,7 +444,8 @@
       "outputCapTokens": 128000,
       "failedAttemptCount": 31,
       "failedRunCount": 4,
-      "interruptedRunCount": 1
+      "interruptedRunCount": 1,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2"
     },
     "deepseek_v4_flash_0731": {
       "inferenceSampleCount": 15,
