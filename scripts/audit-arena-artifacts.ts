@@ -168,6 +168,13 @@ function verifyStreamPayload(
       complete = event;
       continue;
     }
+    // the client throws on an error event and ignores pings, so anything else
+    // makes the artifact undeliverable no matter how well-formed the rest is
+    if (event.type === "ping") continue;
+    if (event.type === "error") {
+      return `stream artifact carries an error event at line ${index + 1}: ${String(event.message ?? "")}`;
+    }
+    return `stream artifact has an unsupported event type at line ${index + 1}: ${String(event.type)}`;
   }
 
   if (!hello) return "stream artifact has no hello event";
