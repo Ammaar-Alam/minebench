@@ -98,6 +98,7 @@ function verifySnapshotPayload(
     buildId?: unknown;
     variant?: unknown;
     checksum?: unknown;
+    buildLoadHints?: { previewBlockCount?: unknown; fullBlockCount?: unknown } | null;
     voxelBuild?: { blocks?: unknown } | null;
   };
   try {
@@ -110,7 +111,36 @@ function verifySnapshotPayload(
   if (expectedChecksum && payload.checksum !== expectedChecksum) {
     return `snapshot checksum mismatch (${String(payload.checksum)})`;
   }
-  if (!Array.isArray(payload.voxelBuild?.blocks)) return "snapshot voxelBuild.blocks missing";
+  const blocks = payload.voxelBuild?.blocks;
+  if (!Array.isArray(blocks)) return "snapshot voxelBuild.blocks missing";
+
+  // The client trusts serverValidated and skips voxel validation, comparing the
+  // received length against the count in buildLoadHints. A truncated blocks
+  // array therefore leaves the viewer unready and voting blocked while still
+  // carrying a valid envelope, so the audit has to check the same total.
+  const hints = payload.buildLoadHints;
+  const announced =
+    variant === "preview" ? hints?.previewBlockCount : hints?.fullBlockCount;
+  if (typeof announced === "number" && Number.isFinite(announced) && announced > 0) {
+    if (blocks.length !== Math.floor(announced)) {
+      return `snapshot block count mismatch (hints ${Math.floor(announced)}, blocks ${blocks.length})`;
+    }
+  }
+
+  // spot-check entries rather than every block: a truncation or corruption that
+  // survives the count check still shows up at the boundaries
+  for (const index of [0, Math.floor(blocks.length / 2), blocks.length - 1]) {
+    const block = blocks[index] as { x?: unknown; y?: unknown; z?: unknown; type?: unknown };
+    if (!block || typeof block !== "object") return `snapshot block ${index} is not an object`;
+    if (
+      typeof block.x !== "number" ||
+      typeof block.y !== "number" ||
+      typeof block.z !== "number" ||
+      typeof block.type !== "string"
+    ) {
+      return `snapshot block ${index} is malformed`;
+    }
+  }
   return null;
 }
 
