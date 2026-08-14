@@ -52,6 +52,8 @@ const JSON_RESPONSE_CACHE_MAX_WEIGHT = Number.parseInt(
 
 type CachedJsonResponse = {
   bytes: Uint8Array;
+  // which path produced this body, so a cached fallback still reports as one
+  source: "db-snapshot" | "live";
   byteWeight: number;
   touchedAt: number;
 };
@@ -165,18 +167,19 @@ function pruneJsonResponseCache() {
   }
 }
 
-function getCachedJsonResponseByKey(key: string): Uint8Array | null {
+function getCachedJsonResponseByKey(key: string): CachedJsonResponse | null {
   const cached = jsonResponseCache.get(key);
   if (!cached) return null;
   cached.touchedAt = Date.now();
   jsonResponseCache.delete(key);
   jsonResponseCache.set(key, cached);
-  return cached.bytes;
+  return cached;
 }
 
 function rememberJsonResponseByKey(
   key: string,
   bytes: Uint8Array,
+  source: CachedJsonResponse["source"],
 ) {
   if (bytes.byteLength > JSON_RESPONSE_CACHE_MAX_WEIGHT) return;
   const previous = jsonResponseCache.get(key);
@@ -186,6 +189,7 @@ function rememberJsonResponseByKey(
   }
   jsonResponseCache.set(key, {
     bytes,
+    source,
     byteWeight: bytes.byteLength,
     touchedAt: Date.now(),
   });
@@ -200,18 +204,20 @@ function rememberJsonResponse(
   hints: unknown,
   gzip: boolean,
   bytes: Uint8Array,
+  source: CachedJsonResponse["source"],
 ) {
   const key = buildJsonResponseCacheKey(buildId, variant, checksum, hints, gzip);
   if (!key) return;
-  rememberJsonResponseByKey(key, bytes);
+  rememberJsonResponseByKey(key, bytes, source);
 }
 
 async function getOrCreateJsonResponse(
   key: string,
+  source: CachedJsonResponse["source"],
   create: () => Promise<Uint8Array | null>,
 ): Promise<Uint8Array | null> {
   const cached = getCachedJsonResponseByKey(key);
-  if (cached) return cached;
+  if (cached) return cached.bytes;
 
   const existing = jsonResponseInflight.get(key);
   // share db snapshot serialization across concurrent clients
@@ -219,7 +225,7 @@ async function getOrCreateJsonResponse(
 
   const promise = (async () => {
     const bytes = await create();
-    if (bytes) rememberJsonResponseByKey(key, bytes);
+    if (bytes) rememberJsonResponseByKey(key, bytes, source);
     return bytes;
   })();
   jsonResponseInflight.set(key, promise);
@@ -350,19 +356,6 @@ export async function GET(
     shellHints,
     shouldGzip,
   );
-  const cachedJsonResponse = jsonCacheKey ? getCachedJsonResponseByKey(jsonCacheKey) : null;
-  if (cachedJsonResponse) {
-    timing.end("total", requestStartedAt);
-    const headers = createJsonHeaders({
-      byteLength: cachedJsonResponse.byteLength,
-      deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
-      source: "response-cache",
-      gzip: shouldGzip,
-    });
-    timing.apply(headers);
-    return new Response(Buffer.from(cachedJsonResponse), { headers });
-  }
-
   // storage-first: the checksum-addressed artifact is the canonical snapshot
   try {
     if (artifactAllowed && canServeSnapshotArtifact) {
@@ -399,8 +392,27 @@ export async function GET(
     console.warn("arena snapshot artifact fetch failed", error);
   }
 
+  const cachedJsonResponse = jsonCacheKey ? getCachedJsonResponseByKey(jsonCacheKey) : null;
+  if (cachedJsonResponse) {
+    // a cached fallback body must still report as the fallback it is, or a
+    // soak measuring db-fallback traffic reads clean while serving it
+    if (cachedJsonResponse.source === "db-snapshot") {
+      console.log(`arena snapshot db fallback (build cached) build=${buildId} variant=${variant}`);
+    }
+    timing.end("total", requestStartedAt);
+    const headers = createJsonHeaders({
+      byteLength: cachedJsonResponse.bytes.byteLength,
+      deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
+      source: `response-cache:${cachedJsonResponse.source}`,
+      gzip: shouldGzip,
+    });
+    timing.apply(headers);
+    return new Response(Buffer.from(cachedJsonResponse.bytes), { headers });
+  }
+
+
   const persistedResponseBytes = jsonCacheKey
-    ? await getOrCreateJsonResponse(jsonCacheKey, async () => {
+    ? await getOrCreateJsonResponse(jsonCacheKey, "db-snapshot", async () => {
         // snapshot json bodies live outside the meta cache to avoid retaining
         // multi-mb blobs across many buildIds. the response cache covers
         // subsequent identical requests with its own byte-weight cap.
@@ -543,7 +555,15 @@ export async function GET(
     },
     shouldGzip,
   );
-  rememberJsonResponse(prepared.buildId, variant, prepared.checksum, prepared.hints, shouldGzip, responseBytes);
+  rememberJsonResponse(
+    prepared.buildId,
+    variant,
+    prepared.checksum,
+    prepared.hints,
+    shouldGzip,
+    responseBytes,
+    "live",
+  );
   timing.end("total", requestStartedAt);
   const headers = createJsonHeaders({
     byteLength: responseBytes.byteLength,
