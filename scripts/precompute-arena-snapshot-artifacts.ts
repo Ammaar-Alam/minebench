@@ -161,13 +161,13 @@ async function main() {
         const fullNeeded =
           prepared.hints.deliveryClass === "snapshot" || prepared.hints.deliveryClass === "inline";
         const planned = Number(previewNeeded) + Number(fullNeeded);
-        if (planned === 0) {
-          skipped += 1;
-          console.log(`- skip ${row.id}: no useful snapshot artifact variants`);
-          continue;
-        }
 
         if (opts.dryRun) {
+          if (planned === 0) {
+            skipped += 1;
+            console.log(`- skip ${row.id}: no useful snapshot artifact variants`);
+            continue;
+          }
           const variants: ArenaBuildVariant[] = [];
           if (previewNeeded) variants.push("preview");
           if (fullNeeded) variants.push("full");
