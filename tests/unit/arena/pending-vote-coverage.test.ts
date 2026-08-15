@@ -40,9 +40,9 @@ assert.ok(
 assert.ok(
   metadataPersistenceIndex >= 0 &&
     matchupSource.slice(metadataPersistenceIndex, checksumRepairIndex).includes(
-      "data: getPreparedArenaBuildMetadataUpdate(prepared)",
+      "data: getPreparedArenaBuildCoreMetadataUpdate(prepared)",
     ),
-  "checksum repair should persist the same prepared metadata used by maintenance",
+  "checksum repair should persist core metadata from the prepared payload",
 );
 assert.ok(
   matchupSource
