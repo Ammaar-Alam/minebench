@@ -34,8 +34,6 @@ export type ArenaBuildArtifactStatusRow = {
   voxelCompressedByteSize: number | null;
   voxelSha256: string | null;
   arenaBuildHints: unknown;
-  arenaSnapshotPreviewChecksum: string | null;
-  arenaSnapshotFullChecksum: string | null;
 };
 
 export const ARTIFACT_STATUS_BUILD_SELECT = {
@@ -45,15 +43,13 @@ export const ARTIFACT_STATUS_BUILD_SELECT = {
   voxelCompressedByteSize: true,
   voxelSha256: true,
   arenaBuildHints: true,
-  arenaSnapshotPreviewChecksum: true,
-  arenaSnapshotFullChecksum: true,
 } as const;
 
 export type ArenaBuildArtifactStatus = {
   buildId: string;
   // valid voxelSha256 and load hints are required metadata
   missingCoreMetadata: boolean;
-  // snapshot-class build whose snapshot checksums are not recorded yet
+  // snapshot-class build whose artifact refs cannot be derived yet
   needsSnapshotCompute: boolean;
   required: ArtifactRequirement[];
   missing: ArtifactRequirement[];
@@ -116,27 +112,9 @@ export function expectedArtifactRequirements(
 
   const required: ArtifactRequirement[] = [];
 
-  // An overwrite import replaces voxelSha256 but can leave the snapshot
-  // checksum columns pointing at the previous payload. Probing those stale
-  // paths would find the old objects and report the build satisfied, so
-  // missing-only maintenance would skip it and verification could activate a
-  // model whose current payload has no snapshot at all. A marker that does not
-  // match the current checksum is treated as absent.
-  const fullSnapshotChecksum =
-    row.arenaSnapshotFullChecksum && row.arenaSnapshotFullChecksum === checksum
-      ? row.arenaSnapshotFullChecksum
-      : null;
-  const previewSnapshotChecksum =
-    row.arenaSnapshotPreviewChecksum && row.arenaSnapshotPreviewChecksum === checksum
-      ? row.arenaSnapshotPreviewChecksum
-      : null;
-  const snapshotChecksumStale =
-    (row.arenaSnapshotFullChecksum != null && fullSnapshotChecksum == null) ||
-    (row.arenaSnapshotPreviewChecksum != null && previewSnapshotChecksum == null);
-
-  const fullSnapshotRef = isSnapshotClass
-    ? getSnapshotArtifactRef(row.id, "full", fullSnapshotChecksum)
-    : null;
+  // snapshot artifacts are addressed by the build checksum; the persisted
+  // hints record whether a smaller preview variant exists for this build
+  const fullSnapshotRef = isSnapshotClass ? getSnapshotArtifactRef(row.id, "full", checksum) : null;
   if (fullSnapshotRef) {
     required.push({ kind: "snapshot", variant: "full", refs: [fullSnapshotRef] });
   }
@@ -168,8 +146,8 @@ export function expectedArtifactRequirements(
 
   return {
     missingCoreMetadata,
-    needsSnapshotCompute:
-      (isSnapshotClass && fullSnapshotChecksum == null) || snapshotChecksumStale,
+    // a snapshot-class build without core metadata cannot compute its refs yet
+    needsSnapshotCompute: isSnapshotClass && missingCoreMetadata,
     required,
   };
 }

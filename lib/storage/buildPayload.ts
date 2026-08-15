@@ -100,7 +100,9 @@ export function hasSupabaseStorageConfig(): boolean {
 }
 
 export function getBuildStorageBucketFromEnv(): string {
-  return (process.env.SUPABASE_STORAGE_BUCKET ?? DEFAULT_BUILD_STORAGE_BUCKET).trim();
+  // an env var present but blank must fall back, not silently disable artifact
+  // delivery for every build
+  return process.env.SUPABASE_STORAGE_BUCKET?.trim() || DEFAULT_BUILD_STORAGE_BUCKET;
 }
 
 export async function getSupabaseStorageReadiness(): Promise<SupabaseStorageReadiness> {

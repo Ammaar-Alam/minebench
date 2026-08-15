@@ -13,6 +13,7 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
+  healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifactPayload,
 } from "@/lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
@@ -122,8 +123,6 @@ async function prepareArenaBuildById(buildId: string) {
       voxelByteSize: true,
       voxelCompressedByteSize: true,
       voxelSha256: true,
-      arenaSnapshotPreview: true,
-      arenaSnapshotFull: true,
       voxelData: true,
       voxelStorageBucket: true,
       voxelStoragePath: true,
@@ -145,39 +144,6 @@ async function persistPreparedArenaBuildMetadata(
   return result.count > 0;
 }
 
-function pickPersistedVariantBuild(
-  fullBuild: unknown | null | undefined,
-  fullChecksum: string | null | undefined,
-  previewBuild: unknown | null | undefined,
-  previewChecksum: string | null | undefined,
-  variant: "full" | "preview",
-  storedChecksum: string | null,
-): ArenaMatchup["a"]["build"] {
-  const snapshot = variant === "preview" ? previewBuild : fullBuild;
-  const snapshotChecksum = (variant === "preview" ? previewChecksum : fullChecksum)?.trim();
-  if (!snapshot || !snapshotChecksum || !storedChecksum || snapshotChecksum !== storedChecksum) return null;
-  // exact variant only, no partial-backfill promotion
-  return snapshot as ArenaMatchup["a"]["build"];
-}
-
-function pickPersistedInitialBuild(
-  hints: ArenaBuildLoadHints,
-  fullBuild: unknown | null | undefined,
-  fullChecksum: string | null | undefined,
-  previewBuild: unknown | null | undefined,
-  previewChecksum: string | null | undefined,
-  storedChecksum: string | null,
-): ArenaMatchup["a"]["build"] {
-  return pickPersistedVariantBuild(
-    fullBuild,
-    fullChecksum,
-    previewBuild,
-    previewChecksum,
-    hints.initialVariant,
-    storedChecksum,
-  );
-}
-
 const SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
   process.env.ARENA_SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS ?? "5000",
   10,
@@ -186,16 +152,11 @@ const SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
 async function resolveInitialBuildSnapshot(
   buildId: string,
   hints: ArenaBuildLoadHints,
-  row: {
-    voxelSha256: string | null;
-    arenaSnapshotPreview: unknown | null;
-    arenaSnapshotPreviewChecksum: string | null;
-    arenaSnapshotFull: unknown | null;
-    arenaSnapshotFullChecksum: string | null;
-  },
+  row: { voxelSha256: string | null },
 ): Promise<ArenaMatchup["a"]["build"]> {
   const storedChecksum = row.voxelSha256?.trim() || null;
-  // storage-first: the checksum-addressed artifact is the canonical snapshot
+  // the checksum-addressed artifact is the canonical snapshot; a miss falls
+  // through to live prepare in the caller
   try {
     const artifact = await fetchArenaBuildSnapshotArtifactPayload(
       buildId,
@@ -205,21 +166,9 @@ async function resolveInitialBuildSnapshot(
     );
     if (artifact) return artifact.voxelBuild as ArenaMatchup["a"]["build"];
   } catch {
-    // storage failure still has the db snapshot columns below
+    // storage failure falls back to live prepare
   }
-  const persisted = pickPersistedInitialBuild(
-    hints,
-    row.arenaSnapshotFull,
-    row.arenaSnapshotFullChecksum,
-    row.arenaSnapshotPreview,
-    row.arenaSnapshotPreviewChecksum,
-    storedChecksum,
-  );
-  if (persisted) {
-    // fallback hits must reach zero during the soak before columns can drop
-    console.log(`arena snapshot db fallback (matchup) build=${buildId} variant=${hints.initialVariant}`);
-  }
-  return persisted;
+  return null;
 }
 
 async function warmFullBuildArtifactUrl(
@@ -844,6 +793,9 @@ export async function GET(req: Request) {
   let preparedB: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
   let persistedInitialBuildA: ArenaMatchup["a"]["build"] | null = null;
   let persistedInitialBuildB: ArenaMatchup["b"]["build"] | null = null;
+  // Builds whose snapshot artifact was absent for this request; healing is
+  // deduped by the success set rather than by whether we prepared here.
+  const artifactMissBuildIds = new Set<string>();
   const prepareStartedAt = performance.now();
   if (shouldPrepareA || shouldPrepareB) {
     preparedA = shouldPrepareA && checksumA ? getCachedPreparedArenaBuild(buildA.id, checksumA) : null;
@@ -862,10 +814,6 @@ export async function GET(req: Request) {
 	                voxelByteSize: true,
                   voxelCompressedByteSize: true,
                   voxelSha256: true,
-                  arenaSnapshotPreview: true,
-                  arenaSnapshotPreviewChecksum: true,
-                  arenaSnapshotFull: true,
-                  arenaSnapshotFullChecksum: true,
                 },
               })
           : Promise.resolve(null),
@@ -880,10 +828,6 @@ export async function GET(req: Request) {
 	                voxelByteSize: true,
                   voxelCompressedByteSize: true,
                   voxelSha256: true,
-                  arenaSnapshotPreview: true,
-                  arenaSnapshotPreviewChecksum: true,
-                  arenaSnapshotFull: true,
-                  arenaSnapshotFullChecksum: true,
                 },
               })
           : Promise.resolve(null),
@@ -901,6 +845,17 @@ export async function GET(req: Request) {
           ? resolveInitialBuildSnapshot(buildB.id, shellHintsB, buildBForPrepare)
           : Promise.resolve(null),
       ]);
+
+      // An absent initial snapshot means the artifact was missing, whether or
+      // not the prepare came from cache. Healing keys off the miss rather than
+      // the prepare so a failed upload is retried on the next matchup; the
+      // success set keeps warm traffic from re-uploading.
+      if (shouldPrepareA && !persistedInitialBuildA && (buildAForPrepare || preparedA)) {
+        artifactMissBuildIds.add(buildA.id);
+      }
+      if (shouldPrepareB && !persistedInitialBuildB && (buildBForPrepare || preparedB)) {
+        artifactMissBuildIds.add(buildB.id);
+      }
 
       [preparedA, preparedB] = await Promise.all([
 	        preparedA || persistedInitialBuildA
@@ -1000,7 +955,15 @@ export async function GET(req: Request) {
     after(async () => {
       await Promise.all(
         preparedForPersistence.map(async (prepared) => {
-          await persistPreparedArenaBuildMetadata(prepared).catch(() => false);
+          const persisted = await persistPreparedArenaBuildMetadata(prepared).catch(() => false);
+          if (!persisted) return;
+          // An inlined build is answered here, so the client never visits the
+          // build route that would upload the missing artifact. Restricted to
+          // builds that live-prepared after an artifact miss, since ensure
+          // upserts unconditionally and warm traffic would re-upload snapshots.
+          if (artifactMissBuildIds.has(prepared.buildId)) {
+            await healArenaBuildSnapshotArtifactsOnce(prepared);
+          }
         }),
       );
     });

@@ -4,7 +4,7 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { gzipSync } from "node:zlib";
 import {
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   pickBuildVariant,
   prepareArenaBuild,
 } from "../lib/arena/buildArtifacts";
@@ -185,18 +185,10 @@ async function main() {
         }
 
         const result = await ensureArenaBuildSnapshotArtifacts(prepared);
-        // Record what now exists. Coverage treats a marker that disagrees with
-        // voxelSha256 as missing, and the missing-only metadata backfill skips
-        // rows whose checksum and hints are already set, so without this a
-        // stale marker survives its own recomputation and the build stays in
-        // missingBuildIds forever. Writing on the skipped path too clears a
-        // stale marker for builds that need no snapshot at all.
-        //
-        // Guarded on the payload identity observed when the row was loaded
-        // Storage identity protects rows that do not have a checksum yet
+        // Storage identity protects checksum-less rows from concurrent overwrites
         const marked = await prisma.build.updateMany({
           where: prepared.payloadIdentity,
-          data: getPreparedArenaBuildMetadataUpdate(prepared),
+          data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
         });
         if (marked.count === 0) {
           skipped += 1;

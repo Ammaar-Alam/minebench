@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import {
   getPreparedArenaBuildCoreMetadataUpdate,
-  getPreparedArenaBuildMetadataUpdate,
   prepareArenaBuildFromBuild,
   type ArenaBuildSource,
 } from "../../../lib/arena/buildArtifacts";
@@ -42,21 +41,14 @@ async function main() {
   assert.deepEqual(
     Object.keys(core).sort(),
     ["arenaBuildHints", "voxelSha256"],
-    "hot-route heals must write core metadata only",
+    "metadata updates must write core metadata only",
   );
   assert.equal(core.voxelSha256, prepared.checksum);
   for (const key of SNAPSHOT_KEYS) {
-    assert.ok(!(key in core), `core metadata update must not carry ${key}`);
+    assert.ok(!(key in core), `metadata update must not carry ${key}`);
   }
 
-  const full = getPreparedArenaBuildMetadataUpdate(prepared);
-  for (const key of ["voxelSha256", "arenaBuildHints", ...SNAPSHOT_KEYS]) {
-    assert.ok(key in full, `maintenance metadata update must carry ${key}`);
-  }
-  assert.equal(full.voxelSha256, core.voxelSha256);
-  assert.deepEqual(full.arenaBuildHints, core.arenaBuildHints);
-
-  console.log("build metadata update split checks passed");
+  console.log("build metadata update checks passed");
 }
 
 main().catch((err) => {

@@ -10,12 +10,11 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
-  ensureArenaBuildSnapshotArtifacts,
+  healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
 import {
   getArenaBuildMeta,
-  getArenaBuildSnapshotFields,
   invalidateArenaBuildMeta,
 } from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
@@ -52,15 +51,15 @@ const JSON_RESPONSE_CACHE_MAX_WEIGHT = Number.parseInt(
 
 type CachedJsonResponse = {
   bytes: Uint8Array;
-  // which path produced this body, so a cached fallback still reports as one
-  source: "db-snapshot" | "live";
+  // which path produced this body; only live prepares are cached now that
+  // snapshots are served from storage
+  source: "live";
   byteWeight: number;
   touchedAt: number;
 };
 
 // short process cache avoids rebuilding the same snapshot json
 const jsonResponseCache = new Map<string, CachedJsonResponse>();
-const jsonResponseInflight = new Map<string, Promise<Uint8Array | null>>();
 let jsonResponseCacheWeight = 0;
 
 // shared build metadata cache lives in lib/arena/buildMetaCache so the build
@@ -68,42 +67,6 @@ let jsonResponseCacheWeight = 0;
 
 function parseVariant(value: string | null): ArenaBuildVariant {
   return value === "preview" ? "preview" : "full";
-}
-
-function isCurrentPersistedSnapshot(
-  snapshot: unknown | null | undefined,
-  snapshotChecksum: string | null | undefined,
-  storedChecksum: string | null,
-): boolean {
-  if (!snapshot) return false;
-  const normalizedSnapshotChecksum = snapshotChecksum?.trim();
-  // db snapshots need their own checksum marker
-  return Boolean(normalizedSnapshotChecksum && storedChecksum && normalizedSnapshotChecksum === storedChecksum);
-}
-
-function pickCurrentPersistedSnapshot(
-  row: {
-    arenaSnapshotPreview: unknown | null;
-    arenaSnapshotPreviewChecksum: string | null;
-    arenaSnapshotFull: unknown | null;
-    arenaSnapshotFullChecksum: string | null;
-  } | null,
-  variant: ArenaBuildVariant,
-  storedChecksum: string | null,
-): unknown | null {
-  if (!row) return null;
-  if (variant === "preview") {
-    return isCurrentPersistedSnapshot(
-      row.arenaSnapshotPreview,
-      row.arenaSnapshotPreviewChecksum,
-      storedChecksum,
-    )
-      ? row.arenaSnapshotPreview
-      : null;
-  }
-  return isCurrentPersistedSnapshot(row.arenaSnapshotFull, row.arenaSnapshotFullChecksum, storedChecksum)
-    ? row.arenaSnapshotFull
-    : null;
 }
 
 function acceptsGzip(request: Request): boolean {
@@ -167,6 +130,13 @@ function pruneJsonResponseCache() {
   }
 }
 
+function dropCachedJsonResponse(key: string): void {
+  const cached = jsonResponseCache.get(key);
+  if (!cached) return;
+  jsonResponseCache.delete(key);
+  jsonResponseCacheWeight -= cached.byteWeight;
+}
+
 function getCachedJsonResponseByKey(key: string): CachedJsonResponse | null {
   const cached = jsonResponseCache.get(key);
   if (!cached) return null;
@@ -209,33 +179,6 @@ function rememberJsonResponse(
   const key = buildJsonResponseCacheKey(buildId, variant, checksum, hints, gzip);
   if (!key) return;
   rememberJsonResponseByKey(key, bytes, source);
-}
-
-async function getOrCreateJsonResponse(
-  key: string,
-  source: CachedJsonResponse["source"],
-  create: () => Promise<Uint8Array | null>,
-): Promise<Uint8Array | null> {
-  const cached = getCachedJsonResponseByKey(key);
-  if (cached) return cached.bytes;
-
-  const existing = jsonResponseInflight.get(key);
-  // share db snapshot serialization across concurrent clients
-  if (existing) return existing;
-
-  const promise = (async () => {
-    const bytes = await create();
-    if (bytes) rememberJsonResponseByKey(key, bytes, source);
-    return bytes;
-  })();
-  jsonResponseInflight.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    if (jsonResponseInflight.get(key) === promise) {
-      jsonResponseInflight.delete(key);
-    }
-  }
 }
 
 async function withTimeout<T>(
@@ -393,12 +336,23 @@ export async function GET(
   }
 
   const cachedJsonResponse = jsonCacheKey ? getCachedJsonResponseByKey(jsonCacheKey) : null;
-  if (cachedJsonResponse) {
-    // a cached fallback body must still report as the fallback it is, or a
-    // soak measuring db-fallback traffic reads clean while serving it
-    if (cachedJsonResponse.source === "db-snapshot") {
-      console.log(`arena snapshot db fallback (build cached) build=${buildId} variant=${variant}`);
-    }
+  // This body exists because the artifact was missing when it was built, so
+  // returning it short-circuits the heal in the after() hook below. Re-arm from
+  // the prepared cache when possible; the success set makes that a no-op once
+  // the artifact exists. The two caches are sized independently, so when the
+  // prepared entry has been evicted the response entry is dropped instead and
+  // the request falls through to preparation, which heals. Otherwise a stale
+  // body could be served indefinitely with the snapshot still absent.
+  const cachedPreparedForHeal = cachedJsonResponse
+    ? getCachedPreparedArenaBuild(buildId, storedChecksum)
+    : null;
+  if (cachedJsonResponse && !cachedPreparedForHeal && jsonCacheKey) {
+    dropCachedJsonResponse(jsonCacheKey);
+  }
+  if (cachedJsonResponse && cachedPreparedForHeal) {
+    after(async () => {
+      await healArenaBuildSnapshotArtifactsOnce(cachedPreparedForHeal);
+    });
     timing.end("total", requestStartedAt);
     const headers = createJsonHeaders({
       byteLength: cachedJsonResponse.bytes.byteLength,
@@ -408,42 +362,6 @@ export async function GET(
     });
     timing.apply(headers);
     return new Response(Buffer.from(cachedJsonResponse.bytes), { headers });
-  }
-
-
-  const persistedResponseBytes = jsonCacheKey
-    ? await getOrCreateJsonResponse(jsonCacheKey, "db-snapshot", async () => {
-        // snapshot json bodies live outside the meta cache to avoid retaining
-        // multi-mb blobs across many buildIds. the response cache covers
-        // subsequent identical requests with its own byte-weight cap.
-        const snapshotFields = await getArenaBuildSnapshotFields(buildId);
-        const persistedSnapshot = pickCurrentPersistedSnapshot(snapshotFields, variant, storedChecksum);
-        if (!persistedSnapshot) return null;
-        return jsonBytes(
-          {
-            buildId,
-            variant,
-            checksum: storedChecksum,
-            serverValidated: true,
-            buildLoadHints: shellHints,
-            voxelBuild: persistedSnapshot,
-          },
-          shouldGzip,
-        );
-      })
-    : null;
-  if (persistedResponseBytes) {
-    // fallback hits must reach zero during the soak before columns can drop
-    console.log(`arena snapshot db fallback (build) build=${buildId} variant=${variant}`);
-    timing.end("total", requestStartedAt);
-    const headers = createJsonHeaders({
-      byteLength: persistedResponseBytes.byteLength,
-      deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
-      source: "db-snapshot",
-      gzip: shouldGzip,
-    });
-    timing.apply(headers);
-    return new Response(Buffer.from(persistedResponseBytes), { headers });
   }
 
   if (shouldRequireStreamFallbackOnSnapshotMiss) {
@@ -541,7 +459,9 @@ export async function GET(
     if (!marked || marked.count === 0) return;
     // drop stale meta cache so the next request sees the freshly written checksum
     invalidateArenaBuildMeta(prepared.buildId);
-    await ensureArenaBuildSnapshotArtifacts(prepared);
+    // dedupes on success and retries after a failure, so warm cache hits do not
+    // re-upload and a transient failure is not permanent
+    await healArenaBuildSnapshotArtifactsOnce(prepared);
   });
 
   const responseBytes = jsonBytes(

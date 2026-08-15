@@ -1,6 +1,6 @@
 import type { ArenaBuildSource } from "@/lib/arena/buildArtifacts";
 import {
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
@@ -67,7 +67,7 @@ export async function maybePrecomputeArenaArtifactsForBuild(
   const prepared = await prepareArenaBuild(source);
   const marked = await prisma.build.updateMany({
     where: prepared.payloadIdentity,
-    data: getPreparedArenaBuildMetadataUpdate(prepared),
+    data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
   });
   if (marked.count === 0) {
     throw new Error(`Build ${source.id} changed during artifact preparation`);
