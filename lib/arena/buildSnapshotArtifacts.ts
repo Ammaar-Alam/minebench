@@ -360,14 +360,34 @@ export async function ensureArenaBuildSnapshotArtifacts(
     variants.push("preview");
   }
   // stream-artifact full builds stay on the ndjson stream path
-  if (prepared.hints.deliveryClass === "snapshot" || prepared.hints.deliveryClass === "inline") {
+  const isStreamClass =
+    prepared.hints.deliveryClass !== "snapshot" && prepared.hints.deliveryClass !== "inline";
+  if (!isStreamClass) {
     variants.push("full");
   }
-  if (variants.length === 0) {
+  // The binary encoding is small enough that a build too large to serve as a
+  // JSON snapshot still fits comfortably as a binary one: eight bytes a block
+  // puts even the largest cohort build a few megabytes under the cap. Those
+  // builds get a binary full variant so they can skip the chunked stream.
+  const binaryVariants: ArenaBuildVariant[] =
+    isStreamClass && ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED ? ["full"] : [];
+
+  if (variants.length === 0 && binaryVariants.length === 0) {
     return { uploaded: 0, skipped: true };
   }
 
   let uploaded = 0;
+  for (const variant of binaryVariants) {
+    try {
+      await uploadSnapshotArtifactVariant(prepared, variant, "binary");
+      uploaded += 1;
+    } catch (err) {
+      console.warn(
+        `arena binary snapshot artifact upload failed for ${prepared.buildId}:${variant}`,
+        err,
+      );
+    }
+  }
   for (const variant of variants) {
     await uploadSnapshotArtifactVariant(prepared, variant);
     uploaded += 1;

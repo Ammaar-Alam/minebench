@@ -992,6 +992,10 @@ function getHydrationDeliveryClass(
 function shouldHydrateViaSnapshot(
   deliveryClass: ArenaBuildDeliveryClass | undefined,
 ): boolean {
+  // A stream-class build is only too large for a whole-body fetch as JSON. The
+  // binary encoding puts it well under the cap, so when the client can read it
+  // the snapshot path is the faster route for every class.
+  if (BINARY_ARTIFACT_READS_ENABLED) return true;
   return deliveryClass === "snapshot" || deliveryClass === "inline";
 }
 
@@ -1023,7 +1027,11 @@ function getLaneMeshCacheKey(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): strin
   const ref = variant === "preview" ? lane.previewRef ?? lane.buildRef : lane.buildRef ?? lane.previewRef;
   const checksum = ref?.checksum ?? lane.buildRef?.checksum ?? lane.previewRef?.checksum ?? null;
   if (!ref?.buildId || !checksum) return null;
-  return `${ref.buildId}:${variant}:${checksum}:${voxelBuildBlockCount(lane.build)}`;
+  // a partial build would otherwise write a cache entry per streamed rebuild
+  const expected = lane.buildLoadHints?.fullBlockCount ?? 0;
+  const count = voxelBuildBlockCount(lane.build);
+  if (variant === "full" && expected > 0 && count < expected) return null;
+  return `${ref.buildId}:${variant}:${checksum}:${count}`;
 }
 
 function estimateCachedHydratedBuildBytes(entry: CachedHydratedBuild): number {
@@ -1205,6 +1213,24 @@ export function Arena() {
         return {
           ...prev,
           [overlayKey]: visible,
+        };
+      });
+    },
+    [],
+  );
+
+  // Streaming mutates one container in place, so the lane keeps the same build
+  // object as blocks arrive and the viewer treats it as the same build growing
+  // rather than a new one replacing it.
+  const setLaneProgressiveBuild = useCallback(
+    (matchupId: string, side: "a" | "b", build: NonNullable<ArenaMatchup["a"]["build"]>) => {
+      setState((prev) => {
+        if (prev.kind !== "ready" || prev.matchup.id !== matchupId) return prev;
+        const lane = prev.matchup[side];
+        if (lane.build === build) return prev;
+        return {
+          ...prev,
+          matchup: { ...prev.matchup, [side]: { ...lane, build } },
         };
       });
     },
@@ -1682,7 +1708,7 @@ export function Arena() {
     let lastProgressUiAt = 0;
 
     const applyProgressiveBuild = (
-      _progressiveBuild: ArenaMatchup["a"]["build"],
+      progressiveBuild: ArenaMatchup["a"]["build"],
       progress: BuildStreamProgress,
     ) => {
       const now = performance.now();
@@ -1695,8 +1721,15 @@ export function Arena() {
           receivedBlocks: progress.receivedBlocks,
           totalBlocks: progress.totalBlocks,
         });
+        // Show the blocks that have arrived instead of an empty frame. The
+        // viewer rebuilds from whatever it is given, and readiness stays tied
+        // to the expected full count, so this changes what is on screen during
+        // hydration and never when a vote becomes possible.
+        if (progressiveBuild && !reachedComplete) {
+          setLaneProgressiveBuild(matchupValue.id, side, progressiveBuild);
+        }
       }
-      // progress only here; final payload flips voting state
+      // the final payload still flips voting state
     };
 
     let unsubscribePrefetchProgress: (() => void) | null = null;
@@ -1825,6 +1858,7 @@ export function Arena() {
   }, [
     cacheHydratedBuild,
     clearAutoFullHydrationRetry,
+    setLaneProgressiveBuild,
     markViewerLaneNotReady,
     readHydratedBuildFromCache,
     registerAutoFullHydrationFailure,
