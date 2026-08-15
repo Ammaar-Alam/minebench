@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import type { GeneratedModelBenchmarkMetrics } from "../lib/ai/modelBenchmarkProfiles";
 import type { ModelKey } from "../lib/ai/modelCatalog";
+import type { AcceptedRequestConfigurationRecord } from "../lib/ai/types";
 import { promptCohortId } from "../lib/benchmark/promptCohortId";
 import { BENCHMARK_PROMPT_MAP } from "../lib/benchmark/prompts";
 import { parseVoxelBuildSpec } from "../lib/voxel/validate";
@@ -23,8 +24,12 @@ export type BenchmarkRunConfiguration = {
   providerRoute: "direct" | "openrouter";
   reasoningOverride: string | null;
   // Versioned only when the provider reports the settings it accepted
-  requestConfigurationVersion?: 1;
+  // v1 stores the prose line; v2 also stores the typed configuration object
+  requestConfigurationVersion?: 1 | 2;
   requestConfiguration?: string;
+  // Provider-accepted settings captured as a typed object, never parsed from
+  // trace strings; v1 cohorts predate this field and stay prose-only
+  acceptedConfiguration?: AcceptedRequestConfigurationRecord;
   toolsEnabled: boolean;
 };
 
@@ -149,6 +154,7 @@ export function createBenchmarkRunConfiguration(args: {
   providerRoute: "direct" | "openrouter";
   reasoningOverride: string | null;
   requestConfiguration?: string;
+  acceptedConfiguration?: AcceptedRequestConfigurationRecord;
   toolsEnabled: boolean;
 }): BenchmarkRunConfiguration {
   return {
@@ -157,13 +163,19 @@ export function createBenchmarkRunConfiguration(args: {
     reasoningOverride: args.reasoningOverride,
     ...(args.requestConfiguration
       ? {
-          requestConfigurationVersion: 1 as const,
+          requestConfigurationVersion: (args.acceptedConfiguration ? 2 : 1) as 1 | 2,
           requestConfiguration: args.requestConfiguration,
+          ...(args.acceptedConfiguration
+            ? { acceptedConfiguration: args.acceptedConfiguration }
+            : {}),
         }
       : {}),
     toolsEnabled: args.toolsEnabled,
   };
 }
+
+// Gemini represents dynamic thinking as a -1 budget rather than a token count
+const DYNAMIC_REASONING_BUDGET = -1;
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -187,6 +199,31 @@ function isBenchmarkSample(value: unknown): value is BenchmarkSample {
   );
 }
 
+function isAcceptedConfigurationRecord(
+  value: unknown,
+): value is AcceptedRequestConfigurationRecord {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<AcceptedRequestConfigurationRecord>;
+  return (
+    typeof record.apiMode === "string" &&
+    isPositiveInteger(record.maxOutputTokens) &&
+    // -1 is Gemini's dynamic-thinking sentinel, which providers pass through
+    // verbatim; rejecting it would silently drop the whole sample on reload
+    (record.reasoningMaxTokens === undefined ||
+      record.reasoningMaxTokens === DYNAMIC_REASONING_BUDGET ||
+      isPositiveInteger(record.reasoningMaxTokens)) &&
+    typeof record.thinkingMode === "string" &&
+    (typeof record.temperature === "number" ||
+      record.temperature === "default" ||
+      record.temperature === "n/a") &&
+    typeof record.textVerbosity === "string" &&
+    typeof record.responseFormat === "string" &&
+    (record.providerRoute === "direct" || record.providerRoute === "openrouter") &&
+    typeof record.resolvedModelId === "string" &&
+    record.resolvedModelId.length > 0
+  );
+}
+
 function isBenchmarkRunConfiguration(value: unknown): value is BenchmarkRunConfiguration {
   if (!value || typeof value !== "object") return false;
   const configuration = value as Partial<BenchmarkRunConfiguration>;
@@ -197,10 +234,15 @@ function isBenchmarkRunConfiguration(value: unknown): value is BenchmarkRunConfi
     (configuration.reasoningOverride === null ||
       typeof configuration.reasoningOverride === "string") &&
     (configuration.requestConfigurationVersion === undefined ||
-      configuration.requestConfigurationVersion === 1) &&
+      configuration.requestConfigurationVersion === 1 ||
+      configuration.requestConfigurationVersion === 2) &&
     (configuration.requestConfiguration === undefined ||
       (typeof configuration.requestConfiguration === "string" &&
         configuration.requestConfiguration.length > 0)) &&
+    // v2 is defined by carrying the structured record; v1 must not carry one
+    (configuration.requestConfigurationVersion === 2
+      ? isAcceptedConfigurationRecord(configuration.acceptedConfiguration)
+      : configuration.acceptedConfiguration === undefined) &&
     typeof configuration.toolsEnabled === "boolean"
   );
 }
@@ -410,7 +452,8 @@ function configurationMatchesJob(
 ): configuration is BenchmarkRunConfiguration {
   return (
     promptProvenanceMatchesJob(configuration, job) &&
-    configuration.requestConfigurationVersion === 1 &&
+    (configuration.requestConfigurationVersion === 1 ||
+      configuration.requestConfigurationVersion === 2) &&
     typeof configuration.requestConfiguration === "string"
   );
 }

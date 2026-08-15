@@ -2,8 +2,8 @@ import { prisma } from "@/lib/prisma";
 
 // Lightweight build metadata. Immutable per (buildId, voxelSha256), so cold-warm
 // hits do not need a Postgres roundtrip every request. Heavy fields (voxelData,
-// storage pointers, arenaSnapshot* json) are intentionally excluded so this
-// cache stays tiny in memory under high cardinality.
+// storage pointers) are intentionally excluded so this cache stays tiny in
+// memory under high cardinality.
 export type ArenaBuildMetaRow = {
   id: string;
   gridSize: number;
@@ -13,13 +13,6 @@ export type ArenaBuildMetaRow = {
   voxelCompressedByteSize: number | null;
   voxelSha256: string | null;
   arenaBuildHints: unknown | null;
-};
-
-export type ArenaBuildSnapshotFields = {
-  arenaSnapshotPreview: unknown | null;
-  arenaSnapshotPreviewChecksum: string | null;
-  arenaSnapshotFull: unknown | null;
-  arenaSnapshotFullChecksum: string | null;
 };
 
 type CacheEntry = {
@@ -151,24 +144,6 @@ export async function getArenaBuildMeta(
       inflight.delete(buildId);
     }
   }
-}
-
-// Snapshot json fields are large and only needed when the artifact redirect
-// path missed and the response cache also missed, so they live outside the
-// metadata cache. Subsequent identical requests are served by the
-// jsonResponseCache in the build route, which has its own byte-weight cap.
-export async function getArenaBuildSnapshotFields(
-  buildId: string,
-): Promise<ArenaBuildSnapshotFields | null> {
-  return prisma.build.findUnique({
-    where: { id: buildId },
-    select: {
-      arenaSnapshotPreview: true,
-      arenaSnapshotPreviewChecksum: true,
-      arenaSnapshotFull: true,
-      arenaSnapshotFullChecksum: true,
-    },
-  });
 }
 
 export function invalidateArenaBuildMeta(buildId: string) {

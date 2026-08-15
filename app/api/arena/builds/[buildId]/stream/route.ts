@@ -18,6 +18,7 @@ import {
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
+import { healArenaBuildSnapshotArtifactsOnce } from "@/lib/arena/buildSnapshotArtifacts";
 import { getArenaBuildMeta, invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
@@ -458,6 +459,17 @@ export async function GET(
             }
             if (marked) invalidateArenaBuildMeta(buildId);
           }
+
+          // Reaching this route at all means the snapshot artifact was missing,
+          // so heal on every fallback rather than only the first prepare: the
+          // prepared cache has no TTL, and gating on it meant a failed upload
+          // was never retried. The success set makes repeat calls no-ops.
+          // Registered with after() like the stream-artifact warmup above, so a
+          // short response or an early client disconnect cannot leave the
+          // invocation suspended mid-upload and lose the repair.
+          after(async () => {
+            await healArenaBuildSnapshotArtifactsOnce(prepared);
+          });
 
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {
             send({

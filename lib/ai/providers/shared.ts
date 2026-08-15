@@ -2,6 +2,9 @@
 // Provider-specific variants (error vocabularies, content extraction, base URL
 // rules) stay in their own adapter files
 
+import { attachAbortSignal } from "@/lib/ai/providers/abort";
+import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
 
@@ -22,4 +25,85 @@ export function withMaxOutputTokens(message: string, maxOutputTokens: number): s
   const budget = Math.floor(maxOutputTokens);
   const trimmed = message.trim().replace(/[.!?]$/, "");
   return `${trimmed}; max_output_tokens=${budget}.`;
+}
+
+export function extractChatCompletionText(data: {
+  choices?: { message?: { content?: unknown } }[];
+}): string {
+  const content = data.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) return content.map((c) => String(c ?? "")).join("");
+  return "";
+}
+
+// The fetch-based chat-completions scaffold shared by the first-party
+// OpenAI-compatible adapters: descend the token-budget ladder on 400
+// token-limit rejections, classify aborts/network failures, and surface the
+// provider error body with its request id. Request bodies, error
+// vocabularies, and stream handling stay in the adapters.
+export async function postChatCompletionWithTokenBudgetRetry(params: {
+  serviceLabel: string;
+  url: string;
+  apiKey: string;
+  maxOutputTokens: number;
+  stream: boolean;
+  looksLikeTokenLimitError: (body: string) => boolean;
+  buildBody: (tokenBudget: number) => Record<string, unknown>;
+  signal?: AbortSignal;
+  onProviderRequest?: () => void;
+}): Promise<{ res: Response; acceptedTokenBudget: number }> {
+  const controller = new AbortController();
+  const detachAbort = attachAbortSignal(controller, params.signal);
+
+  let res: Response | null = null;
+  let lastBody = "";
+  let selectedTokenBudget: number | null = null;
+  try {
+    for (const tok of tokenBudgetCandidates(params.maxOutputTokens)) {
+      controller.signal.throwIfAborted();
+      params.onProviderRequest?.();
+      res = await fetch(params.url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+          ...(params.stream ? { Accept: "text/event-stream" } : {}),
+        },
+        signal: controller.signal,
+        body: JSON.stringify(params.buildBody(tok)),
+      });
+      if (res.ok) {
+        selectedTokenBudget = tok;
+        break;
+      }
+      lastBody = await res.text().catch(() => "");
+      if (res.status === 400 && params.looksLikeTokenLimitError(lastBody)) continue;
+      break;
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`${params.serviceLabel} request timed out`);
+    }
+    console.error(`${params.serviceLabel} network error:`, err);
+    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
+    throw new Error(
+      `${params.serviceLabel} request failed: ${err instanceof Error ? err.message : String(err)}${cause}`,
+    );
+  } finally {
+    detachAbort();
+  }
+
+  if (!res) {
+    throw new Error(`${params.serviceLabel} request failed`);
+  }
+
+  if (!res.ok) {
+    const body = lastBody || (await res.text().catch(() => ""));
+    const rid = requestIdFromResponse(res);
+    throw new Error(
+      `${params.serviceLabel} error ${res.status}${rid ? ` (request ${rid})` : ""}: ${body}`,
+    );
+  }
+
+  return { res, acceptedTokenBudget: selectedTokenBudget ?? params.maxOutputTokens };
 }

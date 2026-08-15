@@ -740,4 +740,101 @@ const concurrentFinalLedger = JSON.parse(readFileSync(concurrentLedgerPath, "utf
 assert.equal(concurrentFinalLedger.jobs["openai_gpt_5_6_sol/castle"]?.generatedMetricsDirty, false);
 assert.equal(concurrentFinalLedger.jobs["xai_grok_4_6/castle"]?.generatedMetricsDirty, false);
 
+// structured accepted-config records (ledger v2)
+const acceptedConfiguration = {
+  apiMode: "responses_sync",
+  maxOutputTokens: 128_000,
+  thinkingMode: "reasoning=max",
+  temperature: "default" as const,
+  textVerbosity: "high",
+  responseFormat: "json_schema",
+  providerRoute: "direct" as const,
+  resolvedModelId: "gpt-5.6-sol",
+};
+const structuredConfiguration = createBenchmarkRunConfiguration({
+  promptText: "Build prompt for structured",
+  providerRoute: "direct",
+  reasoningOverride: null,
+  requestConfiguration: effectiveRequestConfiguration,
+  acceptedConfiguration,
+  toolsEnabled: true,
+});
+assert.equal(structuredConfiguration.requestConfigurationVersion, 2);
+assert.deepEqual(structuredConfiguration.acceptedConfiguration, acceptedConfiguration);
+assert.equal(
+  structuredConfiguration.requestConfiguration,
+  effectiveRequestConfiguration,
+  "v2 must keep the prose line so mixed v1/v2 cohorts compare on the same key",
+);
+assert.equal(
+  castleConfiguration.requestConfigurationVersion,
+  1,
+  "records without the structured object stay at version 1",
+);
+
+const structuredRoot = mkdtempSync(join(tmpdir(), "minebench-structured-benchmark-metrics-"));
+const structuredJob: BenchmarkMetricJob = {
+  ...job("structured"),
+  filePath: join(structuredRoot, "uploads", "structured", "structured-gpt-5-6-sol.json"),
+};
+const structuredStore = new BenchmarkMetricsStore({
+  ledgerPath: join(structuredRoot, "uploads", ".benchmark-metrics.json"),
+  generatedMetricsPath: join(structuredRoot, "modelBenchmarkMetrics.generated.json"),
+});
+structuredStore.markRunning(structuredJob);
+structuredStore.markProviderCall(structuredJob, 1);
+structuredStore.markCompletedAttempt(structuredJob, 1);
+structuredStore.finalizeSuccess(structuredJob, castleJson, {
+  inferenceTimeMs: 45_000,
+  attemptCount: 1,
+  acceptedOutputTokens: 128_000,
+  configuration: structuredConfiguration,
+});
+const structuredLedger = JSON.parse(
+  readFileSync(join(structuredRoot, "uploads", ".benchmark-metrics.json"), "utf8"),
+) as {
+  jobs: Record<
+    string,
+    { sample?: { configuration?: { requestConfigurationVersion?: number; acceptedConfiguration?: unknown } } }
+  >;
+};
+const persistedConfiguration =
+  structuredLedger.jobs["openai_gpt_5_6_sol/structured"]?.sample?.configuration;
+assert.equal(persistedConfiguration?.requestConfigurationVersion, 2);
+assert.deepEqual(persistedConfiguration?.acceptedConfiguration, acceptedConfiguration);
+const structuredSummary = structuredStore
+  .summarize([structuredJob])
+  .get("openai_gpt_5_6_sol");
+assert.equal(
+  structuredSummary?.configurationSampleCount,
+  1,
+  "a v2 sample must survive ledger validation on reload",
+);
+
+// Gemini reports dynamic thinking as a -1 budget; that sample must survive too
+const dynamicThinkingConfiguration = createBenchmarkRunConfiguration({
+  promptText: "Build prompt for structured",
+  providerRoute: "direct",
+  reasoningOverride: null,
+  requestConfiguration: effectiveRequestConfiguration,
+  acceptedConfiguration: { ...acceptedConfiguration, reasoningMaxTokens: -1 },
+  toolsEnabled: true,
+});
+const dynamicJob: BenchmarkMetricJob = {
+  ...job("structured"),
+  filePath: join(structuredRoot, "uploads", "structured", "structured-gpt-5-6-sol.json"),
+};
+structuredStore.finalizeSuccess(dynamicJob, castleJson, {
+  inferenceTimeMs: 45_000,
+  attemptCount: 1,
+  acceptedOutputTokens: 128_000,
+  configuration: dynamicThinkingConfiguration,
+});
+assert.equal(
+  structuredStore.summarize([dynamicJob]).get("openai_gpt_5_6_sol")?.configurationSampleCount,
+  1,
+  "a dynamic-thinking (-1) budget must not invalidate the sample",
+);
+assert.equal(structuredSummary?.configurationIsConsistent, true);
+
 console.log("batch benchmark metric lifecycle checks passed");

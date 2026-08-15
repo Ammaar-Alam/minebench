@@ -1,4 +1,4 @@
-import { withMaxOutputTokens } from "@/lib/ai/providers/shared";
+import { extractChatCompletionText, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
@@ -28,13 +28,6 @@ type NodeHttpResponse = {
 };
 
 const VOXEL_BUILD_JSON_SCHEMA_NAME = "voxel_build_response";
-
-function extractTextFromChat(data: OpenAiCompatibleChatResponse): string {
-  const content = data.choices?.[0]?.message?.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) return content.map((c) => String(c ?? "")).join("");
-  return "";
-}
 
 function requestIdFromHeaders(headers: Headers): string | null {
   return (
@@ -373,6 +366,6 @@ export async function openAiCompatibleGenerateText(params: {
   }
 
   const data = JSON.parse(await readResponseText(res.body)) as OpenAiCompatibleChatResponse;
-  const text = extractTextFromChat(data);
+  const text = extractChatCompletionText(data);
   return { text };
 }
