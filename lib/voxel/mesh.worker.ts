@@ -3,7 +3,12 @@ import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { canVoxelBlockEmitAnyFace, isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild } from "@/lib/voxel/types";
-import type { SerializedBuildBounds, SerializedMeshBucket, VoxelMeshPayload } from "@/lib/voxel/mesh";
+import type {
+  SerializedBuildBounds,
+  SerializedMeshBucket,
+  TransferableVoxelBlocks,
+  VoxelMeshPayload,
+} from "@/lib/voxel/mesh";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -13,7 +18,7 @@ type BuildProgress = {
 
 type WorkerRequest = {
   type: "build";
-  build: VoxelBuild;
+  blocks: TransferableVoxelBlocks;
   allowedBlockIds: string[];
   blockLimit?: number;
 };
@@ -295,7 +300,7 @@ function postProgress(processedBlocks: number, totalBlocks: number, stageLabel: 
 }
 
 function prepareMeshData(
-  build: VoxelBuild,
+  blocks: TransferableVoxelBlocks,
   allowedBlockIds: string[],
   blockLimit?: number,
 ): PreparedMeshData {
@@ -303,6 +308,7 @@ function prepareMeshData(
   const nonWaterBlocks: VoxelBuild["blocks"] = [];
   const waterBlocks: VoxelBuild["blocks"] = [];
   const blocksByPos = new Map<number, string>();
+  const { positions, typeIds, typeNames } = blocks;
 
   let minX = Infinity;
   let minY = Infinity;
@@ -314,27 +320,37 @@ function prepareMeshData(
   const inputLimit =
     typeof blockLimit === "number" && Number.isFinite(blockLimit)
       ? Math.max(0, Math.floor(blockLimit))
-      : build.blocks.length;
-  const maxInputBlocks = Math.min(build.blocks.length, inputLimit);
+      : typeIds.length;
+  const maxInputBlocks = Math.min(typeIds.length, inputLimit);
 
   for (let i = 0; i < maxInputBlocks; i += 1) {
-    const b = build.blocks[i];
-    if (!b || !allowed.has(b.type)) continue;
-    blocksByPos.set(encodePosition(b.x, b.y, b.z), b.type);
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    minZ = Math.min(minZ, b.z);
-    maxX = Math.max(maxX, b.x);
-    maxY = Math.max(maxY, b.y);
-    maxZ = Math.max(maxZ, b.z);
+    const type = typeNames[typeIds[i]];
+    if (!type || !allowed.has(type)) continue;
+    const x = positions[i * 3];
+    const y = positions[i * 3 + 1];
+    const z = positions[i * 3 + 2];
+    blocksByPos.set(encodePosition(x, y, z), type);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    maxZ = Math.max(maxZ, z);
     if ((i & (PROGRESS_EVERY - 1)) === 0) {
       postProgress(i, maxInputBlocks, "Indexing blocks");
     }
   }
 
+  // materialize one temporary block at a time and retain only visible blocks
   for (let i = 0; i < maxInputBlocks; i += 1) {
-    const b = build.blocks[i];
-    if (!b || !allowed.has(b.type)) continue;
+    const type = typeNames[typeIds[i]];
+    if (!type || !allowed.has(type)) continue;
+    const b = {
+      x: positions[i * 3],
+      y: positions[i * 3 + 1],
+      z: positions[i * 3 + 2],
+      type,
+    };
     if (b.type === WATER_BLOCK_ID) {
       if (!canVoxelBlockEmitAnyFace(b, blocksByPos)) continue;
       waterBlocks.push(b);
@@ -622,8 +638,12 @@ function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
   return bucket;
 }
 
-function buildMeshPayload(build: VoxelBuild, allowedBlockIds: string[], blockLimit?: number): VoxelMeshPayload {
-  const prepared = prepareMeshData(build, allowedBlockIds, blockLimit);
+function buildMeshPayload(
+  blocks: TransferableVoxelBlocks,
+  allowedBlockIds: string[],
+  blockLimit?: number,
+): VoxelMeshPayload {
+  const prepared = prepareMeshData(blocks, allowedBlockIds, blockLimit);
   const opaque = makeBucket();
   const cutout = makeBucket();
   const transparent = makeBucket();
@@ -677,7 +697,7 @@ workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
   if (!message || message.type !== "build") return;
 
   try {
-    const payload = buildMeshPayload(message.build, message.allowedBlockIds, message.blockLimit);
+    const payload = buildMeshPayload(message.blocks, message.allowedBlockIds, message.blockLimit);
     const response: WorkerResponse = { type: "complete", payload };
     workerScope.postMessage(response, collectTransferables(payload));
   } catch (err) {

@@ -45,9 +45,13 @@ type MutableModelState = LockedModelRow & {
   conservativeRating: number;
 };
 
-type ModelUpdatePlan = {
+type ModelUpdateRow = {
   id: string;
-  data: Prisma.ModelUpdateInput;
+  eloRating: number;
+  glickoRd: number;
+  glickoVolatility: number;
+  conservativeRating: number;
+  counters: CounterIncrements;
 };
 
 type VoteCacheUpdate = {
@@ -117,20 +121,45 @@ function emptyCounterIncrements(): CounterIncrements {
   };
 }
 
-function orderModelUpdatePlans(plans: ModelUpdatePlan[]): ModelUpdatePlan[] {
-  return [...plans].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-}
-
-async function applyOrderedModelUpdates(
+async function applyBatchedModelUpdates(
   tx: Prisma.TransactionClient,
-  plans: ModelUpdatePlan[],
+  rows: ModelUpdateRow[],
 ) {
-  for (const plan of orderModelUpdatePlans(plans)) {
-    await tx.model.update({
-      where: { id: plan.id },
-      data: plan.data,
-    });
-  }
+  if (rows.length === 0) return;
+  const ordered = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // one grouped statement replaces up to batch-limit serial updates in the drain tx
+  await tx.$executeRaw(Prisma.sql`
+    UPDATE "Model" AS model
+    SET
+      "eloRating" = updated."eloRating",
+      "glickoRd" = updated."glickoRd",
+      "glickoVolatility" = updated."glickoVolatility",
+      "conservativeRating" = updated."conservativeRating",
+      "winCount" = model."winCount" + updated."winDelta",
+      "lossCount" = model."lossCount" + updated."lossDelta",
+      "drawCount" = model."drawCount" + updated."drawDelta",
+      "bothBadCount" = model."bothBadCount" + updated."bothBadDelta",
+      "updatedAt" = CURRENT_TIMESTAMP
+    FROM (
+      VALUES ${Prisma.join(
+        ordered.map(
+          (row) =>
+            Prisma.sql`(${row.id}::text, ${row.eloRating}::double precision, ${row.glickoRd}::double precision, ${row.glickoVolatility}::double precision, ${row.conservativeRating}::double precision, ${row.counters.winCount}::int, ${row.counters.lossCount}::int, ${row.counters.drawCount}::int, ${row.counters.bothBadCount}::int)`,
+        ),
+      )}
+    ) AS updated(
+      "id",
+      "eloRating",
+      "glickoRd",
+      "glickoVolatility",
+      "conservativeRating",
+      "winDelta",
+      "lossDelta",
+      "drawDelta",
+      "bothBadDelta"
+    )
+    WHERE model."id" = updated."id"
+  `);
 }
 
 async function loadModelsForVoteJobs(
@@ -424,22 +453,18 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           });
         }
 
-        const modelUpdatePlans = Array.from(modelStates.values()).map((model) => {
-          const counters = counterIncrements.get(model.id) ?? emptyCounterIncrements();
-          const data: Prisma.ModelUpdateInput = {
+        const modelUpdateRows: ModelUpdateRow[] = Array.from(modelStates.values()).map(
+          (model) => ({
+            id: model.id,
             eloRating: model.eloRating,
             glickoRd: model.glickoRd,
             glickoVolatility: model.glickoVolatility,
             conservativeRating: model.conservativeRating,
-          };
-          if (counters.winCount > 0) data.winCount = { increment: counters.winCount };
-          if (counters.lossCount > 0) data.lossCount = { increment: counters.lossCount };
-          if (counters.drawCount > 0) data.drawCount = { increment: counters.drawCount };
-          if (counters.bothBadCount > 0) data.bothBadCount = { increment: counters.bothBadCount };
-          return { id: model.id, data };
-        });
+            counters: counterIncrements.get(model.id) ?? emptyCounterIncrements(),
+          }),
+        );
 
-        await applyOrderedModelUpdates(tx, modelUpdatePlans);
+        await applyBatchedModelUpdates(tx, modelUpdateRows);
         // coverage rows update in the same tx as processedAt
         await applyCoveragePersistUpdates(tx, Array.from(coveragePersistUpdates.values()));
         await tx.$executeRaw(Prisma.sql`
@@ -460,7 +485,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
 
   if (result.processedCount <= 0) return result;
 
-  invalidateArenaStatsCache();
   for (const cacheUpdate of result.cacheUpdates) {
     recordArenaVoteInSamplingCache(cacheUpdate);
   }
@@ -479,21 +503,27 @@ export async function drainArenaVoteJobs(opts?: {
   const maxMs = Math.max(250, opts?.maxMs ?? JOB_DRAIN_MAX_MS);
   const deadlineAt = Date.now() + maxMs;
 
-  while (processedCount < maxJobs) {
-    const remainingMs = deadlineAt - Date.now();
-    // always let a fresh drain try one batch
-    if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
-    const remainingJobs = maxJobs - processedCount;
-    const result = await processArenaVoteJobBatch(remainingJobs);
-    if (result.lockSkipped) {
-      lockSkipped = true;
-      break;
+  try {
+    while (processedCount < maxJobs) {
+      const remainingMs = deadlineAt - Date.now();
+      // always let a fresh drain try one batch
+      if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
+      const remainingJobs = maxJobs - processedCount;
+      const result = await processArenaVoteJobBatch(remainingJobs);
+      if (result.lockSkipped) {
+        lockSkipped = true;
+        break;
+      }
+      const processed = result.processedCount;
+      if (processed <= 0) break;
+      processedCount += processed;
+      batches += 1;
+      if (processed < Math.max(1, JOB_BATCH_LIMIT)) break;
     }
-    const processed = result.processedCount;
-    if (processed <= 0) break;
-    processedCount += processed;
-    batches += 1;
-    if (processed < Math.max(1, JOB_BATCH_LIMIT)) break;
+  } finally {
+    // ratings moved: leaderboard, prompt signals, and model detail are all stale.
+    // once per drain, and even on a late-batch failure committed data stays visible
+    if (processedCount > 0) invalidateArenaStatsCache();
   }
 
   return { processedCount, batches, lockSkipped };

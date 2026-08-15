@@ -4,7 +4,7 @@ import type { ArenaBuildVariant } from "@/lib/arena/types";
 import {
   deriveArenaBuildLoadHints,
   getCachedPreparedArenaBuild,
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   pickBuildVariant,
   prepareArenaBuild,
 } from "@/lib/arena/buildArtifacts";
@@ -28,7 +28,7 @@ const SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
   10,
 );
 const SNAPSHOT_ARTIFACT_FETCH_ENABLED =
-  (process.env.ARENA_SNAPSHOT_ARTIFACT_FETCH_ENABLED ?? "0").trim() === "1";
+  (process.env.ARENA_SNAPSHOT_ARTIFACT_FETCH_ENABLED ?? "1").trim() === "1";
 const SNAPSHOT_ARTIFACT_REDIRECT_ENABLED =
   (process.env.ARENA_SNAPSHOT_ARTIFACT_REDIRECT_ENABLED ?? "1").trim() !== "0";
 const SNAPSHOT_PREVIEW_ARTIFACT_REDIRECT_ENABLED =
@@ -52,6 +52,8 @@ const JSON_RESPONSE_CACHE_MAX_WEIGHT = Number.parseInt(
 
 type CachedJsonResponse = {
   bytes: Uint8Array;
+  // which path produced this body, so a cached fallback still reports as one
+  source: "db-snapshot" | "live";
   byteWeight: number;
   touchedAt: number;
 };
@@ -165,18 +167,19 @@ function pruneJsonResponseCache() {
   }
 }
 
-function getCachedJsonResponseByKey(key: string): Uint8Array | null {
+function getCachedJsonResponseByKey(key: string): CachedJsonResponse | null {
   const cached = jsonResponseCache.get(key);
   if (!cached) return null;
   cached.touchedAt = Date.now();
   jsonResponseCache.delete(key);
   jsonResponseCache.set(key, cached);
-  return cached.bytes;
+  return cached;
 }
 
 function rememberJsonResponseByKey(
   key: string,
   bytes: Uint8Array,
+  source: CachedJsonResponse["source"],
 ) {
   if (bytes.byteLength > JSON_RESPONSE_CACHE_MAX_WEIGHT) return;
   const previous = jsonResponseCache.get(key);
@@ -186,6 +189,7 @@ function rememberJsonResponseByKey(
   }
   jsonResponseCache.set(key, {
     bytes,
+    source,
     byteWeight: bytes.byteLength,
     touchedAt: Date.now(),
   });
@@ -200,18 +204,20 @@ function rememberJsonResponse(
   hints: unknown,
   gzip: boolean,
   bytes: Uint8Array,
+  source: CachedJsonResponse["source"],
 ) {
   const key = buildJsonResponseCacheKey(buildId, variant, checksum, hints, gzip);
   if (!key) return;
-  rememberJsonResponseByKey(key, bytes);
+  rememberJsonResponseByKey(key, bytes, source);
 }
 
 async function getOrCreateJsonResponse(
   key: string,
+  source: CachedJsonResponse["source"],
   create: () => Promise<Uint8Array | null>,
 ): Promise<Uint8Array | null> {
   const cached = getCachedJsonResponseByKey(key);
-  if (cached) return cached;
+  if (cached) return cached.bytes;
 
   const existing = jsonResponseInflight.get(key);
   // share db snapshot serialization across concurrent clients
@@ -219,7 +225,7 @@ async function getOrCreateJsonResponse(
 
   const promise = (async () => {
     const bytes = await create();
-    if (bytes) rememberJsonResponseByKey(key, bytes);
+    if (bytes) rememberJsonResponseByKey(key, bytes, source);
     return bytes;
   })();
   jsonResponseInflight.set(key, promise);
@@ -281,7 +287,6 @@ export async function GET(
   const artifactAllowed =
     SNAPSHOT_ARTIFACT_FETCH_ENABLED &&
     url.searchParams.get("artifact") !== "0" &&
-    Boolean(expectedChecksum) &&
     Boolean(storedChecksum);
   const shellHints = deriveArenaBuildLoadHints({
     blockCount: buildMeta.blockCount,
@@ -351,21 +356,63 @@ export async function GET(
     shellHints,
     shouldGzip,
   );
+  // storage-first: the checksum-addressed artifact is the canonical snapshot
+  try {
+    if (artifactAllowed && canServeSnapshotArtifact) {
+      const artifactStartedAt = timing.start();
+      const artifactBytes = await withTimeout(
+        (signal) =>
+          fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal }),
+        SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
+        "snapshot artifact fetch",
+      );
+      if (artifactBytes) {
+        timing.end("artifact_hit", artifactStartedAt);
+        timing.end("total", requestStartedAt);
+        // the stored object is gzip; proxying it verbatim to a gzip-capable
+        // client keeps snapshot-class fallbacks off the uncompressed path
+        const body = shouldGzip ? gzipSync(Buffer.from(artifactBytes)) : artifactBytes;
+        const headers = new Headers({
+          "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
+          "Content-Type": "application/json; charset=utf-8",
+          "Content-Length": String(body.byteLength),
+          "x-build-delivery-class": deliveryClass,
+          "x-build-source": "artifact",
+        });
+        if (shouldGzip) {
+          headers.set("Content-Encoding", "gzip");
+          headers.set("Vary", "Accept-Encoding");
+        }
+        timing.apply(headers);
+        return new Response(Buffer.from(body), { headers });
+      }
+      timing.end("artifact_miss", artifactStartedAt);
+    }
+  } catch (error) {
+    console.warn("arena snapshot artifact fetch failed", error);
+  }
+
   const cachedJsonResponse = jsonCacheKey ? getCachedJsonResponseByKey(jsonCacheKey) : null;
   if (cachedJsonResponse) {
+    // a cached fallback body must still report as the fallback it is, or a
+    // soak measuring db-fallback traffic reads clean while serving it
+    if (cachedJsonResponse.source === "db-snapshot") {
+      console.log(`arena snapshot db fallback (build cached) build=${buildId} variant=${variant}`);
+    }
     timing.end("total", requestStartedAt);
     const headers = createJsonHeaders({
-      byteLength: cachedJsonResponse.byteLength,
+      byteLength: cachedJsonResponse.bytes.byteLength,
       deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
-      source: "response-cache",
+      source: `response-cache:${cachedJsonResponse.source}`,
       gzip: shouldGzip,
     });
     timing.apply(headers);
-    return new Response(Buffer.from(cachedJsonResponse), { headers });
+    return new Response(Buffer.from(cachedJsonResponse.bytes), { headers });
   }
 
+
   const persistedResponseBytes = jsonCacheKey
-    ? await getOrCreateJsonResponse(jsonCacheKey, async () => {
+    ? await getOrCreateJsonResponse(jsonCacheKey, "db-snapshot", async () => {
         // snapshot json bodies live outside the meta cache to avoid retaining
         // multi-mb blobs across many buildIds. the response cache covers
         // subsequent identical requests with its own byte-weight cap.
@@ -386,6 +433,8 @@ export async function GET(
       })
     : null;
   if (persistedResponseBytes) {
+    // fallback hits must reach zero during the soak before columns can drop
+    console.log(`arena snapshot db fallback (build) build=${buildId} variant=${variant}`);
     timing.end("total", requestStartedAt);
     const headers = createJsonHeaders({
       byteLength: persistedResponseBytes.byteLength,
@@ -414,34 +463,6 @@ export async function GET(
       },
       { status: 503, headers },
     );
-  }
-
-  try {
-    if (artifactAllowed && canServeSnapshotArtifact) {
-      const artifactStartedAt = timing.start();
-      const artifactBytes = await withTimeout(
-        (signal) =>
-          fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal }),
-        SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
-        "snapshot artifact fetch",
-      );
-      if (artifactBytes) {
-        timing.end("artifact_hit", artifactStartedAt);
-        timing.end("total", requestStartedAt);
-        const headers = new Headers({
-          "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
-          "Content-Type": "application/json; charset=utf-8",
-          "Content-Length": String(artifactBytes.byteLength),
-          "x-build-delivery-class": deliveryClass,
-          "x-build-source": "artifact",
-        });
-        timing.apply(headers);
-        return new Response(Buffer.from(artifactBytes), { headers });
-      }
-      timing.end("artifact_miss", artifactStartedAt);
-    }
-  } catch (error) {
-    console.warn("arena snapshot artifact fetch failed", error);
   }
 
   if (variant === "full" && shellHints.deliveryClass === "stream-artifact") {
@@ -510,10 +531,11 @@ export async function GET(
   const voxelBuild = pickBuildVariant(prepared, variant);
   after(async () => {
     // write metadata and artifacts off the response path
+    console.log(`arena metadata heal (build) build=${prepared.buildId}`);
     const marked = await prisma.build
       .updateMany({
         where: prepared.payloadIdentity,
-        data: getPreparedArenaBuildMetadataUpdate(prepared),
+        data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
       })
       .catch(() => null);
     if (!marked || marked.count === 0) return;
@@ -533,7 +555,15 @@ export async function GET(
     },
     shouldGzip,
   );
-  rememberJsonResponse(prepared.buildId, variant, prepared.checksum, prepared.hints, shouldGzip, responseBytes);
+  rememberJsonResponse(
+    prepared.buildId,
+    variant,
+    prepared.checksum,
+    prepared.hints,
+    shouldGzip,
+    responseBytes,
+    "live",
+  );
   timing.end("total", requestStartedAt);
   const headers = createJsonHeaders({
     byteLength: responseBytes.byteLength,

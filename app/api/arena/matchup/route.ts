@@ -6,12 +6,15 @@ import { expectedScore } from "@/lib/arena/rating";
 import {
   deriveArenaBuildLoadHints,
   getCachedPreparedArenaBuild,
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   pickInitialBuild,
   prepareArenaBuild,
   type PreparedArenaBuild,
 } from "@/lib/arena/buildArtifacts";
-import { createArenaBuildSnapshotArtifactSignedUrl } from "@/lib/arena/buildSnapshotArtifacts";
+import {
+  createArenaBuildSnapshotArtifactSignedUrl,
+  fetchArenaBuildSnapshotArtifactPayload,
+} from "@/lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
@@ -133,9 +136,10 @@ async function prepareArenaBuildById(buildId: string) {
 async function persistPreparedArenaBuildMetadata(
   prepared: PreparedArenaBuild,
 ): Promise<boolean> {
+  console.log(`arena metadata heal (matchup) build=${prepared.buildId}`);
   const result = await prisma.build.updateMany({
     where: prepared.payloadIdentity,
-    data: getPreparedArenaBuildMetadataUpdate(prepared),
+    data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
   });
   invalidateArenaBuildMeta(prepared.buildId);
   return result.count > 0;
@@ -172,6 +176,50 @@ function pickPersistedInitialBuild(
     hints.initialVariant,
     storedChecksum,
   );
+}
+
+const SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS = Number.parseInt(
+  process.env.ARENA_SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS ?? "5000",
+  10,
+);
+
+async function resolveInitialBuildSnapshot(
+  buildId: string,
+  hints: ArenaBuildLoadHints,
+  row: {
+    voxelSha256: string | null;
+    arenaSnapshotPreview: unknown | null;
+    arenaSnapshotPreviewChecksum: string | null;
+    arenaSnapshotFull: unknown | null;
+    arenaSnapshotFullChecksum: string | null;
+  },
+): Promise<ArenaMatchup["a"]["build"]> {
+  const storedChecksum = row.voxelSha256?.trim() || null;
+  // storage-first: the checksum-addressed artifact is the canonical snapshot
+  try {
+    const artifact = await fetchArenaBuildSnapshotArtifactPayload(
+      buildId,
+      hints.initialVariant,
+      storedChecksum,
+      { signal: AbortSignal.timeout(SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS) },
+    );
+    if (artifact) return artifact.voxelBuild as ArenaMatchup["a"]["build"];
+  } catch {
+    // storage failure still has the db snapshot columns below
+  }
+  const persisted = pickPersistedInitialBuild(
+    hints,
+    row.arenaSnapshotFull,
+    row.arenaSnapshotFullChecksum,
+    row.arenaSnapshotPreview,
+    row.arenaSnapshotPreviewChecksum,
+    storedChecksum,
+  );
+  if (persisted) {
+    // fallback hits must reach zero during the soak before columns can drop
+    console.log(`arena snapshot db fallback (matchup) build=${buildId} variant=${hints.initialVariant}`);
+  }
+  return persisted;
 }
 
 async function warmFullBuildArtifactUrl(
@@ -845,26 +893,14 @@ export async function GET(req: Request) {
         return respondJson({ error: "Missing seeded build payload" }, { status: 500 });
       }
 
-      if (checksumA && shouldPrepareA && !preparedA && buildAForPrepare) {
-        persistedInitialBuildA = pickPersistedInitialBuild(
-          shellHintsA,
-          buildAForPrepare.arenaSnapshotFull,
-          buildAForPrepare.arenaSnapshotFullChecksum,
-          buildAForPrepare.arenaSnapshotPreview,
-          buildAForPrepare.arenaSnapshotPreviewChecksum,
-          buildAForPrepare.voxelSha256?.trim() || null,
-        );
-      }
-      if (checksumB && shouldPrepareB && !preparedB && buildBForPrepare) {
-        persistedInitialBuildB = pickPersistedInitialBuild(
-          shellHintsB,
-          buildBForPrepare.arenaSnapshotFull,
-          buildBForPrepare.arenaSnapshotFullChecksum,
-          buildBForPrepare.arenaSnapshotPreview,
-          buildBForPrepare.arenaSnapshotPreviewChecksum,
-          buildBForPrepare.voxelSha256?.trim() || null,
-        );
-      }
+      [persistedInitialBuildA, persistedInitialBuildB] = await Promise.all([
+        checksumA && shouldPrepareA && !preparedA && buildAForPrepare
+          ? resolveInitialBuildSnapshot(buildA.id, shellHintsA, buildAForPrepare)
+          : Promise.resolve(null),
+        checksumB && shouldPrepareB && !preparedB && buildBForPrepare
+          ? resolveInitialBuildSnapshot(buildB.id, shellHintsB, buildBForPrepare)
+          : Promise.resolve(null),
+      ]);
 
       [preparedA, preparedB] = await Promise.all([
 	        preparedA || persistedInitialBuildA

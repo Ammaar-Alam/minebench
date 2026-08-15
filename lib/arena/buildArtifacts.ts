@@ -260,6 +260,16 @@ export function serializeArenaBuildLoadHints(hints: ArenaBuildLoadHints): Record
   };
 }
 
+export function getPreparedArenaBuildCoreMetadataUpdate(
+  prepared: PreparedArenaBuild,
+): Record<string, unknown> {
+  // hot-route self-healing repairs identity and hints only; snapshot JSON is maintenance-owned
+  return {
+    voxelSha256: prepared.checksum,
+    arenaBuildHints: serializeArenaBuildLoadHints(prepared.hints),
+  };
+}
+
 export function getPreparedArenaBuildMetadataUpdate(prepared: PreparedArenaBuild): Record<string, unknown> {
   // persisted snapshots cover inline and snapshot routes only
   const shouldPersistPreparedPayload = prepared.hints.deliveryClass !== "stream-artifact";
@@ -269,8 +279,7 @@ export function getPreparedArenaBuildMetadataUpdate(prepared: PreparedArenaBuild
       : null;
   const snapshotFull = shouldPersistPreparedPayload ? prepared.fullBuild : null;
   return {
-    voxelSha256: prepared.checksum,
-    arenaBuildHints: serializeArenaBuildLoadHints(prepared.hints),
+    ...getPreparedArenaBuildCoreMetadataUpdate(prepared),
     arenaSnapshotPreview: snapshotPreview,
     arenaSnapshotPreviewChecksum: snapshotPreview ? prepared.checksum : null,
     arenaSnapshotFull: snapshotFull,

@@ -1031,9 +1031,41 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   };
 }
 
+// blocks cross the worker boundary as transferable typed arrays so the main
+// thread never structured-clones millions of block objects
+export type TransferableVoxelBlocks = {
+  positions: Int16Array;
+  typeIds: Uint16Array;
+  typeNames: string[];
+};
+
+export function encodeTransferableVoxelBlocks(
+  blocks: VoxelBuild["blocks"],
+): TransferableVoxelBlocks {
+  const positions = new Int16Array(blocks.length * 3);
+  const typeIds = new Uint16Array(blocks.length);
+  const typeNames: string[] = [];
+  const typeIdByName = new Map<string, number>();
+  for (let i = 0; i < blocks.length; i += 1) {
+    const block = blocks[i];
+    if (!block) continue;
+    positions[i * 3] = block.x;
+    positions[i * 3 + 1] = block.y;
+    positions[i * 3 + 2] = block.z;
+    let typeId = typeIdByName.get(block.type);
+    if (typeId === undefined) {
+      typeId = typeNames.length;
+      typeNames.push(block.type);
+      typeIdByName.set(block.type, typeId);
+    }
+    typeIds[i] = typeId;
+  }
+  return { positions, typeIds, typeNames };
+}
+
 type MeshWorkerRequest = {
   type: "build";
-  build: VoxelBuild;
+  blocks: TransferableVoxelBlocks;
   allowedBlockIds: string[];
   blockLimit?: number;
 };
@@ -1191,13 +1223,14 @@ async function createVoxelMeshPayloadInWorker(
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
+    const blocks = encodeTransferableVoxelBlocks(build.blocks);
     const request: MeshWorkerRequest = {
       type: "build",
-      build,
+      blocks,
       allowedBlockIds: palette.map((entry) => entry.id),
       blockLimit: opts?.blockLimit,
     };
-    worker.postMessage(request);
+    worker.postMessage(request, [blocks.positions.buffer, blocks.typeIds.buffer]);
   });
 }
 

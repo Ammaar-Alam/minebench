@@ -677,6 +677,11 @@ export function invalidateArenaStatsCache() {
   modelDetailCache.clear();
 }
 
+export function invalidateArenaModelDetailStatsCache() {
+  // shown counts surface only in model detail stats, so shown drains scope here
+  modelDetailCache.clear();
+}
+
 function promptFilterSql(promptIds: string[]): Prisma.Sql {
   return sqlInColumn(Prisma.sql`matchup."promptId"`, promptIds);
 }
