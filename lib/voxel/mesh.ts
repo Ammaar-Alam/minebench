@@ -5,6 +5,14 @@ import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { canVoxelBlockEmitAnyFace, isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  copyPackedVoxelBlocks,
+  packVoxelBlocks,
+  toObjectBackedVoxelBuild,
+  voxelBuildBlockCount,
+  type PackedVoxelBlocks,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
 
 type BuildProgress = {
@@ -1033,34 +1041,12 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
 
 // blocks cross the worker boundary as transferable typed arrays so the main
 // thread never structured-clones millions of block objects
-export type TransferableVoxelBlocks = {
-  positions: Int16Array;
-  typeIds: Uint16Array;
-  typeNames: string[];
-};
+export type TransferableVoxelBlocks = PackedVoxelBlocks;
 
 export function encodeTransferableVoxelBlocks(
   blocks: VoxelBuild["blocks"],
 ): TransferableVoxelBlocks {
-  const positions = new Int16Array(blocks.length * 3);
-  const typeIds = new Uint16Array(blocks.length);
-  const typeNames: string[] = [];
-  const typeIdByName = new Map<string, number>();
-  for (let i = 0; i < blocks.length; i += 1) {
-    const block = blocks[i];
-    if (!block) continue;
-    positions[i * 3] = block.x;
-    positions[i * 3 + 1] = block.y;
-    positions[i * 3 + 2] = block.z;
-    let typeId = typeIdByName.get(block.type);
-    if (typeId === undefined) {
-      typeId = typeNames.length;
-      typeNames.push(block.type);
-      typeIdByName.set(block.type, typeId);
-    }
-    typeIds[i] = typeId;
-  }
-  return { positions, typeIds, typeNames };
+  return packVoxelBlocks(blocks);
 }
 
 type MeshWorkerRequest = {
@@ -1140,7 +1126,7 @@ function createVoxelGroupFromMeshPayload(
 }
 
 async function createVoxelMeshPayloadInWorker(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelMeshPayload> {
@@ -1223,19 +1209,25 @@ async function createVoxelMeshPayloadInWorker(
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-    const blocks = encodeTransferableVoxelBlocks(build.blocks);
+    // A packed build is still being hydrated in place, so the worker gets a
+    // trimmed copy: transferring the live arrays would detach them.
+    const blocks = build.packed
+      ? copyPackedVoxelBlocks(build.packed, opts?.blockLimit)
+      : encodeTransferableVoxelBlocks(build.blocks);
     const request: MeshWorkerRequest = {
       type: "build",
       blocks,
       allowedBlockIds: palette.map((entry) => entry.id),
-      blockLimit: opts?.blockLimit,
+      // the filled prefix is authoritative; array length alone would let any
+      // trailing slack render as blocks at the origin
+      blockLimit: Math.min(blocks.count, opts?.blockLimit ?? Number.POSITIVE_INFINITY),
     };
     worker.postMessage(request, [blocks.positions.buffer, blocks.typeIds.buffer]);
   });
 }
 
 export async function warmVoxelMeshPayload(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<void> {
@@ -1250,12 +1242,16 @@ export async function warmVoxelMeshPayload(
 
 // Async variant that periodically yields to keep the main thread responsive during huge builds.
 async function createVoxelGroupAsyncLocal(
-  build: VoxelBuild,
+  packedOrObjectBuild: RenderableVoxelBuild,
   palette: BlockDefinition[],
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelGroup> {
-  const yieldAfterMs = Number.isFinite(opts?.yieldAfterMs) ? Math.max(1, opts?.yieldAfterMs ?? 12) : 12;
+  // Main-thread meshing walks block objects. This is the small-build path and
+  // the worker-failure fallback, so materializing here costs no more than the
+  // object representation this change removes everywhere else.
+  const build = toObjectBackedVoxelBuild(packedOrObjectBuild);
+  const yieldAfterMs =Number.isFinite(opts?.yieldAfterMs) ? Math.max(1, opts?.yieldAfterMs ?? 12) : 12;
   let lastYieldAt = nowMs();
   const maybeYield = async (emitProgress?: BuildProgress) => {
     throwIfAborted(opts?.signal);
@@ -1387,7 +1383,7 @@ async function createVoxelGroupAsyncLocal(
 }
 
 export async function createVoxelGroupAsync(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
@@ -1395,7 +1391,7 @@ export async function createVoxelGroupAsync(
   const blockLimit =
     typeof opts?.blockLimit === "number" && Number.isFinite(opts.blockLimit)
       ? Math.max(0, Math.floor(opts.blockLimit))
-      : build.blocks.length;
+      : voxelBuildBlockCount(build);
   if (
     Number.isFinite(LOCAL_MESH_MAX_BLOCKS) &&
     LOCAL_MESH_MAX_BLOCKS > 0 &&

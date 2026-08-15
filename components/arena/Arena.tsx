@@ -9,6 +9,14 @@ import {
   ArenaBuildStreamEvent,
   VoteChoice,
 } from "@/lib/arena/types";
+import {
+  appendPackedVoxelBlocks,
+  createPackedVoxelBlocks,
+  packVoxelBlocks,
+  reservePackedVoxelBlocks,
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoteBar, type VoteConfirmTarget } from "@/components/arena/VoteBar";
@@ -93,6 +101,21 @@ async function readErrorResponse(res: Response, fallback: string): Promise<strin
   return statusHint ?? detail ?? fallback;
 }
 
+// Parsing JSON produces one object per block. Packing at the delivery boundary
+// lets that array go instead of keeping it alive for as long as a lane holds
+// the build, which on a matchup means two of them at once.
+function packDeliveredBuild(
+  build: ArenaMatchup["a"]["build"],
+): ArenaMatchup["a"]["build"] {
+  if (!build || build.packed || build.blocks.length === 0) return build;
+  return { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) };
+}
+
+function packBuildVariantResponse(payload: BuildVariantResponse): BuildVariantResponse {
+  const packedBuild = packDeliveredBuild(payload.voxelBuild);
+  return packedBuild === payload.voxelBuild ? payload : { ...payload, voxelBuild: packedBuild };
+}
+
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const url = new URL("/api/arena/matchup", window.location.origin);
   if (promptId) url.searchParams.set("promptId", promptId);
@@ -100,7 +123,12 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
   url.searchParams.set("payload", "adaptive");
   const res = await fetch(url, { method: "GET", credentials: "include", signal });
   if (!res.ok) throw new Error(await readErrorResponse(res, "Failed to load matchup"));
-  return (await res.json()) as ArenaMatchup;
+  const matchup = (await res.json()) as ArenaMatchup;
+  return {
+    ...matchup,
+    a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
+    b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
+  };
 }
 
 async function fetchMatchup(
@@ -512,7 +540,7 @@ async function fetchBuildVariantSnapshot(
       const message = await readErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
-    return await readBuildVariantJson(res);
+    return packBuildVariantResponse(await readBuildVariantJson(res));
   } finally {
     timed.cleanup();
   }
@@ -567,7 +595,7 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return await readBuildVariantJson(res);
+    return packBuildVariantResponse(await readBuildVariantJson(res));
   }
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -608,17 +636,19 @@ async function fetchBuildVariantStreamOnce(
     let hasComplete = false;
     let sawFirstEvent = false;
 
-    const streamedBlocks: NonNullable<ArenaMatchup["a"]["build"]>["blocks"] = [];
+    // Blocks land in typed arrays as they arrive: the parsed objects from each
+    // chunk are released instead of being retained for the life of the lane,
+    // which is what a large build costs on a phone.
+    const packed = createPackedVoxelBlocks(0);
+    const streamedBuild: RenderableVoxelBuild = {
+      version: "1.0",
+      blocks: [],
+      packed,
+    };
 
     const emitProgress = (progress: BuildStreamProgress) => {
       if (!opts?.onProgress) return;
-      opts.onProgress(
-        {
-          version: "1.0",
-          blocks: streamedBlocks,
-        },
-        progress,
-      );
+      opts.onProgress(streamedBuild, progress);
     };
 
     const processLine = (line: string) => {
@@ -639,7 +669,8 @@ async function fetchBuildVariantStreamOnce(
         serverValidated = serverValidated || event.serverValidated;
         totalBlocks = event.totalBlocks || totalBlocks;
         buildLoadHints = event.buildLoadHints ?? buildLoadHints;
-        if (streamedBlocks.length === 0) {
+        if (totalBlocks != null) reservePackedVoxelBlocks(packed, totalBlocks);
+        if (packed.count === 0) {
           emitProgress({
             receivedBlocks: 0,
             totalBlocks,
@@ -652,13 +683,7 @@ async function fetchBuildVariantStreamOnce(
       if (event.type === "chunk") {
         sawFirstEvent = true;
         if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          // append without spread to avoid call-stack/GC pressure on chunks
-          // that can carry tens of thousands of blocks each.
-          const chunkBlocks = event.blocks;
-          const chunkLen = chunkBlocks.length;
-          for (let i = 0; i < chunkLen; i += 1) {
-            streamedBlocks.push(chunkBlocks[i]);
-          }
+          appendPackedVoxelBlocks(packed, event.blocks);
         }
         totalBlocks = event.totalBlocks || totalBlocks;
         emitProgress({
@@ -705,7 +730,7 @@ async function fetchBuildVariantStreamOnce(
         ? totalBlocks
         : null;
     const streamLooksComplete =
-      hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
+      hasComplete && (announcedTotal == null || packed.count >= announcedTotal);
 
     if (!streamLooksComplete) {
       cancelReader();
@@ -721,10 +746,7 @@ async function fetchBuildVariantStreamOnce(
       checksum,
       serverValidated,
       buildLoadHints,
-      voxelBuild: {
-        version: "1.0",
-        blocks: streamedBlocks,
-      },
+      voxelBuild: streamedBuild,
     };
   } catch (err: unknown) {
     cancelReader();
@@ -808,7 +830,7 @@ function withHydratedBuild(
               : baseHints.initialVariant,
           previewBlockCount:
             hydratedVariant === "preview" && build
-              ? build.blocks.length
+              ? voxelBuildBlockCount(build)
               : baseHints.previewBlockCount,
         }
       : baseHints,
@@ -841,7 +863,7 @@ function laneNeedsFullHydration(lane: ArenaMatchup["a"]): boolean {
   if (!laneExpectsFullHydration(lane)) return false;
   if (!lane.build) return false;
   const full = lane.buildLoadHints?.fullBlockCount ?? 0;
-  return lane.build.blocks.length < full;
+  return voxelBuildBlockCount(lane.build) < full;
 }
 
 function laneExpectsFullHydration(lane: ArenaMatchup["a"]): boolean {
@@ -964,7 +986,7 @@ function getLaneHydratedVariant(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): Ar
     lane.build &&
     Number.isFinite(fullBlockCount) &&
     fullBlockCount > 0 &&
-    lane.build.blocks.length < fullBlockCount
+    voxelBuildBlockCount(lane.build) < fullBlockCount
   ) {
     return "preview";
   }
@@ -977,18 +999,18 @@ function getLaneMeshCacheKey(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): strin
   const ref = variant === "preview" ? lane.previewRef ?? lane.buildRef : lane.buildRef ?? lane.previewRef;
   const checksum = ref?.checksum ?? lane.buildRef?.checksum ?? lane.previewRef?.checksum ?? null;
   if (!ref?.buildId || !checksum) return null;
-  return `${ref.buildId}:${variant}:${checksum}:${lane.build.blocks.length}`;
+  return `${ref.buildId}:${variant}:${checksum}:${voxelBuildBlockCount(lane.build)}`;
 }
 
 function estimateCachedHydratedBuildBytes(entry: CachedHydratedBuild): number {
   if (entry.variant === "preview") {
-    return Math.max(1, entry.build.blocks.length * 34);
+    return Math.max(1, voxelBuildBlockCount(entry.build) * 34);
   }
   const estimated = entry.buildLoadHints?.fullEstimatedBytes;
   if (typeof estimated === "number" && Number.isFinite(estimated) && estimated > 0) {
     return Math.floor(estimated);
   }
-  return Math.max(1, entry.build.blocks.length * 34);
+  return Math.max(1, voxelBuildBlockCount(entry.build) * 34);
 }
 
 function getPositiveByteLimit(value: number, fallback: number): number {
@@ -1005,8 +1027,8 @@ function estimateLaneFullBuildBytes(lane: ArenaMatchup["a"] | ArenaMatchup["b"])
   if (typeof fullBlockCount === "number" && Number.isFinite(fullBlockCount) && fullBlockCount > 0) {
     return Math.floor(fullBlockCount * 34);
   }
-  if (lane.build?.blocks.length) {
-    return Math.floor(lane.build.blocks.length * 34);
+  if (voxelBuildBlockCount(lane.build) > 0) {
+    return Math.floor(voxelBuildBlockCount(lane.build) * 34);
   }
   return null;
 }
@@ -1589,8 +1611,8 @@ export function Arena() {
         };
       });
       setLaneLoadProgress(matchupValue.id, side, {
-        receivedBlocks: cached.build.blocks.length,
-        totalBlocks: cached.build.blocks.length,
+        receivedBlocks: voxelBuildBlockCount(cached.build),
+        totalBlocks: voxelBuildBlockCount(cached.build),
       });
       setLaneLoadError(matchupValue.id, side, null);
       if (cached.variant === "full") {
@@ -1728,8 +1750,8 @@ export function Arena() {
           buildLoadHints: payload.buildLoadHints,
         });
         setLaneLoadProgress(matchupValue.id, side, {
-          receivedBlocks: payload.voxelBuild.blocks.length,
-          totalBlocks: payload.voxelBuild.blocks.length,
+          receivedBlocks: voxelBuildBlockCount(payload.voxelBuild),
+          totalBlocks: voxelBuildBlockCount(payload.voxelBuild),
         });
         setLaneLoadError(matchupValue.id, side, null);
       }

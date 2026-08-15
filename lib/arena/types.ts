@@ -1,4 +1,5 @@
-import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
+import type { VoxelBlock } from "@/lib/voxel/types";
+import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 export type VoteChoice = "A" | "B" | "TIE" | "BOTH_BAD";
 
@@ -80,7 +81,7 @@ export type ArenaMatchup = {
   prompt: { id: string; text: string };
   a: {
     model: { key: string; provider: string; displayName: string; eloRating: number };
-    build: VoxelBuild | null;
+    build: RenderableVoxelBuild | null;
     buildRef?: ArenaBuildRef;
     previewRef?: ArenaBuildRef;
     serverValidated?: boolean;
@@ -88,7 +89,7 @@ export type ArenaMatchup = {
   };
   b: {
     model: { key: string; provider: string; displayName: string; eloRating: number };
-    build: VoxelBuild | null;
+    build: RenderableVoxelBuild | null;
     buildRef?: ArenaBuildRef;
     previewRef?: ArenaBuildRef;
     serverValidated?: boolean;
