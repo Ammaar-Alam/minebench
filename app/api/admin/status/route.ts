@@ -1,13 +1,13 @@
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import {
-  estimateArenaBuildBytes,
-  getArenaArtifactMinBytes,
-} from "@/lib/arena/buildDeliveryPolicy";
 import { getArenaShownJobStatus } from "@/lib/arena/shownJobs";
-import { getArenaBuildStreamArtifactFetchRefs } from "@/lib/arena/buildStream";
+import { getArenaArtifactCoverage } from "@/lib/arena/artifactCoverage";
+import { ARENA_MATCHUP_STATE_CACHE_TTL_MS } from "@/lib/arena/coverage";
+import { findCatalogEntryBySlugOrKey } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
+import { databaseIdentityFromUrl } from "@/lib/db/identity";
+import { getSupabaseStorageReadiness } from "@/lib/storage/buildPayload";
 
 export const runtime = "nodejs";
 
@@ -32,10 +32,10 @@ function getDbInfo() {
   if (!url) return null;
   try {
     const u = new URL(url);
+    const identity = databaseIdentityFromUrl(url);
+    if (!identity) throw new Error("Invalid database URL");
     return {
-      host: u.hostname,
-      port: u.port || "5432",
-      database: u.pathname.replace(/^\//, "") || "unknown",
+      ...identity,
       pgbouncer: u.searchParams.get("pgbouncer") === "true",
       connectionLimit: u.searchParams.get("connection_limit"),
       poolTimeout: u.searchParams.get("pool_timeout"),
@@ -45,127 +45,10 @@ function getDbInfo() {
       host: "unknown",
       port: "unknown",
       database: "unknown",
+      schema: "unknown",
       pgbouncer: false,
       connectionLimit: null,
       poolTimeout: null,
-    };
-  }
-}
-
-async function getArenaArtifactCoverage() {
-  const builds = await prisma.build.findMany({
-    where: {
-      gridSize: 256,
-      palette: "simple",
-      mode: "precise",
-      model: {
-        enabled: true,
-        isBaseline: false,
-      },
-      prompt: {
-        active: true,
-      },
-    },
-    select: {
-      id: true,
-      blockCount: true,
-      voxelByteSize: true,
-      voxelCompressedByteSize: true,
-      voxelSha256: true,
-    },
-  });
-
-  const eligibleBuilds = builds
-    .map((build) => {
-      const checksum = build.voxelSha256?.trim() || null;
-      const estimatedBytes = estimateArenaBuildBytes({
-        blockCount: build.blockCount,
-        voxelByteSize: build.voxelByteSize,
-        voxelCompressedByteSize: build.voxelCompressedByteSize,
-      });
-      if (!checksum || estimatedBytes == null || estimatedBytes < getArenaArtifactMinBytes()) {
-        return null;
-      }
-
-      const fullRefs = getArenaBuildStreamArtifactFetchRefs(build.id, "full", checksum);
-      const previewRefs = getArenaBuildStreamArtifactFetchRefs(build.id, "preview", checksum);
-      if (fullRefs.length === 0 || previewRefs.length === 0) return null;
-
-      return {
-        buildId: build.id,
-        fullRefs,
-        previewRefs,
-      };
-    })
-    .filter(
-      (
-        build,
-      ): build is {
-        buildId: string;
-        fullRefs: Array<{ bucket: string; path: string }>;
-        previewRefs: Array<{ bucket: string; path: string }>;
-      } => build != null,
-    );
-
-  if (eligibleBuilds.length === 0) {
-    return {
-      eligibleBuilds: 0,
-      buildsWithBothVariants: 0,
-      buildsMissingVariants: 0,
-      artifactObjectsPresent: 0,
-      thresholdBytes: getArenaArtifactMinBytes(),
-      error: null,
-    };
-  }
-
-  try {
-    const pathsByBucket = new Map<string, string[]>();
-    for (const build of eligibleBuilds) {
-      for (const ref of [...build.fullRefs, ...build.previewRefs]) {
-        const bucketPaths = pathsByBucket.get(ref.bucket) ?? [];
-        bucketPaths.push(ref.path);
-        pathsByBucket.set(ref.bucket, bucketPaths);
-      }
-    }
-
-    const existingPaths = new Set<string>();
-    for (const [bucket, paths] of pathsByBucket.entries()) {
-      const uniquePaths = Array.from(new Set(paths));
-      const rows = await prisma.$queryRaw<{ name: string }[]>(
-        Prisma.sql`
-          SELECT name
-          FROM storage.objects
-          WHERE bucket_id = ${bucket}
-            AND name IN (${Prisma.join(uniquePaths)})
-        `,
-      );
-      for (const row of rows) {
-        if (row.name) existingPaths.add(row.name);
-      }
-    }
-
-    const buildsWithBothVariants = eligibleBuilds.reduce((count, build) => {
-      const hasFull = build.fullRefs.some((ref) => existingPaths.has(ref.path));
-      const hasPreview = build.previewRefs.some((ref) => existingPaths.has(ref.path));
-      return count + (hasFull && hasPreview ? 1 : 0);
-    }, 0);
-
-    return {
-      eligibleBuilds: eligibleBuilds.length,
-      buildsWithBothVariants,
-      buildsMissingVariants: eligibleBuilds.length - buildsWithBothVariants,
-      artifactObjectsPresent: existingPaths.size,
-      thresholdBytes: getArenaArtifactMinBytes(),
-      error: null,
-    };
-  } catch (error) {
-    return {
-      eligibleBuilds: eligibleBuilds.length,
-      buildsWithBothVariants: null,
-      buildsMissingVariants: null,
-      artifactObjectsPresent: null,
-      thresholdBytes: getArenaArtifactMinBytes(),
-      error: error instanceof Error ? error.message : "artifact status lookup failed",
     };
   }
 }
@@ -192,6 +75,16 @@ export async function GET(req: Request) {
   const denied = requireAdmin(req);
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
 
+  const modelParam = new URL(req.url).searchParams.get("modelKey");
+  const modelEntry = modelParam ? findCatalogEntryBySlugOrKey(modelParam) : null;
+  if (modelParam && !modelEntry) {
+    return NextResponse.json(
+      { error: `Unknown model key or slug: ${modelParam}` },
+      { status: 400 },
+    );
+  }
+  const modelKeys = modelEntry ? [modelEntry.key] : undefined;
+
   try {
     const timing = new ServerTiming();
     const requestStartedAt = timing.start();
@@ -207,6 +100,7 @@ export async function GET(req: Request) {
       artifactCoverage,
       voteJobs,
       shownJobs,
+      storage,
     ] = await Promise.all([
       prisma.prompt.count(),
       prisma.prompt.count({ where: { active: true } }),
@@ -215,9 +109,10 @@ export async function GET(req: Request) {
       prisma.build.count(),
       prisma.matchup.count(),
       prisma.vote.count(),
-      getArenaArtifactCoverage(),
+      getArenaArtifactCoverage(modelKeys),
       getArenaVoteJobStatus(),
       getArenaShownJobStatus(),
+      getSupabaseStorageReadiness(),
     ]);
     timing.end("artifact_status", artifactStartedAt);
     timing.end("total", requestStartedAt);
@@ -229,6 +124,7 @@ export async function GET(req: Request) {
       {
         ok: true,
         db: getDbInfo(),
+        arena: { matchupStateCacheTtlMs: ARENA_MATCHUP_STATE_CACHE_TTL_MS },
         counts: {
           prompts: { total: promptTotal, active: promptActive },
           models: { total: modelTotal, enabled: modelEnabled },
@@ -236,7 +132,8 @@ export async function GET(req: Request) {
           matchups: { total: matchupTotal },
           votes: { total: voteTotal },
         },
-        artifacts: artifactCoverage,
+        artifacts: { ...(modelEntry ? { modelKey: modelEntry.key } : {}), ...artifactCoverage },
+        storage,
         voteJobs,
         shownJobs,
       },

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { NextResponse } from "next/server";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
-import { assertSafeCustomApiUrl } from "@/lib/ai/providers/nvidia";
+import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import type { GenerateEvent, GenerateModelRequest, GenerateRequest } from "@/lib/ai/types";
 
 export const runtime = "nodejs";

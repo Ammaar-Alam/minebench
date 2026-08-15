@@ -4,15 +4,18 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import {
   getPreparedArenaBuildMetadataUpdate,
+  parsePersistedArenaBuildMetadata,
   prepareArenaBuild,
 } from "../lib/arena/buildArtifacts";
 
-type Args = {
-  dryRun: boolean;
-  limit: number;
-  all: boolean;
-  buildIds: string[];
-};
+import {
+  arenaMaintenanceWhere,
+  describeScope,
+  parseArenaMaintenanceArgs,
+  type ArenaMaintenanceArgs,
+} from "./arenaMaintenanceCli";
+
+type Args = ArenaMaintenanceArgs;
 
 type BuildRow = {
   id: string;
@@ -33,27 +36,7 @@ type BuildPayloadRow = BuildRow & {
 };
 
 function parseArgs(argv: string[]): Args {
-  const args = argv.slice(2);
-  const dryRun = args.includes("--dry-run");
-  const all = args.includes("--all");
-
-  const limitIndex = args.indexOf("--limit");
-  const parsedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1] ?? "", 10) : NaN;
-  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 250;
-
-  const buildIds: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] !== "--build") continue;
-    const next = args[i + 1]?.trim();
-    if (next) buildIds.push(next);
-  }
-
-  return {
-    dryRun,
-    limit,
-    all,
-    buildIds,
-  };
+  return parseArenaMaintenanceArgs(argv.slice(2));
 }
 
 async function loadBuildPayloadRow(
@@ -99,27 +82,15 @@ async function main() {
   console.log("Backfilling arena build metadata");
   console.log(`- dry run: ${opts.dryRun ? "yes" : "no"}`);
   console.log(`- limit: ${opts.all ? "all" : opts.limit}`);
-  if (opts.buildIds.length > 0) {
-    console.log(`- build filter: ${opts.buildIds.join(", ")}`);
-  }
+  for (const line of describeScope(opts)) console.log(line);
   console.log("");
 
   try {
-    const where =
-      opts.buildIds.length > 0
-        ? { id: { in: opts.buildIds } }
-        : {
-            gridSize: 256,
-            palette: "simple",
-            mode: "precise",
-            model: { enabled: true, isBaseline: false },
-            prompt: { active: true },
-          };
-
-    const rows = await prisma.build.findMany({
-      where,
+    const cohortWhere = arenaMaintenanceWhere(opts);
+    let rows = await prisma.build.findMany({
+      where: cohortWhere,
       orderBy: { createdAt: "desc" },
-      take: opts.all ? undefined : opts.limit,
+      take: opts.missingOnly || opts.all ? undefined : opts.limit,
       select: {
         id: true,
         gridSize: true,
@@ -134,6 +105,14 @@ async function main() {
         arenaBuildHints: true,
       },
     });
+
+    if (opts.missingOnly) {
+      // JSON filters cannot identify malformed non-null hints
+      rows = rows.filter((row) => {
+        return !parsePersistedArenaBuildMetadata(row).complete;
+      });
+      if (!opts.all && rows.length > opts.limit) rows = rows.slice(0, opts.limit);
+    }
 
     if (rows.length === 0) {
       console.log("No matching builds found.");
@@ -157,10 +136,14 @@ async function main() {
           continue;
         }
 
-        await prisma.build.update({
-          where: { id: row.id },
+        const result = await prisma.build.updateMany({
+          where: prepared.payloadIdentity,
           data,
         });
+        if (result.count === 0) {
+          console.log(`- skip ${row.id}: payload changed during maintenance`);
+          continue;
+        }
         updated += 1;
         console.log(`- updated ${row.id}`);
       } catch (err) {

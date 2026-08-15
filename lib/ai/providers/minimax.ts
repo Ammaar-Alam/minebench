@@ -1,3 +1,4 @@
+import { requestIdFromResponse, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -43,10 +44,6 @@ function nextStreamDelta(previousContent: string, nextContent: string): string {
   return nextContent;
 }
 
-function requestIdFromResponse(res: Response): string | null {
-  return res.headers.get("x-request-id") ?? res.headers.get("request-id") ?? null;
-}
-
 function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
   return (
@@ -57,12 +54,6 @@ function looksLikeTokenLimitError(body: string): boolean {
     b.includes("token limit") ||
     (b.includes("does not support") && b.includes("tokens >"))
   );
-}
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 export async function minimaxGenerateText(params: {

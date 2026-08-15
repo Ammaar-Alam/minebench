@@ -7,9 +7,11 @@ import { createHash } from "node:crypto";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { invalidateArenaCoverageCache } from "@/lib/arena/coverage";
 import {
+  getCatalogSeedGenerationModelKeys,
   isCatalogModelGeneratableForSeed,
   modelCatalogSeedUpsertArgs,
 } from "@/lib/admin/seedModelCatalog";
+import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 
 export const runtime = "nodejs";
 
@@ -111,6 +113,7 @@ export async function POST(req: Request) {
   const batchSizeRaw = Number(url.searchParams.get("batchSize") ?? "2");
   const batchSize = Math.max(1, Math.min(MAX_BATCH, Number.isFinite(batchSizeRaw) ? batchSizeRaw : 2));
   const keyStatus = providerKeyStatus();
+  const enableCatalogModels = isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? "");
 
   await prisma.$transaction(async (tx) => {
     await tx.model.upsert({
@@ -131,7 +134,7 @@ export async function POST(req: Request) {
     });
 
     for (const m of MODEL_CATALOG) {
-      await tx.model.upsert(modelCatalogSeedUpsertArgs(m));
+      await tx.model.upsert(modelCatalogSeedUpsertArgs(m, enableCatalogModels));
     }
 
     for (const text of CURATED_PROMPTS) {
@@ -144,6 +147,17 @@ export async function POST(req: Request) {
   });
   invalidateArenaCoverageCache();
 
+  // Active prompts outside the cohort stay untouched (imported custom prompts
+  // are legitimate) but get surfaced so cohort drift is visible
+  const curatedSet = new Set(CURATED_PROMPTS);
+  const activePrompts = await prisma.prompt.findMany({
+    where: { active: true },
+    select: { text: true },
+  });
+  const activePromptsOutsideCohort = activePrompts
+    .map((prompt) => prompt.text)
+    .filter((text) => !curatedSet.has(text));
+
   if (!generateBuilds) {
     const [promptCount, modelCount] = await Promise.all([
       prisma.prompt.count({ where: { active: true } }),
@@ -155,6 +169,7 @@ export async function POST(req: Request) {
       done: true,
       seeded: 0,
       promptCount,
+      activePromptsOutsideCohort,
       modelCount,
       settings: ARENA_SETTINGS,
       db: getDbInfo(),
@@ -169,7 +184,10 @@ export async function POST(req: Request) {
   });
 
   const modelsAll = await prisma.model.findMany({
-    where: { enabled: true, isBaseline: false },
+    where: {
+      key: { in: getCatalogSeedGenerationModelKeys(MODEL_CATALOG) },
+      isBaseline: false,
+    },
     orderBy: { createdAt: "asc" },
   });
 

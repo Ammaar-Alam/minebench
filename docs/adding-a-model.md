@@ -1,12 +1,10 @@
 # Adding a Model
 
-Every surface a new model touches, in the order to edit them.
-
 Before writing code, read the provider's model card and note four things: the
 output ceiling, the reasoning or thinking levels it accepts, whether it rejects a
 non-default `temperature`, and whether its API is restricted (Responses-only, a
-required beta header, a fixed reasoning mode). Nearly every step below is just
-recording one of those facts.
+required beta header, a fixed reasoning mode). Every step below records one of
+those facts, once.
 
 Do not copy the values from the previous release in the same family. Providers
 change output caps and effort levels between minor versions, and a wrong value
@@ -14,8 +12,8 @@ here benchmarks the model on a request it never accepted.
 
 ## 1. Register the model
 
-`lib/ai/modelCatalog.ts` is the entry point. Add the key to the `ModelKey` union
-and an entry to `MODEL_CATALOG`:
+`lib/ai/modelCatalog.ts` is the entry point and the source of identity. Add one
+entry to `CATALOG` — `ModelKey` and the slug maps derive from it:
 
 ```ts
 {
@@ -24,159 +22,128 @@ and an entry to `MODEL_CATALOG`:
   modelId: "gpt-5.7-sol",
   displayName: "GPT 5.7 Sol Pro",
   enabled: true,
+  slug: "gpt-5-7-sol",
   openRouterModelId: "openai/gpt-5.7-sol-pro",
 }
 ```
 
 `modelId` is the provider's native ID; `openRouterModelId` is the alternate route
 used when the direct provider has no key or the caller explicitly selects
-OpenRouter. Errors from a selected direct route are returned without switching
-providers. Set `forceOpenRouter: true` if there is no direct route, or
-`importOnly: true` for models benchmarked through a web harness rather than an
-API.
+OpenRouter. `slug` names the build artifacts on disk
+(`uploads/<prompt>/<prompt>-<slug>.json`) and is what `--model` accepts — keep it
+short and stable, since renaming it orphans existing builds. Set
+`forceOpenRouter: true` if there is no direct route, or `importOnly: true` for
+models benchmarked through a web harness rather than an API.
 
-`scripts/uploadsCatalog.ts` needs a matching `MODEL_SLUG` entry. The slug names
-the build artifacts on disk (`uploads/<prompt>/<prompt>-<slug>.json`) and is what
-`--model` accepts, so keep it short and stable — renaming it orphans existing
-builds.
+`tests/unit/ai/model-catalog.test.ts` fails on duplicate keys, slugs, or model
+IDs across entries.
 
 ## 2. Output ceiling and sampling
 
-`lib/ai/modelRequestProfiles.ts` holds both, for every provider.
-
-Add an `OUTPUT_CEILINGS` group when the model accepts more or less than the
-MineBench default request. The direct and OpenRouter ID go in the same group,
-since a ceiling belongs to the model rather than the route:
+`lib/ai/modelRequestProfiles.ts`. Add an `OUTPUT_CEILINGS` group when the model
+accepts more or less than the MineBench default request. One ID is enough — a
+lookup on either the native or OpenRouter ID resolves through the catalog to the
+other:
 
 ```ts
-{ tokens: 200_000, ids: ["gpt-5.7-sol", "openai/gpt-5.7-sol-pro"] },
+{ tokens: 200_000, ids: ["gpt-5.7-sol"] },
 ```
 
-Exact IDs are matched before `OUTPUT_CEILING_PREFIXES`, so a family entry can be
-overridden by a single model. Leave both alone if the model runs on the MineBench
-default.
-
-Add to `DEFAULT_SAMPLING_IDS` (or `DEFAULT_SAMPLING_PREFIXES` for a whole family)
-when the provider rejects a non-default `temperature`, `top_p`, or `top_k`.
+Add to `DEFAULT_SAMPLING_IDS` (or `DEFAULT_SAMPLING_PREFIXES` for a family) when
+the provider rejects a non-default `temperature`, `top_p`, or `top_k`. Leave both
+alone if the model runs on the MineBench default.
 
 ## 3. Reasoning ladder
 
-`lib/ai/reasoningProfiles.ts` resolves the effort ladder for both routes, highest
-level first. Generation starts at the head and walks down when the provider
-rejects a level. Two functions need the model: `openAiReasoningEffortAttempts`
-for the direct route and `openRouterReasoningEffortAttempts` for the fallback,
-plus the equivalent pair for whichever provider applies.
-
-Order matters. A `startsWith` branch for a new version must sit above the broader
-family branch, or the family branch wins and the model silently runs on the older
-ladder.
-
-**Claude is the exception.** `lib/ai/claudeModels.ts` resolves the ladder,
-sampling policy, thinking mode, output ceiling, 1M beta header, and effort env var
-from the model ID, covering steps 2 and 3 in one row:
+`lib/ai/reasoningProfiles.ts` holds one `EFFORT_LADDER_RULES` table shared by the
+direct route and the OpenRouter route — both descend the same ladder. Add or
+extend one rule with the model's IDs (or a family prefix):
 
 ```ts
-"opus-5.0": {
-  effortLadder: FULL_EFFORT_LADDER,
-  defaultSamplingOnly: true,
-  maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
-  effortEnvVar: "ANTHROPIC_OPUS_5_EFFORT",
-},
+{ ids: ["gpt-5.7-sol", "openai/gpt-5.7-sol-pro"], ladder: ["max", "xhigh", "high"] },
 ```
 
-Nothing is inherited from the previous release. A model with no row resolves to no
-capabilities, and `tests/unit/ai/claude-capabilities.test.ts` fails when a
-catalogued Anthropic model has no row. Use `FULL_EFFORT_LADDER` or
-`NO_XHIGH_LADDER` if the model matches one, otherwise spell out the levels. An
-empty ladder means no adaptive effort control and needs `legacyManualThinking`.
+Exact `ids` win over `prefixes`, and prefix rules match in array order, so a new
+release's rule must sit above its broader family rule. `aliases` map accepted
+override words onto ladder entries (`max: null` means "start at the head").
+The direct OpenAI adapter's default ladder also resolves from this table — there
+is no second copy to update.
+
+**Claude is separate.** `lib/ai/claudeModels.ts` resolves ladder, sampling
+policy, thinking mode, output ceiling, beta header, and effort env var from one
+row per release, and `tests/unit/ai/claude-capabilities.test.ts` fails when a
+catalogued Anthropic model has no row. Nothing is inherited from the previous
+release.
 
 ## 4. Provider adapter
 
 Only when the model's API is shaped differently from its siblings. In
-`lib/ai/providers/<provider>.ts`, check whether the model belongs in the
-existing predicates — for example `isResponsesOnlyModel` and the
-`reasoning.mode=pro` branches in `openai.ts`, or the structured-output and beta
-header branches in `anthropic.ts`.
+`lib/ai/providers/<provider>.ts`, check whether the model belongs in the existing
+predicates — for example `isResponsesOnlyModel` in `openai.ts`, or the
+structured-output and beta header branches in `anthropic.ts`. Helpers with
+identical semantics live in `lib/ai/providers/shared.ts`; the generic
+OpenAI-compatible client is `lib/ai/providers/openaiCompatible.ts`.
 
-`openai.ts` also carries a `defaultReasoningEffortAttempts` ladder used when the
-caller passes none. It duplicates step 3 and has to be updated alongside it.
-`openrouter.ts` has `defaultTextVerbosity` for models that reject
-`text.verbosity`.
-
-A genuinely new provider needs a new adapter here, following `anthropic.ts` or
-`openai.ts`, dispatched from `callDirectProvider` in
-`lib/ai/generateVoxelBuild.ts`.
+A genuinely new provider needs a new adapter, dispatched from
+`callDirectProvider` in `lib/ai/generateVoxelBuild.ts`.
 
 ## 5. Effort override
 
 A model with an effort ladder gets an env var so a run can lower its effort
 without a code change. Add it to `.env.example` and the override list in
-`docs/local-development.md`, then add a line to that file's model notes stating
-the native ID, the supported effort values, the MineBench default, the output cap,
-and what the OpenRouter fallback uses.
+`docs/local-development.md`, with a line stating the native ID, supported effort
+values, the MineBench default, the output cap, and the OpenRouter fallback.
 
 ## 6. Benchmark profile
 
 `lib/ai/modelBenchmarkProfiles.ts` builds the leaderboard popover.
 
-- `MODEL_RUN_PARAMETERS` — required. The popover reads this map's keys, so a model
-  missing here has no profile at all.
-- `MODEL_BENCHMARK_METADATA` — the release that produced the cohort, plus the
-  manually tallied provider cost. When that cost covers tracked responses, record
-  their count as `totalCost.attemptCount` so later reruns cannot change the cost
-  denominator.
-- `HISTORICAL_BENCHMARK_OUTPUT_CAPS` — only for models whose accepted cap cannot
-  be recovered from a generated cohort. A model with a complete cohort resolves
-  its cap from `modelBenchmarkMetrics.generated.json` and ignores this map.
+- `MODEL_RUN_PARAMETERS` — required; a model missing here has no profile at all.
+- `MODEL_BENCHMARK_METADATA` — the release that produced the cohort plus the
+  manually tallied provider cost. These rows are research provenance and stay
+  manual; do not derive them from current runtime defaults.
 
-Everything else — average inference time, average JSON size, attempt counts,
-build count, output cap — is generated. Do not hand-write those.
+Everything else — average inference time, JSON size, attempt counts, output cap,
+prompt cohort identity — is generated into
+`lib/ai/modelBenchmarkMetrics.generated.json` and committed. Do not hand-write
+those.
 
-## 7. Generate the cohort
+## 7. Test
 
-```bash
-pnpm batch:generate --model gpt-5-7-sol            # report missing builds
-pnpm batch:generate --generate --model gpt-5-7-sol # generate them
-```
-
-Generation writes each attempt's raw response under `uploads/<prompt>/RAW/` and
-records per-job counters in `uploads/.benchmark-metrics.json`. When every prompt
-has a finalized build, `scripts/benchmarkMetrics.ts` rolls those counters into
-`lib/ai/modelBenchmarkMetrics.generated.json`, which is committed.
-
-Provider-call telemetry fires at the adapter's outbound request boundary, so
-internal effort, token-budget, rate-limit, and transport retries each count.
-Configuration telemetry fires only after a provider accepts a request and
-records the settings used for that response. New adapters must forward both
-callbacks from `ProviderTelemetryCallbacks`; do not infer either value from the
-requested fallback ladder.
-
-Inference timing excludes telemetry callbacks, including ledger and raw-response
-writes. A retry counts as a failed attempt only when its preceding attempt
-reached the outbound request boundary.
-
-A counter is published only once every job in the cohort tracked it, so a model
-benchmarked before a counter existed omits the field and the popover renders "Not
-tracked" rather than a total that undercounts real history. See
-`docs/voxel-exec-raw-output.md` for the raw-artifact layout.
-
-Legacy outer-attempt counters are not provider-call evidence, and requested
-fallback traces are not accepted-configuration evidence. Resuming an older
-ledger leaves those metrics untracked unless complete logs support an explicit
-migration. A status refresh preserves the committed cohort measurements until
-every prompt has accepted configuration and output-cap provenance.
-
-## 8. Test
-
-Add a provider config test under `tests/unit/providers/` modelled on
-`claude-opus-5-config.test.ts` or `gpt-5-6-sol-config.test.ts`. It stubs `fetch`,
-so it asserts the exact request body for both routes without network access — the
-output cap, the reasoning payload, the absence of rejected sampling parameters,
-and the resolved benchmark profile.
-
-This test is where a wrong value from the model card gets caught, so assert the
-numbers the card states rather than whatever the code currently produces.
+Add one expectation record to the model's family fixture under
+`tests/unit/providers/` (e.g. `openai-family.test.ts`), using the shared harness
+in `tests/helpers/providerConfigHarness.ts`. Assert the numbers the model card
+states — output cap, reasoning payload, absent sampling parameters, and the
+fallback ladder — for both routes. This is where a wrong value from the model
+card gets caught.
 
 ```bash
 pnpm check   # lint, test, build
 ```
+
+## 8. Generate and publish
+
+```bash
+pnpm batch:generate --generate --model gpt-5-7-sol   # generate the 15-prompt cohort
+pnpm model:publish --model gpt-5-7-sol --dry-run     # report the publish plan
+pnpm model:publish --model gpt-5-7-sol               # upload, artifacts, verify, activate
+```
+
+Publication uploads the cohort, runs metadata/snapshot/stream maintenance
+missing-only, verifies policy-aware artifact coverage
+(`/api/admin/status?modelKey=<slug>` shows the same view), refreshes the
+generated metrics, and only then activates the model. Imported models stay
+staged (disabled) until verification passes, so a partial cohort never reaches
+public surfaces. Real publications use `DIRECT_URL` to hold a per-model database
+lock through activation; configure it as a direct or session-mode connection.
+Commit `lib/ai/modelBenchmarkMetrics.generated.json` after
+publication. Once a model has vote history, publication permits only
+payload-identical cohort reconciliation; publish changed builds under a new
+model identity or explicitly reset the vote and derived rating history first.
+
+Provider-call telemetry fires at the adapter's outbound request boundary, so
+internal effort, token-budget, rate-limit, and transport retries each count.
+Configuration telemetry fires only after a provider accepts a request. Inference
+timing excludes telemetry callbacks. A counter is published only once every job
+in the cohort tracked it; see `docs/voxel-exec-raw-output.md` for the
+raw-artifact layout.

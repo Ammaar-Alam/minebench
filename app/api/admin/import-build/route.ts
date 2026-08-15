@@ -16,6 +16,9 @@ import {
   parseGenerationTimeMs,
   resolveImportedGenerationTimeMs,
 } from "@/lib/arena/importBuildMetrics";
+import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
+import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
+import { ARENA_BUILD_DERIVED_METADATA_RESET } from "@/lib/arena/buildArtifacts";
 
 export const runtime = "nodejs";
 
@@ -98,7 +101,8 @@ function parseStorageEnvelope(value: unknown): { ok: true; ref: BuildStorageRef 
     typeof storage.compressedByteSize === "number" && Number.isFinite(storage.compressedByteSize)
       ? Math.max(0, Math.floor(storage.compressedByteSize))
       : null;
-  const sha256 = typeof storage.sha256 === "string" ? storage.sha256.trim() : null;
+  const sha256 = normalizeArenaBuildChecksum(storage.sha256);
+  if (storage.sha256 != null && !sha256) return { ok: false };
   const blockCount =
     typeof storage.blockCount === "number" && Number.isFinite(storage.blockCount)
       ? Math.max(0, Math.floor(storage.blockCount))
@@ -162,6 +166,9 @@ export async function POST(req: Request) {
   const mode = (url.searchParams.get("mode") ?? "precise").trim();
   if (!mode) return NextResponse.json({ error: "Invalid mode (must be non-empty)" }, { status: 400 });
 
+  // Local imports remain arena-eligible while remote imports stay staged
+  // until publication verifies the complete cohort
+  const enableImportedModels = isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? "");
   const modelEntry = getModelByKey(modelKey);
   const model = await prisma.model.upsert({
     where: { key: modelEntry.key },
@@ -170,14 +177,14 @@ export async function POST(req: Request) {
       provider: modelEntry.provider,
       modelId: modelEntry.modelId,
       displayName: modelEntry.displayName,
-      enabled: true,
+      enabled: enableImportedModels,
       isBaseline: false,
     },
     update: {
       provider: modelEntry.provider,
       modelId: modelEntry.modelId,
       displayName: modelEntry.displayName,
-      enabled: true,
+      ...(enableImportedModels ? { enabled: true } : {}),
     },
   });
 
@@ -304,6 +311,7 @@ export async function POST(req: Request) {
           voxelSha256: storageEnvelope.ok ? storageEnvelope.ref.sha256 ?? null : inlineSha256,
           blockCount,
           generationTimeMs: resolveImportedGenerationTimeMs(generationTime.value),
+          ...ARENA_BUILD_DERIVED_METADATA_RESET,
         },
       })
     : await prisma.build.create({

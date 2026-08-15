@@ -11,7 +11,7 @@ import { geminiGenerateText } from "@/lib/ai/providers/gemini";
 import { minimaxGenerateText } from "@/lib/ai/providers/minimax";
 import { metaGenerateText } from "@/lib/ai/providers/meta";
 import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
-import { openAiCompatibleGenerateText } from "@/lib/ai/providers/nvidia";
+import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatible";
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { xaiGenerateText } from "@/lib/ai/providers/xai";

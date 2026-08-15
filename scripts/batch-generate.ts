@@ -57,7 +57,9 @@ import { validateVoxelBuild } from "../lib/voxel/validate";
 import "dotenv/config";
 
 const UPLOADS_DIR = path.join(process.cwd(), "uploads");
-const PROD_URL = "https://minebench.ai";
+// Import target. Defaults to production; publication and the staging wrapper
+// point this at the deployment they verified against.
+const SITE_URL = (process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai").replace(/\/+$/, "");
 const DEFAULT_STORAGE_BUCKET = "builds";
 const DEFAULT_STORAGE_PREFIX = "imports";
 
@@ -599,6 +601,15 @@ function getUploadCommand(job: Job): string {
   return `pnpm batch:generate --upload --prompt ${job.promptSlug} --model ${job.modelSlug}`;
 }
 
+export function getAdminImportHeaders(token: string): Record<string, string> {
+  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+  return {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json",
+    ...(bypass ? { "x-vercel-protection-bypass": bypass } : {}),
+  };
+}
+
 function supportsTerminalHyperlinks(): boolean {
   if (!process.stdout.isTTY) return false;
   if ((process.env.TERM ?? "").toLowerCase() === "dumb") return false;
@@ -625,7 +636,7 @@ async function uploadBuildLegacy(
   gzipped: Buffer<ArrayBufferLike>,
   generationTimeMs?: number,
 ): Promise<{ ok: boolean; error?: string }> {
-  const url = new URL(`${PROD_URL}/api/admin/import-build`);
+  const url = new URL(`${SITE_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
@@ -646,10 +657,7 @@ async function uploadBuildLegacy(
     return { ok: resp.ok, status: resp.status, text };
   }
 
-  const baseHeaders = {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
+  const baseHeaders = getAdminImportHeaders(token);
 
   const gzipAttempt = await doUpload({
     headers: { ...baseHeaders, "Content-Encoding": "gzip" },
@@ -794,8 +802,8 @@ async function finalizeStorageImport(
   token: string,
   ref: BuildStorageReference,
   generationTimeMs?: number,
-): Promise<{ ok: boolean; error?: string }> {
-  const url = new URL(`${PROD_URL}/api/admin/import-build`);
+): Promise<{ ok: boolean; buildId?: string; error?: string }> {
+  const url = new URL(`${SITE_URL}/api/admin/import-build`);
   url.searchParams.set("modelKey", job.modelKey);
   url.searchParams.set("promptText", job.promptText as string);
   url.searchParams.set("overwrite", "1");
@@ -805,22 +813,30 @@ async function finalizeStorageImport(
 
   const resp = await fetch(url.toString(), {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
+    headers: getAdminImportHeaders(token),
     body: JSON.stringify({ storage: ref }),
   });
 
   const text = await resp.text();
-  if (resp.ok) return { ok: true };
+  if (resp.ok) {
+    // The response's buildId is held for this run only; it is environment
+    // state, not benchmark provenance, so it never enters the ledger
+    let buildId: string | undefined;
+    try {
+      const parsed = JSON.parse(text) as { buildId?: unknown };
+      if (typeof parsed.buildId === "string") buildId = parsed.buildId;
+    } catch {
+      // response body is informational; a missing id is not a failure
+    }
+    return { ok: true, buildId };
+  }
   return { ok: false, error: `Finalize import failed (HTTP ${resp.status}): ${text}` };
 }
 
 async function uploadBuild(
   job: Job,
   generationTimeMs?: number,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; buildId?: string; error?: string }> {
   if (!job.promptText) {
     return { ok: false, error: `Missing prompt text for "${job.promptSlug}". Add uploads/${job.promptSlug}/prompt.txt or pass --promptText/--promptTextFile.` };
   }
@@ -1075,16 +1091,22 @@ Upload notes:
   const existing = allJobs.filter((j) => !isEmptyPlaceholder(j.filePath));
   console.log(`\n🔍 Missing builds: ${missing.length}`);
 
+  // Upload failures from either path must reach the exit status: publication
+  // treats a zero exit as a complete import.
+  let uploadFailureCount = 0;
+
   // upload existing builds if requested
   if (opts.upload) {
     if (existing.length === 0) {
       console.log("\n📤 No existing builds to upload.");
     } else {
       console.log("\n📤 Uploading existing builds...");
+      // shared with the generated-build upload below via uploadFailureCount
       for (const job of existing) {
         process.stdout.write(`  Uploading ${job.promptSlug} × ${job.modelSlug}...`);
         const result = await uploadBuild(job, metricsStore.getSample(job)?.inferenceTimeMs);
         console.log(result.ok ? " ✅" : ` ❌ ${result.error}`);
+        if (!result.ok) uploadFailureCount += 1;
       }
     }
   }
@@ -1191,6 +1213,7 @@ Upload notes:
                       ? `    ✅ [${jobLabel(job)}] Upload complete`
                       : `    ❌ [${jobLabel(job)}] Upload failed: ${uploadResult.error}`,
                   );
+                  if (!uploadResult.ok) uploadFailureCount += 1;
                 }
               } else if (controller.signal.aborted) {
                 console.log(`    ⏸ [${jobLabel(job)}] Interrupted after ${elapsed}`);
@@ -1235,10 +1258,18 @@ Upload notes:
 
     console.log(`\n📊 Results: ${success} succeeded, ${failed} failed`);
     if (stopSignal) process.exitCode = 130;
+    else if (failed > 0) process.exitCode = 1;
   } else if (missing.length > 0 && !opts.generate) {
     console.log("\n💡 Use --generate to generate missing builds.");
   } else if (missing.length === 0) {
     console.log("✨ All builds already exist!");
+  }
+
+  // One report for both upload paths. Publication treats a zero exit as a
+  // complete import, so any failed upload has to fail the command.
+  if (uploadFailureCount > 0) {
+    console.error(`\n${uploadFailureCount} upload(s) failed.`);
+    if (process.exitCode !== 130) process.exitCode = 1;
   }
 
   if (!opts.upload) {

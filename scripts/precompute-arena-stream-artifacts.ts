@@ -5,20 +5,31 @@ import { PrismaClient } from "@prisma/client";
 import { gzipSync } from "node:zlib";
 import { estimateArenaBuildBytes, getArenaArtifactMinBytes } from "../lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildStreamEvent, ArenaBuildVariant } from "../lib/arena/types";
-import { pickBuildVariant, prepareArenaBuild } from "../lib/arena/buildArtifacts";
+import {
+  deriveArenaBuildLoadHints,
+  pickBuildVariant,
+  prepareArenaBuild,
+} from "../lib/arena/buildArtifacts";
 import {
   encodeArenaBuildStreamEvent,
   iterateArenaBuildStreamEvents,
   uploadArenaBuildStreamArtifact,
 } from "../lib/arena/buildStream";
 
-type Args = {
-  dryRun: boolean;
-  limit: number;
-  all: boolean;
+import {
+  arenaMaintenanceWhere,
+  describeScope,
+  parseArenaMaintenanceArgs,
+  type ArenaMaintenanceArgs,
+} from "./arenaMaintenanceCli";
+import {
+  ARTIFACT_STATUS_BUILD_SELECT,
+  getArenaBuildArtifactStatuses,
+} from "../lib/arena/artifactCoverage";
+
+type Args = ArenaMaintenanceArgs & {
   minBytes: number;
   variants: ArenaBuildVariant[];
-  buildIds: string[];
 };
 
 type BuildRow = {
@@ -29,6 +40,7 @@ type BuildRow = {
   voxelByteSize: number | null;
   voxelCompressedByteSize: number | null;
   voxelSha256: string | null;
+  arenaBuildHints: unknown | null;
   voxelStorageBucket: string | null;
   voxelStoragePath: string | null;
   voxelStorageEncoding: string | null;
@@ -40,12 +52,8 @@ type BuildPayloadRow = BuildRow & {
 
 function parseArgs(argv: string[]): Args {
   const args = argv.slice(2);
-  const dryRun = args.includes("--dry-run");
-  const all = args.includes("--all");
+  const shared = parseArenaMaintenanceArgs(args);
 
-  const limitIndex = args.indexOf("--limit");
-  const parsedLimit = limitIndex >= 0 ? Number.parseInt(args[limitIndex + 1] ?? "", 10) : NaN;
-  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 250;
   const minBytesIndex = args.indexOf("--min-bytes");
   const parsedMinBytes =
     minBytesIndex >= 0 ? Number.parseInt(args[minBytesIndex + 1] ?? "", 10) : NaN;
@@ -64,21 +72,7 @@ function parseArgs(argv: string[]): Args {
         ? ["preview"]
         : ["full", "preview"];
 
-  const buildIds: string[] = [];
-  for (let i = 0; i < args.length; i += 1) {
-    if (args[i] !== "--build") continue;
-    const next = args[i + 1]?.trim();
-    if (next) buildIds.push(next);
-  }
-
-  return {
-    dryRun,
-    limit,
-    all,
-    minBytes,
-    variants,
-    buildIds,
-  };
+  return { ...shared, minBytes, variants };
 }
 
 function chunkBytes(events: Iterable<ArenaBuildStreamEvent>) {
@@ -119,6 +113,7 @@ async function loadBuildPayloadRow(
       voxelByteSize: true,
       voxelCompressedByteSize: true,
       voxelSha256: true,
+      arenaBuildHints: true,
       voxelData: true,
       voxelStorageBucket: true,
       voxelStoragePath: true,
@@ -142,40 +137,44 @@ async function main() {
   console.log(`- variants: ${opts.variants.join(", ")}`);
   console.log(`- limit: ${opts.all ? "all" : opts.limit}`);
   console.log(`- min bytes: ${opts.minBytes.toLocaleString()} (${(opts.minBytes / (1024 * 1024)).toFixed(2)} MB)`);
-  if (opts.buildIds.length > 0) {
-    console.log(`- build filter: ${opts.buildIds.join(", ")}`);
-  }
+  for (const line of describeScope(opts)) console.log(line);
   console.log("");
 
   try {
-    const where =
-      opts.buildIds.length > 0
-        ? { id: { in: opts.buildIds } }
-        : {
-            gridSize: 256,
-            palette: "simple",
-            mode: "precise",
-            model: { enabled: true, isBaseline: false },
-            prompt: { active: true },
-          };
-
-    const rows = await prisma.build.findMany({
-      where,
+    let rows = await prisma.build.findMany({
+      where: arenaMaintenanceWhere(opts),
       orderBy: { createdAt: "desc" },
-      take: opts.all ? undefined : opts.limit,
+      // with --missing-only the limit is applied after status discovery, so a
+      // complete newest prefix cannot hide older builds that still need work
+      ...(opts.all || opts.missingOnly ? {} : { take: opts.limit }),
       select: {
-        id: true,
+        ...ARTIFACT_STATUS_BUILD_SELECT,
         gridSize: true,
         palette: true,
-        blockCount: true,
-        voxelByteSize: true,
-        voxelCompressedByteSize: true,
-        voxelSha256: true,
         voxelStorageBucket: true,
         voxelStoragePath: true,
         voxelStorageEncoding: true,
       },
     });
+
+    if (opts.missingOnly) {
+      // derive requirements from the requested threshold, not the env default
+      const statuses = await getArenaBuildArtifactStatuses(rows, opts.minBytes);
+      const needsWork = new Set(
+        statuses
+          .filter((status) =>
+            status.missing.some(
+              (requirement) =>
+                requirement.kind === "stream" && opts.variants.includes(requirement.variant),
+            ),
+          )
+          .map((status) => status.buildId),
+      );
+      const skipped = rows.length - needsWork.size;
+      rows = rows.filter((row) => needsWork.has(row.id));
+      if (!opts.all && rows.length > opts.limit) rows = rows.slice(0, opts.limit);
+      if (skipped > 0) console.log(`Skipping ${skipped} build(s) with stream artifacts present.`);
+    }
 
     if (rows.length === 0) {
       console.log("No matching builds found.");
@@ -196,13 +195,17 @@ async function main() {
           voxelByteSize: row.voxelByteSize,
           voxelCompressedByteSize: row.voxelCompressedByteSize,
         });
+        const shellHints = deriveArenaBuildLoadHints(row);
         let prepared: Awaited<ReturnType<typeof prepareArenaBuild>> | null = null;
         let payloadRow: BuildPayloadRow | null = null;
-        let effectiveBytes = estimatedBytes;
+        let artifactRequired = shellHints.deliveryClass === "stream-artifact";
+        let effectiveBytes =
+          Math.max(shellHints.fullEstimatedBytes ?? 0, estimatedBytes ?? 0) || null;
         if (effectiveBytes == null) {
           payloadRow = await loadBuildPayloadRow(prisma, row);
           prepared = await prepareArenaBuild(payloadRow);
           effectiveBytes = prepared.hints.fullEstimatedBytes;
+          artifactRequired ||= prepared.hints.deliveryClass === "stream-artifact";
         }
         if (effectiveBytes == null) {
           payloadRow = payloadRow ?? (await loadBuildPayloadRow(prisma, row));
@@ -216,7 +219,7 @@ async function main() {
           continue;
         }
 
-        if (effectiveBytes < opts.minBytes) {
+        if (!artifactRequired && effectiveBytes < opts.minBytes) {
           skippedSmall += 1;
           console.log(
             `- skip ${row.id}: estimated ${effectiveBytes.toLocaleString()} bytes (< ${opts.minBytes.toLocaleString()})`,

@@ -4,6 +4,25 @@ export const ARENA_BUILD_GRID_SIZE = 256;
 export const ARENA_BUILD_PALETTE = "simple";
 export const ARENA_BUILD_MODE = "precise";
 
+// Prisma filter for the arena benchmark cohort, shared by the maintenance
+// scripts and the admin status route so the scope cannot drift between them.
+// Naming models explicitly also selects staged (disabled) ones: publication
+// has to compute and verify their artifacts before activation, while the
+// unscoped arena view stays limited to what is already live.
+export function arenaCohortBuildWhere(modelKeys?: readonly string[]) {
+  const scoped = Boolean(modelKeys && modelKeys.length > 0);
+  return {
+    gridSize: ARENA_BUILD_GRID_SIZE,
+    palette: ARENA_BUILD_PALETTE,
+    mode: ARENA_BUILD_MODE,
+    model: {
+      ...(scoped ? { key: { in: [...modelKeys!] } } : { enabled: true }),
+      isBaseline: false,
+    },
+    prompt: { active: true },
+  };
+}
+
 type EligiblePromptRow = {
   promptId: string;
 };

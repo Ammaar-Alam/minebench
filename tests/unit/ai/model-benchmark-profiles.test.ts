@@ -4,11 +4,15 @@ import {
   MODEL_BENCHMARK_PROFILES,
   getModelBenchmarkProfile,
   resolveBenchmarkOutputCap,
+  resolveCurrentGeneratedBenchmarkMetrics,
+  type GeneratedModelBenchmarkMetrics,
 } from "../../../lib/ai/modelBenchmarkProfiles";
 import {
   MODEL_CATALOG,
   resolveModelDisplayName,
 } from "../../../lib/ai/modelCatalog";
+import { promptCohortId } from "../../../lib/benchmark/promptCohortId";
+import { BENCHMARK_PROMPT_COHORT_ID } from "../../../lib/benchmark/prompts";
 
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
 assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
@@ -106,6 +110,53 @@ assert.deepEqual(
   }),
   { kind: "unavailable", reason: "varied-across-builds" },
   "a complete mixed-cap cohort should not fall back to a single historical cap",
+);
+
+const identifiedGeneratedMetrics: GeneratedModelBenchmarkMetrics = {
+  expectedBuildCount: 15,
+  finalizedBuildCount: 15,
+  promptCohortId: promptCohortId(),
+  inferenceSampleCount: 15,
+  completedAttemptTrackingJobCount: 15,
+  completedAttemptCount: 20,
+  averageInferenceMs: 100,
+  averageJsonSizeBytes: 200,
+  outputCapSampleCount: 15,
+  outputCapIsConsistent: true,
+  outputCapTokens: 64_000,
+};
+assert.equal(
+  BENCHMARK_PROMPT_COHORT_ID,
+  promptCohortId(),
+  "the browser-safe prompt cohort identity should match the canonical prompt hash",
+);
+assert.equal(
+  resolveCurrentGeneratedBenchmarkMetrics(identifiedGeneratedMetrics),
+  identifiedGeneratedMetrics,
+  "the current identified prompt cohort should remain available",
+);
+assert.equal(
+  resolveCurrentGeneratedBenchmarkMetrics({
+    ...identifiedGeneratedMetrics,
+    promptCohortId: "prompts-v1:stale",
+  }),
+  undefined,
+  "a stale identified prompt cohort should hide all generated metrics",
+);
+const legacyGeneratedMetrics = { ...identifiedGeneratedMetrics };
+delete legacyGeneratedMetrics.promptCohortId;
+assert.equal(
+  resolveCurrentGeneratedBenchmarkMetrics(legacyGeneratedMetrics),
+  legacyGeneratedMetrics,
+  "legacy generated metrics without a cohort identity should retain count-based behavior",
+);
+assert.deepEqual(
+  resolveBenchmarkOutputCap("openai_gpt_5_6_sol", {
+    ...identifiedGeneratedMetrics,
+    promptCohortId: "prompts-v1:stale",
+  }),
+  { kind: "exact", tokens: 128_000 },
+  "a stale identified cohort should not publish its generated output cap",
 );
 
 const gemini36Flash = getModelBenchmarkProfile("gemini_3_6_flash");

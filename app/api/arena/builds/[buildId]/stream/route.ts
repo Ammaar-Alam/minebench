@@ -441,15 +441,21 @@ export async function GET(
           if (closed || request.signal.aborted) return;
 
           if (!cachedPrepared) {
-            await prisma.build
-              .update({
-                where: { id: buildId },
+            const marked = await prisma.build
+              .updateMany({
+                where: prepared.payloadIdentity,
                 data: getPreparedArenaBuildMetadataUpdate(prepared),
               })
               .catch((err) => {
                 console.warn("arena stream metadata update failed", err);
+                return null;
               });
-            invalidateArenaBuildMeta(buildId);
+            if (marked?.count === 0) {
+              send({ type: "error", message: "Build changed during preparation" });
+              safeClose();
+              return;
+            }
+            if (marked) invalidateArenaBuildMeta(buildId);
           }
 
           if (expectedChecksum && expectedChecksum !== prepared.checksum) {

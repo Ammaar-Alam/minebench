@@ -13,6 +13,7 @@ import {
   clearRawAttemptResponses,
   getBenchmarkPromptSlugs,
   getCandidateModels,
+  getAdminImportHeaders,
   getImportOnlyModelsForGenerationJobs,
   getJobsToGenerate,
   isEmptyPlaceholder,
@@ -185,6 +186,25 @@ async function main() {
   assert.equal(importOnlyModels.length, 1);
   assert.equal(importOnlyModels[0].key, "openai_gpt_4_5_web_harness");
   assert.equal(importOnlyModels[0].importOnly, true);
+
+  const originalBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  try {
+    delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    assert.deepEqual(getAdminImportHeaders("admin-token"), {
+      Authorization: "Bearer admin-token",
+      "Content-Type": "application/json",
+    });
+
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET = " staging-bypass ";
+    assert.equal(
+      getAdminImportHeaders("admin-token")["x-vercel-protection-bypass"],
+      "staging-bypass",
+      "both import paths must cross protected preview deployments",
+    );
+  } finally {
+    if (originalBypass === undefined) delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    else process.env.VERCEL_AUTOMATION_BYPASS_SECRET = originalBypass;
+  }
 
   console.log("batch generate import-only job filtering checks passed");
 }

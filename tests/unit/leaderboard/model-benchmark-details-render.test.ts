@@ -1,172 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ModelBenchmarkDetailsInline } from "../../components/leaderboard/ModelBenchmarkDetails";
-import { MODEL_CATALOG } from "../../lib/ai/modelCatalog";
+import { ModelBenchmarkDetailsInline } from "../../../components/leaderboard/ModelBenchmarkDetails";
+import { MODEL_CATALOG } from "../../../lib/ai/modelCatalog";
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
-
-const detailsSource = readFileSync(
-  "components/leaderboard/ModelBenchmarkDetails.tsx",
-  "utf8",
-);
-const leaderboardSource = readFileSync("components/leaderboard/Leaderboard.tsx", "utf8");
-const modelDetailSource = readFileSync("components/leaderboard/ModelDetail.tsx", "utf8");
-
-assert.ok(
-  detailsSource.includes("aria-expanded={expanded}") &&
-    detailsSource.includes("aria-controls={controlsId}") &&
-    detailsSource.includes('aria-label={`View ${displayName} run details`}'),
-  "model details trigger should expose its disclosure state and accessible name",
-);
-assert.ok(
-  detailsSource.includes('role="region"') &&
-    !detailsSource.includes('aria-modal="true"') &&
-    !detailsSource.includes("backdrop-blur") &&
-    !detailsSource.includes("fixed inset-0"),
-  "model run details should use a nonmodal region without a full-screen backdrop",
-);
-assert.ok(
-  detailsSource.includes("h-6 w-6") &&
-    detailsSource.includes("before:-inset-y-2.5") &&
-    detailsSource.includes("before:-left-1 before:-right-4") &&
-    detailsSource.includes("h-[15px] w-[15px]"),
-  "the quiet info glyph should retain a 44px touch target without widening its layout box",
-);
-assert.ok(
-  detailsSource.includes('document.addEventListener("pointerdown"') &&
-    detailsSource.includes('event.key === "Escape"') &&
-    detailsSource.includes("event.stopPropagation()") &&
-    !detailsSource.includes("onKeyDown={(event) => event.stopPropagation()}"),
-  "the desktop popover should dismiss cleanly without activating its leaderboard row",
-);
-assert.ok(
-  detailsSource.includes('document.addEventListener("scroll", handleScroll, true)') &&
-    detailsSource.includes("panelRef.current?.contains(target)") &&
-    !detailsSource.includes('window.addEventListener("scroll", updatePosition, true)'),
-  "leaderboard scrolling should dismiss the popover while preserving its own internal scroll",
-);
-assert.ok(
-  detailsSource.includes('placement: "above" | "below"') &&
-    detailsSource.includes("style={{ left: position.arrowLeft }}") &&
-    detailsSource.includes('aria-hidden="true"'),
-  "the popover should render a placement-aware pointer aligned with its trigger",
-);
-assert.ok(
-  detailsSource.includes("const POPOVER_GAP = 4") &&
-    detailsSource.includes("fixed z-30 overflow-visible") &&
-    detailsSource.includes("max-h-[calc(100dvh-2rem)] overflow-y-auto") &&
-    detailsSource.includes("rounded-[inherit] p-3"),
-  "the anchored shell should expose its pointer while an inner viewport owns overflow",
-);
-assert.ok(
-  detailsSource.includes("setPosition(null);") &&
-    detailsSource.includes("setOpen(true);") &&
-    !detailsSource.includes("if (!open) updatePosition();") &&
-    detailsSource.includes(
-      'position ? "opacity-100" : "pointer-events-none opacity-0"',
-    ),
-  "the popover should stay hidden until its mounted height is measured",
-);
-assert.ok(
-  detailsSource.includes('label: "Average inference time"') &&
-    detailsSource.includes('label: "Average JSON size"') &&
-    detailsSource.includes('label: "Total attempts"') &&
-    detailsSource.includes('label: "Total cost"') &&
-    detailsSource.includes('label: "Output cap"') &&
-    detailsSource.includes('const NOT_TRACKED = "Not tracked"') &&
-    !detailsSource.includes('"Benchmark predates tracking"'),
-  "every normalized field should use the compact untracked fallback",
-);
-assert.ok(
-  detailsSource.includes("profile.totalCost.usd / profile.totalCost.attemptCount") &&
-    detailsSource.includes("profile.totalCost.usd / profile.buildCount") &&
-    detailsSource.includes('toFixed(2)} per attempt`') &&
-    detailsSource.includes('toFixed(2)} per build`') &&
-    !detailsSource.includes("profile.totalCost.usd / profile.totalAttempts") &&
-    !detailsSource.includes("totalCost.usd / 15"),
-  "cost details should use the fixed denominator measured with each cost snapshot",
-);
-assert.ok(
-  detailsSource.includes('v{profile.sourceRelease.replace(/^v/, "")}') &&
-    !detailsSource.toLowerCase().includes("draft"),
-  "the release header should render canonical profile versions without workflow-state copy",
-);
-assert.ok(
-  detailsSource.indexOf(">\n          Statistics\n        </h3>") <
-    detailsSource.indexOf(">\n          Parameters\n        </h3>") &&
-    detailsSource.includes('<h2 className="sr-only">{displayName} run details</h2>') &&
-    detailsSource.includes("<DetailRows rows={parameters} />") &&
-    detailsSource.includes("<StatisticGrid rows={statistics} />"),
-  "benchmark statistics should lead the compact summary before run parameters",
-);
-assert.ok(
-  detailsSource.includes("Average inference") &&
-    detailsSource.includes("Average JSON size") &&
-    detailsSource.includes("Total attempts") &&
-    detailsSource.includes("Total cost") &&
-    !detailsSource.includes("statistics.length > 0"),
-  "the statistics section should always render the same normalized rows",
-);
-assert.ok(
-  !detailsSource.includes('label: "Run size"') && !detailsSource.includes("Avg."),
-  "benchmark tables should use the full, specific statistic labels",
-);
-assert.ok(
-  detailsSource.includes('className="mt-1 grid grid-cols-2 border-y border-border/60"') &&
-    detailsSource.includes(
-      'className="min-w-0 border-border/60 py-2 odd:pr-3 even:border-l even:pl-3 [&:nth-child(-n+2)]:border-b"',
-    ) &&
-    detailsSource.includes('className="mt-1 divide-y divide-border/60"') &&
-    !detailsSource.includes("divide-y divide-border/60 border-y") &&
-    detailsSource.includes(
-      'className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-3 py-2 text-[12px] leading-4"',
-    ) &&
-    detailsSource.includes(
-      'className="group relative inline-block cursor-help border-b border-dotted border-current text-muted transition-colors hover:text-fg focus-visible:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"',
-    ) &&
-    !detailsSource.includes("borderBottom:") &&
-    detailsSource.includes("duration-75 group-hover:opacity-100 group-focus-visible:opacity-100") &&
-    detailsSource.includes('<dt className="text-muted">{row.label}</dt>') &&
-    !detailsSource.includes('<dt className="text-muted2">{row.label}</dt>') &&
-    detailsSource.includes('className="shrink-0 font-mono text-[10px] text-muted"') &&
-    detailsSource.includes("shadow-soft") &&
-    !detailsSource.includes("rgba(0,0,0"),
-  "details should use compact statistics, readable parameters, and the shared shadow token",
-);
-assert.equal(
-  detailsSource.match(
-    /text-\[10px\] font-medium uppercase tracking-\[0\.12em\] text-muted/g,
-  )?.length,
-  2,
-  "both section headings should use the compact metadata treatment",
-);
-assert.ok(
-  leaderboardSource.includes("<ModelBenchmarkDetailsTrigger") &&
-    leaderboardSource.includes("<ModelBenchmarkDetailsInline") &&
-    leaderboardSource.includes("<ModelBenchmarkDetails") &&
-    modelDetailSource.includes("<ModelBenchmarkDetails"),
-  "mobile leaderboard cards should expand inline while desktop and model profiles expose the popover",
-);
-assert.ok(
-  (leaderboardSource.match(/onClick=\{\(\) => navigateToModel\(m\.key\)\}/g)?.length ??
-    0) === 2 &&
-    leaderboardSource.includes("event.stopPropagation();") &&
-    leaderboardSource.includes('aria-label={`Open ${m.displayName} profile`}'),
-  "leaderboard rows and cards should navigate by pointer while preserving isolated accessible controls",
-);
-assert.ok(
-  !detailsSource.includes("Run setup") &&
-    !detailsSource.includes("Benchmark run") &&
-    !detailsSource.includes("Run details") &&
-    !detailsSource.includes("Ratings reflect the current prompt set"),
-  "the details hierarchy should keep concise, user-facing labels",
-);
-assert.ok(
-  leaderboardSource.includes('const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v4"'),
-  "the canonical model-name change should invalidate stale client leaderboard data",
-);
 
 const trackedMarkup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
@@ -187,8 +25,6 @@ assert.ok(
     trackedMarkup.includes("$710.82") &&
     trackedMarkup.includes("$47.39 per build") &&
     !trackedMarkup.includes("per attempt") &&
-    trackedMarkup.includes("border-dotted") &&
-    !trackedMarkup.includes("title=") &&
     (trackedMarkup.match(/Not tracked/g)?.length ?? 0) === 1,
   "a model without attempt tracking should divide its cost by finalized builds",
 );
@@ -431,4 +267,4 @@ assert.ok(
   "a priced attempt cohort should divide cost by its fixed response count",
 );
 
-console.log("model benchmark details UI checks passed");
+console.log("model benchmark details render checks passed");

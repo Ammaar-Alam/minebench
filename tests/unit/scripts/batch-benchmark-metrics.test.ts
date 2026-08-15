@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promptCohortId } from "../../../lib/benchmark/promptCohortId";
 
 import {
   BenchmarkMetricsStore,
@@ -149,6 +150,23 @@ assert.deepEqual(generated.models.openai_gpt_5_6_sol, {
   failedRunCount: 0,
   interruptedRunCount: 0,
 });
+const castleCohortId = promptCohortId({ castle: castle.promptText! });
+const persistedCastleMetrics = JSON.parse(readFileSync(generatedMetricsPath, "utf8")) as {
+  models: { openai_gpt_5_6_sol: { promptCohortId?: string } };
+};
+assert.equal(persistedCastleMetrics.models.openai_gpt_5_6_sol.promptCohortId, castleCohortId);
+
+const changedPromptCastle = { ...castle, promptText: "A changed castle prompt" };
+store.refreshGeneratedMetrics([changedPromptCastle]);
+const changedPromptMetrics = JSON.parse(readFileSync(generatedMetricsPath, "utf8")) as {
+  models: { openai_gpt_5_6_sol: { promptCohortId?: string } };
+};
+assert.notEqual(promptCohortId({ castle: changedPromptCastle.promptText }), castleCohortId);
+assert.equal(
+  changedPromptMetrics.models.openai_gpt_5_6_sol.promptCohortId,
+  castleCohortId,
+  "an artifact generated for an older prompt must not claim the current cohort identity",
+);
 
 const unmarkedV2Ledger = readLedger();
 delete unmarkedV2Ledger.jobs["openai_gpt_5_6_sol/castle"]?.generatedMetricsDirty;
@@ -510,7 +528,7 @@ writeFileSync(checkoutJob.filePath, checkoutJson);
 const localCompleteMetrics = checkoutStore.refreshGeneratedMetrics([checkoutJob]);
 assert.equal(localCompleteMetrics.models.openai_gpt_5_6_sol?.inferenceSampleCount, 0);
 const refreshedCommittedMetrics = JSON.parse(readFileSync(checkoutMetricsPath, "utf8")) as {
-  models: { openai_gpt_5_6_sol: Record<string, number | boolean> };
+  models: { openai_gpt_5_6_sol: Record<string, number | boolean | string> };
 };
 assert.equal(
   refreshedCommittedMetrics.models.openai_gpt_5_6_sol.averageJsonSizeBytes,
@@ -525,6 +543,11 @@ assert.equal(
   refreshedCommittedMetrics.models.openai_gpt_5_6_sol.outputCapTokens,
   128_000,
   "a complete artifact cohort without its gitignored ledger should preserve the committed cap",
+);
+assert.equal(
+  refreshedCommittedMetrics.models.openai_gpt_5_6_sol.promptCohortId,
+  undefined,
+  "a complete artifact cohort without prompt provenance must not gain a cohort identity",
 );
 
 const terminalResponse = job("terminal-response");

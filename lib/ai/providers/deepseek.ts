@@ -1,3 +1,4 @@
+import { requestIdFromResponse, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -35,10 +36,6 @@ function extractTextFromChat(data: DeepSeekChatResponse): string {
   return "";
 }
 
-function requestIdFromResponse(res: Response): string | null {
-  return res.headers.get("x-request-id") ?? res.headers.get("request-id") ?? null;
-}
-
 function looksLikeTokenLimitError(body: string): boolean {
   const b = body.toLowerCase();
   return (
@@ -47,12 +44,6 @@ function looksLikeTokenLimitError(body: string): boolean {
     b.includes("too many tokens") ||
     b.includes("token limit")
   );
-}
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 function describeThinkingConfig(config: DeepSeekThinkingConfig): string {

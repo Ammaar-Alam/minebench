@@ -1,3 +1,4 @@
+import { withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -76,12 +77,6 @@ function bestThinkingConfigForModel(modelId: string): GeminiThinkingConfig | und
 
 function usesDefaultSampling(modelId: string): boolean {
   return modelId.startsWith("gemini-3");
-}
-
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
 }
 
 function describeThinkingConfigLine(thinkingConfig?: GeminiThinkingConfig): string {

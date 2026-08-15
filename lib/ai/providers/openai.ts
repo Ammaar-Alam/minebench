@@ -1,4 +1,6 @@
+import { parseBooleanEnv, withMaxOutputTokens } from "@/lib/ai/providers/shared";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
+import { openAiReasoningEffortAttempts } from "@/lib/ai/reasoningProfiles";
 import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -42,18 +44,6 @@ type OpenAIChatCompletionsStreamChunk = {
 };
 
 type TextVerbosity = "low" | "medium" | "high";
-
-const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
-const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
-
-function parseBooleanEnv(name: string, defaultValue: boolean): boolean {
-  const raw = process.env[name];
-  if (!raw) return defaultValue;
-  const normalized = raw.trim().toLowerCase();
-  if (TRUE_VALUES.has(normalized)) return true;
-  if (FALSE_VALUES.has(normalized)) return false;
-  return defaultValue;
-}
 
 function parseIntEnv(name: string, defaultValue: number): number {
   const raw = process.env[name];
@@ -373,12 +363,6 @@ function describeReasoningConfigAttempt(
   return `max_tokens=${clampReasoningBudget(cfg.maxTokens, completionBudget)}`;
 }
 
-function withMaxOutputTokens(message: string, maxOutputTokens: number): string {
-  const budget = Math.floor(maxOutputTokens);
-  const trimmed = message.trim().replace(/[.!?]$/, "");
-  return `${trimmed}; max_output_tokens=${budget}.`;
-}
-
 function clampReasoningBudget(maxTokens: number, completionBudget: number): number {
   const cap = Math.max(1, Math.floor(completionBudget) - 1);
   return Math.max(1, Math.min(Math.floor(maxTokens), cap));
@@ -467,20 +451,9 @@ export async function openaiGenerateText(params: {
     params.modelId === "gpt-5-pro" ||
     params.modelId === "gpt-5.2-codex" ||
     params.modelId === "gpt-5.3-codex";
-  const defaultReasoningEffortAttempts: string[] = isGpt5Family
-    ? isGpt56
-      ? ["max", "xhigh", "high", "medium", "low", "none"]
-      : isGpt55Pro
-      ? ["xhigh", "high", "medium"]
-      : params.modelId.startsWith("gpt-5.5")
-        ? ["xhigh", "high", "medium", "low", "none"]
-        : params.modelId.startsWith("gpt-5.4-pro")
-          ? ["xhigh", "high", "medium"]
-          : params.modelId === "gpt-5-pro"
-            ? ["high"]
-            : ["xhigh", "high"]
-    : isGptOssFamily
-      ? ["xhigh", "high", "medium", "low"]
+  const defaultReasoningEffortAttempts: string[] =
+    isGpt5Family || isGptOssFamily
+      ? openAiReasoningEffortAttempts(params.modelId) ?? []
       : [];
   const reasoningEffortAttempts =
     params.reasoningEffortAttempts && params.reasoningEffortAttempts.length > 0

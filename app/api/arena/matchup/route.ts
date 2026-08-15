@@ -9,10 +9,12 @@ import {
   getPreparedArenaBuildMetadataUpdate,
   pickInitialBuild,
   prepareArenaBuild,
+  type PreparedArenaBuild,
 } from "@/lib/arena/buildArtifacts";
 import { createArenaBuildSnapshotArtifactSignedUrl } from "@/lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
+import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
 import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/arena/matchupToken";
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
@@ -23,6 +25,7 @@ import {
 } from "@/lib/db/errors";
 import {
   getArenaMatchupSamplingStateWithMeta,
+  invalidateArenaCoverageCache,
   recordArenaMatchupShown,
   type CoverageState,
   type EligibleModel,
@@ -125,6 +128,17 @@ async function prepareArenaBuildById(buildId: string) {
     },
   });
   return build ? prepareArenaBuild(build) : null;
+}
+
+async function persistPreparedArenaBuildMetadata(
+  prepared: PreparedArenaBuild,
+): Promise<boolean> {
+  const result = await prisma.build.updateMany({
+    where: prepared.payloadIdentity,
+    data: getPreparedArenaBuildMetadataUpdate(prepared),
+  });
+  invalidateArenaBuildMeta(prepared.buildId);
+  return result.count > 0;
 }
 
 function pickPersistedVariantBuild(
@@ -762,17 +776,19 @@ export async function GET(req: Request) {
     return respondJson({ error: "Missing seeded build" }, { status: 500 });
   }
 
-  const checksumA = buildA.voxelSha256?.trim() || null;
-  const checksumB = buildB.voxelSha256?.trim() || null;
+  const checksumA = normalizeArenaBuildChecksum(buildA.voxelSha256);
+  const checksumB = normalizeArenaBuildChecksum(buildB.voxelSha256);
   const shellHintsA = deriveArenaBuildLoadHints(buildA);
   const shellHintsB = deriveArenaBuildLoadHints(buildB);
   const shouldProbeA = payloadMode === "adaptive" && shellHintsA.initialEstimatedBytes == null;
   const shouldProbeB = payloadMode === "adaptive" && shellHintsB.initialEstimatedBytes == null;
   // adaptive mode keeps huge builds out of the matchup response
   const shouldPrepareA =
+    !checksumA ||
     payloadMode === "inline" ||
     (payloadMode === "adaptive" && (shouldInlineInitialInAdaptiveMode(shellHintsA) || shouldProbeA));
   const shouldPrepareB =
+    !checksumB ||
     payloadMode === "inline" ||
     (payloadMode === "adaptive" && (shouldInlineInitialInAdaptiveMode(shellHintsB) || shouldProbeB));
 
@@ -782,8 +798,8 @@ export async function GET(req: Request) {
   let persistedInitialBuildB: ArenaMatchup["b"]["build"] | null = null;
   const prepareStartedAt = performance.now();
   if (shouldPrepareA || shouldPrepareB) {
-    preparedA = shouldPrepareA ? getCachedPreparedArenaBuild(buildA.id, checksumA) : null;
-    preparedB = shouldPrepareB ? getCachedPreparedArenaBuild(buildB.id, checksumB) : null;
+    preparedA = shouldPrepareA && checksumA ? getCachedPreparedArenaBuild(buildA.id, checksumA) : null;
+    preparedB = shouldPrepareB && checksumB ? getCachedPreparedArenaBuild(buildB.id, checksumB) : null;
 
     try {
       const [buildAForPrepare, buildBForPrepare] = await Promise.all([
@@ -829,7 +845,7 @@ export async function GET(req: Request) {
         return respondJson({ error: "Missing seeded build payload" }, { status: 500 });
       }
 
-      if (shouldPrepareA && !preparedA && buildAForPrepare) {
+      if (checksumA && shouldPrepareA && !preparedA && buildAForPrepare) {
         persistedInitialBuildA = pickPersistedInitialBuild(
           shellHintsA,
           buildAForPrepare.arenaSnapshotFull,
@@ -839,7 +855,7 @@ export async function GET(req: Request) {
           buildAForPrepare.voxelSha256?.trim() || null,
         );
       }
-      if (shouldPrepareB && !preparedB && buildBForPrepare) {
+      if (checksumB && shouldPrepareB && !preparedB && buildBForPrepare) {
         persistedInitialBuildB = pickPersistedInitialBuild(
           shellHintsB,
           buildBForPrepare.arenaSnapshotFull,
@@ -882,6 +898,50 @@ export async function GET(req: Request) {
   const shouldInlineB =
     payloadMode === "inline" ||
     (payloadMode === "adaptive" && shouldInlineInitialInAdaptiveMode(preparedB?.hints ?? shellHintsB));
+  const tokenBuildAChecksum =
+    normalizeArenaBuildChecksum(preparedA?.checksum) ?? checksumA;
+  const tokenBuildBChecksum =
+    normalizeArenaBuildChecksum(preparedB?.checksum) ?? checksumB;
+
+  if (!tokenBuildAChecksum || !tokenBuildBChecksum) {
+    return respondJson(
+      { error: "Build metadata is not ready" },
+      { status: 503, headers: { "Retry-After": "1" } },
+    );
+  }
+
+  // Vote validation reads the persisted checksum so repair before signing
+  const checksumRepairs = [preparedA, preparedB].filter(
+    (value): value is NonNullable<typeof value> =>
+      Boolean(value) &&
+      !normalizeArenaBuildChecksum(value?.payloadIdentity.voxelSha256),
+  );
+  const repairedBuildIds = new Set(checksumRepairs.map((prepared) => prepared.buildId));
+  if (checksumRepairs.length > 0) {
+    try {
+      const repaired = await Promise.all(
+        checksumRepairs.map(persistPreparedArenaBuildMetadata),
+      );
+      invalidateArenaCoverageCache();
+      if (repaired.some((success) => !success)) {
+        return respondJson(
+          { error: "Build changed during metadata repair" },
+          { status: 503, headers: { "Retry-After": "1" } },
+        );
+      }
+    } catch (err) {
+      if (isDatabaseUnavailableError(err)) {
+        return respondJson(databaseUnavailableBody(), {
+          status: 503,
+          headers: databaseUnavailableHeaders(),
+        });
+      }
+      return respondJson(
+        { error: getErrorMessage(err, "Failed to repair build metadata") },
+        { status: 500 },
+      );
+    }
+  }
 
   const matchupId = createArenaMatchupToken({
     promptId: picked.prompt.id,
@@ -889,26 +949,22 @@ export async function GET(req: Request) {
     modelBId: rightModel.id,
     buildAId: buildA.id,
     buildBId: buildB.id,
+    buildAChecksum: tokenBuildAChecksum,
+    buildBChecksum: tokenBuildBChecksum,
     samplingLane: picked.lane,
     samplingReason: picked.reason,
   });
   const txMs = 0;
   timing.add("tx", txMs);
   const preparedForPersistence = [preparedA, preparedB].filter(
-    (value): value is NonNullable<typeof value> => Boolean(value),
+    (value): value is NonNullable<typeof value> =>
+      Boolean(value) && !repairedBuildIds.has(value?.buildId ?? ""),
   );
   if (preparedForPersistence.length > 0) {
     after(async () => {
       await Promise.all(
         preparedForPersistence.map(async (prepared) => {
-          await prisma.build
-            .update({
-              where: { id: prepared.buildId },
-              data: getPreparedArenaBuildMetadataUpdate(prepared),
-            })
-            .catch(() => undefined);
-          // drop stale meta so the next request sees the freshly written checksum
-          invalidateArenaBuildMeta(prepared.buildId);
+          await persistPreparedArenaBuildMetadata(prepared).catch(() => false);
         }),
       );
     });
@@ -918,8 +974,8 @@ export async function GET(req: Request) {
     // warm signing caches after the matchup is already ready
     after(async () => {
       await Promise.allSettled([
-        warmFullBuildArtifactUrl(buildA.id, checksumA, preparedA?.hints ?? shellHintsA),
-        warmFullBuildArtifactUrl(buildB.id, checksumB, preparedB?.hints ?? shellHintsB),
+        warmFullBuildArtifactUrl(buildA.id, tokenBuildAChecksum, preparedA?.hints ?? shellHintsA),
+        warmFullBuildArtifactUrl(buildB.id, tokenBuildBChecksum, preparedB?.hints ?? shellHintsB),
       ]);
     });
   }
@@ -944,12 +1000,12 @@ export async function GET(req: Request) {
       buildRef: preparedA?.buildRef ?? {
         buildId: buildA.id,
         variant: "full",
-        checksum: checksumA,
+        checksum: tokenBuildAChecksum,
       },
       previewRef: preparedA?.previewRef ?? {
         buildId: buildA.id,
         variant: "preview",
-        checksum: checksumA,
+        checksum: tokenBuildAChecksum,
       },
       serverValidated: Boolean(preparedA || (shouldInlineA && persistedInitialBuildA)),
       buildLoadHints: preparedA?.hints ?? shellHintsA,
@@ -970,12 +1026,12 @@ export async function GET(req: Request) {
       buildRef: preparedB?.buildRef ?? {
         buildId: buildB.id,
         variant: "full",
-        checksum: checksumB,
+        checksum: tokenBuildBChecksum,
       },
       previewRef: preparedB?.previewRef ?? {
         buildId: buildB.id,
         variant: "preview",
-        checksum: checksumB,
+        checksum: tokenBuildBChecksum,
       },
       serverValidated: Boolean(preparedB || (shouldInlineB && persistedInitialBuildB)),
       buildLoadHints: preparedB?.hints ?? shellHintsB,

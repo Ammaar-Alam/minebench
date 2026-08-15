@@ -65,10 +65,13 @@ export async function maybePrecomputeArenaArtifactsForBuild(
   source: ArenaBuildSource,
 ): Promise<{ streamUploaded: number; snapshotUploaded: boolean; streamSkipped: boolean; reason?: string }> {
   const prepared = await prepareArenaBuild(source);
-  await prisma.build.update({
-    where: { id: source.id },
+  const marked = await prisma.build.updateMany({
+    where: prepared.payloadIdentity,
     data: getPreparedArenaBuildMetadataUpdate(prepared),
   });
+  if (marked.count === 0) {
+    throw new Error(`Build ${source.id} changed during artifact preparation`);
+  }
   invalidateArenaBuildMeta(source.id);
   const stream = isArtifactEligibleBuild(resolveSourceBytes(source))
     ? await maybePrecomputeArenaStreamArtifactsForPrepared(prepared)

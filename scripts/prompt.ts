@@ -31,6 +31,8 @@ import { getPalette } from "../lib/blocks/palettes";
 import { parseVoxelBuildSpec, validateVoxelBuildSpec } from "../lib/voxel/validate";
 import { maxBlocksForGrid } from "../lib/ai/generateVoxelBuild";
 import { LOCAL_BUILD_STORAGE_BUCKET } from "../lib/storage/buildPayload";
+import { isLoopbackDatabaseUrl } from "../lib/db/identity";
+import { ARENA_BUILD_DERIVED_METADATA_RESET } from "../lib/arena/buildArtifacts";
 import {
   listUploadPromptSlugs,
   MODEL_KEY_BY_SLUG,
@@ -99,6 +101,7 @@ function readInlineByteLimit(): number {
 }
 
 const IMPORT_INLINE_MAX_BYTES = readInlineByteLimit();
+const ENABLE_IMPORTED_MODELS = isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? "");
 
 function matchesPersistence(
   existing:
@@ -533,6 +536,7 @@ async function main() {
 
   const modelCache = new Map<ModelKey, { id: string; key: string; isBaseline: boolean }>();
   const promptCache = new Map<string, { id: string }>();
+  const stagedModelIds = new Set<string>();
 
   if (!args.dryRun) {
     await upsertBaselineModel();
@@ -607,14 +611,14 @@ async function main() {
             provider: modelEntry.provider,
             modelId: modelEntry.modelId,
             displayName: modelEntry.displayName,
-            enabled: true,
+            enabled: ENABLE_IMPORTED_MODELS,
             isBaseline: false,
           },
           update: {
             provider: modelEntry.provider,
             modelId: modelEntry.modelId,
             displayName: modelEntry.displayName,
-            enabled: true,
+            ...(ENABLE_IMPORTED_MODELS ? { enabled: true } : {}),
           },
           select: { id: true, key: true, isBaseline: true },
         }));
@@ -669,14 +673,19 @@ async function main() {
 
       const existing = existingBuildsForPrompt.get(model.id) ?? null;
 
-      if (existing && !args.overwrite) {
+      if (
+        existing &&
+        (!args.overwrite ||
+          (existing.voxelSha256?.trim() === voxelSha256 &&
+            matchesPersistence(existing, persistence)))
+      ) {
         skipped += 1;
         continue;
       }
 
-      if (existing?.voxelSha256?.trim() === voxelSha256 && matchesPersistence(existing, persistence)) {
-        skipped += 1;
-        continue;
+      if (!ENABLE_IMPORTED_MODELS && !stagedModelIds.has(model.id)) {
+        await prisma.model.update({ where: { id: model.id }, data: { enabled: false } });
+        stagedModelIds.add(model.id);
       }
 
       if (existing) {
@@ -692,6 +701,7 @@ async function main() {
             voxelSha256,
             blockCount,
             generationTimeMs: 0,
+            ...ARENA_BUILD_DERIVED_METADATA_RESET,
           },
         });
         existingBuildsForPrompt.set(model.id, {

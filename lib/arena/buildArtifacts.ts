@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
   classifyArenaBuildDelivery,
@@ -9,6 +10,7 @@ import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import { filterRenderableVoxelBuild } from "@/lib/voxel/renderVisibility";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { resolveBuildPayload } from "@/lib/storage/buildPayload";
+import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
 
 export type ArenaBuildVariant = "preview" | "full";
 
@@ -44,8 +46,54 @@ export type ArenaBuildSource = {
   arenaBuildHints?: unknown | null;
 };
 
+// Payload overwrites clear derived state until artifact preparation succeeds
+export const ARENA_BUILD_DERIVED_METADATA_RESET = {
+  arenaBuildHints: Prisma.DbNull,
+  arenaSnapshotPreview: Prisma.DbNull,
+  arenaSnapshotPreviewChecksum: null,
+  arenaSnapshotFull: Prisma.DbNull,
+  arenaSnapshotFullChecksum: null,
+} as const;
+
+type ArenaBuildPayloadIdentitySource = Pick<
+  ArenaBuildSource,
+  | "id"
+  | "gridSize"
+  | "palette"
+  | "blockCount"
+  | "voxelByteSize"
+  | "voxelCompressedByteSize"
+  | "voxelSha256"
+  | "voxelStorageBucket"
+  | "voxelStoragePath"
+  | "voxelStorageEncoding"
+>;
+
+// Checksums may be absent, so storage and size metadata remain part of identity
+export function getArenaBuildPayloadIdentity(source: ArenaBuildPayloadIdentitySource) {
+  if (normalizeArenaBuildChecksum(source.voxelSha256)) {
+    return { id: source.id, voxelSha256: source.voxelSha256 };
+  }
+
+  return {
+    id: source.id,
+    gridSize: source.gridSize,
+    palette: source.palette,
+    blockCount: source.blockCount,
+    voxelByteSize: source.voxelByteSize,
+    voxelCompressedByteSize: source.voxelCompressedByteSize,
+    voxelSha256: source.voxelSha256,
+    voxelStorageBucket: source.voxelStorageBucket,
+    voxelStoragePath: source.voxelStoragePath,
+    voxelStorageEncoding: source.voxelStorageEncoding,
+  };
+}
+
+export type ArenaBuildPayloadIdentity = ReturnType<typeof getArenaBuildPayloadIdentity>;
+
 export type PreparedArenaBuild = {
   buildId: string;
+  payloadIdentity: ArenaBuildPayloadIdentity;
   checksum: string | null;
   fullBuild: VoxelBuild;
   previewBuild: VoxelBuild;
@@ -110,8 +158,7 @@ function normalizeGridSize(value: number): 64 | 256 | 512 {
 }
 
 function normalizeStoredChecksum(source: ArenaBuildSource): string | null {
-  const value = source.voxelSha256?.trim();
-  return value ? value : null;
+  return normalizeArenaBuildChecksum(source.voxelSha256);
 }
 
 function buildCacheKey(source: ArenaBuildSource, checksum: string): string {
@@ -189,6 +236,15 @@ export function parsePersistedArenaBuildLoadHints(value: unknown): ArenaBuildLoa
     initialEstimatedBytes,
     fullEstimatedBytes,
   };
+}
+
+export function parsePersistedArenaBuildMetadata(row: {
+  voxelSha256: unknown;
+  arenaBuildHints: unknown;
+}): { checksum: string | null; loadHints: ArenaBuildLoadHints | null; complete: boolean } {
+  const checksum = normalizeArenaBuildChecksum(row.voxelSha256);
+  const loadHints = parsePersistedArenaBuildLoadHints(row.arenaBuildHints);
+  return { checksum, loadHints, complete: checksum != null && loadHints != null };
 }
 
 export function serializeArenaBuildLoadHints(hints: ArenaBuildLoadHints): Record<string, unknown> {
@@ -406,6 +462,7 @@ function createPrepared(
 
   return {
     buildId: source.id,
+    payloadIdentity: getArenaBuildPayloadIdentity(source),
     checksum,
     fullBuild: renderBuild,
     previewBuild: preview.build,

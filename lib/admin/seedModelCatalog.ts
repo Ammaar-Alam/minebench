@@ -19,7 +19,11 @@ const INITIAL_RATING_FIELDS = {
   conservativeRating: 800,
 };
 
-export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
+export function modelCatalogSeedUpsertArgs(
+  m: ModelCatalogEntry,
+  enableCatalogModels: boolean,
+) {
+  const preserveEnabled = m.importOnly || (!enableCatalogModels && m.enabled);
   return {
     where: { key: m.key },
     create: {
@@ -27,7 +31,9 @@ export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
       provider: m.provider,
       modelId: m.modelId,
       displayName: m.displayName,
-      enabled: m.enabled,
+      // Local seeds mirror the catalog so the arena is immediately usable
+      // Remote seeds stay staged until publication verification completes
+      enabled: enableCatalogModels ? m.enabled : false,
       isBaseline: false,
       ...INITIAL_RATING_FIELDS,
     },
@@ -35,9 +41,15 @@ export function modelCatalogSeedUpsertArgs(m: ModelCatalogEntry) {
       provider: m.provider,
       modelId: m.modelId,
       displayName: m.displayName,
-      ...(m.importOnly ? {} : { enabled: m.enabled }),
+      ...(preserveEnabled ? {} : { enabled: m.enabled }),
     },
   };
+}
+
+export function getCatalogSeedGenerationModelKeys(
+  models: readonly ModelCatalogEntry[],
+): string[] {
+  return models.filter((model) => model.enabled).map((model) => model.key);
 }
 
 export function isCatalogModelGeneratableForSeed(args: {
