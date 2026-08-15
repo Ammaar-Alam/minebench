@@ -60,6 +60,13 @@ const UPLOADS_DIR = path.join(process.cwd(), "uploads");
 // Import target. Defaults to production; publication and the staging wrapper
 // point this at the deployment they verified against.
 const SITE_URL = (process.env.MINEBENCH_SITE_URL ?? "https://minebench.ai").replace(/\/+$/, "");
+
+// Preview deployments sit behind Vercel deployment protection, so scripted imports
+// need the automation bypass secret. Production ignores it.
+function protectionBypassHeaders(): Record<string, string> {
+  const secret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+  return secret ? { "x-vercel-protection-bypass": secret } : {};
+}
 const DEFAULT_STORAGE_BUCKET = "builds";
 const DEFAULT_STORAGE_PREFIX = "imports";
 

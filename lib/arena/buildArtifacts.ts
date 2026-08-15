@@ -49,10 +49,6 @@ export type ArenaBuildSource = {
 // Payload overwrites clear derived state until artifact preparation succeeds
 export const ARENA_BUILD_DERIVED_METADATA_RESET = {
   arenaBuildHints: Prisma.DbNull,
-  arenaSnapshotPreview: Prisma.DbNull,
-  arenaSnapshotPreviewChecksum: null,
-  arenaSnapshotFull: Prisma.DbNull,
-  arenaSnapshotFullChecksum: null,
 } as const;
 
 type ArenaBuildPayloadIdentitySource = Pick<
@@ -263,27 +259,10 @@ export function serializeArenaBuildLoadHints(hints: ArenaBuildLoadHints): Record
 export function getPreparedArenaBuildCoreMetadataUpdate(
   prepared: PreparedArenaBuild,
 ): Record<string, unknown> {
-  // hot-route self-healing repairs identity and hints only; snapshot JSON is maintenance-owned
+  // identity and hints only; snapshot payloads live in storage artifacts
   return {
     voxelSha256: prepared.checksum,
     arenaBuildHints: serializeArenaBuildLoadHints(prepared.hints),
-  };
-}
-
-export function getPreparedArenaBuildMetadataUpdate(prepared: PreparedArenaBuild): Record<string, unknown> {
-  // persisted snapshots cover inline and snapshot routes only
-  const shouldPersistPreparedPayload = prepared.hints.deliveryClass !== "stream-artifact";
-  const snapshotPreview =
-    shouldPersistPreparedPayload && prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length
-      ? prepared.previewBuild
-      : null;
-  const snapshotFull = shouldPersistPreparedPayload ? prepared.fullBuild : null;
-  return {
-    ...getPreparedArenaBuildCoreMetadataUpdate(prepared),
-    arenaSnapshotPreview: snapshotPreview,
-    arenaSnapshotPreviewChecksum: snapshotPreview ? prepared.checksum : null,
-    arenaSnapshotFull: snapshotFull,
-    arenaSnapshotFullChecksum: snapshotFull ? prepared.checksum : null,
   };
 }
 

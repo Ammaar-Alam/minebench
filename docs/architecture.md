@@ -42,10 +42,6 @@ erDiagram
         string voxelStoragePath "canonical gzip payload in storage"
         string voxelSha256 "content checksum, addresses artifacts"
         json arenaBuildHints "delivery class, variants, sizes"
-        json arenaSnapshotPreview "LEGACY: leaving Postgres (Phase 2.2)"
-        string arenaSnapshotPreviewChecksum "LEGACY: leaving Postgres (Phase 2.2)"
-        json arenaSnapshotFull "LEGACY: leaving Postgres (Phase 2.2)"
-        string arenaSnapshotFullChecksum "LEGACY: leaving Postgres (Phase 2.2)"
     }
     Vote {
         string sessionId
@@ -99,19 +95,16 @@ flowchart TD
     SR -- yes --> S307["307 to immutable storage object<br/>(browser downloads directly)"]
     SR -- no --> AF{"snapshot artifact<br/>fetch (storage-first)"}
     AF -- hit --> ASRV["serve artifact bytes"]
-    AF -- miss --> DB{"legacy DB snapshot<br/>columns (fallback, instrumented)"}
-    DB -- hit --> DSRV["serve db snapshot<br/>(logged: must reach zero before columns drop)"]
-    DB -- miss --> LP["live prepare: parse canonical payload,<br/>validate, cache, heal core metadata"]
+    AF -- miss --> LP["live prepare: parse canonical payload,<br/>validate, cache, heal metadata<br/>and upload the missing artifact"]
     ST --> VOTE
     IN --> VOTE
     S307 --> VOTE
     ASRV --> VOTE
-    DSRV --> VOTE
     LP --> VOTE["voting unlocks only after<br/>the full build hydrates"]
 ```
 
 Artifacts are immutable and checksum-addressed, so every cache layer (CDN,
 signed-URL cache, in-process body caches, client IndexedDB mesh cache) can
-treat a hit as final. The DB snapshot columns are a compatibility fallback
-scheduled for removal once production logs show zero fallback hits
-(`arena snapshot db fallback` lines) through a full soak window.
+treat a hit as final. Snapshots live only in storage; a miss falls through to a
+live prepare, which serves the request and uploads the absent artifact so the
+next request hits storage.

@@ -3,7 +3,7 @@
 import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import {
-  getPreparedArenaBuildMetadataUpdate,
+  getPreparedArenaBuildCoreMetadataUpdate,
   parsePersistedArenaBuildMetadata,
   prepareArenaBuild,
 } from "../lib/arena/buildArtifacts";
@@ -126,7 +126,7 @@ async function main() {
       try {
         const payloadRow = await loadBuildPayloadRow(prisma, row);
         const prepared = await prepareArenaBuild(payloadRow);
-        const data = getPreparedArenaBuildMetadataUpdate(prepared);
+        const data = getPreparedArenaBuildCoreMetadataUpdate(prepared);
 
         if (opts.dryRun) {
           console.log(
