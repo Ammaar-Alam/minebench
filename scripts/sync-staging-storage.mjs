@@ -223,6 +223,13 @@ async function main() {
   // not proof the bodies match: the database refresh would bring the new
   // checksum while staging kept serving the old object. Compare content
   // identity (etag when present, else size) and recopy when it differs.
+  //
+  // Objects stored with Content-Encoding gzip never compare equal. fetch
+  // decompresses them, so the copy has to recompress before upload, and Node's
+  // gzip does not reproduce the bytes the original encoder wrote. Their content
+  // is identical once decompressed, but their etags are not, so they are
+  // recopied on every run. That is wasted transfer rather than divergence, and
+  // it is why a converged bucket still reports a small number pending.
   const contentKey = (meta) => {
     if (!meta || typeof meta !== "object") return null;
     const etag = typeof meta.eTag === "string" ? meta.eTag.replace(/"/g, "") : null;
@@ -242,6 +249,13 @@ async function main() {
   console.log(
     `Objects: ${sourceObjects.size} in source, ${targetObjects.size} in target, ${pending.length} to copy`,
   );
+  const alreadyPresent = pending.filter((objectPath) => targetObjects.has(objectPath)).length;
+  if (alreadyPresent > 0) {
+    console.log(
+      `- ${alreadyPresent} of those already exist and are being recopied because their ` +
+        "content could not be proven equal; gzip-stored objects always land here",
+    );
+  }
 
   let copied = 0;
   let copiedBytes = 0;
