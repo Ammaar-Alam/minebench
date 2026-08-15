@@ -13,7 +13,16 @@ import {
   type PackedVoxelBlocks,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import {
+  appendQuad,
+  makeBucket,
+  serializeBucket,
+  type MeshBucket,
+  type SerializedMeshBucket,
+} from "@/lib/voxel/meshBuckets";
 import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
+
+export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -41,13 +50,6 @@ const MESH_WORKER_TIMEOUT_MS = Number.parseInt(
   10,
 );
 
-export type SerializedMeshBucket = {
-  positions: Float32Array;
-  normals: Float32Array;
-  uvs: Float32Array;
-  colors: Float32Array;
-  indices: Uint32Array;
-};
 
 export type SerializedBuildBounds = {
   min: [number, number, number];
@@ -66,17 +68,6 @@ export type VoxelMeshPayload = {
   filteredBlockCount: number;
 };
 
-type MeshBucket = {
-  positions: number[];
-  normals: number[];
-  uvs: number[];
-  colors: number[];
-  indices: number[];
-};
-
-function makeBucket(): MeshBucket {
-  return { positions: [], normals: [], uvs: [], colors: [], indices: [] };
-}
 
 type Direction = {
   face: Face;
@@ -186,35 +177,28 @@ function buildGeometry(
   bucket: MeshBucket,
   bounds?: { box: THREE.Box3; center: THREE.Vector3; radius: number },
 ): THREE.BufferGeometry | null {
-  if (bucket.indices.length === 0) return null;
+  return buildGeometryFromSerialized(serializeBucket(bucket), bounds);
+}
+
+// normals, uvs, and colours are stored as normalized integers, so they are
+// declared normalized here and read back at full range in the shader
+function buildGeometryFromSerialized(
+  bucket: SerializedMeshBucket | null,
+  bounds?: { box: THREE.Box3; center: THREE.Vector3; radius: number },
+): THREE.BufferGeometry | null {
+  if (!bucket || bucket.indices.length === 0) return null;
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(bucket.positions, 3));
-  geo.setAttribute("normal", new THREE.Float32BufferAttribute(bucket.normals, 3));
-  geo.setAttribute("uv", new THREE.Float32BufferAttribute(bucket.uvs, 2));
-  geo.setAttribute("color", new THREE.Float32BufferAttribute(bucket.colors, 3));
-  geo.setIndex(bucket.indices);
+  geo.setAttribute("position", new THREE.BufferAttribute(bucket.positions, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(bucket.normals, 3, true));
+  geo.setAttribute("uv", new THREE.BufferAttribute(bucket.uvs, 2, true));
+  geo.setAttribute("color", new THREE.BufferAttribute(bucket.colors, 3, true));
+  geo.setIndex(new THREE.BufferAttribute(bucket.indices, 1));
   if (bounds) {
     geo.boundingBox = bounds.box.clone();
     geo.boundingSphere = new THREE.Sphere(bounds.center.clone(), bounds.radius);
   } else {
     geo.computeBoundingSphere();
   }
-  return geo;
-}
-
-function buildGeometryFromSerialized(
-  bucket: SerializedMeshBucket | null,
-  bounds: { box: THREE.Box3; center: THREE.Vector3; radius: number },
-): THREE.BufferGeometry | null {
-  if (!bucket || bucket.indices.length === 0) return null;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(bucket.positions, 3));
-  geo.setAttribute("normal", new THREE.BufferAttribute(bucket.normals, 3));
-  geo.setAttribute("uv", new THREE.BufferAttribute(bucket.uvs, 2));
-  geo.setAttribute("color", new THREE.BufferAttribute(bucket.colors, 3));
-  geo.setIndex(new THREE.BufferAttribute(bucket.indices, 1));
-  geo.boundingBox = bounds.box.clone();
-  geo.boundingSphere = new THREE.Sphere(bounds.center.clone(), bounds.radius);
   return geo;
 }
 
@@ -350,30 +334,6 @@ function bucketFor(blockType: string, buckets: {
   return buckets.opaque;
 }
 
-function appendQuad(
-  bucket: MeshBucket,
-  verts: [number, number, number][],
-  normal: Pick<Direction, "nx" | "ny" | "nz">,
-  tint: [number, number, number],
-  uv: [number, number, number, number, number, number, number, number],
-) {
-  const baseIndex = bucket.positions.length / 3;
-  for (const [vx, vy, vz] of verts) {
-    bucket.positions.push(vx, vy, vz);
-    bucket.normals.push(normal.nx, normal.ny, normal.nz);
-    bucket.colors.push(tint[0], tint[1], tint[2]);
-  }
-
-  bucket.uvs.push(...uv);
-  bucket.indices.push(
-    baseIndex,
-    baseIndex + 1,
-    baseIndex + 2,
-    baseIndex,
-    baseIndex + 2,
-    baseIndex + 3,
-  );
-}
 
 function configureAtlasTexture(atlasTexture: THREE.Texture) {
   atlasTexture.magFilter = THREE.NearestFilter;
@@ -466,16 +426,6 @@ function deserializeBounds(bounds: SerializedBuildBounds) {
   return { box, center, radius };
 }
 
-function serializeBucket(bucket: MeshBucket): SerializedMeshBucket | null {
-  if (bucket.indices.length === 0) return null;
-  return {
-    positions: Float32Array.from(bucket.positions),
-    normals: Float32Array.from(bucket.normals),
-    uvs: Float32Array.from(bucket.uvs),
-    colors: Float32Array.from(bucket.colors),
-    indices: Uint32Array.from(bucket.indices),
-  };
-}
 
 function collectPayloadTransferables(payload: VoxelMeshPayload): Transferable[] {
   const transferables: Transferable[] = [];

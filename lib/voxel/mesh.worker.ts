@@ -9,6 +9,7 @@ import type {
   TransferableVoxelBlocks,
   VoxelMeshPayload,
 } from "@/lib/voxel/mesh";
+import { appendQuad, makeBucket, serializeBucket, type MeshBucket } from "@/lib/voxel/meshBuckets";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -28,13 +29,6 @@ type WorkerResponse =
   | { type: "complete"; payload: VoxelMeshPayload }
   | { type: "error"; message: string };
 
-type MeshBucket = {
-  positions: number[];
-  normals: number[];
-  uvs: number[];
-  colors: number[];
-  indices: number[];
-};
 
 type PreparedMeshData = {
   allowed: Set<string>;
@@ -167,9 +161,6 @@ const DIRS: Direction[] = [
   },
 ];
 
-function makeBucket(): MeshBucket {
-  return { positions: [], normals: [], uvs: [], colors: [], indices: [] };
-}
 
 function encodePosition(x: number, y: number, z: number): number {
   return x | (y << POSITION_BITS) | (z << (POSITION_BITS * 2));
@@ -228,41 +219,7 @@ function bucketFor(
   return buckets.opaque;
 }
 
-function appendQuad(
-  bucket: MeshBucket,
-  verts: [number, number, number][],
-  normal: Pick<Direction, "nx" | "ny" | "nz">,
-  tint: [number, number, number],
-  uv: [number, number, number, number, number, number, number, number],
-) {
-  const baseIndex = bucket.positions.length / 3;
-  for (const [vx, vy, vz] of verts) {
-    bucket.positions.push(vx, vy, vz);
-    bucket.normals.push(normal.nx, normal.ny, normal.nz);
-    bucket.colors.push(tint[0], tint[1], tint[2]);
-  }
 
-  bucket.uvs.push(...uv);
-  bucket.indices.push(
-    baseIndex,
-    baseIndex + 1,
-    baseIndex + 2,
-    baseIndex,
-    baseIndex + 2,
-    baseIndex + 3,
-  );
-}
-
-function serializeBucket(bucket: MeshBucket): SerializedMeshBucket | null {
-  if (bucket.indices.length === 0) return null;
-  return {
-    positions: Float32Array.from(bucket.positions),
-    normals: Float32Array.from(bucket.normals),
-    uvs: Float32Array.from(bucket.uvs),
-    colors: Float32Array.from(bucket.colors),
-    indices: Uint32Array.from(bucket.indices),
-  };
-}
 
 function serializeBounds(prepared: PreparedMeshData): SerializedBuildBounds {
   const min: [number, number, number] = [
