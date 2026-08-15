@@ -15,6 +15,12 @@ import dotenv from "dotenv";
 
 const LIST_PAGE_SIZE = 1000;
 const CONCURRENCY = 4;
+// Objects are copied whole through memory, and the largest builds run to tens
+// of megabytes, so a copy can lose its socket under load. A dropped copy used
+// to leave staging quietly divergent from production, which defeats the point
+// of a staging copy, so transient failures are retried before being reported.
+const COPY_ATTEMPTS = 4;
+const RETRY_BASE_MS = 500;
 
 function parseEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -98,6 +104,28 @@ async function listObjects(config, prefix = "") {
 
 function isGzipBytes(bytes) {
   return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
+// A dropped socket, a 429, or a 5xx is worth another attempt; a 404 or a
+// permission error is not, and retrying it only slows the run down.
+function isRetryable(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\((4[0-9]{2})\)/.test(message) && !/\((408|429)\)/.test(message)) return false;
+  return true;
+}
+
+async function copyObjectWithRetry(source, target, objectPath) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= COPY_ATTEMPTS; attempt += 1) {
+    try {
+      return await copyObject(source, target, objectPath);
+    } catch (err) {
+      lastError = err;
+      if (attempt === COPY_ATTEMPTS || !isRetryable(err)) break;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_BASE_MS * 2 ** (attempt - 1)));
+    }
+  }
+  throw lastError;
 }
 
 async function copyObject(source, target, objectPath) {
@@ -224,7 +252,7 @@ async function main() {
       const objectPath = pending[cursor];
       cursor += 1;
       try {
-        copiedBytes += await copyObject(source, target, objectPath);
+        copiedBytes += await copyObjectWithRetry(source, target, objectPath);
         copied += 1;
         if (copied % 50 === 0) {
           console.log(`- copied ${copied}/${pending.length}`);
@@ -239,10 +267,18 @@ async function main() {
   console.log(
     `Done. copied=${copied} bytes=${copiedBytes.toLocaleString()} failed=${failures.length}`,
   );
-  for (const failure of failures.slice(0, 20)) {
+  // Every failure is printed: a truncated list reads as a short tail of noise
+  // while leaving staging short of production with no record of what is missing.
+  for (const failure of failures) {
     console.error(`- FAIL ${failure.objectPath}: ${failure.error}`);
   }
-  if (failures.length > 0) process.exitCode = 1;
+  if (failures.length > 0) {
+    console.error(
+      `\n${failures.length} object(s) did not copy, so staging is not a faithful copy of ` +
+        "production. Re-run to retry them; the copy is idempotent.",
+    );
+    process.exitCode = 1;
+  }
 }
 
 await main();
