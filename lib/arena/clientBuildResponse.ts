@@ -1,3 +1,6 @@
+import { decodeBinaryArtifact, isBinaryArtifact } from "@/lib/arena/binaryArtifact";
+import type { PackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
+
 const GZIP_MAGIC_0 = 0x1f;
 const GZIP_MAGIC_1 = 0x8b;
 
@@ -32,6 +35,24 @@ export async function readBuildVariantJson<T>(res: Response): Promise<T> {
   const bytes = new Uint8Array(await res.arrayBuffer());
   const body = isGzipChunk(bytes) ? await gunzipBytes(bytes) : bytes;
   return JSON.parse(new TextDecoder().decode(body)) as T;
+}
+
+// A request for the binary artifact can still be answered with JSON: the
+// binary object is written alongside the JSON one rather than replacing it, so
+// a miss falls back. The body is therefore identified by what it is, not by
+// what was asked for.
+export type BuildVariantArtifact<T> =
+  | { kind: "json"; value: T }
+  | { kind: "binary"; envelope: Record<string, unknown>; blocks: PackedVoxelBlocks };
+
+export async function readBuildVariantArtifact<T>(res: Response): Promise<BuildVariantArtifact<T>> {
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  const body = isGzipChunk(bytes) ? await gunzipBytes(bytes) : bytes;
+  if (isBinaryArtifact(body)) {
+    const { envelope, blocks } = decodeBinaryArtifact(body);
+    return { kind: "binary", envelope, blocks };
+  }
+  return { kind: "json", value: JSON.parse(new TextDecoder().decode(body)) as T };
 }
 
 export function streamFromInitialChunks(

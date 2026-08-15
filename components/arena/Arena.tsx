@@ -9,6 +9,7 @@ import {
   ArenaBuildStreamEvent,
   VoteChoice,
 } from "@/lib/arena/types";
+import { readBuildVariantArtifact } from "@/lib/arena/clientBuildResponse";
 import {
   appendPackedVoxelBlocks,
   createPackedVoxelBlocks,
@@ -30,6 +31,10 @@ type ArenaState =
   | { kind: "ready"; matchup: ArenaMatchup }
   | { kind: "error"; message: string };
 
+// Reading the binary artifact is opt-in per request, so turning this off is a
+// client deploy and needs no coordination with what storage holds.
+const BINARY_ARTIFACT_READS_ENABLED =
+  (process.env.NEXT_PUBLIC_ARENA_BINARY_ARTIFACT_READS_ENABLED ?? "").trim() === "1";
 const MATCHUP_REQUEST_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_MATCHUP_REQUEST_TIMEOUT_MS ?? "12000",
   10,
@@ -114,6 +119,24 @@ function packDeliveredBuild(
 function packBuildVariantResponse(payload: BuildVariantResponse): BuildVariantResponse {
   const packedBuild = packDeliveredBuild(payload.voxelBuild);
   return packedBuild === payload.voxelBuild ? payload : { ...payload, voxelBuild: packedBuild };
+}
+
+// The binary artifact already carries its blocks as typed arrays, so it needs
+// no packing step and never becomes a string or per-block objects.
+async function readBuildVariantPayload(res: Response): Promise<BuildVariantResponse> {
+  const artifact = await readBuildVariantArtifact<BuildVariantResponse>(res);
+  if (artifact.kind === "json") return packBuildVariantResponse(artifact.value);
+  const envelope = artifact.envelope as Omit<BuildVariantResponse, "voxelBuild"> & {
+    version?: string;
+  };
+  return {
+    buildId: envelope.buildId,
+    variant: envelope.variant,
+    checksum: envelope.checksum ?? null,
+    serverValidated: Boolean(envelope.serverValidated),
+    buildLoadHints: envelope.buildLoadHints,
+    voxelBuild: { version: "1.0", blocks: [], packed: artifact.blocks },
+  };
 }
 
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
@@ -516,6 +539,7 @@ async function fetchBuildVariantSnapshot(
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
   const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
+  if (BINARY_ARTIFACT_READS_ENABLED) url.searchParams.set("format", "v4");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
     let res: Response;
@@ -540,7 +564,7 @@ async function fetchBuildVariantSnapshot(
       const message = await readErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
-    return packBuildVariantResponse(await readBuildVariantJson(res));
+    return await readBuildVariantPayload(res);
   } finally {
     timed.cleanup();
   }

@@ -10,6 +10,8 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
+  isBinarySnapshotArtifactEnabled,
+  type ArenaSnapshotArtifactFormat,
   healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
@@ -256,6 +258,17 @@ export async function GET(
     );
   }
 
+  // the client opts in per request, so a rollback is a client deploy and never
+  // strands a reader on a format the server stopped writing
+  // The binary object is additive, so a build without one yet must still be
+  // served from the JSON object rather than counting as a snapshot miss and
+  // pushing the client onto a stream fallback it does not need.
+  const artifactFormats: ArenaSnapshotArtifactFormat[] =
+    url.searchParams.get("format") === "v4" && isBinarySnapshotArtifactEnabled()
+      ? ["binary", "json"]
+      : ["json"];
+  let servedArtifactFormat: ArenaSnapshotArtifactFormat = "json";
+
   if (
     SNAPSHOT_ARTIFACT_REDIRECT_ENABLED &&
     url.searchParams.get("redirect") !== "0" &&
@@ -264,15 +277,23 @@ export async function GET(
     // redirect first so node does not proxy large immutable snapshots
     const requireStreamFallbackOnMiss = variant === "full";
     try {
-      const signedUrl = await withTimeout(
-        (signal) =>
-          createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, storedChecksum, {
-            signal,
-            expiresInSec: SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC,
-          }),
-        SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS,
-        "snapshot artifact sign",
-      );
+      let signedUrl: string | null = null;
+      for (const format of artifactFormats) {
+        signedUrl = await withTimeout(
+          (signal) =>
+            createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, storedChecksum, {
+              signal,
+              expiresInSec: SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC,
+              format,
+            }),
+          SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS,
+          "snapshot artifact sign",
+        );
+        if (signedUrl) {
+          servedArtifactFormat = format;
+          break;
+        }
+      }
       if (signedUrl) {
         timing.end("total", requestStartedAt);
         const headers = new Headers({
@@ -303,12 +324,19 @@ export async function GET(
   try {
     if (artifactAllowed && canServeSnapshotArtifact) {
       const artifactStartedAt = timing.start();
-      const artifactBytes = await withTimeout(
-        (signal) =>
-          fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal }),
-        SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
-        "snapshot artifact fetch",
-      );
+      let artifactBytes: Uint8Array | null = null;
+      for (const format of artifactFormats) {
+        artifactBytes = await withTimeout(
+          (signal) =>
+            fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal, format }),
+          SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
+          "snapshot artifact fetch",
+        );
+        if (artifactBytes) {
+          servedArtifactFormat = format;
+          break;
+        }
+      }
       if (artifactBytes) {
         timing.end("artifact_hit", artifactStartedAt);
         timing.end("total", requestStartedAt);
@@ -317,7 +345,10 @@ export async function GET(
         const body = shouldGzip ? gzipSync(Buffer.from(artifactBytes)) : artifactBytes;
         const headers = new Headers({
           "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
-          "Content-Type": "application/json; charset=utf-8",
+          "Content-Type":
+            servedArtifactFormat === "binary"
+              ? "application/octet-stream"
+              : "application/json; charset=utf-8",
           "Content-Length": String(body.byteLength),
           "x-build-delivery-class": deliveryClass,
           "x-build-source": "artifact",

@@ -7,9 +7,16 @@ import {
   getSupabaseStorageConfig,
   hasSupabaseStorageConfig,
 } from "@/lib/storage/buildPayload";
+import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
+
+export type ArenaSnapshotArtifactFormat = "json" | "binary";
+
+export function isBinarySnapshotArtifactEnabled(): boolean {
+  return ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED;
+}
 
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
 const ARENA_SNAPSHOT_ARTIFACT_PREFIX = normalizePrefix(
@@ -30,6 +37,13 @@ const ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY = normalizePrefix(
     "preview-target",
     getArenaPreviewTargetBlocks(),
   ].join("-"),
+);
+// Binary artifacts are written alongside the JSON ones and read only when a
+// client asks for them, so this can be turned on to backfill before anything
+// reads it, and turned off without stranding a client on a format it cannot get.
+const ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv(
+  "ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED",
+  false,
 );
 const ARENA_SNAPSHOT_ARTIFACT_BUCKET =
   process.env.ARENA_SNAPSHOT_ARTIFACT_BUCKET?.trim() || getBuildStorageBucketFromEnv();
@@ -116,8 +130,13 @@ function encodeStoragePath(path: string): string {
     .join("/");
 }
 
-function getArtifactCacheKey(buildId: string, variant: ArenaBuildVariant, checksum: string | null): string {
-  return `${buildId}:${variant}:${checksum?.trim() || "none"}`;
+function getArtifactCacheKey(
+  buildId: string,
+  variant: ArenaBuildVariant,
+  checksum: string | null,
+  format: ArenaSnapshotArtifactFormat = "json",
+): string {
+  return `${buildId}:${variant}:${checksum?.trim() || "none"}:${format}`;
 }
 
 function maybePruneArtifactCaches(now: number): void {
@@ -191,8 +210,9 @@ function clearSnapshotArtifactMiss(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
+  format: ArenaSnapshotArtifactFormat = "json",
 ): void {
-  artifactMissCache.delete(getArtifactCacheKey(buildId, variant, checksum));
+  artifactMissCache.delete(getArtifactCacheKey(buildId, variant, checksum, format));
 }
 
 function getCachedSnapshotArtifactBody(cacheKey: string): Uint8Array | null {
@@ -220,18 +240,24 @@ function isSnapshotArtifactEnabled(): boolean {
   );
 }
 
+// The binary artifact sits beside the JSON one under the same checksum, so the
+// two never shadow each other and a client that cannot read the binary form
+// still finds the object it expects.
 export function getSnapshotArtifactRef(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
+  format: ArenaSnapshotArtifactFormat = "json",
 ): ArenaBuildSnapshotArtifactRef | null {
   const normalizedChecksum = checksum?.trim();
   if (!normalizedChecksum || !isSnapshotArtifactEnabled()) return null;
+  if (format === "binary" && !ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) return null;
   return {
     bucket: ARENA_SNAPSHOT_ARTIFACT_BUCKET,
     path:
       `${ARENA_SNAPSHOT_ARTIFACT_PREFIX}/${ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY}/` +
-      `${buildId}/${variant}-${normalizedChecksum}.json`,
+      `${buildId}/${variant}-${normalizedChecksum}` +
+      (format === "binary" ? ".mbv4" : ".json"),
   };
 }
 
@@ -253,6 +279,14 @@ function encodeSnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8A
   return gzipSync(ENCODER.encode(JSON.stringify(payload)));
 }
 
+// same envelope, blocks moved into the binary encoding
+function encodeBinarySnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
+  const { voxelBuild, ...envelope } = payload;
+  return gzipSync(
+    encodeBinaryArtifact({ ...envelope, version: voxelBuild.version }, voxelBuild.blocks),
+  );
+}
+
 function maybeGunzipArtifactBytes(bytes: Uint8Array): Uint8Array {
   if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
   return gunzipSync(Buffer.from(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength));
@@ -261,11 +295,12 @@ function maybeGunzipArtifactBytes(bytes: Uint8Array): Uint8Array {
 async function uploadSnapshotArtifactVariant(
   prepared: PreparedArenaBuild,
   variant: ArenaBuildVariant,
+  format: ArenaSnapshotArtifactFormat = "json",
 ): Promise<void> {
-  const ref = getSnapshotArtifactRef(prepared.buildId, variant, prepared.checksum);
+  const ref = getSnapshotArtifactRef(prepared.buildId, variant, prepared.checksum, format);
   if (!ref) return;
 
-  const uploadKey = `${prepared.buildId}:${variant}:${prepared.checksum}`;
+  const uploadKey = `${prepared.buildId}:${variant}:${prepared.checksum}:${format}`;
   const existing = snapshotArtifactUploadInflight.get(uploadKey);
   if (existing) {
     // one upload per build variant is enough
@@ -277,7 +312,11 @@ async function uploadSnapshotArtifactVariant(
     const config = getSupabaseStorageConfig();
     const encodedPath = encodeStoragePath(ref.path);
     const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
-    const payload = encodeSnapshotArtifactPayload(createSnapshotArtifactPayload(prepared, variant));
+    const artifact = createSnapshotArtifactPayload(prepared, variant);
+    const payload =
+      format === "binary"
+        ? encodeBinarySnapshotArtifactPayload(artifact)
+        : encodeSnapshotArtifactPayload(artifact);
     const resp = await fetch(url, {
       method: "POST",
       headers: {
@@ -286,7 +325,8 @@ async function uploadSnapshotArtifactVariant(
         "x-upsert": "true",
         "cache-control": ARENA_SNAPSHOT_ARTIFACT_CACHE_CONTROL,
         "Content-Encoding": "gzip",
-        "Content-Type": "application/json; charset=utf-8",
+        "Content-Type":
+          format === "binary" ? "application/octet-stream" : "application/json; charset=utf-8",
       },
       body: Buffer.from(payload.buffer as ArrayBuffer, payload.byteOffset, payload.byteLength),
     });
@@ -296,7 +336,7 @@ async function uploadSnapshotArtifactVariant(
       throw new Error(`Snapshot artifact upload failed (${resp.status}): ${text || "empty response"}`);
     }
 
-    clearSnapshotArtifactMiss(prepared.buildId, variant, prepared.checksum);
+    clearSnapshotArtifactMiss(prepared.buildId, variant, prepared.checksum, format);
   })();
 
   snapshotArtifactUploadInflight.set(uploadKey, promise);
@@ -327,22 +367,38 @@ export async function ensureArenaBuildSnapshotArtifacts(
     return { uploaded: 0, skipped: true };
   }
 
+  let uploaded = 0;
   for (const variant of variants) {
     await uploadSnapshotArtifactVariant(prepared, variant);
+    uploaded += 1;
+    // the binary artifact is additive: a failure to write it must not cost the
+    // JSON artifact this build is actually served from
+    if (ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) {
+      try {
+        await uploadSnapshotArtifactVariant(prepared, variant, "binary");
+        uploaded += 1;
+      } catch (err) {
+        console.warn(
+          `arena binary snapshot artifact upload failed for ${prepared.buildId}:${variant}`,
+          err,
+        );
+      }
+    }
   }
-  return { uploaded: variants.length, skipped: false };
+  return { uploaded, skipped: false };
 }
 
 export async function fetchArenaBuildSnapshotArtifact(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; format?: ArenaSnapshotArtifactFormat },
 ): Promise<Uint8Array | null> {
-  const ref = getSnapshotArtifactRef(buildId, variant, checksum);
+  const format = opts?.format ?? "json";
+  const ref = getSnapshotArtifactRef(buildId, variant, checksum, format);
   if (!ref) return null;
 
-  const cacheKey = getArtifactCacheKey(buildId, variant, checksum);
+  const cacheKey = getArtifactCacheKey(buildId, variant, checksum, format);
   const now = Date.now();
   maybePruneArtifactCaches(now);
   if (hasFreshArtifactMiss(cacheKey)) {
@@ -433,14 +489,15 @@ export async function createArenaBuildSnapshotArtifactSignedUrl(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
-  opts?: { signal?: AbortSignal; expiresInSec?: number },
+  opts?: { signal?: AbortSignal; expiresInSec?: number; format?: ArenaSnapshotArtifactFormat },
 ): Promise<string | null> {
   if (!ARENA_SNAPSHOT_ARTIFACT_SIGN_REDIRECTS_ENABLED) return null;
 
-  const ref = getSnapshotArtifactRef(buildId, variant, checksum);
+  const format = opts?.format ?? "json";
+  const ref = getSnapshotArtifactRef(buildId, variant, checksum, format);
   if (!ref) return null;
 
-  const cacheKey = getArtifactCacheKey(buildId, variant, checksum);
+  const cacheKey = getArtifactCacheKey(buildId, variant, checksum, format);
   const now = Date.now();
   maybePruneArtifactCaches(now);
   if (hasFreshArtifactMiss(cacheKey)) {
