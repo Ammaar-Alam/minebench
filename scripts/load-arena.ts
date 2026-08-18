@@ -276,6 +276,9 @@ class Metrics {
     lines.push("");
     lines.push("Arena load summary");
     lines.push(`- base url: ${args.baseUrl}`);
+    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim()) {
+      lines.push("- deployment protection: bypass header sent");
+    }
     lines.push(`- users: ${args.users}`);
     lines.push(`- duration: ${args.durationSeconds}s`);
     lines.push(`- payload mode: ${args.payload}`);
@@ -544,6 +547,8 @@ Options:
 
 Env:
   MINEBENCH_LOAD_ISOLATE_USER_IP=1 enables --isolate-user-ip by default
+  VERCEL_AUTOMATION_BYPASS_SECRET is sent as x-vercel-protection-bypass, which a
+    protected preview deployment needs or every request returns the SSO page
 `.trim(),
   );
 }
@@ -681,6 +686,10 @@ async function fetchWithTimeout<T>(params: {
   const headers = new Headers(init.headers);
   const cookie = jar.headerValue();
   if (cookie) headers.set("cookie", cookie);
+  // a protected preview answers every request with the SSO interstitial, which
+  // reads as a fast 200 and produces a run of meaningless timings
+  const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+  if (bypassSecret) headers.set("x-vercel-protection-bypass", bypassSecret);
   const queuedAt = performance.now();
   let startedAt = queuedAt;
   let queueWaitMs = 0;

@@ -2,6 +2,7 @@
 
 import "dotenv/config";
 import { Prisma } from "@prisma/client";
+import { databaseIdentityFromUrl } from "../lib/db/identity";
 import { prisma } from "../lib/prisma";
 
 type Args = {
@@ -88,7 +89,15 @@ async function main() {
   const args = parseArgs(process.argv);
   const cutoff = new Date(Date.now() - args.days * 24 * 60 * 60 * 1000);
 
+  // deletes are irreversible, so name the database before doing any: the only
+  // thing separating staging from production here is the environment wrapper
+  const target = databaseIdentityFromUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "");
+  if (!target) {
+    throw new Error("Could not identify the target database from DATABASE_URL");
+  }
+
   console.log("Pruning processed arena job history");
+  console.log(`- database: ${target.projectRef ?? `${target.host}:${target.port}/${target.database}`}`);
   console.log(`- cutoff: ${cutoff.toISOString()} (${args.days} days)`);
   console.log(`- batch size: ${args.batchSize}`);
   console.log(`- dry run: ${args.dryRun ? "yes" : "no"}`);

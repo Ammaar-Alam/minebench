@@ -2,10 +2,13 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { VoxelBuildExportFormat, VoxelBuildExportStats } from "@/lib/voxel/export";
-import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  toObjectBackedVoxelBuild,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 
 type Props = {
-  build: VoxelBuild | null;
+  build: RenderableVoxelBuild | null;
   palette: "simple" | "advanced";
   fileLabel?: string;
   promptText?: string;
@@ -170,7 +173,15 @@ export function VoxelBuildExportButton({
       setStatus({ type: "error", message: event.message || "Export failed" });
     };
 
-    worker.postMessage({ type: "export", requestId, format, build, palette });
+    // the export worker walks block objects, and a packed build only carries
+    // typed arrays
+    worker.postMessage({
+      type: "export",
+      requestId,
+      format,
+      build: toObjectBackedVoxelBuild(build),
+      palette,
+    });
   };
 
   const statusText =

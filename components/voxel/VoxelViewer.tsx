@@ -6,7 +6,11 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
 import { createVoxelGroupAsync, VoxelGroup } from "@/lib/voxel/mesh";
-import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  voxelBuildBlockCount,
+  voxelBuildBlocksRef,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
 
 export type VoxelViewerBuildProgress = {
@@ -16,7 +20,7 @@ export type VoxelViewerBuildProgress = {
 };
 
 type ViewerProps = {
-  voxelBuild: VoxelBuild | null;
+  voxelBuild: RenderableVoxelBuild | null;
   palette: "simple" | "advanced";
   expectedBlockCount?: number;
   meshCacheKey?: string | null;
@@ -160,21 +164,39 @@ function loadAtlasTexture(): Promise<THREE.Texture> {
 type BuildBounds = { box: THREE.Box3; center: THREE.Vector3; radius: number };
 type RevealGeometry = { geo: THREE.BufferGeometry; total: number };
 
-function computeBuildBounds(build: VoxelBuild, allowed: Set<string>, blockLimit: number): BuildBounds {
-  const limit = Math.max(0, Math.min(build.blocks.length, Math.floor(blockLimit)));
+function computeBuildBounds(
+  build: RenderableVoxelBuild,
+  allowed: Set<string>,
+  blockLimit: number,
+): BuildBounds {
+  const limit = Math.max(0, Math.min(voxelBuildBlockCount(build), Math.floor(blockLimit)));
 
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
 
+  const packed = build.packed;
   for (let i = 0; i < limit; i += 1) {
-    const b = build.blocks[i];
-    if (!b || !allowed.has(b.type)) continue;
-    minX = Math.min(minX, b.x);
-    minY = Math.min(minY, b.y);
-    minZ = Math.min(minZ, b.z);
-    maxX = Math.max(maxX, b.x);
-    maxY = Math.max(maxY, b.y);
-    maxZ = Math.max(maxZ, b.z);
+    let x: number;
+    let y: number;
+    let z: number;
+    if (packed) {
+      if (!allowed.has(packed.typeNames[packed.typeIds[i]] ?? "")) continue;
+      x = packed.positions[i * 3];
+      y = packed.positions[i * 3 + 1];
+      z = packed.positions[i * 3 + 2];
+    } else {
+      const b = build.blocks[i];
+      if (!b || !allowed.has(b.type)) continue;
+      x = b.x;
+      y = b.y;
+      z = b.z;
+    }
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    maxZ = Math.max(maxZ, z);
   }
 
   if (!Number.isFinite(minX)) {
@@ -204,7 +226,7 @@ function computeBuildBounds(build: VoxelBuild, allowed: Set<string>, blockLimit:
 
 type BuildIdentity = {
   palette: "simple" | "advanced";
-  blocksRef: VoxelBuild["blocks"] | null;
+  blocksRef: object | null;
 };
 
 function sameIdentity(a: BuildIdentity | null, b: BuildIdentity | null): boolean {
@@ -390,8 +412,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const spinPreferenceEnabled = useVoxelViewerSpinPreference();
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
+  const currentBlockCount = voxelBuildBlockCount(voxelBuild);
   const latestRef = useRef<{
-    voxelBuild: VoxelBuild | null;
+    voxelBuild: RenderableVoxelBuild | null;
     palette: "simple" | "advanced";
     paletteDefs: BlockDefinition[];
     animateIn: boolean;
@@ -518,7 +541,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
     const latest = latestRef.current;
     const incomingIdentity: BuildIdentity | null = latest.voxelBuild
-      ? { palette: latest.palette, blocksRef: latest.voxelBuild.blocks }
+      ? { palette: latest.palette, blocksRef: voxelBuildBlocksRef(latest.voxelBuild) }
       : null;
 
     if (!incomingIdentity) {
@@ -539,7 +562,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       identityRef.current = incomingIdentity;
     }
 
-    const desiredBlocks = Math.max(0, latest.voxelBuild?.blocks.length ?? 0);
+    const desiredBlocks = Math.max(0, voxelBuildBlockCount(latest.voxelBuild));
     const lastBuiltBlocks = identityChanged ? 0 : Math.max(0, lastBuiltRef.current.blockLimit);
     const delta = desiredBlocks - lastBuiltBlocks;
     const now = performance.now();
@@ -656,7 +679,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
       lastBuiltRef.current = { blockLimit, at: performance.now() };
       const expectedNow = normalizeExpectedBlockCount(expectedSnapshot);
-      const desiredNow = Math.max(0, latestRef.current.voxelBuild?.blocks.length ?? 0);
+      const desiredNow = Math.max(0, voxelBuildBlockCount(latestRef.current.voxelBuild));
       const requiredNow = expectedNow ?? desiredNow;
       requestRenderRef.current?.();
 
@@ -1210,13 +1233,22 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   }, []);
 
   useEffect(() => {
-    const incomingIdentity: BuildIdentity | null = voxelBuild ? { palette, blocksRef: voxelBuild.blocks } : null;
+    const incomingIdentity: BuildIdentity | null = voxelBuild ? { palette, blocksRef: voxelBuildBlocksRef(voxelBuild) } : null;
     const activeIdentity = activeJobRef.current.identity;
     if (activeJobRef.current.controller && activeIdentity && !sameIdentity(activeIdentity, incomingIdentity)) {
       activeJobRef.current.controller.abort();
     }
     requestBuild();
-  }, [voxelBuild, paletteDefs, animateIn, palette, expectedBlockCount, meshCacheKey, requestBuild]);
+  }, [
+    voxelBuild,
+    currentBlockCount,
+    paletteDefs,
+    animateIn,
+    palette,
+    expectedBlockCount,
+    meshCacheKey,
+    requestBuild,
+  ]);
 
   useEffect(() => {
     const three = threeRef.current;

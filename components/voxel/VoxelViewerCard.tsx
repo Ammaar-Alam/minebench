@@ -15,6 +15,12 @@ import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButto
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  toObjectBackedVoxelBuild,
+  voxelBuildBlockCount,
+  voxelBuildBlocksRef,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 export function VoxelViewerCard({
@@ -84,16 +90,16 @@ export function VoxelViewerCard({
 }) {
   type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
 
-  const isLikelyVoxelBuild = (value: unknown): value is VoxelBuild => {
+  const isLikelyVoxelBuild = (value: unknown): value is RenderableVoxelBuild => {
     if (!value || typeof value !== "object") return false;
-    const candidate = value as Partial<VoxelBuild>;
+    const candidate = value as Partial<RenderableVoxelBuild>;
     return candidate.version === "1.0" && Array.isArray(candidate.blocks);
   };
 
   const rendered = useMemo(() => {
     if (!voxelBuild)
       return {
-        build: null as VoxelBuild | null,
+        build: null as RenderableVoxelBuild | null,
         warnings: [] as string[],
         error: null as string | null,
       };
@@ -106,18 +112,24 @@ export function VoxelViewerCard({
     }
     const paletteDefs = getPalette(palette);
     const maxBlocks = MAX_BLOCKS_BY_GRID[gridSize] ?? MAX_BLOCKS_BY_GRID[256];
-    const validated = validateVoxelBuild(voxelBuild, {
-      gridSize,
-      palette: paletteDefs,
-      maxBlocks,
-    });
+    // Validation walks block objects, so a packed build is materialized for it.
+    // That only happens when the server has not already validated the payload.
+    const validated = validateVoxelBuild(
+      isLikelyVoxelBuild(voxelBuild) ? toObjectBackedVoxelBuild(voxelBuild) : voxelBuild,
+      {
+        gridSize,
+        palette: paletteDefs,
+        maxBlocks,
+      },
+    );
     if (!validated.ok) return { build: null, warnings: [], error: validated.error };
     return { build: validated.value.build, warnings: validated.value.warnings, error: null };
   }, [voxelBuild, gridSize, palette, skipValidation]);
 
   const build = rendered.build;
+  const buildBlocksRef = build ? voxelBuildBlocksRef(build) : null;
   const warnings = metrics?.warnings ?? rendered.warnings;
-  const blockCount = metrics?.blockCount ?? build?.blocks.length ?? 0;
+  const blockCount = metrics?.blockCount ?? voxelBuildBlockCount(build);
   const isThinking = Boolean(isLoading && attempt && attempt > 0 && !debugRawText);
   const [preferredView, setPreferredView] = useState<"build" | "json">("build");
   const [showRawBuildJson, setShowRawBuildJson] = useState(false);
@@ -136,13 +148,17 @@ export function VoxelViewerCard({
   }, [jsonText, debugRawText]);
 
   const buildJsonText = useMemo(() => {
-    if (!voxelBuild) return "";
+    if (!enableBuildJsonToggle || !voxelBuild) return "";
     try {
-      return JSON.stringify(voxelBuild, null, 2);
+      return JSON.stringify(
+        isLikelyVoxelBuild(voxelBuild) ? toObjectBackedVoxelBuild(voxelBuild) : voxelBuild,
+        null,
+        2,
+      );
     } catch {
       return "";
     }
-  }, [voxelBuild]);
+  }, [enableBuildJsonToggle, voxelBuild]);
 
   const hasBuildView = Boolean(build);
   const hasModelOutputJson = modelOutputText.trim().length > 0;
@@ -200,7 +216,7 @@ export function VoxelViewerCard({
       (placementLoading
         ? {
             receivedBlocks: 0,
-            totalBlocks: build?.blocks.length ?? null,
+            totalBlocks: voxelBuildBlockCount(build),
           }
         : null);
   const hudLabel = isLoading
@@ -212,7 +228,7 @@ export function VoxelViewerCard({
     setViewerReady(false);
     setPlacementProgress(null);
     setPlacementError(null);
-  }, [build?.blocks, palette]);
+  }, [buildBlocksRef, palette]);
 
   const handleBuildReadyChange = useCallback(
     (ready: boolean) => {

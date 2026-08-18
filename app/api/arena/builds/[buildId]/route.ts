@@ -10,6 +10,8 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
+  isBinarySnapshotArtifactEnabled,
+  type ArenaSnapshotArtifactFormat,
   healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
@@ -238,13 +240,25 @@ export async function GET(
     arenaBuildHints: buildMeta.arenaBuildHints,
   });
   const deliveryClass = variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass;
+  const binaryFormatRequested = url.searchParams.get("format") === "v4";
+  const binaryArtifactRequested =
+    binaryFormatRequested && isBinarySnapshotArtifactEnabled();
+  const fullUsesStreamDelivery =
+    variant === "full" &&
+    (shellHints.deliveryClass === "stream-live" ||
+      shellHints.deliveryClass === "stream-artifact");
   const canServeSnapshotArtifact =
     url.searchParams.get("artifact") !== "0" &&
     Boolean(storedChecksum) &&
     ((variant === "preview" && SNAPSHOT_PREVIEW_ARTIFACT_REDIRECT_ENABLED) ||
       (variant === "full" &&
-        (shellHints.deliveryClass === "snapshot" || shellHints.deliveryClass === "inline")));
-  let shouldRequireStreamFallbackOnSnapshotMiss = false;
+        (binaryArtifactRequested ||
+          shellHints.deliveryClass === "snapshot" ||
+          shellHints.deliveryClass === "inline")));
+  // A v4 request for a stream-class full build must never fall through to a
+  // cached or freshly prepared whole-body JSON response.
+  const avoidWholeBodyJsonFallback = binaryFormatRequested && fullUsesStreamDelivery;
+  let shouldRequireStreamFallbackOnSnapshotMiss = avoidWholeBodyJsonFallback;
   if (expectedChecksum && storedChecksum && expectedChecksum !== storedChecksum) {
     return NextResponse.json(
       {
@@ -256,6 +270,19 @@ export async function GET(
     );
   }
 
+  // the client opts in per request, so a rollback is a client deploy and never
+  // strands a reader on a format the server stopped writing
+  // The binary object is additive, so a build without one yet must still be
+  // served from the JSON object rather than counting as a snapshot miss and
+  // pushing the client onto a stream fallback it does not need.
+  const artifactFormats: ArenaSnapshotArtifactFormat[] =
+    binaryArtifactRequested
+      ? fullUsesStreamDelivery
+        ? ["binary"]
+        : ["binary", "json"]
+      : ["json"];
+  let servedArtifactFormat: ArenaSnapshotArtifactFormat = "json";
+
   if (
     SNAPSHOT_ARTIFACT_REDIRECT_ENABLED &&
     url.searchParams.get("redirect") !== "0" &&
@@ -264,15 +291,29 @@ export async function GET(
     // redirect first so node does not proxy large immutable snapshots
     const requireStreamFallbackOnMiss = variant === "full";
     try {
-      const signedUrl = await withTimeout(
-        (signal) =>
-          createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, storedChecksum, {
-            signal,
-            expiresInSec: SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC,
-          }),
-        SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS,
-        "snapshot artifact sign",
-      );
+      let signedUrl: string | null = null;
+      for (const format of artifactFormats) {
+        try {
+          signedUrl = await withTimeout(
+            (signal) =>
+              createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, storedChecksum, {
+                signal,
+                expiresInSec: SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC,
+                format,
+              }),
+            SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS,
+            "snapshot artifact sign",
+          );
+        } catch (error) {
+          if (format === "json") throw error;
+          console.warn("arena binary snapshot artifact sign failed; falling back", error);
+          continue;
+        }
+        if (signedUrl) {
+          servedArtifactFormat = format;
+          break;
+        }
+      }
       if (signedUrl) {
         timing.end("total", requestStartedAt);
         const headers = new Headers({
@@ -303,12 +344,25 @@ export async function GET(
   try {
     if (artifactAllowed && canServeSnapshotArtifact) {
       const artifactStartedAt = timing.start();
-      const artifactBytes = await withTimeout(
-        (signal) =>
-          fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal }),
-        SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
-        "snapshot artifact fetch",
-      );
+      let artifactBytes: Uint8Array | null = null;
+      for (const format of artifactFormats) {
+        try {
+          artifactBytes = await withTimeout(
+            (signal) =>
+              fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal, format }),
+            SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
+            "snapshot artifact fetch",
+          );
+        } catch (error) {
+          if (format === "json") throw error;
+          console.warn("arena binary snapshot artifact fetch failed; falling back", error);
+          continue;
+        }
+        if (artifactBytes) {
+          servedArtifactFormat = format;
+          break;
+        }
+      }
       if (artifactBytes) {
         timing.end("artifact_hit", artifactStartedAt);
         timing.end("total", requestStartedAt);
@@ -317,7 +371,10 @@ export async function GET(
         const body = shouldGzip ? gzipSync(Buffer.from(artifactBytes)) : artifactBytes;
         const headers = new Headers({
           "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
-          "Content-Type": "application/json; charset=utf-8",
+          "Content-Type":
+            servedArtifactFormat === "binary"
+              ? "application/octet-stream"
+              : "application/json; charset=utf-8",
           "Content-Length": String(body.byteLength),
           "x-build-delivery-class": deliveryClass,
           "x-build-source": "artifact",
@@ -335,7 +392,10 @@ export async function GET(
     console.warn("arena snapshot artifact fetch failed", error);
   }
 
-  const cachedJsonResponse = jsonCacheKey ? getCachedJsonResponseByKey(jsonCacheKey) : null;
+  const cachedJsonResponse =
+    !avoidWholeBodyJsonFallback && jsonCacheKey
+      ? getCachedJsonResponseByKey(jsonCacheKey)
+      : null;
   // This body exists because the artifact was missing when it was built, so
   // returning it short-circuits the heal in the after() hook below. Re-arm from
   // the prepared cache when possible; the success set makes that a no-op once

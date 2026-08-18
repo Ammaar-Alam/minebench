@@ -8,8 +8,12 @@ import {
   pickBuildVariant,
   prepareArenaBuild,
 } from "../lib/arena/buildArtifacts";
-import { ensureArenaBuildSnapshotArtifacts } from "../lib/arena/buildSnapshotArtifacts";
-import type { ArenaBuildVariant } from "../lib/arena/types";
+import { encodeBinaryArtifact } from "../lib/arena/binaryArtifact";
+import {
+  ensureArenaBuildSnapshotArtifacts,
+  expectedSnapshotArtifactTargets,
+  type ArenaSnapshotArtifactTarget,
+} from "../lib/arena/buildSnapshotArtifacts";
 
 import {
   arenaMaintenanceWhere,
@@ -82,17 +86,26 @@ async function loadBuildPayloadRow(
 
 function estimateSnapshotArtifactBytes(
   prepared: Awaited<ReturnType<typeof prepareArenaBuild>>,
-  variant: ArenaBuildVariant,
+  target: ArenaSnapshotArtifactTarget,
 ) {
-  const payload = {
+  const voxelBuild = pickBuildVariant(prepared, target.variant);
+  const envelope = {
     buildId: prepared.buildId,
-    variant,
+    variant: target.variant,
     checksum: prepared.checksum,
     serverValidated: true,
     buildLoadHints: prepared.hints,
-    voxelBuild: pickBuildVariant(prepared, variant),
   };
-  const raw = Buffer.from(JSON.stringify(payload));
+  const raw =
+    target.format === "binary"
+      ? Buffer.from(
+          encodeBinaryArtifact(
+            { ...envelope, version: voxelBuild.version },
+            voxelBuild.blocks,
+            prepared.checksum,
+          ),
+        )
+      : Buffer.from(JSON.stringify({ ...envelope, voxelBuild }));
   return {
     rawBytes: raw.length,
     gzipBytes: gzipSync(raw).length,
@@ -133,14 +146,19 @@ async function main() {
           .filter(
             (status) =>
               status.needsSnapshotCompute ||
-              status.missing.some((requirement) => requirement.kind === "snapshot"),
+              // a build whose JSON object is present but whose binary one is not
+              // still needs work, or the faster read path never gets an object
+              status.missing.some(
+                (requirement) =>
+                  requirement.kind === "snapshot" || requirement.kind === "snapshot-binary",
+              ),
           )
           .map((status) => status.buildId),
       );
       const skipped = rows.length - needsWork.size;
       rows = rows.filter((row) => needsWork.has(row.id));
       if (!opts.all && rows.length > opts.limit) rows = rows.slice(0, opts.limit);
-      if (skipped > 0) console.log(`Skipping ${skipped} build(s) with snapshot artifacts present.`);
+      if (skipped > 0) console.log(`Skipping ${skipped} build(s) with all snapshot artifacts present.`);
     }
 
     if (rows.length === 0) {
@@ -157,30 +175,26 @@ async function main() {
         const payloadRow = await loadBuildPayloadRow(prisma, row);
         const prepared = await prepareArenaBuild(payloadRow);
 
-        const previewNeeded = prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length;
-        const fullNeeded =
-          prepared.hints.deliveryClass === "snapshot" || prepared.hints.deliveryClass === "inline";
-        const planned = Number(previewNeeded) + Number(fullNeeded);
+        const targets = expectedSnapshotArtifactTargets(prepared);
 
         if (opts.dryRun) {
-          if (planned === 0) {
+          if (targets.length === 0) {
             skipped += 1;
             console.log(`- skip ${row.id}: no useful snapshot artifact variants`);
             continue;
           }
-          const variants: ArenaBuildVariant[] = [];
-          if (previewNeeded) variants.push("preview");
-          if (fullNeeded) variants.push("full");
-          const byteSummary = variants
-            .map((variant) => {
-              const size = estimateSnapshotArtifactBytes(prepared, variant);
-              return `${variant}=${(size.rawBytes / (1024 * 1024)).toFixed(2)}MB raw/${(size.gzipBytes / (1024 * 1024)).toFixed(2)}MB gzip`;
+          const byteSummary = targets
+            .map((target) => {
+              const size = estimateSnapshotArtifactBytes(prepared, target);
+              return (
+                `${target.variant}/${target.format}=` +
+                `${(size.rawBytes / (1024 * 1024)).toFixed(2)}MB raw/` +
+                `${(size.gzipBytes / (1024 * 1024)).toFixed(2)}MB gzip`
+              );
             })
             .join(" ");
-          console.log(
-            `- dry-run ${row.id}: preview=${previewNeeded ? "yes" : "no"} full=${fullNeeded ? "yes" : "no"} ${byteSummary}`,
-          );
-          uploaded += planned;
+          console.log(`- dry-run ${row.id}: ${byteSummary}`);
+          uploaded += targets.length;
           continue;
         }
 

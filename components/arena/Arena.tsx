@@ -9,6 +9,15 @@ import {
   ArenaBuildStreamEvent,
   VoteChoice,
 } from "@/lib/arena/types";
+import { readBuildVariantArtifact } from "@/lib/arena/clientBuildResponse";
+import {
+  appendPackedVoxelBlocks,
+  createPackedVoxelBlocks,
+  packVoxelBlocks,
+  reservePackedVoxelBlocks,
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoteBar, type VoteConfirmTarget } from "@/components/arena/VoteBar";
@@ -22,6 +31,10 @@ type ArenaState =
   | { kind: "ready"; matchup: ArenaMatchup }
   | { kind: "error"; message: string };
 
+// Reading the binary artifact is opt-in per request, so turning this off is a
+// client deploy and needs no coordination with what storage holds.
+const BINARY_ARTIFACT_READS_ENABLED =
+  (process.env.NEXT_PUBLIC_ARENA_BINARY_ARTIFACT_READS_ENABLED ?? "").trim() === "1";
 const MATCHUP_REQUEST_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_MATCHUP_REQUEST_TIMEOUT_MS ?? "12000",
   10,
@@ -93,6 +106,39 @@ async function readErrorResponse(res: Response, fallback: string): Promise<strin
   return statusHint ?? detail ?? fallback;
 }
 
+// Parsing JSON produces one object per block. Packing at the delivery boundary
+// lets that array go instead of keeping it alive for as long as a lane holds
+// the build, which on a matchup means two of them at once.
+function packDeliveredBuild(
+  build: ArenaMatchup["a"]["build"],
+): ArenaMatchup["a"]["build"] {
+  if (!build || build.packed || build.blocks.length === 0) return build;
+  return { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) };
+}
+
+function packBuildVariantResponse(payload: BuildVariantResponse): BuildVariantResponse {
+  const packedBuild = packDeliveredBuild(payload.voxelBuild);
+  return packedBuild === payload.voxelBuild ? payload : { ...payload, voxelBuild: packedBuild };
+}
+
+// The binary artifact already carries its blocks as typed arrays, so it needs
+// no packing step and never becomes a string or per-block objects.
+async function readBuildVariantPayload(res: Response): Promise<BuildVariantResponse> {
+  const artifact = await readBuildVariantArtifact<BuildVariantResponse>(res);
+  if (artifact.kind === "json") return packBuildVariantResponse(artifact.value);
+  const envelope = artifact.envelope as Omit<BuildVariantResponse, "voxelBuild"> & {
+    version?: string;
+  };
+  return {
+    buildId: envelope.buildId,
+    variant: envelope.variant,
+    checksum: envelope.checksum ?? null,
+    serverValidated: Boolean(envelope.serverValidated),
+    buildLoadHints: envelope.buildLoadHints,
+    voxelBuild: { version: "1.0", blocks: [], packed: artifact.blocks },
+  };
+}
+
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const url = new URL("/api/arena/matchup", window.location.origin);
   if (promptId) url.searchParams.set("promptId", promptId);
@@ -100,7 +146,12 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
   url.searchParams.set("payload", "adaptive");
   const res = await fetch(url, { method: "GET", credentials: "include", signal });
   if (!res.ok) throw new Error(await readErrorResponse(res, "Failed to load matchup"));
-  return (await res.json()) as ArenaMatchup;
+  const matchup = (await res.json()) as ArenaMatchup;
+  return {
+    ...matchup,
+    a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
+    b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
+  };
 }
 
 async function fetchMatchup(
@@ -488,6 +539,7 @@ async function fetchBuildVariantSnapshot(
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
   const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
+  if (BINARY_ARTIFACT_READS_ENABLED) url.searchParams.set("format", "v4");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
     let res: Response;
@@ -512,7 +564,7 @@ async function fetchBuildVariantSnapshot(
       const message = await readErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
-    return await readBuildVariantJson(res);
+    return await readBuildVariantPayload(res);
   } finally {
     timed.cleanup();
   }
@@ -567,7 +619,7 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return await readBuildVariantJson(res);
+    return packBuildVariantResponse(await readBuildVariantJson(res));
   }
 
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -608,17 +660,19 @@ async function fetchBuildVariantStreamOnce(
     let hasComplete = false;
     let sawFirstEvent = false;
 
-    const streamedBlocks: NonNullable<ArenaMatchup["a"]["build"]>["blocks"] = [];
+    // Blocks land in typed arrays as they arrive: the parsed objects from each
+    // chunk are released instead of being retained for the life of the lane,
+    // which is what a large build costs on a phone.
+    const packed = createPackedVoxelBlocks(0);
+    const streamedBuild: RenderableVoxelBuild = {
+      version: "1.0",
+      blocks: [],
+      packed,
+    };
 
     const emitProgress = (progress: BuildStreamProgress) => {
       if (!opts?.onProgress) return;
-      opts.onProgress(
-        {
-          version: "1.0",
-          blocks: streamedBlocks,
-        },
-        progress,
-      );
+      opts.onProgress(streamedBuild, progress);
     };
 
     const processLine = (line: string) => {
@@ -639,7 +693,8 @@ async function fetchBuildVariantStreamOnce(
         serverValidated = serverValidated || event.serverValidated;
         totalBlocks = event.totalBlocks || totalBlocks;
         buildLoadHints = event.buildLoadHints ?? buildLoadHints;
-        if (streamedBlocks.length === 0) {
+        if (totalBlocks != null) reservePackedVoxelBlocks(packed, totalBlocks);
+        if (packed.count === 0) {
           emitProgress({
             receivedBlocks: 0,
             totalBlocks,
@@ -652,13 +707,7 @@ async function fetchBuildVariantStreamOnce(
       if (event.type === "chunk") {
         sawFirstEvent = true;
         if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          // append without spread to avoid call-stack/GC pressure on chunks
-          // that can carry tens of thousands of blocks each.
-          const chunkBlocks = event.blocks;
-          const chunkLen = chunkBlocks.length;
-          for (let i = 0; i < chunkLen; i += 1) {
-            streamedBlocks.push(chunkBlocks[i]);
-          }
+          appendPackedVoxelBlocks(packed, event.blocks);
         }
         totalBlocks = event.totalBlocks || totalBlocks;
         emitProgress({
@@ -705,7 +754,7 @@ async function fetchBuildVariantStreamOnce(
         ? totalBlocks
         : null;
     const streamLooksComplete =
-      hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
+      hasComplete && (announcedTotal == null || packed.count >= announcedTotal);
 
     if (!streamLooksComplete) {
       cancelReader();
@@ -721,10 +770,7 @@ async function fetchBuildVariantStreamOnce(
       checksum,
       serverValidated,
       buildLoadHints,
-      voxelBuild: {
-        version: "1.0",
-        blocks: streamedBlocks,
-      },
+      voxelBuild: streamedBuild,
     };
   } catch (err: unknown) {
     cancelReader();
@@ -808,7 +854,7 @@ function withHydratedBuild(
               : baseHints.initialVariant,
           previewBlockCount:
             hydratedVariant === "preview" && build
-              ? build.blocks.length
+              ? voxelBuildBlockCount(build)
               : baseHints.previewBlockCount,
         }
       : baseHints,
@@ -841,7 +887,7 @@ function laneNeedsFullHydration(lane: ArenaMatchup["a"]): boolean {
   if (!laneExpectsFullHydration(lane)) return false;
   if (!lane.build) return false;
   const full = lane.buildLoadHints?.fullBlockCount ?? 0;
-  return lane.build.blocks.length < full;
+  return voxelBuildBlockCount(lane.build) < full;
 }
 
 function laneExpectsFullHydration(lane: ArenaMatchup["a"]): boolean {
@@ -946,6 +992,10 @@ function getHydrationDeliveryClass(
 function shouldHydrateViaSnapshot(
   deliveryClass: ArenaBuildDeliveryClass | undefined,
 ): boolean {
+  // A stream-class build is only too large for a whole-body fetch as JSON. The
+  // binary encoding puts it well under the cap, so when the client can read it
+  // the snapshot path is the faster route for every class.
+  if (BINARY_ARTIFACT_READS_ENABLED) return true;
   return deliveryClass === "snapshot" || deliveryClass === "inline";
 }
 
@@ -964,7 +1014,7 @@ function getLaneHydratedVariant(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): Ar
     lane.build &&
     Number.isFinite(fullBlockCount) &&
     fullBlockCount > 0 &&
-    lane.build.blocks.length < fullBlockCount
+    voxelBuildBlockCount(lane.build) < fullBlockCount
   ) {
     return "preview";
   }
@@ -977,18 +1027,22 @@ function getLaneMeshCacheKey(lane: ArenaMatchup["a"] | ArenaMatchup["b"]): strin
   const ref = variant === "preview" ? lane.previewRef ?? lane.buildRef : lane.buildRef ?? lane.previewRef;
   const checksum = ref?.checksum ?? lane.buildRef?.checksum ?? lane.previewRef?.checksum ?? null;
   if (!ref?.buildId || !checksum) return null;
-  return `${ref.buildId}:${variant}:${checksum}:${lane.build.blocks.length}`;
+  // a partial build would otherwise write a cache entry per streamed rebuild
+  const expected = lane.buildLoadHints?.fullBlockCount ?? 0;
+  const count = voxelBuildBlockCount(lane.build);
+  if (variant === "full" && expected > 0 && count < expected) return null;
+  return `${ref.buildId}:${variant}:${checksum}:${count}`;
 }
 
 function estimateCachedHydratedBuildBytes(entry: CachedHydratedBuild): number {
   if (entry.variant === "preview") {
-    return Math.max(1, entry.build.blocks.length * 34);
+    return Math.max(1, voxelBuildBlockCount(entry.build) * 34);
   }
   const estimated = entry.buildLoadHints?.fullEstimatedBytes;
   if (typeof estimated === "number" && Number.isFinite(estimated) && estimated > 0) {
     return Math.floor(estimated);
   }
-  return Math.max(1, entry.build.blocks.length * 34);
+  return Math.max(1, voxelBuildBlockCount(entry.build) * 34);
 }
 
 function getPositiveByteLimit(value: number, fallback: number): number {
@@ -1005,8 +1059,8 @@ function estimateLaneFullBuildBytes(lane: ArenaMatchup["a"] | ArenaMatchup["b"])
   if (typeof fullBlockCount === "number" && Number.isFinite(fullBlockCount) && fullBlockCount > 0) {
     return Math.floor(fullBlockCount * 34);
   }
-  if (lane.build?.blocks.length) {
-    return Math.floor(lane.build.blocks.length * 34);
+  if (voxelBuildBlockCount(lane.build) > 0) {
+    return Math.floor(voxelBuildBlockCount(lane.build) * 34);
   }
   return null;
 }
@@ -1159,6 +1213,24 @@ export function Arena() {
         return {
           ...prev,
           [overlayKey]: visible,
+        };
+      });
+    },
+    [],
+  );
+
+  // Streaming mutates one container in place, so the lane keeps the same build
+  // object as blocks arrive and the viewer treats it as the same build growing
+  // rather than a new one replacing it.
+  const setLaneProgressiveBuild = useCallback(
+    (matchupId: string, side: "a" | "b", build: NonNullable<ArenaMatchup["a"]["build"]>) => {
+      setState((prev) => {
+        if (prev.kind !== "ready" || prev.matchup.id !== matchupId) return prev;
+        const lane = prev.matchup[side];
+        if (lane.build === build) return prev;
+        return {
+          ...prev,
+          matchup: { ...prev.matchup, [side]: { ...lane, build } },
         };
       });
     },
@@ -1589,8 +1661,8 @@ export function Arena() {
         };
       });
       setLaneLoadProgress(matchupValue.id, side, {
-        receivedBlocks: cached.build.blocks.length,
-        totalBlocks: cached.build.blocks.length,
+        receivedBlocks: voxelBuildBlockCount(cached.build),
+        totalBlocks: voxelBuildBlockCount(cached.build),
       });
       setLaneLoadError(matchupValue.id, side, null);
       if (cached.variant === "full") {
@@ -1636,7 +1708,7 @@ export function Arena() {
     let lastProgressUiAt = 0;
 
     const applyProgressiveBuild = (
-      _progressiveBuild: ArenaMatchup["a"]["build"],
+      progressiveBuild: ArenaMatchup["a"]["build"],
       progress: BuildStreamProgress,
     ) => {
       const now = performance.now();
@@ -1649,8 +1721,15 @@ export function Arena() {
           receivedBlocks: progress.receivedBlocks,
           totalBlocks: progress.totalBlocks,
         });
+        // Show the blocks that have arrived instead of an empty frame. The
+        // viewer rebuilds from whatever it is given, and readiness stays tied
+        // to the expected full count, so this changes what is on screen during
+        // hydration and never when a vote becomes possible.
+        if (progressiveBuild && !reachedComplete) {
+          setLaneProgressiveBuild(matchupValue.id, side, progressiveBuild);
+        }
       }
-      // progress only here; final payload flips voting state
+      // the final payload still flips voting state
     };
 
     let unsubscribePrefetchProgress: (() => void) | null = null;
@@ -1728,8 +1807,8 @@ export function Arena() {
           buildLoadHints: payload.buildLoadHints,
         });
         setLaneLoadProgress(matchupValue.id, side, {
-          receivedBlocks: payload.voxelBuild.blocks.length,
-          totalBlocks: payload.voxelBuild.blocks.length,
+          receivedBlocks: voxelBuildBlockCount(payload.voxelBuild),
+          totalBlocks: voxelBuildBlockCount(payload.voxelBuild),
         });
         setLaneLoadError(matchupValue.id, side, null);
       }
@@ -1779,6 +1858,7 @@ export function Arena() {
   }, [
     cacheHydratedBuild,
     clearAutoFullHydrationRetry,
+    setLaneProgressiveBuild,
     markViewerLaneNotReady,
     readHydratedBuildFromCache,
     registerAutoFullHydrationFailure,

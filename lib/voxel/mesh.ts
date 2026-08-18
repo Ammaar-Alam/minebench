@@ -5,7 +5,24 @@ import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { canVoxelBlockEmitAnyFace, isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  copyPackedVoxelBlocks,
+  packVoxelBlocks,
+  toObjectBackedVoxelBuild,
+  voxelBuildBlockCount,
+  type PackedVoxelBlocks,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
+import {
+  appendQuad,
+  makeBucket,
+  serializeBucket,
+  type MeshBucket,
+  type SerializedMeshBucket,
+} from "@/lib/voxel/meshBuckets";
 import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
+
+export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -33,13 +50,6 @@ const MESH_WORKER_TIMEOUT_MS = Number.parseInt(
   10,
 );
 
-export type SerializedMeshBucket = {
-  positions: Float32Array;
-  normals: Float32Array;
-  uvs: Float32Array;
-  colors: Float32Array;
-  indices: Uint32Array;
-};
 
 export type SerializedBuildBounds = {
   min: [number, number, number];
@@ -58,17 +68,6 @@ export type VoxelMeshPayload = {
   filteredBlockCount: number;
 };
 
-type MeshBucket = {
-  positions: number[];
-  normals: number[];
-  uvs: number[];
-  colors: number[];
-  indices: number[];
-};
-
-function makeBucket(): MeshBucket {
-  return { positions: [], normals: [], uvs: [], colors: [], indices: [] };
-}
 
 type Direction = {
   face: Face;
@@ -178,35 +177,31 @@ function buildGeometry(
   bucket: MeshBucket,
   bounds?: { box: THREE.Box3; center: THREE.Vector3; radius: number },
 ): THREE.BufferGeometry | null {
-  if (bucket.indices.length === 0) return null;
+  return buildGeometryFromSerialized(serializeBucket(bucket), bounds);
+}
+
+// normals, uvs, and colours are stored as normalized integers, so they are
+// declared normalized here and read back at full range in the shader
+function buildGeometryFromSerialized(
+  bucket: SerializedMeshBucket | null,
+  bounds?: { box: THREE.Box3; center: THREE.Vector3; radius: number },
+): THREE.BufferGeometry | null {
+  if (!bucket || bucket.indices.length === 0) return null;
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.Float32BufferAttribute(bucket.positions, 3));
-  geo.setAttribute("normal", new THREE.Float32BufferAttribute(bucket.normals, 3));
-  geo.setAttribute("uv", new THREE.Float32BufferAttribute(bucket.uvs, 2));
-  geo.setAttribute("color", new THREE.Float32BufferAttribute(bucket.colors, 3));
-  geo.setIndex(bucket.indices);
+  geo.setAttribute("position", new THREE.BufferAttribute(bucket.positions, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(bucket.normals, 3, true));
+  geo.setAttribute(
+    "uv",
+    new THREE.BufferAttribute(bucket.uvs, 2, bucket.uvs instanceof Uint16Array),
+  );
+  geo.setAttribute("color", new THREE.BufferAttribute(bucket.colors, 3, true));
+  geo.setIndex(new THREE.BufferAttribute(bucket.indices, 1));
   if (bounds) {
     geo.boundingBox = bounds.box.clone();
     geo.boundingSphere = new THREE.Sphere(bounds.center.clone(), bounds.radius);
   } else {
     geo.computeBoundingSphere();
   }
-  return geo;
-}
-
-function buildGeometryFromSerialized(
-  bucket: SerializedMeshBucket | null,
-  bounds: { box: THREE.Box3; center: THREE.Vector3; radius: number },
-): THREE.BufferGeometry | null {
-  if (!bucket || bucket.indices.length === 0) return null;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(bucket.positions, 3));
-  geo.setAttribute("normal", new THREE.BufferAttribute(bucket.normals, 3));
-  geo.setAttribute("uv", new THREE.BufferAttribute(bucket.uvs, 2));
-  geo.setAttribute("color", new THREE.BufferAttribute(bucket.colors, 3));
-  geo.setIndex(new THREE.BufferAttribute(bucket.indices, 1));
-  geo.boundingBox = bounds.box.clone();
-  geo.boundingSphere = new THREE.Sphere(bounds.center.clone(), bounds.radius);
   return geo;
 }
 
@@ -342,30 +337,6 @@ function bucketFor(blockType: string, buckets: {
   return buckets.opaque;
 }
 
-function appendQuad(
-  bucket: MeshBucket,
-  verts: [number, number, number][],
-  normal: Pick<Direction, "nx" | "ny" | "nz">,
-  tint: [number, number, number],
-  uv: [number, number, number, number, number, number, number, number],
-) {
-  const baseIndex = bucket.positions.length / 3;
-  for (const [vx, vy, vz] of verts) {
-    bucket.positions.push(vx, vy, vz);
-    bucket.normals.push(normal.nx, normal.ny, normal.nz);
-    bucket.colors.push(tint[0], tint[1], tint[2]);
-  }
-
-  bucket.uvs.push(...uv);
-  bucket.indices.push(
-    baseIndex,
-    baseIndex + 1,
-    baseIndex + 2,
-    baseIndex,
-    baseIndex + 2,
-    baseIndex + 3,
-  );
-}
 
 function configureAtlasTexture(atlasTexture: THREE.Texture) {
   atlasTexture.magFilter = THREE.NearestFilter;
@@ -458,16 +429,6 @@ function deserializeBounds(bounds: SerializedBuildBounds) {
   return { box, center, radius };
 }
 
-function serializeBucket(bucket: MeshBucket): SerializedMeshBucket | null {
-  if (bucket.indices.length === 0) return null;
-  return {
-    positions: Float32Array.from(bucket.positions),
-    normals: Float32Array.from(bucket.normals),
-    uvs: Float32Array.from(bucket.uvs),
-    colors: Float32Array.from(bucket.colors),
-    indices: Uint32Array.from(bucket.indices),
-  };
-}
 
 function collectPayloadTransferables(payload: VoxelMeshPayload): Transferable[] {
   const transferables: Transferable[] = [];
@@ -881,7 +842,7 @@ function appendMergedPlaneFaces(
 }
 
 function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
-  const bucket = makeBucket();
+  const bucket = makeBucket({ repeatingUvs: true });
   const planes = collectWaterPlanes(prepared);
   for (const plane of planes.values()) {
     appendMergedPlaneFaces(bucket, plane.face, plane.plane, plane.cells, prepared);
@@ -893,7 +854,7 @@ async function buildWaterSurfaceBucketAsync(
   prepared: PreparedMeshData,
   maybeYield: (progress?: BuildProgress) => Promise<void>,
 ): Promise<MeshBucket> {
-  const bucket = makeBucket();
+  const bucket = makeBucket({ repeatingUvs: true });
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
   if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return bucket;
 
@@ -1033,34 +994,12 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
 
 // blocks cross the worker boundary as transferable typed arrays so the main
 // thread never structured-clones millions of block objects
-export type TransferableVoxelBlocks = {
-  positions: Int16Array;
-  typeIds: Uint16Array;
-  typeNames: string[];
-};
+export type TransferableVoxelBlocks = PackedVoxelBlocks;
 
 export function encodeTransferableVoxelBlocks(
   blocks: VoxelBuild["blocks"],
 ): TransferableVoxelBlocks {
-  const positions = new Int16Array(blocks.length * 3);
-  const typeIds = new Uint16Array(blocks.length);
-  const typeNames: string[] = [];
-  const typeIdByName = new Map<string, number>();
-  for (let i = 0; i < blocks.length; i += 1) {
-    const block = blocks[i];
-    if (!block) continue;
-    positions[i * 3] = block.x;
-    positions[i * 3 + 1] = block.y;
-    positions[i * 3 + 2] = block.z;
-    let typeId = typeIdByName.get(block.type);
-    if (typeId === undefined) {
-      typeId = typeNames.length;
-      typeNames.push(block.type);
-      typeIdByName.set(block.type, typeId);
-    }
-    typeIds[i] = typeId;
-  }
-  return { positions, typeIds, typeNames };
+  return packVoxelBlocks(blocks);
 }
 
 type MeshWorkerRequest = {
@@ -1140,7 +1079,7 @@ function createVoxelGroupFromMeshPayload(
 }
 
 async function createVoxelMeshPayloadInWorker(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelMeshPayload> {
@@ -1223,19 +1162,25 @@ async function createVoxelMeshPayloadInWorker(
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-    const blocks = encodeTransferableVoxelBlocks(build.blocks);
+    // A packed build is still being hydrated in place, so the worker gets a
+    // trimmed copy: transferring the live arrays would detach them.
+    const blocks = build.packed
+      ? copyPackedVoxelBlocks(build.packed, opts?.blockLimit)
+      : encodeTransferableVoxelBlocks(build.blocks);
     const request: MeshWorkerRequest = {
       type: "build",
       blocks,
       allowedBlockIds: palette.map((entry) => entry.id),
-      blockLimit: opts?.blockLimit,
+      // the filled prefix is authoritative; array length alone would let any
+      // trailing slack render as blocks at the origin
+      blockLimit: Math.min(blocks.count, opts?.blockLimit ?? Number.POSITIVE_INFINITY),
     };
     worker.postMessage(request, [blocks.positions.buffer, blocks.typeIds.buffer]);
   });
 }
 
 export async function warmVoxelMeshPayload(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<void> {
@@ -1250,12 +1195,18 @@ export async function warmVoxelMeshPayload(
 
 // Async variant that periodically yields to keep the main thread responsive during huge builds.
 async function createVoxelGroupAsyncLocal(
-  build: VoxelBuild,
+  packedOrObjectBuild: RenderableVoxelBuild,
   palette: BlockDefinition[],
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelGroup> {
-  const yieldAfterMs = Number.isFinite(opts?.yieldAfterMs) ? Math.max(1, opts?.yieldAfterMs ?? 12) : 12;
+  // Main-thread meshing walks block objects. This is the small-build path and
+  // the worker-failure fallback, so materializing here costs no more than the
+  // object representation this change removes everywhere else.
+  const build = toObjectBackedVoxelBuild(packedOrObjectBuild);
+  const yieldAfterMs = Number.isFinite(opts?.yieldAfterMs)
+    ? Math.max(1, opts?.yieldAfterMs ?? 12)
+    : 12;
   let lastYieldAt = nowMs();
   const maybeYield = async (emitProgress?: BuildProgress) => {
     throwIfAborted(opts?.signal);
@@ -1387,7 +1338,7 @@ async function createVoxelGroupAsyncLocal(
 }
 
 export async function createVoxelGroupAsync(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
@@ -1395,7 +1346,7 @@ export async function createVoxelGroupAsync(
   const blockLimit =
     typeof opts?.blockLimit === "number" && Number.isFinite(opts.blockLimit)
       ? Math.max(0, Math.floor(opts.blockLimit))
-      : build.blocks.length;
+      : voxelBuildBlockCount(build);
   if (
     Number.isFinite(LOCAL_MESH_MAX_BLOCKS) &&
     LOCAL_MESH_MAX_BLOCKS > 0 &&

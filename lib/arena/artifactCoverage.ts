@@ -6,7 +6,10 @@ import {
   getArenaArtifactMinBytes,
 } from "@/lib/arena/buildDeliveryPolicy";
 import { parsePersistedArenaBuildMetadata } from "@/lib/arena/buildArtifacts";
-import { getSnapshotArtifactRef } from "@/lib/arena/buildSnapshotArtifacts";
+import {
+  getSnapshotArtifactRef,
+  isBinarySnapshotArtifactEnabled,
+} from "@/lib/arena/buildSnapshotArtifacts";
 import { getArenaBuildStreamArtifactFetchRefs } from "@/lib/arena/buildStream";
 import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
 
@@ -22,7 +25,7 @@ export type ArtifactRef = { bucket: string; path: string };
 // A requirement is satisfied when any one of its refs exists, since stream
 // artifacts have preferred and legacy storage locations
 export type ArtifactRequirement = {
-  kind: "snapshot" | "stream";
+  kind: "snapshot" | "snapshot-binary" | "stream";
   variant: "full" | "preview";
   refs: ArtifactRef[];
 };
@@ -144,6 +147,29 @@ export function expectedArtifactRequirements(
     }
   }
 
+  // The binary artifact is what the client asks for first once binary reads are
+  // on. Delivery falls back to the JSON object when it is absent, so a missing
+  // one costs speed rather than correctness and would otherwise never surface:
+  // coverage that ignored it would report a build as complete while the faster
+  // path silently never fired. Every class gets one, including stream-class
+  // builds, which the binary encoding makes small enough to serve whole.
+  if (isBinarySnapshotArtifactEnabled() && checksum) {
+    const binaryFullRef = getSnapshotArtifactRef(row.id, "full", checksum, "binary");
+    required.push({
+      kind: "snapshot-binary",
+      variant: "full",
+      refs: binaryFullRef ? [binaryFullRef] : [],
+    });
+    if (previewNeeded) {
+      const binaryPreviewRef = getSnapshotArtifactRef(row.id, "preview", checksum, "binary");
+      required.push({
+        kind: "snapshot-binary",
+        variant: "preview",
+        refs: binaryPreviewRef ? [binaryPreviewRef] : [],
+      });
+    }
+  }
+
   return {
     missingCoreMetadata,
     // a snapshot-class build without core metadata cannot compute its refs yet
@@ -188,6 +214,8 @@ export type ArenaArtifactCoverage = {
   thresholdBytes: number;
   snapshotRequirements: number | null;
   snapshotMissing: number | null;
+  binaryRequirements: number | null;
+  binaryMissing: number | null;
   buildsMissingCoreMetadata: number | null;
   buildsNeedingSnapshotCompute: number | null;
   missingBuildIds: string[] | null;
@@ -231,12 +259,16 @@ export async function getArenaArtifactCoverage(
       buildsMissingVariants: streamStatuses.length - streamComplete,
       artifactObjectsPresent:
         count(statuses, (status) => status.required, "stream") +
-        count(statuses, (status) => status.required, "snapshot") -
+        count(statuses, (status) => status.required, "snapshot") +
+        count(statuses, (status) => status.required, "snapshot-binary") -
         count(statuses, (status) => status.missing, "stream") -
-        count(statuses, (status) => status.missing, "snapshot"),
+        count(statuses, (status) => status.missing, "snapshot") -
+        count(statuses, (status) => status.missing, "snapshot-binary"),
       thresholdBytes,
       snapshotRequirements: count(statuses, (status) => status.required, "snapshot"),
       snapshotMissing: count(statuses, (status) => status.missing, "snapshot"),
+      binaryRequirements: count(statuses, (status) => status.required, "snapshot-binary"),
+      binaryMissing: count(statuses, (status) => status.missing, "snapshot-binary"),
       buildsMissingCoreMetadata: statuses.filter((status) => status.missingCoreMetadata).length,
       buildsNeedingSnapshotCompute: statuses.filter((status) => status.needsSnapshotCompute)
         .length,
@@ -252,6 +284,8 @@ export async function getArenaArtifactCoverage(
       thresholdBytes,
       snapshotRequirements: null,
       snapshotMissing: null,
+      binaryRequirements: null,
+      binaryMissing: null,
       buildsMissingCoreMetadata: null,
       buildsNeedingSnapshotCompute: null,
       missingBuildIds: null,
