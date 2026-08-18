@@ -373,6 +373,11 @@ async function runFastAudit(args: Args): Promise<number> {
   console.log(`- eligible stream builds: ${coverage.eligibleBuilds}`);
   console.log(`- stream builds complete: ${coverage.buildsWithBothVariants}`);
   console.log(`- snapshot requirements: ${coverage.snapshotRequirements} (missing ${coverage.snapshotMissing})`);
+  if (coverage.binaryRequirements) {
+    console.log(
+      `- binary requirements: ${coverage.binaryRequirements} (missing ${coverage.binaryMissing})`,
+    );
+  }
   console.log(`- builds missing core metadata: ${coverage.buildsMissingCoreMetadata}`);
   console.log(`- builds needing snapshot compute: ${coverage.buildsNeedingSnapshotCompute}`);
   const missing = coverage.missingBuildIds ?? [];

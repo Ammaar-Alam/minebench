@@ -133,14 +133,19 @@ async function main() {
           .filter(
             (status) =>
               status.needsSnapshotCompute ||
-              status.missing.some((requirement) => requirement.kind === "snapshot"),
+              // a build whose JSON object is present but whose binary one is not
+              // still needs work, or the faster read path never gets an object
+              status.missing.some(
+                (requirement) =>
+                  requirement.kind === "snapshot" || requirement.kind === "snapshot-binary",
+              ),
           )
           .map((status) => status.buildId),
       );
       const skipped = rows.length - needsWork.size;
       rows = rows.filter((row) => needsWork.has(row.id));
       if (!opts.all && rows.length > opts.limit) rows = rows.slice(0, opts.limit);
-      if (skipped > 0) console.log(`Skipping ${skipped} build(s) with snapshot artifacts present.`);
+      if (skipped > 0) console.log(`Skipping ${skipped} build(s) with all snapshot artifacts present.`);
     }
 
     if (rows.length === 0) {
