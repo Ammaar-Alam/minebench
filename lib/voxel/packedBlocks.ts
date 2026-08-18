@@ -1,9 +1,9 @@
 import type { VoxelBlock, VoxelBuild } from "./types";
 
-// Blocks cost roughly 80 bytes each as JS objects and roughly 5 bytes each in
-// typed arrays. Large builds are delivered as a stream of chunks, so the client
-// writes each chunk straight into these arrays and lets the parsed objects go,
-// instead of retaining millions of them for the lifetime of the lane.
+// Blocks cost roughly 80 bytes each as JS objects and 8 bytes each in typed
+// arrays, plus one shared palette. Stream chunks are written directly into
+// these arrays so their parsed objects can be released instead of retained for
+// the lifetime of the lane.
 export type PackedVoxelBlocks = {
   // x, y, z interleaved
   positions: Int16Array;

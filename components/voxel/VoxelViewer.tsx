@@ -412,6 +412,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const spinPreferenceEnabled = useVoxelViewerSpinPreference();
 
   const paletteDefs: BlockDefinition[] = useMemo(() => getPalette(palette), [palette]);
+  const currentBlockCount = voxelBuildBlockCount(voxelBuild);
   const latestRef = useRef<{
     voxelBuild: RenderableVoxelBuild | null;
     palette: "simple" | "advanced";
@@ -1238,7 +1239,16 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       activeJobRef.current.controller.abort();
     }
     requestBuild();
-  }, [voxelBuild, paletteDefs, animateIn, palette, expectedBlockCount, meshCacheKey, requestBuild]);
+  }, [
+    voxelBuild,
+    currentBlockCount,
+    paletteDefs,
+    animateIn,
+    palette,
+    expectedBlockCount,
+    meshCacheKey,
+    requestBuild,
+  ]);
 
   useEffect(() => {
     const three = threeRef.current;

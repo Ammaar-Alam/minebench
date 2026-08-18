@@ -5,7 +5,6 @@ import { canVoxelBlockEmitAnyFace, isVoxelOccluder } from "@/lib/voxel/renderVis
 import type { VoxelBuild } from "@/lib/voxel/types";
 import type {
   SerializedBuildBounds,
-  SerializedMeshBucket,
   TransferableVoxelBlocks,
   VoxelMeshPayload,
 } from "@/lib/voxel/mesh";
@@ -538,7 +537,7 @@ function appendMergedPlaneFaces(
 }
 
 function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
-  const bucket = makeBucket();
+  const bucket = makeBucket({ repeatingUvs: true });
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
   if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return bucket;
 

@@ -56,6 +56,7 @@ async function main() {
     appendQuad(bucket, QUAD, { nx: 0, ny: 1, nz: 0 }, [1, 1, 1], uv);
     const serialized = serializeBucket(bucket);
     assert.ok(serialized);
+    assert.ok(serialized.uvs instanceof Uint16Array);
     for (let i = 0; i < 8; i += 1) {
       const decoded = serialized.uvs[i] / 65535;
       assert.ok(
@@ -64,6 +65,19 @@ async function main() {
       );
       assert.ok(Math.abs(decoded - uv[i]) < 1 / 4096, `uv ${i} finer than a texel`);
     }
+  }
+
+  {
+    // Merged water rectangles use repeat-wrapped UVs above one.
+    const bucket = makeBucket({ repeatingUvs: true });
+    const uv: [number, number, number, number, number, number, number, number] = [
+      0, 0, 0, 3, 5, 3, 5, 0,
+    ];
+    appendQuad(bucket, QUAD, { nx: 0, ny: 1, nz: 0 }, [1, 1, 1], uv);
+    const serialized = serializeBucket(bucket);
+    assert.ok(serialized);
+    assert.ok(serialized.uvs instanceof Float32Array);
+    assert.deepEqual(Array.from(serialized.uvs), uv);
   }
 
   {

@@ -190,7 +190,10 @@ function buildGeometryFromSerialized(
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(bucket.positions, 3));
   geo.setAttribute("normal", new THREE.BufferAttribute(bucket.normals, 3, true));
-  geo.setAttribute("uv", new THREE.BufferAttribute(bucket.uvs, 2, true));
+  geo.setAttribute(
+    "uv",
+    new THREE.BufferAttribute(bucket.uvs, 2, bucket.uvs instanceof Uint16Array),
+  );
   geo.setAttribute("color", new THREE.BufferAttribute(bucket.colors, 3, true));
   geo.setIndex(new THREE.BufferAttribute(bucket.indices, 1));
   if (bounds) {
@@ -839,7 +842,7 @@ function appendMergedPlaneFaces(
 }
 
 function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
-  const bucket = makeBucket();
+  const bucket = makeBucket({ repeatingUvs: true });
   const planes = collectWaterPlanes(prepared);
   for (const plane of planes.values()) {
     appendMergedPlaneFaces(bucket, plane.face, plane.plane, plane.cells, prepared);
@@ -851,7 +854,7 @@ async function buildWaterSurfaceBucketAsync(
   prepared: PreparedMeshData,
   maybeYield: (progress?: BuildProgress) => Promise<void>,
 ): Promise<MeshBucket> {
-  const bucket = makeBucket();
+  const bucket = makeBucket({ repeatingUvs: true });
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
   if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return bucket;
 
@@ -1201,7 +1204,9 @@ async function createVoxelGroupAsyncLocal(
   // the worker-failure fallback, so materializing here costs no more than the
   // object representation this change removes everywhere else.
   const build = toObjectBackedVoxelBuild(packedOrObjectBuild);
-  const yieldAfterMs =Number.isFinite(opts?.yieldAfterMs) ? Math.max(1, opts?.yieldAfterMs ?? 12) : 12;
+  const yieldAfterMs = Number.isFinite(opts?.yieldAfterMs)
+    ? Math.max(1, opts?.yieldAfterMs ?? 12)
+    : 12;
   let lastYieldAt = nowMs();
   const maybeYield = async (emitProgress?: BuildProgress) => {
     throwIfAborted(opts?.signal);

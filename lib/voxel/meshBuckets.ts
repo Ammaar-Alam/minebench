@@ -14,7 +14,7 @@ export type MeshBucket = {
   positions: Float32Array;
   // -127/0/127 read back as -1/0/1 through a signed-normalized attribute
   normals: Int8Array;
-  uvs: Uint16Array;
+  uvs: Uint16Array | Float32Array;
   colors: Uint8Array;
   indices: Uint32Array;
   vertexCount: number;
@@ -24,7 +24,7 @@ export type MeshBucket = {
 export type SerializedMeshBucket = {
   positions: Float32Array;
   normals: Int8Array;
-  uvs: Uint16Array;
+  uvs: Uint16Array | Float32Array;
   colors: Uint8Array;
   indices: Uint32Array;
 };
@@ -34,11 +34,15 @@ const NORMAL_UNIT = 127;
 const UV_UNIT = 65535;
 const COLOR_UNIT = 255;
 
-export function makeBucket(): MeshBucket {
+export function makeBucket(
+  options: { repeatingUvs?: boolean } = {},
+): MeshBucket {
   return {
     positions: new Float32Array(INITIAL_QUADS * 4 * 3),
     normals: new Int8Array(INITIAL_QUADS * 4 * 3),
-    uvs: new Uint16Array(INITIAL_QUADS * 4 * 2),
+    uvs: options.repeatingUvs
+      ? new Float32Array(INITIAL_QUADS * 4 * 2)
+      : new Uint16Array(INITIAL_QUADS * 4 * 2),
     colors: new Uint8Array(INITIAL_QUADS * 4 * 3),
     indices: new Uint32Array(INITIAL_QUADS * 6),
     vertexCount: 0,
@@ -103,8 +107,13 @@ export function appendQuad(
     bucket.colors[p + 1] = g;
     bucket.colors[p + 2] = b;
     const u = (baseIndex + i) * 2;
-    bucket.uvs[u] = Math.round(clamp01(uv[i * 2]) * UV_UNIT);
-    bucket.uvs[u + 1] = Math.round(clamp01(uv[i * 2 + 1]) * UV_UNIT);
+    if (bucket.uvs instanceof Float32Array) {
+      bucket.uvs[u] = uv[i * 2];
+      bucket.uvs[u + 1] = uv[i * 2 + 1];
+    } else {
+      bucket.uvs[u] = Math.round(clamp01(uv[i * 2]) * UV_UNIT);
+      bucket.uvs[u + 1] = Math.round(clamp01(uv[i * 2 + 1]) * UV_UNIT);
+    }
   }
 
   const idx = bucket.indexCount;
@@ -136,6 +145,7 @@ const EMPTY = {
   positions: new Float32Array(0),
   normals: new Int8Array(0),
   uvs: new Uint16Array(0),
+  repeatingUvs: new Float32Array(0),
   colors: new Uint8Array(0),
   indices: new Uint32Array(0),
 };
@@ -148,8 +158,9 @@ export function serializeBucket(bucket: MeshBucket): SerializedMeshBucket | null
   bucket.positions = EMPTY.positions;
   const normals = trim(bucket.normals, vertices * 3);
   bucket.normals = EMPTY.normals;
+  const repeatingUvs = bucket.uvs instanceof Float32Array;
   const uvs = trim(bucket.uvs, vertices * 2);
-  bucket.uvs = EMPTY.uvs;
+  bucket.uvs = repeatingUvs ? EMPTY.repeatingUvs : EMPTY.uvs;
   const colors = trim(bucket.colors, vertices * 3);
   bucket.colors = EMPTY.colors;
   const indices = trim(bucket.indices, bucket.indexCount);
