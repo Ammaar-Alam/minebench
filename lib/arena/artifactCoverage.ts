@@ -160,7 +160,7 @@ export function expectedArtifactRequirements(
       variant: "full",
       refs: binaryFullRef ? [binaryFullRef] : [],
     });
-    if (previewNeeded && isSnapshotClass) {
+    if (previewNeeded) {
       const binaryPreviewRef = getSnapshotArtifactRef(row.id, "preview", checksum, "binary");
       required.push({
         kind: "snapshot-binary",

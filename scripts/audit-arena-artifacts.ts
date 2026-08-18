@@ -2,6 +2,7 @@
 
 import "dotenv/config";
 import { gunzipSync } from "node:zlib";
+import { decodeBinaryArtifact } from "../lib/arena/binaryArtifact";
 import { findCatalogEntryBySlugOrKey } from "../lib/ai/modelCatalog";
 import {
   ARTIFACT_STATUS_BUILD_SELECT,
@@ -144,6 +145,55 @@ function verifySnapshotPayload(
   return null;
 }
 
+function verifyBinarySnapshotPayload(
+  bytes: Uint8Array,
+  buildId: string,
+  variant: ArtifactRequirement["variant"],
+  expectedChecksum: string | null,
+): string | null {
+  let decoded: ReturnType<typeof decodeBinaryArtifact>;
+  try {
+    decoded = decodeBinaryArtifact(bytes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `binary snapshot payload is invalid: ${message}`;
+  }
+
+  const envelope = decoded.envelope as {
+    buildId?: unknown;
+    variant?: unknown;
+    checksum?: unknown;
+    serverValidated?: unknown;
+    buildLoadHints?: {
+      previewBlockCount?: unknown;
+      fullBlockCount?: unknown;
+    } | null;
+  };
+  if (envelope.buildId !== buildId) {
+    return `binary snapshot buildId mismatch (${String(envelope.buildId)})`;
+  }
+  if (envelope.variant !== variant) {
+    return `binary snapshot variant mismatch (${String(envelope.variant)})`;
+  }
+  if (expectedChecksum && envelope.checksum !== expectedChecksum) {
+    return `binary snapshot checksum mismatch (${String(envelope.checksum)})`;
+  }
+  if (envelope.serverValidated !== true) {
+    return "binary snapshot is not marked serverValidated";
+  }
+
+  const announced =
+    variant === "preview"
+      ? envelope.buildLoadHints?.previewBlockCount
+      : envelope.buildLoadHints?.fullBlockCount;
+  if (typeof announced === "number" && Number.isFinite(announced) && announced >= 0) {
+    if (decoded.blocks.count !== Math.floor(announced)) {
+      return `binary snapshot block count mismatch (hints ${Math.floor(announced)}, blocks ${decoded.blocks.count})`;
+    }
+  }
+  return null;
+}
+
 function verifyStreamPayload(
   bytes: Uint8Array,
   buildId: string,
@@ -255,9 +305,11 @@ async function checkSignedUrlDelivery(
   checksum: string | null,
 ): Promise<string | null> {
   const signedUrl =
-    kind === "snapshot"
-      ? await createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, checksum)
-      : await createArenaBuildStreamArtifactSignedUrl(buildId, variant, checksum);
+    kind === "stream"
+      ? await createArenaBuildStreamArtifactSignedUrl(buildId, variant, checksum)
+      : await createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, checksum, {
+          format: kind === "snapshot-binary" ? "binary" : "json",
+        });
   if (!signedUrl) return "signed url unavailable (signing disabled or object missing)";
   // a ranged read proves anonymous delivery without re-downloading the body
   const resp = await fetch(signedUrl, {
@@ -279,7 +331,13 @@ function requirementChecksum(requirement: ArtifactRequirement): string | null {
     const match = path.match(/-([0-9a-f]{64})\.json$/);
     return match?.[1] ?? null;
   }
-  const match = path.match(/\/checksum\/([0-9a-f]{64})\//) ?? path.match(/-([0-9a-f]{64})\.ndjson$/);
+  if (requirement.kind === "snapshot-binary") {
+    const match = path.match(/-([0-9a-f]{64})\.mbv4$/);
+    return match?.[1] ?? null;
+  }
+  const match =
+    path.match(/\/checksum\/([0-9a-f]{64})\//) ??
+    path.match(/-([0-9a-f]{64})\.ndjson$/);
   return match?.[1] ?? null;
 }
 
@@ -327,9 +385,11 @@ async function runDeepAudit(args: Args): Promise<number> {
       }
 
       const contentError =
-        requirement.kind === "snapshot"
-          ? verifySnapshotPayload(bytes, row.id, requirement.variant, checksum)
-          : verifyStreamPayload(bytes, row.id, requirement.variant, checksum);
+        requirement.kind === "stream"
+          ? verifyStreamPayload(bytes, row.id, requirement.variant, checksum)
+          : requirement.kind === "snapshot-binary"
+            ? verifyBinarySnapshotPayload(bytes, row.id, requirement.variant, checksum)
+            : verifySnapshotPayload(bytes, row.id, requirement.variant, checksum);
       if (contentError) {
         failures.push({ buildId: row.id, requirement: label, reason: contentError });
         continue;

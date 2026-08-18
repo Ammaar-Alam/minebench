@@ -18,6 +18,11 @@ export function isBinarySnapshotArtifactEnabled(): boolean {
   return ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED;
 }
 
+export type ArenaSnapshotArtifactTarget = {
+  variant: ArenaBuildVariant;
+  format: ArenaSnapshotArtifactFormat;
+};
+
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
 const ARENA_SNAPSHOT_ARTIFACT_PREFIX = normalizePrefix(
   process.env.ARENA_SNAPSHOT_ARTIFACT_PREFIX ?? "arena-snapshot/v2-gzip",
@@ -197,11 +202,12 @@ function rememberSnapshotArtifactMiss(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
+  format: ArenaSnapshotArtifactFormat = "json",
 ): void {
   const now = Date.now();
   maybePruneArtifactCaches(now);
   artifactMissCache.set(
-    getArtifactCacheKey(buildId, variant, checksum),
+    getArtifactCacheKey(buildId, variant, checksum, format),
     now + ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS,
   );
 }
@@ -283,8 +289,35 @@ function encodeSnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8A
 function encodeBinarySnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
   const { voxelBuild, ...envelope } = payload;
   return gzipSync(
-    encodeBinaryArtifact({ ...envelope, version: voxelBuild.version }, voxelBuild.blocks),
+    encodeBinaryArtifact(
+      { ...envelope, version: voxelBuild.version },
+      voxelBuild.blocks,
+      payload.checksum,
+    ),
   );
+}
+
+export function expectedSnapshotArtifactTargets(
+  prepared: PreparedArenaBuild,
+): ArenaSnapshotArtifactTarget[] {
+  const previewNeeded =
+    prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length;
+  const isSnapshotClass =
+    prepared.hints.deliveryClass === "snapshot" ||
+    prepared.hints.deliveryClass === "inline";
+  const targets: ArenaSnapshotArtifactTarget[] = [];
+
+  // Established JSON delivery remains complete before optional binary work.
+  if (previewNeeded) targets.push({ variant: "preview", format: "json" });
+  if (isSnapshotClass) targets.push({ variant: "full", format: "json" });
+
+  if (ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) {
+    if (previewNeeded) targets.push({ variant: "preview", format: "binary" });
+    // Binary full builds are small enough to serve whole for every class.
+    targets.push({ variant: "full", format: "binary" });
+  }
+
+  return targets;
 }
 
 function maybeGunzipArtifactBytes(bytes: Uint8Array): Uint8Array {
@@ -354,56 +387,18 @@ export async function ensureArenaBuildSnapshotArtifacts(
     return { uploaded: 0, skipped: true };
   }
 
-  const variants: ArenaBuildVariant[] = [];
-  // previews only matter when they are smaller than the full build
-  if (prepared.previewBuild.blocks.length < prepared.fullBuild.blocks.length) {
-    variants.push("preview");
-  }
-  // stream-artifact full builds stay on the ndjson stream path
-  const isStreamClass =
-    prepared.hints.deliveryClass !== "snapshot" && prepared.hints.deliveryClass !== "inline";
-  if (!isStreamClass) {
-    variants.push("full");
-  }
-  // The binary encoding is small enough that a build too large to serve as a
-  // JSON snapshot still fits comfortably as a binary one: eight bytes a block
-  // puts even the largest cohort build a few megabytes under the cap. Those
-  // builds get a binary full variant so they can skip the chunked stream.
-  const binaryVariants: ArenaBuildVariant[] =
-    isStreamClass && ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED ? ["full"] : [];
-
-  if (variants.length === 0 && binaryVariants.length === 0) {
+  const targets = expectedSnapshotArtifactTargets(prepared);
+  if (targets.length === 0) {
     return { uploaded: 0, skipped: true };
   }
 
   let uploaded = 0;
-  for (const variant of binaryVariants) {
-    try {
-      await uploadSnapshotArtifactVariant(prepared, variant, "binary");
-      uploaded += 1;
-    } catch (err) {
-      console.warn(
-        `arena binary snapshot artifact upload failed for ${prepared.buildId}:${variant}`,
-        err,
-      );
-    }
-  }
-  for (const variant of variants) {
-    await uploadSnapshotArtifactVariant(prepared, variant);
+  for (const target of targets) {
+    // JSON targets are ordered first, so a later binary failure never removes
+    // or prevents the established delivery path. The error still propagates so
+    // publication and healing can retry the missing binary object.
+    await uploadSnapshotArtifactVariant(prepared, target.variant, target.format);
     uploaded += 1;
-    // the binary artifact is additive: a failure to write it must not cost the
-    // JSON artifact this build is actually served from
-    if (ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) {
-      try {
-        await uploadSnapshotArtifactVariant(prepared, variant, "binary");
-        uploaded += 1;
-      } catch (err) {
-        console.warn(
-          `arena binary snapshot artifact upload failed for ${prepared.buildId}:${variant}`,
-          err,
-        );
-      }
-    }
   }
   return { uploaded, skipped: false };
 }
@@ -459,7 +454,7 @@ export async function fetchArenaBuildSnapshotArtifact(
 
     if (resp.ok) {
       const bytes = maybeGunzipArtifactBytes(new Uint8Array(await resp.arrayBuffer()));
-      clearSnapshotArtifactMiss(buildId, variant, checksum);
+      clearSnapshotArtifactMiss(buildId, variant, checksum, format);
       setCachedSnapshotArtifactBody(cacheKey, bytes);
       return bytes;
     }
@@ -471,7 +466,7 @@ export async function fetchArenaBuildSnapshotArtifact(
       normalized.includes("object not found") ||
       normalized.includes("\"error\":\"not_found\"");
     if (resp.status === 404 || (resp.status === 400 && objectMissing)) {
-      rememberSnapshotArtifactMiss(buildId, variant, checksum);
+      rememberSnapshotArtifactMiss(buildId, variant, checksum, format);
       return null;
     }
 
@@ -568,7 +563,7 @@ export async function createArenaBuildSnapshotArtifactSignedUrl(
         throw new Error("Snapshot artifact signed URL response was missing signedURL");
       }
       const fullUrl = signedURL.startsWith("http") ? signedURL : `${config.url}/storage/v1${signedURL}`;
-      clearSnapshotArtifactMiss(buildId, variant, checksum);
+      clearSnapshotArtifactMiss(buildId, variant, checksum, format);
       artifactSignedUrlCache.set(cacheKey, {
         url: fullUrl,
         expiresAt: now + Math.max(5_000, (expiresInSec - 5) * 1000),
@@ -583,7 +578,7 @@ export async function createArenaBuildSnapshotArtifactSignedUrl(
       normalized.includes("object not found") ||
       normalized.includes("\"error\":\"not_found\"");
     if (resp.status === 404 || (resp.status === 400 && objectMissing)) {
-      rememberSnapshotArtifactMiss(buildId, variant, checksum);
+      rememberSnapshotArtifactMiss(buildId, variant, checksum, format);
       return null;
     }
 
