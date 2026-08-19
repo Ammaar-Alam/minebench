@@ -8,6 +8,7 @@ export type CapturedRequest = {
   method: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  signal?: AbortSignal | null;
 };
 
 export type FetchResponder = (request: CapturedRequest) => Response | null;
@@ -81,6 +82,7 @@ export function installFetchCapture() {
       method: init.method ?? "GET",
       headers,
       body: JSON.parse(init.body as string) as Record<string, unknown>,
+      signal: init.signal,
     };
     requests.push(request);
 

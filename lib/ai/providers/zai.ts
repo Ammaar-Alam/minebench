@@ -23,6 +23,20 @@ function looksLikeTokenLimitError(body: string): boolean {
   );
 }
 
+function isReasoningEffortRejection(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("z.ai error 400") &&
+    message.includes("reasoning") &&
+    message.includes("effort") &&
+    (message.includes("invalid") ||
+      message.includes("unsupported") ||
+      message.includes("enum") ||
+      message.includes("unknown"))
+  );
+}
+
 export async function zaiGenerateText(params: {
   modelId: string;
   apiKey?: string;
@@ -44,32 +58,50 @@ export async function zaiGenerateText(params: {
   const url = `${baseUrl}/chat/completions`;
   const maxTokens = params.maxOutputTokens ?? 65_536;
   // GLM always thinks and rejects thinking.type=disabled, so effort alone selects the mode
-  const reasoningEffort = params.reasoningEffortAttempts?.[0];
+  const effortAttempts: Array<string | undefined> = params.reasoningEffortAttempts?.length
+    ? params.reasoningEffortAttempts
+    : [undefined];
   const useJsonOutput = Boolean(params.jsonSchema);
 
-  const { res, acceptedTokenBudget: budget } = await postChatCompletionWithTokenBudgetRetry({
-    serviceLabel: "Z.AI",
-    url,
-    apiKey,
-    maxOutputTokens: maxTokens,
-    stream: Boolean(params.onDelta),
-    looksLikeTokenLimitError,
-    signal: params.signal,
-    onProviderRequest: params.onProviderRequest,
-    buildBody: (tok) => ({
-      model: params.modelId,
-      messages: [
-        { role: "system", content: params.system },
-        { role: "user", content: params.user },
-      ],
-      stream: Boolean(params.onDelta),
-      max_tokens: tok,
-      thinking: { type: "enabled" },
-      ...(params.temperature === undefined ? {} : { temperature: params.temperature }),
-      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-      ...(useJsonOutput ? { response_format: { type: "json_object" } } : {}),
-    }),
-  });
+  let reasoningEffort: string | undefined;
+  let response: Awaited<ReturnType<typeof postChatCompletionWithTokenBudgetRetry>> | null = null;
+  for (const [index, effort] of effortAttempts.entries()) {
+    try {
+      response = await postChatCompletionWithTokenBudgetRetry({
+        serviceLabel: "Z.AI",
+        url,
+        apiKey,
+        maxOutputTokens: maxTokens,
+        stream: Boolean(params.onDelta),
+        looksLikeTokenLimitError,
+        signal: params.signal,
+        onProviderRequest: params.onProviderRequest,
+        buildBody: (tok) => ({
+          model: params.modelId,
+          messages: [
+            { role: "system", content: params.system },
+            { role: "user", content: params.user },
+          ],
+          stream: Boolean(params.onDelta),
+          max_tokens: tok,
+          thinking: { type: "enabled" },
+          ...(params.temperature === undefined ? {} : { temperature: params.temperature }),
+          ...(effort ? { reasoning_effort: effort } : {}),
+          ...(useJsonOutput ? { response_format: { type: "json_object" } } : {}),
+        }),
+      });
+      reasoningEffort = effort;
+      break;
+    } catch (error) {
+      const nextEffort = effortAttempts[index + 1];
+      if (nextEffort === undefined || !isReasoningEffortRejection(error)) throw error;
+      params.onTrace?.(
+        `Z.AI reasoning config '${effort}' rejected (HTTP 400); falling back to '${nextEffort}'.`,
+      );
+    }
+  }
+  if (!response) throw new Error("Z.AI request failed");
+  const { res, acceptedTokenBudget: budget } = response;
 
   const reasoningLabel = reasoningEffort ? `reasoning_effort=${reasoningEffort}` : "default";
   const responseFormat = useJsonOutput ? "json_object" : "text";
