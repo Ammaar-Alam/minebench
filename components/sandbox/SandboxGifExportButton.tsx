@@ -32,7 +32,7 @@ const MAX_IN_FLIGHT_FRAMES = 4;
 const YIELD_EVERY_FRAMES = 24;
 const COMPARISON_FRAME_COUNT = 108;
 const SINGLE_FRAME_COUNT = 135;
-const COMPARISON_FRAME_DELAY_MS = 50;
+const COMPARISON_FRAME_DELAY_MS = 40;
 const SINGLE_FRAME_DELAY_MS = 40;
 const COMPARISON_PALETTE_SAMPLE_COUNT = 12;
 const SINGLE_PALETTE_SAMPLE_COUNT = 16;
@@ -96,6 +96,7 @@ type ExportLayout = {
     urlText: string;
   };
 };
+type ExportRect = ExportLayout["panelRects"][number];
 
 type GifRenderProfile = (typeof EXPORT_RENDER_PROFILES)[GifExportLayoutFormat][number];
 type GifExportRuntime = {
@@ -457,13 +458,11 @@ function drawPanel(
     height: number;
     target: SandboxGifExportTarget;
     capture: HTMLCanvasElement;
+    captureRect: ExportRect;
   },
 ) {
-  const { x, y, width, height, target, capture } = opts;
-  const captureX = x + PANEL_PAD;
-  const captureY = y + PANEL_PAD + PANEL_META_HEIGHT;
-  const captureWidth = Math.max(1, width - PANEL_PAD * 2);
-  const captureHeight = Math.max(1, height - PANEL_PAD * 2 - PANEL_META_HEIGHT);
+  const { x, y, width, height, target, capture, captureRect } = opts;
+  const { x: captureX, y: captureY, width: captureWidth, height: captureHeight } = captureRect;
 
   ctx.save();
   roundedRectPath(ctx, x, y, width, height, PANEL_RADIUS);
@@ -527,13 +526,16 @@ function renderCompositeFrame(
     const target = targets[idx];
     const panel = layout.panelRects[idx];
     if (!panel) continue;
-    const captureWidth = Math.max(1, Math.round(panel.width - PANEL_PAD * 2));
-    const captureHeight = Math.max(1, Math.round(panel.height - PANEL_PAD * 2 - PANEL_META_HEIGHT));
+    const captureRect = {
+      x: Math.round(panel.x + PANEL_PAD),
+      y: Math.round(panel.y + PANEL_PAD + PANEL_META_HEIGHT),
+      width: Math.max(1, Math.round(panel.width - PANEL_PAD * 2)),
+      height: Math.max(1, Math.round(panel.height - PANEL_PAD * 2 - PANEL_META_HEIGHT)),
+    };
     const capture = target.viewerRef.current?.captureFrame({
       rotationY: (rotationBases[idx] ?? 0) + angle,
-      width: captureWidth,
-      height: captureHeight,
-      fit: "contain",
+      width: captureRect.width,
+      height: captureRect.height,
     });
     if (!capture) {
       throw new Error("One of the viewers is not ready for export");
@@ -546,6 +548,7 @@ function renderCompositeFrame(
       height: panel.height,
       target,
       capture,
+      captureRect,
     });
   }
 }
