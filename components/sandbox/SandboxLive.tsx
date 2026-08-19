@@ -135,6 +135,7 @@ function loadProviderKeysFromStorage(): ProviderApiKeys {
     set("minimax");
     set("xai");
     set("meta");
+    set("zai");
     set("custom");
     return keys;
   } catch {
@@ -623,6 +624,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       setKey("minimax", providerKeys.minimax);
       setKey("xai", providerKeys.xai);
       setKey("meta", providerKeys.meta);
+      setKey("zai", providerKeys.zai);
       setKey("custom", providerKeys.custom);
 
       const res = await fetch("/api/generate", {
@@ -1279,6 +1281,19 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                       autoComplete="off"
                       spellCheck={false}
                       placeholder="Paste your Meta Model API key"
+                    />
+                  </label>
+
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Z.AI</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      type={showKeys ? "text" : "password"}
+                      value={providerKeys.zai ?? ""}
+                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, zai: e.target.value }))}
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="Paste your Z.AI key"
                     />
                   </label>
                 </div>

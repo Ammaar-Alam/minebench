@@ -196,6 +196,7 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Reasoning", value: "Automatic" },
   ],
   xai_grok_4_20: [{ label: "Reasoning", value: "Thinking enabled" }],
+  zai_glm_5_3: [{ label: "Reasoning effort", value: "Max" }],
   zai_glm_5_2: [
     { label: "Reasoning effort", value: "XHigh → High" },
   ],
@@ -280,6 +281,7 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
   xai_grok_4_5: exactOutputCap(262_144),
   xai_grok_4_3: exactOutputCap(983_040),
   xai_grok_4_1: exactOutputCap(30_000),
+  zai_glm_5_3: exactOutputCap(131_072),
   zai_glm_5_2: exactOutputCap(131_072),
   zai_glm_5_1: exactOutputCap(131_072),
   zai_glm_5: exactOutputCap(131_072),

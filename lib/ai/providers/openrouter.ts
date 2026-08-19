@@ -198,6 +198,18 @@ export async function openrouterGenerateText(params: {
 
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
   const maxTokens = params.maxOutputTokens ?? 8192;
+  const responseFormat = !params.jsonSchema
+    ? undefined
+    : params.modelId === "z-ai/glm-5.3"
+      ? { type: "json_object" }
+      : {
+          type: "json_schema",
+          json_schema: {
+            name: VOXEL_BUILD_JSON_SCHEMA_NAME,
+            strict: true,
+            schema: params.jsonSchema,
+          },
+        };
   const reasoningAttempts = reasoningConfigFallbacks({
     automatic: params.automaticReasoning,
     enabled: params.enableReasoning,
@@ -273,18 +285,7 @@ export async function openrouterGenerateText(params: {
                 max_tokens: tok,
                 reasoning: reasoningConfig,
                 ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),
-                ...(params.jsonSchema
-                  ? {
-                      response_format: {
-                        type: "json_schema",
-                        json_schema: {
-                          name: VOXEL_BUILD_JSON_SCHEMA_NAME,
-                          strict: true,
-                          schema: params.jsonSchema,
-                        },
-                      },
-                    }
-                  : {}),
+                ...(responseFormat ? { response_format: responseFormat } : {}),
               }),
             },
             {
@@ -367,7 +368,7 @@ export async function openrouterGenerateText(params: {
         textVerbosity:
           (useDefaultVerbosity ? defaultTextVerbosity(params.modelId) : undefined) ??
           "default",
-        responseFormat: params.jsonSchema ? "json_schema" : "text",
+        responseFormat: responseFormat?.type ?? "text",
       });
       params.onTrace?.(
         withMaxOutputTokens(

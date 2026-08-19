@@ -95,6 +95,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `MINIMAX_API_KEY`
 - `XAI_API_KEY`
 - `META_MODEL_API_KEY`
+- `ZAI_API_KEY`
 - `OPENROUTER_API_KEY`
 
 ### Optional Provider and Runtime Tuning
@@ -130,8 +131,9 @@ Copy `.env.example` to `.env` and set what you need.
 - DeepSeek V4 Pro uses the native DeepSeek API with JSON Output mode, defaults to `thinking=max` and `max_tokens=384000`; use `pnpm batch:generate --reasoning high` only when intentionally lowering effort.
 - DeepSeek V4 Flash 0731 uses the native DeepSeek model ID `deepseek-v4-flash`, supports `reasoning_effort=low|high|max`, and MineBench defaults to `max` with a 384000-token output cap. Its OpenRouter fallback uses the exact `deepseek/deepseek-v4-flash-0731` route and requests `max` reasoning first, with `high` and `low` fallbacks.
 - Qwen 3.8 Max is OpenRouter-only in MineBench and uses `qwen/qwen3.8-max`, with `xhigh|high|medium|low|minimal` reasoning efforts and `xhigh` by default. Its current OpenRouter output cap is 131072 tokens and its context window is 1M tokens.
+- GLM 5.3 uses the native Z.AI model ID `glm-5.3` on the OpenAI-compatible `/api/paas/v4` route, always thinks (`thinking.type=disabled` is rejected), supports `reasoning_effort=low|high|max`, and MineBench defaults it to `max` with a 131072-token output cap against its 1M-token context window. Its OpenRouter fallback uses `z-ai/glm-5.3` with the same cap and effort ladder, stepping down to `high` then `low`.
 - Muse Spark 1.2 uses the native Meta Model API model ID `muse-spark-1.2`, defaults to mandatory `reasoning_effort=xhigh`, and sends `max_completion_tokens=131072` with strict structured output. If no Meta key is available, or OpenRouter is explicitly preferred, MineBench uses `meta/muse-spark-1.2` without ever disabling reasoning.
-- `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`, `MINIMAX_BASE_URL`, `XAI_BASE_URL`, `META_MODEL_API_BASE_URL`
+- `OPENROUTER_BASE_URL`, `MOONSHOT_BASE_URL`, `DEEPSEEK_BASE_URL`, `MINIMAX_BASE_URL`, `XAI_BASE_URL`, `META_MODEL_API_BASE_URL`, `ZAI_BASE_URL`
 - `AI_DEBUG=1` (logs raw model output on failures)
 - `MINEBENCH_TOOL_OUTPUT_DIR`, `MINEBENCH_TOOL_TIMEOUT_MS`, `MINEBENCH_TOOL_MAX_*` (advanced `voxel.exec` controls)
 

@@ -126,6 +126,12 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
   },
   { ids: ["moonshotai/kimi-k3"], ladder: ["max"] },
   {
+    ids: ["glm-5.3", "z-ai/glm-5.3"],
+    ladder: ["max", "high", "low"],
+    aliases: { xhigh: null },
+    supported: "max, xhigh, high, low",
+  },
+  {
     ids: ["z-ai/glm-5.2"],
     ladder: ["xhigh", "high"],
     aliases: { max: null },
@@ -202,11 +208,28 @@ export function metaReasoningEffortAttempts(
   return undefined;
 }
 
+export function zaiReasoningEffortAttempts(
+  modelId: string,
+  override?: string,
+): string[] | undefined {
+  const label = `Z.AI model ${modelId}`;
+  const rule = effortLadderRuleFor(modelId);
+  if (rule) return ladderAttempts(label, rule, override);
+
+  const normalized = normalizeReasoningOverride(override);
+  if (normalized) {
+    throw new Error(`${label} does not expose a reasoning-effort override.`);
+  }
+  return undefined;
+}
+
 export function modelRequiresReasoning(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return (
     normalized === "grok-4.6" ||
     normalized === "x-ai/grok-4.6" ||
+    normalized === "glm-5.3" ||
+    normalized === "z-ai/glm-5.3" ||
     normalized === "google/gemini-3.7-flash" ||
     normalized === "muse-spark-1.2" ||
     normalized === "meta/muse-spark-1.2"

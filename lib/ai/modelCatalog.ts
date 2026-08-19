@@ -471,6 +471,15 @@ const CATALOG = [
     openRouterModelId: "x-ai/grok-4.20",
   },
   {
+    key: "zai_glm_5_3",
+    slug: "glm-5-3",
+    provider: "zai",
+    modelId: "glm-5.3",
+    displayName: "Z.AI GLM 5.3",
+    enabled: true,
+    openRouterModelId: "z-ai/glm-5.3",
+  },
+  {
     key: "zai_glm_5_2",
     slug: "glm-5-2",
     provider: "zai",
