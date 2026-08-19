@@ -303,6 +303,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  zai_glm_5_3: {
+    totalCost: { usd: 6.42 },
+  },
   gemini_3_7_flash: {
     totalCost: { usd: 1.46 },
   },
