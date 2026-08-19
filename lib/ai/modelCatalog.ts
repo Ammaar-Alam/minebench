@@ -403,7 +403,7 @@ const CATALOG = [
     slug: "deepseek-v4-pro",
     provider: "deepseek",
     modelId: "deepseek-v4-pro",
-    displayName: "DeepSeek V4 Pro",
+    displayName: "DeepSeek V4 Pro Preview",
     enabled: true,
   },
   {
