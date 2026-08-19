@@ -8,14 +8,14 @@
 <p align="center">
   <a href="https://minebench.ai"><img alt="Live" src="https://img.shields.io/badge/Live-minebench.ai-0ea5e9?style=flat&logo=vercel&logoColor=white" /></a>
   <a href="https://alpha.minebench.ai"><img alt="Alpha" src="https://img.shields.io/badge/Alpha-alpha.minebench.ai-f59e0b?style=flat&logo=vercel&logoColor=white" /></a>
-  <a href="docs/README.md"><img alt="Docs" src="https://img.shields.io/badge/Docs-Documentation-6366f1?style=flat" /></a>
-  <a href="https://x.com/minebench_ai"><img alt="MineBench on X" src="https://img.shields.io/badge/X-%40minebench_ai-000000?style=flat&logo=x&logoColor=white" /></a>
+  <a href="https://github.com/Ammaar-Alam/minebench/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/Ammaar-Alam/minebench?style=flat&color=22c55e&label=release&display_name=tag" /></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-3b82f6?style=flat" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/Ammaar-Alam/minebench/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/Ammaar-Alam/minebench?style=flat&color=22c55e&label=release&display_name=tag" /></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-3b82f6?style=flat" /></a>
+  <a href="docs/README.md"><img alt="Docs" src="https://img.shields.io/badge/Docs-Documentation-6366f1?style=flat" /></a>
   <a href="https://buymeacoffee.com/ammaaralam"><img alt="Support" src="https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=000000" /></a>
+  <a href="https://x.com/minebench_ai"><img alt="MineBench on X" src="https://img.shields.io/badge/X-%40minebench_ai-000000?style=flat&logo=x&logoColor=white" /></a>
 </p>
 
 <h1 align="center">MineBench</h1>
@@ -28,6 +28,9 @@ Models are given a natural-language prompt and must produce raw 3D coordinates a
 
 ![MineBench arena — Opus 4.5 versus Opus 4.6](.github/assets/readme/benchmark-split.gif)
 ![MineBench default Arena landing page](.github/assets/readme/arena-landing-page.png)
+
+> [!Note]
+> MineBench is not technically a 'benchmark' as it has no objectively correct answers; it is a take on the <a href="https://arxiv.org/abs/2403.04132">LMSYS Chatbot Arena</a>. Many use MineBench to get the general feel or "vibe" of a model. AI labs may use MineBench to privately A/B test model checkpoints.
 
 ## Why MineBench?
 
@@ -51,13 +54,8 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 * Full docs index: [`docs/README.md`](docs/README.md)
 * Local development: [`docs/local-development.md`](docs/local-development.md)
 * Operations and API reference: [`docs/operations.md`](docs/operations.md)
-* Deployment: [`docs/deployment.md`](docs/deployment.md)
-* Ranking math and matchmaking walkthrough: [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md)
 * Ranking policy: [`docs/arena-ranking-validity-policy-v2.md`](docs/arena-ranking-validity-policy-v2.md)
-* Build export and Blender/3D printing/Minecraft imports: [`docs/build-export-import.md`](docs/build-export-import.md)
-* Voxel tool runtime, conversion, and import workflows: [`docs/voxel-exec-raw-output.md`](docs/voxel-exec-raw-output.md)
-
-![MineBench leaderboard showing model rankings](.github/assets/readme/leaderboard-dark.png)
+* Build export and imports: [`docs/build-export-import.md`](docs/build-export-import.md)
 
 ## Frequently Asked Questions
 
@@ -89,6 +87,8 @@ The full FAQ is available at **[minebench.ai/faq](https://minebench.ai/faq)**. E
 ## Supported Models
 
 MineBench currently benchmarks models from OpenAI, Anthropic, Google, Moonshot, DeepSeek, MiniMax, xAI, Z.AI, Qwen, Meta, and any model available through OpenRouter.
+
+![MineBench leaderboard showing model rankings](.github/assets/readme/leaderboard-dark.png)
 
 ## Quick Start (Local)
 

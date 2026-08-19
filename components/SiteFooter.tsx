@@ -21,7 +21,7 @@ export function SiteFooter() {
               target="_blank"
               rel="noreferrer"
             >
-              Faithful Pack
+              Faithful
             </a>
           </span>
           <span className="text-border">·</span>
@@ -58,6 +58,15 @@ export function SiteFooter() {
               Buy Me a Coffee
             </a>
           </span>
+          <span className="text-border">·</span>
+          <a
+            className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"
+            href="https://github.com/Ammaar-Alam/minebench/blob/master/docs/privacy-policy.md"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Privacy
+          </a>
         </span>
       </div>
     </footer>
