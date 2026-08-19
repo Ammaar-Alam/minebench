@@ -12,6 +12,11 @@ import {
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
+import {
+  fitDistanceToRotatingBounds,
+  retargetDistanceForAspect,
+  type RotatingBoundsFraming,
+} from "@/lib/voxel/framing";
 
 export type VoxelViewerBuildProgress = {
   processedBlocks: number;
@@ -37,15 +42,13 @@ export type VoxelViewerHandle = {
   getRotationY: () => number | null;
   captureFrame: (opts?: {
     rotationY?: number;
-    rotationOffsetY?: number;
     width?: number;
     height?: number;
-    fit?: "cover" | "contain";
   }) => HTMLCanvasElement | null;
 };
 
 let atlasPromise: Promise<THREE.Texture> | null = null;
-const EXPORT_RENDER_OVERSCAN = 1;
+const EXPORT_CAPTURE_PIXEL_RATIO = 2;
 let viewerSpinPreference = true;
 const viewerSpinPreferenceListeners = new Set<(enabled: boolean) => void>();
 const MOBILE_DOUBLE_TAP_MS = 330;
@@ -255,6 +258,21 @@ function computeBuildYieldAfterMs(blockCount: number): number {
   return 8;
 }
 
+function getRotatingBoundsFraming(
+  camera: THREE.PerspectiveCamera,
+  bounds: BuildBounds,
+  cameraDirectionY: number,
+): RotatingBoundsFraming {
+  const size = bounds.box.getSize(new THREE.Vector3());
+  return {
+    width: size.x,
+    height: size.y,
+    depth: size.z,
+    verticalFovDegrees: camera.fov,
+    cameraDirectionY,
+  };
+}
+
 function frameBounds(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
@@ -276,13 +294,11 @@ function frameBounds(
   }
   controls.target.copy(target);
 
-  const vFov = THREE.MathUtils.degToRad(camera.fov);
-  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect);
-  const fitHeight = radius / Math.sin(vFov / 2);
-  const fitWidth = radius / Math.sin(hFov / 2);
-  const distance = Math.max(fitHeight, fitWidth);
-
   const dir = new THREE.Vector3(1, yBias, 1).normalize();
+  const distance = fitDistanceToRotatingBounds(
+    getRotatingBoundsFraming(camera, bounds, dir.y),
+    camera.aspect,
+  );
   // slightly closer default framing
   camera.position.copy(target).addScaledVector(dir, distance * (reserveMobileBottomChrome ? 1.22 : 1.1));
   camera.near = Math.max(0.05, distance / 250);
@@ -392,8 +408,6 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const onBuildErrorChangeRef = useRef<((message: string | null) => void) | undefined>(undefined);
   const requestRenderRef = useRef<(() => void) | null>(null);
   const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const exportCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const tapStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const lastTapRef = useRef<{ x: number; y: number; at: number } | null>(null);
   const threeRef = useRef<{
@@ -456,14 +470,6 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     onBuildReadyChangeRef.current?.(ready);
   }, []);
 
-  const getCaptureCanvas = useCallback((width: number, height: number) => {
-    const canvas = captureCanvasRef.current ?? document.createElement("canvas");
-    captureCanvasRef.current = canvas;
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
-    return canvas;
-  }, []);
-
   const getExportRenderer = useCallback(() => {
     const existing = exportRendererRef.current;
     if (existing) return existing;
@@ -475,9 +481,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       alpha: true,
       powerPreference: "high-performance",
     });
-    renderer.setPixelRatio(1);
+    renderer.setPixelRatio(EXPORT_CAPTURE_PIXEL_RATIO);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    exportCanvasRef.current = canvas;
     exportRendererRef.current = renderer;
     return renderer;
   }, []);
@@ -802,137 +807,49 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       captureFrame(opts) {
         const three = threeRef.current;
         const vg = voxelGroupRef.current;
-        if (!three || !vg) return null;
+        const bounds = boundsRef.current;
+        if (!three || !vg || !bounds) return null;
 
         const { scene, camera, renderer, controls } = three;
         const previousY = vg.group.rotation.y;
-        const absoluteRotationY =
+        const previousAspect = camera.aspect;
+        const previousPosition = camera.position.clone();
+        const rotationY =
           typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY) ? opts.rotationY : null;
-        const rotationOffsetY =
-          typeof opts?.rotationOffsetY === "number" && Number.isFinite(opts.rotationOffsetY)
-            ? opts.rotationOffsetY
-            : null;
-        const hasExportRotation = absoluteRotationY !== null || rotationOffsetY !== null;
-        if (absoluteRotationY !== null) {
-          vg.group.rotation.y = absoluteRotationY;
-        } else if (rotationOffsetY !== null) {
-          vg.group.rotation.y = previousY + rotationOffsetY;
-        }
-
-        controls.update();
         const source = renderer.domElement;
         const width = Math.max(1, Math.floor(opts?.width ?? source.width));
         const height = Math.max(1, Math.floor(opts?.height ?? source.height));
-        const frame = getCaptureCanvas(width, height);
-        frame.width = width;
-        frame.height = height;
-        const ctx = frame.getContext("2d");
-        if (!ctx) {
-          if (hasExportRotation) {
-            vg.group.rotation.y = previousY;
-            controls.update();
-            renderer.render(scene, camera);
+        const targetAspect = width / height;
+        const cameraOffset = camera.position.clone().sub(controls.target);
+        const distance = cameraOffset.length();
+        const exportRenderer = getExportRenderer();
+
+        try {
+          if (rotationY !== null) vg.group.rotation.y = rotationY;
+
+          if (distance > 0 && targetAspect !== previousAspect) {
+            const targetDistance = retargetDistanceForAspect({
+              ...getRotatingBoundsFraming(camera, bounds, cameraOffset.y / distance),
+              distance,
+              sourceAspect: previousAspect,
+              targetAspect,
+            });
+            camera.position.copy(controls.target).addScaledVector(cameraOffset, targetDistance / distance);
           }
-          return null;
-        }
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = "high";
-
-        const srcW = source.width;
-        const srcH = source.height;
-        const dstW = width;
-        const dstH = height;
-        const srcAspect = srcW > 0 && srcH > 0 ? srcW / srcH : camera.aspect || 1;
-        const dstAspect = dstW > 0 && dstH > 0 ? dstW / dstH : 1;
-        const fitMode = opts?.fit ?? "cover";
-
-        if (fitMode === "contain") {
-          const drawWidth =
-            dstAspect > srcAspect ? Math.max(1, Math.round(dstH * srcAspect)) : dstW;
-          const drawHeight =
-            dstAspect > srcAspect ? dstH : Math.max(1, Math.round(dstW / srcAspect));
-          const needsHighResSource = srcW < drawWidth || srcH < drawHeight;
-          let sourceCanvas: HTMLCanvasElement = source;
-          if (needsHighResSource) {
-            const exportRenderer = getExportRenderer();
-            exportRenderer.setSize(drawWidth, drawHeight, false);
-            exportRenderer.render(scene, camera);
-            sourceCanvas = exportRenderer.domElement;
-          } else {
-            renderer.render(scene, camera);
-          }
-
-          ctx.clearRect(0, 0, dstW, dstH);
-          ctx.drawImage(
-            sourceCanvas,
-            0,
-            0,
-            sourceCanvas.width,
-            sourceCanvas.height,
-            Math.round((dstW - drawWidth) / 2),
-            Math.round((dstH - drawHeight) / 2),
-            drawWidth,
-            drawHeight,
-          );
-        } else {
-          let cropWidth = srcW;
-          let cropHeight = srcH;
-          if (srcAspect > dstAspect) {
-            cropWidth = Math.max(1, Math.round(srcH * dstAspect));
-          } else if (srcAspect < dstAspect) {
-            cropHeight = Math.max(1, Math.round(srcW / dstAspect));
-          }
-
-          const needsHighResSource = cropWidth < dstW || cropHeight < dstH;
-          let sourceCanvas: HTMLCanvasElement = source;
-          if (needsHighResSource) {
-            const exportRenderer = getExportRenderer();
-            let renderWidth = dstW;
-            let renderHeight = dstH;
-            if (srcAspect > dstAspect) {
-              renderHeight = Math.max(1, Math.round(dstH * EXPORT_RENDER_OVERSCAN));
-              renderWidth = Math.max(dstW, Math.ceil(renderHeight * srcAspect));
-            } else {
-              renderWidth = Math.max(1, Math.round(dstW * EXPORT_RENDER_OVERSCAN));
-              renderHeight = Math.max(dstH, Math.ceil(renderWidth / srcAspect));
-            }
-            exportRenderer.setSize(renderWidth, renderHeight, false);
-            exportRenderer.render(scene, camera);
-            sourceCanvas = exportRenderer.domElement;
-          } else {
-            renderer.render(scene, camera);
-          }
-
-          const exportSrcW = sourceCanvas.width;
-          const exportSrcH = sourceCanvas.height;
-          let sx = 0;
-          let sy = 0;
-          let sw = exportSrcW;
-          let sh = exportSrcH;
-          const exportAspect = exportSrcW > 0 && exportSrcH > 0 ? exportSrcW / exportSrcH : srcAspect;
-          if (exportAspect > dstAspect) {
-            // Too wide: crop left/right.
-            sw = Math.max(1, Math.round(exportSrcH * dstAspect));
-            sx = Math.round((exportSrcW - sw) / 2);
-          } else if (exportAspect < dstAspect) {
-            // Too tall: crop top/bottom.
-            sh = Math.max(1, Math.round(exportSrcW / dstAspect));
-            sy = Math.round((exportSrcH - sh) / 2);
-          }
-          ctx.clearRect(0, 0, dstW, dstH);
-          ctx.drawImage(sourceCanvas, sx, sy, sw, sh, 0, 0, dstW, dstH);
-        }
-
-        if (hasExportRotation) {
+          camera.aspect = targetAspect;
+          camera.updateProjectionMatrix();
+          exportRenderer.setSize(width, height, false);
+          exportRenderer.render(scene, camera);
+          return exportRenderer.domElement;
+        } finally {
           vg.group.rotation.y = previousY;
-          controls.update();
-          renderer.render(scene, camera);
+          camera.position.copy(previousPosition);
+          camera.aspect = previousAspect;
+          camera.updateProjectionMatrix();
         }
-
-        return frame;
       },
     }),
-    [getCaptureCanvas, getExportRenderer]
+    [getExportRenderer]
   );
 
   async function toggleFullscreen() {
@@ -1206,8 +1123,6 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         exportRendererRef.current.dispose();
         exportRendererRef.current = null;
       }
-      exportCanvasRef.current = null;
-      captureCanvasRef.current = null;
       tapStartRef.current = null;
       lastTapRef.current = null;
       renderer.domElement.removeEventListener("pointerdown", onPointerDownForTap);
