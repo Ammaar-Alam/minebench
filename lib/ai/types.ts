@@ -12,6 +12,7 @@ export type ProviderApiKeys = {
   minimax?: string;
   xai?: string;
   meta?: string;
+  zai?: string;
   openrouter?: string;
   custom?: string;
 };

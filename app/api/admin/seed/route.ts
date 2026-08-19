@@ -67,6 +67,7 @@ function providerKeyStatus() {
     minimax: Boolean(process.env.MINIMAX_API_KEY),
     xai: Boolean(process.env.XAI_API_KEY),
     meta: Boolean(process.env.META_MODEL_API_KEY),
+    zai: Boolean(process.env.ZAI_API_KEY),
     openrouter: Boolean(process.env.OPENROUTER_API_KEY),
   };
 }
@@ -87,6 +88,7 @@ function isModelGeneratable(args: { modelKey: string; provider: string }) {
   if (args.provider === "deepseek") return status.deepseek;
   if (args.provider === "minimax") return status.minimax;
   if (args.provider === "meta") return status.meta;
+  if (args.provider === "zai") return status.zai;
 
   // Unknown provider: assume it's callable (or OpenRouter-gated via catalog entries).
   return true;
@@ -217,7 +219,7 @@ export async function POST(req: Request) {
       done: true,
       seeded: 0,
       error:
-        "No enabled models found. Set at least one API key (OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY, MINIMAX_API_KEY, XAI_API_KEY, META_MODEL_API_KEY, etc.) or enable models for configured providers.",
+        "No enabled models found. Set at least one API key (OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, GOOGLE_AI_API_KEY, MINIMAX_API_KEY, XAI_API_KEY, META_MODEL_API_KEY, ZAI_API_KEY, etc.) or enable models for configured providers.",
       promptCount: prompts.length,
       modelCount: 0,
       settings: ARENA_SETTINGS,
@@ -280,7 +282,7 @@ export async function POST(req: Request) {
       done: true,
       seeded: 0,
       error:
-        "No API keys are configured, so no builds can be generated automatically. Use generateBuilds=0 to seed prompts/models only, or set OPENROUTER_API_KEY / provider API keys such as XAI_API_KEY or META_MODEL_API_KEY to generate builds.",
+        "No API keys are configured, so no builds can be generated automatically. Use generateBuilds=0 to seed prompts/models only, or set OPENROUTER_API_KEY or a direct provider key to generate builds.",
       promptCount: prompts.length,
       modelCount: modelsAll.length,
       modelCountGeneratable: 0,

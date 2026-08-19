@@ -15,6 +15,7 @@ import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatibl
 import { openaiGenerateText } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { xaiGenerateText } from "@/lib/ai/providers/xai";
+import { zaiGenerateText } from "@/lib/ai/providers/zai";
 import {
   AnthropicAdaptiveEffort,
   anthropicAdaptiveEffortAttempts,
@@ -31,6 +32,7 @@ import {
   openRouterReasoningEffortAttempts as openRouterReasoningEffortAttemptsForModel,
   xaiAutomaticReasoningForModel,
   xaiReasoningEffortAttempts,
+  zaiReasoningEffortAttempts,
 } from "@/lib/ai/reasoningProfiles";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -163,7 +165,7 @@ function describeRequestedThinkingMode(opts: {
   if (opts.provider === "minimax") return "default";
   if (opts.provider === "custom") return "default";
 
-  if (opts.provider === "meta") {
+  if (opts.provider === "meta" || opts.provider === "zai") {
     if (opts.reasoningEffortAttempts && opts.reasoningEffortAttempts.length > 0) {
       return `reasoning_effort=${opts.reasoningEffortAttempts[0]}`;
     }
@@ -322,6 +324,7 @@ type ProviderKeyName =
   | "minimax"
   | "xai"
   | "meta"
+  | "zai"
   | "openrouter"
   | "custom";
 
@@ -343,6 +346,8 @@ function envVarForProviderKey(provider: ProviderKeyName): string {
       return "XAI_API_KEY";
     case "meta":
       return "META_MODEL_API_KEY";
+    case "zai":
+      return "ZAI_API_KEY";
     case "openrouter":
       return "OPENROUTER_API_KEY";
     case "custom":
@@ -368,6 +373,8 @@ function envVarForDirectProvider(provider: DirectProvider): string | null {
       return envVarForProviderKey("xai");
     case "meta":
       return envVarForProviderKey("meta");
+    case "zai":
+      return envVarForProviderKey("zai");
     case "custom":
       return envVarForProviderKey("custom");
     default:
@@ -386,7 +393,7 @@ function effectiveApiKey(opts: {
   allowServerKeys: boolean;
 }): string | null {
   const provider = opts.provider;
-  if (provider === "zai" || provider === "qwen") return null; // only supported via OpenRouter fallback
+  if (provider === "qwen") return null; // only supported via OpenRouter fallback
 
   const directKey = normalizeApiKey(
     provider === "openrouter"
@@ -407,9 +414,11 @@ function effectiveApiKey(opts: {
                     ? opts.providerKeys?.xai
                     : provider === "meta"
                       ? opts.providerKeys?.meta
-                      : provider === "custom"
-                        ? opts.providerKeys?.custom
-                        : undefined,
+                      : provider === "zai"
+                        ? opts.providerKeys?.zai
+                        : provider === "custom"
+                          ? opts.providerKeys?.custom
+                          : undefined,
   );
   if (directKey) return directKey;
 
@@ -424,6 +433,7 @@ function effectiveApiKey(opts: {
   if (provider === "minimax") return serverApiKey("minimax");
   if (provider === "xai") return serverApiKey("xai");
   if (provider === "meta") return serverApiKey("meta");
+  if (provider === "zai") return serverApiKey("zai");
   if (provider === "custom") return serverApiKey("custom");
 
   return null;
@@ -668,9 +678,23 @@ async function callDirectProvider(args: {
     });
   }
 
-  // Z.AI models are currently OpenRouter-only in MineBench
   if (args.provider === "zai") {
-    throw new Error("Z.AI direct API not supported; use OpenRouter fallback");
+    return zaiGenerateText({
+      modelId: args.modelId,
+      apiKey: args.apiKey,
+      system: args.system,
+      user: args.user,
+      maxOutputTokens: args.maxOutputTokens,
+      reasoningEffortAttempts: args.reasoningEffortAttempts,
+      temperature: DEFAULT_TEMPERATURE,
+      jsonSchema: args.jsonSchema,
+      signal: args.signal,
+      onDelta: args.onDelta,
+      onTrace: args.onTrace,
+      onAcceptedOutputTokens: args.onAcceptedOutputTokens,
+      onProviderRequest: args.onProviderRequest,
+      onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
+    });
   }
 
   // Qwen models are currently OpenRouter-only in MineBench
@@ -791,6 +815,10 @@ async function providerGenerateText(args: {
       model.provider === "meta"
         ? metaReasoningEffortAttempts(model.modelId, args.reasoning)
         : undefined;
+    const directZaiReasoningEffortAttempts =
+      model.provider === "zai"
+        ? zaiReasoningEffortAttempts(model.modelId, args.reasoning)
+        : undefined;
     const directAnthropicAdaptiveEffortAttempts =
       model.provider === "anthropic"
         ? anthropicAdaptiveEffortAttempts(model.modelId, args.reasoning)
@@ -819,7 +847,8 @@ async function providerGenerateText(args: {
       reasoningEffortAttempts:
         directOpenAiReasoningEffortAttempts ??
         directXaiReasoningEffortAttempts ??
-        directMetaReasoningEffortAttempts,
+        directMetaReasoningEffortAttempts ??
+        directZaiReasoningEffortAttempts,
       adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
       geminiThinkingConfig: directGeminiThinkingConfig,
       moonshotThinkingConfig: directMoonshotThinkingConfig,
@@ -845,7 +874,8 @@ async function providerGenerateText(args: {
         reasoningEffortAttempts:
           directOpenAiReasoningEffortAttempts ??
           directXaiReasoningEffortAttempts ??
-          directMetaReasoningEffortAttempts,
+          directMetaReasoningEffortAttempts ??
+          directZaiReasoningEffortAttempts,
         adaptiveEffortAttempts: directAnthropicAdaptiveEffortAttempts,
         geminiThinkingConfig: directGeminiThinkingConfig,
         moonshotThinkingConfig: directMoonshotThinkingConfig,

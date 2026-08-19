@@ -9,6 +9,7 @@ export type SeedProviderKeyStatus = {
   minimax: boolean;
   xai: boolean;
   meta: boolean;
+  zai: boolean;
   openrouter: boolean;
 };
 
@@ -70,6 +71,7 @@ export function isCatalogModelGeneratableForSeed(args: {
   if (model.provider === "deepseek") return providerKeys.deepseek || canUseOpenRouter;
   if (model.provider === "minimax") return providerKeys.minimax || canUseOpenRouter;
   if (model.provider === "meta") return providerKeys.meta || canUseOpenRouter;
+  if (model.provider === "zai") return providerKeys.zai || canUseOpenRouter;
 
   return true;
 }

@@ -17,6 +17,7 @@ function providerKeyStatus(overrides: Partial<SeedProviderKeyStatus>): SeedProvi
     minimax: false,
     xai: false,
     meta: false,
+    zai: false,
     openrouter: false,
     ...overrides,
   };
@@ -135,6 +136,24 @@ assert.equal(
   }),
   false,
   "Muse Spark 1.2 should be skipped when neither route has a key",
+);
+
+const glm53 = getModelByKey("zai_glm_5_3");
+assert.equal(
+  isCatalogModelGeneratableForSeed({
+    model: glm53,
+    providerKeys: providerKeyStatus({ zai: true }),
+  }),
+  true,
+  "GLM 5.3 should be seed-generatable with a direct Z.AI key",
+);
+assert.equal(
+  isCatalogModelGeneratableForSeed({
+    model: glm53,
+    providerKeys: providerKeyStatus({}),
+  }),
+  false,
+  "GLM 5.3 should be skipped when neither route has a key",
 );
 
 console.log("seed model catalog checks passed");

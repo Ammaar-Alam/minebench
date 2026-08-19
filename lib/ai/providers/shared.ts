@@ -2,7 +2,6 @@
 // Provider-specific variants (error vocabularies, content extraction, base URL
 // rules) stay in their own adapter files
 
-import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
@@ -52,16 +51,14 @@ export async function postChatCompletionWithTokenBudgetRetry(params: {
   signal?: AbortSignal;
   onProviderRequest?: () => void;
 }): Promise<{ res: Response; acceptedTokenBudget: number }> {
-  const controller = new AbortController();
-  const detachAbort = attachAbortSignal(controller, params.signal);
-
   let res: Response | null = null;
   let lastBody = "";
   let selectedTokenBudget: number | null = null;
   try {
     for (const tok of tokenBudgetCandidates(params.maxOutputTokens)) {
-      controller.signal.throwIfAborted();
+      params.signal?.throwIfAborted();
       params.onProviderRequest?.();
+      // Fetch keeps this signal attached to the returned response body
       res = await fetch(params.url, {
         method: "POST",
         headers: {
@@ -69,7 +66,7 @@ export async function postChatCompletionWithTokenBudgetRetry(params: {
           "Content-Type": "application/json",
           ...(params.stream ? { Accept: "text/event-stream" } : {}),
         },
-        signal: controller.signal,
+        signal: params.signal,
         body: JSON.stringify(params.buildBody(tok)),
       });
       if (res.ok) {
@@ -89,8 +86,6 @@ export async function postChatCompletionWithTokenBudgetRetry(params: {
     throw new Error(
       `${params.serviceLabel} request failed: ${err instanceof Error ? err.message : String(err)}${cause}`,
     );
-  } finally {
-    detachAbort();
   }
 
   if (!res) {

@@ -8,6 +8,7 @@ export type CapturedRequest = {
   method: string;
   headers: Record<string, string>;
   body: Record<string, unknown>;
+  signal?: AbortSignal | null;
 };
 
 export type FetchResponder = (request: CapturedRequest) => Response | null;
@@ -81,6 +82,7 @@ export function installFetchCapture() {
       method: init.method ?? "GET",
       headers,
       body: JSON.parse(init.body as string) as Record<string, unknown>,
+      signal: init.signal,
     };
     requests.push(request);
 
@@ -170,6 +172,7 @@ export async function runGeneration(
   options: {
     modelKey: ModelKey;
     providerKeys: Record<string, string>;
+    allowServerKeys?: boolean;
     gridSize?: 64 | 256 | 512;
     maxAttempts?: number;
     enableTools?: boolean;
@@ -188,7 +191,7 @@ export async function runGeneration(
     ...(options.maxAttempts !== undefined ? { maxAttempts: options.maxAttempts } : {}),
     enableTools: options.enableTools ?? false,
     providerKeys: options.providerKeys,
-    allowServerKeys: false,
+    allowServerKeys: options.allowServerKeys ?? false,
     ...(options.reasoning !== undefined ? { reasoning: options.reasoning } : {}),
     ...(options.preferOpenRouter !== undefined
       ? { preferOpenRouter: options.preferOpenRouter }
