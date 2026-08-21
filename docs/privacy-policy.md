@@ -1,6 +1,6 @@
 # MineBench Privacy Policy
 
-Effective and last updated: August 19, 2026
+Effective and last updated: August 21, 2026
 
 MineBench is an independent service operated by Ammaar Alam in the United States. This Privacy Policy explains how MineBench handles information when you use [minebench.ai](https://minebench.ai), participate in model evaluations, use MineBench's generation tools, or communicate with MineBench.
 
@@ -78,6 +78,8 @@ Unless the participating organization authorizes it in writing, MineBench does n
 MineBench shows evaluators model outputs and confidential codenames only as necessary to conduct an evaluation. Evaluators are informed that their votes and feedback are provided to the sponsoring organization. The organization controls whether and when its identity, model identity, results, or evaluation materials are made public.
 
 Access is limited to authorized personnel, evaluators, and service providers that need the information to perform the evaluation. Credentials and secrets are excluded from evaluator-facing and public results.
+
+For pre-generated private evaluations, MineBench encrypts a checkpoint endpoint credential while building the evaluation cohort, disables the endpoint after generation, and deletes the stored credential when the cohort completes. Arena voters receive stored MineBench build artifacts; their browsers do not connect to the private checkpoint endpoint.
 
 Evaluation agreements and data processing addenda set additional protections, retention terms, and instructions. If an agreement conflicts with this Privacy Policy regarding private evaluation data, the agreement controls.
 

@@ -55,10 +55,13 @@
     "staging:storage:sync": "node scripts/sync-staging-storage.mjs",
     "staging:run": "node scripts/with-staging-env.mjs",
     "staging:publish": "node scripts/with-staging-env.mjs tsx scripts/model-publish.ts",
-    "staging:prisma:migrate": "node scripts/with-staging-env.mjs prisma migrate deploy"
+    "staging:prisma:migrate": "node scripts/with-staging-env.mjs prisma migrate deploy",
+    "stealth:eval": "tsx scripts/stealth-eval.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
+    "@supabase/ssr": "0.12.4",
+    "@supabase/supabase-js": "2.112.3",
     "@vercel/analytics": "^1.6.1",
     "fflate": "^0.8.3",
     "gifenc": "^1.0.3",

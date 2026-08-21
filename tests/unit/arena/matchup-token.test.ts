@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import {
+  createArenaBuildAccessToken,
   createArenaMatchupToken,
+  parseArenaBuildAccessToken,
   parseArenaMatchupToken,
 } from "../../../lib/arena/matchupToken";
 import { normalizeArenaBuildChecksum } from "../../../lib/arena/buildChecksum";
@@ -46,12 +48,21 @@ try {
   assert.equal(parsed.buildAChecksum, "a".repeat(64));
   assert.equal(parsed.buildBChecksum, "b".repeat(64));
   assert.ok(Number.isInteger(parsed.issuedAt));
+  assert.equal(parsed.stealthVariantId, undefined);
+  assert.ok(token.startsWith("v2."));
+  assert.equal(token.includes("model-a"), false, "encrypted tokens must not expose model ids");
 
-  const [encodedPayload] = token.split(".");
-  assert.ok(encodedPayload);
-  const legacyPayload = JSON.parse(
-    Buffer.from(encodedPayload, "base64url").toString("utf8"),
-  ) as Record<string, unknown>;
+  const legacyPayload: Record<string, unknown> = {
+    i: "legacy-matchup",
+    p: "prompt-1",
+    ma: "model-a",
+    mb: "model-b",
+    ba: "build-a",
+    bb: "build-b",
+    ca: "a".repeat(64),
+    cb: "b".repeat(64),
+    t: Date.now(),
+  };
   delete legacyPayload.ca;
   delete legacyPayload.cb;
   const encodedLegacyPayload = Buffer.from(JSON.stringify(legacyPayload), "utf8").toString(
@@ -65,6 +76,33 @@ try {
     null,
     "tokens without build versions must be rejected",
   );
+
+  const stealthToken = createArenaMatchupToken({
+    promptId: "prompt-1",
+    modelAId: "private-model",
+    modelBId: "model-b",
+    buildAId: "private-build",
+    buildBId: "build-b",
+    buildAChecksum: "c".repeat(64),
+    buildBChecksum: "b".repeat(64),
+    stealthVariantId: "variant-1",
+  });
+  assert.equal(parseArenaMatchupToken(stealthToken)?.stealthVariantId, "variant-1");
+  assert.equal(stealthToken.includes("variant-1"), false);
+
+  const buildAccessToken = createArenaBuildAccessToken({
+    buildId: "private-build",
+    checksum: "c".repeat(64),
+  });
+  const parsedBuildAccess = parseArenaBuildAccessToken(buildAccessToken);
+  assert.ok(parsedBuildAccess);
+  assert.equal(parsedBuildAccess.buildId, "private-build");
+  assert.equal(parsedBuildAccess.checksum, "c".repeat(64));
+  assert.ok(Number.isInteger(parsedBuildAccess.issuedAt));
+  assert.ok(buildAccessToken.startsWith("b1."));
+  assert.equal(buildAccessToken.includes("private-build"), false);
+  assert.equal(buildAccessToken.includes("c".repeat(64)), false);
+  assert.equal(parseArenaBuildAccessToken(`${buildAccessToken}x`), null);
 
   assert.equal(parseArenaMatchupToken(`${token}x`), null, "tampered tokens must be rejected");
   console.log("arena matchup token checks passed");
