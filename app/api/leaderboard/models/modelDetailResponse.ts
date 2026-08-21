@@ -3,7 +3,10 @@ import type { ModelDetailStats } from "@/lib/arena/stats";
 
 export function createModelDetailResponse(data: ModelDetailStats | null) {
   if (!data) {
-    return NextResponse.json({ error: "Model not found" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Model not found" },
+      { status: 404, headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   return NextResponse.json(data, {

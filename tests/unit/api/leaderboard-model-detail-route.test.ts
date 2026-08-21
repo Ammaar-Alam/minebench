@@ -43,6 +43,7 @@ const detail = {
 async function main() {
   const missing = createModelDetailResponse(null);
   assert.equal(missing.status, 404);
+  assert.equal(missing.headers.get("cache-control"), "no-store");
   assert.deepEqual(await missing.json(), { error: "Model not found" });
 
   const response = createModelDetailResponse(detail);

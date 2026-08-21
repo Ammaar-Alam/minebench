@@ -86,6 +86,9 @@ function normalizeRateLimitPath(pathname: string): string {
   if (/^\/api\/arena\/builds\/[^/]+$/.test(pathname)) {
     return "/api/arena/builds/:buildId";
   }
+  if (/^\/api\/leaderboard\/models\/[^/]+$/.test(pathname)) {
+    return "/api/leaderboard/models/:modelKey";
+  }
   return pathname;
 }
 
