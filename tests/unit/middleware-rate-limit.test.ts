@@ -21,6 +21,39 @@ async function main() {
   );
   assert.equal(limited.status, 429);
 
+  const firstAnonymous = middleware(
+    new NextRequest("http://localhost/api/leaderboard/models/anonymous-model-0"),
+  );
+  assert.equal(firstAnonymous.status, 200);
+  assert.match(firstAnonymous.headers.get("set-cookie") ?? "", /mb_rls=/);
+
+  for (let index = 1; index < 18; index += 1) {
+    const request = new NextRequest(
+      `http://localhost/api/leaderboard/models/anonymous-model-${index}`,
+    );
+    assert.equal(middleware(request).status, 200);
+  }
+
+  const anonymousLimited = middleware(
+    new NextRequest("http://localhost/api/leaderboard/models/anonymous-model-18"),
+  );
+  assert.equal(anonymousLimited.status, 429);
+
+  for (let index = 0; index < 18; index += 1) {
+    const request = new NextRequest(
+      `http://localhost/api/leaderboard/models/session-model-${index}`,
+      { headers: { cookie: "mb_rls=review-session" } },
+    );
+    assert.equal(middleware(request).status, 200);
+  }
+
+  const sessionLimited = middleware(
+    new NextRequest("http://localhost/api/leaderboard/models/session-model-18", {
+      headers: { cookie: "mb_rls=review-session" },
+    }),
+  );
+  assert.equal(sessionLimited.status, 429);
+
   console.log("middleware rate-limit contract checks passed");
 }
 

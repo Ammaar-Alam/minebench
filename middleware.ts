@@ -79,6 +79,10 @@ function maybeRedirectToCanonicalHost(req: NextRequest) {
   return NextResponse.redirect(nextUrl, 308);
 }
 
+function isModelDetailPath(pathname: string): boolean {
+  return /^\/api\/leaderboard\/models\/[^/]+$/.test(pathname);
+}
+
 function normalizeRateLimitPath(pathname: string): string {
   if (/^\/api\/arena\/builds\/[^/]+\/stream$/.test(pathname)) {
     return "/api/arena/builds/:buildId/stream";
@@ -86,7 +90,7 @@ function normalizeRateLimitPath(pathname: string): string {
   if (/^\/api\/arena\/builds\/[^/]+$/.test(pathname)) {
     return "/api/arena/builds/:buildId";
   }
-  if (/^\/api\/leaderboard\/models\/[^/]+$/.test(pathname)) {
+  if (isModelDetailPath(pathname)) {
     return "/api/leaderboard/models/:modelKey";
   }
   return pathname;
@@ -165,12 +169,12 @@ function getHeaderFingerprint(req: NextRequest): string {
   return parts.join("|") || "unknown";
 }
 
-function getArenaAnonymousBucketId(req: NextRequest, ip: string | null): string {
+function getAnonymousBucketId(req: NextRequest, ip: string | null): string {
   // stable fallback for clients that block cookies
   return `anon:${stableHash(`${ip ?? "no-ip"}|${getHeaderFingerprint(req)}`)}`;
 }
 
-function getArenaRateLimitSession(req: NextRequest, fallbackBucketId: string) {
+function getRateLimitSession(req: NextRequest, fallbackBucketId: string) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
   if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
@@ -190,15 +194,19 @@ export function middleware(req: NextRequest) {
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
   const isArenaApi = pathname.startsWith("/api/arena/");
+  const isModelDetailApi = isModelDetailPath(pathname);
   const isArenaBuildAsset = /^\/api\/arena\/builds\/[^/]+(?:\/stream)?$/.test(pathname);
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
-  const bucketPath = normalizeRateLimitPath(pathname);
   const ip = getIp(req);
+  const modelSession = !ip && isModelDetailApi
+    ? getRateLimitSession(req, getAnonymousBucketId(req, ip))
+    : null;
+  const bucketPath = normalizeRateLimitPath(pathname);
   const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);
   const arenaSession = isArenaApi
-    ? getArenaRateLimitSession(req, getArenaAnonymousBucketId(req, ip))
+    ? getRateLimitSession(req, getAnonymousBucketId(req, ip))
     : null;
   const arenaIpRules = ip
     ? [
@@ -243,7 +251,12 @@ export function middleware(req: NextRequest) {
           ...arenaNewSessionIpRules,
           { key: `session:${arenaSession?.bucketId}:${bucketPath}`, maxPerWindow },
         ]
-    : [{ key: `${ipBucket}:${bucketPath}`, maxPerWindow }];
+    : [
+        {
+          key: `${ip ? `ip:${ip}` : `session:${modelSession?.bucketId ?? ipBucket}`}:${bucketPath}`,
+          maxPerWindow,
+        },
+      ];
 
   const rateLimit = consumeBuckets(rules, now);
   if (!rateLimit.allowed) {
@@ -251,8 +264,9 @@ export function middleware(req: NextRequest) {
   }
 
   const response = NextResponse.next();
-  if (arenaSession?.cookieValue) {
-    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, arenaSession.cookieValue, {
+  const rateLimitSession = arenaSession ?? modelSession;
+  if (rateLimitSession?.cookieValue) {
+    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, rateLimitSession.cookieValue, {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
