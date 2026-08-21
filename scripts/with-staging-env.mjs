@@ -41,11 +41,20 @@ function required(name) {
 }
 
 const directUrl = required("STAGING_DIRECT_URL");
+const stagingSupabaseUrl = required("STAGING_SUPABASE_URL");
+const stagingServiceRoleKey = required("STAGING_SUPABASE_SERVICE_ROLE_KEY");
 const stagingEnv = {
   DATABASE_URL: staging.STAGING_DATABASE_URL?.trim() || directUrl,
   DIRECT_URL: directUrl,
-  SUPABASE_URL: required("STAGING_SUPABASE_URL"),
-  SUPABASE_SERVICE_ROLE_KEY: required("STAGING_SUPABASE_SERVICE_ROLE_KEY"),
+  SUPABASE_URL: stagingSupabaseUrl,
+  SUPABASE_SERVICE_ROLE_KEY: stagingServiceRoleKey,
+  SUPABASE_SECRET_KEY: staging.STAGING_SUPABASE_SECRET_KEY?.trim() || stagingServiceRoleKey,
+  NEXT_PUBLIC_SUPABASE_URL: stagingSupabaseUrl,
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
+    staging.STAGING_SUPABASE_PUBLISHABLE_KEY?.trim() || "",
+  STEALTH_CONFIG_ENCRYPTION_KEY:
+    staging.STAGING_STEALTH_CONFIG_ENCRYPTION_KEY?.trim() || "",
+  STEALTH_ARENA_SHARE: staging.STAGING_STEALTH_ARENA_SHARE?.trim() || "0.25",
   SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || sourceBucket,
   MINEBENCH_SITE_URL: required("STAGING_SITE_URL"),
   // the alpha deployment may carry its own branch-scoped ADMIN_TOKEN; without

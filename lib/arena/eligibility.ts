@@ -18,6 +18,7 @@ export function arenaCohortBuildWhere(modelKeys?: readonly string[]) {
     model: {
       ...(scoped ? { key: { in: [...modelKeys!] } } : { enabled: true }),
       isBaseline: false,
+      stealthVariant: null,
     },
     prompt: { active: true },
   };
@@ -39,6 +40,9 @@ export async function getArenaEligiblePromptIds(): Promise<string[]> {
       AND build."mode" = ${ARENA_BUILD_MODE}
       AND model.enabled = true
       AND model."isBaseline" = false
+      AND NOT EXISTS (
+        SELECT 1 FROM "StealthVariant" variant WHERE variant."modelId" = model.id
+      )
       AND prompt.active = true
     GROUP BY build."promptId"
     HAVING COUNT(*) >= 2

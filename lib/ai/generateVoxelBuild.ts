@@ -254,6 +254,7 @@ type ResolvedModel = {
   forceOpenRouter?: boolean;
   importOnly?: boolean;
   baseUrl?: string;
+  requireStructuredOutput?: boolean;
 };
 
 function isBilledTimeoutStyleProviderError(message: string): boolean {
@@ -457,6 +458,7 @@ export type GenerateVoxelBuildParams = {
     forceOpenRouter?: boolean;
     importOnly?: boolean;
     baseUrl?: string;
+    requireStructuredOutput?: boolean;
   };
   prompt: string;
   gridSize: 64 | 256 | 512;
@@ -518,6 +520,7 @@ async function callDirectProvider(args: {
   modelId: string;
   apiKey?: string;
   baseUrl?: string;
+  requireStructuredOutput?: boolean;
   system: string;
   user: string;
   jsonSchema: Record<string, unknown>;
@@ -638,6 +641,7 @@ async function callDirectProvider(args: {
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
+      requireStructuredOutput: args.requireStructuredOutput,
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
@@ -873,6 +877,7 @@ async function providerGenerateText(args: {
         modelId: model.modelId,
         apiKey: directKey ?? undefined,
         baseUrl: model.baseUrl,
+        requireStructuredOutput: model.requireStructuredOutput,
         system: args.system,
         user: args.user,
         jsonSchema: args.jsonSchema,

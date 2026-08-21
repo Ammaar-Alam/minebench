@@ -8,6 +8,8 @@ import { invalidateArenaStatsCache } from "@/lib/arena/stats";
 import { prisma } from "@/lib/prisma";
 import { ARENA_VOTE_JOB_DRAIN_LOCK_KEY } from "@/lib/arena/advisoryLocks";
 import { ARENA_WRITE_RETRY_MAX_ATTEMPTS, withArenaWriteRetry } from "@/lib/arena/writeRetry";
+import { applyStealthRatingVote } from "@/lib/stealth/rating";
+import type { VoteChoice } from "@/lib/arena/types";
 
 function readPositiveIntEnv(name: string, fallback: number, max: number): number {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
@@ -31,7 +33,8 @@ type PendingArenaVoteJob = {
   promptId: string;
   modelAId: string;
   modelBId: string;
-  choice: string;
+  choice: VoteChoice;
+  stealthVariantId: string | null;
 };
 
 type LockedModelRow = {
@@ -45,6 +48,14 @@ type MutableModelState = LockedModelRow & {
   conservativeRating: number;
 };
 
+type LockedStealthVariantRow = MutableModelState & {
+  modelId: string;
+  winCount: number;
+  lossCount: number;
+  drawCount: number;
+  bothBadCount: number;
+};
+
 type ModelUpdateRow = {
   id: string;
   eloRating: number;
@@ -53,6 +64,8 @@ type ModelUpdateRow = {
   conservativeRating: number;
   counters: CounterIncrements;
 };
+
+type StealthVariantUpdateRow = Omit<LockedStealthVariantRow, "modelId">;
 
 type VoteCacheUpdate = {
   voteJobId: string;
@@ -198,6 +211,94 @@ async function loadModelsForVoteJobs(
   );
 }
 
+async function loadStealthVariantsForVoteJobs(
+  tx: Prisma.TransactionClient,
+  variantIds: string[],
+): Promise<Map<string, LockedStealthVariantRow>> {
+  const orderedIds = Array.from(new Set(variantIds)).sort();
+  if (orderedIds.length === 0) return new Map();
+
+  const rows = await tx.$queryRaw<LockedStealthVariantRow[]>(Prisma.sql`
+    SELECT
+      "id",
+      "modelId",
+      "eloRating",
+      "glickoRd",
+      "glickoVolatility",
+      "conservativeRating",
+      "winCount",
+      "lossCount",
+      "drawCount",
+      "bothBadCount"
+    FROM "StealthVariant"
+    WHERE "id" IN (${Prisma.join(orderedIds)})
+    ORDER BY "id" ASC
+    FOR UPDATE
+  `);
+
+  if (rows.length !== orderedIds.length) {
+    throw new Error("Stealth vote variant not found");
+  }
+
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        id: row.id,
+        modelId: row.modelId,
+        eloRating: Number(row.eloRating),
+        glickoRd: Number(row.glickoRd),
+        glickoVolatility: Number(row.glickoVolatility),
+        conservativeRating: Number(row.conservativeRating),
+        winCount: row.winCount,
+        lossCount: row.lossCount,
+        drawCount: row.drawCount,
+        bothBadCount: row.bothBadCount,
+      },
+    ]),
+  );
+}
+
+async function applyBatchedStealthVariantUpdates(
+  tx: Prisma.TransactionClient,
+  rows: StealthVariantUpdateRow[],
+) {
+  if (rows.length === 0) return;
+  const ordered = [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  await tx.$executeRaw(Prisma.sql`
+    UPDATE "StealthVariant" AS variant
+    SET
+      "eloRating" = updated."eloRating",
+      "glickoRd" = updated."glickoRd",
+      "glickoVolatility" = updated."glickoVolatility",
+      "conservativeRating" = updated."conservativeRating",
+      "winCount" = updated."winCount",
+      "lossCount" = updated."lossCount",
+      "drawCount" = updated."drawCount",
+      "bothBadCount" = updated."bothBadCount",
+      "updatedAt" = CURRENT_TIMESTAMP
+    FROM (
+      VALUES ${Prisma.join(
+        ordered.map(
+          (row) =>
+            Prisma.sql`(${row.id}::text, ${row.eloRating}::double precision, ${row.glickoRd}::double precision, ${row.glickoVolatility}::double precision, ${row.conservativeRating}::double precision, ${row.winCount}::int, ${row.lossCount}::int, ${row.drawCount}::int, ${row.bothBadCount}::int)`,
+        ),
+      )}
+    ) AS updated(
+      "id",
+      "eloRating",
+      "glickoRd",
+      "glickoVolatility",
+      "conservativeRating",
+      "winCount",
+      "lossCount",
+      "drawCount",
+      "bothBadCount"
+    )
+    WHERE variant."id" = updated."id"
+  `);
+}
+
 async function tryAcquireVoteJobDrainLock(tx: Prisma.TransactionClient): Promise<boolean> {
   // one drain owns rating and coverage writes at a time
   const rows = await tx.$queryRaw<Array<{ locked: boolean }>>(Prisma.sql`
@@ -324,7 +425,8 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
             "promptId",
             "modelAId",
             "modelBId",
-            "choice"
+            "choice",
+            "stealthVariantId"
           FROM "ArenaVoteJob"
           WHERE "processedAt" IS NULL
           ORDER BY "createdAt" ASC
@@ -352,7 +454,15 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
             },
           ]),
         );
+        const lockedStealthVariants = await loadStealthVariantsForVoteJobs(
+          tx,
+          jobs.flatMap((job) => (job.stealthVariantId ? [job.stealthVariantId] : [])),
+        );
+        const stealthVariantStates = new Map<string, LockedStealthVariantRow>(
+          Array.from(lockedStealthVariants.entries()).map(([id, variant]) => [id, { ...variant }]),
+        );
         const counterIncrements = new Map<string, CounterIncrements>();
+        const publicTouchedModelIds = new Set<string>();
         const cacheUpdates: VoteCacheUpdate[] = [];
         const coveragePersistUpdates = new Map<string, CoveragePersistUpdate>();
 
@@ -387,6 +497,31 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           if (!modelA || !modelB) {
             throw new Error("Vote models not found");
           }
+
+          if (job.stealthVariantId) {
+            const variant = stealthVariantStates.get(job.stealthVariantId);
+            if (!variant) throw new Error("Stealth vote variant not found");
+            const variantIsA = variant.modelId === job.modelAId;
+            const variantIsB = variant.modelId === job.modelBId;
+            if (variantIsA === variantIsB) {
+              throw new Error("Stealth vote must contain exactly one variant model");
+            }
+
+            const publicAnchor = variantIsA ? modelB : modelA;
+            Object.assign(
+              variant,
+              applyStealthRatingVote({
+                variant,
+                publicAnchor,
+                variantSide: variantIsA ? "A" : "B",
+                choice: job.choice,
+              }),
+            );
+            continue;
+          }
+
+          publicTouchedModelIds.add(job.modelAId);
+          publicTouchedModelIds.add(job.modelBId);
 
           if (job.choice === "BOTH_BAD") {
             countersForModel(job.modelAId).bothBadCount += 1;
@@ -453,7 +588,9 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           });
         }
 
-        const modelUpdateRows: ModelUpdateRow[] = Array.from(modelStates.values()).map(
+        const modelUpdateRows: ModelUpdateRow[] = Array.from(modelStates.values())
+          .filter((model) => publicTouchedModelIds.has(model.id))
+          .map(
           (model) => ({
             id: model.id,
             eloRating: model.eloRating,
@@ -463,8 +600,12 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
             counters: counterIncrements.get(model.id) ?? emptyCounterIncrements(),
           }),
         );
+        const stealthVariantUpdateRows: StealthVariantUpdateRow[] = Array.from(
+          stealthVariantStates.values(),
+        ).map(({ modelId: _modelId, ...variant }) => variant);
 
         await applyBatchedModelUpdates(tx, modelUpdateRows);
+        await applyBatchedStealthVariantUpdates(tx, stealthVariantUpdateRows);
         // coverage rows update in the same tx as processedAt
         await applyCoveragePersistUpdates(tx, Array.from(coveragePersistUpdates.values()));
         await tx.$executeRaw(Prisma.sql`

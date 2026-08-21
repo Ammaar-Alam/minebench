@@ -6,7 +6,9 @@ import {
   ArenaBuildRef,
   ArenaBuildVariant,
   ArenaMatchup,
+  ArenaModelReveal,
   ArenaBuildStreamEvent,
+  ArenaVoteResponse,
   VoteChoice,
 } from "@/lib/arena/types";
 import { readBuildVariantArtifact } from "@/lib/arena/clientBuildResponse";
@@ -30,6 +32,11 @@ type ArenaState =
   | { kind: "loading" }
   | { kind: "ready"; matchup: ArenaMatchup }
   | { kind: "error"; message: string };
+
+function modelRevealLabel(model: ArenaModelReveal | null | undefined): string | null {
+  if (!model) return null;
+  return model.provider === "Stealth" ? `Stealth • ${model.displayName}` : model.displayName;
+}
 
 // Reading the binary artifact is opt-in per request, so turning this off is a
 // client deploy and needs no coordination with what storage holds.
@@ -198,7 +205,7 @@ const VOTE_REQUEST_TIMEOUT_MS = Number.parseInt(
   10,
 );
 
-async function submitVote(matchupId: string, choice: VoteChoice) {
+async function submitVote(matchupId: string, choice: VoteChoice): Promise<ArenaVoteResponse> {
   // hard timeout so a stalled /api/arena/vote call can't hang the reveal state
   const timed = makeTimeoutSignal(undefined, VOTE_REQUEST_TIMEOUT_MS);
   try {
@@ -210,6 +217,11 @@ async function submitVote(matchupId: string, choice: VoteChoice) {
       signal: timed.signal,
     });
     if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't record your vote."));
+    const response = (await res.json()) as ArenaVoteResponse;
+    if (!response?.reveal?.a?.displayName || !response.reveal.b?.displayName) {
+      throw new Error("The vote saved, but the model reveal was unavailable. Refresh to continue.");
+    }
+    return response;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Vote timed out — the site may be under heavy load. Please try again.");
@@ -1082,7 +1094,7 @@ function formatBuildLoadingMessage(
   return formatVoxelLoadingMessage(fullLoading ? "Retrieving full build" : "Retrieving build", progress);
 }
 
-type RevealAction = VoteChoice | "SKIP";
+type RevealAction = VoteChoice;
 
 type RevealState =
   | { kind: "none" }
@@ -1096,7 +1108,6 @@ type RevealState =
     };
 
 const REVEAL_MS_AFTER_VOTE = 2600;
-const REVEAL_MS_AFTER_SKIP = 1600;
 const TRANSITION_OUT_MS = 220;
 const BUILD_STUCK_AUTOSKIP_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_BUILD_STUCK_AUTOSKIP_MS ?? "45000",
@@ -2277,9 +2288,6 @@ export function Arena() {
     setSubmitting(true);
     clearAutoAdvance();
     advanceNowRequestedAtRef.current = null;
-    const startedAt = Date.now();
-    const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
-    setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
 
     // Submit the vote first. If it fails, stay on the current matchup so
     // the user can retry — advancing anyway would silently convert a
@@ -2287,7 +2295,19 @@ export function Arena() {
     // also don't fetch the next matchup because matchup creation is still
     // a server-side side effect.
     try {
-      await submitVote(matchup.id, choice);
+      const response = await submitVote(matchup.id, choice);
+      setState((prev) =>
+        prev.kind === "ready" && prev.matchup.id === matchup.id
+          ? {
+              kind: "ready",
+              matchup: {
+                ...prev.matchup,
+                a: { ...prev.matchup.a, model: response.reveal.a },
+                b: { ...prev.matchup.b, model: response.reveal.b },
+              },
+            }
+          : prev,
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Couldn't record your vote.";
       flashVoteWarning(msg);
@@ -2295,6 +2315,10 @@ export function Arena() {
       setSubmitting(false);
       return;
     }
+
+    const startedAt = Date.now();
+    const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
+    setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
 
     try {
       const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
@@ -2342,30 +2366,17 @@ export function Arena() {
       abortFullHydrations(matchup.id);
       abortFullPrefetches(matchup.id);
       advanceNowRequestedAtRef.current = null;
-      const startedAt = Date.now();
-      const advanceAt = startedAt + REVEAL_MS_AFTER_SKIP;
-      setReveal({ kind: "reveal", matchupId: matchup.id, action: "SKIP", startedAt, advanceAt, next: null });
       const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
       prefetchMatchupBuilds(next);
-      const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
-      if (stillRevealing) {
-        const requestedAt = advanceNowRequestedAtRef.current;
-        const effectiveAdvanceAt =
-          typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
-        setReveal((prev) =>
-          prev.kind === "reveal" && prev.matchupId === matchup.id
-            ? { ...prev, next, advanceAt: effectiveAdvanceAt }
-            : prev,
-        );
-        scheduleAutoAdvance(matchup.id, effectiveAdvanceAt, next);
-      } else {
-        setState((prev) => {
-          if (prev.kind === "ready" && prev.matchup.id !== matchup.id) return prev;
-          if (prev.kind === "error") return prev;
-          return { kind: "ready", matchup: next };
-        });
-        setSubmitting(false);
-      }
+      transitionRef.current = true;
+      setTransitioning(true);
+      await sleepMs(TRANSITION_OUT_MS);
+      setState({ kind: "ready", matchup: next });
+      setSubmitting(false);
+      requestAnimationFrame(() => {
+        transitionRef.current = false;
+        setTransitioning(false);
+      });
     } catch (err) {
       clearAutoAdvance();
       setState({
@@ -2374,8 +2385,6 @@ export function Arena() {
       });
       setReveal({ kind: "none" });
       setSubmitting(false);
-    } finally {
-      // `submitting` stays true through the reveal so users can see the model names.
     }
   }
 
@@ -2680,8 +2689,8 @@ export function Arena() {
                 subtitle={
                   <ModelReveal
                     revealed={revealModels}
-                    provider={matchup?.a.model.provider}
-                    modelName={matchup?.a.model.displayName}
+                    provider={matchup?.a.model?.provider}
+                    modelName={matchup?.a.model?.displayName}
                   />
                 }
                 voxelBuild={matchup?.a.build ?? null}
@@ -2708,7 +2717,7 @@ export function Arena() {
                 autoRotate={!isCoarsePointer || mobileBuildView === "a"}
                 viewerSize="arena"
                 enableBuildExport={Boolean(matchup?.a.build && !laneNeedsFullA)}
-                exportLabel={matchup?.a.model.displayName ?? "build-a"}
+                exportLabel={matchup?.a.model?.displayName ?? "build-a"}
                 exportPrompt={promptText}
                 actions={
                   laneNeedsFullA ? (
@@ -2733,8 +2742,8 @@ export function Arena() {
                 subtitle={
                   <ModelReveal
                     revealed={revealModels}
-                    provider={matchup?.b.model.provider}
-                    modelName={matchup?.b.model.displayName}
+                    provider={matchup?.b.model?.provider}
+                    modelName={matchup?.b.model?.displayName}
                   />
                 }
                 voxelBuild={matchup?.b.build ?? null}
@@ -2761,7 +2770,7 @@ export function Arena() {
                 autoRotate={!isCoarsePointer || mobileBuildView === "b"}
                 viewerSize="arena"
                 enableBuildExport={Boolean(matchup?.b.build && !laneNeedsFullB)}
-                exportLabel={matchup?.b.model.displayName ?? "build-b"}
+                exportLabel={matchup?.b.model?.displayName ?? "build-b"}
                 exportPrompt={promptText}
                 actions={
                   laneNeedsFullB ? (
@@ -2866,9 +2875,7 @@ export function Arena() {
                         <div className="flex min-w-0 flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex min-w-0 items-center gap-2">
                             <span className="mb-badge bg-bg/40 text-muted ring-border/60">
-                              {revealAction === "SKIP"
-                                ? "Skipped"
-                                : revealAction === "TIE"
+                              {revealAction === "TIE"
                                   ? "You voted: Tie"
                                   : revealAction === "BOTH_BAD"
                                     ? "You voted: Both bad"
@@ -2884,14 +2891,14 @@ export function Arena() {
                                 A
                               </span>
                               <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
-                                {matchup?.a.model.displayName}
+                                {modelRevealLabel(matchup?.a.model)}
                               </span>
                               <span className="text-muted">vs</span>
                               <span className="inline-flex h-5 items-center rounded-full bg-accent2/10 px-2 font-mono text-[11px] font-semibold text-accent2 ring-1 ring-accent2/20">
                                 B
                               </span>
                               <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
-                                {matchup?.b.model.displayName}
+                                {modelRevealLabel(matchup?.b.model)}
                               </span>
                             </div>
                           </div>
@@ -2948,7 +2955,7 @@ export function Arena() {
                               A
                             </span>
                             <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
-                              {matchup?.a.model.displayName ?? "—"}
+                              {modelRevealLabel(matchup?.a.model) ?? "—"}
                             </span>
                           </div>
                           <div
@@ -2960,7 +2967,7 @@ export function Arena() {
                               B
                             </span>
                             <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
-                              {matchup?.b.model.displayName ?? "—"}
+                              {modelRevealLabel(matchup?.b.model) ?? "—"}
                             </span>
                           </div>
                         </div>

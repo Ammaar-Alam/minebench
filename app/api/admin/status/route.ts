@@ -105,7 +105,7 @@ export async function GET(req: Request) {
       prisma.prompt.count(),
       prisma.prompt.count({ where: { active: true } }),
       prisma.model.count(),
-      prisma.model.count({ where: { enabled: true, isBaseline: false } }),
+      prisma.model.count({ where: { enabled: true, isBaseline: false, stealthVariant: null } }),
       prisma.build.count(),
       prisma.matchup.count(),
       prisma.vote.count(),
