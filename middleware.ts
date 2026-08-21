@@ -24,6 +24,7 @@ const BUCKET_PRUNE_INTERVAL = 256;
 type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
 type RateLimitRule = { key: string; maxPerWindow: number };
+type IpInfo = { value: string | null; trusted: boolean };
 let requestsSinceLastPrune = 0;
 type BucketPreview = { key: string; resetAt: number; nextCount: number };
 
@@ -44,9 +45,9 @@ function readBoolEnv(name: string, fallback: boolean) {
   return fallback;
 }
 
-function getIp(req: NextRequest): string | null {
+function getIp(req: NextRequest): IpInfo {
   const requestIp = (req as NextRequest & { ip?: string | null }).ip?.trim();
-  if (requestIp) return requestIp;
+  if (requestIp) return { value: requestIp, trusted: true };
 
   const trustForwardedRaw = process.env.ARENA_TRUST_X_FORWARDED_FOR;
   const trustForwardedFor = readBoolEnv("ARENA_TRUST_X_FORWARDED_FOR", process.env.VERCEL === "1");
@@ -55,15 +56,20 @@ function getIp(req: NextRequest): string | null {
       req.headers.get("x-real-ip") ??
       req.headers.get("cf-connecting-ip") ??
       req.headers.get("x-vercel-forwarded-for");
-    if (direct) return direct.split(",")[0]?.trim() || null;
+    if (direct) return { value: direct.split(",")[0]?.trim() || null, trusted: true };
   }
 
   const forwarded = req.headers.get("x-forwarded-for");
   const allowForwardedFallback =
     trustForwardedFor || (!trustForwardedRaw && readBoolEnv("ARENA_FORWARDED_IP_FALLBACK", true));
   // fallback for non vercel reverse proxies without next ip
-  if (allowForwardedFallback && forwarded) return forwarded.split(",")[0]?.trim() || null;
-  return null;
+  if (allowForwardedFallback && forwarded) {
+    return {
+      value: forwarded.split(",")[0]?.trim() || null,
+      trusted: trustForwardedFor,
+    };
+  }
+  return { value: null, trusted: false };
 }
 
 function maybeRedirectToCanonicalHost(req: NextRequest) {
@@ -198,9 +204,9 @@ export function middleware(req: NextRequest) {
   const isModelDetailApi = isModelDetailPath(pathname);
   const isArenaBuildAsset = /^\/api\/arena\/builds\/[^/]+(?:\/stream)?$/.test(pathname);
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
-  const ip = getIp(req);
-  const modelAnonymousBucketId = !ip && isModelDetailApi
-    ? getAnonymousBucketId(req, ip)
+  const { value: ip, trusted: hasTrustedIp } = getIp(req);
+  const modelAnonymousBucketId = isModelDetailApi && !hasTrustedIp
+    ? getAnonymousBucketId(req, null)
     : null;
   const modelSession = modelAnonymousBucketId
     ? getRateLimitSession(req, modelAnonymousBucketId)
@@ -260,7 +266,7 @@ export function middleware(req: NextRequest) {
           ? [
               {
                 key: `anon:${modelAnonymousBucketId}:${bucketPath}`,
-                maxPerWindow,
+                maxPerWindow: MAX_PER_WINDOW * NO_IP_MODEL_GLOBAL_GUARDRAIL_MULTIPLIER,
               },
               {
                 key: `global:no-ip:${bucketPath}`,
@@ -269,7 +275,7 @@ export function middleware(req: NextRequest) {
             ]
           : []),
         {
-          key: `${ip ? `ip:${ip}` : `session:${modelSession?.bucketId ?? ipBucket}`}:${bucketPath}`,
+          key: `${modelSession ? `session:${modelSession.bucketId}` : ip ? `ip:${ip}` : `session:${ipBucket}`}:${bucketPath}`,
           maxPerWindow,
         },
       ];

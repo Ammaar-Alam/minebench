@@ -4,19 +4,20 @@ import { NextRequest } from "next/server";
 import { middleware } from "../../middleware";
 
 async function main() {
+  process.env.ARENA_TRUST_X_FORWARDED_FOR = "1";
   const ip = "203.0.113.42";
 
   for (let index = 0; index < 18; index += 1) {
     const request = new NextRequest(
       `http://localhost/api/leaderboard/models/model-${index}`,
-      { headers: { "x-forwarded-for": ip } },
+      { headers: { "x-real-ip": ip } },
     );
     assert.equal(middleware(request).status, 200);
   }
 
   const limited = middleware(
     new NextRequest("http://localhost/api/leaderboard/models/model-18", {
-      headers: { "x-forwarded-for": ip },
+      headers: { "x-real-ip": ip },
     }),
   );
   assert.equal(limited.status, 429);
@@ -39,13 +40,26 @@ async function main() {
   );
   assert.equal(anonymousLimited.status, 429);
 
+  for (let index = 0; index < 19; index += 1) {
+    const request = new NextRequest(
+      `http://localhost/api/leaderboard/models/shared-model-${index}`,
+      {
+        headers: {
+          cookie: `mb_rls=review-session-${index}`,
+          "user-agent": "shared-client",
+        },
+      },
+    );
+    assert.equal(middleware(request).status, 200);
+  }
+
   for (let index = 0; index < 18; index += 1) {
     const request = new NextRequest(
       `http://localhost/api/leaderboard/models/session-model-${index}`,
       {
         headers: {
-          cookie: `mb_rls=review-session-${index}`,
-          "user-agent": "review-session-client",
+          cookie: "mb_rls=review-session",
+          "user-agent": "strict-session-client",
         },
       },
     );
@@ -55,8 +69,8 @@ async function main() {
   const sessionLimited = middleware(
     new NextRequest("http://localhost/api/leaderboard/models/session-model-18", {
       headers: {
-        cookie: "mb_rls=review-session-18",
-        "user-agent": "review-session-client",
+        cookie: "mb_rls=review-session",
+        "user-agent": "strict-session-client",
       },
     }),
   );

@@ -4,6 +4,10 @@ import { NextRequest } from "next/server";
 import { middleware } from "../../middleware";
 
 async function main() {
+  delete process.env.ARENA_TRUST_X_FORWARDED_FOR;
+  delete process.env.VERCEL;
+  process.env.ARENA_FORWARDED_IP_FALLBACK = "1";
+
   for (let index = 0; index < 180; index += 1) {
     const request = new NextRequest(
       `http://localhost/api/leaderboard/models/global-model-${index}`,
@@ -12,6 +16,7 @@ async function main() {
           cookie: `mb_rls=rotating-session-${index}`,
           "user-agent": `rotating-client-${index}`,
           "accept-language": `en-${index}`,
+          "x-forwarded-for": `198.51.100.${index % 255}`,
         },
       },
     );
@@ -24,6 +29,7 @@ async function main() {
         cookie: "mb_rls=rotating-session-180",
         "user-agent": "rotating-client-180",
         "accept-language": "en-180",
+        "x-forwarded-for": "198.51.100.180",
       },
     }),
   );
