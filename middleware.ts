@@ -4,6 +4,7 @@ import { LEGACY_HOSTS, SITE_HOST } from "@/lib/seo";
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
 const MAX_PER_WINDOW_LOCAL_EXEC = 6;
+const NO_IP_MODEL_GLOBAL_GUARDRAIL_MULTIPLIER = 10;
 const RATE_LIMIT_SESSION_COOKIE = "mb_rls";
 const ARENA_IP_GUARDRAIL_MULTIPLIER = readIntEnv("ARENA_IP_GUARDRAIL_MULTIPLIER", 250, 1, 1000);
 const ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER = readIntEnv(
@@ -23,6 +24,7 @@ const BUCKET_PRUNE_INTERVAL = 256;
 type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
 type RateLimitRule = { key: string; maxPerWindow: number };
+type IpInfo = { value: string | null; trusted: boolean };
 let requestsSinceLastPrune = 0;
 type BucketPreview = { key: string; resetAt: number; nextCount: number };
 
@@ -43,9 +45,9 @@ function readBoolEnv(name: string, fallback: boolean) {
   return fallback;
 }
 
-function getIp(req: NextRequest): string | null {
+function getIp(req: NextRequest): IpInfo {
   const requestIp = (req as NextRequest & { ip?: string | null }).ip?.trim();
-  if (requestIp) return requestIp;
+  if (requestIp) return { value: requestIp, trusted: true };
 
   const trustForwardedRaw = process.env.ARENA_TRUST_X_FORWARDED_FOR;
   const trustForwardedFor = readBoolEnv("ARENA_TRUST_X_FORWARDED_FOR", process.env.VERCEL === "1");
@@ -54,15 +56,20 @@ function getIp(req: NextRequest): string | null {
       req.headers.get("x-real-ip") ??
       req.headers.get("cf-connecting-ip") ??
       req.headers.get("x-vercel-forwarded-for");
-    if (direct) return direct.split(",")[0]?.trim() || null;
+    if (direct) return { value: direct.split(",")[0]?.trim() || null, trusted: true };
   }
 
   const forwarded = req.headers.get("x-forwarded-for");
   const allowForwardedFallback =
     trustForwardedFor || (!trustForwardedRaw && readBoolEnv("ARENA_FORWARDED_IP_FALLBACK", true));
   // fallback for non vercel reverse proxies without next ip
-  if (allowForwardedFallback && forwarded) return forwarded.split(",")[0]?.trim() || null;
-  return null;
+  if (allowForwardedFallback && forwarded) {
+    return {
+      value: forwarded.split(",")[0]?.trim() || null,
+      trusted: trustForwardedFor,
+    };
+  }
+  return { value: null, trusted: false };
 }
 
 function maybeRedirectToCanonicalHost(req: NextRequest) {
@@ -79,12 +86,19 @@ function maybeRedirectToCanonicalHost(req: NextRequest) {
   return NextResponse.redirect(nextUrl, 308);
 }
 
+function isModelDetailPath(pathname: string): boolean {
+  return /^\/api\/leaderboard\/models\/[^/]+$/.test(pathname);
+}
+
 function normalizeRateLimitPath(pathname: string): string {
   if (/^\/api\/arena\/builds\/[^/]+\/stream$/.test(pathname)) {
     return "/api/arena/builds/:buildId/stream";
   }
   if (/^\/api\/arena\/builds\/[^/]+$/.test(pathname)) {
     return "/api/arena/builds/:buildId";
+  }
+  if (isModelDetailPath(pathname)) {
+    return "/api/leaderboard/models/:modelKey";
   }
   return pathname;
 }
@@ -162,12 +176,12 @@ function getHeaderFingerprint(req: NextRequest): string {
   return parts.join("|") || "unknown";
 }
 
-function getArenaAnonymousBucketId(req: NextRequest, ip: string | null): string {
+function getAnonymousBucketId(req: NextRequest, ip: string | null): string {
   // stable fallback for clients that block cookies
   return `anon:${stableHash(`${ip ?? "no-ip"}|${getHeaderFingerprint(req)}`)}`;
 }
 
-function getArenaRateLimitSession(req: NextRequest, fallbackBucketId: string) {
+function getRateLimitSession(req: NextRequest, fallbackBucketId: string) {
   const existing = req.cookies.get(RATE_LIMIT_SESSION_COOKIE)?.value?.trim();
   if (existing) return { bucketId: existing, cookieValue: null, isNew: false };
   const id = crypto.randomUUID();
@@ -187,15 +201,22 @@ export function middleware(req: NextRequest) {
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
   const isArenaApi = pathname.startsWith("/api/arena/");
+  const isModelDetailApi = isModelDetailPath(pathname);
   const isArenaBuildAsset = /^\/api\/arena\/builds\/[^/]+(?:\/stream)?$/.test(pathname);
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
+  const { value: ip, trusted: hasTrustedIp } = getIp(req);
+  const modelAnonymousBucketId = isModelDetailApi && !hasTrustedIp
+    ? getAnonymousBucketId(req, null)
+    : null;
+  const modelSession = modelAnonymousBucketId
+    ? getRateLimitSession(req, modelAnonymousBucketId)
+    : null;
   const bucketPath = normalizeRateLimitPath(pathname);
-  const ip = getIp(req);
   const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);
   const arenaSession = isArenaApi
-    ? getArenaRateLimitSession(req, getArenaAnonymousBucketId(req, ip))
+    ? getRateLimitSession(req, getAnonymousBucketId(req, ip))
     : null;
   const arenaIpRules = ip
     ? [
@@ -240,7 +261,24 @@ export function middleware(req: NextRequest) {
           ...arenaNewSessionIpRules,
           { key: `session:${arenaSession?.bucketId}:${bucketPath}`, maxPerWindow },
         ]
-    : [{ key: `${ipBucket}:${bucketPath}`, maxPerWindow }];
+    : [
+        ...(modelAnonymousBucketId
+          ? [
+              {
+                key: `anon:${modelAnonymousBucketId}:${bucketPath}`,
+                maxPerWindow: MAX_PER_WINDOW * NO_IP_MODEL_GLOBAL_GUARDRAIL_MULTIPLIER,
+              },
+              {
+                key: `global:no-ip:${bucketPath}`,
+                maxPerWindow: MAX_PER_WINDOW * NO_IP_MODEL_GLOBAL_GUARDRAIL_MULTIPLIER,
+              },
+            ]
+          : []),
+        {
+          key: `${modelSession ? `session:${modelSession.bucketId}` : ip ? `ip:${ip}` : `session:${ipBucket}`}:${bucketPath}`,
+          maxPerWindow,
+        },
+      ];
 
   const rateLimit = consumeBuckets(rules, now);
   if (!rateLimit.allowed) {
@@ -248,8 +286,9 @@ export function middleware(req: NextRequest) {
   }
 
   const response = NextResponse.next();
-  if (arenaSession?.cookieValue) {
-    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, arenaSession.cookieValue, {
+  const rateLimitSession = arenaSession ?? modelSession;
+  if (rateLimitSession?.cookieValue) {
+    response.cookies.set(RATE_LIMIT_SESSION_COOKIE, rateLimitSession.cookieValue, {
       httpOnly: true,
       sameSite: "lax",
       path: "/",
