@@ -29,6 +29,14 @@ for (const path of [
 const voteRoute = read("app/api/arena/vote/route.ts");
 assert.match(voteRoute, /const responseBody: ArenaVoteResponse/);
 assert.match(voteRoute, /provider: "Stealth", displayName: model\.stealthVariant\.codename/);
+assert.match(voteRoute, /z\.literal\("SKIP"\)/);
+const skipReveal = voteRoute.slice(
+  voteRoute.indexOf('if (action === "SKIP")'),
+  voteRoute.indexOf("const choice: VoteChoice = action"),
+);
+assert.match(skipReveal, /loadMatchupReveal/);
+assert.match(skipReveal, /return respondJson\(responseBody/);
+assert.doesNotMatch(skipReveal, /inserted_vote|ArenaVoteJob/);
 assert.match(voteRoute, /queuedVoteJobInput && !queuedVoteJobInput\.stealthVariantId/);
 
 const voteJobs = read("lib/arena/voteJobs.ts");

@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import type { ArenaModelReveal, ArenaVoteResponse, VoteChoice } from "@/lib/arena/types";
+import type { ArenaAction, ArenaModelReveal, ArenaVoteResponse, VoteChoice } from "@/lib/arena/types";
 import { hasArenaMatchupSigningSecret, parseArenaMatchupToken } from "@/lib/arena/matchupToken";
 import { recordArenaVoteQueuedForSampling } from "@/lib/arena/coverage";
 import { shouldScheduleArenaVoteJobDrainAfterResponse } from "@/lib/arena/drainConfig";
@@ -17,7 +17,13 @@ const SESSION_COOKIE = "mb_session";
 
 const reqSchema = z.object({
   matchupId: z.string().min(1).max(2048),
-  choice: z.union([z.literal("A"), z.literal("B"), z.literal("TIE"), z.literal("BOTH_BAD")]),
+  choice: z.union([
+    z.literal("A"),
+    z.literal("B"),
+    z.literal("TIE"),
+    z.literal("BOTH_BAD"),
+    z.literal("SKIP"),
+  ]),
 });
 
 function getOrCreateSessionId(req: Request): { id: string; cookieValue: string | null } {
@@ -34,24 +40,34 @@ function isCapacityVoteError(error: unknown): boolean {
   return isArenaCapacityError(error);
 }
 
-async function loadModelReveal(modelId: string): Promise<ArenaModelReveal | null> {
-  const model = await prisma.model.findUnique({
-    where: { id: modelId },
+async function loadMatchupReveal(
+  modelAId: string,
+  modelBId: string,
+): Promise<ArenaVoteResponse["reveal"] | null> {
+  const models = await prisma.model.findMany({
+    where: { id: { in: [modelAId, modelBId] } },
     select: {
+      id: true,
       key: true,
       provider: true,
       displayName: true,
       stealthVariant: { select: { codename: true } },
     },
   });
-  if (!model) return null;
-  if (model.stealthVariant) {
-    return { provider: "Stealth", displayName: model.stealthVariant.codename };
-  }
-  return {
-    provider: model.provider,
-    displayName: resolveModelDisplayName(model.key, model.displayName),
-  };
+  const reveals = new Map<string, ArenaModelReveal>(
+    models.map((model) => [
+      model.id,
+      model.stealthVariant
+        ? { provider: "Stealth", displayName: model.stealthVariant.codename }
+        : {
+            provider: model.provider,
+            displayName: resolveModelDisplayName(model.key, model.displayName),
+          },
+    ]),
+  );
+  const a = reveals.get(modelAId);
+  const b = reveals.get(modelBId);
+  return a && b ? { a, b } : null;
 }
 
 export async function POST(req: Request) {
@@ -79,7 +95,7 @@ export async function POST(req: Request) {
     return respondJson({ error: parsed.error.message }, { status: 400 });
   }
 
-  const { matchupId, choice } = parsed.data as { matchupId: string; choice: VoteChoice };
+  const { matchupId, choice: action } = parsed.data as { matchupId: string; choice: ArenaAction };
 
   let res: NextResponse | null = null;
   let queuedVoteJobs = 0;
@@ -116,6 +132,18 @@ export async function POST(req: Request) {
       samplingReason: tokenMatchup.samplingReason ?? null,
       stealthVariantId: tokenMatchup.stealthVariantId ?? null,
     };
+    if (action === "SKIP") {
+      const revealStartedAt = timing.start();
+      const reveal = await loadMatchupReveal(matchup.modelAId, matchup.modelBId);
+      timing.end("reveal", revealStartedAt);
+      if (!reveal) {
+        return respondJson({ error: "Matchup reveal is unavailable" }, { status: 409 });
+      }
+      const responseBody: ArenaVoteResponse = { ok: true, reveal };
+      return respondJson(responseBody, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    const choice: VoteChoice = action;
     const session = getOrCreateSessionId(req);
     const sessionId = session.id;
     const txStartedAt = timing.start();
@@ -252,16 +280,15 @@ export async function POST(req: Request) {
       };
     }
 
-    const [revealA, revealB] = await Promise.all([
-      loadModelReveal(matchup.modelAId),
-      loadModelReveal(matchup.modelBId),
-    ]);
-    if (!revealA || !revealB) {
+    const revealStartedAt = timing.start();
+    const reveal = await loadMatchupReveal(matchup.modelAId, matchup.modelBId);
+    timing.end("reveal", revealStartedAt);
+    if (!reveal) {
       return respondJson({ error: "Matchup reveal is unavailable" }, { status: 409 });
     }
     const responseBody: ArenaVoteResponse = {
       ok: true,
-      reveal: { a: revealA, b: revealB },
+      reveal,
     };
     res = NextResponse.json(responseBody, { headers: { "Cache-Control": "no-store" } });
     if (session.cookieValue) {

@@ -6,8 +6,8 @@ ordinary public Arena, and reports only to invited members of the sponsoring
 organization.
 
 Each private matchup contains exactly one codenamed checkpoint and one public
-MineBench model. The voter sees neither identity before voting. After a vote,
-the public model is named normally and the private model is revealed as
+MineBench model. The voter sees neither identity before acting. After a vote or
+skip, the public model is named normally and the private model is revealed as
 `Stealth • Codename`. Private checkpoints never appear on the public
 leaderboard.
 
@@ -54,7 +54,7 @@ sequenceDiagram
     Operator->>Storage: Validated builds and delivery artifacts
     Operator->>Storage: Delete endpoint credential after complete cohort
     Storage-->>Voter: Anonymous checkpoint build vs public build
-    Voter->>Storage: Vote
+    Voter->>Storage: Vote or skip
     Storage-->>Voter: Stealth codename and public model reveal
     Storage-->>Portal: Organization-scoped aggregate report
 ```
@@ -75,8 +75,8 @@ are proxied with the per-matchup capability identity instead of redirecting to
 a stable storage path. This prevents a voter from learning a stable identifier
 in one revealed match and recognizing it before a later vote.
 
-The vote response is the only pre-release identity-reveal path. Skipping moves
-to a new matchup without revealing either identity.
+A vote or skip response is the only pre-release identity-reveal path. Skipping
+reveals the same anonymous labels without recording a vote or affecting ratings.
 
 Private variants keep independent Glicko state. A vote updates the codenamed
 variant against the public model's current rating as a read-only anchor. It does
@@ -176,8 +176,8 @@ activation:
    the variant endpoint is disabled, and every build has a checksum and Arena
    artifact metadata.
 5. Set alpha's stealth share to 1 for acceptance traffic. Confirm exactly one
-   private variant per matchup, no names or stable IDs before voting, no reveal
-   on skip, and `Stealth • Codename` only after a successful vote.
+   private variant per matchup, no names or stable IDs before an action, and
+   `Stealth • Codename` after either a vote or skip.
 6. Compare public leaderboard ratings, counters, coverage, rank snapshots, and
    benchmark surfaces before and after private votes; they must be unchanged.
 7. Confirm the lab report updates, Viewer cannot export, and an authorized CSV
