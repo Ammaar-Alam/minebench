@@ -4,6 +4,7 @@ import { LEGACY_HOSTS, SITE_HOST } from "@/lib/seo";
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
 const MAX_PER_WINDOW_LOCAL_EXEC = 6;
+const NO_IP_MODEL_GLOBAL_GUARDRAIL_MULTIPLIER = 10;
 const RATE_LIMIT_SESSION_COOKIE = "mb_rls";
 const ARENA_IP_GUARDRAIL_MULTIPLIER = readIntEnv("ARENA_IP_GUARDRAIL_MULTIPLIER", 250, 1, 1000);
 const ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER = readIntEnv(
@@ -260,6 +261,10 @@ export function middleware(req: NextRequest) {
               {
                 key: `anon:${modelAnonymousBucketId}:${bucketPath}`,
                 maxPerWindow,
+              },
+              {
+                key: `global:no-ip:${bucketPath}`,
+                maxPerWindow: MAX_PER_WINDOW * NO_IP_MODEL_GLOBAL_GUARDRAIL_MULTIPLIER,
               },
             ]
           : []),
