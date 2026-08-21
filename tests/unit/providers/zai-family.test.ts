@@ -30,7 +30,7 @@ runProviderConfigTest("zai family", {
   assert.deepEqual(getModelBenchmarkProfile(model.key)?.parameters, [
     { label: "Reasoning effort", value: "Max" },
   ]);
-  assert.deepEqual(getModelBenchmarkProfile(model.key)?.totalCost, { usd: 6.42 });
+  assert.deepEqual(getModelBenchmarkProfile(model.key)?.totalCost, { usd: 6.42, attemptCount: 24 });
 
   // Z.AI documents low|high|max and rejects thinking.type=disabled, so max is
   // both the default and the ladder head, and xhigh resolves onto it
