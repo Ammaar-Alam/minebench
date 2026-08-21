@@ -42,14 +42,22 @@ async function main() {
   for (let index = 0; index < 18; index += 1) {
     const request = new NextRequest(
       `http://localhost/api/leaderboard/models/session-model-${index}`,
-      { headers: { cookie: "mb_rls=review-session" } },
+      {
+        headers: {
+          cookie: `mb_rls=review-session-${index}`,
+          "user-agent": "review-session-client",
+        },
+      },
     );
     assert.equal(middleware(request).status, 200);
   }
 
   const sessionLimited = middleware(
     new NextRequest("http://localhost/api/leaderboard/models/session-model-18", {
-      headers: { cookie: "mb_rls=review-session" },
+      headers: {
+        cookie: "mb_rls=review-session-18",
+        "user-agent": "review-session-client",
+      },
     }),
   );
   assert.equal(sessionLimited.status, 429);

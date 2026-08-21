@@ -198,8 +198,11 @@ export function middleware(req: NextRequest) {
   const isArenaBuildAsset = /^\/api\/arena\/builds\/[^/]+(?:\/stream)?$/.test(pathname);
   const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
   const ip = getIp(req);
-  const modelSession = !ip && isModelDetailApi
-    ? getRateLimitSession(req, getAnonymousBucketId(req, ip))
+  const modelAnonymousBucketId = !ip && isModelDetailApi
+    ? getAnonymousBucketId(req, ip)
+    : null;
+  const modelSession = modelAnonymousBucketId
+    ? getRateLimitSession(req, modelAnonymousBucketId)
     : null;
   const bucketPath = normalizeRateLimitPath(pathname);
   const ipBucket = ip ?? "unknown";
@@ -252,6 +255,14 @@ export function middleware(req: NextRequest) {
           { key: `session:${arenaSession?.bucketId}:${bucketPath}`, maxPerWindow },
         ]
     : [
+        ...(modelAnonymousBucketId
+          ? [
+              {
+                key: `anon:${modelAnonymousBucketId}:${bucketPath}`,
+                maxPerWindow,
+              },
+            ]
+          : []),
         {
           key: `${ip ? `ip:${ip}` : `session:${modelSession?.bucketId ?? ipBucket}`}:${bucketPath}`,
           maxPerWindow,
