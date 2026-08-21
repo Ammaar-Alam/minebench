@@ -7,7 +7,7 @@ import { signOutLab } from "./sign-in/actions";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Private evaluations",
+  title: "Evaluations",
   robots: { index: false, follow: false },
 };
 
@@ -19,40 +19,35 @@ export default async function LabHomePage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6 py-6 sm:py-10">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="space-y-2">
-          <span className="mb-eyebrow">Private evaluations</span>
-          <h1 className="font-display text-3xl font-semibold tracking-tight text-fg">Organizations</h1>
-        </div>
+    <div className="mx-auto w-full max-w-3xl space-y-8 py-6 sm:py-12">
+      <header className="flex items-center justify-between gap-4 border-b border-border/70 pb-5">
+        <h1 className="text-3xl font-semibold tracking-tight text-fg">Evaluations</h1>
         <form action={signOutLab}>
           <button type="submit" className="mb-btn mb-btn-ghost h-9 px-4 text-xs">Sign out</button>
         </form>
       </header>
 
       {identity.memberships.length > 0 ? (
-        <div className="grid gap-3 sm:grid-cols-2">
-          {identity.memberships.map(({ organization, role }) => (
+        <div className="divide-y divide-border/60 border-y border-border/70">
+          {identity.memberships.map(({ organization }) => (
             <Link
               key={organization.id}
               href={`/lab/${organization.slug}`}
-              className="mb-panel overflow-hidden p-5 before:hidden transition hover:border-accent/35"
+              className="group flex items-center justify-between gap-6 py-5 transition-colors hover:text-accent"
             >
-              <div className="mb-panel-inner space-y-2">
-                <h2 className="font-display text-lg font-semibold tracking-tight text-fg">{organization.name}</h2>
-                <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted">{role.toLowerCase()}</p>
-              </div>
+              <h2 className="text-lg font-medium tracking-tight text-fg transition-colors group-hover:text-accent">
+                {organization.name}
+              </h2>
+              <span aria-hidden="true" className="text-muted">
+                →
+              </span>
             </Link>
           ))}
         </div>
       ) : (
-        <section className="mb-panel p-5 before:hidden sm:p-7">
-          <div className="mb-panel-inner space-y-3">
-            <h2 className="font-display text-xl font-semibold tracking-tight">Access pending</h2>
-            <p className="max-w-[55ch] text-sm leading-relaxed text-muted">
-              This account is signed in but has not been added to an evaluation organization.
-            </p>
-          </div>
+        <section className="border-y border-border/70 py-8">
+          <h2 className="text-lg font-medium tracking-tight text-fg">No evaluations</h2>
+          <p className="mt-2 text-sm text-muted">This account is not linked to an evaluation.</p>
         </section>
       )}
     </div>

@@ -8,14 +8,18 @@ import { signOutLab } from "../sign-in/actions";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Private evaluations",
+  title: "Evaluations",
   robots: { index: false, follow: false },
 };
 
 function statusClass(status: string): string {
-  if (status === "ACTIVE" || status === "STABLE") return "bg-success/10 text-success ring-success/25";
-  if (status === "DEGRADED" || status === "WITHDRAWN") return "bg-warn/10 text-warn ring-warn/25";
-  return "bg-bg/45 text-muted ring-border/65";
+  if (status === "ACTIVE" || status === "STABLE") return "text-success";
+  if (status === "DEGRADED" || status === "WITHDRAWN") return "text-warn";
+  return "text-muted";
+}
+
+function statusLabel(status: string): string {
+  return status.charAt(0) + status.slice(1).toLowerCase();
 }
 
 export default async function LabOrganizationPage({
@@ -39,23 +43,18 @@ export default async function LabOrganizationPage({
           winCount: true,
           lossCount: true,
           drawCount: true,
+          bothBadCount: true,
         },
       },
     },
   });
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-7 py-6 sm:py-10">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div className="space-y-2">
-          <span className="mb-eyebrow">Private evaluations</span>
-          <h1 className="font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">
-            {context.membership.organization.name}
-          </h1>
-          <p className="font-mono text-xs uppercase tracking-[0.12em] text-muted">
-            {context.membership.role.toLowerCase()} access
-          </p>
-        </div>
+    <div className="mx-auto w-full max-w-5xl space-y-9 py-6 sm:py-12">
+      <header className="flex flex-col gap-5 border-b border-border/70 pb-6 sm:flex-row sm:items-end sm:justify-between">
+        <h1 className="text-3xl font-semibold tracking-tight text-fg sm:text-4xl">
+          {context.membership.organization.name}
+        </h1>
         <div className="flex items-center gap-2">
           {context.memberships.length > 1 ? (
             <Link href="/lab" className="mb-btn mb-btn-ghost h-9 px-4 text-xs">
@@ -71,61 +70,56 @@ export default async function LabOrganizationPage({
       </header>
 
       {experiments.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2">
-          {experiments.map((experiment) => {
-            const decisiveVotes = experiment.variants.reduce(
-              (total, variant) => total + variant.winCount + variant.lossCount,
-              0,
-            );
-            return (
-              <Link
-                key={experiment.id}
-                href={`/lab/${orgSlug}/experiments/${experiment.id}`}
-                className="mb-panel overflow-hidden p-5 before:hidden transition hover:border-accent/35 sm:p-6"
-              >
-                <div className="mb-panel-inner space-y-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="space-y-2">
-                      <h2 className="font-display text-xl font-semibold tracking-tight text-fg">
-                        {experiment.name}
-                      </h2>
-                      <p className="text-sm text-muted">
-                        {experiment.variants.map((variant) => variant.codename).join(" · ") || "No variants"}
-                      </p>
-                    </div>
+        <section className="space-y-3">
+          <h2 className="text-sm font-medium text-muted">Evaluations</h2>
+          <div className="divide-y divide-border/60 border-y border-border/70">
+            {experiments.map((experiment) => {
+              const votes = experiment.variants.reduce(
+                (total, variant) =>
+                  total +
+                  variant.winCount +
+                  variant.lossCount +
+                  variant.drawCount +
+                  variant.bothBadCount,
+                0,
+              );
+              return (
+                <Link
+                  key={experiment.id}
+                  href={`/lab/${orgSlug}/experiments/${experiment.id}`}
+                  className="group grid gap-4 py-5 transition-colors sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                >
+                  <div className="min-w-0 space-y-1.5">
+                    <h3 className="text-xl font-medium tracking-tight text-fg transition-colors group-hover:text-accent">
+                      {experiment.name}
+                    </h3>
+                    <p className="truncate text-sm text-muted">
+                      {experiment.variants.map((variant) => variant.codename).join(" · ") ||
+                        "No checkpoints"}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm sm:justify-end">
+                    <span className="font-mono text-xs tabular-nums text-muted">
+                      {votes.toLocaleString()} votes
+                    </span>
                     <span
-                      className={`inline-flex rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] ring-1 ${statusClass(experiment.status)}`}
+                      className={`inline-flex items-center gap-2 text-xs font-medium ${statusClass(experiment.status)}`}
                     >
-                      {experiment.status.toLowerCase()}
+                      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                      {statusLabel(experiment.status)}
+                    </span>
+                    <span aria-hidden="true" className="text-muted">
+                      →
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 gap-3 border-t border-border/55 pt-4 text-sm">
-                    <div>
-                      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">Variants</div>
-                      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
-                        {experiment.variants.length}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">Decisive votes</div>
-                      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
-                        {decisiveVotes.toLocaleString()}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      ) : (
-        <section className="mb-panel p-5 before:hidden sm:p-7">
-          <div className="mb-panel-inner space-y-3">
-            <h2 className="font-display text-xl font-semibold tracking-tight text-fg">No evaluations yet</h2>
-            <p className="max-w-[55ch] text-sm leading-relaxed text-muted">
-              New evaluations appear here after MineBench finishes checkpoint onboarding.
-            </p>
+                </Link>
+              );
+            })}
           </div>
+        </section>
+      ) : (
+        <section className="border-y border-border/70 py-8">
+          <h2 className="text-lg font-medium tracking-tight text-fg">No evaluations</h2>
         </section>
       )}
     </div>
