@@ -311,8 +311,15 @@ function isDeterministicProviderPreflightError(message: string): boolean {
 }
 
 function normalizeApiKey(raw: string | undefined): string | null {
-  const v = (raw ?? "").trim();
-  return v ? v : null;
+  const stripQuotes = (value: string) => {
+    const first = value[0];
+    return value.length >= 2 && (first === '"' || first === "'") && value.at(-1) === first
+      ? value.slice(1, -1).trim()
+      : value;
+  };
+  const unquoted = stripQuotes((raw ?? "").trim());
+  const key = stripQuotes(unquoted.replace(/^Bearer\s+/i, "").trim());
+  return key || null;
 }
 
 type ProviderKeyName =
@@ -776,7 +783,7 @@ async function providerGenerateText(args: {
   if (model.provider === "custom" && preferOpenRouter) {
     throw new Error("OpenRouter routing is unavailable for custom API models.");
   }
-  if (model.provider === "custom" && !hasDirect) {
+  if (model.provider === "custom" && !forceOpenRouter && !hasDirect) {
     throw new Error(
       `Missing custom API key. Provide your own ${envVarForProviderKey("custom")} key.`,
     );
@@ -974,6 +981,7 @@ async function providerGenerateText(args: {
     reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
     jsonSchema: args.jsonSchema,
+    requireParameterSupport: model.provider !== "custom",
     reasoningEffortAttempts: openRouterReasoningEffortAttempts,
     requireReasoning: modelRequiresReasoning(model.openRouterModelId),
     signal: args.signal,

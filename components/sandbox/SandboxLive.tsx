@@ -16,7 +16,10 @@ import { getPalette } from "@/lib/blocks/palettes";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
-type SelectedModelValue = ModelKey | typeof CUSTOM_MODEL_VALUE;
+type SelectedModelValue =
+  | ModelKey
+  | typeof OPENROUTER_MODEL_VALUE
+  | typeof CUSTOM_MODEL_VALUE;
 
 type CustomSandboxModel = {
   displayName: string;
@@ -35,10 +38,11 @@ type SelectedLiveModel =
   | {
       id: string;
       kind: "custom";
+      provider: "openrouter" | "custom";
       displayName: string;
       providerLabel: string;
       modelId: string;
-      baseUrl: string;
+      baseUrl?: string;
     };
 
 type ModelResult = {
@@ -59,12 +63,12 @@ const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
 const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
+const OPENROUTER_MODEL_VALUE = "__openrouter__";
 const CUSTOM_MODEL_VALUE = "__custom_api__";
-const DEFAULT_CUSTOM_API_URL = "https://inference-api.nvidia.com/v1/chat/completions";
 const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
-  displayName: "Custom API model",
+  displayName: "OpenAI-compatible model",
   modelId: "",
-  baseUrl: DEFAULT_CUSTOM_API_URL,
+  baseUrl: "",
 };
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
@@ -152,8 +156,10 @@ function saveProviderKeysToStorage(keys: ProviderApiKeys) {
   }
 }
 
-function isCustomModelValue(value: string | null | undefined): value is typeof CUSTOM_MODEL_VALUE {
-  return value === CUSTOM_MODEL_VALUE;
+function isAdHocModelValue(
+  value: string | null | undefined,
+): value is typeof OPENROUTER_MODEL_VALUE | typeof CUSTOM_MODEL_VALUE {
+  return value === OPENROUTER_MODEL_VALUE || value === CUSTOM_MODEL_VALUE;
 }
 
 function findArrayStart(text: string, field: string): number {
@@ -411,20 +417,30 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       .map(([label, models]) => ({ label, models }));
   }, []);
   const canCompare = true;
-  const usesCustomModel =
-    isCustomModelValue(modelPair.a) || (compareEnabled && isCustomModelValue(modelPair.b));
+  const adHocModelValue = isAdHocModelValue(modelPair.a)
+    ? modelPair.a
+    : compareEnabled && isAdHocModelValue(modelPair.b)
+      ? modelPair.b
+      : null;
+  const usesAdHocModel = adHocModelValue !== null;
+  const usesOpenRouterModel = adHocModelValue === OPENROUTER_MODEL_VALUE;
+  const usesOpenAiCompatibleModel = adHocModelValue === CUSTOM_MODEL_VALUE;
   const selectedModels = useMemo(() => {
     const picked: SelectedLiveModel[] = [];
     const pushValue = (value: SelectedModelValue | null) => {
       if (!value) return;
-      if (isCustomModelValue(value)) {
+      if (isAdHocModelValue(value)) {
+        const usesOpenRouter = value === OPENROUTER_MODEL_VALUE;
         picked.push({
-          id: "custom",
+          id: usesOpenRouter ? "openrouter" : "custom",
           kind: "custom",
-          displayName: customModel.displayName.trim() || "Custom API model",
-          providerLabel: "Custom API",
+          provider: usesOpenRouter ? "openrouter" : "custom",
+          displayName: usesOpenRouter
+            ? customModel.modelId.trim() || "OpenRouter model"
+            : customModel.displayName.trim() || "OpenAI-compatible model",
+          providerLabel: usesOpenRouter ? "OpenRouter" : "OpenAI-compatible",
           modelId: customModel.modelId.trim(),
-          baseUrl: customModel.baseUrl.trim() || DEFAULT_CUSTOM_API_URL,
+          ...(usesOpenRouter ? {} : { baseUrl: customModel.baseUrl.trim() }),
         });
         return;
       }
@@ -439,7 +455,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       });
     };
     pushValue(modelPair.a);
-    if (compareEnabled && modelPair.b && (!isCustomModelValue(modelPair.b) || !isCustomModelValue(modelPair.a))) {
+    if (compareEnabled && modelPair.b && (!isAdHocModelValue(modelPair.b) || !isAdHocModelValue(modelPair.a))) {
       pushValue(modelPair.b);
     }
     return picked;
@@ -454,7 +470,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           .map((model) =>
             model.kind === "catalog"
               ? model.modelKey
-              : `${model.displayName}:${model.modelId}:${model.baseUrl}`,
+              : `${model.provider}:${model.displayName}:${model.modelId}:${model.baseUrl ?? ""}`,
           )
           .join("|"),
       ].join("\0"),
@@ -491,7 +507,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   useEffect(() => {
     if (!compareEnabled) return;
     setModelPair((prev) => {
-      if (prev.b && prev.b !== prev.a && !(isCustomModelValue(prev.a) && isCustomModelValue(prev.b))) {
+      if (prev.b && prev.b !== prev.a && !(isAdHocModelValue(prev.a) && isAdHocModelValue(prev.b))) {
         return prev;
       }
       const fallback = ENABLED_MODELS.find((model) => model.key !== prev.a)?.key ?? null;
@@ -513,8 +529,8 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         if (
           !compareEnabled ||
           prev.b == null ||
-          isCustomModelValue(nextValue) ||
-          isCustomModelValue(prev.b) ||
+          isAdHocModelValue(nextValue) ||
+          isAdHocModelValue(prev.b) ||
           nextValue !== prev.b
         ) {
           return { a: nextValue, b: prev.b };
@@ -522,12 +538,12 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         const fallback = ENABLED_MODELS.find((model) => model.key !== nextValue)?.key ?? null;
         return { a: nextValue, b: fallback ?? CUSTOM_MODEL_VALUE };
       }
-      if (isCustomModelValue(nextValue) && isCustomModelValue(prev.a)) {
+      if (isAdHocModelValue(nextValue) && isAdHocModelValue(prev.a)) {
         return prev;
       }
       if (
-        !isCustomModelValue(nextValue) &&
-        !isCustomModelValue(prev.a) &&
+        !isAdHocModelValue(nextValue) &&
+        !isAdHocModelValue(prev.a) &&
         (nextValue === prev.a || nextValue === prev.b)
       ) {
         return prev;
@@ -582,6 +598,13 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     );
     if (invalidCustomModel) {
       setRequestError(`Enter a model ID for ${invalidCustomModel.displayName}.`);
+      return;
+    }
+    const missingCustomUrl = selectedModels.some(
+      (model) => model.kind === "custom" && model.provider === "custom" && !model.baseUrl,
+    );
+    if (missingCustomUrl) {
+      setRequestError("Enter a chat completions URL for the OpenAI-compatible model.");
       return;
     }
 
@@ -645,7 +668,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               : {
                   id: model.id,
                   kind: "custom" as const,
-                  provider: "custom" as const,
+                  provider: model.provider,
                   displayName: model.displayName,
                   modelId: model.modelId,
                   baseUrl: model.baseUrl,
@@ -1011,7 +1034,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                                 disabled={
                                   compareEnabled &&
                                   modelPair.b != null &&
-                                  !isCustomModelValue(modelPair.b) &&
+                                  !isAdHocModelValue(modelPair.b) &&
                                   model.key === modelPair.b
                                 }
                               >
@@ -1020,12 +1043,20 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                             ))}
                           </optgroup>
                         ))}
+                        <optgroup label="OpenRouter">
+                          <option
+                            value={OPENROUTER_MODEL_VALUE}
+                            disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
+                          >
+                            Other OpenRouter model
+                          </option>
+                        </optgroup>
                         <optgroup label="Custom">
                           <option
                             value={CUSTOM_MODEL_VALUE}
-                            disabled={compareEnabled && isCustomModelValue(modelPair.b)}
+                            disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
                           >
-                            Custom API model
+                            OpenAI-compatible model
                           </option>
                         </optgroup>
                       </select>
@@ -1052,16 +1083,21 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                                 <option
                                   key={model.key}
                                   value={model.key}
-                                  disabled={!isCustomModelValue(modelPair.a) && model.key === modelPair.a}
+                                  disabled={!isAdHocModelValue(modelPair.a) && model.key === modelPair.a}
                                 >
                                   {model.displayName}
                                 </option>
                               ))}
                             </optgroup>
                           ))}
+                          <optgroup label="OpenRouter">
+                            <option value={OPENROUTER_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
+                              Other OpenRouter model
+                            </option>
+                          </optgroup>
                           <optgroup label="Custom">
-                            <option value={CUSTOM_MODEL_VALUE} disabled={isCustomModelValue(modelPair.a)}>
-                              Custom API model
+                            <option value={CUSTOM_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
+                              OpenAI-compatible model
                             </option>
                           </optgroup>
                         </select>
@@ -1071,20 +1107,24 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                   ) : null}
                 </div>
 
-                {usesCustomModel ? (
+                {usesAdHocModel ? (
                   <div className="mt-3 rounded-xl border border-border/70 bg-bg/35 p-3">
-                    <div className="text-xs font-medium text-muted">Custom API model</div>
+                    <div className="text-xs font-medium text-muted">
+                      {usesOpenRouterModel ? "OpenRouter model" : "OpenAI-compatible model"}
+                    </div>
                     <div className="mt-3 grid grid-cols-1 gap-3">
-                      <label className="flex flex-col gap-1">
-                        <div className="text-xs font-medium text-muted">Display name</div>
-                        <input
-                          className="mb-field h-10 w-full"
-                          value={customModel.displayName}
-                          onChange={(e) => updateCustomModel({ displayName: e.target.value })}
-                          disabled={running}
-                          placeholder="My custom model"
-                        />
-                      </label>
+                      {usesOpenAiCompatibleModel ? (
+                        <label className="flex flex-col gap-1">
+                          <div className="text-xs font-medium text-muted">Display name</div>
+                          <input
+                            className="mb-field h-10 w-full"
+                            value={customModel.displayName}
+                            onChange={(e) => updateCustomModel({ displayName: e.target.value })}
+                            disabled={running}
+                            placeholder="My model"
+                          />
+                        </label>
+                      ) : null}
                       <label className="flex flex-col gap-1">
                         <div className="text-xs font-medium text-muted">Model ID</div>
                         <input
@@ -1092,19 +1132,21 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                           value={customModel.modelId}
                           onChange={(e) => updateCustomModel({ modelId: e.target.value })}
                           disabled={running}
-                          placeholder="aws/anthropic/bedrock-claude-fable-5"
+                          placeholder={usesOpenRouterModel ? "stealth/ox-alpha" : undefined}
                         />
                       </label>
-                      <label className="flex flex-col gap-1">
-                        <div className="text-xs font-medium text-muted">API server URL</div>
-                        <input
-                          className="mb-field h-10 w-full"
-                          value={customModel.baseUrl}
-                          onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
-                          disabled={running}
-                          placeholder={DEFAULT_CUSTOM_API_URL}
-                        />
-                      </label>
+                      {usesOpenAiCompatibleModel ? (
+                        <label className="flex flex-col gap-1">
+                          <div className="text-xs font-medium text-muted">Chat completions URL</div>
+                          <input
+                            className="mb-field h-10 w-full"
+                            value={customModel.baseUrl}
+                            onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
+                            disabled={running}
+                            type="url"
+                          />
+                        </label>
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
@@ -1162,24 +1204,28 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 />
               </label>
 
+              {usesOpenAiCompatibleModel ? (
+                <label className="flex flex-col gap-1 md:col-span-2">
+                  <div className="text-xs font-medium text-muted">OpenAI-compatible API key</div>
+                  <input
+                    className="mb-field h-10 w-full"
+                    type={showKeys ? "text" : "password"}
+                    value={providerKeys.custom ?? ""}
+                    onChange={(e) =>
+                      setProviderKeys((prev) => ({ ...prev, custom: e.target.value }))
+                    }
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="Paste the key for this server"
+                  />
+                </label>
+              ) : null}
+
               <details className="md:col-span-2 rounded-xl border border-border/70 bg-bg/35 px-3 py-2">
                 <summary className="cursor-pointer select-none text-xs font-medium text-muted">
                   Use a provider-specific key instead (optional)
                 </summary>
                 <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Custom API key</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.custom ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, custom: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste the key for your custom API server"
-                    />
-                  </label>
-
                   <label className="flex flex-col gap-1">
                     <div className="text-xs font-medium text-muted">OpenAI</div>
                     <input

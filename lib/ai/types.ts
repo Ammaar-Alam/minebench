@@ -56,6 +56,13 @@ export type GenerateModelRequest =
       displayName: string;
       modelId: string;
       baseUrl: string;
+    }
+  | {
+      id: string;
+      kind: "custom";
+      provider: "openrouter";
+      displayName: string;
+      modelId: string;
     };
 
 export type GenerateRequest = {
