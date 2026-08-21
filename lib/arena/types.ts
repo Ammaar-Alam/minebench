@@ -2,6 +2,7 @@ import type { VoxelBlock } from "@/lib/voxel/types";
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 export type VoteChoice = "A" | "B" | "TIE" | "BOTH_BAD";
+export type ArenaAction = VoteChoice | "SKIP";
 
 export type ArenaModelReveal = {
   provider: string;
