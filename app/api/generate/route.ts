@@ -37,6 +37,13 @@ const modelRequestSchema = z.union([
     modelId: z.string().trim().min(1).max(240),
     baseUrl: z.string().trim().url().max(4000),
   }),
+  z.object({
+    id: z.string().trim().min(1).max(200),
+    kind: z.literal("custom"),
+    provider: z.literal("openrouter"),
+    displayName: z.string().trim().min(1).max(120),
+    modelId: z.string().trim().min(1).max(240),
+  }),
 ]);
 
 const reqSchema = z.object({
@@ -103,7 +110,7 @@ export async function POST(req: Request) {
   }
 
   for (const model of models) {
-    if (model.kind !== "custom") continue;
+    if (model.kind !== "custom" || model.provider !== "custom") continue;
     try {
       await assertSafeCustomApiUrl(model.baseUrl);
     } catch (error) {
@@ -201,13 +208,23 @@ export async function POST(req: Request) {
                 onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
               }
             : {
-                model: {
-                  key: model.id,
-                  provider: "custom",
-                  modelId: model.modelId,
-                  displayName: model.displayName,
-                  baseUrl: model.baseUrl,
-                },
+                model:
+                  model.provider === "openrouter"
+                    ? {
+                        key: model.id,
+                        provider: "custom",
+                        modelId: model.modelId,
+                        displayName: model.displayName,
+                        openRouterModelId: model.modelId,
+                        forceOpenRouter: true,
+                      }
+                    : {
+                        key: model.id,
+                        provider: "custom",
+                        modelId: model.modelId,
+                        displayName: model.displayName,
+                        baseUrl: model.baseUrl,
+                      },
                 prompt: body.prompt,
                 gridSize: body.gridSize,
                 palette: body.palette,

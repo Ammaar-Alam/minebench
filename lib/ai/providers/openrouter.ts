@@ -186,6 +186,7 @@ export async function openrouterGenerateText(params: {
   reasoningMaxTokens?: number;
   temperature?: number;
   jsonSchema?: Record<string, unknown>;
+  requireParameterSupport?: boolean;
   reasoningEffortAttempts?: string[];
   requireReasoning?: boolean;
   signal?: AbortSignal;
@@ -273,7 +274,7 @@ export async function openrouterGenerateText(params: {
                   { role: "system", content: params.system },
                   { role: "user", content: params.user },
                 ],
-                ...(params.jsonSchema
+                ...(params.jsonSchema && params.requireParameterSupport !== false
                   ? {
                       provider: {
                         require_parameters: true,
