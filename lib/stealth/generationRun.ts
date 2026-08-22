@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type StealthGenerationResultStatus } from "@prisma/client";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { BENCHMARK_PROMPT_COHORT_ID } from "@/lib/benchmark/prompts";
 import { prisma } from "@/lib/prisma";
@@ -49,6 +49,29 @@ async function lockGenerationRun(
     FOR UPDATE
   `);
   return rows[0] ?? null;
+}
+
+function summarizeGenerationResults(
+  results: ReadonlyArray<{
+    status: StealthGenerationResultStatus;
+    attempts: number;
+    error: string | null;
+  }>,
+) {
+  let lastError: string | null = null;
+  for (const result of results) {
+    if (result.error) lastError = result.error;
+  }
+  return {
+    completedBuildCount: results.filter((result) => result.status === "READY").length,
+    failedBuildCount: results.filter((result) => result.status === "FAILED").length,
+    providerCallCount: results.reduce((sum, result) => sum + result.attempts, 0),
+    retryCount: results.reduce((sum, result) => sum + Math.max(0, result.attempts - 1), 0),
+    activePromptCount: results.filter(
+      (result) => result.status === "GENERATING" || result.status === "VALIDATING",
+    ).length,
+    lastError,
+  };
 }
 
 async function countCompletedBuilds(
@@ -237,20 +260,18 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
     });
     const results = await tx.stealthGenerationResult.findMany({
       where: { runId: run.id },
+      orderBy: { updatedAt: "asc" },
       select: { status: true, attempts: true, error: true },
     });
-    const completedBuildCount = results.filter((result) => result.status === "READY").length;
-    const failedBuildCount = results.filter((result) => result.status === "FAILED").length;
-    const providerCallCount = results.reduce((sum, result) => sum + result.attempts, 0);
-    const retryCount = results.reduce((sum, result) => sum + Math.max(0, result.attempts - 1), 0);
+    const progress = summarizeGenerationResults(results);
     await tx.stealthGenerationRun.update({
       where: { id: run.id },
       data: {
-        status: completedBuildCount > 0 ? "PARTIAL" : "FAILED",
-        completedBuildCount,
-        failedBuildCount,
-        providerCallCount,
-        retryCount,
+        status: progress.completedBuildCount > 0 ? "PARTIAL" : "FAILED",
+        completedBuildCount: progress.completedBuildCount,
+        failedBuildCount: progress.failedBuildCount,
+        providerCallCount: progress.providerCallCount,
+        retryCount: progress.retryCount,
         error: message,
         completedAt: new Date(),
       },
@@ -259,9 +280,9 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
       await tx.stealthVariant.update({
         where: { id: run.variantId },
         data: {
-          status: completedBuildCount > 0 ? "GENERATING" : "DRAFT",
-          generatedBuildCount: completedBuildCount,
-          generationFailureCount: failedBuildCount,
+          status: progress.completedBuildCount > 0 ? "GENERATING" : "DRAFT",
+          generatedBuildCount: progress.completedBuildCount,
+          generationFailureCount: progress.failedBuildCount,
           lastGenerationError: message,
         },
       });
@@ -465,28 +486,29 @@ async function refreshStealthGenerationProgress(runId: string): Promise<void> {
       orderBy: { updatedAt: "asc" },
       select: { status: true, attempts: true, error: true },
     });
-    const completedBuildCount = results.filter((result) => result.status === "READY").length;
-    const failedBuildCount = results.filter((result) => result.status === "FAILED").length;
-    const providerCallCount = results.reduce((sum, result) => sum + result.attempts, 0);
-    const retryCount = results.reduce((sum, result) => sum + Math.max(0, result.attempts - 1), 0);
-    const lastError = [...results].reverse().find((result) => result.error)?.error ?? null;
+    const progress = summarizeGenerationResults(results);
     await tx.stealthGenerationRun.update({
       where: { id: run.id },
-      data: { completedBuildCount, failedBuildCount, providerCallCount, retryCount, error: lastError },
+      data: {
+        completedBuildCount: progress.completedBuildCount,
+        failedBuildCount: progress.failedBuildCount,
+        providerCallCount: progress.providerCallCount,
+        retryCount: progress.retryCount,
+        error: progress.lastError,
+      },
     });
     await tx.stealthVariant.update({
       where: { id: run.variantId },
       data: {
-        generatedBuildCount: completedBuildCount,
-        generationFailureCount: failedBuildCount,
-        lastGenerationError: lastError,
+        generatedBuildCount: progress.completedBuildCount,
+        generationFailureCount: progress.failedBuildCount,
+        lastGenerationError: progress.lastError,
       },
     });
   });
 }
 
 export async function finishStealthGenerationRun(runId: string): Promise<void> {
-  await refreshStealthGenerationProgress(runId);
   await prisma.$transaction(async (tx) => {
     const locked = await lockGenerationRun(tx, runId);
     if (!locked) return;
@@ -495,15 +517,41 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       include: { variant: { include: { experiment: true } } },
     });
     if (!run || run.status !== "RUNNING") return;
-    const complete = run.completedBuildCount === run.expectedBuildCount && run.failedBuildCount === 0;
+    const results = await tx.stealthGenerationResult.findMany({
+      where: { runId: run.id },
+      orderBy: { updatedAt: "asc" },
+      select: { status: true, attempts: true, error: true },
+    });
+    const progress = summarizeGenerationResults(results);
+    const runProgress = {
+      completedBuildCount: progress.completedBuildCount,
+      failedBuildCount: progress.failedBuildCount,
+      providerCallCount: progress.providerCallCount,
+      retryCount: progress.retryCount,
+      error: progress.lastError,
+    };
+    const variantProgress = {
+      generatedBuildCount: progress.completedBuildCount,
+      generationFailureCount: progress.failedBuildCount,
+      lastGenerationError: progress.lastError,
+    };
+    if (progress.activePromptCount > 0) {
+      await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
+      await tx.stealthVariant.update({ where: { id: run.variantId }, data: variantProgress });
+      return;
+    }
+    const complete =
+      progress.completedBuildCount === run.expectedBuildCount && progress.failedBuildCount === 0;
     await tx.stealthGenerationRun.update({
       where: { id: run.id },
       data: {
-        status: complete ? "SUCCEEDED" : run.completedBuildCount > 0 ? "PARTIAL" : "FAILED",
+        ...runProgress,
+        status: complete ? "SUCCEEDED" : progress.completedBuildCount > 0 ? "PARTIAL" : "FAILED",
         completedAt: new Date(),
       },
     });
     if (run.variant.experiment.status === "CLOSED") {
+      await tx.stealthVariant.update({ where: { id: run.variantId }, data: variantProgress });
       if (complete) {
         await tx.stealthEndpointCredential.deleteMany({ where: { variantId: run.variantId } });
       }
@@ -512,6 +560,7 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
     await tx.stealthVariant.update({
       where: { id: run.variantId },
       data: {
+        ...variantProgress,
         status: complete ? "READY" : "GENERATING",
         endpointEnabled: !complete,
         cohortGeneratedAt: complete ? new Date() : null,

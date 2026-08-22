@@ -471,6 +471,13 @@ async function main() {
     await firstRequestStarted;
     await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: firstPrompt });
     assert.equal(generationRequestCount, 1, "an in-flight prompt must not call the provider twice");
+    await finishStealthGenerationRun(retryRun.runId);
+    assert.equal(
+      (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: retryRun.runId } }))
+        .status,
+      "RUNNING",
+      "duplicate finalization must not terminate active prompt work",
+    );
     releaseFirstRequest();
     await firstGeneration;
     await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: firstPrompt });
