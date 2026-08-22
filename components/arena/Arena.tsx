@@ -2877,7 +2877,7 @@ export function Arena() {
               className={`[grid-area:1/1] transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "opacity-100 translate-y-0" : "pointer-events-none opacity-0 -translate-y-1"}`}
             >
               <div className="flex h-full flex-col justify-center gap-3 border-t border-border/70 px-1 py-2 sm:py-3">
-                <div key={matchup?.id} className="flex items-baseline gap-3 sm:gap-5">
+                <div key={matchup?.id} className="grid grid-cols-2 gap-2 sm:gap-3">
                   <RevealLane
                     side="A"
                     model={matchup?.a.model}
@@ -2891,11 +2891,6 @@ export function Arena() {
                     faded={revealAction === "A"}
                     delayed
                   />
-                  {revealVerdict ? (
-                    <span className="mb-reveal-lane mb-reveal-lane-delay hidden shrink-0 font-mono text-[11px] uppercase tracking-[0.18em] text-muted2 md:inline">
-                      {revealVerdict}
-                    </span>
-                  ) : null}
                 </div>
 
                 <div className="flex items-center gap-3">
@@ -2908,6 +2903,12 @@ export function Arena() {
                       <div className="mb-progress-wait absolute inset-0" />
                     ) : null}
                   </div>
+
+                  {revealVerdict ? (
+                    <span className="shrink-0 font-mono text-[11px] uppercase tracking-[0.18em] text-muted2">
+                      {revealVerdict}
+                    </span>
+                  ) : null}
 
                   <button
                     type="button"
