@@ -12,6 +12,7 @@ async function main() {
   process.env.STEALTH_CONFIG_ENCRYPTION_KEY = Buffer.alloc(32, 7).toString("base64");
 
   const {
+    acceptExactEmailInvitations,
     activateStealthEvaluation,
     closeStealthEvaluation,
     completeUploadedStealthCohort,
@@ -20,6 +21,7 @@ async function main() {
     deleteUnusedDraftEvaluation,
     disableStealthEndpoint,
     getStealthEvaluationWorkspace,
+    inviteOrganizationMember,
     pauseStealthEvaluation,
     prepareStealthCohortPrompts,
     purgeStealthEvaluationIfDue,
@@ -30,8 +32,8 @@ async function main() {
   } = await import("../../../lib/stealth/service");
 
   const suffix = randomUUID().slice(0, 8);
-  const [admin, member, outsider] = await Promise.all(
-    ["admin", "member", "outsider"].map((name) =>
+  const [admin, member, outsider, invitee] = await Promise.all(
+    ["admin", "member", "outsider", "invitee"].map((name) =>
       prisma.user.create({
         data: {
           id: randomUUID(),
@@ -65,6 +67,44 @@ async function main() {
   const memberActor = { organizationUser: { userId: member.id } } as const;
   const outsiderActor = { organizationUser: { userId: outsider.id } } as const;
   const minebenchAdmin = { minebenchAdmin: true } as const;
+
+  await assert.rejects(
+    inviteOrganizationMember(memberActor, organization.id, {
+      email: invitee.email,
+      role: "MEMBER",
+    }),
+    /Admin access is required/,
+  );
+  await inviteOrganizationMember(adminActor, organization.id, {
+    email: invitee.email,
+    role: "MEMBER",
+  });
+  assert.equal(
+    await prisma.organizationMembership.count({
+      where: { organizationId: organization.id, userId: invitee.id },
+    }),
+    0,
+    "an invitation must not grant membership before acceptance",
+  );
+  await updateOrganizationMember(adminActor, organization.id, {
+    email: invitee.email,
+    role: "ADMIN",
+  });
+  await acceptExactEmailInvitations({ id: invitee.id, email: invitee.email });
+  assert.equal(
+    (
+      await prisma.organizationMembership.findUniqueOrThrow({
+        where: {
+          organizationId_userId: { organizationId: organization.id, userId: invitee.id },
+        },
+      })
+    ).role,
+    "ADMIN",
+  );
+  await updateOrganizationMember(adminActor, organization.id, {
+    email: invitee.email,
+    role: "MEMBER",
+  });
 
   const evaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Checkpoint service ${suffix}`,
@@ -160,12 +200,46 @@ async function main() {
   assert.equal(uploadedVariant.source, "UPLOAD");
   assert.equal(uploadedVariant.generatedBuildCount, prompts.length);
   assert.equal(uploadedVariant.status, "READY");
+  await completeUploadedStealthCohort(
+    memberActor,
+    organization.id,
+    uploadedEvaluation.id,
+    {
+      codename: "Uploaded Two",
+      builds: prompts.map((prompt) => ({
+        promptSlug: prompt.slug,
+        build: {
+          version: "1.0",
+          blocks: [{ x: 1, y: 0, z: 0, type: "stone" }],
+        },
+      })),
+    },
+  );
+  assert.equal(
+    await prisma.stealthVariant.count({ where: { experimentId: uploadedEvaluation.id } }),
+    2,
+    "checkpoint membership stays open until activation",
+  );
   await activateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id);
   const active = await prisma.stealthExperiment.findUniqueOrThrow({
     where: { id: uploadedEvaluation.id },
   });
   assert.equal(active.status, "ACTIVE");
   assert.ok(active.checkpointSetFrozenAt);
+  await assert.rejects(
+    configureStealthEndpoint(memberActor, organization.id, uploadedEvaluation.id, {
+      codename: "Too Late",
+      config: {
+        protocol: "openai-compatible",
+        endpointUrl: "https://checkpoint.example.test/v1",
+        apiKey: "test-secret-key",
+        modelId: "checkpoint-late",
+        requireStructuredOutput: true,
+        enableTools: true,
+      },
+    }),
+    /cannot accept new checkpoints/,
+  );
   await assert.rejects(
     updateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id, {
       name: "Changed after activation",

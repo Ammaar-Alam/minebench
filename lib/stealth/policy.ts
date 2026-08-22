@@ -1,7 +1,7 @@
 import type { OrganizationRole, StealthExperimentStatus } from "@prisma/client";
 
 const MAX_STEALTH_ARENA_SHARE = 1;
-const DEFAULT_STEALTH_ARENA_SHARE = 0.25;
+const DEFAULT_STEALTH_ARENA_SHARE = 0;
 
 export const ACTIVE_STEALTH_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = [
   "ACTIVE",

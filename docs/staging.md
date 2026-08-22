@@ -17,10 +17,8 @@ Nothing is tested against production directly.
 The alpha Supabase branch has its own Postgres, storage, and service-role key.
 Point the branch-scoped Vercel variables (`DATABASE_URL`, `DIRECT_URL`,
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`,
-`ADMIN_TOKEN`, `NEXT_PUBLIC_SUPABASE_URL`,
-`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, and
-`STEALTH_CONFIG_ENCRYPTION_KEY`) at it; the app needs no code awareness of
-which environment it is in. Vercel crons only fire on production deployments, which is fine — the
+`ADMIN_TOKEN`) at it; the app needs no code awareness of which environment it
+is in. Vercel crons only fire on production deployments, which is fine — the
 drains also run inline from request `after()` hooks.
 
 Local credentials for the tooling live in `.env.staging.local` (git-ignored):
@@ -31,10 +29,6 @@ STAGING_DATABASE_URL=          # alpha branch pooled connection (what the deploy
 STAGING_SITE_URL=              # alpha deployment URL, required by every staging: command
 STAGING_SUPABASE_URL=
 STAGING_SUPABASE_SERVICE_ROLE_KEY=
-STAGING_SUPABASE_PUBLISHABLE_KEY=       # required for private evaluation sign-in
-STAGING_STEALTH_CONFIG_ENCRYPTION_KEY=  # required for private endpoint configuration
-# STAGING_SUPABASE_SECRET_KEY= (defaults to the staging service-role key)
-# STAGING_STEALTH_ARENA_SHARE= (defaults to the app's 0.25 share)
 # STAGING_ADMIN_TOKEN= (only when alpha uses its own branch-scoped ADMIN_TOKEN)
 # STAGING_SUPABASE_STORAGE_BUCKET= (defaults to SUPABASE_STORAGE_BUCKET)
 ```
@@ -107,15 +101,6 @@ Any command can be pointed at alpha the same way:
 pnpm staging:run tsx scripts/audit-arena-artifacts.ts --deep --limit 25
 pnpm staging:prisma:migrate
 ```
-
-Private checkpoint onboarding and acceptance also run through this wrapper:
-
-```bash
-pnpm staging:run pnpm stealth:eval help
-```
-
-Use alpha-only lab endpoint and encryption credentials. The complete acceptance
-gate is documented in [Private Checkpoint Evaluations](./private-evaluations.md#alpha-acceptance-gate).
 
 ## Promotion
 

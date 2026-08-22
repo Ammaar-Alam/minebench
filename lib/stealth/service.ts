@@ -18,10 +18,7 @@ import {
 import { getPalette } from "@/lib/blocks/palettes";
 import { prisma } from "@/lib/prisma";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import {
-  getBuildStorageBucketFromEnv,
-  getSupabaseStorageConfig,
-} from "@/lib/storage/buildPayload";
+import { getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
 import {
   decryptStealthEndpointConfig,
   encryptStealthEndpointConfig,
@@ -224,16 +221,12 @@ const MAX_RETENTION_DAYS = 3650;
 const MAX_GENERATION_ATTEMPTS = 10;
 const MAX_GENERATION_CONCURRENCY = 4;
 const STORAGE_DELETE_BATCH_SIZE = 100;
-const CONFIGURABLE_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = ["DRAFT"];
+const CONFIGURABLE_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = [
+  "DRAFT",
+  "GENERATING",
+  "READY",
+];
 const CONFIGURABLE_VARIANT_STATUSES: readonly StealthVariantStatus[] = ["DRAFT", "GENERATING"];
-
-export function canManageOrganizationMembers(role: OrganizationRole | "MINEBENCH_ADMIN"): boolean {
-  return role === "ADMIN" || role === "MINEBENCH_ADMIN";
-}
-
-export function canOperateEvaluation(role: OrganizationRole | "MINEBENCH_ADMIN"): boolean {
-  return role === "ADMIN" || role === "MEMBER" || role === "MINEBENCH_ADMIN";
-}
 
 function isMineBenchAdmin(actor: StealthActor): actor is { minebenchAdmin: true } {
   return "minebenchAdmin" in actor && actor.minebenchAdmin === true;
@@ -549,9 +542,10 @@ async function syncExperimentReadiness(
       variant.expectedBuildCount > 0 &&
       variant.generatedBuildCount === variant.expectedBuildCount,
   );
+  const generating = variants.some((variant) => variant.status === "GENERATING");
   await db.stealthExperiment.update({
     where: { id: experimentId },
-    data: { status: allReady ? "READY" : "GENERATING" },
+    data: { status: allReady ? "READY" : generating ? "GENERATING" : "DRAFT" },
   });
 }
 
@@ -659,18 +653,6 @@ export async function provisionStealthOrganization(
         authUserId: user?.id,
       },
     });
-    if (user) {
-      await tx.organizationMembership.upsert({
-        where: {
-          organizationId_userId: {
-            organizationId: organization.id,
-            userId: user.id,
-          },
-        },
-        create: { organizationId: organization.id, userId: user.id, role: "ADMIN" },
-        update: { role: "ADMIN" },
-      });
-    }
     return organization;
   });
 }
@@ -773,13 +755,6 @@ export async function inviteOrganizationMember(
         acceptedById: null,
       },
     });
-    if (user) {
-      await tx.organizationMembership.upsert({
-        where: { organizationId_userId: { organizationId, userId: user.id } },
-        create: { organizationId, userId: user.id, role },
-        update: { role },
-      });
-    }
   });
 }
 
@@ -796,7 +771,7 @@ export async function updateOrganizationMember(
     if (user && role !== "ADMIN") {
       await assertNotLastAdmin(tx, organizationId, user.id);
     }
-    await tx.organizationInvitation.updateMany({
+    const invitations = await tx.organizationInvitation.updateMany({
       where: { organizationId, email, revokedAt: null },
       data: { role },
     });
@@ -805,7 +780,9 @@ export async function updateOrganizationMember(
         where: { organizationId, userId: user.id },
         data: { role },
       });
-      if (updated.count === 0) throw new Error("Member not found");
+      if (updated.count === 0 && invitations.count === 0) throw new Error("Member not found");
+    } else if (invitations.count === 0) {
+      throw new Error("Member not found");
     }
   });
 }
@@ -1130,6 +1107,7 @@ export async function configureStealthEndpoint(
         create: { variantId: existing.id, ...encrypted },
         update: encrypted,
       });
+      await syncExperimentReadiness(tx, experiment.id);
       return { variantId: existing.id };
     }
 
@@ -1158,6 +1136,7 @@ export async function configureStealthEndpoint(
         credential: { create: encrypted },
       },
     });
+    await syncExperimentReadiness(tx, experiment.id);
     return { variantId };
   });
 }
@@ -1233,6 +1212,7 @@ export async function completeUploadedStealthCohort(
         data: { displayName: codename, enabled: false },
       });
       await tx.stealthEndpointCredential.deleteMany({ where: { variantId: existing.id } });
+      await syncExperimentReadiness(tx, experiment.id);
       return { variantId: existing.id, modelId: existing.modelId };
     }
 
@@ -1259,6 +1239,7 @@ export async function completeUploadedStealthCohort(
         expectedBuildCount: prompts.length,
       },
     });
+    await syncExperimentReadiness(tx, experiment.id);
     return { variantId, modelId };
   });
 
@@ -1371,7 +1352,7 @@ export async function createStealthGenerationRun(
       throw new Error("Checkpoint not found");
     }
     if (experiment.status === "CLOSED") throw new Error("Closed evaluations are read-only");
-    if (experiment.status !== "DRAFT" && experiment.status !== "GENERATING") {
+    if (!CONFIGURABLE_EXPERIMENT_STATUSES.includes(experiment.status)) {
       throw new Error("Only draft evaluations can generate builds");
     }
     const withCredential = await tx.stealthVariant.findUnique({
@@ -1736,27 +1717,6 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
   });
 }
 
-export async function freezeStealthEvaluation(
-  actor: StealthActor,
-  organizationId: string,
-  experimentId: string,
-): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    await assertEvaluationOperator(tx, actor, organizationId);
-    const experiment = await lockExperiment(tx, experimentId);
-    if (!experiment || experiment.organizationId !== organizationId) {
-      throw new Error("Evaluation not found");
-    }
-    if (experiment.status !== "READY") throw new Error("Evaluation is not ready");
-    if (!experiment.checkpointSetFrozenAt) {
-      await tx.stealthExperiment.update({
-        where: { id: experiment.id },
-        data: { checkpointSetFrozenAt: new Date() },
-      });
-    }
-  });
-}
-
 export async function activateStealthEvaluation(
   actor: StealthActor,
   organizationId: string,
@@ -2019,27 +1979,6 @@ export async function getProtectedStealthBuild(
   };
 }
 
-export async function lookupProtectedPublicBuildForStealthRelease(
-  actor: StealthActor,
-  organizationId: string,
-  params: { variantId: string; publicModelKey: string },
-): Promise<{ modelId: string; modelKey: string; displayName: string } | null> {
-  await assertEvaluationOperator(prisma, actor, organizationId);
-  const variant = await prisma.stealthVariant.findFirst({
-    where: { id: params.variantId, experiment: { organizationId } },
-    select: { id: true },
-  });
-  if (!variant) throw new Error("Checkpoint not found");
-  const model = await prisma.model.findFirst({
-    where: {
-      key: params.publicModelKey,
-      stealthVariant: null,
-    },
-    select: { id: true, key: true, displayName: true },
-  });
-  return model ? { modelId: model.id, modelKey: model.key, displayName: model.displayName } : null;
-}
-
 export async function recordStealthReleaseMapping(
   actor: StealthActor,
   organizationId: string,
@@ -2270,12 +2209,4 @@ export async function purgeStealthEvaluationIfDue(
   });
   invalidateStealthSamplingCache();
   return true;
-}
-
-export function defaultStealthRetentionDays(): number {
-  return DEFAULT_RETENTION_DAYS;
-}
-
-export function defaultStealthBuildStorageBucket(): string {
-  return getBuildStorageBucketFromEnv();
 }

@@ -10,11 +10,11 @@ import {
 } from "../../../lib/stealth/policy";
 import { serializeDeidentifiedStealthVotes } from "../../../lib/stealth/report";
 
-assert.equal(readStealthArenaShare(undefined), 0.25);
+assert.equal(readStealthArenaShare(undefined), 0);
 assert.equal(readStealthArenaShare("0.5"), 0.5);
 assert.equal(readStealthArenaShare("3"), 1);
 assert.equal(readStealthArenaShare("-2"), 0);
-assert.equal(readStealthArenaShare("invalid"), 0.25);
+assert.equal(readStealthArenaShare("invalid"), 0);
 assert.equal(normalizeStealthSlug("  Frontier Lab / Run 7  "), "frontier-lab-run-7");
 
 assert.deepEqual(ACTIVE_STEALTH_EXPERIMENT_STATUSES, ["ACTIVE"]);

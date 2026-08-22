@@ -103,12 +103,6 @@ function arenaBuildAccessEncryptionKey(): Buffer {
     .digest();
 }
 
-function tokenMaxAgeMs(): number {
-  const parsed = Number.parseInt(process.env.ARENA_MATCHUP_TOKEN_MAX_AGE_MS ?? "", 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_TOKEN_MAX_AGE_MS;
-  return Math.min(parsed, 24 * 60 * 60 * 1000);
-}
-
 function encodeBase64Url(value: string): string {
   return Buffer.from(value, "utf8").toString("base64url");
 }
@@ -155,7 +149,7 @@ function fromCompactPayload(input: CompactArenaMatchupTokenPayload): ArenaMatchu
     typeof input.t !== "number" ||
     !Number.isInteger(input.t) ||
     input.t > Date.now() + TOKEN_FUTURE_SKEW_MS ||
-    Date.now() - input.t > tokenMaxAgeMs()
+    Date.now() - input.t > DEFAULT_TOKEN_MAX_AGE_MS
   ) {
     return null;
   }
@@ -230,7 +224,7 @@ export function parseArenaBuildAccessToken(token: string): ArenaBuildAccessToken
       typeof payload.t !== "number" ||
       !Number.isInteger(payload.t) ||
       payload.t > Date.now() + TOKEN_FUTURE_SKEW_MS ||
-      Date.now() - payload.t > tokenMaxAgeMs()
+      Date.now() - payload.t > DEFAULT_TOKEN_MAX_AGE_MS
     ) {
       return null;
     }

@@ -73,21 +73,6 @@ export async function getLabIdentity(): Promise<LabIdentity | null> {
     },
   });
 
-  if (user.memberships.length > 0) {
-    await prisma.organizationInvitation.updateMany({
-      where: {
-        authUserId: user.id,
-        acceptedAt: null,
-        revokedAt: null,
-        organizationId: { in: user.memberships.map(({ organization }) => organization.id) },
-      },
-      data: {
-        acceptedById: user.id,
-        acceptedAt: new Date(),
-      },
-    });
-  }
-
   return {
     user: {
       id: user.id,

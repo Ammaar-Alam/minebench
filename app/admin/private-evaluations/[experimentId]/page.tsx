@@ -12,6 +12,7 @@ import {
   getStealthOrganizationForAdmin,
 } from "@/lib/stealth/service";
 import {
+  activateAdminEvaluationAction,
   closeAdminEvaluationAction,
   disableAdminEndpointAction,
   pauseAdminEvaluationAction,
@@ -140,6 +141,9 @@ export default async function PrivateEvaluationAdminDetail({
       </section>
 
       <section className="flex flex-wrap gap-2 border-t border-border/70 pt-6">
+        {workspace.status === "READY" ? (
+          <form action={activateAdminEvaluationAction.bind(null, organizationId, experimentId)}><button className="mb-btn mb-btn-primary" type="submit">Activate</button></form>
+        ) : null}
         {workspace.status === "ACTIVE" ? (
           <form action={pauseAdminEvaluationAction.bind(null, organizationId, experimentId)}><button className="mb-btn mb-btn-ghost" type="submit">Pause</button></form>
         ) : null}

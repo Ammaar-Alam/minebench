@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { PrismaClient } from "@prisma/client";
 import { POST as vote } from "../../../app/api/arena/vote/route";
 import { createArenaMatchupToken } from "../../../lib/arena/matchupToken";
+import { drainArenaVoteJobs } from "../../../lib/arena/voteJobs";
 import {
   invalidateStealthSamplingCache,
   pickStealthMatchup,
@@ -121,6 +122,8 @@ async function main() {
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
     assert.equal(await db.vote.count(), 1);
     assert.equal(await db.arenaVoteJob.count({ where: { stealthVariantId: fixture.variant.id } }), 1);
+    const drain = await drainArenaVoteJobs({ maxJobs: 1, maxMs: 10_000 });
+    assert.equal(drain.processedCount, 1);
   } finally {
     if (originalSigningSecret === undefined) delete process.env.ARENA_MATCHUP_SIGNING_SECRET;
     else process.env.ARENA_MATCHUP_SIGNING_SECRET = originalSigningSecret;
@@ -128,7 +131,21 @@ async function main() {
     else process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE = originalDrainSetting;
   }
 
-  await db.stealthVariant.update({ where: { id: fixture.variant.id }, data: { winCount: 1 } });
+  const updatedPrivateVariant = await db.stealthVariant.findUniqueOrThrow({
+    where: { id: fixture.variant.id },
+  });
+  assert.equal(updatedPrivateVariant.winCount, 1);
+  assert.notEqual(updatedPrivateVariant.eloRating, fixture.variant.eloRating);
+  const unchangedPublicModel = await db.model.findUniqueOrThrow({ where: { id: fixture.publicModel.id } });
+  assert.equal(unchangedPublicModel.eloRating, 1550);
+  assert.equal(unchangedPublicModel.shownCount, 0);
+  assert.equal(unchangedPublicModel.winCount, 0);
+  assert.ok(
+    (await db.arenaVoteJob.findFirstOrThrow({
+      where: { stealthVariantId: fixture.variant.id },
+    })).processedAt,
+  );
+
   invalidateStealthSamplingCache();
   assert.equal(
     await pickStealthMatchup({ publicState: fixture.publicState }),
@@ -138,7 +155,15 @@ async function main() {
 
   await db.stealthExperiment.update({
     where: { id: fixture.experiment.id },
-    data: { pauseAtGoal: false },
+    data: { pauseAtGoal: false, status: "ACTIVE" },
+  });
+  await db.stealthVariant.update({
+    where: { id: fixture.variant.id },
+    data: { status: "ACTIVE" },
+  });
+  await db.model.update({
+    where: { id: fixture.privateModel.id },
+    data: { enabled: true },
   });
   invalidateStealthSamplingCache();
   assert.ok(
@@ -152,11 +177,6 @@ async function main() {
   });
   invalidateStealthSamplingCache();
   assert.equal(await pickStealthMatchup({ publicState: fixture.publicState }), null);
-
-  const unchangedPublicModel = await db.model.findUniqueOrThrow({ where: { id: fixture.publicModel.id } });
-  assert.equal(unchangedPublicModel.eloRating, 1550);
-  assert.equal(unchangedPublicModel.shownCount, 0);
-  assert.equal(unchangedPublicModel.winCount, 0);
 
   console.log("private evaluation PostgreSQL boundary checks passed");
 }

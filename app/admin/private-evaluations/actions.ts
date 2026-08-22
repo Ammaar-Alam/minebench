@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getLabIdentity } from "@/lib/stealth/auth";
 import {
+  activateStealthEvaluation,
   closeStealthEvaluation,
   createStealthEvaluation,
   disableStealthEndpoint,
@@ -16,6 +17,14 @@ async function requireMineBenchAdmin() {
   const identity = await getLabIdentity();
   if (!identity?.user.isMineBenchAdmin) throw new Error("MineBench admin access is required");
   return { minebenchAdmin: true } as const;
+}
+
+export async function activateAdminEvaluationAction(
+  organizationId: string,
+  experimentId: string,
+) {
+  await activateStealthEvaluation(await requireMineBenchAdmin(), organizationId, experimentId);
+  await refresh(experimentId);
 }
 
 function text(formData: FormData, name: string): string {

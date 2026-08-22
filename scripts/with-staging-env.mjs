@@ -54,7 +54,7 @@ const stagingEnv = {
     staging.STAGING_SUPABASE_PUBLISHABLE_KEY?.trim() || "",
   STEALTH_CONFIG_ENCRYPTION_KEY:
     staging.STAGING_STEALTH_CONFIG_ENCRYPTION_KEY?.trim() || "",
-  STEALTH_ARENA_SHARE: staging.STAGING_STEALTH_ARENA_SHARE?.trim() || "0.25",
+  STEALTH_ARENA_SHARE: staging.STAGING_STEALTH_ARENA_SHARE?.trim() || "0",
   SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || sourceBucket,
   MINEBENCH_SITE_URL: required("STAGING_SITE_URL"),
   // the alpha deployment may carry its own branch-scoped ADMIN_TOKEN; without
