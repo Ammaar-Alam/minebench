@@ -19,7 +19,10 @@ export default async function EvaluationLayout({
   const { orgSlug, experimentId } = await params;
   const { workspace } = await loadEvaluationWorkspace(orgSlug, experimentId);
   const basePath = `/lab/${orgSlug}/experiments/${experimentId}`;
-  const checkpoints = workspace.checkpoints.filter((checkpoint) => checkpoint.status !== "WITHDRAWN");
+  const checkpoints =
+    workspace.status === "CLOSED"
+      ? workspace.checkpoints
+      : workspace.checkpoints.filter((checkpoint) => checkpoint.status !== "WITHDRAWN");
   const buildCount = checkpoints.reduce((total, checkpoint) => total + checkpoint.generatedBuildCount, 0);
   const expectedBuildCount = checkpoints.reduce(
     (total, checkpoint) => total + checkpoint.expectedBuildCount,

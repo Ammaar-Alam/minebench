@@ -198,11 +198,12 @@ export async function middleware(req: NextRequest) {
   if (canonicalRedirect) return canonicalRedirect;
 
   const { pathname } = req.nextUrl;
-  if (
+  const isLabApi = pathname.startsWith("/api/lab/");
+  const refreshesSupabase =
     pathname.startsWith("/lab") ||
-    pathname.startsWith("/api/lab/") ||
-    pathname.startsWith("/admin/private-evaluations")
-  ) {
+    isLabApi ||
+    pathname.startsWith("/admin/private-evaluations");
+  if (refreshesSupabase && !isLabApi) {
     const { refreshSupabaseSession } = await import("@/lib/supabase/middleware");
     return refreshSupabaseSession(req);
   }
@@ -293,7 +294,9 @@ export async function middleware(req: NextRequest) {
     return rateLimitedResponse(rateLimit.retryAfterSeconds);
   }
 
-  const response = NextResponse.next();
+  const response = isLabApi
+    ? await (await import("@/lib/supabase/middleware")).refreshSupabaseSession(req)
+    : NextResponse.next();
   const rateLimitSession = arenaSession ?? modelSession;
   if (rateLimitSession?.cookieValue) {
     response.cookies.set(RATE_LIMIT_SESSION_COOKIE, rateLimitSession.cookieValue, {

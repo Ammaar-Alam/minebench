@@ -7,6 +7,7 @@ import {
   invalidateStealthSamplingCache,
   pickStealthMatchup,
 } from "../../../lib/stealth/sampling";
+import { getDeidentifiedStealthVotePage } from "../../../lib/stealth/report";
 import { seedPrivateSamplingFixture } from "../../helpers/privateEvaluationFixtures";
 
 const db = new PrismaClient();
@@ -20,6 +21,8 @@ const privateTables = [
   "StealthEndpointCredential",
   "StealthGenerationRun",
   "StealthGenerationResult",
+  "StealthCohortUpload",
+  "ArenaBuildArtifact",
 ];
 
 async function main() {
@@ -122,6 +125,17 @@ async function main() {
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
     assert.equal(await db.vote.count(), 1);
     assert.equal(await db.arenaVoteJob.count({ where: { stealthVariantId: fixture.variant.id } }), 1);
+    const firstExportPage = await getDeidentifiedStealthVotePage(fixture.experiment.id, null, 1);
+    assert.equal(firstExportPage.rows.length, 1);
+    assert.equal(firstExportPage.rows[0]?.choice, "WIN");
+    assert.ok(firstExportPage.nextCursor);
+    const secondExportPage = await getDeidentifiedStealthVotePage(
+      fixture.experiment.id,
+      firstExportPage.nextCursor,
+      1,
+    );
+    assert.deepEqual(secondExportPage.rows, []);
+    assert.equal(secondExportPage.nextCursor, null);
     const drain = await drainArenaVoteJobs({ maxJobs: 1, maxMs: 10_000 });
     assert.equal(drain.processedCount, 1);
   } finally {

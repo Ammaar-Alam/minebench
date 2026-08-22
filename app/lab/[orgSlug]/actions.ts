@@ -18,6 +18,7 @@ import {
   pauseStealthEvaluation,
   removeOrganizationMember,
   resumeStealthEvaluation,
+  sanitizeOperationalError,
   updateOrganizationMember,
   updateStealthEvaluation,
   type StealthActor,
@@ -157,15 +158,25 @@ export async function uploadCohortAction(
   orgSlug: string,
   experimentId: string,
   formData: FormData,
-) {
-  const context = await organizationContext(orgSlug);
-  await completeUploadedStealthCohortFromStorage(context.actor, context.organizationId, experimentId, {
-    variantId: text(formData, "variantId") || undefined,
-    codename: text(formData, "codename"),
-    bucket: text(formData, "cohortUploadBucket"),
-    path: text(formData, "cohortUploadPath"),
-  });
-  revalidateEvaluation(orgSlug, experimentId);
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const context = await organizationContext(orgSlug);
+    await completeUploadedStealthCohortFromStorage(
+      context.actor,
+      context.organizationId,
+      experimentId,
+      {
+        variantId: text(formData, "variantId") || undefined,
+        codename: text(formData, "codename"),
+        bucket: text(formData, "cohortUploadBucket"),
+        path: text(formData, "cohortUploadPath"),
+      },
+    );
+    revalidateEvaluation(orgSlug, experimentId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: sanitizeOperationalError(error) };
+  }
 }
 
 export async function startGenerationAction(

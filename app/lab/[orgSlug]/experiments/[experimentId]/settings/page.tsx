@@ -12,6 +12,21 @@ import {
 } from "../../../actions";
 import { loadEvaluationWorkspace } from "../data";
 
+function needsEndpointKey(checkpoint: {
+  source: string;
+  status: string;
+  credentialConfigured: boolean;
+  generatedBuildCount: number;
+  expectedBuildCount: number;
+}): boolean {
+  return (
+    checkpoint.source === "ENDPOINT" &&
+    !checkpoint.credentialConfigured &&
+    checkpoint.generatedBuildCount < checkpoint.expectedBuildCount &&
+    (checkpoint.status === "DRAFT" || checkpoint.status === "GENERATING")
+  );
+}
+
 export default async function EvaluationSettingsPage({
   params,
 }: {
@@ -136,7 +151,7 @@ export default async function EvaluationSettingsPage({
                 <div className="truncate text-sm font-medium text-fg">{checkpoint.codename}</div>
                 <div className="mt-1 text-xs text-muted">
                   {titleCase(checkpoint.source)}
-                  {!checkpoint.credentialConfigured ? " · Needs key" : ""}
+                  {needsEndpointKey(checkpoint) ? " · Needs key" : ""}
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-3">

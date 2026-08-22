@@ -76,6 +76,21 @@ async function main() {
   );
   assert.equal(sessionLimited.status, 429);
 
+  const labIp = "203.0.113.84";
+  for (let index = 0; index < 18; index += 1) {
+    const request = new NextRequest(
+      "http://localhost/api/lab/organizations/test/builds/private-build",
+      { headers: { "x-real-ip": labIp } },
+    );
+    assert.equal((await middleware(request)).status, 200);
+  }
+  const labLimited = await middleware(
+    new NextRequest("http://localhost/api/lab/organizations/test/builds/private-build", {
+      headers: { "x-real-ip": labIp },
+    }),
+  );
+  assert.equal(labLimited.status, 429);
+
   console.log("middleware rate-limit contract checks passed");
 }
 

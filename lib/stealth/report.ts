@@ -415,14 +415,35 @@ export type DeidentifiedStealthVote = {
 };
 
 type ExportRow = Omit<DeidentifiedStealthVote, "choice"> & {
+  voteId: string;
+  createdAt: Date;
   rawChoice: "A" | "B" | "TIE" | "BOTH_BAD";
 };
 
-export async function getDeidentifiedStealthVotes(
+export type DeidentifiedStealthVoteCursor = {
+  voteId: string;
+  createdAt: Date;
+};
+
+export async function getDeidentifiedStealthVotePage(
   experimentId: string,
-): Promise<DeidentifiedStealthVote[]> {
+  cursor: DeidentifiedStealthVoteCursor | null,
+  limit = 1_000,
+): Promise<{
+  rows: DeidentifiedStealthVote[];
+  nextCursor: DeidentifiedStealthVoteCursor | null;
+}> {
+  const pageSize = Math.max(1, Math.min(5_000, Math.floor(limit)));
+  const afterCursor = cursor
+    ? Prisma.sql`AND (
+        vote."createdAt" > ${cursor.createdAt}
+        OR (vote."createdAt" = ${cursor.createdAt} AND vote.id > ${cursor.voteId})
+      )`
+    : Prisma.empty;
   const rows = await prisma.$queryRaw<ExportRow[]>(Prisma.sql`
     SELECT
+      vote.id AS "voteId",
+      vote."createdAt" AS "createdAt",
       TO_CHAR(vote."createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
       variant.codename AS codename,
       prompt.text AS prompt,
@@ -438,9 +459,11 @@ export async function getDeidentifiedStealthVotes(
       ELSE matchup."modelAId"
     END
     WHERE variant."experimentId" = ${experimentId}
-    ORDER BY vote."createdAt" ASC
+    ${afterCursor}
+    ORDER BY vote."createdAt" ASC, vote.id ASC
+    LIMIT ${pageSize}
   `);
-  return rows.map((row) => ({
+  const mapped: DeidentifiedStealthVote[] = rows.map((row) => ({
     day: row.day,
     codename: row.codename,
     prompt: row.prompt,
@@ -455,6 +478,14 @@ export async function getDeidentifiedStealthVotes(
             ? "WIN"
             : "LOSS",
   }));
+  const last = rows.at(-1);
+  return {
+    rows: mapped,
+    nextCursor:
+      rows.length === pageSize && last
+        ? { voteId: last.voteId, createdAt: last.createdAt }
+        : null,
+  };
 }
 
 function csvCell(value: string): string {
@@ -464,8 +495,11 @@ function csvCell(value: string): string {
     : neutralized;
 }
 
-export function serializeDeidentifiedStealthVotes(rows: DeidentifiedStealthVote[]): string {
-  const lines = ["date,codename,prompt,opponent,variant_side,outcome"];
+export function serializeDeidentifiedStealthVotes(
+  rows: DeidentifiedStealthVote[],
+  includeHeader = true,
+): string {
+  const lines = includeHeader ? ["date,codename,prompt,opponent,variant_side,outcome"] : [];
   for (const row of rows) {
     lines.push(
       [row.day, row.codename, row.prompt, row.opponent, row.variantSide, row.choice]
@@ -473,5 +507,5 @@ export function serializeDeidentifiedStealthVotes(rows: DeidentifiedStealthVote[
         .join(","),
     );
   }
-  return `${lines.join("\n")}\n`;
+  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }

@@ -40,7 +40,7 @@ export function CohortUploadForm({
   action,
   signUrl,
 }: {
-  action: (formData: FormData) => Promise<void>;
+  action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
   signUrl: string;
 }) {
   const router = useRouter();
@@ -73,7 +73,12 @@ export function CohortUploadForm({
       formData.delete("cohortFile");
       formData.set("cohortUploadBucket", target.bucket);
       formData.set("cohortUploadPath", target.path);
-      await action(formData);
+      const result = await action(formData);
+      if (!result.ok) {
+        setError(result.error);
+        setProgress(0);
+        return;
+      }
       form.reset();
       setProgress(0);
       router.refresh();

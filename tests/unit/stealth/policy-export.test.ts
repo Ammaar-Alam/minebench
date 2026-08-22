@@ -46,6 +46,22 @@ assert.equal(
 );
 assert.equal(csv.includes("session"), false);
 assert.equal(csv.includes("matchup"), false);
+assert.equal(
+  serializeDeidentifiedStealthVotes(
+    [
+      {
+        day: "2026-08-21",
+        codename: "Orchid",
+        prompt: "Castle",
+        opponent: "Public Model",
+        variantSide: "B",
+        choice: "WIN",
+      },
+    ],
+    false,
+  ),
+  "2026-08-21,Orchid,Castle,Public Model,B,WIN\n",
+);
 
 const formulaCsv = serializeDeidentifiedStealthVotes([
   {
