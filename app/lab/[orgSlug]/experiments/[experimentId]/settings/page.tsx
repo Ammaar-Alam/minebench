@@ -1,5 +1,6 @@
 import { EvaluationStatus } from "@/components/lab/EvaluationStatus";
 import { formatDate, titleCase } from "@/components/lab/format";
+import { LabDisclosure } from "@/components/lab/LabDisclosure";
 import {
   closeEvaluationAction,
   configureEndpointAction,
@@ -31,22 +32,20 @@ export default async function EvaluationSettingsPage({
     );
 
   return (
-    <div className="space-y-10">
-      <section className="space-y-5" aria-labelledby="settings-heading">
-        <div className="border-b border-border/70 pb-3">
-          <h2 id="settings-heading" className="text-2xl font-semibold tracking-tight text-fg">
-            Settings
-          </h2>
-        </div>
+    <div className="space-y-12">
+      <section aria-labelledby="settings-heading">
+        <h2 id="settings-heading" className="text-2xl font-semibold tracking-tight text-fg">
+          Settings
+        </h2>
 
-        <dl className="divide-y divide-border/55 border-y border-border/70 text-sm">
-          <div className="grid gap-1 py-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
-            <dt className="text-muted">Name</dt>
-            <dd className="text-fg">{workspace.name}</dd>
+        <dl className="mt-5 grid gap-x-8 gap-y-5 text-sm sm:grid-cols-2 lg:grid-cols-5">
+          <div className="min-w-0">
+            <dt className="text-[10px] text-muted">Name</dt>
+            <dd className="mt-1 truncate text-fg">{workspace.name}</dd>
           </div>
-          <div className="grid gap-1 py-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
-            <dt className="text-muted">Vote goal</dt>
-            <dd className="text-fg">
+          <div>
+            <dt className="text-[10px] text-muted">Vote goal</dt>
+            <dd className="mt-1 text-fg">
               {workspace.targetDecisiveVotes
                 ? `${workspace.targetDecisiveVotes.toLocaleString()} per checkpoint${
                     workspace.pauseAtGoal ? " · Pause at goal" : ""
@@ -54,86 +53,90 @@ export default async function EvaluationSettingsPage({
                 : "No goal"}
             </dd>
           </div>
-          <div className="grid gap-1 py-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
-            <dt className="text-muted">Vote export</dt>
-            <dd className="text-fg">
+          <div>
+            <dt className="text-[10px] text-muted">Vote export</dt>
+            <dd className="mt-1 text-fg">
               {workspace.exportPolicy === "DEIDENTIFIED_VOTES" ? "Deidentified votes" : "Aggregates only"}
             </dd>
           </div>
-          <div className="grid gap-1 py-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
-            <dt className="text-muted">Retention</dt>
-            <dd className="text-fg">
+          <div>
+            <dt className="text-[10px] text-muted">Retention</dt>
+            <dd className="mt-1 text-fg">
               {workspace.retentionDays} days
               {workspace.retentionDeleteAt ? ` · Deletes ${formatDate(workspace.retentionDeleteAt)}` : ""}
             </dd>
           </div>
-          <div className="grid gap-1 py-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
-            <dt className="text-muted">Checkpoint set</dt>
-            <dd className="text-fg">{workspace.checkpointSetFrozenAt ? "Frozen" : "Open"}</dd>
+          <div>
+            <dt className="text-[10px] text-muted">Checkpoint set</dt>
+            <dd className="mt-1 text-fg">{workspace.checkpointSetFrozenAt ? "Frozen" : "Open"}</dd>
           </div>
         </dl>
 
         {!readOnly ? (
-          <form action={updateAction} className="grid gap-4 border-y border-border/70 py-5 sm:grid-cols-2">
-            <label className="space-y-2 text-sm font-medium text-fg">
-              <span>Name</span>
-              <input
-                name="name"
-                required={!identityFrozen}
-                disabled={identityFrozen}
-                maxLength={140}
-                defaultValue={workspace.name}
-                className="mb-field h-11 disabled:opacity-60"
-              />
-            </label>
-            <label className="space-y-2 text-sm font-medium text-fg">
-              <span>Decisive vote goal</span>
-              <input
-                name="targetDecisiveVotes"
-                type="number"
-                min={1}
-                max={1_000_000}
-                defaultValue={workspace.targetDecisiveVotes ?? ""}
-                className="mb-field h-11"
-              />
-            </label>
-            <label className="flex min-h-11 items-center gap-3 text-sm text-fg">
-              <input
-                name="pauseAtGoal"
-                type="checkbox"
-                defaultChecked={workspace.pauseAtGoal}
-                className="h-4 w-4 accent-accent"
-              />
-              Pause at goal
-            </label>
-            <div className="flex items-end justify-end">
-              <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5 text-sm">
-                Save
-              </button>
-            </div>
-          </form>
+          <LabDisclosure
+            title={<span className="text-sm font-medium text-fg">Evaluation settings</span>}
+            className="mt-6 border-t border-border/60"
+            panelClassName="pb-1 pt-4"
+          >
+            <form action={updateAction} className="grid max-w-3xl gap-4 sm:grid-cols-2">
+              {!identityFrozen ? (
+                <label className="space-y-2 text-sm font-medium text-fg">
+                  <span>Name</span>
+                  <input
+                    name="name"
+                    required
+                    maxLength={140}
+                    defaultValue={workspace.name}
+                    className="mb-field h-11"
+                  />
+                </label>
+              ) : null}
+              <label className="space-y-2 text-sm font-medium text-fg">
+                <span>Decisive vote goal</span>
+                <input
+                  name="targetDecisiveVotes"
+                  type="number"
+                  min={1}
+                  max={1_000_000}
+                  defaultValue={workspace.targetDecisiveVotes ?? ""}
+                  className="mb-field h-11"
+                />
+              </label>
+              <label className="flex min-h-11 items-center gap-3 text-sm text-fg">
+                <input
+                  name="pauseAtGoal"
+                  type="checkbox"
+                  defaultChecked={workspace.pauseAtGoal}
+                  className="h-4 w-4 accent-accent"
+                />
+                Pause at goal
+              </label>
+              <div className="flex items-end justify-end">
+                <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5 text-sm">
+                  Save
+                </button>
+              </div>
+            </form>
+          </LabDisclosure>
         ) : null}
       </section>
 
-      <section className="space-y-5" aria-labelledby="checkpoint-settings-heading">
-        <div className="flex items-end justify-between gap-4 border-b border-border/70 pb-3">
-          <div>
-            <h2 id="checkpoint-settings-heading" className="text-xl font-semibold tracking-tight text-fg">
-              Checkpoints
-            </h2>
-            <p className="mt-1 text-sm text-muted">Credentials are encrypted and shown once.</p>
-          </div>
+      <section aria-labelledby="checkpoint-settings-heading">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 id="checkpoint-settings-heading" className="text-xl font-semibold tracking-tight text-fg">
+            Checkpoints
+          </h2>
           <span className="font-mono text-xs text-muted">{workspace.checkpoints.length}</span>
         </div>
 
-        <div className="divide-y divide-border/55 border-y border-border/70">
+        <div className="mt-4 divide-y divide-border/50 overflow-hidden rounded-md border border-border/70">
           {workspace.checkpoints.map((checkpoint) => (
-            <div key={checkpoint.id} className="flex min-h-16 items-center justify-between gap-4 py-4">
+            <div key={checkpoint.id} className="flex min-h-16 items-center justify-between gap-4 px-4 py-3">
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium text-fg">{checkpoint.codename}</div>
                 <div className="mt-1 text-xs text-muted">
                   {titleCase(checkpoint.source)}
-                  {checkpoint.credentialConfigured ? " · Credential configured" : ""}
+                  {!checkpoint.credentialConfigured ? " · Needs key" : ""}
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-3">
@@ -156,16 +159,19 @@ export default async function EvaluationSettingsPage({
             </div>
           ))}
           {workspace.checkpoints.length === 0 ? (
-            <div className="py-8 text-sm text-muted">No checkpoints</div>
+            <div className="px-4 py-8 text-sm text-muted">No checkpoints</div>
           ) : null}
         </div>
 
         {workspace.status === "DRAFT" ? (
-          <form action={configureAction} className="space-y-5 border-y border-border/70 py-6">
-            <div>
-              <h3 className="text-lg font-medium tracking-tight text-fg">Add checkpoint</h3>
-              <p className="mt-1 text-sm text-muted">Connect a confidential endpoint.</p>
-            </div>
+          <div className="mt-5 overflow-hidden rounded-md border border-border/70">
+            <LabDisclosure
+              title={<span className="text-sm font-medium text-fg">Add checkpoint</span>}
+              className="border-b border-border/55"
+              buttonClassName="px-4"
+              panelClassName="px-4 pb-5 pt-2 sm:px-5"
+            >
+          <form action={configureAction} className="space-y-5">
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="space-y-2 text-sm font-medium text-fg">
                 <span>Codename</span>
@@ -247,14 +253,13 @@ export default async function EvaluationSettingsPage({
               </button>
             </div>
           </form>
-        ) : null}
-
-        {workspace.status === "DRAFT" ? (
-          <form action={uploadAction} className="space-y-5 border-y border-border/70 py-6">
-            <div>
-              <h3 className="text-lg font-medium tracking-tight text-fg">Upload cohort</h3>
-              <p className="mt-1 text-sm text-muted">Submit one build for every prompt.</p>
-            </div>
+            </LabDisclosure>
+            <LabDisclosure
+              title={<span className="text-sm font-medium text-fg">Upload cohort</span>}
+              buttonClassName="px-4"
+              panelClassName="px-4 pb-5 pt-2 sm:px-5"
+            >
+          <form action={uploadAction} className="space-y-5">
             <label className="block max-w-sm space-y-2 text-sm font-medium text-fg">
               <span>Codename</span>
               <input name="codename" required maxLength={80} className="mb-field h-11" />
@@ -264,9 +269,9 @@ export default async function EvaluationSettingsPage({
               <textarea
                 name="cohort"
                 required
-                rows={10}
+                rows={8}
                 spellCheck={false}
-                className="mb-field min-h-48 resize-y py-3 font-mono text-xs"
+                className="mb-field min-h-40 resize-y py-3 font-mono text-xs"
               />
             </label>
             <div className="flex justify-end">
@@ -275,10 +280,12 @@ export default async function EvaluationSettingsPage({
               </button>
             </div>
           </form>
+            </LabDisclosure>
+          </div>
         ) : null}
       </section>
 
-      <section className="space-y-4 border-y border-danger/30 py-6" aria-labelledby="lifecycle-heading">
+      <section className="space-y-4 border-t border-danger/30 pt-6" aria-labelledby="lifecycle-heading">
         <div>
           <h2 id="lifecycle-heading" className="text-xl font-semibold tracking-tight text-fg">
             Lifecycle

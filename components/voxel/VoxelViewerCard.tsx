@@ -55,6 +55,7 @@ export function VoxelViewerCard({
   actions,
   viewerRef,
   skipValidation = false,
+  embedded = false,
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -71,7 +72,7 @@ export function VoxelViewerCard({
   attempt?: number;
   retryReason?: string;
   elapsedMs?: number;
-  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number };
+  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number; attempts?: number };
   error?: string;
   loadingMessage?: string;
   jsonText?: string;
@@ -87,6 +88,7 @@ export function VoxelViewerCard({
   actions?: ReactNode;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
+  embedded?: boolean;
 }) {
   type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
 
@@ -266,17 +268,17 @@ export function VoxelViewerCard({
   }, []);
 
   return (
-    <div className="mb-panel">
+    <div className={embedded ? "overflow-hidden bg-card/25" : "mb-panel"}>
       <div className="mb-panel-inner">
-        <div className="border-b border-border bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
+        <div className="border-b border-border/60 bg-bg/35 px-3 py-2 sm:px-4 sm:py-2.5">
           <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
             <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <div className="font-display text-base font-semibold tracking-tight text-fg">
+              <div className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
+                <div className="max-w-48 shrink-0 truncate whitespace-nowrap font-display text-base font-semibold tracking-tight text-fg">
                   {title}
                 </div>
                 {subtitle ? (
-                  <div className="min-h-[1.1rem] text-[12px] sm:text-[13px]">{subtitle}</div>
+                  <div className="min-h-[1.1rem] min-w-0 text-[12px] sm:text-[13px]">{subtitle}</div>
                 ) : null}
               </div>
               {build ? (
@@ -346,6 +348,11 @@ export function VoxelViewerCard({
                   <div className="items-center gap-2 font-mono sm:flex">
                     <span>{blockCount.toLocaleString()} blocks</span>
                     {timing ? <span>• {timing}</span> : null}
+                    {metrics?.attempts ? (
+                      <span>
+                        • {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
                     {warnings.length ? (
                       <span>
                         • {warnings.length} warning{warnings.length === 1 ? "" : "s"}

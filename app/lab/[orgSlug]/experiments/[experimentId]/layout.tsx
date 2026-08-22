@@ -28,8 +28,8 @@ export default async function EvaluationLayout({
   const decisiveVotes = checkpoints.reduce((total, checkpoint) => total + checkpoint.decisiveVotes, 0);
 
   return (
-    <div className="mx-auto w-full max-w-[78rem] space-y-7 py-5 sm:py-9">
-      <header className="space-y-5">
+    <div className="mx-auto w-full max-w-[78rem] py-3 sm:py-5">
+      <header>
         <Link
           href={`/lab/${orgSlug}`}
           className="inline-flex min-h-11 items-center gap-2 text-xs text-muted transition hover:text-fg focus-visible:outline-none focus-visible:text-accent"
@@ -37,10 +37,10 @@ export default async function EvaluationLayout({
           <span aria-hidden="true">←</span>
           {workspace.organization.name}
         </Link>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="mt-1 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="truncate text-2xl font-semibold tracking-tight text-fg sm:text-3xl">
+              <h1 className="truncate text-2xl font-semibold tracking-tight text-fg sm:text-[1.75rem]">
                 {workspace.name}
               </h1>
               <EvaluationStatus status={workspace.status} />
@@ -53,8 +53,10 @@ export default async function EvaluationLayout({
           </p>
         </div>
       </header>
-      <EvaluationNav basePath={basePath} />
-      <div className="min-w-0">{children}</div>
+      <div className="mt-4">
+        <EvaluationNav basePath={basePath} />
+      </div>
+      <div className="mt-6 min-w-0">{children}</div>
     </div>
   );
 }

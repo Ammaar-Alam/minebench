@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { EvaluationStatus } from "@/components/lab/EvaluationStatus";
 import { formatDateTime, titleCase } from "@/components/lab/format";
+import { LabDisclosure } from "@/components/lab/LabDisclosure";
 import { prisma } from "@/lib/prisma";
 import { getLabOrganizationContext } from "@/lib/stealth/auth";
 import { listStealthEvaluationWorkspaces } from "@/lib/stealth/service";
@@ -57,7 +58,7 @@ export default async function LabOrganizationPage({
   const updateRoleAction = updateMemberRoleAction.bind(null, orgSlug);
 
   return (
-    <div className="mx-auto w-full max-w-[72rem] space-y-12 py-5 sm:py-10">
+    <div className="mx-auto w-full max-w-[72rem] space-y-10 py-4 sm:py-7">
       <header className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <p className="text-xs text-muted">{titleCase(context.membership.role)}</p>
@@ -112,7 +113,7 @@ export default async function LabOrganizationPage({
                 <Link
                   key={evaluation.id}
                   href={`/lab/${orgSlug}/experiments/${evaluation.id}`}
-                  className="group grid min-h-24 gap-4 border-b border-border/50 py-5 transition-colors last:border-0 hover:bg-card/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 sm:grid-cols-[minmax(0,1fr)_12rem_8rem_1.5rem] sm:items-center sm:gap-6"
+                  className="group grid min-h-20 gap-4 border-b border-border/50 py-4 transition-colors last:border-0 hover:bg-card/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 sm:grid-cols-[minmax(0,1fr)_12rem_8rem_1.5rem] sm:items-center sm:gap-6"
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-3">
@@ -145,7 +146,7 @@ export default async function LabOrganizationPage({
                       {evaluation.voteProgress.decisiveVotes.toLocaleString()}
                     </span>
                   </div>
-                  <span aria-hidden="true" className="hidden text-right text-muted group-hover:text-fg sm:block">→</span>
+                  <span aria-hidden="true" className="hidden text-right text-muted transition-transform duration-200 ease-out group-hover:translate-x-0.5 group-hover:text-fg motion-reduce:transition-none sm:block">→</span>
                 </Link>
               );
             })}
@@ -161,14 +162,15 @@ export default async function LabOrganizationPage({
       </section>
 
       {team ? (
-        <details className="group border-y border-border/70">
-          <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
+        <LabDisclosure
+          title={
             <span className="text-sm font-medium text-fg">
               Team <span className="ml-2 font-normal text-muted">{team.memberships.length}</span>
             </span>
-            <span aria-hidden="true" className="text-lg text-muted transition-transform group-open:rotate-45 motion-reduce:transition-none">+</span>
-          </summary>
-          <div className="space-y-7 border-t border-border/55 py-6">
+          }
+          className="border-t border-border/60"
+          panelClassName="space-y-6 pb-1 pt-4"
+        >
             <form action={inviteAction} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem_auto]">
               <label className="space-y-2 text-sm font-medium text-fg">
                 <span>Email</span>
@@ -184,7 +186,7 @@ export default async function LabOrganizationPage({
               <button type="submit" className="mb-btn mb-btn-primary min-h-11 self-end px-5">Invite</button>
             </form>
 
-            <div className="divide-y divide-border/50 border-y border-border/55">
+            <div className="divide-y divide-border/50 overflow-hidden rounded-md border border-border/60 px-4">
               {team.memberships.map(({ user, role }) => (
                 <div key={user.id} className="flex min-h-14 flex-col gap-3 py-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
@@ -236,8 +238,7 @@ export default async function LabOrganizationPage({
                 </div>
               ))}
             </div>
-          </div>
-        </details>
+        </LabDisclosure>
       ) : null}
     </div>
   );
