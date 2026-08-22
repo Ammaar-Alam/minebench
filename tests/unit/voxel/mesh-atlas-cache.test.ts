@@ -40,6 +40,33 @@ async function main() {
     assert.equal(texture.version, 2);
   }
 
+  {
+    const { SpatialBlockTable } = await import("../../../lib/voxel/ambientOcclusion");
+    const table = new SpatialBlockTable(100);
+
+    const testCoords: Array<[number, number, number, number]> = [
+      [0, 0, 0, 1],
+      [100, 200, 300, 2],
+      [512, 512, 512, 3],
+      [100, 200, 750, 4],
+      [1023, 1023, 1023, 5],
+      [0, 0, 1023, 6],
+    ];
+
+    for (const [x, y, z, typeId] of testCoords) {
+      table.set(x, y, z, typeId);
+    }
+
+    for (const [x, y, z, typeId] of testCoords) {
+      assert.equal(table.get(x, y, z), typeId, `lookup failed for (${x}, ${y}, ${z})`);
+    }
+
+    assert.equal(table.get(1023, 1023, 1022), -1);
+    assert.equal(table.get(0, 0, 513), -1);
+    assert.equal(table.get(-1, 0, 0), -1);
+    assert.equal(table.get(1024, 0, 0), -1);
+  }
+
   console.log("mesh atlas cache and texture configuration checks passed");
 }
 

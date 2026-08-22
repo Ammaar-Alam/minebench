@@ -147,6 +147,8 @@ export const DIRS: readonly Direction[] = [
   },
 ];
 
+const EMPTY_SLOT = 0xffffffff;
+
 export class SpatialBlockTable {
   private readonly keys: Uint32Array;
   private readonly values: Uint16Array;
@@ -157,14 +159,14 @@ export class SpatialBlockTable {
     const size = 1 << Math.ceil(Math.log2(minCap));
     this.mask = size - 1;
     this.keys = new Uint32Array(size);
-    this.keys.fill(0xffffffff);
+    this.keys.fill(EMPTY_SLOT);
     this.values = new Uint16Array(size);
   }
 
   set(x: number, y: number, z: number, typeId: number): void {
-    const key = (x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20);
+    const key = ((x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20)) >>> 0;
     let index = (Math.imul(key, 0x9e3779b9) >>> 0) & this.mask;
-    while (this.keys[index] !== 0xffffffff && this.keys[index] !== key) {
+    while (this.keys[index] !== EMPTY_SLOT && this.keys[index] !== key) {
       index = (index + 1) & this.mask;
     }
     this.keys[index] = key;
@@ -173,11 +175,11 @@ export class SpatialBlockTable {
 
   get(x: number, y: number, z: number): number {
     if (x < 0 || y < 0 || z < 0 || x > 1023 || y > 1023 || z > 1023) return -1;
-    const key = x | (y << 10) | (z << 20);
+    const key = ((x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20)) >>> 0;
     let index = (Math.imul(key, 0x9e3779b9) >>> 0) & this.mask;
     while (true) {
       const stored = this.keys[index];
-      if (stored === 0xffffffff) return -1;
+      if (stored === EMPTY_SLOT) return -1;
       if (stored === key) return this.values[index];
       index = (index + 1) & this.mask;
     }
