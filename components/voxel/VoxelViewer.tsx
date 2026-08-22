@@ -1227,7 +1227,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       {/* Out of flow: the renderer writes a pixel height onto the canvas, and in
           normal flow that measurement props the stage open so a flex parent can
           never shrink it back down. */}
-      <div ref={mountRef} className="absolute inset-0" />
+      <div ref={mountRef} className="mb-viewer-stage absolute inset-0" />
 
       {showControls ? (
         <>
