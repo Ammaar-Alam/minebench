@@ -906,7 +906,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               aria-label="Export JSON"
               title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
               disabled={!hasJsonExport}
-              className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() =>
                 exportModelJson({
                   modelName,
@@ -1009,7 +1009,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                     aria-pressed={compareEnabled}
                     onClick={() => setCompareEnabled((v) => !v)}
                     disabled={running || !canCompare}
-                    className={`mb-btn h-7 rounded-full px-2.5 text-[11px] ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
+                    className={`mb-btn h-7 px-2.5 text-[11px] ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
                   >
                     {compareEnabled ? "Stop comparing" : "Compare models"}
                   </button>
@@ -1108,7 +1108,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 </div>
 
                 {usesAdHocModel ? (
-                  <div className="mt-3 rounded-xl border border-border/70 bg-bg/35 p-3">
+                  <div className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3">
                     <div className="text-xs font-medium text-muted">
                       {usesOpenRouterModel ? "OpenRouter model" : "OpenAI-compatible model"}
                     </div>
@@ -1163,7 +1163,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  className="mb-btn mb-btn-ghost h-7 rounded-full px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mb-btn mb-btn-ghost h-7 px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={() => {
                     setProviderKeys({});
                     setRequestError(null);
@@ -1175,7 +1175,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 <button
                   type="button"
                   aria-pressed={showKeys}
-                  className={`mb-btn h-7 rounded-full px-2.5 text-[11px] ${showKeys ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
+                  className={`mb-btn h-7 px-2.5 text-[11px] ${showKeys ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
                   onClick={() => setShowKeys((v) => !v)}
                   disabled={running}
                 >
@@ -1221,7 +1221,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 </label>
               ) : null}
 
-              <details className="md:col-span-2 rounded-xl border border-border/70 bg-bg/35 px-3 py-2">
+              <details className="md:col-span-2 rounded-md border border-border/70 bg-bg/35 px-3 py-2">
                 <summary className="cursor-pointer select-none text-xs font-medium text-muted">
                   Use a provider-specific key instead (optional)
                 </summary>
