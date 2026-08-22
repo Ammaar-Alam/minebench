@@ -10,15 +10,15 @@ import type {
   ModelPromptBreakdown,
 } from "@/lib/arena/stats";
 import type {
-  ArenaBuildLoadHints,
   ArenaBuildRef,
-  ArenaBuildStreamEvent,
   ArenaBuildVariant,
 } from "@/lib/arena/types";
 import {
-  isGzipStreamPrefix,
+  IncompleteBuildStreamError,
   readBuildVariantJson,
-  streamFromInitialChunks,
+  readBuildVariantStream,
+  type BuildStreamProgress,
+  type BuildVariantStreamResponse,
 } from "@/lib/arena/clientBuildResponse";
 import {
   VoxelLoadingHud,
@@ -31,7 +31,10 @@ import type {
 } from "@/components/voxel/VoxelViewer";
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
-import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { ModelLateralNav, PromptLateralNav } from "@/components/leaderboard/LateralNav";
 import {
   SandboxGifExportButton,
@@ -55,18 +58,6 @@ const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
 );
 const STREAM_REQUEST_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_STREAM_REQUEST_TIMEOUT_MS ?? "12000",
-  10,
-);
-const STREAM_FIRST_EVENT_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_FIRST_EVENT_TIMEOUT_MS ?? "6000",
-  10,
-);
-const STREAM_STALL_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_STALL_TIMEOUT_MS ?? "10000",
-  10,
-);
-const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
   10,
 );
 const BUILD_LOAD_DEBOUNCE_MS = Number.parseInt(
@@ -120,76 +111,24 @@ function makeTimeoutSignal(
   };
 }
 
-async function readWithTimeout<T>(
-  read: () => Promise<T>,
-  timeoutMs: number,
-  signal?: AbortSignal,
-  onTimeout?: () => void,
-): Promise<T> {
-  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-  return await new Promise<T>((resolve, reject) => {
-    const timer =
-      Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? window.setTimeout(() => {
-            onTimeout?.();
-            cleanup();
-            reject(new Error("Build stream stalled"));
-          }, timeoutMs)
-        : null;
-    const onAbort = () => {
-      cleanup();
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    const cleanup = () => {
-      if (timer != null) window.clearTimeout(timer);
-      if (signal) signal.removeEventListener("abort", onAbort);
-    };
-    if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    read().then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (err) => {
-        cleanup();
-        reject(err);
-      },
-    );
-  });
-}
-
 type CurvePoint = { x: number; y: number; value: number };
 type LoadedPromptBuild = {
   buildId: string;
   variant: ArenaBuildVariant;
-  voxelBuild: VoxelBuild;
+  voxelBuild: RenderableVoxelBuild;
   gridSize: number;
   palette: "simple" | "advanced";
   mode: string;
   blockCount: number;
 };
 
-type BuildVariantResponse = {
-  buildId: string;
-  variant: ArenaBuildVariant;
-  checksum: string | null;
-  serverValidated: boolean;
-  buildLoadHints?: ArenaBuildLoadHints;
-  voxelBuild: VoxelBuild;
-};
-
-type BuildStreamProgress = {
-  receivedBlocks: number;
-  totalBlocks: number | null;
-  chunkIndex: number | null;
-  chunkCount: number | null;
-};
+type BuildVariantResponse = BuildVariantStreamResponse;
 
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
   allowLiveFallback?: boolean;
   onProgress?: (
-    build: VoxelBuild,
+    build: RenderableVoxelBuild,
     progress: BuildStreamProgress,
     meta: { serverValidated: boolean },
   ) => void;
@@ -199,15 +138,6 @@ const LazyVoxelViewer = dynamic(
   () => import("@/components/voxel/VoxelViewer").then((mod) => mod.VoxelViewer),
   { ssr: false },
 );
-
-function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
-  if (!line.trim()) return null;
-  try {
-    return JSON.parse(line) as ArenaBuildStreamEvent;
-  } catch {
-    return null;
-  }
-}
 
 function buildCacheKey(buildId: string, variant: ArenaBuildVariant) {
   return `${buildId}:${variant}`;
@@ -338,171 +268,19 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return await readBuildVariantJson<BuildVariantResponse>(res);
+    return readBuildVariantJson<BuildVariantResponse>(res);
   }
 
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  let cancelled = false;
-  const cancelReader = () => {
-    if (cancelled) return;
-    cancelled = true;
-    void reader?.cancel().catch(() => undefined);
-  };
-
   try {
-    reader = res.body.getReader();
-    const initialChunks: Uint8Array[] = [];
-    let initialByteCount = 0;
-    while (initialByteCount < 2) {
-      const initialRead = await readWithTimeout(
-        () => reader!.read(),
-        STREAM_FIRST_EVENT_TIMEOUT_MS,
-        opts?.signal,
-        cancelReader,
-      );
-      if (initialRead.done) break;
-      if (initialRead.value && initialRead.value.length > 0) {
-        initialChunks.push(initialRead.value);
-        initialByteCount += initialRead.value.length;
-      }
-    }
-    if (initialChunks.length === 0) {
-      throw new Error("Build stream ended before any data loaded");
-    }
-    const stream = streamFromInitialChunks(initialChunks, reader);
-    reader = isGzipStreamPrefix(initialChunks)
-      ? stream
-          .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>)
-          .getReader()
-      : stream.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const startedAt = performance.now();
-
-    let resolvedVariant: ArenaBuildVariant = ref.variant;
-    let checksum: string | null = ref.checksum ?? null;
-    let serverValidated = false;
-    let buildLoadHints: ArenaBuildLoadHints | undefined;
-    let totalBlocks: number | null = null;
-    let hasComplete = false;
-    let sawFirstEvent = false;
-
-    const streamedBlocks: VoxelBuild["blocks"] = [];
-
-    const emitProgress = (progress: BuildStreamProgress) => {
-      if (!opts?.onProgress) return;
-      opts.onProgress(
-        {
-          version: "1.0",
-          blocks: streamedBlocks,
-        },
-        progress,
-        { serverValidated },
-      );
-    };
-
-    const processLine = (line: string) => {
-      const event = parseArenaBuildStreamLine(line);
-      if (!event) return;
-
-      if (event.type === "ping") {
-        sawFirstEvent = true;
-        return;
-      }
-      if (event.type === "error") {
-        throw new Error(event.message || "Build stream failed");
-      }
-      if (event.type === "hello") {
-        sawFirstEvent = true;
-        resolvedVariant = event.variant;
-        checksum = event.checksum ?? checksum;
-        serverValidated = serverValidated || event.serverValidated;
-        totalBlocks = event.totalBlocks || totalBlocks;
-        buildLoadHints = event.buildLoadHints ?? buildLoadHints;
-        if (streamedBlocks.length === 0) {
-          emitProgress({
-            receivedBlocks: 0,
-            totalBlocks,
-            chunkIndex: null,
-            chunkCount: event.chunkCount ?? null,
-          });
-        }
-        return;
-      }
-      if (event.type === "chunk") {
-        sawFirstEvent = true;
-        if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          for (const block of event.blocks) {
-            streamedBlocks.push(block);
-          }
-        }
-        totalBlocks = event.totalBlocks || totalBlocks;
-        emitProgress({
-          receivedBlocks: event.receivedBlocks,
-          totalBlocks,
-          chunkIndex: event.index,
-          chunkCount: event.chunkCount,
-        });
-        return;
-      }
-      if (event.type === "complete") {
-        hasComplete = true;
-        totalBlocks = event.totalBlocks || totalBlocks;
-      }
-    };
-
-    while (true) {
-      if (performance.now() - startedAt > STREAM_HARD_TIMEOUT_MS) {
-        cancelReader();
-        throw new Error("Build stream hard timeout");
-      }
-
-      const { done, value } = await readWithTimeout(
-        () => reader!.read(),
-        sawFirstEvent ? STREAM_STALL_TIMEOUT_MS : STREAM_FIRST_EVENT_TIMEOUT_MS,
-        opts?.signal,
-        cancelReader,
-      );
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        processLine(line);
-      }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) processLine(buffer);
-
-    const announcedTotal =
-      typeof totalBlocks === "number" && Number.isFinite(totalBlocks) && totalBlocks >= 0
-        ? totalBlocks
-        : null;
-    const streamLooksComplete =
-      hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
-
-    if (!streamLooksComplete) {
-      cancelReader();
+    return await readBuildVariantStream(res, {
+      signal: opts?.signal,
+      onProgress: opts?.onProgress,
+    });
+  } catch (error) {
+    if (error instanceof IncompleteBuildStreamError) {
       return fetchBuildVariantSnapshot(ref, opts?.signal);
     }
-
-    return {
-      buildId: ref.buildId,
-      variant: resolvedVariant,
-      checksum,
-      serverValidated,
-      buildLoadHints,
-      voxelBuild: {
-        version: "1.0",
-        blocks: streamedBlocks,
-      },
-    };
-  } catch (err: unknown) {
-    cancelReader();
-    if (isAbortError(err)) throw err;
-    throw err;
+    throw error;
   }
 }
 
@@ -1343,6 +1121,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
     const largeBuild = activeBuildMeta.blockCount >= LARGE_BUILD_PREVIEW_BLOCKS;
 
     const storePayload = (payload: BuildVariantResponse) => {
+      const receivedBlockCount = voxelBuildBlockCount(payload.voxelBuild);
       const loadedBuild: LoadedPromptBuild = {
         buildId: activeBuildId,
         variant: payload.variant,
@@ -1352,8 +1131,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
         mode: activeBuildMeta.mode,
         blockCount:
           payload.variant === "full"
-            ? Math.max(activeBuildMeta.blockCount, payload.voxelBuild.blocks.length)
-            : payload.voxelBuild.blocks.length,
+            ? Math.max(activeBuildMeta.blockCount, receivedBlockCount)
+            : receivedBlockCount,
       };
 
       setBuildCache((current) => rememberLoadedBuild(current, loadedBuild));

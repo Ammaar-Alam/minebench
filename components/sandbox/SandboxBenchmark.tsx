@@ -21,9 +21,15 @@ import type {
   ArenaBuildDeliveryClass,
   ArenaBuildLoadHints,
   ArenaBuildRef,
-  ArenaBuildStreamEvent,
   ArenaBuildVariant,
 } from "@/lib/arena/types";
+import {
+  IncompleteBuildStreamError,
+  readBuildVariantJson,
+  readBuildVariantStream,
+  type BuildStreamProgress,
+  type BuildVariantStreamResponse,
+} from "@/lib/arena/clientBuildResponse";
 import {
   SANDBOX_COMPARISON_MODEL_PARAMS,
   SANDBOX_COMPARISON_SLOTS,
@@ -36,7 +42,7 @@ import {
   buildSandboxComparisonPath,
   parseSandboxComparisonDeepLink,
 } from "@/lib/deepLinks";
-import type { VoxelBuild } from "@/lib/voxel/types";
+import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -85,28 +91,14 @@ type BenchmarkResponse = {
   builds: SandboxComparisonSelection<BenchmarkBuild | null>;
 };
 
-type BuildVariantResponse = {
-  buildId: string;
-  variant: ArenaBuildVariant;
-  checksum: string | null;
-  serverValidated: boolean;
-  buildLoadHints?: ArenaBuildLoadHints;
-  voxelBuild: VoxelBuild;
-};
-
-type BuildStreamProgress = {
-  receivedBlocks: number;
-  totalBlocks: number | null;
-  chunkIndex: number | null;
-  chunkCount: number | null;
-};
+type BuildVariantResponse = BuildVariantStreamResponse;
 
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
   allowSnapshotFallback?: boolean;
   allowLiveFallback?: boolean;
   onProgress?: (
-    build: VoxelBuild,
+    build: RenderableVoxelBuild,
     progress: BuildStreamProgress,
     meta: { serverValidated: boolean },
   ) => void;
@@ -152,20 +144,6 @@ const STREAM_REQUEST_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_STREAM_REQUEST_TIMEOUT_MS ?? "12000",
   10,
 );
-const STREAM_FIRST_EVENT_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_FIRST_EVENT_TIMEOUT_MS ?? "6000",
-  10,
-);
-const STREAM_STALL_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_STALL_TIMEOUT_MS ?? "10000",
-  10,
-);
-const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
-  10,
-);
-const GZIP_MAGIC_0 = 0x1f;
-const GZIP_MAGIC_1 = 0x8b;
 
 type TimeoutSignal = {
   signal: AbortSignal;
@@ -198,45 +176,6 @@ function makeTimeoutSignal(
       if (parentSignal) parentSignal.removeEventListener("abort", abortFromParent);
     },
   };
-}
-
-async function readWithTimeout<T>(
-  read: () => Promise<T>,
-  timeoutMs: number,
-  signal?: AbortSignal,
-  onTimeout?: () => void,
-): Promise<T> {
-  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-  return await new Promise<T>((resolve, reject) => {
-    const timer =
-      Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? window.setTimeout(() => {
-            onTimeout?.();
-            cleanup();
-            reject(new Error("Build stream stalled"));
-          }, timeoutMs)
-        : null;
-    const onAbort = () => {
-      cleanup();
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-    const cleanup = () => {
-      if (timer != null) window.clearTimeout(timer);
-      if (signal) signal.removeEventListener("abort", onAbort);
-    };
-    if (signal) signal.addEventListener("abort", onAbort, { once: true });
-
-    read().then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (err) => {
-        cleanup();
-        reject(err);
-      },
-    );
-  });
 }
 
 function SelectChevron({ withTrailingAction = false }: { withTrailingAction?: boolean }) {
@@ -343,26 +282,6 @@ function formatBuildLoadingMessage(progress: SlotHydrationState["progress"]): st
   return formatVoxelLoadingMessage("Retrieving build", progress);
 }
 
-function isGzipChunk(chunk: Uint8Array): boolean {
-  return chunk.length >= 2 && chunk[0] === GZIP_MAGIC_0 && chunk[1] === GZIP_MAGIC_1;
-}
-
-async function gunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
-  if (typeof DecompressionStream !== "function") {
-    throw new Error("Compressed build artifact is not supported by this browser.");
-  }
-  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const decompressor = new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>;
-  const stream = new Blob([body]).stream().pipeThrough(decompressor);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-async function readBuildVariantJson(res: Response): Promise<BuildVariantResponse> {
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  const body = isGzipChunk(bytes) ? await gunzipBytes(bytes) : bytes;
-  return JSON.parse(new TextDecoder().decode(body)) as BuildVariantResponse;
-}
-
 async function fetchBenchmarkResponse(args: {
   promptId?: string;
   models?: Partial<SandboxComparisonSelection<string>>;
@@ -414,43 +333,10 @@ async function fetchBuildVariantSnapshot(
       signal: timed.signal,
     });
     if (!res.ok) throw new Error(await res.text());
-    return await readBuildVariantJson(res);
+    return await readBuildVariantJson<BuildVariantResponse>(res);
   } finally {
     timed.cleanup();
   }
-}
-
-function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
-  if (!line.trim()) return null;
-  try {
-    return JSON.parse(line) as ArenaBuildStreamEvent;
-  } catch {
-    return null;
-  }
-}
-
-function streamFromFirstChunk(
-  firstChunk: Uint8Array,
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      controller.enqueue(firstChunk);
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) controller.enqueue(value);
-        }
-        controller.close();
-      } catch (err) {
-        controller.error(err);
-      }
-    },
-    cancel(reason) {
-      return reader.cancel(reason);
-    },
-  });
 }
 
 async function fetchBuildVariantStreamOnce(
@@ -480,167 +366,22 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return (await res.json()) as BuildVariantResponse;
+    return readBuildVariantJson<BuildVariantResponse>(res);
   }
 
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  let cancelled = false;
-  const cancelReader = () => {
-    if (cancelled) return;
-    cancelled = true;
-    void reader?.cancel().catch(() => undefined);
-  };
-
   try {
-    reader = res.body.getReader();
-    const firstRead = await readWithTimeout(
-      () => reader!.read(),
-      STREAM_FIRST_EVENT_TIMEOUT_MS,
-      opts?.signal,
-      cancelReader,
-    );
-    if (firstRead.done || !firstRead.value) {
-      throw new Error("Build stream ended before any data loaded");
-    }
-
-    const firstChunk = firstRead.value;
-    const stream = streamFromFirstChunk(firstChunk, reader);
-    reader = isGzipChunk(firstChunk)
-      ? stream
-          .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>)
-          .getReader()
-      : stream.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const startedAt = performance.now();
-
-    let resolvedVariant: ArenaBuildVariant = ref.variant;
-    let checksum: string | null = ref.checksum ?? null;
-    let serverValidated = false;
-    let buildLoadHints: ArenaBuildLoadHints | undefined;
-    let totalBlocks: number | null = null;
-    let hasComplete = false;
-    let sawFirstEvent = false;
-
-    const streamedBlocks: VoxelBuild["blocks"] = [];
-
-    const emitProgress = (progress: BuildStreamProgress) => {
-      if (!opts?.onProgress) return;
-      opts.onProgress(
-        {
-          version: "1.0",
-          blocks: streamedBlocks,
-        },
-        progress,
-        { serverValidated },
-      );
-    };
-
-    const processLine = (line: string) => {
-      const event = parseArenaBuildStreamLine(line);
-      if (!event) return;
-
-      if (event.type === "ping") {
-        sawFirstEvent = true;
-        return;
-      }
-      if (event.type === "error") {
-        throw new Error(event.message || "Build stream failed");
-      }
-      if (event.type === "hello") {
-        sawFirstEvent = true;
-        resolvedVariant = event.variant;
-        checksum = event.checksum ?? checksum;
-        serverValidated = serverValidated || event.serverValidated;
-        totalBlocks = event.totalBlocks || totalBlocks;
-        buildLoadHints = event.buildLoadHints ?? buildLoadHints;
-        if (streamedBlocks.length === 0) {
-          emitProgress({
-            receivedBlocks: 0,
-            totalBlocks,
-            chunkIndex: null,
-            chunkCount: event.chunkCount ?? null,
-          });
-        }
-        return;
-      }
-      if (event.type === "chunk") {
-        sawFirstEvent = true;
-        if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          for (const block of event.blocks) {
-            streamedBlocks.push(block);
-          }
-        }
-        totalBlocks = event.totalBlocks || totalBlocks;
-        emitProgress({
-          receivedBlocks: event.receivedBlocks,
-          totalBlocks,
-          chunkIndex: event.index,
-          chunkCount: event.chunkCount,
-        });
-        return;
-      }
-      if (event.type === "complete") {
-        hasComplete = true;
-        totalBlocks = event.totalBlocks || totalBlocks;
-      }
-    };
-
-    while (true) {
-      if (performance.now() - startedAt > STREAM_HARD_TIMEOUT_MS) {
-        cancelReader();
-        throw new Error("Build stream hard timeout");
-      }
-
-      const { done, value } = await readWithTimeout(
-        () => reader!.read(),
-        sawFirstEvent ? STREAM_STALL_TIMEOUT_MS : STREAM_FIRST_EVENT_TIMEOUT_MS,
-        opts?.signal,
-        cancelReader,
-      );
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        processLine(line);
-      }
-    }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) processLine(buffer);
-
-    const announcedTotal =
-      typeof totalBlocks === "number" && Number.isFinite(totalBlocks) && totalBlocks >= 0
-        ? totalBlocks
-        : null;
-    const streamLooksComplete =
-      hasComplete && (announcedTotal == null || streamedBlocks.length >= announcedTotal);
-
-    if (!streamLooksComplete) {
-      cancelReader();
-      if (opts?.allowSnapshotFallback === false) {
-        throw new Error("Build stream ended before all blocks loaded");
-      }
+    return await readBuildVariantStream(res, {
+      signal: opts?.signal,
+      onProgress: opts?.onProgress,
+    });
+  } catch (error) {
+    if (
+      error instanceof IncompleteBuildStreamError &&
+      opts?.allowSnapshotFallback !== false
+    ) {
       return fetchBuildVariantSnapshot(ref, opts?.signal);
     }
-
-    return {
-      buildId: ref.buildId,
-      variant: resolvedVariant,
-      checksum,
-      serverValidated,
-      buildLoadHints,
-      voxelBuild: {
-        version: "1.0",
-        blocks: streamedBlocks,
-      },
-    };
-  } catch (err: unknown) {
-    cancelReader();
-    if (err instanceof Error && err.name === "AbortError") throw err;
-    throw err;
+    throw error;
   }
 }
 
