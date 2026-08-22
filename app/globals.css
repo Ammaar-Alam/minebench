@@ -894,24 +894,6 @@
     }
   }
 
-  /* Arena fills the first screen so the section rule below it stays in view
-     as a scroll cue, instead of leaving dead space under the vote bar. */
-  .mb-arena-stage {
-    /* The vote controls land exactly on the fold: subtract only the chrome
-       above them. The gap to the next section falls below the fold, so the
-       first screen has no dead space and nothing is left half-cut. */
-    --mb-arena-header: 6.75rem;
-    --mb-arena-pad: 1rem;
-    min-height: calc(100svh - var(--mb-arena-header) - var(--mb-arena-pad));
-  }
-
-  @media (min-width: 640px) {
-    .mb-arena-stage {
-      --mb-arena-header: 4rem;
-      --mb-arena-pad: 1.5rem;
-    }
-  }
-
   .mb-viewer-stage {
     background-color: hsl(var(--viewer-bg));
   }

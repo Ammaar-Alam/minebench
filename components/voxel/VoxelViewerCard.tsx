@@ -190,10 +190,10 @@ export function VoxelViewerCard({
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }, [elapsedMs]);
 
-  const isArena = viewerSize === "arena";
-  const viewerHeightClass = isArena
-    ? "mb-viewer-stage relative w-full min-h-[250px] flex-1"
-    : "mb-viewer-stage relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
+  const viewerHeightClass =
+    viewerSize === "arena"
+      ? "relative h-[48svh] min-h-[260px] max-h-[440px] w-full sm:h-[48vh] sm:min-h-[280px] sm:max-h-[450px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
+      : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
   const loadingLabel =
     loadingMessage?.trim() ||
     (attempt === 0
@@ -266,8 +266,8 @@ export function VoxelViewerCard({
   }, []);
 
   return (
-    <div className={isArena ? "mb-panel flex min-h-0 flex-1 flex-col" : "mb-panel"}>
-      <div className={isArena ? "mb-panel-inner flex min-h-0 flex-1 flex-col" : "mb-panel-inner"}>
+    <div className="mb-panel">
+      <div className="mb-panel-inner">
         <div className="border-b border-border/70 bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
           <div className="flex items-center justify-between gap-2 sm:gap-3">
             <div className="flex min-w-0 flex-1 items-center gap-2">

@@ -2562,7 +2562,7 @@ export function Arena() {
 
   return (
     <div id="mb-arena" className="flex flex-col gap-10 md:gap-12">
-      <div className="mb-arena-stage flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
           {/* prompt */}
           <div ref={promptRowRef} className="relative border-b border-border/70 pb-3">
             <div className="flex items-center gap-3 sm:gap-4">
@@ -2683,10 +2683,10 @@ export function Arena() {
           {/* builds grid */}
           <div
             ref={cardsScrollRef}
-            className={`mb-x-scroll -mx-0.5 flex min-h-0 w-[calc(100%+0.25rem)] flex-1 snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 scroll-smooth transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+            className={`mb-x-scroll -mx-0.5 flex w-[calc(100%+0.25rem)] snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 scroll-smooth transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
           >
             <div
-              className={`relative mb-card-enter flex min-h-0 min-w-full shrink-0 flex-col snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "border-accent/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""}`}
+              className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "border-accent/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:a` : "arena-build-a"}
@@ -2739,7 +2739,7 @@ export function Arena() {
               />
             </div>
             <div
-              className={`relative mb-card-enter mb-card-enter-delay flex min-h-0 min-w-full shrink-0 flex-col snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "border-accent2/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""}`}
+              className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "border-accent2/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:b` : "arena-build-b"}
