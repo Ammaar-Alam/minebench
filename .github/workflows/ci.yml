@@ -58,6 +58,21 @@ jobs:
     name: "Quality / Regression Tests"
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: minebench
+          POSTGRES_PASSWORD: minebench
+          POSTGRES_DB: minebench_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U minebench -d minebench_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -82,10 +97,11 @@ jobs:
 
       - name: Run regression suite
         id: regression
-        run: pnpm test
+        run: pnpm test && pnpm test:integration
         env:
           DATABASE_URL: "postgresql://minebench:minebench@localhost:5432/minebench_ci"
           DIRECT_URL: "postgresql://minebench:minebench@localhost:5432/minebench_ci"
+          MINEBENCH_TEST_DATABASE_URL: "postgresql://minebench:minebench@localhost:5432/minebench_ci"
 
       - name: Write job summary
         if: always()
@@ -95,7 +111,7 @@ jobs:
             echo ""
             echo "| Item | Value |"
             echo "| --- | --- |"
-            echo "| Command | \`pnpm test\` |"
+            echo "| Command | \`pnpm test && pnpm test:integration\` |"
             echo "| Result | \`${{ steps.regression.outcome }}\` |"
             echo "| Node | \`${{ steps.versions.outputs.node }}\` |"
             echo "| pnpm | \`${{ steps.versions.outputs.pnpm }}\` |"

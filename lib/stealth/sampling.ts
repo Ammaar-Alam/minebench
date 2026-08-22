@@ -7,7 +7,11 @@ import type {
 } from "@/lib/arena/coverage";
 import { weightedPick } from "@/lib/arena/sampling";
 import { prisma } from "@/lib/prisma";
-import { ACTIVE_STEALTH_EXPERIMENT_STATUSES } from "@/lib/stealth/policy";
+import {
+  ACTIVE_STEALTH_EXPERIMENT_STATUSES,
+  hasReachedStealthVoteGoal,
+  isStealthVoteGoalEnforced,
+} from "@/lib/stealth/policy";
 
 const CACHE_TTL_MS = 15_000;
 const ARENA_GRID_SIZE = 256;
@@ -16,7 +20,8 @@ const ARENA_MODE = "precise";
 
 type VariantSnapshot = {
   id: string;
-  targetDecisiveVotes: number;
+  targetDecisiveVotes: number | null;
+  pauseAtGoal: boolean;
   model: EligibleModel;
   buildsByPromptId: Map<string, EligibleBuildMeta>;
   promptVotes: Map<string, number>;
@@ -66,7 +71,7 @@ async function querySnapshot(): Promise<StealthSamplingSnapshot> {
       shownCount: true,
       winCount: true,
       lossCount: true,
-      experiment: { select: { targetDecisiveVotes: true } },
+      experiment: { select: { targetDecisiveVotes: true, pauseAtGoal: true } },
       model: {
         select: {
           id: true,
@@ -136,6 +141,7 @@ async function querySnapshot(): Promise<StealthSamplingSnapshot> {
     variants: variants.map((variant) => ({
       id: variant.id,
       targetDecisiveVotes: variant.experiment.targetDecisiveVotes,
+      pauseAtGoal: variant.experiment.pauseAtGoal,
       model: {
         id: variant.model.id,
         key: variant.model.key,
@@ -181,11 +187,16 @@ export async function pickStealthMatchup(params: {
   const snapshot = await getSnapshot();
   const promptById = new Map(params.publicState.prompts.map((prompt) => [prompt.id, prompt]));
   const candidates = snapshot.variants.filter((variant) => {
+    if (hasReachedStealthVoteGoal(variant, variant.decisiveVotes)) {
+      return false;
+    }
     if (params.forcedPromptId) return variant.buildsByPromptId.has(params.forcedPromptId);
     return Array.from(variant.buildsByPromptId.keys()).some((promptId) => promptById.has(promptId));
   });
   const variant = weightedPick(candidates, (candidate) => {
-    const remaining = Math.max(1, candidate.targetDecisiveVotes - candidate.decisiveVotes);
+    const remaining = isStealthVoteGoalEnforced(candidate)
+      ? Math.max(1, (candidate.targetDecisiveVotes ?? 0) - candidate.decisiveVotes)
+      : 1;
     return remaining / Math.max(1, candidate.model.shownCount + 1);
   });
   if (!variant) return null;

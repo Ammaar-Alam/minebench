@@ -149,6 +149,22 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
         links: [{ label: "Open Import", href: "/sandbox?mode=import" }],
       },
       {
+        id: "can-organizations-run-private-evaluations",
+        question: "Can organizations run private checkpoint evaluations?",
+        answer: [
+          "Yes.",
+          "MineBench supports confidential checkpoint evaluations for approved organizations. Teams can evaluate unreleased checkpoints from a private endpoint or a complete uploaded cohort, inspect their builds and results, and keep private votes separate from the public leaderboard.",
+          "Private matchups use the normal Arena surface with one private checkpoint and one public model. Public ratings, rankings, counters, and coverage are not changed by private votes.",
+        ],
+        links: [
+          { label: "Private Evaluations", href: "/private-evaluations" },
+          {
+            label: "Policy",
+            href: "https://github.com/Ammaar-Alam/minebench/blob/master/docs/private-evaluations.md",
+          },
+        ],
+      },
+      {
         id: "why-is-a-model-missing",
         question: "Why isn't a particular model on the leaderboard?",
         answer: [

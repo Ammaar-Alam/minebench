@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { confidenceFromRd, stabilityTier } from "@/lib/arena/rating";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 import { prisma } from "@/lib/prisma";
+import { stealthVoteGoalProgress } from "@/lib/stealth/policy";
 
 type AggregateRow = {
   variantId: string;
@@ -29,9 +30,21 @@ export type StealthBreakdown = StealthOutcomeSummary & {
   label: string;
 };
 
+export type StealthBuildReportRow = {
+  resultId: string | null;
+  promptId: string;
+  prompt: string;
+  status: string;
+  attempts: number;
+  generationTimeMs: number;
+  error: string | null;
+  blockCount: number | null;
+};
+
 export type StealthVariantReport = {
   id: string;
   codename: string;
+  source: string;
   status: string;
   generatedBuildCount: number;
   expectedBuildCount: number;
@@ -44,18 +57,21 @@ export type StealthVariantReport = {
   stability: "Provisional" | "Established" | "Stable";
   estimatedFieldRank: number;
   estimatedFieldSize: number;
-  targetDecisiveVotes: number;
-  progress: number;
+  targetDecisiveVotes: number | null;
+  progress: number | null;
   pendingVotes: number;
   sideA: number;
   sideB: number;
   sideBalance: number | null;
   promptScoreSpread: number | null;
+  hasEndpointCredential: boolean;
   outcomes: StealthOutcomeSummary;
   prompts: StealthBreakdown[];
   opponents: StealthBreakdown[];
   latestGenerationRun: {
+    id: string;
     status: string;
+    workflowRunId: string | null;
     completedBuildCount: number;
     expectedBuildCount: number;
     failedBuildCount: number;
@@ -64,6 +80,7 @@ export type StealthVariantReport = {
     startedAt: Date;
     completedAt: Date | null;
   } | null;
+  builds: StealthBuildReportRow[];
 };
 
 export type StealthExperimentReport = {
@@ -72,6 +89,8 @@ export type StealthExperimentReport = {
   name: string;
   status: string;
   exportPolicy: string;
+  targetDecisiveVotes: number | null;
+  pauseAtGoal: boolean;
   agreementReference: string | null;
   startsAt: Date | null;
   endedAt: Date | null;
@@ -127,6 +146,11 @@ function finalizeOutcomes<T extends StealthOutcomeSummary>(summary: T): T {
   } as T;
 }
 
+function safeGenerationError(status: string, error: string | null): string | null {
+  if (!error || status !== "FAILED") return null;
+  return "Generation failed";
+}
+
 function appendBreakdown(
   map: Map<string, StealthBreakdown>,
   id: string,
@@ -150,11 +174,28 @@ export async function getStealthExperimentReport(
         orderBy: { codename: "asc" },
         include: {
           releasedModel: { select: { key: true } },
+          credential: { select: { id: true } },
+          model: {
+            select: {
+              builds: {
+                orderBy: { prompt: { text: "asc" } },
+                select: {
+                  id: true,
+                  promptId: true,
+                  blockCount: true,
+                  generationTimeMs: true,
+                  prompt: { select: { id: true, text: true } },
+                },
+              },
+            },
+          },
           generationRuns: {
             orderBy: { startedAt: "desc" },
             take: 1,
             select: {
+              id: true,
               status: true,
+              workflowRunId: true,
               completedBuildCount: true,
               expectedBuildCount: true,
               failedBuildCount: true,
@@ -162,6 +203,18 @@ export async function getStealthExperimentReport(
               retryCount: true,
               startedAt: true,
               completedAt: true,
+              results: {
+                orderBy: { prompt: { text: "asc" } },
+                select: {
+                  id: true,
+                  status: true,
+                  attempts: true,
+                  generationTimeMs: true,
+                  error: true,
+                  prompt: { select: { id: true, text: true } },
+                  build: { select: { id: true, blockCount: true } },
+                },
+              },
             },
           },
           _count: { select: { voteJobs: { where: { processedAt: null } } } },
@@ -222,6 +275,8 @@ export async function getStealthExperimentReport(
     name: experiment.name,
     status: experiment.status,
     exportPolicy: experiment.exportPolicy,
+    targetDecisiveVotes: experiment.targetDecisiveVotes,
+    pauseAtGoal: experiment.pauseAtGoal,
     agreementReference: experiment.agreementReference,
     startsAt: experiment.startsAt,
     endedAt: experiment.endedAt,
@@ -259,9 +314,53 @@ export async function getStealthExperimentReport(
         (model) => model.conservativeRating > variant.conservativeRating,
       ).length + 1;
       const latestGenerationRun = variant.generationRuns[0] ?? null;
+      const latestGenerationResults = latestGenerationRun?.results ?? [];
+      const buildsByPromptId = new Map<string, StealthBuildReportRow>(
+        variant.model.builds.map((build) => [
+          build.promptId,
+          {
+            resultId: null,
+            promptId: build.prompt.id,
+            prompt: build.prompt.text,
+            status: "READY",
+            attempts: 0,
+            generationTimeMs: build.generationTimeMs,
+            error: null,
+            blockCount: build.blockCount,
+          },
+        ]),
+      );
+      for (const result of latestGenerationResults) {
+        const persisted = buildsByPromptId.get(result.prompt.id);
+        buildsByPromptId.set(result.prompt.id, {
+          resultId: result.id,
+          promptId: result.prompt.id,
+          prompt: result.prompt.text,
+          status: result.status,
+          attempts: result.attempts,
+          generationTimeMs: result.generationTimeMs || persisted?.generationTimeMs || 0,
+          error: safeGenerationError(result.status, result.error),
+          blockCount: result.build?.blockCount ?? persisted?.blockCount ?? null,
+        });
+      }
+      const latestGenerationRunSummary = latestGenerationRun
+        ? {
+            id: latestGenerationRun.id,
+            status: latestGenerationRun.status,
+            workflowRunId: latestGenerationRun.workflowRunId,
+            completedBuildCount: latestGenerationRun.completedBuildCount,
+            expectedBuildCount: latestGenerationRun.expectedBuildCount,
+            failedBuildCount: latestGenerationRun.failedBuildCount,
+            providerCallCount: latestGenerationRun.providerCallCount,
+            retryCount: latestGenerationRun.retryCount,
+            startedAt: latestGenerationRun.startedAt,
+            completedAt: latestGenerationRun.completedAt,
+          }
+        : null;
       return {
         id: variant.id,
         codename: variant.codename,
+        source: variant.source,
         status: variant.status,
         generatedBuildCount: variant.generatedBuildCount,
         expectedBuildCount: variant.expectedBuildCount,
@@ -281,9 +380,9 @@ export async function getStealthExperimentReport(
         estimatedFieldRank: rank,
         estimatedFieldSize: publicModels.length + 1,
         targetDecisiveVotes: experiment.targetDecisiveVotes,
-        progress: Math.min(
-          1,
-          finalizedOutcomes.decisiveVotes / Math.max(1, experiment.targetDecisiveVotes),
+        progress: stealthVoteGoalProgress(
+          experiment.targetDecisiveVotes,
+          finalizedOutcomes.decisiveVotes,
         ),
         pendingVotes: variant._count.voteJobs,
         sideA,
@@ -291,12 +390,16 @@ export async function getStealthExperimentReport(
         sideBalance: totalSides > 0 ? Math.min(sideA, sideB) / totalSides : null,
         promptScoreSpread:
           promptScores.length > 1 ? Math.max(...promptScores) - Math.min(...promptScores) : null,
+        hasEndpointCredential: variant.credential != null,
         outcomes: finalizedOutcomes,
         prompts: finalizedPrompts,
         opponents: Array.from(opponents.values())
           .map(finalizeOutcomes)
           .sort((a, b) => b.votes - a.votes || a.label.localeCompare(b.label)),
-        latestGenerationRun,
+        latestGenerationRun: latestGenerationRunSummary,
+        builds: Array.from(buildsByPromptId.values()).sort((a, b) =>
+          a.prompt.localeCompare(b.prompt),
+        ),
       };
     }),
   };

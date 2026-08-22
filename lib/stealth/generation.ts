@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
-import type { ArenaBuildSource } from "@/lib/arena/buildArtifacts";
 import {
   isLoopbackDatabaseUrl,
   supabaseProjectRefFromApiUrl,
@@ -38,6 +37,8 @@ const BUILD_SOURCE_SELECT = {
   voxelStorageEncoding: true,
   arenaBuildHints: true,
 } satisfies Prisma.BuildSelect;
+
+type ExistingBuild = Prisma.BuildGetPayload<{ select: typeof BUILD_SOURCE_SELECT }>;
 
 function storageConfig(): { url: string; key: string; bucket: string } | null {
   const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "")
@@ -101,7 +102,6 @@ async function storePayload(params: {
         Authorization: `Bearer ${config.key}`,
         apikey: config.key,
         "Content-Type": "application/gzip",
-        "x-upsert": "true",
       },
       body: new Uint8Array(
         params.gzip.buffer as ArrayBuffer,
@@ -121,6 +121,42 @@ async function storePayload(params: {
   };
 }
 
+function validateExistingBuildIdentity(
+  build: ExistingBuild,
+  expected: {
+    sha256: string;
+    voxelByteSize: number;
+    voxelCompressedByteSize: number;
+    blockCount: number;
+  },
+): void {
+  const mismatches = [
+    build.voxelSha256 !== expected.sha256 ? "checksum" : null,
+    build.voxelByteSize !== expected.voxelByteSize ? "byte size" : null,
+    build.voxelCompressedByteSize !== expected.voxelCompressedByteSize
+      ? "compressed byte size"
+      : null,
+    build.blockCount !== expected.blockCount ? "block count" : null,
+  ].filter(Boolean);
+  if (mismatches.length > 0) {
+    throw new Error(`Existing stealth build cannot be replaced (${mismatches.join(", ")})`);
+  }
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002"
+  );
+}
+
+async function maybePrecomputeRemoteArtifacts(build: ExistingBuild): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
+  if (!isLoopbackDatabaseUrl(databaseUrl)) {
+    await maybePrecomputeArenaArtifactsForBuild(build);
+  }
+}
+
 export async function persistStealthBuild(params: {
   variantId: string;
   modelId: string;
@@ -133,68 +169,74 @@ export async function persistStealthBuild(params: {
   const gzip = gzipSync(json);
   const sha256 = createHash("sha256").update(json).digest("hex");
   const blockCount = params.build.blocks.length;
+  const prompt = await prisma.prompt.upsert({
+    where: { text: params.promptText },
+    create: { text: params.promptText, active: true },
+    update: { active: true },
+  });
+
+  const buildKey = {
+    promptId_modelId_gridSize_palette_mode: {
+      promptId: prompt.id,
+      modelId: params.modelId,
+      gridSize: GRID_SIZE,
+      palette: PALETTE,
+      mode: MODE,
+    },
+  };
+  const expectedIdentity = {
+    sha256,
+    voxelByteSize: json.byteLength,
+    voxelCompressedByteSize: gzip.byteLength,
+    blockCount,
+  };
+  const existing = await prisma.build.findUnique({
+    where: buildKey,
+    select: BUILD_SOURCE_SELECT,
+  });
+  if (existing) {
+    validateExistingBuildIdentity(existing, expectedIdentity);
+    await maybePrecomputeRemoteArtifacts(existing);
+    return { id: existing.id, blockCount: existing.blockCount };
+  }
+
   const payload = await storePayload({
     variantId: params.variantId,
     promptSlug: params.promptSlug,
     build: params.build,
     gzip,
   });
-  const prompt = await prisma.prompt.upsert({
-    where: { text: params.promptText },
-    create: { text: params.promptText, active: true },
-    update: { active: true },
-  });
-  const build = await prisma.build.upsert({
-    where: {
-      promptId_modelId_gridSize_palette_mode: {
+  let build: ExistingBuild;
+  try {
+    build = await prisma.build.create({
+      data: {
         promptId: prompt.id,
         modelId: params.modelId,
         gridSize: GRID_SIZE,
         palette: PALETTE,
         mode: MODE,
+        ...payload,
+        voxelByteSize: json.byteLength,
+        voxelCompressedByteSize: gzip.byteLength,
+        voxelSha256: sha256,
+        blockCount,
+        generationTimeMs: params.generationTimeMs,
       },
-    },
-    create: {
-      promptId: prompt.id,
-      modelId: params.modelId,
-      gridSize: GRID_SIZE,
-      palette: PALETTE,
-      mode: MODE,
-      ...payload,
-      voxelByteSize: json.byteLength,
-      voxelCompressedByteSize: gzip.byteLength,
-      voxelSha256: sha256,
-      blockCount,
-      generationTimeMs: params.generationTimeMs,
-    },
-    update: {
-      ...payload,
-      voxelByteSize: json.byteLength,
-      voxelCompressedByteSize: gzip.byteLength,
-      voxelSha256: sha256,
-      arenaBuildHints: Prisma.DbNull,
-      blockCount,
-      generationTimeMs: params.generationTimeMs,
-    },
-  });
-  const source: ArenaBuildSource = {
-    id: build.id,
-    gridSize: build.gridSize,
-    palette: build.palette,
-    blockCount: build.blockCount,
-    voxelByteSize: build.voxelByteSize,
-    voxelCompressedByteSize: build.voxelCompressedByteSize,
-    voxelSha256: build.voxelSha256,
-    voxelData: build.voxelData,
-    voxelStorageBucket: build.voxelStorageBucket,
-    voxelStoragePath: build.voxelStoragePath,
-    voxelStorageEncoding: build.voxelStorageEncoding,
-    arenaBuildHints: build.arenaBuildHints,
-  };
-  const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
-  if (!isLoopbackDatabaseUrl(databaseUrl)) {
-    await maybePrecomputeArenaArtifactsForBuild(source);
+      select: BUILD_SOURCE_SELECT,
+    });
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) throw error;
+    const raced = await prisma.build.findUnique({
+      where: buildKey,
+      select: BUILD_SOURCE_SELECT,
+    });
+    if (!raced) throw error;
+    validateExistingBuildIdentity(raced, expectedIdentity);
+    await maybePrecomputeRemoteArtifacts(raced);
+    return { id: raced.id, blockCount: raced.blockCount };
   }
+
+  await maybePrecomputeRemoteArtifacts(build);
   return { id: build.id, blockCount };
 }
 

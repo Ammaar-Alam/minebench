@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import {
+  ACTIVE_STEALTH_EXPERIMENT_STATUSES,
   canExportStealthVotes,
+  hasReachedStealthVoteGoal,
+  isStealthVoteGoalEnforced,
   normalizeStealthSlug,
   readStealthArenaShare,
+  stealthVoteGoalProgress,
 } from "../../../lib/stealth/policy";
 import { serializeDeidentifiedStealthVotes } from "../../../lib/stealth/report";
 
@@ -13,10 +17,18 @@ assert.equal(readStealthArenaShare("-2"), 0);
 assert.equal(readStealthArenaShare("invalid"), 0.25);
 assert.equal(normalizeStealthSlug("  Frontier Lab / Run 7  "), "frontier-lab-run-7");
 
-assert.equal(canExportStealthVotes("OWNER"), true);
+assert.deepEqual(ACTIVE_STEALTH_EXPERIMENT_STATUSES, ["ACTIVE"]);
 assert.equal(canExportStealthVotes("ADMIN"), true);
-assert.equal(canExportStealthVotes("ANALYST"), true);
-assert.equal(canExportStealthVotes("VIEWER"), false);
+assert.equal(canExportStealthVotes("MEMBER"), true);
+
+assert.equal(isStealthVoteGoalEnforced({ targetDecisiveVotes: null, pauseAtGoal: true }), false);
+assert.equal(isStealthVoteGoalEnforced({ targetDecisiveVotes: 10, pauseAtGoal: false }), false);
+assert.equal(isStealthVoteGoalEnforced({ targetDecisiveVotes: 10, pauseAtGoal: true }), true);
+assert.equal(hasReachedStealthVoteGoal({ targetDecisiveVotes: 10, pauseAtGoal: true }, 9), false);
+assert.equal(hasReachedStealthVoteGoal({ targetDecisiveVotes: 10, pauseAtGoal: true }, 10), true);
+assert.equal(hasReachedStealthVoteGoal({ targetDecisiveVotes: 10, pauseAtGoal: false }, 12), false);
+assert.equal(stealthVoteGoalProgress(null, 12), null);
+assert.equal(stealthVoteGoalProgress(10, 12), 1);
 
 const csv = serializeDeidentifiedStealthVotes([
   {

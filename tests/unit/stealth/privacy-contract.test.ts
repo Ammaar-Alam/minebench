@@ -24,7 +24,32 @@ for (const path of [
   const buildRoute = read(path);
   assert.match(buildRoute, /parseArenaBuildAccessToken/);
   assert.match(buildRoute, /private, no-store/);
+  assert.match(buildRoute, /privateAccessOnly && !buildAccess/);
 }
+
+const generation = read("lib/stealth/generation.ts");
+assert.doesNotMatch(generation, /prisma\.build\.upsert/);
+assert.doesNotMatch(generation, /"x-upsert": "true"/);
+assert.match(generation, /validateExistingBuildIdentity/);
+assert.match(generation, /Existing stealth build cannot be replaced/);
+
+const buildMetaCache = read("lib/arena/buildMetaCache.ts");
+assert.match(buildMetaCache, /privateAccessOnly/);
+assert.match(buildMetaCache, /stealthVariant/);
+
+const leaderboardBuildRoute = read("app/api/leaderboard/builds/[buildId]/route.ts");
+assert.match(leaderboardBuildRoute, /stealthVariant/);
+assert.match(leaderboardBuildRoute, /Build not found/);
+
+const labBuildRoute = read("app/api/lab/organizations/[orgSlug]/builds/[resultId]/route.ts");
+assert.match(labBuildRoute, /getLabIdentity/);
+assert.match(labBuildRoute, /identity\.user\.isMineBenchAdmin/);
+assert.match(labBuildRoute, /stealthGenerationResult\.findUnique/);
+assert.match(labBuildRoute, /organizationId !== organization\?\.id/);
+assert.match(labBuildRoute, /resolveBuildPayload/);
+assert.match(labBuildRoute, /validateVoxelBuild/);
+assert.match(labBuildRoute, /resultId: result\.id/);
+assert.doesNotMatch(labBuildRoute, /buildId:|voxelSha256:/);
 
 const voteRoute = read("app/api/arena/vote/route.ts");
 assert.match(voteRoute, /const responseBody: ArenaVoteResponse/);

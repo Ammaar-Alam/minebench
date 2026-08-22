@@ -9,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 import { ARENA_VOTE_JOB_DRAIN_LOCK_KEY } from "@/lib/arena/advisoryLocks";
 import { ARENA_WRITE_RETRY_MAX_ATTEMPTS, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { applyStealthRatingVote } from "@/lib/stealth/rating";
+import { invalidateStealthSamplingCache } from "@/lib/stealth/sampling";
 import type { VoteChoice } from "@/lib/arena/types";
 
 function readPositiveIntEnv(name: string, fallback: number, max: number): number {
@@ -49,6 +50,7 @@ type MutableModelState = LockedModelRow & {
 };
 
 type LockedStealthVariantRow = MutableModelState & {
+  experimentId: string;
   modelId: string;
   winCount: number;
   lossCount: number;
@@ -65,7 +67,7 @@ type ModelUpdateRow = {
   counters: CounterIncrements;
 };
 
-type StealthVariantUpdateRow = Omit<LockedStealthVariantRow, "modelId">;
+type StealthVariantUpdateRow = Omit<LockedStealthVariantRow, "experimentId" | "modelId">;
 
 type VoteCacheUpdate = {
   voteJobId: string;
@@ -102,6 +104,7 @@ type CoveragePersistUpdate = {
 type VoteJobBatchResult = {
   processedCount: number;
   cacheUpdates: VoteCacheUpdate[];
+  affectedStealthExperimentIds: string[];
   lockSkipped?: boolean;
 };
 
@@ -221,6 +224,7 @@ async function loadStealthVariantsForVoteJobs(
   const rows = await tx.$queryRaw<LockedStealthVariantRow[]>(Prisma.sql`
     SELECT
       "id",
+      "experimentId",
       "modelId",
       "eloRating",
       "glickoRd",
@@ -245,6 +249,7 @@ async function loadStealthVariantsForVoteJobs(
       row.id,
       {
         id: row.id,
+        experimentId: row.experimentId,
         modelId: row.modelId,
         eloRating: Number(row.eloRating),
         glickoRd: Number(row.glickoRd),
@@ -414,6 +419,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           return {
             processedCount: 0,
             cacheUpdates: [],
+            affectedStealthExperimentIds: [],
             lockSkipped: true,
           };
         }
@@ -438,6 +444,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           return {
             processedCount: 0,
             cacheUpdates: [],
+            affectedStealthExperimentIds: [],
           };
         }
 
@@ -464,6 +471,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
         const counterIncrements = new Map<string, CounterIncrements>();
         const publicTouchedModelIds = new Set<string>();
         const cacheUpdates: VoteCacheUpdate[] = [];
+        const affectedStealthExperimentIds = new Set<string>();
         const coveragePersistUpdates = new Map<string, CoveragePersistUpdate>();
 
         // batch repeated pair and prompt increments into one write
@@ -517,6 +525,9 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
                 choice: job.choice,
               }),
             );
+            if (isDecisiveChoice(job.choice)) {
+              affectedStealthExperimentIds.add(variant.experimentId);
+            }
             continue;
           }
 
@@ -602,7 +613,7 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
         );
         const stealthVariantUpdateRows: StealthVariantUpdateRow[] = Array.from(
           stealthVariantStates.values(),
-        ).map(({ modelId: _modelId, ...variant }) => variant);
+        ).map(({ experimentId: _experimentId, modelId: _modelId, ...variant }) => variant);
 
         await applyBatchedModelUpdates(tx, modelUpdateRows);
         await applyBatchedStealthVariantUpdates(tx, stealthVariantUpdateRows);
@@ -614,7 +625,11 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
           WHERE "id" IN (${Prisma.join(jobs.map((job) => job.id))})
         `);
 
-        return { processedCount: jobs.length, cacheUpdates };
+        return {
+          processedCount: jobs.length,
+          cacheUpdates,
+          affectedStealthExperimentIds: Array.from(affectedStealthExperimentIds),
+        };
       },
       {
         maxWait: JOB_TX_MAX_WAIT_MS,
@@ -625,6 +640,12 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
   );
 
   if (result.processedCount <= 0) return result;
+
+  if (result.affectedStealthExperimentIds.length > 0) {
+    const { reconcileStealthVoteGoals } = await import("@/lib/stealth/service");
+    await reconcileStealthVoteGoals(result.affectedStealthExperimentIds);
+    invalidateStealthSamplingCache();
+  }
 
   for (const cacheUpdate of result.cacheUpdates) {
     recordArenaVoteInSamplingCache(cacheUpdate);
