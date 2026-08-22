@@ -343,69 +343,78 @@ export async function persistStealthBuild(params: {
 }
 
 export async function deleteUnacceptedStealthBuild(buildId: string): Promise<boolean> {
-  const build = await prisma.build.findUnique({
-    where: { id: buildId },
-    select: {
-      id: true,
-      voxelSha256: true,
-      voxelStorageBucket: true,
-      voxelStoragePath: true,
-      _count: {
+  return prisma.$transaction(
+    async (tx) => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT id FROM "Build" WHERE id = ${buildId} FOR UPDATE
+      `);
+      if (locked.length === 0) return true;
+      const build = await tx.build.findUnique({
+        where: { id: buildId },
         select: {
-          matchupsAsA: true,
-          matchupsAsB: true,
-          stealthGenerationResults: { where: { status: "READY" } },
+          id: true,
+          voxelSha256: true,
+          voxelStorageBucket: true,
+          voxelStoragePath: true,
+          _count: {
+            select: {
+              matchupsAsA: true,
+              matchupsAsB: true,
+              stealthGenerationResults: { where: { status: "READY" } },
+            },
+          },
         },
-      },
-    },
-  });
-  if (!build) return true;
-  if (
-    build._count.matchupsAsA > 0 ||
-    build._count.matchupsAsB > 0 ||
-    build._count.stealthGenerationResults > 0
-  ) {
-    return false;
-  }
+      });
+      if (!build) return true;
+      if (
+        build._count.matchupsAsA > 0 ||
+        build._count.matchupsAsB > 0 ||
+        build._count.stealthGenerationResults > 0
+      ) {
+        return false;
+      }
 
-  const surviving = build.voxelSha256
-    ? await prisma.build.findMany({
-        where: { id: { not: build.id }, voxelSha256: build.voxelSha256 },
-        select: { voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
-      })
-    : [];
-  const survivingChecksums = new Set(
-    surviving.flatMap((entry) => (entry.voxelSha256 ? [entry.voxelSha256] : [])),
-  );
-  const rawRef =
-    build.voxelStorageBucket && build.voxelStoragePath
-      ? { bucket: build.voxelStorageBucket, path: build.voxelStoragePath }
-      : null;
-  if (!isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "")) {
-    await deleteArenaBuildArtifacts({
-      retiringBuilds: [build],
-      survivingChecksums,
-      deleteStorage: deleteSupabaseStorageObjects,
-    });
-    if (
-      rawRef &&
-      !surviving.some(
-        (entry) =>
-          entry.voxelStorageBucket === rawRef.bucket && entry.voxelStoragePath === rawRef.path,
-      )
-    ) {
-      await deleteSupabaseStorageObjects([rawRef]);
-    }
-  }
-  const deleted = await prisma.build.deleteMany({
-    where: {
-      id: build.id,
-      matchupsAsA: { none: {} },
-      matchupsAsB: { none: {} },
-      stealthGenerationResults: { none: { status: "READY" } },
+      const surviving = build.voxelSha256
+        ? await tx.build.findMany({
+            where: { id: { not: build.id }, voxelSha256: build.voxelSha256 },
+            select: { voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+          })
+        : [];
+      const survivingChecksums = new Set(
+        surviving.flatMap((entry) => (entry.voxelSha256 ? [entry.voxelSha256] : [])),
+      );
+      const rawRef =
+        build.voxelStorageBucket && build.voxelStoragePath
+          ? { bucket: build.voxelStorageBucket, path: build.voxelStoragePath }
+          : null;
+      if (!isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "")) {
+        await deleteArenaBuildArtifacts({
+          retiringBuilds: [build],
+          survivingChecksums,
+          deleteStorage: deleteSupabaseStorageObjects,
+        });
+        if (
+          rawRef &&
+          !surviving.some(
+            (entry) =>
+              entry.voxelStorageBucket === rawRef.bucket && entry.voxelStoragePath === rawRef.path,
+          )
+        ) {
+          await deleteSupabaseStorageObjects([rawRef]);
+        }
+      }
+      const deleted = await tx.build.deleteMany({
+        where: {
+          id: build.id,
+          matchupsAsA: { none: {} },
+          matchupsAsB: { none: {} },
+          stealthGenerationResults: { none: { status: "READY" } },
+        },
+      });
+      return deleted.count === 1;
     },
-  });
-  return deleted.count === 1;
+    { timeout: 60_000 },
+  );
 }
 
 export function isMissingStealthBuildPayload(error: unknown): boolean {

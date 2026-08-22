@@ -54,9 +54,9 @@ Usage:
 
   const db = getDbInfo();
   const [modelTotal, matchupTotal, voteTotal, coverageModelPromptTotal, coveragePairTotal, coveragePairPromptTotal] = await Promise.all([
-    prisma.model.count(),
-    prisma.matchup.count(),
-    prisma.vote.count(),
+    prisma.model.count({ where: { stealthVariant: null } }),
+    prisma.matchup.count({ where: { stealthVariantId: null } }),
+    prisma.vote.count({ where: { matchup: { stealthVariantId: null } } }),
     prisma.arenaCoverageModelPrompt.count(),
     prisma.arenaCoveragePair.count(),
     prisma.arenaCoveragePairPrompt.count(),
@@ -94,10 +94,10 @@ Usage:
       const dcmp = await tx.arenaCoverageModelPrompt.deleteMany();
       deletedCoverageModelPrompts = dcmp.count;
 
-      const dv = await tx.vote.deleteMany();
+      const dv = await tx.vote.deleteMany({ where: { matchup: { stealthVariantId: null } } });
       deletedVotes = dv.count;
 
-      const dm = await tx.matchup.deleteMany();
+      const dm = await tx.matchup.deleteMany({ where: { stealthVariantId: null } });
       deletedMatchups = dm.count;
     }
 
@@ -115,20 +115,6 @@ Usage:
         bothBadCount: 0,
       },
     });
-    const updatedStealthVariants = await tx.stealthVariant.updateMany({
-      data: {
-        eloRating: 1500,
-        glickoRd: 350,
-        glickoVolatility: 0.06,
-        conservativeRating: 800,
-        shownCount: 0,
-        winCount: 0,
-        lossCount: 0,
-        drawCount: 0,
-        bothBadCount: 0,
-      },
-    });
-
     return {
       deletedVotes,
       deletedMatchups,
@@ -136,13 +122,11 @@ Usage:
       deletedCoveragePairs,
       deletedCoveragePairPrompts,
       updatedModels: updatedModels.count,
-      updatedStealthVariants: updatedStealthVariants.count,
     };
   });
 
   console.log("done");
   console.log(`models reset: ${result.updatedModels}`);
-  console.log(`stealth variants reset: ${result.updatedStealthVariants}`);
   if (args.keepHistory) {
     console.log("history kept: matchups/votes unchanged");
   } else {

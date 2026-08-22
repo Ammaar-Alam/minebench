@@ -93,6 +93,67 @@ async function installBuildInsertFailure(params: {
   };
 }
 
+async function installBuildDeleteBarrier(params: {
+  name: string;
+  lockKey: number;
+  buildId: string;
+}) {
+  const functionName = `block_${params.name}`;
+  const triggerName = `block_${params.name}_build`;
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION "${functionName}"() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF OLD.id = '${params.buildId}' THEN
+        PERFORM pg_advisory_xact_lock(${params.lockKey});
+      END IF;
+      RETURN OLD;
+    END
+    $$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER "${triggerName}"
+    BEFORE DELETE ON "Build"
+    FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+  `);
+  let release!: () => void;
+  let ready!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const acquired = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const holder = prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${params.lockKey})`);
+      ready();
+      await released;
+    },
+    { timeout: 30_000 },
+  );
+  await acquired;
+  return {
+    waitUntilBlocked: () =>
+      waitFor(async () => {
+        const [row] = await prisma.$queryRaw<Array<{ blocked: boolean }>>`
+          SELECT EXISTS (
+            SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted = false
+          ) AS blocked
+        `;
+        return row?.blocked ? true : null;
+      }, "unaccepted build cleanup"),
+    release: async () => {
+      release();
+      await holder;
+    },
+    uninstall: async () => {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "Build"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
+    },
+  };
+}
+
 async function main() {
   const schema = process.env.MINEBENCH_TEST_SCHEMA;
   if (!schema) {
@@ -107,6 +168,7 @@ async function main() {
     activateStealthEvaluation,
     closeStealthEvaluation,
     completeUploadedStealthCohort,
+    completeUploadedStealthCohortFromStorage,
     configureStealthEndpoint,
     createStealthEvaluation,
     deleteUnusedDraftEvaluation,
@@ -123,7 +185,10 @@ async function main() {
     updateStealthEvaluation,
   } = await import("../../../lib/stealth/service");
   const { prepareStealthCohortPrompts } = await import("../../../lib/stealth/cohort");
-  const { persistStealthBuild } = await import("../../../lib/stealth/generation");
+  const { deleteUnacceptedStealthBuild, persistStealthBuild } = await import(
+    "../../../lib/stealth/generation"
+  );
+  const { getStealthExperimentReport } = await import("../../../lib/stealth/report");
   const {
     failStealthGenerationRun,
     finishStealthGenerationRun,
@@ -434,6 +499,30 @@ async function main() {
     where: { id: pendingUpload.id },
     data: { expiresAt: new Date(Date.now() - 60_000) },
   });
+  const expiredUploadFetch = global.fetch;
+  let expiredUploadRead = false;
+  global.fetch = (async () => {
+    expiredUploadRead = true;
+    throw new Error("Expired uploads must not be read");
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      completeUploadedStealthCohortFromStorage(
+        memberActor,
+        organization.id,
+        evaluation.id,
+        {
+          codename: "Expired upload",
+          bucket: pendingUpload.bucket,
+          path: pendingUpload.path,
+        },
+      ),
+      /reference is invalid/i,
+    );
+  } finally {
+    global.fetch = expiredUploadFetch;
+  }
+  assert.equal(expiredUploadRead, false);
   const draftStorageUrl = process.env.SUPABASE_URL;
   const draftStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const draftFetch = global.fetch;
@@ -815,7 +904,7 @@ async function main() {
   });
   try {
     await closingRequestStarted;
-    await closeStealthEvaluation(memberActor, organization.id, closingEvaluation.id);
+    await disableStealthEndpoint(memberActor, organization.id, closingCheckpoint.variantId);
     releaseClosingRequest();
     await closingGeneration;
   } finally {
@@ -823,19 +912,24 @@ async function main() {
     await closingGeneration.catch(() => undefined);
     global.fetch = originalGenerationFetch;
   }
-  const closedGenerationVariant = await prisma.stealthVariant.findUniqueOrThrow({
+  const revokedGenerationVariant = await prisma.stealthVariant.findUniqueOrThrow({
     where: { id: closingCheckpoint.variantId },
   });
-  assert.equal(closedGenerationVariant.status, "WITHDRAWN");
+  assert.equal(revokedGenerationVariant.status, "DRAFT");
+  assert.equal(revokedGenerationVariant.endpointEnabled, false);
   assert.equal(
-    await prisma.build.count({ where: { modelId: closedGenerationVariant.modelId } }),
+    await prisma.build.count({ where: { modelId: revokedGenerationVariant.modelId } }),
     0,
-    "closing during provider work must fence build persistence",
+    "revocation during provider work must fence build persistence",
   );
   assert.equal(
     (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: closingRun.runId } }))
       .status,
     "FAILED",
+  );
+  assert.equal(
+    await prisma.stealthEndpointCredential.count({ where: { variantId: closingCheckpoint.variantId } }),
+    0,
   );
 
   const persistenceRaceEvaluation = await createStealthEvaluation(memberActor, organization.id, {
@@ -1023,12 +1117,50 @@ async function main() {
     await prisma.stealthEndpointCredential.count({ where: { variantId: failureCheckpoint.variantId } }),
     1,
   );
-  await assert.rejects(
-    disableStealthEndpoint(memberActor, organization.id, failureCheckpoint.variantId),
-    /partial generation/i,
-  );
   assert.ok(conflictingBuildId);
-  await prisma.build.delete({ where: { id: conflictingBuildId } });
+  const cleanupRaceRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    failureCheckpoint.variantId,
+    { maxAttempts: 1, concurrency: 1 },
+    async (runId) => `workflow-${runId}`,
+  );
+  const conflictingBuild = await prisma.build.findUniqueOrThrow({
+    where: { id: conflictingBuildId },
+    select: { promptId: true },
+  });
+  const cleanupBarrier = await installBuildDeleteBarrier({
+    name: `cleanup_${suffix}`,
+    lockKey: Number.parseInt(suffix, 16) + 2,
+    buildId: conflictingBuildId,
+  });
+  const cleanup = deleteUnacceptedStealthBuild(conflictingBuildId);
+  await cleanupBarrier.waitUntilBlocked();
+  const adoption = prisma.stealthGenerationResult.update({
+    where: {
+      runId_promptId: { runId: cleanupRaceRun.runId, promptId: conflictingBuild.promptId },
+    },
+    data: { buildId: conflictingBuildId, status: "READY" },
+  });
+  adoption.catch(() => undefined);
+  try {
+    let adoptionSettled = false;
+    adoption.finally(() => {
+      adoptionSettled = true;
+    }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(adoptionSettled, false, "replacement adoption must wait for cleanup ownership");
+    await cleanupBarrier.release();
+    assert.equal(await cleanup, true);
+    await assert.rejects(adoption);
+  } finally {
+    await cleanupBarrier.release().catch(() => undefined);
+    await cleanup.catch(() => undefined);
+    await adoption.catch(() => undefined);
+    await cleanupBarrier.uninstall();
+  }
+  await failStealthGenerationRun(cleanupRaceRun.runId, "Cleanup fencing test complete");
+  assert.equal(await prisma.build.count({ where: { id: conflictingBuildId } }), 0);
 
   const partialRun = await startStealthGeneration(
     memberActor,
@@ -1109,6 +1241,16 @@ async function main() {
     "READY",
   );
   await failStealthGenerationRun(reuseRun.runId, "Test cleanup");
+  await disableStealthEndpoint(memberActor, organization.id, failureCheckpoint.variantId);
+  const disabledPartialVariant = await prisma.stealthVariant.findUniqueOrThrow({
+    where: { id: failureCheckpoint.variantId },
+  });
+  assert.equal(disabledPartialVariant.status, "WITHDRAWN");
+  assert.equal(disabledPartialVariant.endpointEnabled, false);
+  assert.equal(
+    await prisma.stealthEndpointCredential.count({ where: { variantId: failureCheckpoint.variantId } }),
+    0,
+  );
 
   const reservedUploadEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Reserved upload ${suffix}`,
@@ -1550,6 +1692,16 @@ async function main() {
     where: { id: uploadedEvaluation.id },
     data: { retentionDeleteAt: dueShared },
   });
+  assert.equal(
+    await getStealthEvaluationWorkspace(memberActor, organization.id, uploadedEvaluation.id),
+    null,
+    "organization workspace reads must expire at the retention deadline",
+  );
+  assert.equal(
+    await getStealthExperimentReport(uploadedEvaluation.id),
+    null,
+    "retained reports must expire even when purge is delayed",
+  );
   const previousStorageUrl = process.env.SUPABASE_URL;
   const previousStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const originalFetch = global.fetch;

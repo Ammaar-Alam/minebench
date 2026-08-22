@@ -20,6 +20,7 @@ assert.doesNotMatch(cohortUpload, /from "tus-js-client"/);
 const service = read("lib/stealth/service.ts");
 assert.match(service, /createSignedUploadUrl/);
 assert.match(service, /signedUrl: data\.signedUrl/);
+assert.match(service, /expiresAt: \{ gt: new Date\(\) \}/);
 
 function assertOrder(body: string, first: string, second: string, message: string) {
   const firstIndex = body.indexOf(first);
@@ -67,6 +68,27 @@ assert.match(
 assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);
 assert.match(generationRun, /deleteUnacceptedStealthBuild\(existing\.id\)/);
 assert.match(generationRun, /sanitizeOperationalError\([\s\S]*configuredApiKey/);
+const unacceptedCleanup = generationSource.slice(
+  generationSource.indexOf("export async function deleteUnacceptedStealthBuild"),
+  generationSource.indexOf("export function isMissingStealthBuildPayload"),
+);
+assertOrder(
+  unacceptedCleanup,
+  'SELECT id FROM "Build" WHERE id = ${buildId} FOR UPDATE',
+  "deleteArenaBuildArtifacts",
+  "unaccepted cleanup must claim the Build before deleting storage",
+);
+
+const retention = read("lib/stealth/retention.ts");
+assert.match(retention, /retentionDeleteAt: \{ gt: now \}/);
+for (const path of [
+  "lib/stealth/service.ts",
+  "lib/stealth/report.ts",
+  "app/api/lab/organizations/[orgSlug]/experiments/[experimentId]/export/route.ts",
+  "app/api/lab/organizations/[orgSlug]/builds/[resultId]/route.ts",
+]) {
+  assert.match(read(path), /readableStealthEvaluationWhere/);
+}
 
 for (const path of ["lib/arena/buildSnapshotArtifacts.ts", "lib/arena/buildStream.ts"]) {
   assert.match(read(path), /uploadArenaBuildArtifact/);

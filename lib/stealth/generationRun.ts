@@ -379,9 +379,12 @@ async function acceptStealthGenerationBuild(params: {
     if (!locked) return false;
     const run = await tx.stealthGenerationRun.findUnique({
       where: { id: params.runId },
-      select: { status: true, variant: { select: { experimentId: true } } },
+      select: {
+        status: true,
+        variant: { select: { experimentId: true, endpointEnabled: true } },
+      },
     });
-    if (!run || run.status !== "RUNNING") return false;
+    if (!run || run.status !== "RUNNING" || !run.variant.endpointEnabled) return false;
     const experiment = await lockExperiment(tx, run.variant.experimentId);
     if (!experiment || !isStealthCheckpointSetOpen(experiment.status)) return false;
     const accepted = await tx.stealthGenerationResult.updateMany({
@@ -425,7 +428,11 @@ export async function generateStealthPromptForRun(params: {
       },
     });
     if (!currentRun) throw new Error("Generation run not found");
-    if (currentRun.status !== "RUNNING" || currentRun.variant.experiment.status === "CLOSED") {
+    if (
+      currentRun.status !== "RUNNING" ||
+      !currentRun.variant.endpointEnabled ||
+      currentRun.variant.experiment.status === "CLOSED"
+    ) {
       return null;
     }
     const prior = await tx.stealthGenerationResult.upsert({
@@ -565,9 +572,22 @@ export async function generateStealthPromptForRun(params: {
     if (!locked) return 0;
     const current = await tx.stealthGenerationRun.findUnique({
       where: { id: run.id },
-      select: { status: true, variant: { select: { experiment: { select: { status: true } } } } },
+      select: {
+        status: true,
+        variant: {
+          select: {
+            endpointEnabled: true,
+            experiment: { select: { status: true } },
+          },
+        },
+      },
     });
-    if (!current || current.status !== "RUNNING" || current.variant.experiment.status === "CLOSED") {
+    if (
+      !current ||
+      current.status !== "RUNNING" ||
+      !current.variant.endpointEnabled ||
+      current.variant.experiment.status === "CLOSED"
+    ) {
       return 0;
     }
     const updated = await tx.stealthGenerationResult.updateMany({

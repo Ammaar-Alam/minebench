@@ -42,6 +42,7 @@ import {
   opaqueStealthModelKey,
 } from "@/lib/stealth/policy";
 import { invalidateStealthSamplingCache } from "@/lib/stealth/sampling";
+import { readableStealthEvaluationWhere } from "@/lib/stealth/retention";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 
 export type StealthActor =
@@ -1095,7 +1096,7 @@ export async function getStealthEvaluationWorkspace(
 ): Promise<StealthEvaluationWorkspace | null> {
   await assertEvaluationOperator(prisma, actor, organizationId);
   const evaluation = await prisma.stealthExperiment.findFirst({
-    where: { id: experimentId, organizationId },
+    where: { id: experimentId, organizationId, ...readableStealthEvaluationWhere() },
     include: {
       organization: { select: { id: true, slug: true, name: true } },
       variants: {
@@ -1669,11 +1670,16 @@ export async function completeUploadedStealthCohortFromStorage(
     bucket: input.bucket,
     path: input.path,
   });
-  const tracked = await prisma.stealthCohortUpload.findUnique({
-    where: { bucket_path: ref },
-    select: { experimentId: true },
+  const tracked = await prisma.stealthCohortUpload.findFirst({
+    where: {
+      bucket: ref.bucket,
+      path: ref.path,
+      experimentId,
+      expiresAt: { gt: new Date() },
+    },
+    select: { id: true },
   });
-  if (!tracked || tracked.experimentId !== experimentId) {
+  if (!tracked) {
     throw new Error("Cohort upload reference is invalid");
   }
   try {
@@ -1697,6 +1703,10 @@ export async function completeUploadedStealthCohortFromStorage(
       }
       throw new Error("Cohort must be valid JSON");
     }
+    const stillLive = await prisma.stealthCohortUpload.count({
+      where: { id: tracked.id, expiresAt: { gt: new Date() } },
+    });
+    if (stillLive !== 1) throw new Error("Cohort upload reference is invalid");
     return await completeUploadedStealthCohort(actor, organizationId, experimentId, {
       variantId: input.variantId,
       codename: input.codename,
@@ -1916,7 +1926,7 @@ export async function disableStealthEndpoint(
   organizationId: string,
   variantId: string,
 ): Promise<void> {
-  await prisma.$transaction(async (tx) => {
+  const runIds = await prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
     const identity = await tx.stealthVariant.findUnique({
       where: { id: variantId },
@@ -1933,20 +1943,21 @@ export async function disableStealthEndpoint(
     }
     if (experiment.status === "CLOSED") throw new Error("Closed evaluations are read-only");
     if (variant.source !== "ENDPOINT") throw new Error("Checkpoint does not use an endpoint");
-    await reclaimStaleStealthGenerationRuns(tx, variant.id);
-    const [buildCount, activeRunCount] = await Promise.all([
+    const [buildCount, activeRuns] = await Promise.all([
       tx.build.count({ where: { modelId: variant.modelId } }),
-      tx.stealthGenerationRun.count({ where: { variantId: variant.id, status: "RUNNING" } }),
+      tx.stealthGenerationRun.findMany({
+        where: { variantId: variant.id, status: "RUNNING" },
+        select: { id: true },
+      }),
     ]);
-    if (activeRunCount > 0) throw new Error("Generation is still running");
-    if (buildCount > 0 && variant.status !== "READY") {
-      throw new Error("A partial generation must be completed before disabling its endpoint");
-    }
+    const withdrawPartial = buildCount > 0 && variant.status !== "READY";
     await tx.stealthVariant.update({
       where: { id: variant.id },
       data: {
         endpointEnabled: false,
-        ...(buildCount === 0 && variant.status === "GENERATING"
+        ...(withdrawPartial
+          ? { status: "WITHDRAWN" as const }
+          : buildCount === 0 && variant.status === "GENERATING"
           ? {
               status: "DRAFT" as const,
               generatedBuildCount: 0,
@@ -1956,9 +1967,17 @@ export async function disableStealthEndpoint(
           : {}),
       },
     });
+    if (withdrawPartial) {
+      await tx.model.update({ where: { id: variant.modelId }, data: { enabled: false } });
+    }
     await tx.stealthEndpointCredential.deleteMany({ where: { variantId: variant.id } });
     await syncExperimentReadiness(tx, experiment.id);
+    return activeRuns.map((run) => run.id);
   });
+  const { failStealthGenerationRun } = await import("@/lib/stealth/generationRun");
+  for (const runId of runIds) {
+    await failStealthGenerationRun(runId, "Endpoint disabled");
+  }
 }
 
 export async function deleteUnusedDraftEvaluation(
@@ -2040,6 +2059,7 @@ export async function getProtectedStealthBuild(
         variant: {
           experiment: {
             organizationId,
+            ...readableStealthEvaluationWhere(),
           },
         },
       },

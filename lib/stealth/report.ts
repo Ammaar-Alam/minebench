@@ -3,6 +3,7 @@ import { confidenceFromRd, stabilityTier } from "@/lib/arena/rating";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 import { prisma } from "@/lib/prisma";
 import { stealthVoteGoalProgress } from "@/lib/stealth/policy";
+import { readableStealthEvaluationWhere } from "@/lib/stealth/retention";
 
 type AggregateRow = {
   variantId: string;
@@ -166,8 +167,8 @@ function appendBreakdown(
 export async function getStealthExperimentReport(
   experimentId: string,
 ): Promise<StealthExperimentReport | null> {
-  const experiment = await prisma.stealthExperiment.findUnique({
-    where: { id: experimentId },
+  const experiment = await prisma.stealthExperiment.findFirst({
+    where: { id: experimentId, ...readableStealthEvaluationWhere() },
     include: {
       organization: { select: { id: true, slug: true, name: true } },
       variants: {
@@ -416,13 +417,11 @@ export type DeidentifiedStealthVote = {
 
 type ExportRow = Omit<DeidentifiedStealthVote, "choice"> & {
   voteId: string;
-  createdAt: Date;
   rawChoice: "A" | "B" | "TIE" | "BOTH_BAD";
 };
 
 export type DeidentifiedStealthVoteCursor = {
   voteId: string;
-  createdAt: Date;
 };
 
 export async function getDeidentifiedStealthVotePage(
@@ -434,16 +433,10 @@ export async function getDeidentifiedStealthVotePage(
   nextCursor: DeidentifiedStealthVoteCursor | null;
 }> {
   const pageSize = Math.max(1, Math.min(5_000, Math.floor(limit)));
-  const afterCursor = cursor
-    ? Prisma.sql`AND (
-        vote."createdAt" > ${cursor.createdAt}
-        OR (vote."createdAt" = ${cursor.createdAt} AND vote.id > ${cursor.voteId})
-      )`
-    : Prisma.empty;
+  const afterCursor = cursor ? Prisma.sql`AND vote.id > ${cursor.voteId}` : Prisma.empty;
   const rows = await prisma.$queryRaw<ExportRow[]>(Prisma.sql`
     SELECT
       vote.id AS "voteId",
-      vote."createdAt" AS "createdAt",
       TO_CHAR(vote."createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
       variant.codename AS codename,
       prompt.text AS prompt,
@@ -460,7 +453,7 @@ export async function getDeidentifiedStealthVotePage(
     END
     WHERE variant."experimentId" = ${experimentId}
     ${afterCursor}
-    ORDER BY vote."createdAt" ASC, vote.id ASC
+    ORDER BY vote.id ASC
     LIMIT ${pageSize}
   `);
   const mapped: DeidentifiedStealthVote[] = rows.map((row) => ({
@@ -483,7 +476,7 @@ export async function getDeidentifiedStealthVotePage(
     rows: mapped,
     nextCursor:
       rows.length === pageSize && last
-        ? { voteId: last.voteId, createdAt: last.createdAt }
+        ? { voteId: last.voteId }
         : null,
   };
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createArenaBuildAccessToken } from "@/lib/arena/matchupToken";
 import { prisma } from "@/lib/prisma";
 import { getLabIdentity } from "@/lib/stealth/auth";
+import { readableStealthEvaluationWhere } from "@/lib/stealth/retention";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,8 +63,22 @@ export async function GET(
     );
   }
 
-  const result = await prisma.stealthGenerationResult.findUnique({
-    where: { id: resultId },
+  const result = await prisma.stealthGenerationResult.findFirst({
+    where: {
+      id: resultId,
+      ...(!identity.user.isMineBenchAdmin
+        ? {
+            run: {
+              variant: {
+                experiment: {
+                  organizationId: organization?.id,
+                  ...readableStealthEvaluationWhere(),
+                },
+              },
+            },
+          }
+        : {}),
+    },
     select: {
       id: true,
       status: true,
@@ -79,7 +94,9 @@ export async function GET(
             select: {
               codename: true,
               source: true,
-              experiment: { select: { organizationId: true } },
+              experiment: {
+                select: { organizationId: true },
+              },
             },
           },
         },

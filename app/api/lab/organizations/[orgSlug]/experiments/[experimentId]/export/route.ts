@@ -7,6 +7,7 @@ import {
   getDeidentifiedStealthVotePage,
   serializeDeidentifiedStealthVotes,
 } from "@/lib/stealth/report";
+import { readableStealthEvaluationWhere } from "@/lib/stealth/retention";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,11 +19,15 @@ export async function GET(
   const { orgSlug, experimentId } = await params;
   const context = await getLabOrganizationContext(orgSlug).catch(() => null);
   if (!context) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-  const experiment = await prisma.stealthExperiment.findUnique({
-    where: { id: experimentId },
+  const experiment = await prisma.stealthExperiment.findFirst({
+    where: {
+      id: experimentId,
+      organizationId: context.membership.organization.id,
+      ...readableStealthEvaluationWhere(),
+    },
     select: { organizationId: true, slug: true, exportPolicy: true },
   });
-  if (!experiment || experiment.organizationId !== context.membership.organization.id) {
+  if (!experiment) {
     return NextResponse.json({ error: "Evaluation not found" }, { status: 404 });
   }
   if (

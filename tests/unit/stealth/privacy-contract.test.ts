@@ -54,7 +54,7 @@ assert.match(leaderboardBuildRoute, /Build not found/);
 const labBuildRoute = read("app/api/lab/organizations/[orgSlug]/builds/[resultId]/route.ts");
 assert.match(labBuildRoute, /getLabIdentity/);
 assert.match(labBuildRoute, /identity\.user\.isMineBenchAdmin/);
-assert.match(labBuildRoute, /stealthGenerationResult\.findUnique/);
+assert.match(labBuildRoute, /stealthGenerationResult\.findFirst/);
 assert.match(labBuildRoute, /organizationId !== organization\?\.id/);
 assert.match(labBuildRoute, /createArenaBuildAccessToken/);
 assert.match(labBuildRoute, /streamToken:/);
@@ -62,6 +62,11 @@ assert.doesNotMatch(labBuildRoute, /resolveBuildPayload/);
 assert.doesNotMatch(labBuildRoute, /validateVoxelBuild/);
 assert.match(labBuildRoute, /resultId: result\.id/);
 assert.doesNotMatch(labBuildRoute, /voxelBuild[:,]/);
+
+const resetElo = read("scripts/reset-elo.ts");
+assert.match(resetElo, /vote\.deleteMany\(\{ where: \{ matchup: \{ stealthVariantId: null \} \} \}\)/);
+assert.match(resetElo, /matchup\.deleteMany\(\{ where: \{ stealthVariantId: null \} \}\)/);
+assert.doesNotMatch(resetElo, /stealthVariant\.updateMany/);
 
 const voteRoute = read("app/api/arena/vote/route.ts");
 assert.match(voteRoute, /const responseBody: ArenaVoteResponse/);
