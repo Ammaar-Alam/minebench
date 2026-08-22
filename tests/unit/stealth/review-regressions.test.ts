@@ -34,6 +34,36 @@ function assertOrder(body: string, first: string, second: string, message: strin
   assert.ok(firstIndex >= 0 && secondIndex >= 0 && firstIndex < secondIndex, message);
 }
 
+function functionBody(source: string, functionName: string): string {
+  const start = source.indexOf(`export async function ${functionName}`);
+  const end = source.indexOf("\nexport async function ", start + 1);
+  assert.ok(start >= 0, `${functionName} must exist`);
+  return source.slice(start, end < 0 ? undefined : end);
+}
+
+const workspaceDetail = functionBody(service, "getStealthEvaluationWorkspace");
+assertOrder(
+  workspaceDetail,
+  "reclaimStaleStealthGenerationRuns",
+  "stealthExperiment.findFirst",
+  "workspace reads must reclaim expired generation reservations before reporting status",
+);
+const uploadTarget = functionBody(service, "createStealthCohortUploadTarget");
+assert.match(uploadTarget, /expiresAt: \{ gt: now \}/);
+const activation = functionBody(service, "activateStealthEvaluation");
+assert.match(activation, /generationRuns:[\s\S]*status: "SUCCEEDED"/);
+assert.match(activation, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
+const closeEvaluation = functionBody(service, "closeStealthEvaluation");
+assertOrder(
+  closeEvaluation,
+  'data: { status: "PAUSED", endedAt }',
+  "drainStealthVoteJobsForExperiment",
+  "closure must become non-votable before draining accepted votes",
+);
+assert.match(functionBody(service, "resumeStealthEvaluation"), /if \(experiment\.endedAt\)/);
+assert.doesNotMatch(service, /for \(let page = 1; page <= 10/);
+assert.match(service, /if \(!data\.nextPage\) break/);
+
 for (const functionName of ["disableStealthEndpoint", "recordStealthReleaseMapping"]) {
   const start = service.indexOf(`export async function ${functionName}`);
   const end = service.indexOf("\nexport async function ", start + 1);
@@ -111,6 +141,7 @@ assert.match(report, /ORDER BY vote\."createdAt" ASC, vote\.id ASC/);
 assert.match(report, /if \(persisted && !result\.build\) continue/);
 assert.match(report, /stealthGenerationResults: \{ some: \{ status: "READY" \} \}/);
 assert.match(report, /isBaseline: false/);
+assert.match(report, /function safeGenerationError[\s\S]*return error/);
 
 const sampling = read("lib/stealth/sampling.ts");
 assert.match(
@@ -120,7 +151,19 @@ assert.match(
 
 const voteJobs = read("lib/arena/voteJobs.ts");
 assert.match(voteJobs, /drainStealthVoteJobsForExperiment/);
+assert.doesNotMatch(voteJobs, /stealthExperimentId\?: string/);
+assert.match(voteJobs, /ORDER BY "createdAt" ASC, "id" ASC/);
 assert.match(service, /Votes are still settling/);
+
+const generateVoxelBuild = read("lib/ai/generateVoxelBuild.ts");
+assert.match(generateVoxelBuild, /reasoningEffort: args\.reasoning/);
+
+const credentials = read("lib/stealth/credentials.ts");
+assert.match(credentials, /protocol === "openrouter"[\s\S]*requireStructuredOutput/);
+
+const signInActions = read("app/lab/sign-in/actions.ts");
+assert.match(signInActions, /VERCEL_URL/);
+assert.doesNotMatch(signInActions, /NODE_ENV === "production"[\s\S]*https:\/\/minebench\.ai/);
 
 const voteRoute = read("app/api/arena/vote/route.ts");
 assertOrder(
@@ -142,6 +185,8 @@ for (const path of ["lib/arena/buildSnapshotArtifacts.ts", "lib/arena/buildStrea
 
 const cli = read("scripts/stealth-eval.ts");
 assert.match(cli, /positiveInt\(args, \["--concurrency"\], 1, 4\)/);
+assert.doesNotMatch(cli, /for \(let page = 1; page <= 10/);
+assert.match(cli, /if \(!data\.nextPage\) break/);
 
 const actions = read("app/lab/[orgSlug]/actions.ts");
 assert.match(actions, /completeUploadedStealthCohortFromStorage/);

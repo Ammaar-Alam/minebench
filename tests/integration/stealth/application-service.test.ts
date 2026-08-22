@@ -499,6 +499,61 @@ async function main() {
     /not ready/,
   );
 
+  const staleEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+    name: `Stale generation ${suffix}`,
+  });
+  const staleCheckpoint = await configureStealthEndpoint(
+    memberActor,
+    organization.id,
+    staleEvaluation.id,
+    {
+      codename: "Stale generation",
+      config: {
+        protocol: "openrouter",
+        endpointUrl: "",
+        apiKey: "stale-generation-secret-key",
+        modelId: `stale-generation-${suffix}`,
+        requireStructuredOutput: true,
+        enableTools: false,
+      },
+    },
+  );
+  const [stalePrompt] = await prepareStealthCohortPrompts();
+  assert.ok(stalePrompt);
+  const staleReadAt = new Date(Date.now() - 16 * 60_000);
+  const staleRun = await prisma.stealthGenerationRun.create({
+    data: {
+      variantId: staleCheckpoint.variantId,
+      status: "RUNNING",
+      promptCohortId: "stale-read-recovery",
+      configuration: {},
+      expectedBuildCount: 1,
+      startedAt: staleReadAt,
+      results: {
+        create: { promptId: stalePrompt.prompt.id, status: "QUEUED", updatedAt: staleReadAt },
+      },
+    },
+  });
+  await prisma.stealthVariant.update({
+    where: { id: staleCheckpoint.variantId },
+    data: { status: "GENERATING" },
+  });
+  await prisma.stealthExperiment.update({
+    where: { id: staleEvaluation.id },
+    data: { status: "GENERATING" },
+  });
+  const recoveredWorkspace = await getStealthEvaluationWorkspace(
+    memberActor,
+    organization.id,
+    staleEvaluation.id,
+  );
+  assert.equal(recoveredWorkspace?.checkpoints[0]?.latestGenerationRun?.status, "FAILED");
+  assert.equal(
+    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: staleRun.id } })).status,
+    "FAILED",
+    "workspace status reads must reclaim expired generation reservations",
+  );
+
   const privateCacheVariant = await prisma.stealthVariant.findUniqueOrThrow({
     where: { id: checkpoint.variantId },
     select: { modelId: true },
@@ -1040,6 +1095,15 @@ async function main() {
       .status,
     "CLOSED",
     "closure must roll back if active runs cannot terminalize",
+  );
+  assert.ok(
+    (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: atomicCloseEvaluation.id } }))
+      .endedAt,
+    "a close request must retain its non-votable reservation when finalization fails",
+  );
+  await assert.rejects(
+    resumeStealthEvaluation(memberActor, organization.id, atomicCloseEvaluation.id),
+    /closing/,
   );
   assert.equal(
     (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: atomicCloseRun.runId } }))
@@ -1742,6 +1806,21 @@ async function main() {
     2,
     "checkpoint membership stays open until activation",
   );
+  const uploadedRun = await prisma.stealthGenerationRun.findFirstOrThrow({
+    where: { variantId: uploaded.variantId, status: "SUCCEEDED" },
+  });
+  await prisma.stealthGenerationRun.update({
+    where: { id: uploadedRun.id },
+    data: { promptCohortId: "prompts-v1:stale" },
+  });
+  await assert.rejects(
+    activateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id),
+    /outdated prompt cohort/,
+  );
+  await prisma.stealthGenerationRun.update({
+    where: { id: uploadedRun.id },
+    data: { promptCohortId: uploadedRun.promptCohortId },
+  });
   await activateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id);
   const active = await prisma.stealthExperiment.findUniqueOrThrow({
     where: { id: uploadedEvaluation.id },

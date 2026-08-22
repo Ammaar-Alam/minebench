@@ -647,12 +647,14 @@ export async function syncExperimentReadiness(
 
 async function findOrInviteSupabaseAuthUserByEmail(email: string): Promise<string | null> {
   const supabase = createSupabaseAdminClient();
-  for (let page = 1; page <= 10; page += 1) {
+  let page = 1;
+  while (true) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
     if (error) throw new Error(sanitizeOperationalError(error));
     const found = data.users.find((user) => user.email?.trim().toLowerCase() === email);
     if (found) return found.id;
-    if (data.users.length < 1000) break;
+    if (!data.nextPage) break;
+    page = data.nextPage;
   }
 
   const siteUrl = (process.env.MINEBENCH_SITE_URL ?? "").trim().replace(/\/+$/, "");
@@ -1102,6 +1104,27 @@ export async function getStealthEvaluationWorkspace(
   experimentId: string,
 ): Promise<StealthEvaluationWorkspace | null> {
   await assertEvaluationOperator(prisma, actor, organizationId);
+  await prisma.$transaction(async (tx) => {
+    const experiment = await lockExperiment(tx, experimentId);
+    if (
+      !experiment ||
+      experiment.organizationId !== organizationId ||
+      !isStealthCheckpointSetOpen(experiment.status)
+    ) {
+      return;
+    }
+    const variants = await tx.stealthVariant.findMany({
+      where: { experimentId },
+      orderBy: { id: "asc" },
+      select: { id: true },
+    });
+    let reclaimed = 0;
+    for (const variant of variants) {
+      await lockVariant(tx, variant.id);
+      reclaimed += await reclaimStaleStealthGenerationRuns(tx, variant.id);
+    }
+    if (reclaimed > 0) await syncExperimentReadiness(tx, experimentId);
+  });
   const evaluation = await prisma.stealthExperiment.findFirst({
     where: { id: experimentId, organizationId, ...readableStealthEvaluationWhere() },
     include: {
@@ -1359,8 +1382,9 @@ export async function createStealthCohortUploadTarget(
     if (!isStealthCheckpointSetOpen(experiment.status)) {
       throw new Error("Activated evaluations cannot accept new checkpoints");
     }
+    const now = new Date();
     const pendingUploads = await tx.stealthCohortUpload.count({
-      where: { experiment: { organizationId } },
+      where: { experiment: { organizationId }, expiresAt: { gt: now } },
     });
     if (pendingUploads >= MAX_PENDING_COHORT_UPLOADS_PER_ORGANIZATION) {
       throw new Error("Too many pending cohort uploads");
@@ -1371,7 +1395,7 @@ export async function createStealthCohortUploadTarget(
         experimentId,
         bucket,
         path,
-        expiresAt: new Date(Date.now() + COHORT_UPLOAD_TTL_MS),
+        expiresAt: new Date(now.getTime() + COHORT_UPLOAD_TTL_MS),
       },
     });
   });
@@ -1757,6 +1781,12 @@ export async function activateStealthEvaluation(
         modelId: true,
         expectedBuildCount: true,
         generatedBuildCount: true,
+        generationRuns: {
+          where: { status: "SUCCEEDED" },
+          orderBy: { completedAt: "desc" },
+          take: 1,
+          select: { promptCohortId: true },
+        },
       },
     });
     if (variants.length === 0) throw new Error("Add a checkpoint first");
@@ -1764,6 +1794,9 @@ export async function activateStealthEvaluation(
       if (variant.status !== "READY") throw new Error(`${variant.codename} is not ready`);
       if (variant.expectedBuildCount === 0 || variant.generatedBuildCount !== variant.expectedBuildCount) {
         throw new Error(`${variant.codename} is incomplete`);
+      }
+      if (variant.generationRuns[0]?.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID) {
+        throw new Error(`${variant.codename} uses an outdated prompt cohort`);
       }
     }
     const now = new Date();
@@ -1831,6 +1864,7 @@ export async function resumeStealthEvaluation(
       throw new Error("Evaluation not found");
     }
     if (experiment.status !== "PAUSED") throw new Error("Evaluation is not paused");
+    if (experiment.endedAt) throw new Error("Evaluation is closing");
     const variants = await tx.stealthVariant.findMany({
       where: { experimentId: experiment.id, status: "ACTIVE" },
       select: { modelId: true, winCount: true, lossCount: true },
@@ -1864,13 +1898,34 @@ export async function closeStealthEvaluation(
   experimentId: string,
   params?: { retentionDays?: number },
 ): Promise<void> {
-  await assertEvaluationOperator(prisma, actor, organizationId);
-  const closeTarget = await prisma.stealthExperiment.findFirst({
-    where: { id: experimentId, organizationId },
-    select: { status: true },
+  const closeState = await prisma.$transaction(async (tx) => {
+    await assertEvaluationOperator(tx, actor, organizationId);
+    const experiment = await lockExperiment(tx, experimentId);
+    if (!experiment || experiment.organizationId !== organizationId) {
+      throw new Error("Evaluation not found");
+    }
+    if (experiment.status === "CLOSED") return null;
+    const variants = await tx.stealthVariant.findMany({
+      where: { experimentId: experiment.id },
+      select: { modelId: true },
+    });
+    const retentionDays =
+      params?.retentionDays === undefined
+        ? experiment.retentionDays
+        : normalizeRetentionDays(params.retentionDays);
+    const endedAt = experiment.endedAt ?? new Date();
+    await tx.model.updateMany({
+      where: { id: { in: variants.map((variant) => variant.modelId) } },
+      data: { enabled: false },
+    });
+    await tx.stealthExperiment.update({
+      where: { id: experiment.id },
+      data: { status: "PAUSED", endedAt },
+    });
+    return { retentionDays, endedAt };
   });
-  if (!closeTarget) throw new Error("Evaluation not found");
-  if (closeTarget.status === "CLOSED") return;
+  if (!closeState) return;
+  invalidateStealthSamplingCache();
   const { drainStealthVoteJobsForExperiment } = await import("@/lib/arena/voteJobs");
   await drainStealthVoteJobsForExperiment(experimentId);
   const { terminalizeStealthGenerationRunsForClosure } = await import(
@@ -1891,11 +1946,6 @@ export async function closeStealthEvaluation(
       where: { experimentId: experiment.id },
       select: { id: true, modelId: true },
     });
-    const now = new Date();
-    const retentionDays =
-      params?.retentionDays === undefined
-        ? experiment.retentionDays
-        : normalizeRetentionDays(params.retentionDays);
     await tx.model.updateMany({
       where: { id: { in: variants.map((variant) => variant.modelId) } },
       data: { enabled: false },
@@ -1911,9 +1961,11 @@ export async function closeStealthEvaluation(
       where: { id: experiment.id },
       data: {
         status: "CLOSED",
-        endedAt: now,
-        retentionDays,
-        retentionDeleteAt: new Date(now.getTime() + retentionDays * 86_400_000),
+        endedAt: closeState.endedAt,
+        retentionDays: closeState.retentionDays,
+        retentionDeleteAt: new Date(
+          closeState.endedAt.getTime() + closeState.retentionDays * 86_400_000,
+        ),
       },
     });
     await terminalizeStealthGenerationRunsForClosure(tx, experiment.id);

@@ -540,6 +540,7 @@ async function callDirectProvider(args: {
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
+  reasoningEffort?: string;
   reasoningEffortAttempts?: string[];
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
@@ -656,6 +657,7 @@ async function callDirectProvider(args: {
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
       requireStructuredOutput: args.requireStructuredOutput,
+      reasoningEffort: args.reasoningEffort,
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
@@ -897,6 +899,7 @@ async function providerGenerateText(args: {
         jsonSchema: args.jsonSchema,
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
+        reasoningEffort: model.provider === "custom" ? args.reasoning : undefined,
         reasoningEffortAttempts:
           directOpenAiReasoningEffortAttempts ??
           directXaiReasoningEffortAttempts ??
@@ -999,8 +1002,9 @@ async function providerGenerateText(args: {
     enableReasoning: openRouterReasoningEnabled,
     reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
-    jsonSchema: args.jsonSchema,
-    requireParameterSupport: model.provider !== "custom",
+    jsonSchema: model.requireStructuredOutput === false ? undefined : args.jsonSchema,
+    requireParameterSupport:
+      model.requireStructuredOutput ?? model.provider !== "custom",
     reasoningEffortAttempts: openRouterReasoningEffortAttempts,
     requireReasoning: modelRequiresReasoning(model.openRouterModelId),
     signal: args.signal,

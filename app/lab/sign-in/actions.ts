@@ -3,7 +3,6 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { SITE_URL } from "@/lib/seo";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const emailSchema = z.string().trim().email().max(320);
@@ -11,7 +10,11 @@ const emailSchema = z.string().trim().email().max(320);
 async function requestOrigin(): Promise<string> {
   const configured = process.env.MINEBENCH_SITE_URL?.trim();
   if (configured) return new URL(configured).origin;
-  if (process.env.NODE_ENV === "production") return SITE_URL;
+  const vercelUrl = process.env.VERCEL_URL?.trim();
+  if (vercelUrl) return new URL(`https://${vercelUrl}`).origin;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Missing MINEBENCH_SITE_URL for the sign-in redirect");
+  }
 
   const requestHeaders = await headers();
   const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");

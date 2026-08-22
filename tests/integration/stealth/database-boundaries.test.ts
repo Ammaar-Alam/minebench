@@ -140,6 +140,66 @@ async function main() {
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
     assert.equal(await db.vote.count(), 1);
     assert.equal(await db.arenaVoteJob.count({ where: { stealthVariantId: fixture.variant.id } }), 1);
+    const olderPublicModels = await Promise.all(
+      ["a", "b"].map((name) =>
+        db.model.create({
+          data: {
+            key: `older-public-${name}-${fixture.experiment.id}`,
+            provider: "Public",
+            modelId: `older-public-${name}-${fixture.experiment.id}`,
+            displayName: `Older public ${name}`,
+          },
+        }),
+      ),
+    );
+    const olderPublicBuilds = await Promise.all(
+      olderPublicModels.map((model, index) =>
+        db.build.create({
+          data: {
+            promptId: fixture.privateBuild.promptId,
+            modelId: model.id,
+            gridSize: fixture.privateBuild.gridSize,
+            palette: fixture.privateBuild.palette,
+            mode: fixture.privateBuild.mode,
+            voxelData: {
+              version: "1.0",
+              blocks: [{ x: index + 2, y: 0, z: 0, type: "stone" }],
+            },
+            voxelSha256: String(index + 2).repeat(64),
+            blockCount: 1,
+            generationTimeMs: 1,
+          },
+        }),
+      ),
+    );
+    const olderPublicMatchup = await db.matchup.create({
+      data: {
+        promptId: fixture.privateBuild.promptId,
+        modelAId: olderPublicModels[0].id,
+        modelBId: olderPublicModels[1].id,
+        buildAId: olderPublicBuilds[0].id,
+        buildBId: olderPublicBuilds[1].id,
+      },
+    });
+    const olderPublicVote = await db.vote.create({
+      data: {
+        matchupId: olderPublicMatchup.id,
+        sessionId: "older-public-vote",
+        choice: "A",
+        createdAt: new Date(Date.now() - 5_000),
+      },
+    });
+    const olderPublicJob = await db.arenaVoteJob.create({
+      data: {
+        voteId: olderPublicVote.id,
+        matchupId: olderPublicMatchup.id,
+        promptId: fixture.privateBuild.promptId,
+        modelAId: olderPublicModels[0].id,
+        modelBId: olderPublicModels[1].id,
+        choice: "A",
+        createdAt: olderPublicVote.createdAt,
+      },
+    });
     invalidateStealthSamplingCache();
     assert.equal(
       await pickStealthMatchup({ publicState: fixture.publicState }),
@@ -150,7 +210,10 @@ async function main() {
     assert.equal(firstExportPage.rows.length, 1);
     assert.equal(firstExportPage.rows[0]?.choice, "WIN");
     assert.ok(firstExportPage.nextCursor);
-    const firstVote = await db.vote.findFirstOrThrow({ orderBy: { createdAt: "asc" } });
+    const firstVote = await db.vote.findFirstOrThrow({
+      where: { matchup: { stealthVariantId: fixture.variant.id } },
+      orderBy: { createdAt: "asc" },
+    });
     const laterMatchup = await db.matchup.create({
       data: {
         promptId: fixture.privateBuild.promptId,
@@ -211,6 +274,10 @@ async function main() {
       }),
       0,
       "closure must settle every previously accepted private vote",
+    );
+    assert.ok(
+      (await db.arenaVoteJob.findUniqueOrThrow({ where: { id: olderPublicJob.id } })).processedAt,
+      "closure must drain earlier public votes before its private votes",
     );
   } finally {
     if (originalSigningSecret === undefined) delete process.env.ARENA_MATCHUP_SIGNING_SECRET;

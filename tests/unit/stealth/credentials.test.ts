@@ -91,6 +91,7 @@ try {
         displayName: "Ox OpenRouter",
         openRouterModelId: "stealth/ox-alpha",
         forceOpenRouter: true,
+        requireStructuredOutput: true,
       },
       providerKeys: { openrouter: "openrouter-key" },
       allowServerKeys: false,

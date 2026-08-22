@@ -149,7 +149,7 @@ function finalizeOutcomes<T extends StealthOutcomeSummary>(summary: T): T {
 
 function safeGenerationError(status: string, error: string | null): string | null {
   if (!error || status !== "FAILED") return null;
-  return "Generation failed";
+  return error;
 }
 
 function appendBreakdown(

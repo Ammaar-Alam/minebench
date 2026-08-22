@@ -169,6 +169,7 @@ export function stealthEndpointConfigToGenerateVoxelBuildArgs(
         displayName: identity.displayName,
         openRouterModelId: config.modelId,
         forceOpenRouter: true,
+        requireStructuredOutput: config.requireStructuredOutput,
       },
       providerKeys: { openrouter: config.apiKey },
     };

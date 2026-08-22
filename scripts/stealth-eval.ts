@@ -151,12 +151,14 @@ function endpointApiKey(): string {
 async function findSupabaseAuthUserIdByEmail(email: string): Promise<string | null> {
   const { createSupabaseAdminClient } = await import("../lib/supabase/admin");
   const supabase = createSupabaseAdminClient();
-  for (let page = 1; page <= 10; page += 1) {
+  let page = 1;
+  while (true) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
     if (error) throw error;
     const found = data.users.find((user) => user.email?.trim().toLowerCase() === email);
     if (found) return found.id;
-    if (data.users.length < 1000) break;
+    if (!data.nextPage) break;
+    page = data.nextPage;
   }
   return null;
 }

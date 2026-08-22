@@ -411,7 +411,6 @@ async function applyCoveragePersistUpdates(
 
 async function processArenaVoteJobBatch(
   limit = JOB_BATCH_LIMIT,
-  stealthExperimentId?: string,
 ): Promise<VoteJobBatchResult> {
   const batchLimit = Math.max(1, Math.min(Math.max(1, JOB_BATCH_LIMIT), Math.floor(limit)));
   const result = await withArenaWriteRetry<VoteJobBatchResult>(() =>
@@ -438,12 +437,7 @@ async function processArenaVoteJobBatch(
             "stealthVariantId"
           FROM "ArenaVoteJob"
           WHERE "processedAt" IS NULL
-            ${stealthExperimentId
-              ? Prisma.sql`AND "stealthVariantId" IN (
-                  SELECT id FROM "StealthVariant" WHERE "experimentId" = ${stealthExperimentId}
-                )`
-              : Prisma.empty}
-          ORDER BY "createdAt" ASC
+          ORDER BY "createdAt" ASC, "id" ASC
           LIMIT ${batchLimit}
           FOR UPDATE SKIP LOCKED
         `);
@@ -662,7 +656,6 @@ async function processArenaVoteJobBatch(
 async function drainVoteJobs(opts?: {
   maxJobs?: number;
   maxMs?: number;
-  stealthExperimentId?: string;
 }): Promise<ArenaVoteJobDrainResult> {
   // bounded drains keep after hooks from turning into long requests
   let processedCount = 0;
@@ -678,7 +671,7 @@ async function drainVoteJobs(opts?: {
       // always let a fresh drain try one batch
       if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
       const remainingJobs = maxJobs - processedCount;
-      const result = await processArenaVoteJobBatch(remainingJobs, opts?.stealthExperimentId);
+      const result = await processArenaVoteJobBatch(remainingJobs);
       if (result.lockSkipped) {
         lockSkipped = true;
         break;
@@ -713,10 +706,13 @@ export async function drainArenaVoteJobs(opts?: {
 export async function drainStealthVoteJobsForExperiment(
   experimentId: string,
 ): Promise<ArenaVoteJobDrainResult> {
+  const pendingJobs = await prisma.arenaVoteJob.count({
+    where: { processedAt: null, stealthVariant: { experimentId } },
+  });
+  if (pendingJobs === 0) return { processedCount: 0, batches: 0, lockSkipped: false };
   return drainVoteJobs({
     maxJobs: 1_000,
     maxMs: 30_000,
-    stealthExperimentId: experimentId,
   });
 }
 
