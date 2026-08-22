@@ -17,6 +17,7 @@ import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { ErrorState } from "@/components/ErrorState";
+import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import type {
   ArenaBuildDeliveryClass,
   ArenaBuildLoadHints,
@@ -379,22 +380,9 @@ async function fetchBenchmarkResponse(args: {
   const url = query ? `/api/sandbox/benchmark?${query}` : "/api/sandbox/benchmark";
   const res = await fetch(url, { method: "GET", cache: "no-store", signal: args.signal });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    let message = text || "Failed to load benchmark comparison data";
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      if (
-        parsed &&
-        typeof parsed === "object" &&
-        "error" in parsed &&
-        typeof (parsed as { error?: unknown }).error === "string"
-      ) {
-        message = (parsed as { error: string }).error;
-      }
-    } catch {
-      // ignore
-    }
-    throw new Error(message);
+    throw new Error(
+      await readClientErrorResponse(res, "Failed to load benchmark comparison data"),
+    );
   }
   return (await res.json()) as BenchmarkResponse;
 }
@@ -413,7 +401,7 @@ async function fetchBuildVariantSnapshot(
       method: "GET",
       signal: timed.signal,
     });
-    if (!res.ok) throw new Error(await res.text());
+    if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load build"));
     return await readBuildVariantJson(res);
   } finally {
     timed.cleanup();
@@ -476,7 +464,7 @@ async function fetchBuildVariantStreamOnce(
   } finally {
     requestTimed.cleanup();
   }
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load build"));
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {

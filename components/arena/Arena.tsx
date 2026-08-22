@@ -10,6 +10,7 @@ import {
   VoteChoice,
 } from "@/lib/arena/types";
 import { readBuildVariantArtifact } from "@/lib/arena/clientBuildResponse";
+import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import {
   appendPackedVoxelBlocks,
   createPackedVoxelBlocks,
@@ -66,46 +67,6 @@ const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
 let snapshotStorageRedirectBlocked = false;
 let streamStorageRedirectBlocked = false;
 
-async function readErrorResponse(res: Response, fallback: string): Promise<string> {
-  // Categorize common statuses so the UI isn't showing a raw HTML error page.
-  const statusHint =
-    res.status === 429
-      ? "Slow down — you're going a bit fast. Try again in a few seconds."
-      : res.status === 503 || res.status === 504
-        ? "The server is overloaded right now. Please try again shortly."
-        : res.status >= 500
-          ? "The server had a problem. Please try again."
-          : res.status === 404
-            ? "Not found."
-            : res.status === 401 || res.status === 403
-              ? "You don't have access to this."
-              : null;
-
-  // Best-effort body extraction: JSON { error | message } → string, else truncated text.
-  let detail: string | null = null;
-  try {
-    const body = await res.clone().json();
-    if (body && typeof body === "object") {
-      const candidate = (body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message;
-      if (typeof candidate === "string" && candidate.trim()) detail = candidate.trim();
-    }
-  } catch {
-    // not JSON — fall through to text
-  }
-  if (!detail) {
-    try {
-      const text = (await res.text()).trim();
-      // Skip raw HTML error pages
-      if (text && !text.startsWith("<") && text.length <= 500) detail = text;
-    } catch {
-      // ignore
-    }
-  }
-
-  if (statusHint && detail && detail !== statusHint) return `${statusHint} (${detail})`;
-  return statusHint ?? detail ?? fallback;
-}
-
 // Parsing JSON produces one object per block. Packing at the delivery boundary
 // lets that array go instead of keeping it alive for as long as a lane holds
 // the build, which on a matchup means two of them at once.
@@ -145,7 +106,7 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
   // Adaptive mode keeps small builds instant while deferring large payloads.
   url.searchParams.set("payload", "adaptive");
   const res = await fetch(url, { method: "GET", credentials: "include", signal });
-  if (!res.ok) throw new Error(await readErrorResponse(res, "Failed to load matchup"));
+  if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load matchup"));
   const matchup = (await res.json()) as ArenaMatchup;
   return {
     ...matchup,
@@ -209,7 +170,7 @@ async function submitVote(matchupId: string, choice: VoteChoice) {
       body: JSON.stringify({ matchupId, choice }),
       signal: timed.signal,
     });
-    if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't record your vote."));
+    if (!res.ok) throw new Error(await readClientErrorResponse(res, "Couldn't record your vote."));
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("Vote timed out — the site may be under heavy load. Please try again.");
@@ -561,7 +522,7 @@ async function fetchBuildVariantSnapshot(
       if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
         return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
       }
-      const message = await readErrorResponse(res, "Couldn't load build");
+      const message = await readClientErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
     return await readBuildVariantPayload(res);
@@ -610,7 +571,7 @@ async function fetchBuildVariantStreamOnce(
   }
   if (!res.ok) {
     const retryAfterMs = readRetryAfterMs(res, 1000);
-    const message = await readErrorResponse(res, "Couldn't load build");
+    const message = await readClientErrorResponse(res, "Couldn't load build");
     if (useArtifact && ref.variant === "full" && res.status === 503) {
       throw new BuildRetryAfterError(message, retryAfterMs);
     }

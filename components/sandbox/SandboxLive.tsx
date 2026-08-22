@@ -10,6 +10,7 @@ import {
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -679,10 +680,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       });
 
       if (!res.ok || !res.body) {
-        const txt = await res.text().catch(() => "");
-        const obj = safeJsonParseObject(txt);
-        const message = obj && typeof obj.error === "string" ? obj.error : txt || "Request failed";
-        throw new Error(message);
+        throw new Error(await readClientErrorResponse(res, "Request failed"));
       }
 
       const reader = res.body.getReader();

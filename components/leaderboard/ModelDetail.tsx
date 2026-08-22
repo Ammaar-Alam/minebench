@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import type {
   ModelDetailStats,
   ModelOpponentBreakdown,
@@ -221,27 +222,6 @@ function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
   return [400, 403, 404, 500, 502, 504].includes(status);
 }
 
-async function readErrorResponse(res: Response, fallback: string): Promise<string> {
-  let detail: string | null = null;
-  try {
-    const body = await res.clone().json();
-    if (body && typeof body === "object") {
-      const candidate = (body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message;
-      if (typeof candidate === "string" && candidate.trim()) detail = candidate.trim();
-    }
-  } catch {
-    // fall through to text
-  }
-  if (!detail) {
-    try {
-      const text = (await res.text()).trim();
-      if (text && !text.startsWith("<") && text.length <= 500) detail = text;
-    } catch {
-      // ignore
-    }
-  }
-  return detail ?? fallback;
-}
 
 function rememberLoadedBuild(
   current: Record<string, LoadedPromptBuild>,
@@ -294,7 +274,7 @@ async function fetchBuildVariantSnapshot(
       if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
         return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
       }
-      throw new Error(await readErrorResponse(res, "Failed to load build"));
+      throw new Error(await readClientErrorResponse(res, "Failed to load build"));
     }
     try {
       return await readBuildVariantJson<BuildVariantResponse>(res);
@@ -334,7 +314,7 @@ async function fetchBuildVariantStreamOnce(
   } finally {
     requestTimed.cleanup();
   }
-  if (!res.ok) throw new Error(await readErrorResponse(res, "Failed to load build"));
+  if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load build"));
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
