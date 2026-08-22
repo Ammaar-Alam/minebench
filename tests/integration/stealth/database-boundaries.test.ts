@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { PrismaClient } from "@prisma/client";
+import { POST as vote } from "../../../app/api/arena/vote/route";
+import { createArenaMatchupToken } from "../../../lib/arena/matchupToken";
 import {
   invalidateStealthSamplingCache,
   pickStealthMatchup,
@@ -78,6 +80,53 @@ async function main() {
   assert.equal(selection.stealthModel.id, fixture.privateModel.id);
   assert.equal(selection.publicModel.id, fixture.publicModel.id);
   assert.notEqual(selection.stealthModel.id, selection.publicModel.id);
+
+  const publicBuild = await db.build.create({
+    data: {
+      promptId: fixture.privateBuild.promptId,
+      modelId: fixture.publicModel.id,
+      gridSize: fixture.privateBuild.gridSize,
+      palette: fixture.privateBuild.palette,
+      mode: fixture.privateBuild.mode,
+      voxelData: { version: "1.0", blocks: [{ x: 1, y: 0, z: 0, type: "stone" }] },
+      voxelSha256: "b".repeat(64),
+      blockCount: 1,
+      generationTimeMs: 1,
+    },
+  });
+  const originalSigningSecret = process.env.ARENA_MATCHUP_SIGNING_SECRET;
+  const originalDrainSetting = process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE;
+  process.env.ARENA_MATCHUP_SIGNING_SECRET = "private-vote-integration-secret";
+  process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE = "0";
+  try {
+    const response = await vote(
+      new Request("http://localhost:3000/api/arena/vote", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          matchupId: createArenaMatchupToken({
+            promptId: fixture.privateBuild.promptId,
+            modelAId: fixture.privateModel.id,
+            modelBId: fixture.publicModel.id,
+            buildAId: fixture.privateBuild.id,
+            buildBId: publicBuild.id,
+            buildAChecksum: fixture.privateBuild.voxelSha256 ?? "",
+            buildBChecksum: publicBuild.voxelSha256 ?? "",
+            stealthVariantId: fixture.variant.id,
+          }),
+          choice: "A",
+        }),
+      }),
+    );
+    assert.equal(response.status, 200, JSON.stringify(await response.json()));
+    assert.equal(await db.vote.count(), 1);
+    assert.equal(await db.arenaVoteJob.count({ where: { stealthVariantId: fixture.variant.id } }), 1);
+  } finally {
+    if (originalSigningSecret === undefined) delete process.env.ARENA_MATCHUP_SIGNING_SECRET;
+    else process.env.ARENA_MATCHUP_SIGNING_SECRET = originalSigningSecret;
+    if (originalDrainSetting === undefined) delete process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE;
+    else process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE = originalDrainSetting;
+  }
 
   await db.stealthVariant.update({ where: { id: fixture.variant.id }, data: { winCount: 1 } });
   invalidateStealthSamplingCache();
