@@ -243,15 +243,39 @@ function bucketFor(blockType: string, buckets: {
 }
 
 
-function configureAtlasTexture(atlasTexture: THREE.Texture) {
-  atlasTexture.magFilter = THREE.NearestFilter;
-  atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
-  atlasTexture.generateMipmaps = true;
-  atlasTexture.anisotropy = 4;
-  atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
-  atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
-  atlasTexture.colorSpace = THREE.SRGBColorSpace;
-  atlasTexture.needsUpdate = true;
+export function configureAtlasTexture(atlasTexture: THREE.Texture) {
+  let changed = false;
+  if (atlasTexture.magFilter !== THREE.NearestFilter) {
+    atlasTexture.magFilter = THREE.NearestFilter;
+    changed = true;
+  }
+  if (atlasTexture.minFilter !== THREE.LinearMipmapLinearFilter) {
+    atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    changed = true;
+  }
+  if (!atlasTexture.generateMipmaps) {
+    atlasTexture.generateMipmaps = true;
+    changed = true;
+  }
+  if (atlasTexture.anisotropy !== 4) {
+    atlasTexture.anisotropy = 4;
+    changed = true;
+  }
+  if (atlasTexture.wrapS !== THREE.ClampToEdgeWrapping) {
+    atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
+    changed = true;
+  }
+  if (atlasTexture.wrapT !== THREE.ClampToEdgeWrapping) {
+    atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
+    changed = true;
+  }
+  if (atlasTexture.colorSpace !== THREE.SRGBColorSpace) {
+    atlasTexture.colorSpace = THREE.SRGBColorSpace;
+    changed = true;
+  }
+  if (changed) {
+    atlasTexture.needsUpdate = true;
+  }
 }
 
 function getWaterSurfaceTexture(atlasTexture: THREE.Texture): THREE.Texture | null {
