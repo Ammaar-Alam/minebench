@@ -102,6 +102,20 @@ Usage:
     }
 
     const updatedModels = await tx.model.updateMany({
+      where: { stealthVariant: null },
+      data: {
+        eloRating: 1500,
+        glickoRd: 350,
+        glickoVolatility: 0.06,
+        conservativeRating: 800,
+        shownCount: 0,
+        winCount: 0,
+        lossCount: 0,
+        drawCount: 0,
+        bothBadCount: 0,
+      },
+    });
+    const updatedStealthVariants = await tx.stealthVariant.updateMany({
       data: {
         eloRating: 1500,
         glickoRd: 350,
@@ -122,11 +136,13 @@ Usage:
       deletedCoveragePairs,
       deletedCoveragePairPrompts,
       updatedModels: updatedModels.count,
+      updatedStealthVariants: updatedStealthVariants.count,
     };
   });
 
   console.log("done");
   console.log(`models reset: ${result.updatedModels}`);
+  console.log(`stealth variants reset: ${result.updatedStealthVariants}`);
   if (args.keepHistory) {
     console.log("history kept: matchups/votes unchanged");
   } else {

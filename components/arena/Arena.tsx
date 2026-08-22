@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArenaAction,
   ArenaBuildDeliveryClass,
   ArenaBuildRef,
   ArenaBuildVariant,
   ArenaMatchup,
+  ArenaModelReveal,
   ArenaBuildStreamEvent,
+  ArenaVoteResponse,
   VoteChoice,
 } from "@/lib/arena/types";
 import { readBuildVariantArtifact } from "@/lib/arena/clientBuildResponse";
@@ -30,6 +33,11 @@ type ArenaState =
   | { kind: "loading" }
   | { kind: "ready"; matchup: ArenaMatchup }
   | { kind: "error"; message: string };
+
+function modelRevealLabel(model: ArenaModelReveal | null | undefined): string | null {
+  if (!model) return null;
+  return model.provider === "Stealth" ? `Stealth • ${model.displayName}` : model.displayName;
+}
 
 // Reading the binary artifact is opt-in per request, so turning this off is a
 // client deploy and needs no coordination with what storage holds.
@@ -198,21 +206,35 @@ const VOTE_REQUEST_TIMEOUT_MS = Number.parseInt(
   10,
 );
 
-async function submitVote(matchupId: string, choice: VoteChoice) {
-  // hard timeout so a stalled /api/arena/vote call can't hang the reveal state
+async function submitArenaAction(matchupId: string, action: ArenaAction): Promise<ArenaVoteResponse> {
+  const failureMessage = action === "SKIP" ? "Couldn't reveal this matchup." : "Couldn't record your vote.";
+  // hard timeout so a stalled arena action can't hang the reveal state
   const timed = makeTimeoutSignal(undefined, VOTE_REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch("/api/arena/vote", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ matchupId, choice }),
+      body: JSON.stringify({ matchupId, choice: action }),
       signal: timed.signal,
     });
-    if (!res.ok) throw new Error(await readErrorResponse(res, "Couldn't record your vote."));
+    if (!res.ok) throw new Error(await readErrorResponse(res, failureMessage));
+    const response = (await res.json()) as ArenaVoteResponse;
+    if (!response?.reveal?.a?.displayName || !response.reveal.b?.displayName) {
+      throw new Error(
+        action === "SKIP"
+          ? "The model reveal was unavailable. Refresh to continue."
+          : "The vote saved, but the model reveal was unavailable. Refresh to continue.",
+      );
+    }
+    return response;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Vote timed out — the site may be under heavy load. Please try again.");
+      throw new Error(
+        action === "SKIP"
+          ? "Reveal timed out — the site may be under heavy load. Please try again."
+          : "Vote timed out — the site may be under heavy load. Please try again.",
+      );
     }
     if (err instanceof TypeError) {
       // Network failure (offline, DNS, CORS, etc.)
@@ -1082,7 +1104,7 @@ function formatBuildLoadingMessage(
   return formatVoxelLoadingMessage(fullLoading ? "Retrieving full build" : "Retrieving build", progress);
 }
 
-type RevealAction = VoteChoice | "SKIP";
+type RevealAction = ArenaAction;
 
 type RevealState =
   | { kind: "none" }
@@ -1090,8 +1112,8 @@ type RevealState =
       kind: "reveal";
       matchupId: string;
       action: RevealAction;
-      startedAt: number;
-      advanceAt: number;
+      startedAt: number | null;
+      advanceAt: number | null;
       next: ArenaMatchup | null;
     };
 
@@ -1331,7 +1353,14 @@ export function Arena() {
   );
 
   const matchup = state.kind === "ready" ? state.matchup : null;
-  const revealModels = Boolean(matchup && reveal.kind === "reveal" && reveal.matchupId === matchup.id);
+  const revealModels = Boolean(
+    matchup &&
+      matchup.a.model &&
+      matchup.b.model &&
+      reveal.kind === "reveal" &&
+      reveal.matchupId === matchup.id &&
+      reveal.startedAt != null,
+  );
   const revealAction: RevealAction | null = reveal.kind === "reveal" ? reveal.action : null;
   const matchupHasBuildA = Boolean(matchup?.a.build);
   const matchupHasBuildB = Boolean(matchup?.b.build);
@@ -2173,6 +2202,17 @@ export function Arena() {
     if (!matchup || reveal.kind !== "reveal" || reveal.matchupId !== matchup.id) {
       return {
         visible: false,
+        pending: false,
+        secondsLeft: 0,
+        progress: 0,
+        nextReady: false,
+        waitingForNext: false,
+      };
+    }
+    if (reveal.startedAt == null || reveal.advanceAt == null) {
+      return {
+        visible: true,
+        pending: true,
         secondsLeft: 0,
         progress: 0,
         nextReady: false,
@@ -2187,7 +2227,7 @@ export function Arena() {
     const nextReady = Boolean(reveal.next);
     const waitingForNext = !nextReady && remainingMs <= 0;
     const progress = nextReady ? timedProgress : Math.min(0.94, timedProgress);
-    return { visible: true, secondsLeft, progress, nextReady, waitingForNext };
+    return { visible: true, pending: false, secondsLeft, progress, nextReady, waitingForNext };
   })();
 
   async function advanceToNext(matchupId: string, next: ArenaMatchup) {
@@ -2224,11 +2264,11 @@ export function Arena() {
 
   const requestAdvanceNow = useCallback((matchupId: string) => {
     const current = revealRef.current;
-    if (current.kind !== "reveal" || current.matchupId !== matchupId) return;
+    if (current.kind !== "reveal" || current.matchupId !== matchupId || current.advanceAt == null) return;
     const now = Date.now();
     advanceNowRequestedAtRef.current = now;
     setReveal((prev) => {
-      if (prev.kind !== "reveal" || prev.matchupId !== matchupId) return prev;
+      if (prev.kind !== "reveal" || prev.matchupId !== matchupId || prev.advanceAt == null) return prev;
       // Clamp so the timer UI switches to "Loading next…" immediately.
       return { ...prev, advanceAt: Math.min(prev.advanceAt, now) };
     });
@@ -2268,6 +2308,65 @@ export function Arena() {
     }, 6000);
   }
 
+  function beginReveal(matchupId: string, action: RevealAction) {
+    setReveal({
+      kind: "reveal",
+      matchupId,
+      action,
+      startedAt: null,
+      advanceAt: null,
+      next: null,
+    });
+  }
+
+  function completeReveal(matchupId: string, response: ArenaVoteResponse, durationMs: number): number {
+    setState((prev) =>
+      prev.kind === "ready" && prev.matchup.id === matchupId
+        ? {
+            kind: "ready",
+            matchup: {
+              ...prev.matchup,
+              a: { ...prev.matchup.a, model: response.reveal.a },
+              b: { ...prev.matchup.b, model: response.reveal.b },
+            },
+          }
+        : prev,
+    );
+    const startedAt = Date.now();
+    const advanceAt = startedAt + durationMs;
+    setReveal((prev) =>
+      prev.kind === "reveal" && prev.matchupId === matchupId
+        ? { ...prev, startedAt, advanceAt }
+        : prev,
+    );
+    return advanceAt;
+  }
+
+  function queueNextMatchup(matchupId: string, advanceAt: number, fetchedNext: ArenaMatchup) {
+    const next = applyCachedBuildsToMatchup(fetchedNext);
+    prefetchMatchupBuilds(next);
+    const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchupId;
+    if (stillRevealing) {
+      const requestedAt = advanceNowRequestedAtRef.current;
+      const effectiveAdvanceAt =
+        typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
+      setReveal((prev) =>
+        prev.kind === "reveal" && prev.matchupId === matchupId
+          ? { ...prev, next, advanceAt: effectiveAdvanceAt }
+          : prev,
+      );
+      scheduleAutoAdvance(matchupId, effectiveAdvanceAt, next);
+      return;
+    }
+
+    setState((prev) => {
+      if (prev.kind === "ready" && prev.matchup.id !== matchupId) return prev;
+      if (prev.kind === "error") return prev;
+      return { kind: "ready", matchup: next };
+    });
+    setSubmitting(false);
+  }
+
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     if (isMatchupVoteBlocked(matchup, sideLoadStateRef.current)) return;
@@ -2277,17 +2376,12 @@ export function Arena() {
     setSubmitting(true);
     clearAutoAdvance();
     advanceNowRequestedAtRef.current = null;
-    const startedAt = Date.now();
-    const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
-    setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
+    beginReveal(matchup.id, choice);
 
-    // Submit the vote first. If it fails, stay on the current matchup so
-    // the user can retry — advancing anyway would silently convert a
-    // dropped vote into a skip and bias rankings + prompt coverage. We
-    // also don't fetch the next matchup because matchup creation is still
-    // a server-side side effect.
+    let advanceAt: number;
     try {
-      await submitVote(matchup.id, choice);
+      const response = await submitArenaAction(matchup.id, choice);
+      advanceAt = completeReveal(matchup.id, response, REVEAL_MS_AFTER_VOTE);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Couldn't record your vote.";
       flashVoteWarning(msg);
@@ -2296,28 +2390,9 @@ export function Arena() {
       return;
     }
 
+    // Do not create the next matchup until the vote is durable.
     try {
-      const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
-      prefetchMatchupBuilds(next);
-      const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
-      if (stillRevealing) {
-        const requestedAt = advanceNowRequestedAtRef.current;
-        const effectiveAdvanceAt =
-          typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
-        setReveal((prev) =>
-          prev.kind === "reveal" && prev.matchupId === matchup.id
-            ? { ...prev, next, advanceAt: effectiveAdvanceAt }
-            : prev,
-        );
-        scheduleAutoAdvance(matchup.id, effectiveAdvanceAt, next);
-      } else {
-        setState((prev) => {
-          if (prev.kind === "ready" && prev.matchup.id !== matchup.id) return prev;
-          if (prev.kind === "error") return prev;
-          return { kind: "ready", matchup: next };
-        });
-        setSubmitting(false);
-      }
+      queueNextMatchup(matchup.id, advanceAt, await fetchMatchup(undefined));
     } catch (err) {
       // Vote already persisted; this is a pure next-matchup load failure,
       // so show the full error state (nothing to present next).
@@ -2335,37 +2410,21 @@ export function Arena() {
     if (!matchup || submitting) return;
     flashVoteConfirm("SKIP");
     setSubmitting(true);
+    clearAutoAdvance();
+    advanceNowRequestedAtRef.current = null;
+    beginReveal(matchup.id, "SKIP");
+    // old hydration should not overlap the next matchup
+    abortInitialHydrations(matchup.id);
+    abortFullHydrations(matchup.id);
+    abortFullPrefetches(matchup.id);
+
     try {
-      clearAutoAdvance();
-      // old hydration should not overlap the next matchup
-      abortInitialHydrations(matchup.id);
-      abortFullHydrations(matchup.id);
-      abortFullPrefetches(matchup.id);
-      advanceNowRequestedAtRef.current = null;
-      const startedAt = Date.now();
-      const advanceAt = startedAt + REVEAL_MS_AFTER_SKIP;
-      setReveal({ kind: "reveal", matchupId: matchup.id, action: "SKIP", startedAt, advanceAt, next: null });
-      const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
-      prefetchMatchupBuilds(next);
-      const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
-      if (stillRevealing) {
-        const requestedAt = advanceNowRequestedAtRef.current;
-        const effectiveAdvanceAt =
-          typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
-        setReveal((prev) =>
-          prev.kind === "reveal" && prev.matchupId === matchup.id
-            ? { ...prev, next, advanceAt: effectiveAdvanceAt }
-            : prev,
-        );
-        scheduleAutoAdvance(matchup.id, effectiveAdvanceAt, next);
-      } else {
-        setState((prev) => {
-          if (prev.kind === "ready" && prev.matchup.id !== matchup.id) return prev;
-          if (prev.kind === "error") return prev;
-          return { kind: "ready", matchup: next };
-        });
-        setSubmitting(false);
-      }
+      const revealPromise = submitArenaAction(matchup.id, "SKIP").then((response) =>
+        completeReveal(matchup.id, response, REVEAL_MS_AFTER_SKIP),
+      );
+      const nextPromise = fetchMatchup(undefined);
+      const [advanceAt, fetchedNext] = await Promise.all([revealPromise, nextPromise]);
+      queueNextMatchup(matchup.id, advanceAt, fetchedNext);
     } catch (err) {
       clearAutoAdvance();
       setState({
@@ -2374,8 +2433,6 @@ export function Arena() {
       });
       setReveal({ kind: "none" });
       setSubmitting(false);
-    } finally {
-      // `submitting` stays true through the reveal so users can see the model names.
     }
   }
 
@@ -2672,7 +2729,7 @@ export function Arena() {
             className={`mb-x-scroll -mx-0.5 flex w-[calc(100%+0.25rem)] snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 scroll-smooth transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
           >
             <div
-              className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "ring-1 ring-accent/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
+              className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "ring-1 ring-accent/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealMeta.visible && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealMeta.visible && revealAction === "B" ? "mb-reveal-dim" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:a` : "arena-build-a"}
@@ -2680,8 +2737,8 @@ export function Arena() {
                 subtitle={
                   <ModelReveal
                     revealed={revealModels}
-                    provider={matchup?.a.model.provider}
-                    modelName={matchup?.a.model.displayName}
+                    provider={matchup?.a.model?.provider}
+                    modelName={matchup?.a.model?.displayName}
                   />
                 }
                 voxelBuild={matchup?.a.build ?? null}
@@ -2708,7 +2765,7 @@ export function Arena() {
                 autoRotate={!isCoarsePointer || mobileBuildView === "a"}
                 viewerSize="arena"
                 enableBuildExport={Boolean(matchup?.a.build && !laneNeedsFullA)}
-                exportLabel={matchup?.a.model.displayName ?? "build-a"}
+                exportLabel={matchup?.a.model?.displayName ?? "build-a"}
                 exportPrompt={promptText}
                 actions={
                   laneNeedsFullA ? (
@@ -2725,7 +2782,7 @@ export function Arena() {
               />
             </div>
             <div
-              className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "ring-1 ring-accent2/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
+              className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "ring-1 ring-accent2/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealMeta.visible && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealMeta.visible && revealAction === "A" ? "mb-reveal-dim" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:b` : "arena-build-b"}
@@ -2733,8 +2790,8 @@ export function Arena() {
                 subtitle={
                   <ModelReveal
                     revealed={revealModels}
-                    provider={matchup?.b.model.provider}
-                    modelName={matchup?.b.model.displayName}
+                    provider={matchup?.b.model?.provider}
+                    modelName={matchup?.b.model?.displayName}
                   />
                 }
                 voxelBuild={matchup?.b.build ?? null}
@@ -2761,7 +2818,7 @@ export function Arena() {
                 autoRotate={!isCoarsePointer || mobileBuildView === "b"}
                 viewerSize="arena"
                 enableBuildExport={Boolean(matchup?.b.build && !laneNeedsFullB)}
-                exportLabel={matchup?.b.model.displayName ?? "build-b"}
+                exportLabel={matchup?.b.model?.displayName ?? "build-b"}
                 exportPrompt={promptText}
                 actions={
                   laneNeedsFullB ? (
@@ -2884,14 +2941,14 @@ export function Arena() {
                                 A
                               </span>
                               <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
-                                {matchup?.a.model.displayName}
+                                {modelRevealLabel(matchup?.a.model) ?? "—"}
                               </span>
                               <span className="text-muted">vs</span>
                               <span className="inline-flex h-5 items-center rounded-full bg-accent2/10 px-2 font-mono text-[11px] font-semibold text-accent2 ring-1 ring-accent2/20">
                                 B
                               </span>
                               <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
-                                {matchup?.b.model.displayName}
+                                {modelRevealLabel(matchup?.b.model) ?? "—"}
                               </span>
                             </div>
                           </div>
@@ -2921,9 +2978,15 @@ export function Arena() {
                             <button
                               type="button"
                               className="mb-btn mb-btn-ghost h-9 px-4 text-xs"
-                              disabled={transitioning}
+                              disabled={transitioning || revealMeta.pending}
                               onClick={() => {
-                                if (reveal.kind !== "reveal" || reveal.matchupId !== matchup?.id) return;
+                                if (
+                                  reveal.kind !== "reveal" ||
+                                  reveal.matchupId !== matchup?.id ||
+                                  reveal.advanceAt == null
+                                ) {
+                                  return;
+                                }
                                 if (!reveal.next) {
                                   requestAdvanceNow(reveal.matchupId);
                                   return;
@@ -2948,7 +3011,7 @@ export function Arena() {
                               A
                             </span>
                             <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
-                              {matchup?.a.model.displayName ?? "—"}
+                              {modelRevealLabel(matchup?.a.model) ?? "—"}
                             </span>
                           </div>
                           <div
@@ -2960,7 +3023,7 @@ export function Arena() {
                               B
                             </span>
                             <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
-                              {matchup?.b.model.displayName ?? "—"}
+                              {modelRevealLabel(matchup?.b.model) ?? "—"}
                             </span>
                           </div>
                         </div>

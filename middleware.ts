@@ -193,11 +193,19 @@ function getRateLimitSession(req: NextRequest, fallbackBucketId: string) {
   };
 }
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const canonicalRedirect = maybeRedirectToCanonicalHost(req);
   if (canonicalRedirect) return canonicalRedirect;
 
   const { pathname } = req.nextUrl;
+  if (
+    pathname.startsWith("/lab") ||
+    pathname.startsWith("/api/lab/") ||
+    pathname.startsWith("/admin/private-evaluations")
+  ) {
+    const { refreshSupabaseSession } = await import("@/lib/supabase/middleware");
+    return refreshSupabaseSession(req);
+  }
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
   const isArenaApi = pathname.startsWith("/api/arena/");
@@ -300,5 +308,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.well-known/workflow/).*)"],
 };

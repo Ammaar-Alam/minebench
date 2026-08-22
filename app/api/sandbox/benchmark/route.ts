@@ -101,7 +101,7 @@ export async function GET(req: Request) {
         gridSize: ARENA_GRID_SIZE,
         palette: ARENA_PALETTE,
         mode: ARENA_MODE,
-        model: { enabled: true, isBaseline: false },
+        model: { enabled: true, isBaseline: false, stealthVariant: null },
         prompt: { active: true },
       },
     });
@@ -147,6 +147,7 @@ export async function GET(req: Request) {
       where: {
         enabled: true,
         isBaseline: false,
+        stealthVariant: null,
         builds: {
           some: {
             promptId: { in: eligiblePromptIds },

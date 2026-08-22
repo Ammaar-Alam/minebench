@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export function SiteFooter() {
   const buyMeACoffeeUrl = "https://buymeacoffee.com/ammaaralam";
 
@@ -58,6 +60,13 @@ export function SiteFooter() {
               Buy Me a Coffee
             </a>
           </span>
+          <span className="text-border">·</span>
+          <Link
+            className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"
+            href="/private-evaluations"
+          >
+            Private Evaluations
+          </Link>
           <span className="text-border">·</span>
           <a
             className="text-fg underline decoration-border/70 underline-offset-2 hover:decoration-fg"

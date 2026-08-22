@@ -19,6 +19,8 @@ import {
   getArenaBuildMeta,
   invalidateArenaBuildMeta,
 } from "@/lib/arena/buildMetaCache";
+import { parseArenaBuildAccessToken } from "@/lib/arena/matchupToken";
+import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
 
@@ -80,6 +82,11 @@ function jsonBytes(value: unknown, gzip: boolean): Uint8Array {
   return gzip ? gzipSync(bytes) : bytes;
 }
 
+function rewriteBlindSnapshotIdentity(bytes: Uint8Array, buildId: string): Uint8Array {
+  const payload = JSON.parse(Buffer.from(bytes).toString("utf8")) as Record<string, unknown>;
+  return Buffer.from(JSON.stringify({ ...payload, buildId, checksum: null }));
+}
+
 function buildJsonResponseCacheKey(
   buildId: string,
   variant: ArenaBuildVariant,
@@ -97,9 +104,12 @@ function createJsonHeaders(opts: {
   deliveryClass: string;
   source: string;
   gzip: boolean;
+  privateAccess?: boolean;
 }): Headers {
   const headers = new Headers({
-    "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
+    "Cache-Control": opts.privateAccess
+      ? "private, no-store"
+      : "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": String(opts.byteLength),
     "x-build-delivery-class": opts.deliveryClass,
@@ -215,10 +225,24 @@ export async function GET(
 ) {
   const timing = new ServerTiming();
   const requestStartedAt = timing.start();
-  const { buildId } = await params;
+  const { buildId: requestedBuildId } = await params;
+  const buildAccess = parseArenaBuildAccessToken(requestedBuildId);
+  if (requestedBuildId.startsWith("b1.") && !buildAccess) {
+    return NextResponse.json({ error: "Build not found" }, { status: 404 });
+  }
+  const buildId = buildAccess?.buildId ?? requestedBuildId;
+  const clientBuildId = buildAccess ? requestedBuildId : buildId;
+  const privateLoopbackAccess = Boolean(
+    buildAccess &&
+      isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? ""),
+  );
   const url = new URL(request.url);
   const variant = parseVariant(url.searchParams.get("variant"));
-  const expectedChecksum = url.searchParams.get("checksum")?.trim() || null;
+  const requestedChecksum = url.searchParams.get("checksum")?.trim() || null;
+  if (buildAccess && requestedChecksum && requestedChecksum !== buildAccess.checksum) {
+    return NextResponse.json({ error: "Build checksum mismatch" }, { status: 409 });
+  }
+  const expectedChecksum = buildAccess?.checksum ?? requestedChecksum;
   const shouldGzip = acceptsGzip(request);
   // pass the client-supplied checksum so the meta cache can detect stale
   // entries left behind by an overwrite import that landed on another lambda
@@ -227,9 +251,13 @@ export async function GET(
   if (!buildMeta) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });
   }
+  if (buildMeta.privateAccessOnly && !buildAccess) {
+    return NextResponse.json({ error: "Build not found" }, { status: 404 });
+  }
 
   const storedChecksum = buildMeta.voxelSha256?.trim() || null;
   const artifactAllowed =
+    !privateLoopbackAccess &&
     SNAPSHOT_ARTIFACT_FETCH_ENABLED &&
     url.searchParams.get("artifact") !== "0" &&
     Boolean(storedChecksum);
@@ -240,7 +268,7 @@ export async function GET(
     arenaBuildHints: buildMeta.arenaBuildHints,
   });
   const deliveryClass = variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass;
-  const binaryFormatRequested = url.searchParams.get("format") === "v4";
+  const binaryFormatRequested = !buildAccess && url.searchParams.get("format") === "v4";
   const binaryArtifactRequested =
     binaryFormatRequested && isBinarySnapshotArtifactEnabled();
   const fullUsesStreamDelivery =
@@ -261,11 +289,13 @@ export async function GET(
   let shouldRequireStreamFallbackOnSnapshotMiss = avoidWholeBodyJsonFallback;
   if (expectedChecksum && storedChecksum && expectedChecksum !== storedChecksum) {
     return NextResponse.json(
-      {
-        error: "Build checksum mismatch",
-        expectedChecksum,
-        actualChecksum: storedChecksum,
-      },
+      buildAccess
+        ? { error: "Build changed" }
+        : {
+            error: "Build checksum mismatch",
+            expectedChecksum,
+            actualChecksum: storedChecksum,
+          },
       { status: 409 },
     );
   }
@@ -284,6 +314,7 @@ export async function GET(
   let servedArtifactFormat: ArenaSnapshotArtifactFormat = "json";
 
   if (
+    !buildAccess &&
     SNAPSHOT_ARTIFACT_REDIRECT_ENABLED &&
     url.searchParams.get("redirect") !== "0" &&
     canServeSnapshotArtifact
@@ -333,13 +364,15 @@ export async function GET(
     }
   }
 
-  const jsonCacheKey = buildJsonResponseCacheKey(
-    buildId,
-    variant,
-    storedChecksum,
-    shellHints,
-    shouldGzip,
-  );
+  const jsonCacheKey = buildAccess
+    ? null
+    : buildJsonResponseCacheKey(
+        buildId,
+        variant,
+        storedChecksum,
+        shellHints,
+        shouldGzip,
+      );
   // storage-first: the checksum-addressed artifact is the canonical snapshot
   try {
     if (artifactAllowed && canServeSnapshotArtifact) {
@@ -366,11 +399,18 @@ export async function GET(
       if (artifactBytes) {
         timing.end("artifact_hit", artifactStartedAt);
         timing.end("total", requestStartedAt);
+        const responseArtifactBytes = buildAccess
+          ? rewriteBlindSnapshotIdentity(artifactBytes, clientBuildId)
+          : artifactBytes;
         // the stored object is gzip; proxying it verbatim to a gzip-capable
         // client keeps snapshot-class fallbacks off the uncompressed path
-        const body = shouldGzip ? gzipSync(Buffer.from(artifactBytes)) : artifactBytes;
+        const body = shouldGzip
+          ? gzipSync(Buffer.from(responseArtifactBytes))
+          : responseArtifactBytes;
         const headers = new Headers({
-          "Cache-Control": "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
+          "Cache-Control": buildAccess
+            ? "private, no-store"
+            : "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
           "Content-Type":
             servedArtifactFormat === "binary"
               ? "application/octet-stream"
@@ -393,7 +433,7 @@ export async function GET(
   }
 
   const cachedJsonResponse =
-    !avoidWholeBodyJsonFallback && jsonCacheKey
+    !buildAccess && !avoidWholeBodyJsonFallback && jsonCacheKey
       ? getCachedJsonResponseByKey(jsonCacheKey)
       : null;
   // This body exists because the artifact was missing when it was built, so
@@ -489,7 +529,8 @@ export async function GET(
       }
       prepared = await prepareArenaBuild(build, { signal: request.signal });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load build payload";
+      const message =
+        !buildAccess && err instanceof Error ? err.message : "Failed to load build payload";
       return NextResponse.json({ error: message }, { status: 422 });
     }
     timing.end("prepare", prepareStartedAt);
@@ -497,11 +538,13 @@ export async function GET(
 
   if (expectedChecksum && expectedChecksum !== prepared.checksum) {
     return NextResponse.json(
-      {
-        error: "Build checksum mismatch",
-        expectedChecksum,
-        actualChecksum: prepared.checksum,
-      },
+      buildAccess
+        ? { error: "Build changed" }
+        : {
+            error: "Build checksum mismatch",
+            expectedChecksum,
+            actualChecksum: prepared.checksum,
+          },
       { status: 409 },
     );
   }
@@ -521,35 +564,38 @@ export async function GET(
     invalidateArenaBuildMeta(prepared.buildId);
     // dedupes on success and retries after a failure, so warm cache hits do not
     // re-upload and a transient failure is not permanent
-    await healArenaBuildSnapshotArtifactsOnce(prepared);
+    if (!privateLoopbackAccess) await healArenaBuildSnapshotArtifactsOnce(prepared);
   });
 
   const responseBytes = jsonBytes(
     {
-      buildId: prepared.buildId,
+      buildId: clientBuildId,
       variant,
-      checksum: prepared.checksum,
+      checksum: buildAccess ? null : prepared.checksum,
       serverValidated: true,
       buildLoadHints: prepared.hints,
       voxelBuild,
     },
     shouldGzip,
   );
-  rememberJsonResponse(
-    prepared.buildId,
-    variant,
-    prepared.checksum,
-    prepared.hints,
-    shouldGzip,
-    responseBytes,
-    "live",
-  );
+  if (!buildAccess) {
+    rememberJsonResponse(
+      prepared.buildId,
+      variant,
+      prepared.checksum,
+      prepared.hints,
+      shouldGzip,
+      responseBytes,
+      "live",
+    );
+  }
   timing.end("total", requestStartedAt);
   const headers = createJsonHeaders({
     byteLength: responseBytes.byteLength,
     deliveryClass: variant === "preview" ? prepared.hints.initialDeliveryClass : prepared.hints.deliveryClass,
     source: "live",
     gzip: shouldGzip,
+    privateAccess: Boolean(buildAccess),
   });
   timing.apply(headers);
 

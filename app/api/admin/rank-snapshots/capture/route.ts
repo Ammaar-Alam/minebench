@@ -46,7 +46,7 @@ async function capture(req: Request) {
   const capturedAt = floorToUtcHour(anchor);
 
   const models = await prisma.model.findMany({
-    where: { enabled: true, isBaseline: false },
+    where: { enabled: true, isBaseline: false, stealthVariant: null },
     orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
     select: {
       id: true,

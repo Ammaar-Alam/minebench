@@ -24,6 +24,11 @@
     /* Background effects */
     --bg-halo-opacity: 0.45;
     --bg-grid-opacity: 0.26;
+
+    --acc-expand: 250ms;
+    --acc-collapse: 250ms;
+    --acc-chevron: 250ms;
+    --acc-ease: cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   :root[data-theme="dark"] {
@@ -60,6 +65,19 @@
     background-color: hsl(var(--bg));
     color: hsl(var(--fg));
     -webkit-tap-highlight-color: transparent;
+  }
+
+  body:has(#mb-lab-canvas) .mb-bg-grid,
+  body:has(#mb-lab-canvas) .mb-bg-halo {
+    display: none;
+  }
+
+  body:has(#mb-lab-canvas) #mb-shell {
+    background-color: hsl(var(--bg));
+  }
+
+  body:has(#mb-lab-canvas) #mb-footer {
+    display: none;
   }
 
   button,
@@ -846,6 +864,12 @@
       inset 0 1px 0 hsl(0 0% 100% / 0.06);
   }
 
+  #mb-lab-canvas .mb-field {
+    border-radius: 0.375rem;
+    background-color: hsl(var(--bg));
+    box-shadow: none;
+  }
+
   .mb-btn {
     @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg focus-visible:outline-none;
     transition:
@@ -916,6 +940,95 @@
 
   .mb-btn-danger:hover {
     background-image: linear-gradient(to bottom, hsl(var(--danger) / 0.32), hsl(var(--danger) / 0.16));
+  }
+
+  #mb-lab-canvas .mb-btn {
+    border-radius: 0.375rem;
+    box-shadow: none;
+  }
+
+  #mb-lab-canvas .mb-btn-primary {
+    background-color: hsl(var(--accent) / 0.12);
+    background-image: none;
+  }
+
+  #mb-lab-canvas .mb-btn-ghost {
+    background-color: transparent;
+    background-image: none;
+  }
+
+  @keyframes mb-status-change {
+    from {
+      opacity: 0.45;
+      transform: translateY(2px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .mb-status-change {
+    transform-origin: left center;
+    animation: mb-status-change 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-status-change {
+      animation: none;
+    }
+  }
+
+  /* grid-template-rows 0fr → 1fr gives a clean height animation
+     with no JS measurement; the inner element clips overflow. */
+  .t-acc-panel {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
+  }
+  .t-acc[data-open="true"] .t-acc-panel {
+    grid-template-rows: 1fr;
+    transition: grid-template-rows var(--acc-expand) var(--acc-ease);
+  }
+  .t-acc-panel-inner {
+    overflow: hidden;
+    opacity: 0;
+    filter: blur(2px);
+    transition:
+      opacity var(--acc-collapse) var(--acc-ease),
+      filter var(--acc-collapse) var(--acc-ease);
+  }
+  .t-acc[data-open="true"] .t-acc-panel-inner {
+    opacity: 1;
+    filter: blur(0);
+    transition:
+      opacity var(--acc-expand) var(--acc-ease),
+      filter var(--acc-expand) var(--acc-ease);
+  }
+  /* Flip the chevron vertically to turn the "v" into a "^".
+     scaleY(-1) about the centre passes through a flat line at
+     the midpoint (same look as a `d:` path morph) but animates
+     in every browser, unlike CSS `d:` morphing (Chromium only).
+     The chevron path is symmetric about the 16x16 viewBox
+     centre, so the flip lands exactly on the "^"; non-scaling
+     -stroke keeps the stroke width constant through the flip. */
+  .t-acc-chevron {
+    display: inline-flex;
+    transform: scaleY(1);
+    transform-origin: center;
+    transition:
+      transform var(--acc-chevron) var(--acc-ease),
+      color 140ms ease-out;
+  }
+  .t-acc-chevron path { vector-effect: non-scaling-stroke; }
+  .t-acc[data-open="true"] .t-acc-chevron {
+    transform: scaleY(-1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .t-acc-panel, .t-acc-panel-inner, .t-acc-chevron {
+      transition: none !important;
+    }
   }
 
   .mb-kbd {
@@ -1002,6 +1115,25 @@
     background: linear-gradient(to bottom, hsl(var(--accent) / 0.62), hsl(var(--accent2) / 0.52));
     border-radius: 999px;
     border: 1px solid hsl(var(--border) / 0.75);
+  }
+
+  .mb-lab-scroll {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted2) / 0.35) transparent;
+  }
+
+  .mb-lab-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .mb-lab-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .mb-lab-scroll::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: hsl(var(--muted2) / 0.3);
   }
 
   .mb-x-scroll {

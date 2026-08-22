@@ -13,6 +13,7 @@ export type ArenaBuildMetaRow = {
   voxelCompressedByteSize: number | null;
   voxelSha256: string | null;
   arenaBuildHints: unknown | null;
+  privateAccessOnly: boolean;
 };
 
 type CacheEntry = {
@@ -114,7 +115,7 @@ export async function getArenaBuildMeta(
 
   const startGen = getGeneration(buildId);
   const promise = (async () => {
-    const row = await prisma.build.findUnique({
+    const build = await prisma.build.findUnique({
       where: { id: buildId },
       select: {
         id: true,
@@ -125,8 +126,22 @@ export async function getArenaBuildMeta(
         voxelCompressedByteSize: true,
         voxelSha256: true,
         arenaBuildHints: true,
+        model: { select: { stealthVariant: { select: { id: true } } } },
       },
     });
+    const row = build
+      ? {
+          id: build.id,
+          gridSize: build.gridSize,
+          palette: build.palette,
+          blockCount: build.blockCount,
+          voxelByteSize: build.voxelByteSize,
+          voxelCompressedByteSize: build.voxelCompressedByteSize,
+          voxelSha256: build.voxelSha256,
+          arenaBuildHints: build.arenaBuildHints,
+          privateAccessOnly: Boolean(build.model.stealthVariant),
+        }
+      : null;
     // skip the cache write if an invalidation landed while we were fetching;
     // the row may already reflect an out-of-date checksum write.
     if (getGeneration(buildId) === startGen) {

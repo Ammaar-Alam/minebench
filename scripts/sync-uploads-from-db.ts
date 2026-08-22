@@ -341,7 +341,7 @@ async function main() {
         gridSize: args.gridSize,
         palette: args.palette,
         mode: args.mode,
-        model: { isBaseline: false },
+        model: { isBaseline: false, stealthVariant: null },
       },
       select: {
         id: true,

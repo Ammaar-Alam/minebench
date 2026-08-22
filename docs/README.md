@@ -14,6 +14,7 @@ Documentation for running, extending, and understanding MineBench.
 - [Arena Ranking System](./arena-ranking-system.md)
 - [Arena Ranking Policy](./arena-ranking-validity-policy-v2.md)
 - [Consistency Metric](./consistency-metric-percentile-band.md)
+- [Private Checkpoint Evaluations](./private-evaluations.md)
 
 ## Builds & Generation
 

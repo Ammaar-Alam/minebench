@@ -8,6 +8,237 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+enum OrganizationRole {
+  ADMIN
+  MEMBER
+}
+
+enum StealthExportPolicy {
+  AGGREGATES_ONLY
+  DEIDENTIFIED_VOTES
+}
+
+enum StealthExperimentStatus {
+  DRAFT
+  GENERATING
+  READY
+  ACTIVE
+  PAUSED
+  CLOSED
+}
+
+enum StealthVariantStatus {
+  DRAFT
+  GENERATING
+  READY
+  ACTIVE
+  WITHDRAWN
+}
+
+enum StealthVariantSource {
+  ENDPOINT
+  UPLOAD
+}
+
+enum StealthGenerationRunStatus {
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
+enum StealthGenerationResultStatus {
+  QUEUED
+  GENERATING
+  VALIDATING
+  READY
+  FAILED
+}
+
+model User {
+  id               String    @id @db.Uuid
+  email            String    @unique
+  displayName      String?
+  lastSeenAt       DateTime?
+  isMineBenchAdmin Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  memberships     OrganizationMembership[]
+  acceptedInvites OrganizationInvitation[] @relation("AcceptedOrganizationInvites")
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships OrganizationMembership[]
+  invitations OrganizationInvitation[]
+  experiments StealthExperiment[]
+}
+
+model OrganizationMembership {
+  organizationId String
+  userId         String           @db.Uuid
+  role           OrganizationRole
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, userId])
+  @@index([userId])
+}
+
+model OrganizationInvitation {
+  id             String           @id @default(cuid())
+  organizationId String
+  email          String
+  role           OrganizationRole
+  authUserId     String?          @db.Uuid
+  acceptedById   String?          @db.Uuid
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  acceptedBy   User?        @relation("AcceptedOrganizationInvites", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, email])
+  @@index([authUserId])
+  @@index([acceptedById])
+}
+
+model StealthExperiment {
+  id                    String                  @id @default(cuid())
+  organizationId        String
+  slug                  String
+  name                  String
+  status                StealthExperimentStatus @default(DRAFT)
+  exportPolicy          StealthExportPolicy     @default(AGGREGATES_ONLY)
+  targetDecisiveVotes   Int?
+  pauseAtGoal           Boolean                 @default(true)
+  retentionDays         Int                     @default(30)
+  agreementReference    String?
+  startsAt              DateTime?
+  checkpointSetFrozenAt DateTime?
+  endedAt               DateTime?
+  retentionDeleteAt     DateTime?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  variants     StealthVariant[]
+
+  @@unique([organizationId, slug])
+  @@index([organizationId, status])
+  @@index([status, retentionDeleteAt])
+}
+
+model StealthVariant {
+  id                     String               @id @default(cuid())
+  experimentId           String
+  codename               String
+  source                 StealthVariantSource @default(ENDPOINT)
+  status                 StealthVariantStatus @default(DRAFT)
+  modelId                String               @unique
+  releasedModelId        String?
+  checkpointFingerprint  String?
+  endpointEnabled        Boolean              @default(false)
+  lastValidatedAt        DateTime?
+  cohortGeneratedAt      DateTime?
+  releasedAt             DateTime?
+  expectedBuildCount     Int                  @default(0)
+  generatedBuildCount    Int                  @default(0)
+  generationFailureCount Int                  @default(0)
+  lastGenerationError    String?
+
+  eloRating          Float @default(1500)
+  glickoRd           Float @default(350)
+  glickoVolatility   Float @default(0.06)
+  conservativeRating Float @default(800)
+  shownCount         Int   @default(0)
+  winCount           Int   @default(0)
+  lossCount          Int   @default(0)
+  drawCount          Int   @default(0)
+  bothBadCount       Int   @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  experiment     StealthExperiment          @relation(fields: [experimentId], references: [id], onDelete: Cascade)
+  model          Model                      @relation("StealthOpaqueModel", fields: [modelId], references: [id], onDelete: Restrict)
+  releasedModel  Model?                     @relation("StealthReleasedModel", fields: [releasedModelId], references: [id], onDelete: SetNull)
+  credential     StealthEndpointCredential?
+  generationRuns StealthGenerationRun[]
+  matchups       Matchup[]
+  voteJobs       ArenaVoteJob[]
+
+  @@unique([experimentId, codename])
+  @@index([experimentId, status])
+  @@index([releasedModelId])
+}
+
+model StealthEndpointCredential {
+  id              String   @id @default(cuid())
+  variantId       String   @unique
+  encryptedConfig String
+  fingerprint     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  variant StealthVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+}
+
+model StealthGenerationRun {
+  id                  String                     @id @default(cuid())
+  variantId           String
+  status              StealthGenerationRunStatus @default(RUNNING)
+  workflowRunId       String?                    @unique
+  promptCohortId      String
+  configuration       Json
+  expectedBuildCount  Int
+  completedBuildCount Int                        @default(0)
+  failedBuildCount    Int                        @default(0)
+  providerCallCount   Int                        @default(0)
+  retryCount          Int                        @default(0)
+  startedAt           DateTime                   @default(now())
+  completedAt         DateTime?
+  error               String?
+
+  variant StealthVariant            @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  results StealthGenerationResult[]
+
+  @@index([variantId, startedAt])
+}
+
+model StealthGenerationResult {
+  id                   String                        @id @default(cuid())
+  runId                String
+  promptId             String
+  buildId              String?
+  status               StealthGenerationResultStatus
+  attempts             Int                           @default(0)
+  generationTimeMs     Int                           @default(0)
+  requestConfiguration String?
+  error                String?
+  createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
+
+  run    StealthGenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  prompt Prompt               @relation(fields: [promptId], references: [id], onDelete: Restrict)
+  build  Build?               @relation(fields: [buildId], references: [id], onDelete: SetNull)
+
+  @@unique([runId, promptId])
+  @@index([promptId])
+  @@index([buildId])
+}
+
 model Model {
   id          String   @id @default(cuid())
   key         String   @unique
@@ -37,6 +268,8 @@ model Model {
   coveragePairPromptsLow ArenaCoveragePairPrompt[] @relation("ArenaCoveragePairPromptLow")
   coveragePairPromptsHigh ArenaCoveragePairPrompt[] @relation("ArenaCoveragePairPromptHigh")
   shownJobs ArenaShownJob[]
+  stealthVariant StealthVariant? @relation("StealthOpaqueModel")
+  releasedStealthVariants StealthVariant[] @relation("StealthReleasedModel")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -71,6 +304,7 @@ model Prompt {
   matchups Matchup[]
   coverageByModel ArenaCoverageModelPrompt[]
   coveragePairs ArenaCoveragePairPrompt[]
+  stealthGenerationResults StealthGenerationResult[]
 
   @@unique([text])
   @@index([active])
@@ -103,6 +337,7 @@ model Build {
 
   matchupsAsA Matchup[] @relation("MatchupBuildA")
   matchupsAsB Matchup[] @relation("MatchupBuildB")
+  stealthGenerationResults StealthGenerationResult[]
 
   @@unique([promptId, modelId, gridSize, palette, mode])
   @@index([gridSize, palette, mode, promptId, modelId])
@@ -131,11 +366,15 @@ model Matchup {
   buildBId String
   buildB   Build @relation("MatchupBuildB", fields: [buildBId], references: [id], onDelete: Restrict)
 
+  stealthVariantId String?
+  stealthVariant   StealthVariant? @relation(fields: [stealthVariantId], references: [id], onDelete: Restrict)
+
   votes Vote[]
 
   @@index([promptId, createdAt])
   @@index([modelAId])
   @@index([modelBId])
+  @@index([stealthVariantId, createdAt])
   @@index([samplingLane, createdAt])
 }
 
@@ -170,7 +409,11 @@ model ArenaVoteJob {
   modelBId  String
   choice    String
 
+  stealthVariantId String?
+  stealthVariant   StealthVariant? @relation(fields: [stealthVariantId], references: [id], onDelete: Restrict)
+
   @@index([matchupId])
+  @@index([stealthVariantId, processedAt])
 }
 
 model ArenaShownJob {

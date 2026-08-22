@@ -16,6 +16,7 @@ import {
   conservativeScore,
   updateRatingPair,
 } from "../lib/arena/rating";
+import { applyStealthRatingVote } from "../lib/stealth/rating";
 
 type Choice = "A" | "B" | "TIE" | "BOTH_BAD";
 
@@ -58,12 +59,28 @@ Usage:
     return;
   }
 
-  const [models, votes] = await Promise.all([
+  const [models, variants, votes] = await Promise.all([
     prisma.model.findMany({
+      where: { stealthVariant: null },
       select: {
         id: true,
         key: true,
         displayName: true,
+        eloRating: true,
+        glickoRd: true,
+        glickoVolatility: true,
+        conservativeRating: true,
+        winCount: true,
+        lossCount: true,
+        drawCount: true,
+        bothBadCount: true,
+      },
+    }),
+    prisma.stealthVariant.findMany({
+      select: {
+        id: true,
+        codename: true,
+        modelId: true,
         eloRating: true,
         glickoRd: true,
         glickoVolatility: true,
@@ -82,6 +99,7 @@ Usage:
           select: {
             modelAId: true,
             modelBId: true,
+            stealthVariantId: true,
           },
         },
       },
@@ -100,9 +118,61 @@ Usage:
       bothBadCount: 0,
     });
   }
+  const stateByVariantId = new Map<string, ModelState>();
+  const variantById = new Map(variants.map((variant) => [variant.id, variant]));
+  for (const variant of variants) {
+    stateByVariantId.set(variant.id, {
+      rating: INITIAL_RATING,
+      rd: INITIAL_RD,
+      volatility: INITIAL_VOLATILITY,
+      winCount: 0,
+      lossCount: 0,
+      drawCount: 0,
+      bothBadCount: 0,
+    });
+  }
 
   for (const vote of votes) {
     if (!isChoice(vote.choice)) continue;
+    if (vote.matchup.stealthVariantId) {
+      const variantRecord = variantById.get(vote.matchup.stealthVariantId);
+      const variant = stateByVariantId.get(vote.matchup.stealthVariantId);
+      if (!variantRecord || !variant) continue;
+      const variantIsA = vote.matchup.modelAId === variantRecord.modelId;
+      const variantIsB = vote.matchup.modelBId === variantRecord.modelId;
+      if (variantIsA === variantIsB) continue;
+      const publicModel = stateByModelId.get(
+        variantIsA ? vote.matchup.modelBId : vote.matchup.modelAId,
+      );
+      if (!publicModel) continue;
+      const updated = applyStealthRatingVote({
+        variant: {
+          eloRating: variant.rating,
+          glickoRd: variant.rd,
+          glickoVolatility: variant.volatility,
+          conservativeRating: conservativeScore(variant.rating, variant.rd),
+          winCount: variant.winCount,
+          lossCount: variant.lossCount,
+          drawCount: variant.drawCount,
+          bothBadCount: variant.bothBadCount,
+        },
+        publicAnchor: {
+          eloRating: publicModel.rating,
+          glickoRd: publicModel.rd,
+          glickoVolatility: publicModel.volatility,
+        },
+        variantSide: variantIsA ? "A" : "B",
+        choice: vote.choice,
+      });
+      variant.rating = updated.eloRating;
+      variant.rd = updated.glickoRd;
+      variant.volatility = updated.glickoVolatility;
+      variant.winCount = updated.winCount;
+      variant.lossCount = updated.lossCount;
+      variant.drawCount = updated.drawCount;
+      variant.bothBadCount = updated.bothBadCount;
+      continue;
+    }
     const a = stateByModelId.get(vote.matchup.modelAId);
     const b = stateByModelId.get(vote.matchup.modelBId);
     if (!a || !b) continue;
@@ -172,12 +242,35 @@ Usage:
         Math.abs(a.newConservative - a.oldConservative),
     );
 
+  const variantDiffs = variants.map((variant) => {
+    const recomputed = stateByVariantId.get(variant.id) as ModelState;
+    return {
+      id: variant.id,
+      codename: variant.codename,
+      oldConservative: Number(variant.conservativeRating),
+      newRating: recomputed.rating,
+      newRd: recomputed.rd,
+      newVolatility: recomputed.volatility,
+      newConservative: conservativeScore(recomputed.rating, recomputed.rd),
+      winCount: recomputed.winCount,
+      lossCount: recomputed.lossCount,
+      drawCount: recomputed.drawCount,
+      bothBadCount: recomputed.bothBadCount,
+    };
+  });
+
   console.log(`models: ${models.length}`);
+  console.log(`stealth variants: ${variants.length}`);
   console.log(`votes replayed: ${votes.length}`);
   console.log("top conservative-score deltas:");
   for (const diff of diffs.slice(0, 10)) {
     console.log(
       `- ${diff.displayName} (${diff.key}): ${diff.oldConservative.toFixed(2)} -> ${diff.newConservative.toFixed(2)} (${formatDelta(diff.newConservative - diff.oldConservative)})`,
+    );
+  }
+  for (const diff of variantDiffs) {
+    console.log(
+      `- Stealth ${diff.codename}: ${diff.oldConservative.toFixed(2)} -> ${diff.newConservative.toFixed(2)} (${formatDelta(diff.newConservative - diff.oldConservative)})`,
     );
   }
 
@@ -199,6 +292,21 @@ Usage:
           lossCount: diff.newLossCount,
           drawCount: diff.newDrawCount,
           bothBadCount: diff.newBothBadCount,
+        },
+      });
+    }
+    for (const diff of variantDiffs) {
+      await tx.stealthVariant.update({
+        where: { id: diff.id },
+        data: {
+          eloRating: diff.newRating,
+          glickoRd: diff.newRd,
+          glickoVolatility: diff.newVolatility,
+          conservativeRating: diff.newConservative,
+          winCount: diff.winCount,
+          lossCount: diff.lossCount,
+          drawCount: diff.drawCount,
+          bothBadCount: diff.bothBadCount,
         },
       });
     }
