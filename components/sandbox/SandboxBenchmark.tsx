@@ -1346,7 +1346,7 @@ export function SandboxBenchmark() {
 
             <button
               type="button"
-              className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+              className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
               onClick={() => {
                 setSelectionReloading(true);
                 clearVisibleBuilds();
@@ -1474,7 +1474,7 @@ export function SandboxBenchmark() {
             <button
               type="button"
               aria-label="Previous prompt"
-              className="mb-btn mb-btn-ghost h-9 w-9 rounded-full p-0"
+              className="mb-btn mb-btn-ghost h-9 w-9 p-0"
               onClick={() => navigatePrompt(-1)}
               disabled={loading || refreshing || !canNavigatePrompts}
             >
@@ -1484,25 +1484,17 @@ export function SandboxBenchmark() {
             </button>
             <button
               type="button"
-              className="mb-btn mb-btn-ghost h-9 rounded-full px-3 text-xs"
+              className="mb-btn mb-btn-ghost h-9 px-3 text-xs"
               onClick={handleRandomPrompt}
               disabled={loading || refreshing || !canNavigatePrompts}
               title="Pick a random prompt"
             >
-              <span className="inline-flex items-center gap-1.5">
-                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-                  <rect x="5" y="5" width="14" height="14" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                  <circle cx="9" cy="9" r="1.1" fill="currentColor" />
-                  <circle cx="12" cy="12" r="1.1" fill="currentColor" />
-                  <circle cx="15" cy="15" r="1.1" fill="currentColor" />
-                </svg>
-                <span>Random</span>
-              </span>
+              Random
             </button>
             <button
               type="button"
               aria-label="Next prompt"
-              className="mb-btn mb-btn-ghost h-9 w-9 rounded-full p-0"
+              className="mb-btn mb-btn-ghost h-9 w-9 p-0"
               onClick={() => navigatePrompt(1)}
               disabled={loading || refreshing || !canNavigatePrompts}
             >

@@ -25,7 +25,7 @@ export function OfflineBanner() {
       aria-live="polite"
       className="fixed inset-x-0 top-0 z-50 flex justify-center px-3 pt-3"
     >
-      <div className="mb-subpanel flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-medium text-warn ring-1 ring-warn/40 shadow-soft">
+      <div className="mb-subpanel flex items-center gap-2 rounded-md px-3.5 py-1.5 text-xs font-medium text-warn ring-1 ring-warn/40">
         <span className="h-1.5 w-1.5 rounded-full bg-warn shadow-[0_0_0_3px_hsl(var(--warn)_/_0.22)]" aria-hidden="true" />
         <span>You&apos;re offline. Changes may not save.</span>
       </div>

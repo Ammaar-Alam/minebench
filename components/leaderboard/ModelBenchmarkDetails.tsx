@@ -437,7 +437,7 @@ export function ModelBenchmarkDetails({
               id={detailsId}
               role="region"
               aria-label={`${displayName} run details`}
-              className={`fixed z-30 overflow-visible rounded-lg border border-border bg-card shadow-soft ${
+              className={`fixed z-30 overflow-visible rounded-md border border-border bg-card ${
                 position ? "opacity-100" : "pointer-events-none opacity-0"
               }`}
               style={{

@@ -1103,6 +1103,42 @@ const BUILD_STUCK_AUTOSKIP_MS = Number.parseInt(
   10,
 );
 
+function RevealLane({
+  side,
+  model,
+  chosen,
+  faded,
+  delayed,
+}: {
+  side: "A" | "B";
+  model?: { provider: string; displayName: string; eloRating: number };
+  chosen: boolean;
+  faded: boolean;
+  delayed?: boolean;
+}) {
+  const isA = side === "A";
+  const chosenRule = isA ? "border-accent" : "border-accent2";
+  const sideTone = isA ? "text-accent" : "text-accent2";
+  return (
+    <div
+      className={`mb-reveal-lane ${delayed ? "mb-reveal-lane-delay" : ""} flex min-w-0 flex-1 items-baseline gap-2 border-t-2 pt-1.5 transition-opacity duration-200 ${
+        chosen ? chosenRule : "border-border/70"
+      } ${faded ? "opacity-45" : "opacity-100"}`}
+    >
+      <span className={`shrink-0 font-mono text-[11px] font-semibold ${sideTone}`}>{side}</span>
+      <span className="min-w-0 truncate text-[13px] font-medium text-fg">
+        {model?.displayName ?? "—"}
+      </span>
+      <span className="hidden shrink-0 font-mono text-[11px] text-muted2 sm:inline">
+        {model?.provider ?? ""}
+      </span>
+      <span className="ml-auto shrink-0 pl-2 font-mono text-[12px] tabular-nums text-muted">
+        {model ? Math.round(model.eloRating) : ""}
+      </span>
+    </div>
+  );
+}
+
 function PipelineArrow() {
   return (
     <div
@@ -1152,6 +1188,7 @@ export function Arena() {
   const [viewerReady, setViewerReady] = useState<{ matchupId: string; a: boolean; b: boolean } | null>(null);
   const [customPrompt, setCustomPrompt] = useState("");
   const [promptDialogOpen, setPromptDialogOpen] = useState(false);
+  const promptRowRef = useRef<HTMLDivElement | null>(null);
   const [transitioning, setTransitioning] = useState(false);
   const [mobileBuildView, setMobileBuildView] = useState<"a" | "b">("a");
   const [isCoarsePointer, setIsCoarsePointer] = useState(false);
@@ -1412,9 +1449,23 @@ export function Arena() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") setPromptDialogOpen(false);
     };
+    const onPointerDown = (e: PointerEvent) => {
+      const row = promptRowRef.current;
+      if (row && e.target instanceof Node && !row.contains(e.target)) {
+        setPromptDialogOpen(false);
+      }
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
   }, [promptDialogOpen]);
+
+  useEffect(() => {
+    setPromptDialogOpen(false);
+  }, [matchup?.id]);
 
   useEffect(() => {
     const media = window.matchMedia("(pointer: coarse)");
@@ -2169,6 +2220,15 @@ export function Arena() {
     };
   }, [matchup, sideLoadState]);
 
+  const revealVerdict =
+    revealAction === "SKIP"
+      ? "Skipped"
+      : revealAction === "TIE"
+        ? "Tie"
+        : revealAction === "BOTH_BAD"
+          ? "Both bad"
+          : null;
+
   const revealMeta = (() => {
     if (!matchup || reveal.kind !== "reveal" || reveal.matchupId !== matchup.id) {
       return {
@@ -2541,67 +2601,61 @@ export function Arena() {
   const buildSwitchDisabled = state.kind !== "ready" || transitioning;
 
   return (
-    <div className="flex flex-col gap-4 md:gap-6">
-      <div className="mb-panel flex flex-col gap-2 p-2.5 sm:p-4 md:gap-2.5 md:p-3">
+    <div id="mb-arena" className="flex flex-col gap-10 md:gap-12">
+      <div className="mb-arena-stage flex flex-col gap-3">
           {/* prompt */}
-          <div className="mb-subpanel relative overflow-hidden px-3 py-2.5 sm:px-4 sm:py-3 md:py-2.5">
-            <div className="relative z-10 flex items-center gap-3 sm:gap-3.5">
+          <div ref={promptRowRef} className="relative border-b border-border/70 pb-3">
+            <div className="flex items-center gap-3 sm:gap-4">
               <span className="mb-eyebrow shrink-0">Prompt</span>
               <div
-                title={promptText}
-                className={`min-w-0 flex-1 overflow-hidden whitespace-nowrap text-ellipsis pr-1 text-[14px] font-medium leading-tight text-fg/95 sm:text-[15px] ${isLongPrompt ? "cursor-help" : ""}`}
+                className={`relative min-w-0 flex-1 overflow-hidden whitespace-nowrap text-ellipsis text-[15px] leading-snug text-fg transition-opacity duration-150 ease-out motion-reduce:transition-none sm:text-base ${isLongPrompt ? "pr-10" : ""} ${promptDialogOpen ? "opacity-0" : "opacity-100"}`}
               >
                 <AnimatedPrompt text={promptText || "Loading…"} isExpanded={false} />
+                {isLongPrompt ? (
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-y-0 right-0 w-14 bg-gradient-to-l from-bg to-transparent"
+                  />
+                ) : null}
               </div>
               {isLongPrompt ? (
                 <button
                   type="button"
-                  className="mb-btn mb-btn-ghost h-8 shrink-0 rounded-full px-3 text-[11px] sm:text-[11px]"
-                  title="View full prompt"
-                  onClick={() => setPromptDialogOpen(true)}
+                  aria-expanded={promptDialogOpen}
+                  className="inline-flex h-7 shrink-0 items-center gap-1 text-[11px] font-medium text-muted transition-colors hover:text-fg focus-visible:text-accent focus-visible:outline-none"
+                  onClick={() => setPromptDialogOpen((open) => !open)}
                 >
                   <span className="hidden sm:inline">Full prompt</span>
                   <span className="sm:hidden">Full</span>
+                  <svg
+                    aria-hidden="true"
+                    className={`mb-disclosure-chevron h-3 w-3 ${promptDialogOpen ? "is-open" : ""}`}
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M4 6.5L8 10.5L12 6.5" />
+                  </svg>
                 </button>
               ) : null}
             </div>
+
+            {/* Drops out of the prompt rule rather than pushing the viewers down:
+               reflowing the canvas mid-transition costs a frame budget we do not have. */}
             {isLongPrompt ? (
-              <div className="pointer-events-none absolute inset-y-0 right-0 z-0 w-16 bg-gradient-to-l from-bg/95 to-transparent md:w-20" />
+              <div
+                className={`mb-prompt-reveal absolute inset-x-0 top-full z-30 ${promptDialogOpen ? "is-open" : ""}`}
+                aria-hidden={!promptDialogOpen}
+              >
+                <p className="border-b border-border bg-bg px-0 pb-4 pt-3 text-[15px] leading-relaxed text-fg/90 sm:text-base">
+                  {promptText}
+                </p>
+              </div>
             ) : null}
           </div>
-
-          {promptDialogOpen ? (
-            <div className="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center">
-              <button
-                type="button"
-                aria-label="Close"
-                className="absolute inset-0 bg-bg/60 backdrop-blur-sm"
-                onClick={() => setPromptDialogOpen(false)}
-              />
-              <div
-                role="dialog"
-                aria-modal="true"
-                aria-label="Full prompt"
-                className="relative w-full max-w-2xl overflow-hidden rounded-3xl bg-card/90 shadow-soft ring-1 ring-border backdrop-blur-xl"
-              >
-                <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
-                  <span className="mb-eyebrow">Prompt</span>
-                  <button
-                    type="button"
-                    className="mb-btn mb-btn-ghost h-9 rounded-full px-4 text-xs"
-                    onClick={() => setPromptDialogOpen(false)}
-                  >
-                    Close <span className="hidden sm:inline"><span className="mb-kbd">Esc</span></span>
-                  </button>
-                </div>
-                <div className="max-h-[70vh] overflow-auto px-4 py-4">
-                  <p className="whitespace-pre-wrap break-words text-[15px] leading-relaxed text-fg/90">
-                    {promptText}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ) : null}
 
           {state.kind === "error" ? (
             <ErrorState
@@ -2617,7 +2671,7 @@ export function Arena() {
             <div
               role="status"
               aria-live="polite"
-              className="flex items-center gap-2 rounded-xl bg-bg/50 px-3 py-2 text-xs text-muted ring-1 ring-border/60"
+              className="flex items-center gap-2 rounded-md bg-bg/50 px-3 py-2 text-xs text-muted ring-1 ring-border/60"
             >
               <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
               <span>Taking longer than usual — MineBench may be under heavy load.</span>
@@ -2628,7 +2682,7 @@ export function Arena() {
             <div
               role="status"
               aria-live="polite"
-              className="flex items-start gap-2 rounded-xl bg-warn/8 px-3 py-2 text-xs text-warn ring-1 ring-warn/30"
+              className="flex items-start gap-2 rounded-md bg-warn/8 px-3 py-2 text-xs text-warn ring-1 ring-warn/30"
             >
               <svg
                 aria-hidden="true"
@@ -2669,10 +2723,10 @@ export function Arena() {
           {/* builds grid */}
           <div
             ref={cardsScrollRef}
-            className={`mb-x-scroll -mx-0.5 flex w-[calc(100%+0.25rem)] snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 scroll-smooth transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+            className={`mb-x-scroll -mx-0.5 flex min-h-0 w-[calc(100%+0.25rem)] flex-1 snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 scroll-smooth transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
           >
             <div
-              className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "ring-1 ring-accent/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
+              className={`relative mb-card-enter flex min-h-0 min-w-full shrink-0 flex-col snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "border-accent/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:a` : "arena-build-a"}
@@ -2714,7 +2768,7 @@ export function Arena() {
                   laneNeedsFullA ? (
                     <button
                       type="button"
-                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+                      className="mb-btn mb-btn-ghost h-8 px-3 text-[11px] sm:text-xs"
                       disabled={laneLoadA === "loading-full"}
                       onClick={() => requestFullLaneDetail("a")}
                     >
@@ -2725,7 +2779,7 @@ export function Arena() {
               />
             </div>
             <div
-              className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-2xl transition-all duration-200 ease-out motion-reduce:transition-none sm:rounded-3xl md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "ring-1 ring-accent2/30 md:ring-border/60 md:shadow-none" : "ring-1 ring-border/60"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
+              className={`relative mb-card-enter mb-card-enter-delay flex min-h-0 min-w-full shrink-0 flex-col snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "border-accent2/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:b` : "arena-build-b"}
@@ -2767,7 +2821,7 @@ export function Arena() {
                   laneNeedsFullB ? (
                     <button
                       type="button"
-                      className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+                      className="mb-btn mb-btn-ghost h-8 px-3 text-[11px] sm:text-xs"
                       disabled={laneLoadB === "loading-full"}
                       onClick={() => requestFullLaneDetail("b")}
                     >
@@ -2781,7 +2835,7 @@ export function Arena() {
 
           {/* segmented build switcher – mobile only */}
           <div className="md:hidden">
-            <div className="flex rounded-xl border border-border/55 bg-bg/45 p-0.5 shadow-[inset_0_1px_0_hsl(var(--fg)_/_0.04)] backdrop-blur-sm">
+            <div className="flex rounded-md border border-border/70">
               <button
                 type="button"
                 aria-pressed={mobileBuildView === "a"}
@@ -2816,12 +2870,12 @@ export function Arena() {
           </div>
 
 	          {buildLoadError ? (
-	            <div className="mb-subpanel flex items-center justify-between gap-3 px-3 py-2 text-sm text-muted sm:px-4">
+	            <div className="flex items-center justify-between gap-3 border-t border-border/70 px-1 py-2 text-sm text-muted">
 	              <span>{buildLoadError}</span>
 	              <div className="flex shrink-0 items-center gap-2">
 	                <button
 	                  type="button"
-	                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+	                  className="mb-btn mb-btn-ghost h-8 px-3 text-[11px] sm:text-xs"
 	                  onClick={() => {
 	                    if (laneErrorA) retryLaneBuild("a");
 	                    if (laneErrorB) retryLaneBuild("b");
@@ -2831,7 +2885,7 @@ export function Arena() {
 	                </button>
 	                <button
 	                  type="button"
-	                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-[11px] sm:text-xs"
+	                  className="mb-btn mb-btn-ghost h-8 px-3 text-[11px] sm:text-xs"
 	                  onClick={() => {
 	                    void handleSkip();
 	                  }}
@@ -2843,154 +2897,89 @@ export function Arena() {
 	          ) : null}
 
 	          {/* action bar (vote buttons ↔ reveal status) */}
-          <div className="relative h-[8.5rem] sm:h-[7.5rem]">
-            <div className="relative h-full">
-              <div className="relative h-full">
-                <div
-                  className={`absolute inset-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "pointer-events-none opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
-                  >
-                    <VoteBar
-                      disabled={state.kind !== "ready" || submitting || transitioning}
-                      disableVotes={state.kind !== "ready" || matchupBuildLoading}
-                      onVote={handleVote}
-                      onSkip={handleSkip}
-                      confirming={voteConfirming}
+          {/* Both states share one grid cell, so the bar is exactly as tall as
+             the vote controls need and the crossfade shifts nothing. */}
+          <div className="grid">
+            <div
+              className={`[grid-area:1/1] transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "pointer-events-none opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
+            >
+              <VoteBar
+                disabled={state.kind !== "ready" || submitting || transitioning}
+                disableVotes={state.kind !== "ready" || matchupBuildLoading}
+                onVote={handleVote}
+                onSkip={handleSkip}
+                confirming={voteConfirming}
+              />
+            </div>
+
+            <div
+              aria-hidden={!revealMeta.visible}
+              className={`[grid-area:1/1] transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "opacity-100 translate-y-0" : "pointer-events-none opacity-0 -translate-y-1"}`}
+            >
+              <div className="flex h-full flex-col justify-center gap-3 border-t border-border/70 px-1 py-2 sm:py-3">
+                <div key={matchup?.id} className="flex items-baseline gap-3 sm:gap-5">
+                  <RevealLane
+                    side="A"
+                    model={matchup?.a.model}
+                    chosen={revealAction === "A"}
+                    faded={revealAction === "B"}
+                  />
+                  <RevealLane
+                    side="B"
+                    model={matchup?.b.model}
+                    chosen={revealAction === "B"}
+                    faded={revealAction === "A"}
+                    delayed
+                  />
+                  {revealVerdict ? (
+                    <span className="mb-reveal-lane mb-reveal-lane-delay hidden shrink-0 font-mono text-[11px] uppercase tracking-[0.18em] text-muted2 md:inline">
+                      {revealVerdict}
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="relative h-px min-w-0 flex-1 bg-border/50">
+                    <div
+                      className="absolute inset-y-0 left-0 bg-accent/70 transition-[width] duration-100 ease-linear motion-reduce:transition-none"
+                      style={{ width: `${(revealMeta.progress * 100).toFixed(1)}%` }}
                     />
+                    {revealMeta.waitingForNext ? (
+                      <div className="mb-progress-wait absolute inset-0" />
+                    ) : null}
                   </div>
 
-                  <div
-                    className={`absolute inset-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none ${revealMeta.visible ? "opacity-100 translate-y-0" : "pointer-events-none opacity-0 -translate-y-1"}`}
+                  <button
+                    type="button"
+                    className="mb-btn mb-btn-ghost h-8 shrink-0 px-3 text-xs"
+                    disabled={transitioning}
+                    onClick={() => {
+                      if (reveal.kind !== "reveal" || reveal.matchupId !== matchup?.id) return;
+                      if (!reveal.next) {
+                        requestAdvanceNow(reveal.matchupId);
+                        return;
+                      }
+                      void advanceToNext(reveal.matchupId, reveal.next);
+                    }}
                   >
-                    <div className="mb-subpanel h-full px-3 py-2 sm:px-4 sm:py-2.5">
-                      <div className="flex h-full flex-col justify-between gap-2">
-                        <div className="flex min-w-0 flex-col items-stretch gap-2 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="flex min-w-0 items-center gap-2">
-                            <span className="mb-badge bg-bg/40 text-muted ring-border/60">
-                              {revealAction === "SKIP"
-                                ? "Skipped"
-                                : revealAction === "TIE"
-                                  ? "You voted: Tie"
-                                  : revealAction === "BOTH_BAD"
-                                    ? "You voted: Both bad"
-                                    : revealAction === "A"
-                                      ? "You voted: A"
-                                      : revealAction === "B"
-                                        ? "You voted: B"
-                                        : "Revealed"}
-                            </span>
-
-                            <div className="hidden min-w-0 items-center gap-2 text-xs sm:flex">
-                              <span className="inline-flex h-5 items-center rounded-full bg-accent/10 px-2 font-mono text-[11px] font-semibold text-accent ring-1 ring-accent/20">
-                                A
-                              </span>
-                              <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
-                                {matchup?.a.model.displayName}
-                              </span>
-                              <span className="text-muted">vs</span>
-                              <span className="inline-flex h-5 items-center rounded-full bg-accent2/10 px-2 font-mono text-[11px] font-semibold text-accent2 ring-1 ring-accent2/20">
-                                B
-                              </span>
-                              <span className="min-w-0 max-w-[10rem] truncate font-medium text-fg md:max-w-[16rem]">
-                                {matchup?.b.model.displayName}
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center justify-between gap-3 sm:shrink-0 sm:justify-start">
-                            <div className="flex items-center gap-2 text-xs text-muted">
-                              {revealMeta.nextReady ? (
-                                <span className="font-mono">
-                                  Next in {Math.max(0, Math.ceil(revealMeta.secondsLeft))}s
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-2 font-mono">
-                                  <span
-                                    className={`h-3 w-3 rounded-full border-2 border-muted/30 ${
-                                      revealMeta.waitingForNext
-                                        ? "animate-pulse border-t-muted/60"
-                                        : "animate-spin border-t-muted/80"
-                                    }`}
-                                  />
-                                  {revealMeta.waitingForNext
-                                    ? "Loading next…"
-                                    : "Loading…"}
-                                </span>
-                              )}
-                            </div>
-
-                            <button
-                              type="button"
-                              className="mb-btn mb-btn-ghost h-9 px-4 text-xs"
-                              disabled={transitioning}
-                              onClick={() => {
-                                if (reveal.kind !== "reveal" || reveal.matchupId !== matchup?.id) return;
-                                if (!reveal.next) {
-                                  requestAdvanceNow(reveal.matchupId);
-                                  return;
-                                }
-                                void advanceToNext(reveal.matchupId, reveal.next);
-                              }}
-                            >
-                              Next{" "}
-                              <span className="hidden md:inline"><span className="mb-kbd">Space</span></span>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Mobile-only: show both model names so user doesn't have to swipe */}
-                        <div className="flex items-center gap-2 text-[11px] sm:hidden">
-                          <div
-                            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-accent/8 px-2 py-1 ring-1 ring-accent/20 ${
-                              revealAction === "A" ? "ring-accent/50" : ""
-                            }`}
-                          >
-                            <span className="inline-flex h-4 items-center rounded-full bg-accent/15 px-1.5 font-mono text-[10px] font-semibold text-accent ring-1 ring-accent/30">
-                              A
-                            </span>
-                            <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
-                              {matchup?.a.model.displayName ?? "—"}
-                            </span>
-                          </div>
-                          <div
-                            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-accent2/8 px-2 py-1 ring-1 ring-accent2/20 ${
-                              revealAction === "B" ? "ring-accent2/50" : ""
-                            }`}
-                          >
-                            <span className="inline-flex h-4 items-center rounded-full bg-accent2/15 px-1.5 font-mono text-[10px] font-semibold text-accent2 ring-1 ring-accent2/30">
-                              B
-                            </span>
-                            <span className="min-w-0 flex-1 truncate font-medium text-fg/95">
-                              {matchup?.b.model.displayName ?? "—"}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="relative h-1.5 w-full overflow-hidden rounded-full bg-border/40">
-                          <div
-                            className="h-full rounded-full bg-accent/70 transition-[width] duration-100 ease-linear motion-reduce:transition-none"
-                            style={{ width: `${(revealMeta.progress * 100).toFixed(1)}%` }}
-                          />
-                          {revealMeta.waitingForNext ? (
-                            <div className="mb-progress-wait absolute inset-0" />
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                    Next
+                    <span className="hidden md:inline"><span className="mb-kbd">Space</span></span>
+                  </button>
                 </div>
               </div>
             </div>
+          </div>
       </div>
 
       {/* how it works — pipeline diagram */}
-      <div className="mb-panel mb-panel-solid overflow-hidden p-5 sm:p-7 md:p-10">
-        <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
-          <h2 className="mb-3 text-center font-display text-2xl font-semibold tracking-tight text-fg sm:text-[1.75rem] md:mb-4 md:text-3xl">
+      <section className="border-t border-border/70 pt-8 sm:pt-10">
+        <div className="flex w-full flex-col">
+          <h2 className="font-display text-[clamp(1.6rem,3.4vw,2.4rem)] font-semibold leading-tight tracking-tight text-fg">
             How it works
           </h2>
-          <p className="mb-8 max-w-2xl text-center text-[15px] leading-relaxed text-fg/80 sm:mb-10 sm:text-base">
-            Models read a text prompt and output raw JSON coordinates for voxel blocks — no images,
-            no 3D tools. Humans vote pair-wise and rankings emerge from Elo.
+          <p className="mb-8 mt-3 max-w-[62ch] text-[15px] leading-relaxed text-muted sm:mb-10 sm:text-base">
+            Models read a text prompt and output raw block coordinates — no images, no 3D tools.
+            Humans vote pair-wise, and the rankings follow.
           </p>
 
           <div className="grid w-full grid-cols-1 items-stretch gap-5 md:grid-cols-[1fr_auto_1fr_auto_1fr] md:gap-6">
@@ -3000,7 +2989,7 @@ export function Arena() {
                 <span className="mb-step-num">01</span>
                 <span className="mb-eyebrow">Prompt</span>
               </div>
-              <figure className="rounded-xl border border-border/60 bg-bg/40 p-4 font-mono text-[12px] italic leading-relaxed text-fg/85">
+              <figure className="border-t border-border/70 pt-4 font-mono text-[12px] italic leading-relaxed text-fg/85">
                 &ldquo;A warm wooden cabin beside a pond, with a stone chimney, a small dock, and a few trees.&rdquo;
               </figure>
               <p className="text-sm leading-relaxed text-fg/70">
@@ -3016,7 +3005,7 @@ export function Arena() {
                 <span className="mb-step-num">02</span>
                 <span className="mb-eyebrow">Generate</span>
               </div>
-              <figure className="relative rounded-xl border border-accent/25 bg-bg/40 p-4 font-mono text-[11px] leading-relaxed text-fg/85">
+              <figure className="relative border-t border-accent/40 pt-4 font-mono text-[11px] leading-relaxed text-fg/85">
                 <pre className="overflow-x-auto whitespace-pre">
 {`{
   "version": "1.0",
@@ -3027,7 +3016,7 @@ export function Arena() {
   ]
 }`}
                 </pre>
-                <span className="absolute bottom-2 right-3 font-mono text-[10px] text-muted/70">
+                <span className="absolute bottom-0 right-0 font-mono text-[10px] text-muted/70">
                   1,247 blocks
                 </span>
               </figure>
@@ -3044,17 +3033,17 @@ export function Arena() {
                 <span className="mb-step-num">03</span>
                 <span className="mb-eyebrow">Vote &amp; rank</span>
               </div>
-              <figure className="flex flex-col gap-3 rounded-xl border border-border/60 bg-bg/40 p-4">
+              <figure className="flex flex-col gap-3 border-t border-border/70 pt-4">
                 <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px]">
-                  <span className="inline-flex h-7 items-center rounded-lg bg-accent/15 px-2.5 font-semibold text-accent ring-1 ring-accent/30">
+                  <span className="inline-flex h-7 items-center rounded-md border border-accent/40 px-2.5 font-medium text-accent">
                     A wins
                   </span>
                   <span className="hidden text-muted/60 sm:inline">·</span>
-                  <span className="inline-flex h-7 items-center rounded-lg bg-muted/10 px-2.5 font-semibold text-muted/90 ring-1 ring-border/70">
+                  <span className="inline-flex h-7 items-center rounded-md border border-border/70 px-2.5 font-medium text-muted">
                     Tie
                   </span>
                   <span className="hidden text-muted/60 sm:inline">·</span>
-                  <span className="inline-flex h-7 items-center rounded-lg bg-accent2/15 px-2.5 font-semibold text-accent2 ring-1 ring-accent2/30">
+                  <span className="inline-flex h-7 items-center rounded-md border border-accent2/40 px-2.5 font-medium text-accent2">
                     B wins
                   </span>
                 </div>
@@ -3079,20 +3068,20 @@ export function Arena() {
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
       {/* sandbox cta - moved to bottom & polished */}
-      <div className="mb-panel mb-panel-solid flex flex-col items-center gap-4 p-5 text-center sm:p-6 md:p-7">
-        <div className="flex flex-col items-center gap-1.5">
-          <h3 className="font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
-            Want to test a model yourself?
-          </h3>
-          <p className="text-sm leading-relaxed text-fg/70">
-            Enter any prompt to generate a 3D build in the Sandbox.
+      <section className="flex flex-col gap-4 border-t border-border/70 pt-8 sm:flex-row sm:items-end sm:justify-between sm:gap-10 sm:pt-10">
+        <div className="flex flex-col gap-2">
+          <h2 className="font-display text-[clamp(1.6rem,3.4vw,2.4rem)] font-semibold leading-tight tracking-tight text-fg">
+            Build your own
+          </h2>
+          <p className="max-w-[48ch] text-[15px] leading-relaxed text-muted">
+            Any prompt, any model, rendered live.
           </p>
         </div>
         <form
-          className="relative flex w-full max-w-md items-center"
+          className="relative flex w-full items-center sm:max-w-md"
           onSubmit={(e) => {
             e.preventDefault();
             const q = customPrompt.trim();
@@ -3107,13 +3096,13 @@ export function Arena() {
             onChange={(e) => setCustomPrompt(e.target.value)}
           />
           <a
-            className="mb-btn mb-btn-primary absolute right-1.5 top-1.5 bottom-1.5 flex items-center rounded-md px-4 text-sm"
+            className="mb-btn mb-btn-primary absolute right-1.5 top-1.5 bottom-1.5 flex items-center px-4 text-sm"
             href={`/sandbox${customPrompt.trim() ? `?prompt=${encodeURIComponent(customPrompt.trim())}` : ""}`}
           >
             Generate
           </a>
         </form>
-      </div>
+      </section>
     </div>
   );
 }

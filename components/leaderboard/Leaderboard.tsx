@@ -222,7 +222,7 @@ function ModelSearchEmptyState({ onClear }: { onClear: () => void }) {
       <button
         type="button"
         onClick={onClear}
-        className="mb-btn mb-btn-ghost h-11 rounded-full px-4 text-xs"
+        className="mb-btn mb-btn-ghost h-11 px-4 text-xs"
       >
         Clear
       </button>
@@ -365,15 +365,11 @@ export function Leaderboard() {
       <div className="mb-panel shrink-0 px-5 py-5 ring-inset before:hidden">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center xl:grid-cols-[minmax(0,1fr)_auto_auto] xl:gap-x-6 xl:gap-y-0">
           {topModel ? (
-            <div className="mb-leaderboard-champion mb-model-reveal mb-model-reveal-in order-1 inline-flex min-h-[72px] max-w-full min-w-0 self-start items-center gap-2 py-0 pl-0 pr-2 min-[340px]:min-h-20 min-[340px]:gap-3 min-[340px]:pr-3 sm:order-none sm:col-span-2 sm:gap-4 sm:pr-4 xl:col-span-1">
+            <div className="mb-leaderboard-champion mb-model-reveal-in opacity-0 order-1 inline-flex min-h-[72px] max-w-full min-w-0 self-start items-center gap-2 py-0 pl-0 pr-2 min-[340px]:min-h-20 min-[340px]:gap-3 min-[340px]:pr-3 sm:order-none sm:col-span-2 sm:gap-4 sm:pr-4 xl:col-span-1">
               <span
                 aria-hidden="true"
                 className="relative flex h-[72px] w-[72px] shrink-0 items-center justify-center rounded-full bg-accent/10 ring-1 ring-accent/35 min-[340px]:h-20 min-[340px]:w-20"
               >
-                <span
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 rounded-full shadow-[0_0_0_4px_hsl(var(--accent)/0.06),0_10px_24px_-10px_hsl(var(--accent)/0.45)]"
-                />
                 <span className="relative -translate-y-px text-center font-mono text-2xl font-semibold leading-none text-accent tabular-nums sm:text-[1.75rem]">
                   1
                 </span>
@@ -450,7 +446,7 @@ export function Leaderboard() {
                 onClick={handleRetry}
                 disabled={retrying}
                 aria-live="polite"
-                className="mb-refresh-retry inline-flex h-11 items-center gap-1.5 rounded-full px-3 font-mono text-[11px] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40 disabled:cursor-not-allowed disabled:opacity-60"
+                className="mb-refresh-retry inline-flex h-11 items-center gap-1.5 rounded-md px-3 font-mono text-[11px] text-warn ring-1 ring-warn/30 transition hover:bg-warn/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-warn/40 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <span className="h-1.5 w-1.5 rounded-full bg-warn" aria-hidden="true" />
                 <span>
@@ -465,7 +461,7 @@ export function Leaderboard() {
               onClick={() => setShowDetailed((v) => !v)}
               aria-label={showDetailed ? "Hide details" : "Show details"}
               aria-pressed={showDetailed}
-              className={`mb-btn mb-details-toggle hidden h-11 rounded-full bg-transparent px-3.5 text-[11px] ring-1 ring-inset sm:inline-flex ${
+              className={`mb-btn mb-details-toggle hidden h-11 bg-transparent px-3.5 text-[11px] ring-1 ring-inset sm:inline-flex ${
                 showDetailed
                   ? "text-accent ring-accent/45"
                   : "text-muted ring-border/60 hover:text-fg hover:ring-border"
@@ -476,7 +472,7 @@ export function Leaderboard() {
             <div
               role="search"
               aria-label="Leaderboard models"
-              className="relative h-11 w-full rounded-full bg-bg/70 text-sm ring-1 ring-inset ring-border transition-colors hover:bg-bg/80 focus-within:ring-2 focus-within:ring-accent/50 sm:w-56 md:w-64 xl:w-72"
+              className="relative h-11 w-full rounded-md bg-bg text-sm ring-1 ring-inset ring-border transition-colors focus-within:ring-2 focus-within:ring-accent/50 sm:w-56 md:w-64 xl:w-72"
             >
               <label htmlFor="leaderboard-model-search" className="sr-only">
                 Search models
@@ -509,7 +505,7 @@ export function Leaderboard() {
                   type="button"
                   onClick={clearModelQuery}
                   aria-label="Clear model search"
-                  className="absolute inset-y-0 right-0 grid w-11 place-items-center rounded-full text-muted2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
+                  className="absolute inset-y-0 right-0 grid w-11 place-items-center rounded-md text-muted2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
                 >
                   <CloseIcon className="h-3.5 w-3.5" />
                 </button>
@@ -534,13 +530,13 @@ export function Leaderboard() {
         <div
           role="status"
           aria-live="polite"
-          className="mb-subpanel shrink-0 flex items-center gap-2 rounded-xl px-3 py-2 text-xs text-muted"
+          className="mb-subpanel shrink-0 flex items-center gap-2 rounded-md px-3 py-2 text-xs text-muted"
         >
           <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
           <span>Taking longer than usual — MineBench may be under heavy load.</span>
         </div>
       ) : null}
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-card/60 shadow-soft ring-1 ring-border">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
         <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
         <div
@@ -556,7 +552,7 @@ export function Leaderboard() {
 	              return (
 	                <div
 	                  key={m.key}
-	                  className={`w-full rounded-2xl bg-gradient-to-b from-bg/62 to-bg/44 p-3 text-left ring-1 ring-border/70 transition ${
+	                  className={`w-full rounded-md p-3 text-left ring-1 ring-border/70 transition ${
 	                    navigatingModelKey === m.key
 	                      ? "opacity-75"
 	                      : "active:ring-accent/45 active:from-bg/72"
