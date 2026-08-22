@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { POST as vote } from "../../../app/api/arena/vote/route";
 import { createArenaMatchupToken } from "../../../lib/arena/matchupToken";
 import { drainArenaVoteJobs } from "../../../lib/arena/voteJobs";
+import { prisma as routePrisma } from "../../../lib/prisma";
 import {
   invalidateStealthSamplingCache,
   pickStealthMatchup,
@@ -103,25 +104,38 @@ async function main() {
   process.env.ARENA_MATCHUP_SIGNING_SECRET = "private-vote-integration-secret";
   process.env.ARENA_VOTE_JOB_DRAIN_AFTER_RESPONSE = "0";
   try {
-    const response = await vote(
+    const signedMatchupId = createArenaMatchupToken({
+      promptId: fixture.privateBuild.promptId,
+      modelAId: fixture.privateModel.id,
+      modelBId: fixture.publicModel.id,
+      buildAId: fixture.privateBuild.id,
+      buildBId: publicBuild.id,
+      buildAChecksum: fixture.privateBuild.voxelSha256 ?? "",
+      buildBChecksum: publicBuild.voxelSha256 ?? "",
+      stealthVariantId: fixture.variant.id,
+    });
+    const voteRequest = () =>
       new Request("http://localhost:3000/api/arena/vote", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          matchupId: createArenaMatchupToken({
-            promptId: fixture.privateBuild.promptId,
-            modelAId: fixture.privateModel.id,
-            modelBId: fixture.publicModel.id,
-            buildAId: fixture.privateBuild.id,
-            buildBId: publicBuild.id,
-            buildAChecksum: fixture.privateBuild.voxelSha256 ?? "",
-            buildBChecksum: publicBuild.voxelSha256 ?? "",
-            stealthVariantId: fixture.variant.id,
-          }),
+          matchupId: signedMatchupId,
           choice: "A",
         }),
-      }),
-    );
+      });
+    const modelDelegate = routePrisma.model as unknown as Record<string, unknown>;
+    const originalFindMany = modelDelegate.findMany;
+    modelDelegate.findMany = async () => {
+      throw new Error("forced reveal failure");
+    };
+    try {
+      const failedReveal = await vote(voteRequest());
+      assert.equal(failedReveal.status, 409);
+      assert.equal(await db.vote.count(), 0, "a reveal failure must not commit the vote");
+    } finally {
+      modelDelegate.findMany = originalFindMany;
+    }
+    const response = await vote(voteRequest());
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
     assert.equal(await db.vote.count(), 1);
     assert.equal(await db.arenaVoteJob.count({ where: { stealthVariantId: fixture.variant.id } }), 1);
@@ -129,13 +143,41 @@ async function main() {
     assert.equal(firstExportPage.rows.length, 1);
     assert.equal(firstExportPage.rows[0]?.choice, "WIN");
     assert.ok(firstExportPage.nextCursor);
+    const firstVote = await db.vote.findFirstOrThrow({ orderBy: { createdAt: "asc" } });
+    const laterMatchup = await db.matchup.create({
+      data: {
+        promptId: fixture.privateBuild.promptId,
+        modelAId: fixture.privateModel.id,
+        modelBId: fixture.publicModel.id,
+        buildAId: fixture.privateBuild.id,
+        buildBId: publicBuild.id,
+        stealthVariantId: fixture.variant.id,
+      },
+    });
+    await db.vote.create({
+      data: {
+        id: "00000000-0000-0000-0000-000000000000",
+        matchupId: laterMatchup.id,
+        sessionId: "later-export-vote",
+        choice: "B",
+        createdAt: new Date(firstVote.createdAt.getTime() + 1),
+      },
+    });
     const secondExportPage = await getDeidentifiedStealthVotePage(
       fixture.experiment.id,
       firstExportPage.nextCursor,
       1,
     );
-    assert.deepEqual(secondExportPage.rows, []);
-    assert.equal(secondExportPage.nextCursor, null);
+    assert.equal(secondExportPage.rows.length, 1);
+    assert.equal(secondExportPage.rows[0]?.choice, "LOSS");
+    assert.ok(secondExportPage.nextCursor);
+    const finalExportPage = await getDeidentifiedStealthVotePage(
+      fixture.experiment.id,
+      secondExportPage.nextCursor,
+      1,
+    );
+    assert.deepEqual(finalExportPage.rows, []);
+    assert.equal(finalExportPage.nextCursor, null);
     const drain = await drainArenaVoteJobs({ maxJobs: 1, maxMs: 10_000 });
     assert.equal(drain.processedCount, 1);
   } finally {

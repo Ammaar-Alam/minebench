@@ -209,14 +209,24 @@ function EvidenceQuality({ variant }: { variant: ResultsDashboardVariant }) {
   );
 }
 
-function BreakdownVisual({ title, rows }: { title: string; rows: StealthBreakdown[] }) {
+function BreakdownVisual({
+  title,
+  rows,
+  worstFirst = false,
+}: {
+  title: string;
+  rows: StealthBreakdown[];
+  worstFirst?: boolean;
+}) {
   const sortedRows = useMemo(
     () =>
-      [...rows].sort(
-        (a, b) =>
-          (b.averageScore ?? -1) - (a.averageScore ?? -1) || b.votes - a.votes,
-      ),
-    [rows],
+      [...rows].sort((a, b) => {
+        const missingScore = worstFirst ? 2 : -1;
+        const scoreA = a.averageScore ?? missingScore;
+        const scoreB = b.averageScore ?? missingScore;
+        return (worstFirst ? scoreA - scoreB : scoreB - scoreA) || b.votes - a.votes;
+      }),
+    [rows, worstFirst],
   );
 
   return (
@@ -288,7 +298,7 @@ export function ResultsDashboard({ variants }: { variants: ResultsDashboardVaria
           </div>
           <div className="grid gap-12 xl:grid-cols-2 xl:gap-16">
             <BreakdownVisual title="Prompt landscape" rows={selected.prompts} />
-            <BreakdownVisual title="Opponent field" rows={selected.opponents} />
+            <BreakdownVisual title="Opponent field" rows={selected.opponents} worstFirst />
           </div>
         </>
       ) : (

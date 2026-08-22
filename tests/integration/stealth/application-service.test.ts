@@ -93,6 +93,57 @@ async function installBuildInsertFailure(params: {
   };
 }
 
+async function installGenerationResultUpdateFailure(params: {
+  name: string;
+  runId: string;
+}) {
+  const functionName = `reject_${params.name}`;
+  const triggerName = `reject_${params.name}_result`;
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION "${functionName}"() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF OLD."runId" = '${params.runId}' THEN
+        RAISE EXCEPTION 'forced generation terminalization failure';
+      END IF;
+      RETURN NEW;
+    END
+    $$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER "${triggerName}"
+    BEFORE UPDATE ON "StealthGenerationResult"
+    FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+  `);
+  return async () => {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "StealthGenerationResult"`);
+    await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
+  };
+}
+
+async function installDeferredArtifactOwnershipFailure(name: string) {
+  const functionName = `reject_${name}`;
+  const triggerName = `reject_${name}_artifact`;
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION "${functionName}"() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      RAISE EXCEPTION 'forced artifact ownership commit failure';
+    END
+    $$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE CONSTRAINT TRIGGER "${triggerName}"
+    AFTER INSERT ON "ArenaBuildArtifact"
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+  `);
+  return async () => {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "ArenaBuildArtifact"`);
+    await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
+  };
+}
+
 async function installBuildDeleteBarrier(params: {
   name: string;
   lockKey: number;
@@ -175,6 +226,7 @@ async function main() {
     disableStealthEndpoint,
     getStealthEvaluationWorkspace,
     inviteOrganizationMember,
+    listStealthEvaluationWorkspaces,
     reconcileStealthGoalPause,
     purgeDueStealthEvaluations,
     purgeStealthEvaluationIfDue,
@@ -932,6 +984,67 @@ async function main() {
     0,
   );
 
+  const atomicCloseEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+    name: `Atomic close ${suffix}`,
+  });
+  const atomicCloseCheckpoint = await configureStealthEndpoint(
+    memberActor,
+    organization.id,
+    atomicCloseEvaluation.id,
+    {
+      codename: "Atomic close",
+      config: {
+        protocol: "openrouter",
+        endpointUrl: "",
+        apiKey: "atomic-close-secret-key",
+        modelId: `atomic-close-${suffix}`,
+        requireStructuredOutput: true,
+        enableTools: false,
+      },
+    },
+  );
+  const atomicCloseRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    atomicCloseCheckpoint.variantId,
+    { maxAttempts: 1, concurrency: 1 },
+    async (runId) => `workflow-${runId}`,
+  );
+  const removeTerminalizationFailure = await installGenerationResultUpdateFailure({
+    name: `close_${suffix}`,
+    runId: atomicCloseRun.runId,
+  });
+  try {
+    await assert.rejects(
+      closeStealthEvaluation(memberActor, organization.id, atomicCloseEvaluation.id),
+      /forced generation terminalization failure/,
+    );
+  } finally {
+    await removeTerminalizationFailure();
+  }
+  assert.notEqual(
+    (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: atomicCloseEvaluation.id } }))
+      .status,
+    "CLOSED",
+    "closure must roll back if active runs cannot terminalize",
+  );
+  assert.equal(
+    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: atomicCloseRun.runId } }))
+      .status,
+    "RUNNING",
+  );
+  await prisma.stealthGenerationResult.updateMany({
+    where: { runId: atomicCloseRun.runId },
+    data: { status: "READY" },
+  });
+  await closeStealthEvaluation(memberActor, organization.id, atomicCloseEvaluation.id);
+  assert.equal(
+    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: atomicCloseRun.runId } }))
+      .status,
+    "SUCCEEDED",
+    "a fully persisted cohort must remain successful when closure wins finalization",
+  );
+
   const persistenceRaceEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Persistence race ${suffix}`,
   });
@@ -1208,6 +1321,12 @@ async function main() {
   );
   const reusePrompt = cohortPrompts.find((prompt) => prompt.slug === validationFailurePrompt);
   assert.ok(reusePrompt);
+  const retryReport = await getStealthExperimentReport(generationEvaluation.id);
+  const retryBuild = retryReport?.variants
+    .find((variant) => variant.id === failureCheckpoint.variantId)
+    ?.builds.find((build) => build.promptId === reusePrompt.prompt.id);
+  assert.equal(retryBuild?.status, "READY");
+  assert.ok(retryBuild?.resultId, "a retry must retain the inspectable persisted build result");
   assert.equal(
     (
       await prisma.stealthGenerationResult.findUniqueOrThrow({
@@ -1482,7 +1601,43 @@ async function main() {
     throw new Error("Unexpected artifact fence request");
   }) as typeof fetch;
   const { uploadArenaBuildStreamArtifact } = await import("../../../lib/arena/buildStream");
-  const { deleteArenaBuildArtifacts } = await import("../../../lib/arena/artifactOwnership");
+  const { deleteArenaBuildArtifacts, uploadArenaBuildArtifact } = await import(
+    "../../../lib/arena/artifactOwnership"
+  );
+  const failedOwnershipRef = {
+    bucket: "previous-artifacts",
+    path: `failed-ownership/${artifactFenceBuild.id}/full.ndjson`,
+  };
+  const removeOwnershipFailure = await installDeferredArtifactOwnershipFailure(
+    `artifact_${suffix}`,
+  );
+  let failedOwnershipUpload = false;
+  const compensatedOwnershipRefs: typeof failedOwnershipRef[] = [];
+  try {
+    await assert.rejects(
+      uploadArenaBuildArtifact(
+        artifactFenceBuild.id,
+        failedOwnershipRef,
+        async () => {
+          failedOwnershipUpload = true;
+        },
+        async (refs) => {
+          compensatedOwnershipRefs.push(...refs);
+        },
+      ),
+      /forced artifact ownership commit failure/,
+    );
+  } finally {
+    await removeOwnershipFailure();
+  }
+  assert.equal(failedOwnershipUpload, true);
+  assert.deepEqual(compensatedOwnershipRefs, [failedOwnershipRef]);
+  assert.equal(
+    await prisma.arenaBuildArtifact.count({
+      where: { bucket: failedOwnershipRef.bucket, path: failedOwnershipRef.path },
+    }),
+    0,
+  );
   const artifactUpload = uploadArenaBuildStreamArtifact(
     artifactFenceBuild.id,
     "full",
@@ -1611,6 +1766,13 @@ async function main() {
   });
   assert.equal(uploadedClosed.status, "CLOSED");
   assert.ok(uploadedClosed.retentionDeleteAt);
+  assert.equal(
+    (
+      await listStealthEvaluationWorkspaces(memberActor, organization.id)
+    ).find((evaluation) => evaluation.id === uploadedEvaluation.id)?.checkpointCount,
+    2,
+    "closed summaries must retain their historical checkpoint count",
+  );
   await prisma.$transaction((tx) => syncExperimentReadiness(tx, uploadedEvaluation.id));
   assert.equal(
     (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: uploadedEvaluation.id } }))
@@ -1692,6 +1854,20 @@ async function main() {
     where: { id: uploadedEvaluation.id },
     data: { retentionDeleteAt: dueShared },
   });
+  assert.equal(
+    (await listStealthEvaluationWorkspaces(memberActor, organization.id)).some(
+      (evaluation) => evaluation.id === uploadedEvaluation.id,
+    ),
+    false,
+    "expired evaluations must leave organization summaries before physical purge",
+  );
+  assert.equal(
+    (await listStealthEvaluationWorkspaces(minebenchAdmin, organization.id)).some(
+      (evaluation) => evaluation.id === uploadedEvaluation.id,
+    ),
+    true,
+    "the MineBench support view remains independently available",
+  );
   assert.equal(
     await getStealthEvaluationWorkspace(memberActor, organization.id, uploadedEvaluation.id),
     null,

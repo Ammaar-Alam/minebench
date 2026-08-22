@@ -186,6 +186,12 @@ export async function getStealthExperimentReport(
                   blockCount: true,
                   generationTimeMs: true,
                   prompt: { select: { id: true, text: true } },
+                  stealthGenerationResults: {
+                    where: { status: "READY" },
+                    orderBy: { updatedAt: "desc" },
+                    take: 1,
+                    select: { id: true },
+                  },
                 },
               },
             },
@@ -257,7 +263,7 @@ export async function getStealthExperimentReport(
             vote.choice
         `),
     prisma.model.findMany({
-      where: { enabled: true, stealthVariant: null },
+      where: { enabled: true, isBaseline: false, stealthVariant: null },
       orderBy: { conservativeRating: "desc" },
       select: { conservativeRating: true },
     }),
@@ -320,7 +326,7 @@ export async function getStealthExperimentReport(
         variant.model.builds.map((build) => [
           build.promptId,
           {
-            resultId: null,
+            resultId: build.stealthGenerationResults[0]?.id ?? null,
             promptId: build.prompt.id,
             prompt: build.prompt.text,
             status: "READY",
@@ -333,6 +339,7 @@ export async function getStealthExperimentReport(
       );
       for (const result of latestGenerationResults) {
         const persisted = buildsByPromptId.get(result.prompt.id);
+        if (persisted && !result.build) continue;
         buildsByPromptId.set(result.prompt.id, {
           resultId: result.id,
           promptId: result.prompt.id,
@@ -417,11 +424,13 @@ export type DeidentifiedStealthVote = {
 
 type ExportRow = Omit<DeidentifiedStealthVote, "choice"> & {
   voteId: string;
+  createdAt: string;
   rawChoice: "A" | "B" | "TIE" | "BOTH_BAD";
 };
 
 export type DeidentifiedStealthVoteCursor = {
   voteId: string;
+  createdAt: string;
 };
 
 export async function getDeidentifiedStealthVotePage(
@@ -433,10 +442,16 @@ export async function getDeidentifiedStealthVotePage(
   nextCursor: DeidentifiedStealthVoteCursor | null;
 }> {
   const pageSize = Math.max(1, Math.min(5_000, Math.floor(limit)));
-  const afterCursor = cursor ? Prisma.sql`AND vote.id > ${cursor.voteId}` : Prisma.empty;
+  const afterCursor = cursor
+    ? Prisma.sql`AND (
+        vote."createdAt" > CAST(${cursor.createdAt} AS timestamp)
+        OR (vote."createdAt" = CAST(${cursor.createdAt} AS timestamp) AND vote.id > ${cursor.voteId})
+      )`
+    : Prisma.empty;
   const rows = await prisma.$queryRaw<ExportRow[]>(Prisma.sql`
     SELECT
       vote.id AS "voteId",
+      TO_CHAR(vote."createdAt", 'YYYY-MM-DD HH24:MI:SS.US') AS "createdAt",
       TO_CHAR(vote."createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
       variant.codename AS codename,
       prompt.text AS prompt,
@@ -453,7 +468,7 @@ export async function getDeidentifiedStealthVotePage(
     END
     WHERE variant."experimentId" = ${experimentId}
     ${afterCursor}
-    ORDER BY vote.id ASC
+    ORDER BY vote."createdAt" ASC, vote.id ASC
     LIMIT ${pageSize}
   `);
   const mapped: DeidentifiedStealthVote[] = rows.map((row) => ({
@@ -476,7 +491,7 @@ export async function getDeidentifiedStealthVotePage(
     rows: mapped,
     nextCursor:
       rows.length === pageSize && last
-        ? { voteId: last.voteId }
+        ? { voteId: last.voteId, createdAt: last.createdAt }
         : null,
   };
 }

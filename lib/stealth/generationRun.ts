@@ -232,47 +232,54 @@ export async function getStealthGenerationPlan(
   return { promptBatches };
 }
 
-export async function abortStealthGenerationRunsForEvaluation(
+export async function terminalizeStealthGenerationRunsForClosure(
+  tx: Prisma.TransactionClient,
   experimentId: string,
 ): Promise<void> {
-  const runIds = await prisma.stealthGenerationRun.findMany({
+  const runs = await tx.stealthGenerationRun.findMany({
     where: { status: "RUNNING", variant: { experimentId } },
-    select: { id: true },
+    select: { id: true, expectedBuildCount: true },
   });
-  for (const { id } of runIds) {
-    await prisma.$transaction(async (tx) => {
-      const locked = await lockGenerationRun(tx, id);
-      if (!locked) return;
-      const run = await tx.stealthGenerationRun.findUnique({
-        where: { id },
-        select: { status: true, expectedBuildCount: true },
-      });
-      if (!run || run.status !== "RUNNING") return;
+  for (const run of runs) {
+    const currentResults = await tx.stealthGenerationResult.findMany({
+      where: { runId: run.id },
+      orderBy: { updatedAt: "asc" },
+      select: { status: true, attempts: true, error: true },
+    });
+    const currentProgress = summarizeGenerationResults(currentResults);
+    const complete =
+      currentProgress.completedBuildCount === run.expectedBuildCount &&
+      currentProgress.failedBuildCount === 0;
+    if (!complete) {
       await tx.stealthGenerationResult.updateMany({
-        where: { runId: id, status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
+        where: { runId: run.id, status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
         data: { status: "FAILED", error: "Evaluation closed" },
       });
-      const results = await tx.stealthGenerationResult.findMany({
-        where: { runId: id },
-        orderBy: { updatedAt: "asc" },
-        select: { status: true, attempts: true, error: true },
-      });
-      const progress = summarizeGenerationResults(results);
-      await tx.stealthGenerationRun.update({
-        where: { id },
-        data: {
-          status: progress.completedBuildCount > 0 ? "PARTIAL" : "FAILED",
-          completedBuildCount: progress.completedBuildCount,
-          failedBuildCount: Math.max(
-            progress.failedBuildCount,
-            run.expectedBuildCount - progress.completedBuildCount,
-          ),
-          providerCallCount: progress.providerCallCount,
-          retryCount: progress.retryCount,
-          error: "Evaluation closed",
-          completedAt: new Date(),
-        },
-      });
+    }
+    const results = complete
+      ? currentResults
+      : await tx.stealthGenerationResult.findMany({
+          where: { runId: run.id },
+          orderBy: { updatedAt: "asc" },
+          select: { status: true, attempts: true, error: true },
+        });
+    const progress = summarizeGenerationResults(results);
+    await tx.stealthGenerationRun.update({
+      where: { id: run.id },
+      data: {
+        status: complete ? "SUCCEEDED" : progress.completedBuildCount > 0 ? "PARTIAL" : "FAILED",
+        completedBuildCount: progress.completedBuildCount,
+        failedBuildCount: complete
+          ? 0
+          : Math.max(
+              progress.failedBuildCount,
+              run.expectedBuildCount - progress.completedBuildCount,
+            ),
+        providerCallCount: progress.providerCallCount,
+        retryCount: progress.retryCount,
+        error: complete ? null : "Evaluation closed",
+        completedAt: new Date(),
+      },
     });
   }
 }

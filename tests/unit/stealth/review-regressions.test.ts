@@ -21,6 +21,12 @@ const service = read("lib/stealth/service.ts");
 assert.match(service, /createSignedUploadUrl/);
 assert.match(service, /signedUrl: data\.signedUrl/);
 assert.match(service, /expiresAt: \{ gt: new Date\(\) \}/);
+const workspaceList = service.slice(
+  service.indexOf("export async function listStealthEvaluationWorkspaces"),
+  service.indexOf("export async function getStealthEvaluationWorkspace"),
+);
+assert.match(workspaceList, /readableStealthEvaluationWhere/);
+assert.match(workspaceList, /evaluation\.status === "CLOSED"/);
 
 function assertOrder(body: string, first: string, second: string, message: string) {
   const firstIndex = body.indexOf(first);
@@ -68,6 +74,7 @@ assert.match(
 assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);
 assert.match(generationRun, /deleteUnacceptedStealthBuild\(existing\.id\)/);
 assert.match(generationRun, /sanitizeOperationalError\([\s\S]*configuredApiKey/);
+assert.match(generationRun, /complete \? "SUCCEEDED"/);
 const unacceptedCleanup = generationSource.slice(
   generationSource.indexOf("export async function deleteUnacceptedStealthBuild"),
   generationSource.indexOf("export function isMissingStealthBuildPayload"),
@@ -89,6 +96,26 @@ for (const path of [
 ]) {
   assert.match(read(path), /readableStealthEvaluationWhere/);
 }
+
+const report = read("lib/stealth/report.ts");
+assert.match(report, /createdAt: string/);
+assert.match(report, /ORDER BY vote\."createdAt" ASC, vote\.id ASC/);
+assert.match(report, /if \(persisted && !result\.build\) continue/);
+assert.match(report, /isBaseline: false/);
+
+const voteRoute = read("app/api/arena/vote/route.ts");
+assertOrder(
+  voteRoute.slice(voteRoute.indexOf("const choice: VoteChoice")),
+  "loadMatchupReveal",
+  "withArenaWriteRetry",
+  "vote reveal must load before the committing write",
+);
+
+const resultsPage = read("app/lab/[orgSlug]/experiments/[experimentId]/results/page.tsx");
+assert.match(resultsPage, /rating: variant\.conservativeRating/);
+const resultsDashboard = read("components/lab/ResultsDashboard.tsx");
+assert.match(resultsDashboard, /worstFirst/);
+assert.match(resultsDashboard, /title="Opponent field"[\s\S]*worstFirst/);
 
 for (const path of ["lib/arena/buildSnapshotArtifacts.ts", "lib/arena/buildStream.ts"]) {
   assert.match(read(path), /uploadArenaBuildArtifact/);

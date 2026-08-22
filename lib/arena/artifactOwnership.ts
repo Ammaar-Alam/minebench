@@ -151,47 +151,73 @@ const ARTIFACT_OWNER_SELECT = {
   },
 } satisfies Prisma.ArenaBuildArtifactSelect;
 
+async function compensateArtifactUpload(
+  ref: ArenaArtifactStorageRef,
+  deleteStorage: (refs: ArenaArtifactStorageRef[]) => Promise<void>,
+): Promise<void> {
+  await prisma.$transaction(
+    async (tx) => {
+      await lockArtifactRefs(tx, [ref]);
+      const owners = await tx.arenaBuildArtifact.findMany({
+        where: { bucket: ref.bucket, path: ref.path },
+        select: ARTIFACT_OWNER_SELECT,
+      });
+      if (!owners.some((owner) => isRetainedArtifactBuild(owner.build, new Date()))) {
+        await deleteStorage([ref]);
+      }
+    },
+    { maxWait: 10_000, timeout: ARTIFACT_LOCK_TIMEOUT_MS },
+  );
+}
+
 export async function uploadArenaBuildArtifact(
   buildId: string,
   ref: ArenaArtifactStorageRef,
   upload: () => Promise<void>,
   deleteStorage: (refs: ArenaArtifactStorageRef[]) => Promise<void>,
 ): Promise<boolean> {
-  const outcome = await prisma.$transaction(
-    async (tx) => {
-      await lockArtifactRefs(tx, [ref]);
-      let failure: unknown = null;
-      try {
-        await tx.arenaBuildArtifact.upsert({
-          where: { buildId_bucket_path: { buildId, bucket: ref.bucket, path: ref.path } },
-          create: { buildId, bucket: ref.bucket, path: ref.path },
-          update: {},
-        });
-        await upload();
-      } catch (error) {
-        failure = error;
-      }
-      const owners = await tx.arenaBuildArtifact.findMany({
-        where: { bucket: ref.bucket, path: ref.path },
-        select: ARTIFACT_OWNER_SELECT,
-      });
-      const now = new Date();
-      const accepted = owners.some(
-        (owner) => owner.buildId === buildId && isRetainedArtifactBuild(owner.build, now),
-      );
-      if (!owners.some((owner) => isRetainedArtifactBuild(owner.build, now))) {
+  let uploadAttempted = false;
+  try {
+    const outcome = await prisma.$transaction(
+      async (tx) => {
+        await lockArtifactRefs(tx, [ref]);
+        let failure: unknown = null;
         try {
-          await deleteStorage([ref]);
+          await tx.arenaBuildArtifact.upsert({
+            where: { buildId_bucket_path: { buildId, bucket: ref.bucket, path: ref.path } },
+            create: { buildId, bucket: ref.bucket, path: ref.path },
+            update: {},
+          });
+          uploadAttempted = true;
+          await upload();
         } catch (error) {
-          failure ??= error;
+          failure = error;
         }
-      }
-      return { accepted, failure };
-    },
-    { maxWait: 10_000, timeout: ARTIFACT_LOCK_TIMEOUT_MS },
-  );
-  if (outcome.failure) throw outcome.failure;
-  return outcome.accepted;
+        const owners = await tx.arenaBuildArtifact.findMany({
+          where: { bucket: ref.bucket, path: ref.path },
+          select: ARTIFACT_OWNER_SELECT,
+        });
+        const now = new Date();
+        const accepted = owners.some(
+          (owner) => owner.buildId === buildId && isRetainedArtifactBuild(owner.build, now),
+        );
+        if (!owners.some((owner) => isRetainedArtifactBuild(owner.build, now))) {
+          try {
+            await deleteStorage([ref]);
+          } catch (error) {
+            failure ??= error;
+          }
+        }
+        return { accepted, failure };
+      },
+      { maxWait: 10_000, timeout: ARTIFACT_LOCK_TIMEOUT_MS },
+    );
+    if (outcome.failure) throw outcome.failure;
+    return outcome.accepted;
+  } catch (error) {
+    if (uploadAttempted) await compensateArtifactUpload(ref, deleteStorage);
+    throw error;
+  }
 }
 
 async function loadRegisteredArtifactOwnership(

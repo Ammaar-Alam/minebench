@@ -144,6 +144,12 @@ export async function POST(req: Request) {
     }
 
     const choice: VoteChoice = action;
+    const revealStartedAt = timing.start();
+    const reveal = await loadMatchupReveal(matchup.modelAId, matchup.modelBId);
+    timing.end("reveal", revealStartedAt);
+    if (!reveal) {
+      return respondJson({ error: "Matchup reveal is unavailable" }, { status: 409 });
+    }
     const session = getOrCreateSessionId(req);
     const sessionId = session.id;
     const txStartedAt = timing.start();
@@ -280,12 +286,6 @@ export async function POST(req: Request) {
       };
     }
 
-    const revealStartedAt = timing.start();
-    const reveal = await loadMatchupReveal(matchup.modelAId, matchup.modelBId);
-    timing.end("reveal", revealStartedAt);
-    if (!reveal) {
-      return respondJson({ error: "Matchup reveal is unavailable" }, { status: 409 });
-    }
     const responseBody: ArenaVoteResponse = {
       ok: true,
       reveal,

@@ -15,7 +15,7 @@ export default async function EvaluationResultsPage({
   const variants: ResultsDashboardVariant[] = report.variants.map((variant) => ({
     id: variant.id,
     codename: variant.codename,
-    rating: variant.rating,
+    rating: variant.conservativeRating,
     ratingDeviation: variant.ratingDeviation,
     confidence: variant.confidence,
     stability: variant.stability,

@@ -1048,7 +1048,10 @@ export async function listStealthEvaluationWorkspaces(
 ): Promise<StealthEvaluationWorkspaceListItem[]> {
   await assertEvaluationOperator(prisma, actor, organizationId);
   const evaluations = await prisma.stealthExperiment.findMany({
-    where: { organizationId },
+    where: {
+      organizationId,
+      ...("organizationUser" in actor ? readableStealthEvaluationWhere() : {}),
+    },
     orderBy: { updatedAt: "desc" },
     include: {
       variants: {
@@ -1081,7 +1084,10 @@ export async function listStealthEvaluationWorkspaces(
       slug: evaluation.slug,
       name: evaluation.name,
       status: evaluation.status,
-      checkpointCount: evaluation.variants.filter((variant) => variant.status !== "WITHDRAWN").length,
+      checkpointCount:
+        evaluation.status === "CLOSED"
+          ? evaluation.variants.length
+          : evaluation.variants.filter((variant) => variant.status !== "WITHDRAWN").length,
       buildProgress,
       voteProgress: { decisiveVotes, targetDecisiveVotes: evaluation.targetDecisiveVotes },
       updatedAt: evaluation.updatedAt,
@@ -1850,6 +1856,9 @@ export async function closeStealthEvaluation(
   experimentId: string,
   params?: { retentionDays?: number },
 ): Promise<void> {
+  const { terminalizeStealthGenerationRunsForClosure } = await import(
+    "@/lib/stealth/generationRun"
+  );
   await prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
     const experiment = await lockExperiment(tx, experimentId);
@@ -1886,10 +1895,8 @@ export async function closeStealthEvaluation(
         retentionDeleteAt: new Date(now.getTime() + retentionDays * 86_400_000),
       },
     });
+    await terminalizeStealthGenerationRunsForClosure(tx, experiment.id);
   });
-  await (await import("@/lib/stealth/generationRun")).abortStealthGenerationRunsForEvaluation(
-    experimentId,
-  );
   invalidateStealthSamplingCache();
 }
 
