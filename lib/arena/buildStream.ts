@@ -9,6 +9,7 @@ import {
   getArenaCanonicalStreamArtifactRef,
   getArenaLegacyStreamArtifactRef,
   getArenaStreamArtifactLocation,
+  registerArenaBuildArtifact,
 } from "@/lib/arena/artifactOwnership";
 import { gzipSync } from "node:zlib";
 
@@ -610,6 +611,7 @@ export async function uploadArenaBuildStreamArtifact(
   const ref = getArenaBuildStreamArtifactRef(buildId, variant, checksum);
   if (!ref) return null;
 
+  await registerArenaBuildArtifact(buildId, ref);
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(ref.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;

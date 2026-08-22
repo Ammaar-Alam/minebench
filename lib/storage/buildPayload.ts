@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
@@ -27,6 +27,7 @@ export type BuildPayloadSource = {
 
 type LoadBuildPayloadOptions = {
   signal?: AbortSignal;
+  maxBytes?: number;
 };
 
 type SupabaseStorageConfig = {
@@ -177,6 +178,9 @@ export async function fetchStoredBuildBytes(
 
   if ((ref.bucket ?? "").trim() === LOCAL_BUILD_STORAGE_BUCKET) {
     const absolutePath = resolveLocalStorageAbsolutePath(ref.path);
+    if (opts?.maxBytes != null && (await stat(absolutePath)).size > opts.maxBytes) {
+      throw new Error("Storage payload exceeds size limit");
+    }
     return new Uint8Array(await readFile(absolutePath));
   }
 
@@ -202,21 +206,73 @@ export async function fetchStoredBuildBytes(
     const text = await resp.text().catch(() => "");
     throw new Error(`Storage download failed (${resp.status}): ${text || "empty response"}`);
   }
-
-  return new Uint8Array(await resp.arrayBuffer());
+  const contentLength = Number.parseInt(resp.headers.get("content-length") ?? "", 10);
+  if (opts?.maxBytes != null && Number.isFinite(contentLength) && contentLength > opts.maxBytes) {
+    await resp.body?.cancel().catch(() => undefined);
+    throw new Error("Storage payload exceeds size limit");
+  }
+  if (!resp.body) return new Uint8Array();
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      length += next.value.byteLength;
+      if (opts?.maxBytes != null && length > opts.maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("Storage payload exceeds size limit");
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
-export function decodeStoredBuildText(bytes: Uint8Array, encoding?: string | null): string {
+export function decodeStoredBuildText(
+  bytes: Uint8Array,
+  encoding?: string | null,
+  opts?: { maxOutputBytes?: number },
+): string {
   const wantsGzip = encodingWantsGzip(encoding);
   const isGzip = hasGzipMagic(bytes);
 
   if (wantsGzip || isGzip) {
-    if (!isGzip) return Buffer.from(bytes).toString("utf-8");
+    if (!isGzip) {
+      if (opts?.maxOutputBytes != null && bytes.byteLength > opts.maxOutputBytes) {
+        throw new Error("Stored build payload exceeds size limit");
+      }
+      return Buffer.from(bytes).toString("utf-8");
+    }
     try {
-      return gunzipSync(bytes).toString("utf-8");
-    } catch {
+      return gunzipSync(
+        bytes,
+        opts?.maxOutputBytes == null ? undefined : { maxOutputLength: opts.maxOutputBytes },
+      ).toString("utf-8");
+    } catch (error) {
+      if (
+        opts?.maxOutputBytes != null &&
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ERR_BUFFER_TOO_LARGE"
+      ) {
+        throw new Error("Stored build payload exceeds size limit");
+      }
       throw new Error("Stored build payload is marked as gzip but failed to decompress");
     }
+  }
+
+  if (opts?.maxOutputBytes != null && bytes.byteLength > opts.maxOutputBytes) {
+    throw new Error("Stored build payload exceeds size limit");
   }
 
   return Buffer.from(bytes).toString("utf-8");

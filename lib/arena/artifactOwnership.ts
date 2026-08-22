@@ -1,6 +1,7 @@
 import { getArenaPreviewTargetBlocks } from "@/lib/arena/buildArtifacts";
 import { getArenaDeliveryPolicySignature } from "@/lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
+import { prisma } from "@/lib/prisma";
 import { getBuildStorageBucketFromEnv } from "@/lib/storage/buildPayload";
 
 export type ArenaArtifactStorageRef = { bucket: string; path: string };
@@ -95,16 +96,62 @@ function refKey(ref: ArenaArtifactStorageRef): string {
   return `${ref.bucket}:${ref.path}`;
 }
 
+export type ArenaRegisteredArtifactOwnership = {
+  retiringRefs: ArenaArtifactStorageRef[];
+  survivingRefKeys: ReadonlySet<string>;
+};
+
+export async function registerArenaBuildArtifact(
+  buildId: string,
+  ref: ArenaArtifactStorageRef,
+): Promise<void> {
+  await prisma.arenaBuildArtifact.upsert({
+    where: { buildId_bucket_path: { buildId, bucket: ref.bucket, path: ref.path } },
+    create: { buildId, bucket: ref.bucket, path: ref.path },
+    update: {},
+  });
+}
+
+async function loadRegisteredArtifactOwnership(
+  retiringBuildIds: string[],
+): Promise<ArenaRegisteredArtifactOwnership> {
+  const retiring = await prisma.arenaBuildArtifact.findMany({
+    where: { buildId: { in: retiringBuildIds } },
+    select: { bucket: true, path: true },
+  });
+  const refs = Array.from(new Map(retiring.map((ref) => [refKey(ref), ref])).values());
+  const surviving =
+    refs.length === 0
+      ? []
+      : await prisma.arenaBuildArtifact.findMany({
+          where: {
+            buildId: { notIn: retiringBuildIds },
+            OR: refs.map((ref) => ({ bucket: ref.bucket, path: ref.path })),
+          },
+          select: { bucket: true, path: true },
+        });
+  return {
+    retiringRefs: refs,
+    survivingRefKeys: new Set(surviving.map(refKey)),
+  };
+}
+
 export async function deleteArenaBuildArtifacts(params: {
   retiringBuilds: ReadonlyArray<{ id: string; voxelSha256: string | null }>;
   survivingChecksums: ReadonlySet<string>;
   deleteStorage: (refs: ArenaArtifactStorageRef[]) => Promise<void>;
+  registeredOwnership?: ArenaRegisteredArtifactOwnership;
 }): Promise<{ deleted: number; preserved: number }> {
   const deleting = new Map<string, ArenaArtifactStorageRef>();
   const preserving = new Set<string>();
   const addDeleting = (ref: ArenaArtifactStorageRef | null) => {
     if (ref) deleting.set(refKey(ref), ref);
   };
+  const registered =
+    params.registeredOwnership ??
+    (await loadRegisteredArtifactOwnership(params.retiringBuilds.map((build) => build.id)));
+  for (const ref of registered.retiringRefs) addDeleting(ref);
+  for (const key of registered.survivingRefKeys) preserving.add(key);
 
   for (const build of params.retiringBuilds) {
     const checksum = build.voxelSha256?.trim() || null;

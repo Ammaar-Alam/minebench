@@ -538,6 +538,9 @@ async function purgeDueEvaluations(args: CliArgs): Promise<void> {
   });
   console.log(`Purged ${result.purged} evaluation(s)`);
   for (const id of result.evaluationIds) console.log(id);
+  for (const failure of result.failures) {
+    console.error(`Failed ${failure.evaluationId}: ${failure.error}`);
+  }
 }
 
 async function recordReleaseMapping(args: CliArgs): Promise<void> {

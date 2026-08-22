@@ -6,11 +6,13 @@ async function main() {
   process.env.ARENA_STREAM_ARTIFACTS_ENABLED = "0";
 
   const { deleteArenaBuildArtifacts } = await import("../../../lib/arena/artifactOwnership");
+  const noRegisteredArtifacts = { retiringRefs: [], survivingRefKeys: new Set<string>() };
 
   const deleted: Array<Array<{ bucket: string; path: string }>> = [];
   const deletion = await deleteArenaBuildArtifacts({
     retiringBuilds: [{ id: "build-a", voxelSha256: "checksum-a" }],
     survivingChecksums: new Set(),
+    registeredOwnership: noRegisteredArtifacts,
     deleteStorage: async (refs) => {
       deleted.push(refs);
     },
@@ -40,6 +42,7 @@ async function main() {
       { id: "build-b", voxelSha256: "checksum-shared" },
     ],
     survivingChecksums: new Set(["checksum-shared"]),
+    registeredOwnership: noRegisteredArtifacts,
     deleteStorage: async (refs) => {
       preservedRefs.push(...refs);
     },
@@ -53,11 +56,42 @@ async function main() {
     deleteArenaBuildArtifacts({
       retiringBuilds: [{ id: "build-c", voxelSha256: "checksum-c" }],
       survivingChecksums: new Set(),
+      registeredOwnership: noRegisteredArtifacts,
       deleteStorage: async () => {
         throw new Error("storage unavailable");
       },
     }),
     /storage unavailable/,
+  );
+
+  const previousNamespaceRefs: Array<{ bucket: string; path: string }> = [];
+  const previousNamespace = await deleteArenaBuildArtifacts({
+    retiringBuilds: [{ id: "build-d", voxelSha256: "checksum-d" }],
+    survivingChecksums: new Set(),
+    registeredOwnership: {
+      retiringRefs: [
+        { bucket: "previous-bucket", path: "previous-snapshots/build-d/full.json" },
+        { bucket: "previous-bucket", path: "previous-stream/checksum/shared/full.ndjson" },
+      ],
+      survivingRefKeys: new Set([
+        "previous-bucket:previous-stream/checksum/shared/full.ndjson",
+      ]),
+    },
+    deleteStorage: async (refs) => {
+      previousNamespaceRefs.push(...refs);
+    },
+  });
+  assert.equal(previousNamespace.deleted, 9);
+  assert.equal(previousNamespace.preserved, 1);
+  assert.equal(
+    previousNamespaceRefs.some(
+      (ref) => ref.bucket === "previous-bucket" && ref.path.includes("previous-snapshots"),
+    ),
+    true,
+  );
+  assert.equal(
+    previousNamespaceRefs.some((ref) => ref.path.includes("previous-stream/checksum/shared")),
+    false,
   );
 }
 

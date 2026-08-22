@@ -9,6 +9,7 @@ import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import {
   getArenaSnapshotArtifactRef,
   hasArenaSnapshotArtifactLocation,
+  registerArenaBuildArtifact,
   type ArenaSnapshotArtifactFormat,
 } from "@/lib/arena/artifactOwnership";
 import { gunzipSync, gzipSync } from "node:zlib";
@@ -310,6 +311,7 @@ async function uploadSnapshotArtifactVariant(
   }
 
   const promise = (async () => {
+    await registerArenaBuildArtifact(prepared.buildId, ref);
     const config = getSupabaseStorageConfig();
     const encodedPath = encodeStoragePath(ref.path);
     const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;

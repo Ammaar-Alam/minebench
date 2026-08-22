@@ -23,6 +23,7 @@ async function main() {
     getStealthEvaluationWorkspace,
     inviteOrganizationMember,
     reconcileStealthGoalPause,
+    purgeDueStealthEvaluations,
     purgeStealthEvaluationIfDue,
     removeOrganizationMember,
     resumeStealthEvaluation,
@@ -283,7 +284,45 @@ async function main() {
     await prisma.stealthEndpointCredential.count({ where: { variantId: checkpoint.variantId } }),
     0,
   );
-  await deleteUnusedDraftEvaluation(memberActor, organization.id, evaluation.id);
+  const pendingUploadPath = `stealth-cohort-uploads/v1/${organization.id}/${evaluation.id}/${randomUUID()}.json`;
+  const pendingUpload = await prisma.stealthCohortUpload.create({
+    data: {
+      id: randomUUID(),
+      experimentId: evaluation.id,
+      bucket: "builds",
+      path: pendingUploadPath,
+      expiresAt: new Date(Date.now() + 60_000),
+    },
+  });
+  await assert.rejects(
+    deleteUnusedDraftEvaluation(memberActor, organization.id, evaluation.id),
+    /pending cohort upload/i,
+  );
+  await prisma.stealthCohortUpload.update({
+    where: { id: pendingUpload.id },
+    data: { expiresAt: new Date(Date.now() - 60_000) },
+  });
+  const draftStorageUrl = process.env.SUPABASE_URL;
+  const draftStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const draftFetch = global.fetch;
+  const deletedDraftUploads: string[] = [];
+  process.env.SUPABASE_URL = "https://storage.example.test";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
+  global.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as { prefixes: string[] };
+    deletedDraftUploads.push(...body.prefixes);
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  try {
+    await deleteUnusedDraftEvaluation(memberActor, organization.id, evaluation.id);
+  } finally {
+    global.fetch = draftFetch;
+    if (draftStorageUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = draftStorageUrl;
+    if (draftStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = draftStorageKey;
+  }
+  assert.deepEqual(deletedDraftUploads, [pendingUploadPath]);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: evaluation.id } }), 0);
 
   const generationEvaluation = await createStealthEvaluation(memberActor, organization.id, {
@@ -905,6 +944,25 @@ async function main() {
       generationTimeMs: privateBuild.generationTimeMs,
     },
   });
+  const previousSnapshotPath = `arena-snapshot/previous-policy/${privateBuild.id}/full.json`;
+  const previousSharedPath = `arena-stream/previous-policy/checksum/${privateBuild.voxelSha256}/full.ndjson`;
+  await prisma.arenaBuildArtifact.createMany({
+    data: [
+      { buildId: privateBuild.id, bucket: "previous-artifacts", path: previousSnapshotPath },
+      { buildId: privateBuild.id, bucket: "previous-artifacts", path: previousSharedPath },
+      { buildId: survivingBuild.id, bucket: "previous-artifacts", path: previousSharedPath },
+    ],
+  });
+  const trackedUploadPath = `stealth-cohort-uploads/v1/${organization.id}/${uploadedEvaluation.id}/${randomUUID()}.json`;
+  await prisma.stealthCohortUpload.create({
+    data: {
+      id: randomUUID(),
+      experimentId: uploadedEvaluation.id,
+      bucket: "builds",
+      path: trackedUploadPath,
+      expiresAt: new Date(Date.now() - 60_000),
+    },
+  });
   const dueShared = new Date(Date.now() - 60_000);
   await prisma.stealthExperiment.update({
     where: { id: uploadedEvaluation.id },
@@ -962,6 +1020,9 @@ async function main() {
     assert.equal(deletedPaths.includes(fullArtifact.path), false);
     assert.equal(deletedPaths.includes(previewArtifact.path), false);
     assert.equal(deletedPaths.includes(sharedRawPath), false);
+    assert.equal(deletedPaths.includes(previousSnapshotPath), true);
+    assert.equal(deletedPaths.includes(previousSharedPath), false);
+    assert.equal(deletedPaths.includes(trackedUploadPath), true);
   } finally {
     global.fetch = originalFetch;
     if (previousStorageUrl === undefined) delete process.env.SUPABASE_URL;
@@ -985,6 +1046,92 @@ async function main() {
   });
   assert.equal(await purgeStealthEvaluationIfDue(retained.id, new Date()), true);
   assert.equal(await purgeStealthEvaluationIfDue(retained.id, new Date()), false);
+
+  const blockedPurge = await createStealthEvaluation(minebenchAdmin, otherOrganization.id, {
+    name: `Blocked purge ${suffix}`,
+  });
+  const blockedCheckpoint = await configureStealthEndpoint(
+    minebenchAdmin,
+    otherOrganization.id,
+    blockedPurge.id,
+    {
+      codename: "Blocked purge",
+      config: {
+        protocol: "openai-compatible",
+        endpointUrl: "https://checkpoint.example.test/v1",
+        apiKey: "blocked-purge-secret-key",
+        modelId: `blocked-purge-${suffix}`,
+        requireStructuredOutput: true,
+        enableTools: true,
+      },
+    },
+  );
+  const laterPurge = await createStealthEvaluation(minebenchAdmin, otherOrganization.id, {
+    name: `Later purge ${suffix}`,
+  });
+  const abandonedUploadEvaluation = await createStealthEvaluation(
+    minebenchAdmin,
+    otherOrganization.id,
+    { name: `Abandoned upload ${suffix}` },
+  );
+  const abandonedUpload = await prisma.stealthCohortUpload.create({
+    data: {
+      id: randomUUID(),
+      experimentId: abandonedUploadEvaluation.id,
+      bucket: "builds",
+      path: `stealth-cohort-uploads/v1/${otherOrganization.id}/${abandonedUploadEvaluation.id}/${randomUUID()}.json`,
+      expiresAt: new Date(Date.now() - 60_000),
+    },
+  });
+  await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, blockedPurge.id);
+  await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, laterPurge.id);
+  const purgeNow = new Date();
+  await prisma.stealthExperiment.update({
+    where: { id: blockedPurge.id },
+    data: { retentionDeleteAt: new Date(purgeNow.getTime() - 120_000) },
+  });
+  await prisma.stealthExperiment.update({
+    where: { id: laterPurge.id },
+    data: { retentionDeleteAt: new Date(purgeNow.getTime() - 60_000) },
+  });
+  const batchStorageUrl = process.env.SUPABASE_URL;
+  const batchStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const batchFetch = global.fetch;
+  process.env.SUPABASE_URL = "https://storage.example.test";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
+  global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (
+      init?.method === "POST" &&
+      String(input).includes("/storage/v1/object/list/") &&
+      String(init.body).includes(blockedCheckpoint.variantId)
+    ) {
+      return new Response(null, { status: 503 });
+    }
+    if (init?.method === "POST" && String(input).includes("/storage/v1/object/list/")) {
+      return Response.json([]);
+    }
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  let batchPurge: Awaited<ReturnType<typeof purgeDueStealthEvaluations>>;
+  try {
+    batchPurge = await purgeDueStealthEvaluations(minebenchAdmin, { now: purgeNow });
+  } finally {
+    global.fetch = batchFetch;
+    if (batchStorageUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = batchStorageUrl;
+    if (batchStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = batchStorageKey;
+  }
+  assert.deepEqual(batchPurge.evaluationIds, [laterPurge.id]);
+  assert.equal(batchPurge.failures.length, 1);
+  assert.equal(batchPurge.failures[0]?.evaluationId, blockedPurge.id);
+  assert.equal(await prisma.stealthExperiment.count({ where: { id: blockedPurge.id } }), 1);
+  assert.equal(await prisma.stealthExperiment.count({ where: { id: laterPurge.id } }), 0);
+  assert.equal(await prisma.stealthCohortUpload.count({ where: { id: abandonedUpload.id } }), 0);
+  assert.equal(
+    await prisma.stealthExperiment.count({ where: { id: abandonedUploadEvaluation.id } }),
+    1,
+  );
 
   console.log("private evaluation application service checks passed");
 }

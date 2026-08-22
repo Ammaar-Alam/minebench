@@ -230,6 +230,9 @@ const DEFAULT_RETENTION_DAYS = 30;
 const MAX_RETENTION_DAYS = 3650;
 const STORAGE_DELETE_BATCH_SIZE = 100;
 const COHORT_UPLOAD_PREFIX = "stealth-cohort-uploads/v1";
+const COHORT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1_000;
+const MAX_COHORT_UPLOAD_BYTES = 128 * 1_024 * 1_024;
+const MAX_COHORT_JSON_BYTES = 256 * 1_024 * 1_024;
 const CONFIGURABLE_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = [
   "DRAFT",
   "GENERATING",
@@ -1199,7 +1202,7 @@ function assertCohortUploadRef(input: {
   experimentId: string;
   bucket: string;
   path: string;
-}): void {
+}): { bucket: string; path: string } {
   const expectedBucket = getBuildStorageBucketFromEnv();
   const bucket = input.bucket.trim();
   const path = input.path.trim().replace(/^\/+/, "");
@@ -1214,6 +1217,7 @@ function assertCohortUploadRef(input: {
   ) {
     throw new Error("Cohort upload reference is invalid");
   }
+  return { bucket, path };
 }
 
 async function assertCohortUploadOpen(
@@ -1251,16 +1255,39 @@ export async function createStealthCohortUploadTarget(
   organizationId: string,
   experimentId: string,
 ): Promise<StealthCohortUploadTarget> {
-  await assertCohortUploadOpen(actor, organizationId, experimentId);
-
   const bucket = getBuildStorageBucketFromEnv();
-  const path = `${COHORT_UPLOAD_PREFIX}/${organizationId}/${experimentId}/${randomUUID()}.json`;
-  const { data, error } = await createSupabaseAdminClient()
-    .storage
-    .from(bucket)
-    .createSignedUploadUrl(path, { upsert: false });
-  if (error) throw new Error(sanitizeOperationalError(error));
-  return { bucket, path, signedUrl: data.signedUrl };
+  const id = randomUUID();
+  const path = `${COHORT_UPLOAD_PREFIX}/${organizationId}/${experimentId}/${id}.json`;
+  await prisma.$transaction(async (tx) => {
+    await assertEvaluationOperator(tx, actor, organizationId);
+    const experiment = await lockExperiment(tx, experimentId);
+    if (!experiment || experiment.organizationId !== organizationId) {
+      throw new Error("Evaluation not found");
+    }
+    if (!isStealthCheckpointSetOpen(experiment.status)) {
+      throw new Error("Activated evaluations cannot accept new checkpoints");
+    }
+    await tx.stealthCohortUpload.create({
+      data: {
+        id,
+        experimentId,
+        bucket,
+        path,
+        expiresAt: new Date(Date.now() + COHORT_UPLOAD_TTL_MS),
+      },
+    });
+  });
+  try {
+    const { data, error } = await createSupabaseAdminClient()
+      .storage
+      .from(bucket)
+      .createSignedUploadUrl(path, { upsert: false });
+    if (error) throw new Error(sanitizeOperationalError(error));
+    return { bucket, path, signedUrl: data.signedUrl };
+  } catch (error) {
+    await prisma.stealthCohortUpload.deleteMany({ where: { id } });
+    throw error;
+  }
 }
 
 export async function completeUploadedStealthCohort(
@@ -1452,19 +1479,38 @@ export async function completeUploadedStealthCohortFromStorage(
   input: CompleteUploadedStealthCohortFromStorageInput,
 ): Promise<{ variantId: string; runId: string }> {
   await assertCohortUploadOpen(actor, organizationId, experimentId);
-  assertCohortUploadRef({
+  const ref = assertCohortUploadRef({
     organizationId,
     experimentId,
     bucket: input.bucket,
     path: input.path,
   });
-  const ref = { bucket: input.bucket.trim(), path: input.path.trim().replace(/^\/+/, "") };
+  const tracked = await prisma.stealthCohortUpload.findUnique({
+    where: { bucket_path: ref },
+    select: { experimentId: true },
+  });
+  if (!tracked || tracked.experimentId !== experimentId) {
+    throw new Error("Cohort upload reference is invalid");
+  }
   try {
-    const bytes = await fetchStoredBuildBytes(ref);
+    let bytes: Uint8Array;
+    try {
+      bytes = await fetchStoredBuildBytes(ref, { maxBytes: MAX_COHORT_UPLOAD_BYTES });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("size limit")) {
+        throw new Error("Cohort file is too large");
+      }
+      throw error;
+    }
     let parsed: unknown;
     try {
-      parsed = JSON.parse(decodeStoredBuildText(bytes));
-    } catch {
+      parsed = JSON.parse(
+        decodeStoredBuildText(bytes, null, { maxOutputBytes: MAX_COHORT_JSON_BYTES }),
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("size limit")) {
+        throw new Error("Cohort file is too large");
+      }
       throw new Error("Cohort must be valid JSON");
     }
     return await completeUploadedStealthCohort(actor, organizationId, experimentId, {
@@ -1473,7 +1519,12 @@ export async function completeUploadedStealthCohortFromStorage(
       builds: uploadedBuildsFromStorageJson(parsed),
     });
   } finally {
-    await deleteStorageObjects([ref]).catch(() => undefined);
+    try {
+      await deleteStorageObjects([ref]);
+      await prisma.stealthCohortUpload.deleteMany({ where: { bucket: ref.bucket, path: ref.path } });
+    } catch {
+      // Retention owns tracked uploads that cannot be deleted here
+    }
   }
 }
 
@@ -1695,7 +1746,8 @@ export async function deleteUnusedDraftEvaluation(
   organizationId: string,
   experimentId: string,
 ): Promise<void> {
-  await prisma.$transaction(async (tx) => {
+  const now = new Date();
+  const prepare = async (tx: Prisma.TransactionClient) => {
     await assertEvaluationOperator(tx, actor, organizationId);
     const experiment = await lockExperiment(tx, experimentId);
     if (!experiment || experiment.organizationId !== organizationId) {
@@ -1716,14 +1768,30 @@ export async function deleteUnusedDraftEvaluation(
     if (buildCount > 0 || matchupCount > 0 || voteCount > 0) {
       throw new Error("Only unused drafts can be deleted");
     }
-    await tx.stealthEndpointCredential.deleteMany({ where: { variantId: { in: variantIds } } });
-    await tx.stealthGenerationResult.deleteMany({
-      where: { run: { variantId: { in: variantIds } } },
+    const uploads = await tx.stealthCohortUpload.findMany({
+      where: { experimentId: experiment.id },
+      select: { bucket: true, path: true, expiresAt: true },
     });
-    await tx.stealthGenerationRun.deleteMany({ where: { variantId: { in: variantIds } } });
-    await tx.stealthVariant.deleteMany({ where: { id: { in: variantIds } } });
-    await tx.stealthExperiment.delete({ where: { id: experiment.id } });
-    await tx.model.deleteMany({ where: { id: { in: modelIds } } });
+    if (uploads.some((upload) => upload.expiresAt > now)) {
+      throw new Error("A pending cohort upload must expire before this draft can be deleted");
+    }
+    return { experiment, variantIds, modelIds, uploads };
+  };
+  const snapshot = await prisma.$transaction(prepare);
+  await deleteStorageObjects(snapshot.uploads);
+  await prisma.$transaction(async (tx) => {
+    const current = await prepare(tx);
+    await tx.stealthCohortUpload.deleteMany({ where: { experimentId: current.experiment.id } });
+    await tx.stealthEndpointCredential.deleteMany({
+      where: { variantId: { in: current.variantIds } },
+    });
+    await tx.stealthGenerationResult.deleteMany({
+      where: { run: { variantId: { in: current.variantIds } } },
+    });
+    await tx.stealthGenerationRun.deleteMany({ where: { variantId: { in: current.variantIds } } });
+    await tx.stealthVariant.deleteMany({ where: { id: { in: current.variantIds } } });
+    await tx.stealthExperiment.delete({ where: { id: current.experiment.id } });
+    await tx.model.deleteMany({ where: { id: { in: current.modelIds } } });
   });
 }
 
@@ -1932,7 +2000,11 @@ async function listStealthBuildStorageRefs(
 export async function purgeDueStealthEvaluations(
   actor: StealthActor,
   params?: { now?: Date; limit?: number },
-): Promise<{ purged: number; evaluationIds: string[] }> {
+): Promise<{
+  purged: number;
+  evaluationIds: string[];
+  failures: Array<{ evaluationId: string; error: string }>;
+}> {
   if (!isMineBenchAdmin(actor)) throw new Error("MineBench admin access is required");
   const now = params?.now ?? new Date();
   const limit = Math.max(1, Math.min(100, params?.limit ?? 25));
@@ -1946,11 +2018,35 @@ export async function purgeDueStealthEvaluations(
     select: { id: true },
   });
   const purged: string[] = [];
-  for (const evaluation of due) {
-    const result = await purgeStealthEvaluationIfDue(evaluation.id, now);
-    if (result) purged.push(evaluation.id);
+  const failures: Array<{ evaluationId: string; error: string }> = [];
+  const expiredUploads = await prisma.stealthCohortUpload.findMany({
+    where: { expiresAt: { lte: now } },
+    orderBy: { expiresAt: "asc" },
+    take: 100,
+    select: { id: true, experimentId: true, bucket: true, path: true },
+  });
+  for (const upload of expiredUploads) {
+    try {
+      await deleteStorageObjects([upload]);
+      await prisma.stealthCohortUpload.deleteMany({
+        where: { id: upload.id, expiresAt: { lte: now } },
+      });
+    } catch (error) {
+      failures.push({
+        evaluationId: upload.experimentId,
+        error: sanitizeOperationalError(error),
+      });
+    }
   }
-  return { purged: purged.length, evaluationIds: purged };
+  for (const evaluation of due) {
+    try {
+      const result = await purgeStealthEvaluationIfDue(evaluation.id, now);
+      if (result) purged.push(evaluation.id);
+    } catch (error) {
+      failures.push({ evaluationId: evaluation.id, error: sanitizeOperationalError(error) });
+    }
+  }
+  return { purged: purged.length, evaluationIds: purged, failures };
 }
 
 export async function purgeStealthEvaluationIfDue(
@@ -1980,6 +2076,10 @@ export async function purgeStealthEvaluationIfDue(
         voxelSha256: true,
       },
     });
+    const cohortUploads = await tx.stealthCohortUpload.findMany({
+      where: { experimentId: experiment.id },
+      select: { bucket: true, path: true },
+    });
     const checksums = Array.from(
       new Set(builds.map((build) => build.voxelSha256?.trim()).filter(Boolean) as string[]),
     );
@@ -2000,6 +2100,7 @@ export async function purgeStealthEvaluationIfDue(
       experimentId: experiment.id,
       variants,
       builds,
+      cohortUploads,
       survivingChecksums: new Set(
         surviving.flatMap((build) => (build.voxelSha256 ? [build.voxelSha256] : [])),
       ),
@@ -2020,6 +2121,7 @@ export async function purgeStealthEvaluationIfDue(
   await deleteStorageObjects(
     [
       ...variantStorageRefs,
+      ...snapshot.cohortUploads,
       ...snapshot.builds.flatMap((build) =>
         build.voxelStorageBucket && build.voxelStoragePath
           ? [{ bucket: build.voxelStorageBucket, path: build.voxelStoragePath }]
@@ -2057,6 +2159,7 @@ export async function purgeStealthEvaluationIfDue(
     });
     await tx.stealthGenerationRun.deleteMany({ where: { variantId: { in: variantIds } } });
     await tx.stealthEndpointCredential.deleteMany({ where: { variantId: { in: variantIds } } });
+    await tx.stealthCohortUpload.deleteMany({ where: { experimentId: experiment.id } });
     await tx.build.deleteMany({ where: { modelId: { in: modelIds } } });
     await tx.stealthVariant.deleteMany({ where: { id: { in: variantIds } } });
     await tx.model.deleteMany({ where: { id: { in: modelIds } } });

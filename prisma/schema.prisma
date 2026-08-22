@@ -132,12 +132,27 @@ model StealthExperiment {
   createdAt             DateTime                @default(now())
   updatedAt             DateTime                @updatedAt
 
-  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  variants     StealthVariant[]
+  organization  Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  variants      StealthVariant[]
+  cohortUploads StealthCohortUpload[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
   @@index([status, retentionDeleteAt])
+}
+
+model StealthCohortUpload {
+  id           String   @id @db.Uuid
+  experimentId String
+  bucket       String
+  path         String
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  experiment StealthExperiment @relation(fields: [experimentId], references: [id], onDelete: Restrict)
+
+  @@unique([bucket, path])
+  @@index([experimentId, expiresAt])
 }
 
 model StealthVariant {
@@ -338,11 +353,24 @@ model Build {
   matchupsAsA Matchup[] @relation("MatchupBuildA")
   matchupsAsB Matchup[] @relation("MatchupBuildB")
   stealthGenerationResults StealthGenerationResult[]
+  arenaArtifacts ArenaBuildArtifact[]
 
   @@unique([promptId, modelId, gridSize, palette, mode])
   @@index([gridSize, palette, mode, promptId, modelId])
   @@index([promptId])
   @@index([modelId])
+}
+
+model ArenaBuildArtifact {
+  buildId   String
+  bucket    String
+  path      String
+  createdAt DateTime @default(now())
+
+  build Build @relation(fields: [buildId], references: [id], onDelete: Cascade)
+
+  @@id([buildId, bucket, path])
+  @@index([bucket, path])
 }
 
 model Matchup {
@@ -392,6 +420,7 @@ model Vote {
   @@unique([matchupId, sessionId])
   @@index([sessionId])
   @@index([createdAt])
+  @@index([createdAt, id])
   @@index([matchupId, createdAt])
 }
 
