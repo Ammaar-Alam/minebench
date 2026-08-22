@@ -1072,7 +1072,7 @@ function RevealLane({
   delayed,
 }: {
   side: "A" | "B";
-  model?: { provider: string; displayName: string; eloRating: number };
+  model?: ArenaModelReveal | null;
   chosen: boolean;
   faded: boolean;
   delayed?: boolean;
@@ -1090,12 +1090,11 @@ function RevealLane({
       <span className="min-w-0 truncate text-[13px] font-medium text-fg">
         {model?.displayName ?? "—"}
       </span>
-      <span className="hidden shrink-0 font-mono text-[11px] text-muted2 sm:inline">
-        {model?.provider ?? ""}
-      </span>
-      <span className="ml-auto shrink-0 pl-2 font-mono text-[12px] tabular-nums text-muted">
-        {model ? Math.round(model.eloRating) : ""}
-      </span>
+      {model?.provider ? (
+        <span className="hidden shrink-0 font-mono text-[11px] text-muted2 sm:inline">
+          {model.provider}
+        </span>
+      ) : null}
     </div>
   );
 }
