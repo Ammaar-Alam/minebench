@@ -957,6 +957,28 @@
     background-image: none;
   }
 
+  @keyframes mb-status-change {
+    from {
+      opacity: 0.45;
+      transform: translateY(2px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .mb-status-change {
+    transform-origin: left center;
+    animation: mb-status-change 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-status-change {
+      animation: none;
+    }
+  }
+
   /* grid-template-rows 0fr → 1fr gives a clean height animation
      with no JS measurement; the inner element clips overflow. */
   .t-acc-panel {
@@ -994,7 +1016,9 @@
     display: inline-flex;
     transform: scaleY(1);
     transform-origin: center;
-    transition: transform var(--acc-chevron) var(--acc-ease);
+    transition:
+      transform var(--acc-chevron) var(--acc-ease),
+      color 140ms ease-out;
   }
   .t-acc-chevron path { vector-effect: non-scaling-stroke; }
   .t-acc[data-open="true"] .t-acc-chevron {

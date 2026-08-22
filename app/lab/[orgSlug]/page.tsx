@@ -58,7 +58,7 @@ export default async function LabOrganizationPage({
   const updateRoleAction = updateMemberRoleAction.bind(null, orgSlug);
 
   return (
-    <div className="mx-auto w-full max-w-[72rem] space-y-10 py-4 sm:py-7">
+    <div className="mx-auto w-full max-w-[72rem] space-y-8 py-1 sm:py-2">
       <header className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">
           <p className="text-xs text-muted">{titleCase(context.membership.role)}</p>
@@ -168,17 +168,16 @@ export default async function LabOrganizationPage({
               Team <span className="ml-2 font-normal text-muted">{team.memberships.length}</span>
             </span>
           }
-          className="border-t border-border/60"
           panelClassName="space-y-6 pb-1 pt-4"
         >
-            <form action={inviteAction} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem_auto]">
+            <form action={inviteAction} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_6rem_auto]">
               <label className="space-y-2 text-sm font-medium text-fg">
                 <span>Email</span>
                 <input name="email" type="email" required autoComplete="email" className="mb-field h-11" />
               </label>
               <label className="space-y-2 text-sm font-medium text-fg">
                 <span>Role</span>
-                <select name="role" defaultValue="MEMBER" className="mb-field h-11">
+                <select name="role" defaultValue="MEMBER" className="mb-field h-11 w-24 pr-8">
                   <option value="MEMBER">Member</option>
                   <option value="ADMIN">Admin</option>
                 </select>
@@ -198,7 +197,7 @@ export default async function LabOrganizationPage({
                       <>
                         <form action={updateRoleAction} className="flex items-center gap-2">
                           <input type="hidden" name="email" value={user.email} />
-                          <select name="role" defaultValue={role} aria-label={`Role for ${user.email}`} className="mb-field h-11 w-28 text-xs">
+                          <select name="role" defaultValue={role} aria-label={`Role for ${user.email}`} className="mb-field h-11 w-24 pr-8 text-xs">
                             <option value="MEMBER">Member</option>
                             <option value="ADMIN">Admin</option>
                           </select>
@@ -224,7 +223,7 @@ export default async function LabOrganizationPage({
                   <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     <form action={updateRoleAction} className="flex items-center gap-2">
                       <input type="hidden" name="email" value={invitation.email} />
-                      <select name="role" defaultValue={invitation.role} aria-label={`Role for ${invitation.email}`} className="mb-field h-11 w-28 text-xs">
+                      <select name="role" defaultValue={invitation.role} aria-label={`Role for ${invitation.email}`} className="mb-field h-11 w-24 pr-8 text-xs">
                         <option value="MEMBER">Member</option>
                         <option value="ADMIN">Admin</option>
                       </select>
