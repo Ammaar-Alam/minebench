@@ -81,7 +81,14 @@ export function appendQuad(
   bucket: MeshBucket,
   verts: readonly (readonly [number, number, number])[],
   normal: { nx: number; ny: number; nz: number },
-  tint: readonly [number, number, number],
+  tint:
+    | readonly [number, number, number]
+    | readonly [
+        readonly [number, number, number],
+        readonly [number, number, number],
+        readonly [number, number, number],
+        readonly [number, number, number],
+      ],
   uv: readonly [number, number, number, number, number, number, number, number],
 ): void {
   ensureCapacity(bucket, 4, 6);
@@ -90,13 +97,20 @@ export function appendQuad(
   const nx = normal.nx * NORMAL_UNIT;
   const ny = normal.ny * NORMAL_UNIT;
   const nz = normal.nz * NORMAL_UNIT;
-  const r = Math.round(clamp01(tint[0]) * COLOR_UNIT);
-  const g = Math.round(clamp01(tint[1]) * COLOR_UNIT);
-  const b = Math.round(clamp01(tint[2]) * COLOR_UNIT);
+  const isPerVertex = Array.isArray(tint[0]);
+
+  let l0 = 0, l1 = 0, l2 = 0, l3 = 0;
 
   for (let i = 0; i < 4; i += 1) {
     const vert = verts[i];
     const p = (baseIndex + i) * 3;
+    const t = isPerVertex
+      ? (tint as readonly (readonly [number, number, number])[])[i]
+      : (tint as readonly [number, number, number]);
+    const r = Math.round(clamp01(t[0]) * COLOR_UNIT);
+    const g = Math.round(clamp01(t[1]) * COLOR_UNIT);
+    const b = Math.round(clamp01(t[2]) * COLOR_UNIT);
+
     bucket.positions[p] = vert[0];
     bucket.positions[p + 1] = vert[1];
     bucket.positions[p + 2] = vert[2];
@@ -106,6 +120,15 @@ export function appendQuad(
     bucket.colors[p] = r;
     bucket.colors[p + 1] = g;
     bucket.colors[p + 2] = b;
+
+    if (isPerVertex) {
+      const lum = r + g + b;
+      if (i === 0) l0 = lum;
+      else if (i === 1) l1 = lum;
+      else if (i === 2) l2 = lum;
+      else l3 = lum;
+    }
+
     const u = (baseIndex + i) * 2;
     if (bucket.uvs instanceof Float32Array) {
       bucket.uvs[u] = uv[i * 2];
@@ -117,12 +140,21 @@ export function appendQuad(
   }
 
   const idx = bucket.indexCount;
-  bucket.indices[idx] = baseIndex;
-  bucket.indices[idx + 1] = baseIndex + 1;
-  bucket.indices[idx + 2] = baseIndex + 2;
-  bucket.indices[idx + 3] = baseIndex;
-  bucket.indices[idx + 4] = baseIndex + 2;
-  bucket.indices[idx + 5] = baseIndex + 3;
+  if (isPerVertex && l0 + l2 < l1 + l3) {
+    bucket.indices[idx] = baseIndex + 1;
+    bucket.indices[idx + 1] = baseIndex + 2;
+    bucket.indices[idx + 2] = baseIndex + 3;
+    bucket.indices[idx + 3] = baseIndex + 1;
+    bucket.indices[idx + 4] = baseIndex + 3;
+    bucket.indices[idx + 5] = baseIndex;
+  } else {
+    bucket.indices[idx] = baseIndex;
+    bucket.indices[idx + 1] = baseIndex + 1;
+    bucket.indices[idx + 2] = baseIndex + 2;
+    bucket.indices[idx + 3] = baseIndex;
+    bucket.indices[idx + 4] = baseIndex + 2;
+    bucket.indices[idx + 5] = baseIndex + 3;
+  }
 
   bucket.vertexCount += 4;
   bucket.indexCount += 6;

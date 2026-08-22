@@ -3,7 +3,7 @@ import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getRenderKind } from "@/lib/blocks/registry";
 import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
-import { canVoxelBlockEmitAnyFace, isVoxelOccluder } from "@/lib/voxel/renderVisibility";
+import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import {
   copyPackedVoxelBlocks,
@@ -21,6 +21,13 @@ import {
   type SerializedMeshBucket,
 } from "@/lib/voxel/meshBuckets";
 import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
+import {
+  canBlockEmitAnyFace,
+  computeFaceAO,
+  DIRS,
+  SpatialBlockTable,
+  type Direction,
+} from "@/lib/voxel/ambientOcclusion";
 
 export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
@@ -67,111 +74,6 @@ export type VoxelMeshPayload = {
   bounds: SerializedBuildBounds;
   filteredBlockCount: number;
 };
-
-
-type Direction = {
-  face: Face;
-  dx: number;
-  dy: number;
-  dz: number;
-  nx: number;
-  ny: number;
-  nz: number;
-  quad: (x: number, y: number, z: number) => [number, number, number][];
-};
-
-const DIRS: Direction[] = [
-  {
-    face: "east",
-    dx: 1,
-    dy: 0,
-    dz: 0,
-    nx: 1,
-    ny: 0,
-    nz: 0,
-    quad: (x, y, z) => [
-      [x + 1, y, z],
-      [x + 1, y + 1, z],
-      [x + 1, y + 1, z + 1],
-      [x + 1, y, z + 1],
-    ],
-  },
-  {
-    face: "west",
-    dx: -1,
-    dy: 0,
-    dz: 0,
-    nx: -1,
-    ny: 0,
-    nz: 0,
-    quad: (x, y, z) => [
-      [x, y, z + 1],
-      [x, y + 1, z + 1],
-      [x, y + 1, z],
-      [x, y, z],
-    ],
-  },
-  {
-    face: "north",
-    dx: 0,
-    dy: 0,
-    dz: -1,
-    nx: 0,
-    ny: 0,
-    nz: -1,
-    quad: (x, y, z) => [
-      [x, y, z],
-      [x, y + 1, z],
-      [x + 1, y + 1, z],
-      [x + 1, y, z],
-    ],
-  },
-  {
-    face: "south",
-    dx: 0,
-    dy: 0,
-    dz: 1,
-    nx: 0,
-    ny: 0,
-    nz: 1,
-    quad: (x, y, z) => [
-      [x + 1, y, z + 1],
-      [x + 1, y + 1, z + 1],
-      [x, y + 1, z + 1],
-      [x, y, z + 1],
-    ],
-  },
-  {
-    face: "up",
-    dx: 0,
-    dy: 1,
-    dz: 0,
-    nx: 0,
-    ny: 1,
-    nz: 0,
-    quad: (x, y, z) => [
-      [x, y + 1, z + 1],
-      [x + 1, y + 1, z + 1],
-      [x + 1, y + 1, z],
-      [x, y + 1, z],
-    ],
-  },
-  {
-    face: "down",
-    dx: 0,
-    dy: -1,
-    dz: 0,
-    nx: 0,
-    ny: -1,
-    nz: 0,
-    quad: (x, y, z) => [
-      [x, y, z],
-      [x + 1, y, z],
-      [x + 1, y, z + 1],
-      [x, y, z + 1],
-    ],
-  },
-];
 
 function buildGeometry(
   bucket: MeshBucket,
@@ -247,9 +149,12 @@ export type VoxelGroup = {
 
 type PreparedMeshData = {
   allowed: Set<string>;
-  blocksByPos: Map<number, string>;
-  nonWaterBlocks: VoxelBuild["blocks"];
-  waterBlocks: VoxelBuild["blocks"];
+  table: SpatialBlockTable;
+  materialOccluding: Uint8Array;
+  typeNames: string[];
+  typeIdsByName: Map<string, number>;
+  nonWaterBlocks: Array<{ x: number; y: number; z: number; type: string; typeId: number }>;
+  waterBlocks: Array<{ x: number; y: number; z: number; type: string; typeId: number }>;
   filteredBlockCount: number;
   maxInputBlocks: number;
   minX: number;
@@ -340,10 +245,13 @@ function bucketFor(blockType: string, buckets: {
 
 function configureAtlasTexture(atlasTexture: THREE.Texture) {
   atlasTexture.magFilter = THREE.NearestFilter;
-  atlasTexture.minFilter = THREE.NearestFilter;
+  atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
+  atlasTexture.generateMipmaps = true;
+  atlasTexture.anisotropy = 4;
   atlasTexture.wrapS = THREE.ClampToEdgeWrapping;
   atlasTexture.wrapT = THREE.ClampToEdgeWrapping;
   atlasTexture.colorSpace = THREE.SRGBColorSpace;
+  atlasTexture.needsUpdate = true;
 }
 
 function getWaterSurfaceTexture(atlasTexture: THREE.Texture): THREE.Texture | null {
@@ -378,12 +286,13 @@ function getWaterSurfaceTexture(atlasTexture: THREE.Texture): THREE.Texture | nu
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.magFilter = THREE.NearestFilter;
-  texture.minFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.flipY = atlasTexture.flipY;
-  texture.generateMipmaps = false;
+  texture.generateMipmaps = true;
+  texture.anisotropy = 4;
   texture.needsUpdate = true;
 
   cachedWaterTexture = { atlasTexture, texture };
@@ -457,22 +366,34 @@ function prepareMeshData(
   blockLimit?: number,
 ): PreparedMeshData {
   const allowed = new Set(palette.map((p) => p.id));
-  const nonWaterBlocks: VoxelBuild["blocks"] = [];
-  const waterBlocks: VoxelBuild["blocks"] = [];
-  const blocksByPos = new Map<number, string>();
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
   const inputLimit =
     typeof blockLimit === "number" && Number.isFinite(blockLimit)
       ? Math.max(0, Math.floor(blockLimit))
       : build.blocks.length;
   const maxInputBlocks = Math.min(build.blocks.length, inputLimit);
 
+  const typeNames = palette.map((p) => p.id);
+  const typeIdsByName = new Map<string, number>();
+  const materialOccluding = new Uint8Array(typeNames.length);
+
+  for (let i = 0; i < typeNames.length; i += 1) {
+    const name = typeNames[i];
+    typeIdsByName.set(name, i);
+    materialOccluding[i] = isVoxelOccluder(name) ? 1 : 0;
+  }
+
+  const table = new SpatialBlockTable(maxInputBlocks);
+  const nonWaterBlocks: PreparedMeshData["nonWaterBlocks"] = [];
+  const waterBlocks: PreparedMeshData["waterBlocks"] = [];
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
-    blocksByPos.set(encodePosition(b.x, b.y, b.z), b.type);
+    const typeId = typeIdsByName.get(b.type) ?? 0;
+    table.set(b.x, b.y, b.z, typeId);
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
     minZ = Math.min(minZ, b.z);
@@ -484,13 +405,14 @@ function prepareMeshData(
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
+    const typeId = typeIdsByName.get(b.type) ?? 0;
+    if (!canBlockEmitAnyFace(b.x, b.y, b.z, typeId, table, materialOccluding)) continue;
+    const item = { x: b.x, y: b.y, z: b.z, type: b.type, typeId };
     if (b.type === WATER_BLOCK_ID) {
-      if (!canVoxelBlockEmitAnyFace(b, blocksByPos)) continue;
-      waterBlocks.push(b);
-      continue;
+      waterBlocks.push(item);
+    } else {
+      nonWaterBlocks.push(item);
     }
-    if (!canVoxelBlockEmitAnyFace(b, blocksByPos)) continue;
-    nonWaterBlocks.push(b);
   }
 
   if (!Number.isFinite(minX)) {
@@ -500,7 +422,10 @@ function prepareMeshData(
 
   return {
     allowed,
-    blocksByPos,
+    table,
+    materialOccluding,
+    typeNames,
+    typeIdsByName,
     nonWaterBlocks,
     waterBlocks,
     filteredBlockCount: nonWaterBlocks.length + waterBlocks.length,
@@ -524,22 +449,34 @@ async function prepareMeshDataAsync(
   maybeYield: (progress?: BuildProgress) => Promise<void>,
 ): Promise<PreparedMeshData> {
   const allowed = new Set(palette.map((p) => p.id));
-  const nonWaterBlocks: VoxelBuild["blocks"] = [];
-  const waterBlocks: VoxelBuild["blocks"] = [];
-  const blocksByPos = new Map<number, string>();
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-
   const inputLimit =
     typeof blockLimit === "number" && Number.isFinite(blockLimit)
       ? Math.max(0, Math.floor(blockLimit))
       : build.blocks.length;
   const maxInputBlocks = Math.min(build.blocks.length, inputLimit);
 
+  const typeNames = palette.map((p) => p.id);
+  const typeIdsByName = new Map<string, number>();
+  const materialOccluding = new Uint8Array(typeNames.length);
+
+  for (let i = 0; i < typeNames.length; i += 1) {
+    const name = typeNames[i];
+    typeIdsByName.set(name, i);
+    materialOccluding[i] = isVoxelOccluder(name) ? 1 : 0;
+  }
+
+  const table = new SpatialBlockTable(maxInputBlocks);
+  const nonWaterBlocks: PreparedMeshData["nonWaterBlocks"] = [];
+  const waterBlocks: PreparedMeshData["waterBlocks"] = [];
+
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
-    blocksByPos.set(encodePosition(b.x, b.y, b.z), b.type);
+    const typeId = typeIdsByName.get(b.type) ?? 0;
+    table.set(b.x, b.y, b.z, typeId);
     minX = Math.min(minX, b.x);
     minY = Math.min(minY, b.y);
     minZ = Math.min(minZ, b.z);
@@ -558,13 +495,14 @@ async function prepareMeshDataAsync(
   for (let i = 0; i < maxInputBlocks; i += 1) {
     const b = build.blocks[i];
     if (!b || !allowed.has(b.type)) continue;
+    const typeId = typeIdsByName.get(b.type) ?? 0;
+    if (!canBlockEmitAnyFace(b.x, b.y, b.z, typeId, table, materialOccluding)) continue;
+    const item = { x: b.x, y: b.y, z: b.z, type: b.type, typeId };
     if (b.type === WATER_BLOCK_ID) {
-      if (!canVoxelBlockEmitAnyFace(b, blocksByPos)) continue;
-      waterBlocks.push(b);
-      continue;
+      waterBlocks.push(item);
+    } else {
+      nonWaterBlocks.push(item);
     }
-    if (!canVoxelBlockEmitAnyFace(b, blocksByPos)) continue;
-    nonWaterBlocks.push(b);
     if ((i & 0x03ff) === 0) {
       await maybeYield({
         processedBlocks: i,
@@ -581,7 +519,10 @@ async function prepareMeshDataAsync(
 
   return {
     allowed,
-    blocksByPos,
+    table,
+    materialOccluding,
+    typeNames,
+    typeIdsByName,
     nonWaterBlocks,
     waterBlocks,
     filteredBlockCount: nonWaterBlocks.length + waterBlocks.length,
@@ -599,7 +540,7 @@ async function prepareMeshDataAsync(
 }
 
 function appendStandardFaces(
-  block: VoxelBuild["blocks"][number],
+  block: PreparedMeshData["nonWaterBlocks"][number],
   prepared: PreparedMeshData,
   buckets: {
     opaque: MeshBucket;
@@ -611,25 +552,47 @@ function appendStandardFaces(
   const bx = block.x - prepared.cx;
   const by = block.y - prepared.cy;
   const bz = block.z - prepared.cz;
+  const kind = getRenderKind(block.type) ?? "opaque";
 
   for (const d of DIRS) {
-    const neighborType = prepared.blocksByPos.get(
-      encodePosition(block.x + d.dx, block.y + d.dy, block.z + d.dz),
-    );
-    if (neighborType) {
-      if (neighborType === block.type) continue;
-      if (isVoxelOccluder(neighborType)) continue;
+    const neighborTypeId = prepared.table.get(block.x + d.dx, block.y + d.dy, block.z + d.dz);
+    if (neighborTypeId !== -1) {
+      if (neighborTypeId === block.typeId) continue;
+      if (prepared.materialOccluding[neighborTypeId] === 1) continue;
     }
 
     const texKey = getTextureKey(block.type, d.face);
     if (!hasAtlasKey(texKey)) continue;
     const uv = getAtlasUv(texKey);
     const bucket = bucketFor(block.type, buckets);
+    const baseTint = faceTint(block.type, d.face);
+
+    let tints:
+      | readonly [number, number, number]
+      | readonly [
+          readonly [number, number, number],
+          readonly [number, number, number],
+          readonly [number, number, number],
+          readonly [number, number, number],
+        ];
+
+    if (kind === "emissive") {
+      tints = baseTint;
+    } else {
+      const ao = computeFaceAO(d, block.x, block.y, block.z, prepared.table, prepared.materialOccluding);
+      tints = [
+        [baseTint[0] * ao[0], baseTint[1] * ao[0], baseTint[2] * ao[0]],
+        [baseTint[0] * ao[1], baseTint[1] * ao[1], baseTint[2] * ao[1]],
+        [baseTint[0] * ao[2], baseTint[1] * ao[2], baseTint[2] * ao[2]],
+        [baseTint[0] * ao[3], baseTint[1] * ao[3], baseTint[2] * ao[3]],
+      ];
+    }
+
     appendQuad(
       bucket,
       d.quad(bx, by, bz),
       d,
-      faceTint(block.type, d.face),
+      tints,
       [uv.u0, uv.v0, uv.u0, uv.v1, uv.u1, uv.v1, uv.u1, uv.v0],
     );
   }
@@ -651,16 +614,19 @@ function getOrCreatePlane(
 function collectWaterPlanes(prepared: PreparedMeshData) {
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
   if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return planes;
+  const waterTypeId = prepared.typeIdsByName.get(WATER_BLOCK_ID) ?? -1;
 
   for (const block of prepared.waterBlocks) {
 
     for (const d of DIRS) {
-      const neighborType = prepared.blocksByPos.get(
-        encodePosition(block.x + d.dx, block.y + d.dy, block.z + d.dz),
+      const neighborTypeId = prepared.table.get(
+        block.x + d.dx,
+        block.y + d.dy,
+        block.z + d.dz,
       );
-      if (neighborType) {
-        if (neighborType === WATER_BLOCK_ID) continue;
-        if (isVoxelOccluder(neighborType)) continue;
+      if (neighborTypeId !== -1) {
+        if (neighborTypeId === waterTypeId) continue;
+        if (prepared.materialOccluding[neighborTypeId] === 1) continue;
       }
 
       switch (d.face) {
@@ -857,18 +823,21 @@ async function buildWaterSurfaceBucketAsync(
   const bucket = makeBucket({ repeatingUvs: true });
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
   if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterBlocks.length === 0) return bucket;
+  const waterTypeId = prepared.typeIdsByName.get(WATER_BLOCK_ID) ?? -1;
 
   for (let i = 0; i < prepared.waterBlocks.length; i += 1) {
     const block = prepared.waterBlocks[i];
     if (!block) continue;
 
     for (const d of DIRS) {
-      const neighborType = prepared.blocksByPos.get(
-        encodePosition(block.x + d.dx, block.y + d.dy, block.z + d.dz),
+      const neighborTypeId = prepared.table.get(
+        block.x + d.dx,
+        block.y + d.dy,
+        block.z + d.dz,
       );
-      if (neighborType) {
-        if (neighborType === WATER_BLOCK_ID) continue;
-        if (isVoxelOccluder(neighborType)) continue;
+      if (neighborTypeId !== -1) {
+        if (neighborTypeId === waterTypeId) continue;
+        if (prepared.materialOccluding[neighborTypeId] === 1) continue;
       }
 
       switch (d.face) {

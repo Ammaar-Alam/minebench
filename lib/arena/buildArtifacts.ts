@@ -430,8 +430,8 @@ function createPrepared(
   const renderBuild = filterRenderableVoxelBuild(fullBuild);
   const hintsFromMetadata = deriveArenaBuildLoadHints({
     blockCount: renderBuild.blocks.length,
-    voxelByteSize: null,
-    voxelCompressedByteSize: null,
+    voxelByteSize: source.voxelByteSize,
+    voxelCompressedByteSize: source.voxelCompressedByteSize,
   });
   const fullEstimatedBytes = hintsFromMetadata.fullEstimatedBytes ?? payloadEstimatedBytes;
   const deliveryClass = classifyArenaBuildDelivery(fullEstimatedBytes);
