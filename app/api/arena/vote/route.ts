@@ -173,7 +173,7 @@ export async function POST(req: Request) {
                 INNER JOIN "StealthExperiment" experiment ON experiment.id = variant."experimentId"
                 WHERE variant.id = ${tokenMatchup.stealthVariantId}
                   AND variant.status = 'ACTIVE'
-                  AND experiment.status IN ('ACTIVE', 'STABLE')
+                  AND experiment.status = 'ACTIVE'
                   AND (
                     (variant."modelId" = ${tokenMatchup.modelAId} AND variant."modelId" <> ${tokenMatchup.modelBId}) OR
                     (variant."modelId" = ${tokenMatchup.modelBId} AND variant."modelId" <> ${tokenMatchup.modelAId})
