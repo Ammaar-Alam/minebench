@@ -62,6 +62,19 @@
     -webkit-tap-highlight-color: transparent;
   }
 
+  body:has(#mb-lab-canvas) .mb-bg-grid,
+  body:has(#mb-lab-canvas) .mb-bg-halo {
+    display: none;
+  }
+
+  body:has(#mb-lab-canvas) #mb-shell {
+    background-color: hsl(var(--bg));
+  }
+
+  body:has(#mb-lab-canvas) #mb-footer {
+    display: none;
+  }
+
   button,
   a,
   [role="button"] {
@@ -846,6 +859,12 @@
       inset 0 1px 0 hsl(0 0% 100% / 0.06);
   }
 
+  #mb-lab-canvas .mb-field {
+    border-radius: 0.375rem;
+    background-color: hsl(var(--bg));
+    box-shadow: none;
+  }
+
   .mb-btn {
     @apply inline-flex select-none items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold text-fg focus-visible:outline-none;
     transition:
@@ -916,6 +935,21 @@
 
   .mb-btn-danger:hover {
     background-image: linear-gradient(to bottom, hsl(var(--danger) / 0.32), hsl(var(--danger) / 0.16));
+  }
+
+  #mb-lab-canvas .mb-btn {
+    border-radius: 0.375rem;
+    box-shadow: none;
+  }
+
+  #mb-lab-canvas .mb-btn-primary {
+    background-color: hsl(var(--accent) / 0.12);
+    background-image: none;
+  }
+
+  #mb-lab-canvas .mb-btn-ghost {
+    background-color: transparent;
+    background-image: none;
   }
 
   .mb-kbd {

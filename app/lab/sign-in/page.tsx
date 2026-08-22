@@ -46,7 +46,7 @@ export default async function LabSignInPage({
               type="email"
               autoComplete="email"
               required
-              className="h-12 w-full rounded-lg border border-border bg-card px-4 text-base text-fg outline-none transition focus:border-accent/70 focus:ring-2 focus:ring-accent/20"
+              className="mb-field h-12 text-base"
             />
           </label>
           <button type="submit" className="mb-btn mb-btn-primary h-11 w-full text-sm">

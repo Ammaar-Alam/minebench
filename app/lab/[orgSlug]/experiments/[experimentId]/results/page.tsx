@@ -30,12 +30,9 @@ export default async function EvaluationResultsPage({
   }));
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="mb-eyebrow">Arena evidence</p>
-          <h2 className="mt-1.5 text-2xl font-semibold tracking-tight text-fg">Results</h2>
-        </div>
+    <div className="space-y-8">
+      <header className="flex flex-wrap items-center justify-between gap-4">
+        <h2 className="text-2xl font-semibold tracking-tight text-fg">Results</h2>
         {exportAvailable ? (
           <a
             href={`/api/lab/organizations/${orgSlug}/experiments/${experimentId}/export`}
