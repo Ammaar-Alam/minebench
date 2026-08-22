@@ -5,6 +5,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 interface FaqNavigationItem {
   id: string;
   question: string;
+  navLabel?: string;
 }
 
 interface FaqNavigationSection {
@@ -191,9 +192,12 @@ export function FaqNavigation({
         })}
       </nav>
 
-      <aside className="sticky top-20 hidden self-start lg:block">
-        <nav aria-label="FAQ questions">
-          <div className="relative space-y-6" ref={trackRef}>
+      <aside className="sticky top-16 hidden self-start lg:block">
+        <nav
+          aria-label="FAQ questions"
+          className="max-h-[calc(100vh-5rem)] overflow-y-auto py-1 pr-2 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+        >
+          <div className="relative space-y-4" ref={trackRef}>
             <span
               aria-hidden="true"
               className="pointer-events-none absolute -left-[3px] top-0 z-10 h-1.5 w-1.5 rounded-full bg-accent opacity-0 shadow-[0_0_0_4px_hsl(var(--accent)/0.12),0_0_12px_hsl(var(--accent)/0.65)] will-change-transform motion-reduce:transition-none"
@@ -202,24 +206,24 @@ export function FaqNavigation({
             {sections.map((section) => (
               <div key={section.id}>
                 <a
-                  className="text-sm font-semibold text-fg transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"
+                  className="text-xs font-semibold uppercase tracking-wider text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"
                   href={`#${section.id}`}
                 >
                   {section.title}
                 </a>
-                <ol className="mt-2 border-l border-border/70 pl-4">
+                <ol className="mt-1.5 border-l border-border/70 pl-3.5">
                   {section.items.map((item) => {
                     const active = activeId === item.id;
                     return (
                       <li key={item.id}>
                         <a
                           aria-current={active ? "location" : undefined}
-                          className="relative block py-1 text-xs leading-5 text-fg opacity-55 hover:!opacity-100 focus-visible:!opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                          className="relative block py-0.5 text-xs leading-5 text-fg opacity-55 transition-opacity duration-150 hover:!opacity-100 focus-visible:!opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                           href={`#${item.id}`}
                           id={`faq-nav-${item.id}`}
                           onClick={() => navigateTo(item.id)}
                         >
-                          {item.question}
+                          {item.navLabel ?? item.question}
                         </a>
                       </li>
                     );

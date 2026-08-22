@@ -1072,7 +1072,7 @@ function RevealLane({
   delayed,
 }: {
   side: "A" | "B";
-  model?: ArenaModelReveal | null;
+  model?: { provider?: string; displayName?: string } | null;
   chosen: boolean;
   faded: boolean;
   delayed?: boolean;
