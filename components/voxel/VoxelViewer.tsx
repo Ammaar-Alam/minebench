@@ -472,7 +472,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const canvas = document.createElement("canvas");
     const renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,
+      antialias: true,
       alpha: true,
       powerPreference: "high-performance",
     });
@@ -890,7 +890,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     let renderer: THREE.WebGLRenderer;
     try {
       renderer = new THREE.WebGLRenderer({
-        antialias: false,
+        antialias: !isMobileViewerEnv(),
         alpha: true,
         powerPreference: "high-performance",
       });

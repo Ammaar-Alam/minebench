@@ -61,10 +61,12 @@ async function main() {
     }
   }
 
+  const PADDING = 8;
+  const PADDED_TILE_SIZE = TILE_SIZE + PADDING * 2;
   const cols = Math.ceil(Math.sqrt(keyList.length));
   const rows = Math.ceil(keyList.length / cols);
-  const atlasWidth = cols * TILE_SIZE;
-  const atlasHeight = rows * TILE_SIZE;
+  const atlasWidth = cols * PADDED_TILE_SIZE;
+  const atlasHeight = rows * PADDED_TILE_SIZE;
 
   await fs.mkdir(publicOutDir, { recursive: true });
   await fs.mkdir(path.dirname(outMapLib), { recursive: true });
@@ -98,13 +100,20 @@ async function main() {
           fit: "fill",
           kernel: sharp.kernel.nearest
         })
+        .extend({
+          top: PADDING,
+          bottom: PADDING,
+          left: PADDING,
+          right: PADDING,
+          extendWith: "copy"
+        })
         .png()
         .toBuffer();
 
       return {
         input,
-        left: col * TILE_SIZE,
-        top: row * TILE_SIZE
+        left: col * PADDED_TILE_SIZE,
+        top: row * PADDED_TILE_SIZE
       };
     })
   );
@@ -124,8 +133,8 @@ async function main() {
   for (const [index, key] of keyList.entries()) {
     const col = index % cols;
     const row = Math.floor(index / cols);
-    const x = col * TILE_SIZE;
-    const y = row * TILE_SIZE;
+    const x = col * PADDED_TILE_SIZE + PADDING;
+    const y = row * PADDED_TILE_SIZE + PADDING;
     const bottomY = atlasHeight - y - TILE_SIZE;
 
     keyToUv[key] = {
