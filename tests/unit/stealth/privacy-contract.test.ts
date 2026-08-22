@@ -16,6 +16,8 @@ assert.equal((matchupRoute.match(/model: null/g) ?? []).length, 2);
 assert.match(matchupRoute, /stealthVariantId: picked\.stealthVariantId/);
 assert.match(matchupRoute, /createArenaBuildAccessToken/);
 assert.match(matchupRoute, /checksum: null/);
+assert.doesNotMatch(matchupRoute, /const blindBuildAccess = picked\.stealthVariantId/);
+assert.doesNotMatch(matchupRoute, /buildRef: blindBuildAccess[\s\S]*: preparedA\?\.buildRef/);
 
 for (const path of [
   "app/api/arena/builds/[buildId]/route.ts",

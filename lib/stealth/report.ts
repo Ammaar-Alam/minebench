@@ -179,6 +179,7 @@ export async function getStealthExperimentReport(
           model: {
             select: {
               builds: {
+                where: { stealthGenerationResults: { some: { status: "READY" } } },
                 orderBy: { prompt: { text: "asc" } },
                 select: {
                   id: true,

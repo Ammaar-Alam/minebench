@@ -409,7 +409,10 @@ async function applyCoveragePersistUpdates(
   }
 }
 
-async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJobBatchResult> {
+async function processArenaVoteJobBatch(
+  limit = JOB_BATCH_LIMIT,
+  stealthExperimentId?: string,
+): Promise<VoteJobBatchResult> {
   const batchLimit = Math.max(1, Math.min(Math.max(1, JOB_BATCH_LIMIT), Math.floor(limit)));
   const result = await withArenaWriteRetry<VoteJobBatchResult>(() =>
     prisma.$transaction(
@@ -435,6 +438,11 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
             "stealthVariantId"
           FROM "ArenaVoteJob"
           WHERE "processedAt" IS NULL
+            ${stealthExperimentId
+              ? Prisma.sql`AND "stealthVariantId" IN (
+                  SELECT id FROM "StealthVariant" WHERE "experimentId" = ${stealthExperimentId}
+                )`
+              : Prisma.empty}
           ORDER BY "createdAt" ASC
           LIMIT ${batchLimit}
           FOR UPDATE SKIP LOCKED
@@ -651,9 +659,10 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
   return result;
 }
 
-export async function drainArenaVoteJobs(opts?: {
+async function drainVoteJobs(opts?: {
   maxJobs?: number;
   maxMs?: number;
+  stealthExperimentId?: string;
 }): Promise<ArenaVoteJobDrainResult> {
   // bounded drains keep after hooks from turning into long requests
   let processedCount = 0;
@@ -669,7 +678,7 @@ export async function drainArenaVoteJobs(opts?: {
       // always let a fresh drain try one batch
       if (remainingMs < JOB_DRAIN_MIN_BATCH_BUDGET_MS && processedCount > 0) break;
       const remainingJobs = maxJobs - processedCount;
-      const result = await processArenaVoteJobBatch(remainingJobs);
+      const result = await processArenaVoteJobBatch(remainingJobs, opts?.stealthExperimentId);
       if (result.lockSkipped) {
         lockSkipped = true;
         break;
@@ -692,6 +701,23 @@ export async function drainArenaVoteJobs(opts?: {
   }
 
   return { processedCount, batches, lockSkipped };
+}
+
+export async function drainArenaVoteJobs(opts?: {
+  maxJobs?: number;
+  maxMs?: number;
+}): Promise<ArenaVoteJobDrainResult> {
+  return drainVoteJobs(opts);
+}
+
+export async function drainStealthVoteJobsForExperiment(
+  experimentId: string,
+): Promise<ArenaVoteJobDrainResult> {
+  return drainVoteJobs({
+    maxJobs: 1_000,
+    maxMs: 30_000,
+    stealthExperimentId: experimentId,
+  });
 }
 
 export async function scheduleArenaVoteJobDrain(): Promise<void> {

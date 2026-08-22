@@ -237,6 +237,7 @@ const DEFAULT_RETENTION_DAYS = 30;
 const MAX_RETENTION_DAYS = 3650;
 const COHORT_UPLOAD_PREFIX = "stealth-cohort-uploads/v1";
 const COHORT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1_000;
+const MAX_PENDING_COHORT_UPLOADS_PER_ORGANIZATION = 20;
 const MAX_COHORT_UPLOAD_BYTES = 128 * 1_024 * 1_024;
 const MAX_COHORT_JSON_BYTES = 256 * 1_024 * 1_024;
 const CONFIGURABLE_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = [
@@ -1350,12 +1351,19 @@ export async function createStealthCohortUploadTarget(
   const path = `${COHORT_UPLOAD_PREFIX}/${organizationId}/${experimentId}/${id}.json`;
   await prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
+    await lockOrganization(tx, organizationId);
     const experiment = await lockExperiment(tx, experimentId);
     if (!experiment || experiment.organizationId !== organizationId) {
       throw new Error("Evaluation not found");
     }
     if (!isStealthCheckpointSetOpen(experiment.status)) {
       throw new Error("Activated evaluations cannot accept new checkpoints");
+    }
+    const pendingUploads = await tx.stealthCohortUpload.count({
+      where: { experiment: { organizationId } },
+    });
+    if (pendingUploads >= MAX_PENDING_COHORT_UPLOADS_PER_ORGANIZATION) {
+      throw new Error("Too many pending cohort uploads");
     }
     await tx.stealthCohortUpload.create({
       data: {
@@ -1856,6 +1864,15 @@ export async function closeStealthEvaluation(
   experimentId: string,
   params?: { retentionDays?: number },
 ): Promise<void> {
+  await assertEvaluationOperator(prisma, actor, organizationId);
+  const closeTarget = await prisma.stealthExperiment.findFirst({
+    where: { id: experimentId, organizationId },
+    select: { status: true },
+  });
+  if (!closeTarget) throw new Error("Evaluation not found");
+  if (closeTarget.status === "CLOSED") return;
+  const { drainStealthVoteJobsForExperiment } = await import("@/lib/arena/voteJobs");
+  await drainStealthVoteJobsForExperiment(experimentId);
   const { terminalizeStealthGenerationRunsForClosure } = await import(
     "@/lib/stealth/generationRun"
   );
@@ -1866,6 +1883,10 @@ export async function closeStealthEvaluation(
       throw new Error("Evaluation not found");
     }
     if (experiment.status === "CLOSED") return;
+    const pendingVoteJobs = await tx.arenaVoteJob.count({
+      where: { processedAt: null, stealthVariant: { experimentId: experiment.id } },
+    });
+    if (pendingVoteJobs > 0) throw new Error("Votes are still settling; try again");
     const variants = await tx.stealthVariant.findMany({
       where: { experimentId: experiment.id },
       select: { id: true, modelId: true },
@@ -2251,24 +2272,46 @@ export async function purgeDueStealthEvaluations(
   const purged: string[] = [];
   const failures: Array<{ evaluationId: string; error: string }> = [];
   if (hasSupabaseStorageConfig()) {
-    const expiredUploads = await prisma.stealthCohortUpload.findMany({
-      where: { expiresAt: { lte: now } },
-      orderBy: { expiresAt: "asc" },
-      take: 100,
-      select: { id: true, experimentId: true, bucket: true, path: true },
-    });
-    for (const upload of expiredUploads) {
-      try {
-        await deleteSupabaseStorageObjects([upload]);
-        await prisma.stealthCohortUpload.deleteMany({
-          where: { id: upload.id, expiresAt: { lte: now } },
-        });
-      } catch (error) {
-        failures.push({
-          evaluationId: upload.experimentId,
-          error: sanitizeOperationalError(error),
-        });
+    let uploadCursor: { expiresAt: Date; id: string } | null = null;
+    while (true) {
+      const expiredUploads: Array<{
+        id: string;
+        experimentId: string;
+        bucket: string;
+        path: string;
+        expiresAt: Date;
+      }> = await prisma.stealthCohortUpload.findMany({
+        where: {
+          expiresAt: { lte: now },
+          ...(uploadCursor
+            ? {
+                OR: [
+                  { expiresAt: { gt: uploadCursor.expiresAt } },
+                  { expiresAt: uploadCursor.expiresAt, id: { gt: uploadCursor.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ expiresAt: "asc" }, { id: "asc" }],
+        take: 100,
+        select: { id: true, experimentId: true, bucket: true, path: true, expiresAt: true },
+      });
+      if (expiredUploads.length === 0) break;
+      for (const upload of expiredUploads) {
+        try {
+          await deleteSupabaseStorageObjects([upload]);
+          await prisma.stealthCohortUpload.deleteMany({
+            where: { id: upload.id, expiresAt: { lte: now } },
+          });
+        } catch (error) {
+          failures.push({
+            evaluationId: upload.experimentId,
+            error: sanitizeOperationalError(error),
+          });
+        }
       }
+      const lastUpload: (typeof expiredUploads)[number] = expiredUploads.at(-1)!;
+      uploadCursor = { expiresAt: lastUpload.expiresAt, id: lastUpload.id };
     }
   }
   let cursor: { retentionDeleteAt: Date; id: string } | null = null;

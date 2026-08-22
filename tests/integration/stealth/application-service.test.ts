@@ -221,6 +221,7 @@ async function main() {
     completeUploadedStealthCohort,
     completeUploadedStealthCohortFromStorage,
     configureStealthEndpoint,
+    createStealthCohortUploadTarget,
     createStealthEvaluation,
     deleteUnusedDraftEvaluation,
     disableStealthEndpoint,
@@ -812,6 +813,18 @@ async function main() {
   }) as typeof fetch;
   let firstGeneration: Promise<void> | null = null;
   try {
+    const originalCohortId = (
+      await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: retryRun.runId } })
+    ).promptCohortId;
+    await prisma.stealthGenerationRun.update({
+      where: { id: retryRun.runId },
+      data: { promptCohortId: "prompts-v1:stale" },
+    });
+    await assert.rejects(getStealthGenerationPlan(retryRun.runId), /cohort has changed/);
+    await prisma.stealthGenerationRun.update({
+      where: { id: retryRun.runId },
+      data: { promptCohortId: originalCohortId },
+    });
     const plan = await getStealthGenerationPlan(retryRun.runId);
     assert.ok(plan);
     const promptSlugs = plan.promptBatches.flat();
@@ -1231,6 +1244,18 @@ async function main() {
     1,
   );
   assert.ok(conflictingBuildId);
+  const orphanBuildReport = await getStealthExperimentReport(generationEvaluation.id);
+  const orphanBuildPrompt = cohortPrompts.find(
+    (prompt) => prompt.slug === persistenceFailurePrompt,
+  );
+  assert.ok(orphanBuildPrompt);
+  assert.equal(
+    orphanBuildReport?.variants
+      .find((variant) => variant.id === failureCheckpoint.variantId)
+      ?.builds.find((build) => build.promptId === orphanBuildPrompt.prompt.id)?.status,
+    "FAILED",
+    "an unaccepted persisted build must not hide its failed result",
+  );
   const cleanupRaceRun = await startStealthGeneration(
     memberActor,
     organization.id,
@@ -2013,19 +2038,44 @@ async function main() {
   const laterPurge = await createStealthEvaluation(minebenchAdmin, otherOrganization.id, {
     name: `Later purge ${suffix}`,
   });
+  const uploadQuotaEvaluation = await createStealthEvaluation(
+    minebenchAdmin,
+    otherOrganization.id,
+    { name: `Upload quota ${suffix}` },
+  );
+  const quotaUploadIds = Array.from({ length: 20 }, () => randomUUID());
+  await prisma.stealthCohortUpload.createMany({
+    data: quotaUploadIds.map((id) => ({
+      id,
+      experimentId: uploadQuotaEvaluation.id,
+      bucket: "builds",
+      path: `stealth-cohort-uploads/v1/${otherOrganization.id}/${uploadQuotaEvaluation.id}/${id}.json`,
+      expiresAt: new Date(Date.now() + 60_000),
+    })),
+  });
+  await assert.rejects(
+    createStealthCohortUploadTarget(
+      minebenchAdmin,
+      otherOrganization.id,
+      uploadQuotaEvaluation.id,
+    ),
+    /Too many pending cohort uploads/,
+  );
+  await prisma.stealthCohortUpload.deleteMany({ where: { id: { in: quotaUploadIds } } });
   const abandonedUploadEvaluation = await createStealthEvaluation(
     minebenchAdmin,
     otherOrganization.id,
     { name: `Abandoned upload ${suffix}` },
   );
-  const abandonedUpload = await prisma.stealthCohortUpload.create({
-    data: {
-      id: randomUUID(),
+  const abandonedUploadIds = Array.from({ length: 101 }, () => randomUUID());
+  await prisma.stealthCohortUpload.createMany({
+    data: abandonedUploadIds.map((id) => ({
+      id,
       experimentId: abandonedUploadEvaluation.id,
       bucket: "builds",
-      path: `stealth-cohort-uploads/v1/${otherOrganization.id}/${abandonedUploadEvaluation.id}/${randomUUID()}.json`,
+      path: `stealth-cohort-uploads/v1/${otherOrganization.id}/${abandonedUploadEvaluation.id}/${id}.json`,
       expiresAt: new Date(Date.now() - 60_000),
-    },
+    })),
   });
   await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, blockedPurge.id);
   await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, laterPurge.id);
@@ -2071,7 +2121,11 @@ async function main() {
   assert.equal(batchPurge.failures[0]?.evaluationId, blockedPurge.id);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: blockedPurge.id } }), 1);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: laterPurge.id } }), 0);
-  assert.equal(await prisma.stealthCohortUpload.count({ where: { id: abandonedUpload.id } }), 0);
+  assert.equal(
+    await prisma.stealthCohortUpload.count({ where: { id: { in: abandonedUploadIds } } }),
+    0,
+    "expired upload cleanup must advance beyond its first batch",
+  );
   assert.equal(
     await prisma.stealthExperiment.count({ where: { id: abandonedUploadEvaluation.id } }),
     1,

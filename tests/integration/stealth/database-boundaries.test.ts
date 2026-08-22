@@ -9,6 +9,7 @@ import {
   pickStealthMatchup,
 } from "../../../lib/stealth/sampling";
 import { getDeidentifiedStealthVotePage } from "../../../lib/stealth/report";
+import { closeStealthEvaluation } from "../../../lib/stealth/service";
 import { seedPrivateSamplingFixture } from "../../helpers/privateEvaluationFixtures";
 
 const db = new PrismaClient();
@@ -139,6 +140,12 @@ async function main() {
     assert.equal(response.status, 200, JSON.stringify(await response.json()));
     assert.equal(await db.vote.count(), 1);
     assert.equal(await db.arenaVoteJob.count({ where: { stealthVariantId: fixture.variant.id } }), 1);
+    invalidateStealthSamplingCache();
+    assert.equal(
+      await pickStealthMatchup({ publicState: fixture.publicState }),
+      null,
+      "an accepted decisive vote must satisfy the goal before its job drains",
+    );
     const firstExportPage = await getDeidentifiedStealthVotePage(fixture.experiment.id, null, 1);
     assert.equal(firstExportPage.rows.length, 1);
     assert.equal(firstExportPage.rows[0]?.choice, "WIN");
@@ -178,8 +185,33 @@ async function main() {
     );
     assert.deepEqual(finalExportPage.rows, []);
     assert.equal(finalExportPage.nextCursor, null);
-    const drain = await drainArenaVoteJobs({ maxJobs: 1, maxMs: 10_000 });
-    assert.equal(drain.processedCount, 1);
+    const closer = await db.user.create({
+      data: { id: crypto.randomUUID(), email: `closer-${fixture.experiment.id}@example.test` },
+    });
+    await db.organizationMembership.create({
+      data: {
+        organizationId: fixture.experiment.organizationId,
+        userId: closer.id,
+        role: "MEMBER",
+      },
+    });
+    await closeStealthEvaluation(
+      { organizationUser: { userId: closer.id } },
+      fixture.experiment.organizationId,
+      fixture.experiment.id,
+    );
+    assert.equal(
+      (await db.stealthExperiment.findUniqueOrThrow({ where: { id: fixture.experiment.id } }))
+        .status,
+      "CLOSED",
+    );
+    assert.equal(
+      await db.arenaVoteJob.count({
+        where: { stealthVariantId: fixture.variant.id, processedAt: null },
+      }),
+      0,
+      "closure must settle every previously accepted private vote",
+    );
   } finally {
     if (originalSigningSecret === undefined) delete process.env.ARENA_MATCHUP_SIGNING_SECRET;
     else process.env.ARENA_MATCHUP_SIGNING_SECRET = originalSigningSecret;
@@ -202,13 +234,6 @@ async function main() {
     })).processedAt,
   );
 
-  invalidateStealthSamplingCache();
-  assert.equal(
-    await pickStealthMatchup({ publicState: fixture.publicState }),
-    null,
-    "an enforced checkpoint goal must remove the checkpoint from sampling",
-  );
-
   await db.stealthExperiment.update({
     where: { id: fixture.experiment.id },
     data: { status: "ACTIVE" },
@@ -221,6 +246,14 @@ async function main() {
     where: { id: fixture.privateModel.id },
     data: { enabled: true },
   });
+
+  invalidateStealthSamplingCache();
+  assert.equal(
+    await pickStealthMatchup({ publicState: fixture.publicState }),
+    null,
+    "an enforced checkpoint goal must remove the checkpoint from sampling",
+  );
+
   const reconciliationRetry = await drainArenaVoteJobs({ maxJobs: 1, maxMs: 10_000 });
   assert.equal(reconciliationRetry.processedCount, 0);
   assert.equal(

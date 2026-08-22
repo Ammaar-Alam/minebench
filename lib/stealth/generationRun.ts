@@ -30,6 +30,8 @@ import {
 
 const MAX_GENERATION_ATTEMPTS = 10;
 const MAX_GENERATION_CONCURRENCY = 4;
+const DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS = 120_000;
+const MAX_PROVIDER_REQUEST_TIMEOUT_MS = 900_000;
 const { gridSize: GRID_SIZE, palette: PALETTE, mode: MODE } = STEALTH_COHORT_BUILD;
 
 export type StealthGenerationLauncher = (runId: string) => Promise<string>;
@@ -52,6 +54,26 @@ async function lockGenerationRun(
     FOR UPDATE
   `);
   return rows[0] ?? null;
+}
+
+async function lockGenerationContext(
+  db: Prisma.TransactionClient,
+  runId: string,
+) {
+  const identity = await db.stealthGenerationRun.findUnique({
+    where: { id: runId },
+    select: { variant: { select: { experimentId: true } } },
+  });
+  if (!identity) return null;
+  const experiment = await lockExperiment(db, identity.variant.experimentId);
+  if (!experiment || !(await lockGenerationRun(db, runId))) return null;
+  return experiment;
+}
+
+function providerRequestTimeoutMs(): number {
+  const parsed = Number.parseInt(process.env.OPENAI_REQUEST_TIMEOUT_MS ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_PROVIDER_REQUEST_TIMEOUT_MS;
+  return Math.min(Math.floor(parsed), MAX_PROVIDER_REQUEST_TIMEOUT_MS);
 }
 
 function summarizeGenerationResults(
@@ -219,10 +241,13 @@ export async function getStealthGenerationPlan(
 ): Promise<{ promptBatches: string[][] } | null> {
   const run = await prisma.stealthGenerationRun.findUnique({
     where: { id: runId },
-    select: { status: true, configuration: true },
+    select: { status: true, configuration: true, promptCohortId: true },
   });
   if (!run) throw new Error("Generation run not found");
   if (run.status !== "RUNNING") return null;
+  if (run.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID) {
+    throw new Error("The generation prompt cohort has changed");
+  }
   const concurrency = generationConcurrency(run.configuration);
   const promptSlugs = (await prepareStealthCohortPrompts()).map((prompt) => prompt.slug);
   const promptBatches: string[][] = [];
@@ -287,15 +312,13 @@ export async function terminalizeStealthGenerationRunsForClosure(
 export async function failStealthGenerationRun(runId: string, error: unknown): Promise<void> {
   const message = sanitizeOperationalError(error);
   await prisma.$transaction(async (tx) => {
-    const locked = await lockGenerationRun(tx, runId);
-    if (!locked) return;
+    const experiment = await lockGenerationContext(tx, runId);
+    if (!experiment) return;
     const run = await tx.stealthGenerationRun.findUnique({
       where: { id: runId },
-      include: { variant: { include: { experiment: true } } },
+      include: { variant: true },
     });
     if (!run || run.status !== "RUNNING") return;
-    const experiment = await lockExperiment(tx, run.variant.experimentId);
-    if (!experiment) return;
     const currentResults = await tx.stealthGenerationResult.findMany({
       where: { runId: run.id },
       orderBy: { updatedAt: "asc" },
@@ -382,17 +405,16 @@ async function acceptStealthGenerationBuild(params: {
   requestConfiguration: string | null;
 }): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
-    const locked = await lockGenerationRun(tx, params.runId);
-    if (!locked) return false;
+    const experiment = await lockGenerationContext(tx, params.runId);
+    if (!experiment) return false;
     const run = await tx.stealthGenerationRun.findUnique({
       where: { id: params.runId },
       select: {
         status: true,
-        variant: { select: { experimentId: true, endpointEnabled: true } },
+        variant: { select: { endpointEnabled: true } },
       },
     });
     if (!run || run.status !== "RUNNING" || !run.variant.endpointEnabled) return false;
-    const experiment = await lockExperiment(tx, run.variant.experimentId);
     if (!experiment || !isStealthCheckpointSetOpen(experiment.status)) return false;
     const accepted = await tx.stealthGenerationResult.updateMany({
       where: { ...params.resultIdentity, status: params.fromStatus },
@@ -413,6 +435,14 @@ export async function generateStealthPromptForRun(params: {
   runId: string;
   promptSlug: string;
 }): Promise<void> {
+  const identity = await prisma.stealthGenerationRun.findUnique({
+    where: { id: params.runId },
+    select: { promptCohortId: true },
+  });
+  if (!identity) throw new Error("Generation run not found");
+  if (identity.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID) {
+    throw new Error("The generation prompt cohort has changed");
+  }
   const prompts = await prepareStealthCohortPrompts();
   const entry = prompts.find((prompt) => prompt.slug === params.promptSlug);
   if (!entry) throw new Error("Prompt not found");
@@ -420,8 +450,8 @@ export async function generateStealthPromptForRun(params: {
   const resultKey = { runId_promptId: resultIdentity };
 
   const run = await prisma.$transaction(async (tx) => {
-    const locked = await lockGenerationRun(tx, params.runId);
-    if (!locked) throw new Error("Generation run not found");
+    const experiment = await lockGenerationContext(tx, params.runId);
+    if (!experiment) throw new Error("Generation run not found");
     const currentRun = await tx.stealthGenerationRun.findUnique({
       where: { id: params.runId },
       include: {
@@ -429,7 +459,6 @@ export async function generateStealthPromptForRun(params: {
           include: {
             credential: true,
             model: true,
-            experiment: { select: { id: true, status: true } },
           },
         },
       },
@@ -438,7 +467,7 @@ export async function generateStealthPromptForRun(params: {
     if (
       currentRun.status !== "RUNNING" ||
       !currentRun.variant.endpointEnabled ||
-      currentRun.variant.experiment.status === "CLOSED"
+      experiment.status === "CLOSED"
     ) {
       return null;
     }
@@ -521,10 +550,20 @@ export async function generateStealthPromptForRun(params: {
   const maxAttempts = Math.max(1, Math.min(MAX_GENERATION_ATTEMPTS, configuration.maxAttempts ?? 3));
   let attempts = 0;
   let configuredApiKey: string | null = null;
+  const requestController = new AbortController();
+  let requestTimeout: ReturnType<typeof setTimeout> | null = null;
+  const armRequestTimeout = () => {
+    if (requestTimeout) clearTimeout(requestTimeout);
+    requestTimeout = setTimeout(
+      () => requestController.abort(new Error("Provider request timed out")),
+      providerRequestTimeoutMs(),
+    );
+  };
   let generated: Awaited<ReturnType<typeof generateVoxelBuild>>;
   try {
     const config = decryptStealthEndpointConfig(run.variant.credential.encryptedConfig);
     configuredApiKey = config.apiKey;
+    armRequestTimeout();
     generated = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, () =>
       generateVoxelBuild({
         ...stealthEndpointConfigToGenerateVoxelBuildArgs(config, {
@@ -535,7 +574,9 @@ export async function generateStealthPromptForRun(params: {
         gridSize: GRID_SIZE,
         palette: PALETTE,
         maxAttempts,
+        abortSignal: requestController.signal,
         onProviderRequest: (attempt) => {
+          armRequestTimeout();
           attempts = Math.max(attempts, attempt);
         },
         onRetry: (attempt) => {
@@ -554,6 +595,8 @@ export async function generateStealthPromptForRun(params: {
     });
     await refreshStealthGenerationProgress(run.id);
     return;
+  } finally {
+    if (requestTimeout) clearTimeout(requestTimeout);
   }
 
   if (!generated.ok) {
@@ -575,8 +618,8 @@ export async function generateStealthPromptForRun(params: {
   }
 
   const validating = await prisma.$transaction(async (tx) => {
-    const locked = await lockGenerationRun(tx, run.id);
-    if (!locked) return 0;
+    const experiment = await lockGenerationContext(tx, run.id);
+    if (!experiment) return 0;
     const current = await tx.stealthGenerationRun.findUnique({
       where: { id: run.id },
       select: {
@@ -584,7 +627,6 @@ export async function generateStealthPromptForRun(params: {
         variant: {
           select: {
             endpointEnabled: true,
-            experiment: { select: { status: true } },
           },
         },
       },
@@ -593,7 +635,7 @@ export async function generateStealthPromptForRun(params: {
       !current ||
       current.status !== "RUNNING" ||
       !current.variant.endpointEnabled ||
-      current.variant.experiment.status === "CLOSED"
+      experiment.status === "CLOSED"
     ) {
       return 0;
     }
@@ -649,20 +691,17 @@ export async function generateStealthPromptForRun(params: {
 
 async function refreshStealthGenerationProgress(runId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    const locked = await lockGenerationRun(tx, runId);
-    if (!locked) return;
+    const experiment = await lockGenerationContext(tx, runId);
+    if (!experiment) return;
     const run = await tx.stealthGenerationRun.findUnique({
       where: { id: runId },
       select: {
         id: true,
         variantId: true,
         status: true,
-        variant: { select: { experimentId: true } },
       },
     });
     if (!run || run.status !== "RUNNING") return;
-    const experiment = await lockExperiment(tx, run.variant.experimentId);
-    if (!experiment) return;
     const results = await tx.stealthGenerationResult.findMany({
       where: { runId },
       orderBy: { updatedAt: "asc" },
@@ -694,15 +733,13 @@ async function refreshStealthGenerationProgress(runId: string): Promise<void> {
 
 export async function finishStealthGenerationRun(runId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    const locked = await lockGenerationRun(tx, runId);
-    if (!locked) return;
+    const experiment = await lockGenerationContext(tx, runId);
+    if (!experiment) return;
     const run = await tx.stealthGenerationRun.findUnique({
       where: { id: runId },
-      include: { variant: { include: { experiment: true } } },
+      include: { variant: true },
     });
     if (!run || run.status !== "RUNNING") return;
-    const experiment = await lockExperiment(tx, run.variant.experimentId);
-    if (!experiment) return;
     const results = await tx.stealthGenerationResult.findMany({
       where: { runId: run.id },
       orderBy: { updatedAt: "asc" },

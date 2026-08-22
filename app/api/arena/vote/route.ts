@@ -10,6 +10,7 @@ import { scheduleArenaVoteJobDrain } from "@/lib/arena/voteJobs";
 import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { ServerTiming } from "@/lib/serverTiming";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
+import { invalidateStealthSamplingCache } from "@/lib/stealth/sampling";
 
 export const runtime = "nodejs";
 
@@ -190,6 +191,7 @@ export async function POST(req: Request) {
                     WHERE other_variant.id <> variant.id
                       AND other_variant."modelId" IN (${tokenMatchup.modelAId}, ${tokenMatchup.modelBId})
                   )
+                FOR SHARE OF variant, experiment
               )`
             : Prisma.sql`NOT EXISTS (
                 SELECT 1
@@ -320,6 +322,8 @@ export async function POST(req: Request) {
   }
   if (queuedVoteJobInput && !queuedVoteJobInput.stealthVariantId) {
     recordArenaVoteQueuedForSampling(queuedVoteJobInput);
+  } else if (queuedVoteJobInput?.stealthVariantId) {
+    invalidateStealthSamplingCache();
   }
   if (shouldScheduleArenaVoteJobDrainAfterResponse(queuedVoteJobs)) {
     after(() =>

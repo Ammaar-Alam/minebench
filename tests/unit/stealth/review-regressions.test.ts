@@ -48,6 +48,9 @@ for (const functionName of ["disableStealthEndpoint", "recordStealthReleaseMappi
 }
 
 const generationRun = read("lib/stealth/generationRun.ts");
+assert.match(generationRun, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
+assert.match(generationRun, /abortSignal:/);
+assert.match(generationRun, /process\.env\.OPENAI_REQUEST_TIMEOUT_MS/);
 for (const functionName of [
   "failStealthGenerationRun",
   "refreshStealthGenerationProgress",
@@ -59,11 +62,16 @@ for (const functionName of [
   assert.ok(resolvedStart >= 0, `${functionName} must exist`);
   assertOrder(
     body,
-    "lockExperiment(tx",
+    "lockGenerationContext(tx",
     "stealthVariant.update",
     `${functionName} must lock the evaluation before changing its checkpoint`,
   );
 }
+assert.doesNotMatch(
+  generationRun,
+  /lockGenerationRun\(tx/,
+  "generation transactions must use the shared experiment-first lock helper",
+);
 assert.match(service, /if \(hasSupabaseStorageConfig\(\)\) \{[\s\S]*listStealthBuildStorageRefs/);
 
 const generationSource = read("lib/stealth/generation.ts");
@@ -101,7 +109,18 @@ const report = read("lib/stealth/report.ts");
 assert.match(report, /createdAt: string/);
 assert.match(report, /ORDER BY vote\."createdAt" ASC, vote\.id ASC/);
 assert.match(report, /if \(persisted && !result\.build\) continue/);
+assert.match(report, /stealthGenerationResults: \{ some: \{ status: "READY" \} \}/);
 assert.match(report, /isBaseline: false/);
+
+const sampling = read("lib/stealth/sampling.ts");
+assert.match(
+  sampling,
+  /voteJobs: \{ where: \{ processedAt: null, choice: \{ in: \["A", "B"\] \} \} \}/,
+);
+
+const voteJobs = read("lib/arena/voteJobs.ts");
+assert.match(voteJobs, /drainStealthVoteJobsForExperiment/);
+assert.match(service, /Votes are still settling/);
 
 const voteRoute = read("app/api/arena/vote/route.ts");
 assertOrder(
@@ -147,5 +166,10 @@ const generation = read("lib/stealth/generation.ts");
 assert.match(generation, /isExistingObjectUploadError/);
 assert.match(generation, /assertStoredPayloadMatches/);
 assert.match(generation, /promptSlug}-\$\{params\.sha256}\.json\.gz/);
+
+const stagingRunner = read("scripts/with-staging-env.mjs");
+assert.match(stagingRunner, /required\("STAGING_SUPABASE_PUBLISHABLE_KEY"\)/);
+assert.match(stagingRunner, /required\("STAGING_STEALTH_CONFIG_ENCRYPTION_KEY"\)/);
+assert.doesNotMatch(stagingRunner, /STAGING_SUPABASE_PUBLISHABLE_KEY\?\.trim\(\) \|\| ""/);
 
 console.log("private evaluation review regression checks passed");

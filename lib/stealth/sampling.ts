@@ -71,6 +71,11 @@ async function querySnapshot(): Promise<StealthSamplingSnapshot> {
       shownCount: true,
       winCount: true,
       lossCount: true,
+      _count: {
+        select: {
+          voteJobs: { where: { processedAt: null, choice: { in: ["A", "B"] } } },
+        },
+      },
       experiment: { select: { targetDecisiveVotes: true, pauseAtGoal: true } },
       model: {
         select: {
@@ -157,7 +162,7 @@ async function querySnapshot(): Promise<StealthSamplingSnapshot> {
       ),
       promptVotes: promptVotesByVariant.get(variant.id) ?? new Map(),
       opponentVotes: opponentVotesByVariant.get(variant.id) ?? new Map(),
-      decisiveVotes: variant.winCount + variant.lossCount,
+      decisiveVotes: variant.winCount + variant.lossCount + variant._count.voteJobs,
     })),
   };
 }

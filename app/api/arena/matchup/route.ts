@@ -991,18 +991,16 @@ export async function GET(req: Request) {
     samplingReason: picked.reason,
     stealthVariantId: picked.stealthVariantId,
   });
-  const blindBuildAccess = picked.stealthVariantId
-    ? {
-        a: createArenaBuildAccessToken({
-          buildId: buildA.id,
-          checksum: tokenBuildAChecksum,
-        }),
-        b: createArenaBuildAccessToken({
-          buildId: buildB.id,
-          checksum: tokenBuildBChecksum,
-        }),
-      }
-    : null;
+  const blindBuildAccess = {
+    a: createArenaBuildAccessToken({
+      buildId: buildA.id,
+      checksum: tokenBuildAChecksum,
+    }),
+    b: createArenaBuildAccessToken({
+      buildId: buildB.id,
+      checksum: tokenBuildBChecksum,
+    }),
+  };
   const txMs = 0;
   timing.add("tx", txMs);
   const allowArtifactHealing =
@@ -1030,7 +1028,7 @@ export async function GET(req: Request) {
     });
   }
 
-  if (MATCHUP_ARTIFACT_URL_WARMING_ENABLED && !blindBuildAccess) {
+  if (MATCHUP_ARTIFACT_URL_WARMING_ENABLED && !picked.stealthVariantId) {
     // warm signing caches after the matchup is already ready
     after(async () => {
       await Promise.allSettled([
@@ -1052,20 +1050,8 @@ export async function GET(req: Request) {
           : shouldInlineA
             ? persistedInitialBuildA
             : null) as ArenaMatchup["a"]["build"],
-      buildRef: blindBuildAccess
-        ? { buildId: blindBuildAccess.a, variant: "full", checksum: null }
-        : preparedA?.buildRef ?? {
-            buildId: buildA.id,
-            variant: "full",
-            checksum: tokenBuildAChecksum,
-          },
-      previewRef: blindBuildAccess
-        ? { buildId: blindBuildAccess.a, variant: "preview", checksum: null }
-        : preparedA?.previewRef ?? {
-            buildId: buildA.id,
-            variant: "preview",
-            checksum: tokenBuildAChecksum,
-          },
+      buildRef: { buildId: blindBuildAccess.a, variant: "full", checksum: null },
+      previewRef: { buildId: blindBuildAccess.a, variant: "preview", checksum: null },
       serverValidated: Boolean(preparedA || (shouldInlineA && persistedInitialBuildA)),
       buildLoadHints: preparedA?.hints ?? shellHintsA,
     },
@@ -1077,20 +1063,8 @@ export async function GET(req: Request) {
           : shouldInlineB
             ? persistedInitialBuildB
             : null) as ArenaMatchup["b"]["build"],
-      buildRef: blindBuildAccess
-        ? { buildId: blindBuildAccess.b, variant: "full", checksum: null }
-        : preparedB?.buildRef ?? {
-            buildId: buildB.id,
-            variant: "full",
-            checksum: tokenBuildBChecksum,
-          },
-      previewRef: blindBuildAccess
-        ? { buildId: blindBuildAccess.b, variant: "preview", checksum: null }
-        : preparedB?.previewRef ?? {
-            buildId: buildB.id,
-            variant: "preview",
-            checksum: tokenBuildBChecksum,
-          },
+      buildRef: { buildId: blindBuildAccess.b, variant: "full", checksum: null },
+      previewRef: { buildId: blindBuildAccess.b, variant: "preview", checksum: null },
       serverValidated: Boolean(preparedB || (shouldInlineB && persistedInitialBuildB)),
       buildLoadHints: preparedB?.hints ?? shellHintsB,
     },
