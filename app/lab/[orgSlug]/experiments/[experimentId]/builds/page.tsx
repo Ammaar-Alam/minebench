@@ -5,8 +5,6 @@ import {
   ProtectedBuildInspector,
   type ProtectedBuildOption,
 } from "@/components/lab/ProtectedBuildInspector";
-import { ProgressRail } from "@/components/lab/ProgressRail";
-import { formatDuration, titleCase } from "@/components/lab/format";
 import { startGenerationAction } from "../../../actions";
 import { loadEvaluationReport } from "../data";
 
@@ -20,145 +18,111 @@ export default async function EvaluationBuildsPage({
   const generationActive = workspace.checkpoints.some(
     (checkpoint) => checkpoint.latestGenerationRun?.status === "RUNNING",
   );
-  const protectedBuilds: ProtectedBuildOption[] = report.variants.flatMap((variant) =>
-    variant.builds.flatMap((build) =>
-      build.resultId && build.status === "READY"
-        ? [
-            {
-              resultId: build.resultId,
-              checkpoint: variant.codename,
-              prompt: build.prompt,
-              blockCount: build.blockCount,
-              attempts: build.attempts,
-              generationTimeMs: build.generationTimeMs,
-            },
-          ]
-        : [],
-    ),
+  const builds: ProtectedBuildOption[] = report.variants.flatMap((variant) =>
+    variant.builds.map((build) => ({
+      id: `${variant.id}:${build.promptId}`,
+      resultId: build.resultId,
+      checkpointId: variant.id,
+      checkpoint: variant.codename,
+      promptId: build.promptId,
+      prompt: build.prompt,
+      status: build.status,
+      error: build.error,
+      blockCount: build.blockCount,
+      attempts: build.attempts,
+      generationTimeMs: build.generationTimeMs,
+    })),
   );
+  const readyBuilds = builds.filter((build) => build.status === "READY").length;
+  const issueCount = builds.filter((build) => build.status === "FAILED" || build.error).length;
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-6">
       <GenerationPoller active={generationActive} />
 
-      <section className="space-y-4" aria-labelledby="build-progress-heading">
-        <div className="flex flex-wrap items-end justify-between gap-3">
+      <section className="space-y-4" aria-labelledby="cohort-heading">
+        <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <h2 id="build-progress-heading" className="text-2xl font-semibold tracking-tight text-fg">
-              Builds
+            <p className="mb-eyebrow">Visual review</p>
+            <h2 id="cohort-heading" className="mt-1.5 text-2xl font-semibold tracking-tight text-fg">
+              Cohort
             </h2>
-            <p className="mt-1 text-sm text-muted">Inspect completed prompts as they arrive.</p>
           </div>
-          {workspace.status === "DRAFT" && workspace.checkpoints.length === 0 ? (
+          <div className="flex items-center gap-5 text-xs text-muted">
+            <span><strong className="font-mono font-medium tabular-nums text-fg">{readyBuilds}</strong> ready</span>
+            {issueCount ? <span className="text-danger">{issueCount} issues</span> : null}
+          </div>
+        </div>
+
+        {workspace.checkpoints.length > 0 ? (
+          <div className="overflow-x-auto pb-1 [scrollbar-width:thin]">
+            <div className="flex min-w-max gap-3">
+              {workspace.checkpoints.map((checkpoint) => {
+                const running = checkpoint.latestGenerationRun?.status === "RUNNING";
+                const canStart =
+                  workspace.status !== "CLOSED" &&
+                  checkpoint.credentialConfigured &&
+                  !running &&
+                  (checkpoint.expectedBuildCount === 0 ||
+                    checkpoint.generatedBuildCount < checkpoint.expectedBuildCount);
+                const startAction = startGenerationAction.bind(
+                  null,
+                  orgSlug,
+                  experimentId,
+                  checkpoint.id,
+                );
+                const percent = checkpoint.expectedBuildCount
+                  ? Math.min(
+                      100,
+                      Math.round(
+                        (checkpoint.generatedBuildCount / checkpoint.expectedBuildCount) * 100,
+                      ),
+                    )
+                  : 0;
+
+                return (
+                  <article
+                    key={checkpoint.id}
+                    className="w-[18rem] rounded-2xl border border-border/70 bg-card/45 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="truncate text-sm font-semibold text-fg">{checkpoint.codename}</h3>
+                        <div className="mt-1.5"><EvaluationStatus status={checkpoint.status} /></div>
+                      </div>
+                      <span className="font-mono text-xs tabular-nums text-muted">
+                        {checkpoint.generatedBuildCount}/{checkpoint.expectedBuildCount}
+                      </span>
+                    </div>
+                    <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-border/45">
+                      <div className="h-full rounded-full bg-accent" style={{ width: `${percent}%` }} />
+                    </div>
+                    {canStart ? (
+                      <form action={startAction} className="mt-4 border-t border-border/55 pt-3">
+                        <input type="hidden" name="maxAttempts" value="3" />
+                        <button type="submit" className="mb-btn mb-btn-primary h-10 w-full px-4 text-xs">
+                          Generate
+                        </button>
+                      </form>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-border bg-card/30 p-6">
             <Link
               href={`/lab/${orgSlug}/experiments/${experimentId}/settings`}
-              className="mb-btn mb-btn-primary min-h-11 px-5 text-sm"
+              className="text-sm font-medium text-accent hover:underline"
             >
-              Add checkpoint
+              Add checkpoint →
             </Link>
-          ) : null}
-        </div>
-
-        <div className="divide-y divide-border/55 border-y border-border/70">
-          {workspace.checkpoints.map((checkpoint) => {
-            const variant = report.variants.find((item) => item.id === checkpoint.id);
-            const running = checkpoint.latestGenerationRun?.status === "RUNNING";
-            const canStart =
-              workspace.status !== "CLOSED" &&
-              checkpoint.credentialConfigured &&
-              !running &&
-              (checkpoint.expectedBuildCount === 0 ||
-                checkpoint.generatedBuildCount < checkpoint.expectedBuildCount);
-            const startAction = startGenerationAction.bind(
-              null,
-              orgSlug,
-              experimentId,
-              checkpoint.id,
-            );
-
-            return (
-              <article key={checkpoint.id} className="space-y-5 py-5">
-                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-3">
-                      <h3 className="truncate text-lg font-medium text-fg">{checkpoint.codename}</h3>
-                      <EvaluationStatus status={checkpoint.status} />
-                    </div>
-                    <p className="text-xs text-muted">{titleCase(checkpoint.source)}</p>
-                  </div>
-                  {canStart ? (
-                    <form action={startAction} className="flex items-end gap-2">
-                      <label className="space-y-1 text-xs text-muted">
-                        <span className="block">Attempts</span>
-                        <input
-                          name="maxAttempts"
-                          type="number"
-                          min={1}
-                          max={10}
-                          defaultValue={3}
-                          className="mb-field h-11 w-20"
-                        />
-                      </label>
-                      <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-4 text-sm">
-                        Generate
-                      </button>
-                    </form>
-                  ) : null}
-                </div>
-
-                <ProgressRail
-                  completed={checkpoint.generatedBuildCount}
-                  expected={checkpoint.expectedBuildCount}
-                  label="Cohort"
-                />
-
-                {variant?.builds.length ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[42rem] text-left text-sm">
-                      <thead className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
-                        <tr className="border-b border-border/45">
-                          <th className="py-2 pr-4 font-medium">Prompt</th>
-                          <th className="px-3 py-2 text-right font-medium">Status</th>
-                          <th className="px-3 py-2 text-right font-medium">Attempts</th>
-                          <th className="py-2 pl-3 text-right font-medium">Time</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {variant.builds.map((build) => (
-                          <tr key={build.promptId} className="border-b border-border/35 last:border-0">
-                            <td className="max-w-[34rem] py-3 pr-4 text-fg">
-                              <span className="line-clamp-2">{build.prompt}</span>
-                              {build.error ? (
-                                <span className="mt-1 block text-xs text-danger">{build.error}</span>
-                              ) : null}
-                            </td>
-                            <td className="px-3 py-3 text-right">
-                              <EvaluationStatus status={build.status} />
-                            </td>
-                            <td className="px-3 py-3 text-right font-mono text-xs tabular-nums text-muted">
-                              {build.attempts}
-                            </td>
-                            <td className="py-3 pl-3 text-right font-mono text-xs tabular-nums text-muted">
-                              {formatDuration(build.generationTimeMs)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted">No prompt activity yet.</p>
-                )}
-              </article>
-            );
-          })}
-          {workspace.checkpoints.length === 0 ? (
-            <div className="py-8 text-sm text-muted">No checkpoints</div>
-          ) : null}
-        </div>
+          </div>
+        )}
       </section>
 
-      <ProtectedBuildInspector orgSlug={orgSlug} builds={protectedBuilds} />
+      <ProtectedBuildInspector orgSlug={orgSlug} builds={builds} />
     </div>
   );
 }

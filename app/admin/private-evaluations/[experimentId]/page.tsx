@@ -50,18 +50,19 @@ export default async function PrivateEvaluationAdminDetail({
   ]);
   if (!workspace || !organization || report?.organization.id !== organizationId) notFound();
   const builds: ProtectedBuildOption[] = report.variants.flatMap((variant) =>
-    variant.builds.flatMap((build) =>
-      build.resultId && build.status === "READY"
-        ? [{
-            resultId: build.resultId,
-            checkpoint: variant.codename,
-            prompt: build.prompt,
-            blockCount: build.blockCount,
-            attempts: build.attempts,
-            generationTimeMs: build.generationTimeMs,
-          }]
-        : [],
-    ),
+    variant.builds.map((build) => ({
+      id: `${variant.id}:${build.promptId}`,
+      resultId: build.resultId,
+      checkpointId: variant.id,
+      checkpoint: variant.codename,
+      promptId: build.promptId,
+      prompt: build.prompt,
+      status: build.status,
+      error: build.error,
+      blockCount: build.blockCount,
+      attempts: build.attempts,
+      generationTimeMs: build.generationTimeMs,
+    })),
   );
 
   return (
