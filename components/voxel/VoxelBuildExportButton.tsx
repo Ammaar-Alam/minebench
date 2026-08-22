@@ -203,7 +203,7 @@ export function VoxelBuildExportButton({
         aria-controls={menuId}
         disabled={isDisabled}
         onClick={() => setMenuOpen((open) => !open)}
-        className="mb-btn mb-btn-ghost h-8 w-8 rounded-full border border-border/70 bg-bg/55 p-0 text-muted shadow-sm backdrop-blur-sm hover:border-accent/60 hover:bg-accent/10 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+        className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted shadow-sm backdrop-blur-sm hover:border-accent/60 hover:bg-accent/10 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
         title={disabledReason ?? "Export build"}
       >
         <svg

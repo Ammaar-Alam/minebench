@@ -11,18 +11,28 @@ type Theme = "light" | "dark";
 const THEME_KEY = "mb-theme";
 const BUY_ME_A_COFFEE_URL = "https://buymeacoffee.com/ammaaralam";
 
+function getSystemTheme(): Theme {
+  if (typeof window === "undefined") return "dark";
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function getStoredTheme(): Theme | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const saved = window.localStorage.getItem(THEME_KEY);
+    if (saved === "dark" || saved === "light") return saved;
+  } catch {}
+  return null;
+}
+
 function getInitialTheme(): Theme {
+  const stored = getStoredTheme();
+  if (stored) return stored;
   if (typeof document !== "undefined") {
     const fromDom = document.documentElement.dataset.theme;
     if (fromDom === "dark" || fromDom === "light") return fromDom;
   }
-  if (typeof window !== "undefined") {
-    try {
-      const saved = window.localStorage.getItem(THEME_KEY);
-      if (saved === "dark" || saved === "light") return saved;
-    } catch {}
-  }
-  return "dark";
+  return getSystemTheme();
 }
 
 function applyTheme(theme: Theme) {
@@ -35,7 +45,7 @@ function applyTheme(theme: Theme) {
 
 function CubeMark() {
   return (
-    <div className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl bg-gradient-to-br from-card/70 via-bg/40 to-accent/15 shadow-soft ring-1 ring-border backdrop-blur sm:h-9 sm:w-9">
+    <div className="grid h-10 w-10 place-items-center overflow-hidden rounded-lg sm:h-9 sm:w-9">
       <Image
         src={faviconIcon}
         alt="MineBench icon"
@@ -58,8 +68,20 @@ function ThemeToggle() {
         applyTheme(e.newValue);
       }
     };
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const onSystemChange = () => {
+      if (getStoredTheme()) return;
+      const next = getSystemTheme();
+      setTheme(next);
+      document.documentElement.dataset.theme = next;
+      document.documentElement.style.colorScheme = next;
+    };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    media.addEventListener("change", onSystemChange);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      media.removeEventListener("change", onSystemChange);
+    };
   }, []);
 
   function toggleTheme() {
@@ -73,7 +95,7 @@ function ThemeToggle() {
       type="button"
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="grid h-10 w-10 place-items-center rounded-md text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:text-accent"
       onClick={toggleTheme}
     >
       <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none">
@@ -105,14 +127,18 @@ function NavLink({ href, label }: { href: string; label: string }) {
   return (
     <Link
       aria-current={active ? "page" : undefined}
-      className={
-        active
-          ? "inline-flex h-10 shrink-0 items-center rounded-full border border-accent/45 bg-gradient-to-b from-accent/22 via-accent/14 to-accent2/18 px-4 text-[13px] font-semibold text-fg shadow-[0_10px_28px_-18px_rgba(45,211,191,0.95),inset_0_1px_0_rgba(255,255,255,0.08)] ring-1 ring-accent/20 sm:text-sm"
-          : "inline-flex h-10 shrink-0 items-center rounded-full border border-transparent px-4 text-[13px] text-muted/90 transition hover:border-border/60 hover:bg-bg/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:text-sm"
-      }
+      className={`relative inline-flex h-10 shrink-0 items-center px-1 text-[13px] transition-colors focus-visible:outline-none focus-visible:text-accent sm:text-sm ${
+        active ? "font-medium text-fg" : "text-muted hover:text-fg"
+      }`}
       href={href}
     >
       <span>{label}</span>
+      <span
+        aria-hidden="true"
+        className={`absolute inset-x-0 bottom-0 h-px origin-left bg-fg transition-transform duration-200 ease-out motion-reduce:transition-none ${
+          active ? "scale-x-100" : "scale-x-0"
+        }`}
+      />
     </Link>
   );
 }
@@ -125,7 +151,7 @@ function SupportLink() {
       rel="noreferrer"
       title="Support MineBench on Buy Me a Coffee"
       aria-label="Support MineBench on Buy Me a Coffee"
-      className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full border border-success/40 bg-success/10 px-3.5 text-[13px] font-semibold text-success transition hover:bg-success/18 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-success/40 sm:text-sm"
+      className="inline-flex h-10 shrink-0 items-center gap-1.5 px-1 text-[13px] text-success transition-colors hover:text-fg focus-visible:outline-none focus-visible:text-accent sm:text-sm"
     >
       <svg
         aria-hidden="true"
@@ -171,7 +197,7 @@ function SocialIconLink({
 
 export function SiteHeader() {
   return (
-    <header className="relative sticky top-0 z-40 border-b border-border bg-bg/75 backdrop-blur">
+    <header className="relative sticky top-0 z-40 border-b border-border bg-bg">
       <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 sm:py-3 lg:px-8">
         <a
           href="#main"
@@ -229,9 +255,9 @@ export function SiteHeader() {
         </div>
 
         {/* Row 2: nav – grid keeps ThemeToggle pinned right, links scroll left */}
-        <nav className="grid w-full grid-cols-[1fr_auto] items-center gap-2 rounded-full bg-bg/55 p-1 shadow-soft ring-1 ring-border sm:flex sm:w-auto sm:flex-nowrap sm:items-center sm:gap-1 sm:bg-transparent sm:p-0 sm:shadow-none sm:ring-0">
+        <nav className="grid w-full grid-cols-[1fr_auto] items-center gap-2 sm:flex sm:w-auto sm:flex-nowrap sm:items-center sm:gap-1">
           <div className="relative min-w-0">
-            <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+            <div className="flex items-center gap-5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               <NavLink href="/" label="Arena" />
               <NavLink href="/sandbox" label="Sandbox" />
               <NavLink href="/leaderboard" label="Leaderboard" />
@@ -240,7 +266,7 @@ export function SiteHeader() {
               <SupportLink />
             </div>
             {/* fade mask so partially-visible Support fades out cleanly on mobile */}
-            <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-[hsl(var(--bg)/0.55)] to-transparent sm:hidden" aria-hidden="true" />
+            <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-bg to-transparent sm:hidden" aria-hidden="true" />
           </div>
           <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
           <ThemeToggle />

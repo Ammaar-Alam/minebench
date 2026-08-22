@@ -326,17 +326,12 @@ function ViewerControlHint({ isPanMode, spinEnabled }: { isPanMode: boolean; spi
 
   return (
     <div className="pointer-events-none absolute bottom-[4.15rem] left-2.5 right-2.5 z-10 flex sm:bottom-3 sm:left-3 sm:right-auto">
-      <div className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-full border border-border/40 bg-bg/[0.50] px-2.5 py-1 text-[10px] font-medium leading-none text-muted/70 backdrop-blur-sm sm:px-3">
+      <div className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-bg/[0.55] px-2.5 py-1 text-[10px] font-medium leading-none text-muted/70 backdrop-blur-sm sm:px-3">
         <span className={itemClass}>
           <span className={inputLabelClass}>Drag</span>
           <span>{isPanMode ? "Pan" : "Rotate"}</span>
         </span>
         <span className={dividerClass} aria-hidden="true" />
-        <span className={desktopItemClass}>
-          <span className={keyClass}>Ctrl</span>
-          <span>Pan</span>
-        </span>
-        <span className={`${dividerClass} hidden sm:inline-flex`} aria-hidden="true" />
         <span className={itemClass}>
           <span className={`${inputLabelClass} sm:hidden`}>Pinch</span>
           <span className={`${inputLabelClass} hidden sm:inline`}>Scroll</span>
@@ -1173,13 +1168,15 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     if (autoRotate) requestRenderRef.current?.();
   }, [autoRotate, spinPreferenceEnabled]);
 
+  // Same register as the hint strip below and the loading HUD: translucent
+  // slab, no ring, muted label. Hover carries the affordance instead.
   const controlButtonClass =
-    "mb-btn h-11 flex-1 gap-1.5 rounded-lg px-3 text-[12px] leading-none sm:h-8 sm:flex-none sm:px-2.5 sm:text-[11px]";
-  const controlGhostClass = `${controlButtonClass} ring-1 ring-border/60 bg-bg/[0.46] text-fg/85 hover:bg-bg/[0.64] hover:ring-border/80`;
-  const controlActiveClass = `${controlButtonClass} ring-1 ring-border/75 bg-card/65 text-fg hover:bg-card/80 hover:ring-border`;
+    "mb-btn h-11 flex-1 gap-1.5 rounded-md bg-bg/[0.55] px-3 text-[12px] font-medium leading-none backdrop-blur-sm transition-colors sm:h-7 sm:flex-none sm:px-2.5 sm:text-[11px]";
+  const controlGhostClass = `${controlButtonClass} text-muted/80 hover:bg-bg/[0.72] hover:text-fg`;
+  const controlActiveClass = `${controlButtonClass} bg-accent/[0.14] text-accent hover:bg-accent/[0.2]`;
   const controlKeyClass =
-    "hidden h-5 min-w-5 items-center justify-center rounded-md border border-border/55 bg-bg/45 px-1.5 font-mono text-[10px] font-semibold leading-none text-muted/75 sm:inline-flex";
-  const activeControlKeyClass = `${controlKeyClass} border-border/60 bg-bg/55 text-fg/80`;
+    "hidden h-4 min-w-4 items-center justify-center rounded border border-border/40 bg-bg/40 px-1 font-mono text-[9px] font-semibold leading-none text-muted/70 sm:inline-flex";
+  const activeControlKeyClass = `${controlKeyClass} border-accent/25 bg-accent/[0.07] text-accent/75`;
 
   return (
     <div
@@ -1227,12 +1224,15 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         if (isPanModifierKey(e)) setPanModifierHeld(hasPanModifier(e));
       }}
     >
-      <div ref={mountRef} className="h-full w-full" />
+      {/* Out of flow: the renderer writes a pixel height onto the canvas, and in
+          normal flow that measurement props the stage open so a flex parent can
+          never shrink it back down. */}
+      <div ref={mountRef} className="mb-viewer-stage absolute inset-0" />
 
       {showControls ? (
         <>
           <ViewerControlHint isPanMode={effectivePanMode} spinEnabled={Boolean(autoRotate && spinPreferenceEnabled)} />
-          <div className="absolute inset-x-2.5 bottom-2 flex items-center gap-1 rounded-xl border border-border/60 bg-bg/65 p-1 backdrop-blur-md sm:inset-x-auto sm:bottom-auto sm:right-3 sm:top-3 sm:gap-1.5 sm:rounded-full sm:border-transparent sm:bg-transparent sm:p-0 sm:shadow-none sm:backdrop-blur-0">
+          <div className="absolute inset-x-2.5 bottom-2 flex items-center gap-1 sm:inset-x-auto sm:bottom-auto sm:right-3 sm:top-3 sm:gap-1.5">
             <button
               aria-pressed={effectivePanMode}
               aria-label={effectivePanMode ? "Switch to rotate mode" : "Switch to pan mode"}

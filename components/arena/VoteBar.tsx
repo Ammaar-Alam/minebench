@@ -60,16 +60,16 @@ export function VoteBar({
 }) {
   const voteDisabled = Boolean(disabled || disableVotes);
   const buttonBase =
-    "inline-flex touch-manipulation select-none items-center justify-center gap-1.5 rounded-xl font-semibold transition-all duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40";
+    "relative inline-flex touch-manipulation select-none items-center justify-center gap-1.5 rounded-md font-semibold transition-all duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40";
   const mobilePrimary =
     "h-11 px-3 text-[13px]";
   const mobileSecondary = "h-9 px-2.5 text-[12px]";
-  const desktopBase = "h-11 px-4 text-sm sm:rounded-xl";
+  const desktopBase = "h-11 px-4 text-sm";
 
   const flash = (target: VoteConfirmTarget) => (confirming === target ? " mb-vote-confirmed" : "");
 
   return (
-    <div className="mb-subpanel relative h-full px-2 py-2 sm:px-3.5 sm:py-3">
+    <div className="relative h-full border-t border-border/70 px-1 py-2 sm:py-3">
       <div className="flex h-full flex-col justify-center gap-1.5">
         <div className="grid grid-cols-2 gap-1.5 sm:hidden">
           <button
@@ -135,7 +135,7 @@ export function VoteBar({
             >
               <ChevronLeft className="h-4 w-4 opacity-70" />
               <span>A wins</span>
-              <span className="hidden md:inline-flex"><span className="mb-kbd">1</span></span>
+              <span className="mb-kbd absolute right-3 top-1/2 hidden -translate-y-1/2 font-normal md:inline-flex">1</span>
             </button>
 
             <button
@@ -154,8 +154,8 @@ export function VoteBar({
               disabled={voteDisabled}
               onClick={() => onVote("B")}
             >
+              <span className="mb-kbd absolute left-3 top-1/2 hidden -translate-y-1/2 font-normal md:inline-flex">2</span>
               <span>B wins</span>
-              <span className="hidden md:inline-flex"><span className="mb-kbd">2</span></span>
               <ChevronRight className="h-4 w-4 opacity-70" />
             </button>
           </div>

@@ -25,7 +25,7 @@ export function ErrorState({ error, onRetry, retrying, compact, title, hint, cla
       role="alert"
       aria-live="polite"
       className={[
-        "rounded-xl ring-1 ring-danger/30 bg-danger/10 text-fg",
+        "rounded-md ring-1 ring-danger/30 bg-danger/10 text-fg",
         compact ? "px-3 py-2" : "px-3.5 py-3",
         className ?? "",
       ].join(" ").trim()}
@@ -44,7 +44,7 @@ export function ErrorState({ error, onRetry, retrying, compact, title, hint, cla
             type="button"
             onClick={onRetry}
             disabled={retrying}
-            className="mb-btn mb-btn-ghost h-8 shrink-0 rounded-full px-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+            className="mb-btn mb-btn-ghost h-8 shrink-0 px-3 text-xs disabled:cursor-not-allowed disabled:opacity-60"
           >
             {retrying ? "Retrying…" : "Try again"}
           </button>

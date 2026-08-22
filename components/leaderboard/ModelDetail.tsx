@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import type {
   ModelDetailStats,
   ModelOpponentBreakdown,
@@ -221,27 +222,6 @@ function shouldRetrySnapshotWithoutRedirect(status: number): boolean {
   return [400, 403, 404, 500, 502, 504].includes(status);
 }
 
-async function readErrorResponse(res: Response, fallback: string): Promise<string> {
-  let detail: string | null = null;
-  try {
-    const body = await res.clone().json();
-    if (body && typeof body === "object") {
-      const candidate = (body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message;
-      if (typeof candidate === "string" && candidate.trim()) detail = candidate.trim();
-    }
-  } catch {
-    // fall through to text
-  }
-  if (!detail) {
-    try {
-      const text = (await res.text()).trim();
-      if (text && !text.startsWith("<") && text.length <= 500) detail = text;
-    } catch {
-      // ignore
-    }
-  }
-  return detail ?? fallback;
-}
 
 function rememberLoadedBuild(
   current: Record<string, LoadedPromptBuild>,
@@ -294,7 +274,7 @@ async function fetchBuildVariantSnapshot(
       if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
         return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
       }
-      throw new Error(await readErrorResponse(res, "Failed to load build"));
+      throw new Error(await readClientErrorResponse(res, "Failed to load build"));
     }
     try {
       return await readBuildVariantJson<BuildVariantResponse>(res);
@@ -334,7 +314,7 @@ async function fetchBuildVariantStreamOnce(
   } finally {
     requestTimed.cleanup();
   }
-  if (!res.ok) throw new Error(await readErrorResponse(res, "Failed to load build"));
+  if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load build"));
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
@@ -973,7 +953,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
 
   if (loading && !build) {
     return (
-      <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
+      <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-md bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
         <VoxelLoadingHud
           label={overlayLabel}
           progress={overlayProgress}
@@ -985,14 +965,14 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
 
   if (!build) {
     return (
-      <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-xl bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
+      <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-md bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
         <div className="text-xs text-muted">{error ? "Build unavailable" : "No build yet"}</div>
       </div>
     );
   }
 
   return (
-    <div className={`relative w-full overflow-hidden rounded-xl bg-bg/32 ring-1 ring-border/65 ${heightClass}`}>
+    <div className={`relative w-full overflow-hidden rounded-md bg-bg/32 ring-1 ring-border/65 ${heightClass}`}>
       <LazyVoxelViewer
         ref={viewerRef}
         voxelBuild={build.voxelBuild}
@@ -1997,7 +1977,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                     lastPromptTriggerRef.current = event.currentTarget;
                     setPromptWithUrl(prompt);
                   }}
-                  className="relative mb-card-enter h-full cursor-pointer rounded-2xl bg-bg/40 p-3.5 ring-1 ring-border/60 transition duration-200 hover:-translate-y-0.5 hover:bg-bg/55 hover:ring-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:p-4"
+                  className="relative mb-card-enter h-full cursor-pointer rounded-md p-3.5 ring-1 ring-border/60 transition duration-200 hover:-translate-y-0.5 hover:bg-bg/55 hover:ring-accent/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 sm:p-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
@@ -2114,7 +2094,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             role="dialog"
             aria-modal="true"
             aria-label="Full prompt details"
-            className="relative w-full max-w-3xl overflow-hidden rounded-3xl bg-card/92 shadow-soft ring-1 ring-border backdrop-blur-xl"
+            className="relative w-full max-w-3xl overflow-hidden rounded-md bg-card ring-1 ring-border-xl"
           >
             <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-3 sm:gap-3 sm:px-4">
               <PromptLateralNav
@@ -2128,7 +2108,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
               <button
                 type="button"
                 ref={modalCloseRef}
-                className="mb-btn mb-btn-ghost h-9 shrink-0 rounded-full px-3 text-xs sm:px-4"
+                className="mb-btn mb-btn-ghost h-9 shrink-0 px-3 text-xs sm:px-4"
                 onClick={() => setPromptWithUrl(null)}
                 aria-label="Close prompt details"
               >
