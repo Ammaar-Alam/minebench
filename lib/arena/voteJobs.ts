@@ -642,8 +642,6 @@ async function processArenaVoteJobBatch(limit = JOB_BATCH_LIMIT): Promise<VoteJo
   if (result.processedCount <= 0) return result;
 
   if (result.affectedStealthExperimentIds.length > 0) {
-    const { reconcileStealthVoteGoals } = await import("@/lib/stealth/service");
-    await reconcileStealthVoteGoals(result.affectedStealthExperimentIds);
     invalidateStealthSamplingCache();
   }
 
@@ -686,6 +684,11 @@ export async function drainArenaVoteJobs(opts?: {
     // ratings moved: leaderboard, prompt signals, and model detail are all stale.
     // once per drain, and even on a late-batch failure committed data stays visible
     if (processedCount > 0) invalidateArenaStatsCache();
+  }
+
+  if (!lockSkipped) {
+    const { reconcileActiveStealthVoteGoals } = await import("@/lib/stealth/service");
+    await reconcileActiveStealthVoteGoals();
   }
 
   return { processedCount, batches, lockSkipped };

@@ -169,6 +169,26 @@ async function main() {
 
   await db.stealthExperiment.update({
     where: { id: fixture.experiment.id },
+    data: { status: "ACTIVE" },
+  });
+  await db.stealthVariant.update({
+    where: { id: fixture.variant.id },
+    data: { status: "ACTIVE" },
+  });
+  await db.model.update({
+    where: { id: fixture.privateModel.id },
+    data: { enabled: true },
+  });
+  const reconciliationRetry = await drainArenaVoteJobs({ maxJobs: 1, maxMs: 10_000 });
+  assert.equal(reconciliationRetry.processedCount, 0);
+  assert.equal(
+    (await db.stealthExperiment.findUniqueOrThrow({ where: { id: fixture.experiment.id } })).status,
+    "PAUSED",
+    "a later empty drain must recover goal reconciliation after jobs are committed",
+  );
+
+  await db.stealthExperiment.update({
+    where: { id: fixture.experiment.id },
     data: { pauseAtGoal: false, status: "ACTIVE" },
   });
   await db.stealthVariant.update({

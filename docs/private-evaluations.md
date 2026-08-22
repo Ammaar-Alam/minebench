@@ -57,7 +57,10 @@ Both paths use the same prompt, grid, palette, mode, output validation, checksum
 storage, and artifact requirements used by MineBench's Arena pipeline. Incomplete
 or invalid uploaded cohorts are rejected with prompt-specific feedback. Accepted
 builds are immutable; replacing a valid accepted build requires a new checkpoint
-in a new draft evaluation.
+in a new draft evaluation. Private cohort preparation never changes a prompt's
+public eligibility. A running endpoint or upload operation reserves its checkpoint,
+and a persisted build is accepted only after its required artifacts and the open
+evaluation lifecycle are revalidated.
 
 Endpoint credentials are encrypted immediately and are never displayed again.
 They are retained only while a partial run can validly resume, then deleted when
@@ -75,6 +78,9 @@ Private votes update only the private checkpoint's rating state. The public mode
 acts as a read-only anchor. Public ratings, rankings, counters, coverage,
 leaderboard metrics, rank snapshots, benchmark surfaces, and publication data are
 unchanged by private matchups or votes.
+
+Goal-based pauses are reconciled after vote processing and by later idle drains, so
+a transient reconciliation failure remains recoverable after the vote job commits.
 
 Checkpoint comparisons inside an evaluation are estimates based on each
 checkpoint's independently calibrated public-anchor results. They should not be
