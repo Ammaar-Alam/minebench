@@ -237,6 +237,10 @@ const CONFIGURABLE_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = [
 ];
 const CONFIGURABLE_VARIANT_STATUSES: readonly StealthVariantStatus[] = ["DRAFT", "GENERATING"];
 
+export function isStealthCheckpointSetOpen(status: StealthExperimentStatus): boolean {
+  return CONFIGURABLE_EXPERIMENT_STATUSES.includes(status);
+}
+
 function isMineBenchAdmin(actor: StealthActor): actor is { minebenchAdmin: true } {
   return "minebenchAdmin" in actor && actor.minebenchAdmin === true;
 }
@@ -1120,7 +1124,7 @@ export async function configureStealthEndpoint(
     if (!experiment || experiment.organizationId !== organizationId) {
       throw new Error("Evaluation not found");
     }
-    if (!CONFIGURABLE_EXPERIMENT_STATUSES.includes(experiment.status)) {
+    if (!isStealthCheckpointSetOpen(experiment.status)) {
       throw new Error("Activated evaluations cannot accept new checkpoints");
     }
 
@@ -1223,7 +1227,7 @@ async function assertCohortUploadOpen(
     select: { status: true },
   });
   if (!experiment) throw new Error("Evaluation not found");
-  if (!CONFIGURABLE_EXPERIMENT_STATUSES.includes(experiment.status)) {
+  if (!isStealthCheckpointSetOpen(experiment.status)) {
     throw new Error("Activated evaluations cannot accept new checkpoints");
   }
 }
@@ -1299,7 +1303,7 @@ export async function completeUploadedStealthCohort(
     if (!experiment || experiment.organizationId !== organizationId) {
       throw new Error("Evaluation not found");
     }
-    if (!CONFIGURABLE_EXPERIMENT_STATUSES.includes(experiment.status)) {
+    if (!isStealthCheckpointSetOpen(experiment.status)) {
       throw new Error("Activated evaluations cannot accept new checkpoints");
     }
     const existing = input.variantId

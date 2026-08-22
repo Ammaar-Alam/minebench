@@ -496,10 +496,3 @@ export function streamFromInitialChunks(
     { highWaterMark: 0 },
   );
 }
-
-export function streamFromFirstChunk(
-  firstChunk: Uint8Array,
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): ReadableStream<Uint8Array> {
-  return streamFromInitialChunks([firstChunk], reader);
-}

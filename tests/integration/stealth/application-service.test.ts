@@ -373,6 +373,25 @@ async function main() {
       .status,
     "FAILED",
   );
+  let attachmentFailureRunId = "";
+  await assert.rejects(
+    startStealthGeneration(
+      memberActor,
+      organization.id,
+      generationCheckpoint.variantId,
+      { maxAttempts: 3, concurrency: 2 },
+      async (runId) => {
+        attachmentFailureRunId = runId;
+        return generationRun.workflowRunId;
+      },
+    ),
+  );
+  assert.ok(attachmentFailureRunId);
+  const attachmentFailure = await prisma.stealthGenerationRun.findUniqueOrThrow({
+    where: { id: attachmentFailureRunId },
+  });
+  assert.equal(attachmentFailure.status, "FAILED");
+  assert.equal(attachmentFailure.workflowRunId, null);
   await assert.rejects(
     startStealthGeneration(
       memberActor,
@@ -414,8 +433,20 @@ async function main() {
   }));
   const originalGenerationFetch = global.fetch;
   let generationRequestCount = 0;
+  let markFirstRequestStarted!: () => void;
+  let releaseFirstRequest!: () => void;
+  const firstRequestStarted = new Promise<void>((resolve) => {
+    markFirstRequestStarted = resolve;
+  });
+  const firstRequestRelease = new Promise<void>((resolve) => {
+    releaseFirstRequest = resolve;
+  });
   global.fetch = (async () => {
     generationRequestCount += 1;
+    if (generationRequestCount === 1) {
+      markFirstRequestStarted();
+      await firstRequestRelease;
+    }
     return Response.json({
       choices: [
         {
@@ -426,13 +457,22 @@ async function main() {
       ],
     });
   }) as typeof fetch;
+  let firstGeneration: Promise<void> | null = null;
   try {
     const plan = await getStealthGenerationPlan(retryRun.runId);
     assert.ok(plan);
     const promptSlugs = plan.promptBatches.flat();
     const firstPrompt = promptSlugs[0];
     assert.ok(firstPrompt);
+    firstGeneration = generateStealthPromptForRun({
+      runId: retryRun.runId,
+      promptSlug: firstPrompt,
+    });
+    await firstRequestStarted;
     await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: firstPrompt });
+    assert.equal(generationRequestCount, 1, "an in-flight prompt must not call the provider twice");
+    releaseFirstRequest();
+    await firstGeneration;
     await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: firstPrompt });
     assert.equal(generationRequestCount, 1, "a persisted prompt build must be reused");
     for (const promptSlug of promptSlugs.slice(1)) {
@@ -441,6 +481,8 @@ async function main() {
     await finishStealthGenerationRun(retryRun.runId);
     await finishStealthGenerationRun(retryRun.runId);
   } finally {
+    releaseFirstRequest();
+    await firstGeneration?.catch(() => undefined);
     global.fetch = originalGenerationFetch;
   }
   const completedRun = await prisma.stealthGenerationRun.findUniqueOrThrow({
