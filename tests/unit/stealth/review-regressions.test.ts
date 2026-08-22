@@ -20,18 +20,11 @@ const service = read("lib/stealth/service.ts");
 assert.match(service, /createSignedUploadUrl/);
 assert.match(service, /signedUrl: data\.signedUrl/);
 
-const workflow = read("workflows/stealth-generation.ts");
-assert.match(workflow, /Promise\.allSettled/);
-assert.match(workflow, /index \+= plan\.concurrency/);
-assert.match(workflow, /await failStealthGeneration\(/);
-
 const cli = read("scripts/stealth-eval.ts");
 assert.match(cli, /positiveInt\(args, \["--concurrency"\], 1, 4\)/);
-assert.match(cli, /failStealthGenerationRun\(runId, error\)/);
 
 const actions = read("app/lab/[orgSlug]/actions.ts");
 assert.match(actions, /completeUploadedStealthCohortFromStorage/);
-assert.match(actions, /failStealthGenerationRun\(runId, error\)/);
 
 const middleware = read("middleware.ts");
 assert.match(middleware, /pathname\.startsWith\("\/admin\/private-evaluations"\)/);

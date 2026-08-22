@@ -3,20 +3,17 @@
 import type { OrganizationRole } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { start } from "workflow/api";
+import { start as startWorkflow } from "workflow/api";
 import { getLabOrganizationContext } from "@/lib/stealth/auth";
 import type { StealthEndpointProtocol } from "@/lib/stealth/credentials";
 import {
   activateStealthEvaluation,
-  attachWorkflowRunId,
   closeStealthEvaluation,
   completeUploadedStealthCohortFromStorage,
   configureStealthEndpoint,
   createStealthEvaluation,
-  createStealthGenerationRun,
   deleteUnusedDraftEvaluation,
   disableStealthEndpoint,
-  failStealthGenerationRun,
   inviteOrganizationMember,
   pauseStealthEvaluation,
   removeOrganizationMember,
@@ -25,6 +22,7 @@ import {
   updateStealthEvaluation,
   type StealthActor,
 } from "@/lib/stealth/service";
+import { startStealthGeneration } from "@/lib/stealth/generationRun";
 import { generateStealthCohortWorkflow } from "@/workflows/stealth-generation";
 
 type OrganizationActionContext = {
@@ -177,7 +175,7 @@ export async function startGenerationAction(
   formData: FormData,
 ) {
   const context = await organizationContext(orgSlug);
-  const { runId } = await createStealthGenerationRun(
+  await startStealthGeneration(
     context.actor,
     context.organizationId,
     variantId,
@@ -185,15 +183,8 @@ export async function startGenerationAction(
       maxAttempts: requiredPositiveInt(formData, "maxAttempts", 3, 10),
       concurrency: 1,
     },
+    async (runId) => (await startWorkflow(generateStealthCohortWorkflow, [runId])).runId,
   );
-  let run: Awaited<ReturnType<typeof start>>;
-  try {
-    run = await start(generateStealthCohortWorkflow, [runId]);
-  } catch (error) {
-    await failStealthGenerationRun(runId, error);
-    throw error;
-  }
-  await attachWorkflowRunId(runId, run.runId);
   revalidateEvaluation(orgSlug, experimentId);
 }
 

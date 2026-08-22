@@ -20,17 +20,24 @@ type CliArgs = {
 };
 
 type ServiceModule = typeof import("../lib/stealth/service");
+type GenerationRunModule = typeof import("../lib/stealth/generationRun");
 type WorkflowApiModule = typeof import("workflow/api");
 const OPERATOR_ACTOR = { minebenchAdmin: true } as const;
 const STEALTH_GENERATION_WORKFLOW = {
   workflowId: "workflow//./workflows/stealth-generation//generateStealthCohortWorkflow",
 } as const;
 let servicePromise: Promise<ServiceModule> | null = null;
+let generationRunPromise: Promise<GenerationRunModule> | null = null;
 let workflowPromise: Promise<WorkflowApiModule> | null = null;
 
 async function service(): Promise<ServiceModule> {
   servicePromise ??= import("../lib/stealth/service");
   return servicePromise;
+}
+
+async function generationRun(): Promise<GenerationRunModule> {
+  generationRunPromise ??= import("../lib/stealth/generationRun");
+  return generationRunPromise;
 }
 
 async function workflow(): Promise<WorkflowApiModule> {
@@ -395,7 +402,7 @@ async function uploadCohort(args: CliArgs): Promise<void> {
 async function startGeneration(args: CliArgs): Promise<void> {
   const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
   const checkpointId = await variantId(args, organization.id, experimentId);
-  const { runId } = await (await service()).createStealthGenerationRun(
+  const { runId, workflowRunId } = await (await generationRun()).startStealthGeneration(
     OPERATOR_ACTOR,
     organization.id,
     checkpointId,
@@ -403,17 +410,12 @@ async function startGeneration(args: CliArgs): Promise<void> {
       maxAttempts: positiveInt(args, ["--attempts"], 3, 10) ?? 3,
       concurrency: positiveInt(args, ["--concurrency"], 1, 4) ?? 1,
     },
+    async (applicationRunId) => {
+      const { start } = await workflow();
+      return (await start(STEALTH_GENERATION_WORKFLOW, [applicationRunId])).runId;
+    },
   );
-  const { start } = await workflow();
-  let run: Awaited<ReturnType<typeof start>>;
-  try {
-    run = await start(STEALTH_GENERATION_WORKFLOW, [runId]);
-  } catch (error) {
-    await (await service()).failStealthGenerationRun(runId, error);
-    throw error;
-  }
-  await (await service()).attachWorkflowRunId(runId, run.runId);
-  console.log(`Generation started: run=${runId} workflow=${run.runId}`);
+  console.log(`Generation started: run=${runId} workflow=${workflowRunId}`);
 }
 
 async function activateEvaluation(args: CliArgs): Promise<void> {

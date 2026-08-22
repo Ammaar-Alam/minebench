@@ -3,7 +3,7 @@ import {
   finishStealthGenerationRun,
   generateStealthPromptForRun,
   getStealthGenerationPlan,
-} from "@/lib/stealth/service";
+} from "@/lib/stealth/generationRun";
 
 async function loadStealthGenerationPlan(runId: string) {
   "use step";
@@ -32,11 +32,9 @@ export async function generateStealthCohortWorkflow(runId: string): Promise<{ ru
   try {
     const plan = await loadStealthGenerationPlan(runId);
     if (!plan) return { runId };
-    for (let index = 0; index < plan.promptSlugs.length; index += plan.concurrency) {
+    for (const promptBatch of plan.promptBatches) {
       const outcomes = await Promise.allSettled(
-        plan.promptSlugs
-          .slice(index, index + plan.concurrency)
-          .map((promptSlug) => generateStealthPrompt(runId, promptSlug)),
+        promptBatch.map((promptSlug) => generateStealthPrompt(runId, promptSlug)),
       );
       const failed = outcomes.find((outcome) => outcome.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;

@@ -18,21 +18,25 @@ async function main() {
     completeUploadedStealthCohort,
     configureStealthEndpoint,
     createStealthEvaluation,
-    createStealthGenerationRun,
     deleteUnusedDraftEvaluation,
     disableStealthEndpoint,
-    failStealthGenerationRun,
     getStealthEvaluationWorkspace,
-    getStealthGenerationPlan,
     inviteOrganizationMember,
     pauseStealthEvaluation,
-    prepareStealthCohortPrompts,
     purgeStealthEvaluationIfDue,
     removeOrganizationMember,
     resumeStealthEvaluation,
     updateOrganizationMember,
     updateStealthEvaluation,
   } = await import("../../../lib/stealth/service");
+  const { prepareStealthCohortPrompts } = await import("../../../lib/stealth/cohort");
+  const {
+    failStealthGenerationRun,
+    finishStealthGenerationRun,
+    generateStealthPromptForRun,
+    getStealthGenerationPlan,
+    startStealthGeneration,
+  } = await import("../../../lib/stealth/generationRun");
 
   const suffix = randomUUID().slice(0, 8);
   const [admin, member, outsider, invitee] = await Promise.all(
@@ -291,44 +295,328 @@ async function main() {
     {
       codename: "Generation One",
       config: {
-        protocol: "openai-compatible",
-        endpointUrl: "https://checkpoint.example.test/v1",
+        protocol: "openrouter",
+        endpointUrl: "",
         apiKey: "generation-secret-key",
         modelId: `generation-${suffix}`,
         requireStructuredOutput: true,
-        enableTools: true,
+        enableTools: false,
       },
     },
   );
-  const generationRun = await createStealthGenerationRun(
-    memberActor,
-    organization.id,
-    generationCheckpoint.variantId,
-    { maxAttempts: 3, concurrency: 3 },
-  );
-  assert.equal((await getStealthGenerationPlan(generationRun.runId))?.concurrency, 3);
   await assert.rejects(
-    createStealthGenerationRun(
+    startStealthGeneration(
       memberActor,
       organization.id,
       generationCheckpoint.variantId,
-      { maxAttempts: 3, concurrency: 1 },
+      { maxAttempts: 0, concurrency: 1 },
+      async () => "invalid-attempt-workflow",
     ),
+    /Attempts must be from 1 to 10/,
+  );
+  await assert.rejects(
+    startStealthGeneration(
+      memberActor,
+      organization.id,
+      generationCheckpoint.variantId,
+      { maxAttempts: 3, concurrency: 5 },
+      async () => "invalid-concurrency-workflow",
+    ),
+    /Concurrency must be from 1 to 4/,
+  );
+  let launchCount = 0;
+  const concurrentStarts = await Promise.allSettled([
+    startStealthGeneration(
+      memberActor,
+      organization.id,
+      generationCheckpoint.variantId,
+      { maxAttempts: 3, concurrency: 3 },
+      async (runId) => {
+        launchCount += 1;
+        return `workflow-${runId}`;
+      },
+    ),
+    startStealthGeneration(
+      memberActor,
+      organization.id,
+      generationCheckpoint.variantId,
+      { maxAttempts: 3, concurrency: 3 },
+      async (runId) => {
+        launchCount += 1;
+        return `workflow-${runId}`;
+      },
+    ),
+  ]);
+  assert.equal(concurrentStarts.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(concurrentStarts.filter((result) => result.status === "rejected").length, 1);
+  assert.match(
+    String(concurrentStarts.find((result) => result.status === "rejected")?.reason),
     /already running/,
   );
+  assert.equal(launchCount, 1);
+  const generationRun = concurrentStarts.find(
+    (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof startStealthGeneration>>> =>
+      result.status === "fulfilled",
+  )!.value;
+  assert.equal(
+    (
+      await prisma.stealthGenerationRun.findUniqueOrThrow({
+        where: { id: generationRun.runId },
+      })
+    ).workflowRunId,
+    `workflow-${generationRun.runId}`,
+  );
+  assert.equal((await getStealthGenerationPlan(generationRun.runId))?.promptBatches[0]?.length, 3);
   await failStealthGenerationRun(generationRun.runId, "Workflow startup failed");
   assert.equal(
     (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: generationRun.runId } }))
       .status,
     "FAILED",
   );
-  const retryRun = await createStealthGenerationRun(
+  await assert.rejects(
+    startStealthGeneration(
+      memberActor,
+      organization.id,
+      generationCheckpoint.variantId,
+      { maxAttempts: 3, concurrency: 2 },
+      async () => {
+        throw new Error("Startup failed at https://private.example.test api_key=secret-value");
+      },
+    ),
+    (error: unknown) =>
+      error instanceof Error &&
+      error.message.includes("[endpoint]") &&
+      !error.message.includes("secret-value"),
+  );
+  const launchFailure = await prisma.stealthGenerationRun.findFirstOrThrow({
+    where: { variantId: generationCheckpoint.variantId },
+    orderBy: { startedAt: "desc" },
+  });
+  assert.equal(launchFailure.status, "FAILED");
+  assert.equal(launchFailure.workflowRunId, null);
+  assert.equal(
+    (await prisma.stealthVariant.findUniqueOrThrow({ where: { id: generationCheckpoint.variantId } }))
+      .status,
+    "DRAFT",
+  );
+  const retryRun = await startStealthGeneration(
     memberActor,
     organization.id,
     generationCheckpoint.variantId,
     { maxAttempts: 3, concurrency: 2 },
+    async (runId) => `workflow-${runId}`,
   );
-  await failStealthGenerationRun(retryRun.runId, "Test cleanup");
+  const generatedBlocks = Array.from({ length: 500 }, (_, index) => ({
+    x: index % 40,
+    y: index % 25,
+    z: Math.floor(index / 200),
+    type: "stone",
+  }));
+  const originalGenerationFetch = global.fetch;
+  let generationRequestCount = 0;
+  global.fetch = (async () => {
+    generationRequestCount += 1;
+    return Response.json({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({ version: "1.0", blocks: generatedBlocks }),
+          },
+        },
+      ],
+    });
+  }) as typeof fetch;
+  try {
+    const plan = await getStealthGenerationPlan(retryRun.runId);
+    assert.ok(plan);
+    const promptSlugs = plan.promptBatches.flat();
+    const firstPrompt = promptSlugs[0];
+    assert.ok(firstPrompt);
+    await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: firstPrompt });
+    await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: firstPrompt });
+    assert.equal(generationRequestCount, 1, "a persisted prompt build must be reused");
+    for (const promptSlug of promptSlugs.slice(1)) {
+      await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug });
+    }
+    await finishStealthGenerationRun(retryRun.runId);
+    await finishStealthGenerationRun(retryRun.runId);
+  } finally {
+    global.fetch = originalGenerationFetch;
+  }
+  const completedRun = await prisma.stealthGenerationRun.findUniqueOrThrow({
+    where: { id: retryRun.runId },
+  });
+  assert.equal(completedRun.status, "SUCCEEDED");
+  assert.equal(completedRun.completedBuildCount, 15);
+  assert.equal(completedRun.failedBuildCount, 0);
+  assert.equal(completedRun.providerCallCount, 15);
+  assert.equal(completedRun.retryCount, 0);
+  assert.equal(
+    (await prisma.stealthVariant.findUniqueOrThrow({ where: { id: generationCheckpoint.variantId } }))
+      .status,
+    "READY",
+  );
+  assert.equal(
+    await prisma.stealthEndpointCredential.count({
+      where: { variantId: generationCheckpoint.variantId },
+    }),
+    0,
+  );
+
+  const failureCheckpoint = await configureStealthEndpoint(
+    memberActor,
+    organization.id,
+    generationEvaluation.id,
+    {
+      codename: "Generation Failure",
+      config: {
+        protocol: "openrouter",
+        endpointUrl: "",
+        apiKey: "generation-failure-secret-key",
+        modelId: `generation-failure-${suffix}`,
+        requireStructuredOutput: true,
+        enableTools: false,
+      },
+    },
+  );
+  const noBuildRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    failureCheckpoint.variantId,
+    { maxAttempts: 2, concurrency: 1 },
+    async (runId) => `workflow-${runId}`,
+  );
+  const failurePrompts = (await getStealthGenerationPlan(noBuildRun.runId))?.promptBatches.flat();
+  assert.ok(failurePrompts && failurePrompts.length >= 3);
+  const [validationFailurePrompt, providerFailurePrompt, persistenceFailurePrompt] = failurePrompts;
+  assert.ok(validationFailurePrompt && providerFailurePrompt && persistenceFailurePrompt);
+  let failedProviderRequests = 0;
+  global.fetch = (async () => {
+    failedProviderRequests += 1;
+    return Response.json({
+      choices: [{ message: { content: JSON.stringify({ version: "1.0", blocks: [] }) } }],
+    });
+  }) as typeof fetch;
+  let conflictingBuildId: string | null = null;
+  try {
+    await generateStealthPromptForRun({
+      runId: noBuildRun.runId,
+      promptSlug: validationFailurePrompt,
+    });
+    global.fetch = (async () => {
+      failedProviderRequests += 1;
+      return new Response("Provider rejected request", { status: 401 });
+    }) as typeof fetch;
+    await generateStealthPromptForRun({
+      runId: noBuildRun.runId,
+      promptSlug: providerFailurePrompt,
+    });
+    const failureVariant = await prisma.stealthVariant.findUniqueOrThrow({
+      where: { id: failureCheckpoint.variantId },
+      select: { modelId: true },
+    });
+    const persistencePrompt = (await prepareStealthCohortPrompts()).find(
+      (prompt) => prompt.slug === persistenceFailurePrompt,
+    );
+    assert.ok(persistencePrompt);
+    global.fetch = (async () => {
+      failedProviderRequests += 1;
+      const { persistStealthBuild } = await import("../../../lib/stealth/generation");
+      const conflict = await persistStealthBuild({
+        variantId: failureCheckpoint.variantId,
+        modelId: failureVariant.modelId,
+        promptSlug: persistencePrompt.slug,
+        promptText: persistencePrompt.text,
+        build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+        generationTimeMs: 0,
+      });
+      conflictingBuildId = conflict.id;
+      return Response.json({
+        choices: [
+          { message: { content: JSON.stringify({ version: "1.0", blocks: generatedBlocks }) } },
+        ],
+      });
+    }) as typeof fetch;
+    await generateStealthPromptForRun({
+      runId: noBuildRun.runId,
+      promptSlug: persistenceFailurePrompt,
+    });
+    await finishStealthGenerationRun(noBuildRun.runId);
+  } finally {
+    global.fetch = originalGenerationFetch;
+  }
+  const noBuildFailure = await prisma.stealthGenerationRun.findUniqueOrThrow({
+    where: { id: noBuildRun.runId },
+  });
+  assert.equal(failedProviderRequests, 5);
+  assert.equal(noBuildFailure.status, "FAILED");
+  assert.equal(noBuildFailure.completedBuildCount, 0);
+  assert.equal(noBuildFailure.failedBuildCount, 3);
+  assert.equal(noBuildFailure.providerCallCount, 5);
+  assert.equal(noBuildFailure.retryCount, 2);
+  assert.equal(
+    await prisma.stealthEndpointCredential.count({ where: { variantId: failureCheckpoint.variantId } }),
+    1,
+  );
+  assert.ok(conflictingBuildId);
+  await prisma.build.delete({ where: { id: conflictingBuildId } });
+
+  const partialRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    failureCheckpoint.variantId,
+    { maxAttempts: 2, concurrency: 1 },
+    async (runId) => `workflow-${runId}`,
+  );
+  global.fetch = (async () =>
+    Response.json({
+      choices: [
+        { message: { content: JSON.stringify({ version: "1.0", blocks: generatedBlocks }) } },
+      ],
+    })) as typeof fetch;
+  try {
+    await generateStealthPromptForRun({
+      runId: partialRun.runId,
+      promptSlug: validationFailurePrompt,
+    });
+  } finally {
+    global.fetch = originalGenerationFetch;
+  }
+  await failStealthGenerationRun(partialRun.runId, "Workflow execution failed");
+  await failStealthGenerationRun(partialRun.runId, "A duplicate failure must be ignored");
+  const partialFailure = await prisma.stealthGenerationRun.findUniqueOrThrow({
+    where: { id: partialRun.runId },
+  });
+  assert.equal(partialFailure.status, "PARTIAL");
+  assert.equal(partialFailure.completedBuildCount, 1);
+  assert.equal(partialFailure.failedBuildCount, 14);
+  assert.equal(partialFailure.providerCallCount, 1);
+  assert.equal(partialFailure.retryCount, 0);
+  assert.match(partialFailure.error ?? "", /Workflow execution failed/);
+  assert.equal(
+    await prisma.stealthEndpointCredential.count({ where: { variantId: failureCheckpoint.variantId } }),
+    1,
+  );
+
+  const reuseRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    failureCheckpoint.variantId,
+    { maxAttempts: 2, concurrency: 1 },
+    async (runId) => `workflow-${runId}`,
+  );
+  global.fetch = (async () => {
+    throw new Error("A completed prompt must not call the provider again");
+  }) as typeof fetch;
+  try {
+    await generateStealthPromptForRun({
+      runId: reuseRun.runId,
+      promptSlug: validationFailurePrompt,
+    });
+  } finally {
+    global.fetch = originalGenerationFetch;
+  }
+  await failStealthGenerationRun(reuseRun.runId, "Test cleanup");
 
   const uploadedEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Uploaded ${suffix}`,
