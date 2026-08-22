@@ -9,7 +9,10 @@ function tone(status: string): string {
 
 export function EvaluationStatus({ status }: { status: string }) {
   return (
-    <span className={`inline-flex items-center gap-2 text-xs font-medium ${tone(status)}`}>
+    <span
+      key={status}
+      className={`mb-status-change inline-flex items-center gap-2 text-xs font-medium ${tone(status)}`}
+    >
       <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
       {titleCase(status)}
     </span>

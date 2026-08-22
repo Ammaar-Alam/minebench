@@ -164,7 +164,7 @@ export function ProtectedBuildInspector({
             {filteredBuilds.length}/{builds.length}
           </span>
         </div>
-        <div className="grid gap-2 border-t border-border/60 p-2 sm:grid-cols-[minmax(12rem,1fr)_10.5rem_9.5rem_auto] lg:border-t-0">
+        <div className="grid gap-2 border-t border-border/60 p-2 sm:grid-cols-[minmax(12rem,1fr)_9rem_8rem_auto] lg:border-t-0">
           <label className="relative block">
             <span className="sr-only">Search builds</span>
             <svg viewBox="0 0 20 20" aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted2" fill="none">
@@ -184,7 +184,7 @@ export function ProtectedBuildInspector({
             <select
               value={checkpointFilter}
               onChange={(event) => setCheckpointFilter(event.target.value)}
-              className="mb-field h-11"
+              className="mb-field h-11 pr-8"
             >
               <option value="ALL">All checkpoints</option>
               {checkpoints.map((checkpoint) => (
@@ -199,7 +199,7 @@ export function ProtectedBuildInspector({
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as BuildFilter)}
-              className="mb-field h-11"
+              className="mb-field h-11 pr-8"
             >
               <option value="ALL">All statuses</option>
               <option value="READY">Ready</option>
@@ -241,8 +241,8 @@ export function ProtectedBuildInspector({
                   type="button"
                   aria-pressed={active}
                   onClick={() => setSelectedId(build.id)}
-                  className={`relative grid min-h-[4.5rem] w-full grid-cols-[2rem_minmax(0,1fr)] gap-2 px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 ${
-                    active ? "bg-card/45" : "hover:bg-card/25"
+                  className={`group relative grid min-h-[4.5rem] w-full cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-2 px-3 py-3 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 ${
+                    active ? "bg-card/50" : "hover:bg-card/35"
                   }`}
                 >
                   <span
@@ -251,15 +251,17 @@ export function ProtectedBuildInspector({
                       active ? "scale-y-100" : "scale-y-0"
                     }`}
                   />
-                  <span className={`pt-0.5 font-mono text-[10px] tabular-nums ${active ? "text-fg" : "text-muted2"}`}>
+                  <span className={`pt-0.5 font-mono text-[10px] tabular-nums transition-colors duration-150 ${active ? "text-fg" : "text-muted2 group-hover:text-muted"}`}>
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <span className="min-w-0">
-                    <span className="line-clamp-2 text-sm font-medium leading-5 text-fg">{build.prompt}</span>
+                    <span className={`line-clamp-2 text-sm font-medium leading-5 transition-[color,transform] duration-150 ease-out motion-reduce:transition-none ${active ? "text-accent" : "text-fg/90 group-hover:translate-x-0.5 group-hover:text-fg"}`}>
+                      {build.prompt}
+                    </span>
                     <span className="mt-1.5 flex items-center justify-between gap-3 text-[10px] text-muted">
                       <span className="truncate">{build.checkpoint}</span>
                       <span className={`flex shrink-0 items-center gap-1.5 ${statusTone(build.status)}`}>
-                        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current transition-transform duration-150 group-hover:scale-125 motion-reduce:transition-none" />
                         {titleCase(build.status)}
                       </span>
                     </span>
@@ -284,7 +286,6 @@ export function ProtectedBuildInspector({
                 gridSize={payload?.gridSize ?? 256}
                 palette={payload?.palette ?? "simple"}
                 expectedBlockCount={payload?.blockCount ?? selected.blockCount ?? undefined}
-                autoRotate={false}
                 isLoading={loading}
                 loadingMessage="Loading build…"
                 error={error ?? undefined}

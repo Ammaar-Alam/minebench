@@ -32,7 +32,7 @@ export default async function EvaluationSettingsPage({
     );
 
   return (
-    <div className="space-y-12">
+    <div className="space-y-8">
       <section aria-labelledby="settings-heading">
         <h2 id="settings-heading" className="text-2xl font-semibold tracking-tight text-fg">
           Settings
@@ -78,9 +78,9 @@ export default async function EvaluationSettingsPage({
             className="mt-6 border-t border-border/60"
             panelClassName="pb-1 pt-4"
           >
-            <form action={updateAction} className="grid max-w-3xl gap-4 sm:grid-cols-2">
+            <form action={updateAction} className="flex max-w-5xl flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:gap-x-5">
               {!identityFrozen ? (
-                <label className="space-y-2 text-sm font-medium text-fg">
+                <label className="w-full space-y-2 text-sm font-medium text-fg sm:w-80">
                   <span>Name</span>
                   <input
                     name="name"
@@ -91,7 +91,7 @@ export default async function EvaluationSettingsPage({
                   />
                 </label>
               ) : null}
-              <label className="space-y-2 text-sm font-medium text-fg">
+              <label className="w-full space-y-2 text-sm font-medium text-fg sm:w-72">
                 <span>Decisive vote goal</span>
                 <input
                   name="targetDecisiveVotes"
@@ -111,11 +111,9 @@ export default async function EvaluationSettingsPage({
                 />
                 Pause at goal
               </label>
-              <div className="flex items-end justify-end">
-                <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5 text-sm">
-                  Save
-                </button>
-              </div>
+              <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5 text-sm">
+                Save
+              </button>
             </form>
           </LabDisclosure>
         ) : null}
@@ -299,7 +297,7 @@ export default async function EvaluationSettingsPage({
           </p>
         </div>
         {draftDeletable ? (
-          <form action={deleteAction} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <form action={deleteAction} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-5">
             <label className="flex min-h-11 items-center gap-3 text-sm text-fg">
               <input type="checkbox" required className="h-4 w-4 accent-danger" />
               Delete this draft
@@ -309,7 +307,7 @@ export default async function EvaluationSettingsPage({
             </button>
           </form>
         ) : !readOnly ? (
-          <form action={closeAction} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <form action={closeAction} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-5">
             <label className="flex min-h-11 items-center gap-3 text-sm text-fg">
               <input type="checkbox" required className="h-4 w-4 accent-danger" />
               Close this evaluation

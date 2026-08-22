@@ -28,7 +28,7 @@ export default async function EvaluationLayout({
   const decisiveVotes = checkpoints.reduce((total, checkpoint) => total + checkpoint.decisiveVotes, 0);
 
   return (
-    <div className="mx-auto w-full max-w-[78rem] py-3 sm:py-5">
+    <div className="mx-auto w-full max-w-[78rem]">
       <header>
         <Link
           href={`/lab/${orgSlug}`}

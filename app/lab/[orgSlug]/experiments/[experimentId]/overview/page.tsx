@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { EvaluationStatus } from "@/components/lab/EvaluationStatus";
 import { GenerationPoller } from "@/components/lab/GenerationPoller";
+import { LifecycleActionButton } from "@/components/lab/LifecycleActionButton";
 import { ProgressRail } from "@/components/lab/ProgressRail";
 import { formatDate, titleCase } from "@/components/lab/format";
 import {
@@ -67,23 +68,17 @@ export default async function EvaluationOverviewPage({
             ) : null}
             {workspace.status === "READY" ? (
               <form action={activateAction}>
-                <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5">
-                  Activate
-                </button>
+                <LifecycleActionButton label="Activate" pendingLabel="Activating…" tone="primary" />
               </form>
             ) : null}
             {workspace.status === "ACTIVE" ? (
               <form action={pauseAction}>
-                <button type="submit" className="mb-btn mb-btn-ghost min-h-11 px-5">
-                  Pause
-                </button>
+                <LifecycleActionButton label="Pause" pendingLabel="Pausing…" tone="ghost" />
               </form>
             ) : null}
             {workspace.status === "PAUSED" ? (
               <form action={resumeAction}>
-                <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5">
-                  Resume
-                </button>
+                <LifecycleActionButton label="Resume" pendingLabel="Resuming…" tone="primary" />
               </form>
             ) : null}
           </div>
