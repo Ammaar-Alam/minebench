@@ -444,7 +444,9 @@ export async function GET(
   // the request falls through to preparation, which heals. Otherwise a stale
   // body could be served indefinitely with the snapshot still absent.
   const cachedPreparedForHeal = cachedJsonResponse
-    ? getCachedPreparedArenaBuild(buildId, storedChecksum)
+    ? !buildMeta.privateAccessOnly
+      ? getCachedPreparedArenaBuild(buildId, storedChecksum)
+      : null
     : null;
   if (cachedJsonResponse && !cachedPreparedForHeal && jsonCacheKey) {
     dropCachedJsonResponse(jsonCacheKey);
@@ -501,7 +503,9 @@ export async function GET(
     );
   }
 
-  let prepared = getCachedPreparedArenaBuild(buildId, storedChecksum);
+  let prepared = buildMeta.privateAccessOnly
+    ? null
+    : getCachedPreparedArenaBuild(buildId, storedChecksum);
   if (!prepared) {
     // live prepare is rare (artifact + db snapshot already missed), so fetching
     // voxelData/storage pointers on demand is fine instead of holding them in cache.
@@ -527,7 +531,10 @@ export async function GET(
       if (!build) {
         return NextResponse.json({ error: "Build not found" }, { status: 404 });
       }
-      prepared = await prepareArenaBuild(build, { signal: request.signal });
+      prepared = await prepareArenaBuild(
+        { ...build, privateAccessOnly: buildMeta.privateAccessOnly },
+        { signal: request.signal },
+      );
     } catch (err) {
       const message =
         !buildAccess && err instanceof Error ? err.message : "Failed to load build payload";

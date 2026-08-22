@@ -9,6 +9,7 @@ import {
 import {
   deleteUnacceptedStealthBuild,
   ensureStealthBuildArtifacts,
+  isMissingStealthBuildPayload,
   persistStealthBuild,
 } from "@/lib/stealth/generation";
 import {
@@ -283,6 +284,8 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
       include: { variant: { include: { experiment: true } } },
     });
     if (!run || run.status !== "RUNNING") return;
+    const experiment = await lockExperiment(tx, run.variant.experimentId);
+    if (!experiment) return;
     const currentResults = await tx.stealthGenerationResult.findMany({
       where: { runId: run.id },
       orderBy: { updatedAt: "asc" },
@@ -305,7 +308,7 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
           completedAt: new Date(),
         },
       });
-      if (run.variant.experiment.status !== "CLOSED") {
+      if (experiment.status !== "CLOSED") {
         await tx.stealthVariant.updateMany({
           where: { id: run.variantId, status: { not: "WITHDRAWN" } },
           data: {
@@ -344,7 +347,7 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
         completedAt: new Date(),
       },
     });
-    if (run.variant.experiment.status !== "CLOSED") {
+    if (experiment.status !== "CLOSED") {
       await tx.stealthVariant.updateMany({
         where: { id: run.variantId, status: { not: "WITHDRAWN" } },
         data: {
@@ -459,7 +462,7 @@ export async function generateStealthPromptForRun(params: {
   if (existing) {
     try {
       await ensureStealthBuildArtifacts(existing.id);
-      await acceptStealthGenerationBuild({
+      const accepted = await acceptStealthGenerationBuild({
         runId: run.id,
         resultIdentity,
         fromStatus: "GENERATING",
@@ -468,14 +471,22 @@ export async function generateStealthPromptForRun(params: {
         generationTimeMs: 0,
         requestConfiguration: null,
       });
+      if (!accepted) return;
+      await refreshStealthGenerationProgress(run.id);
+      return;
     } catch (error) {
-      await prisma.stealthGenerationResult.updateMany({
-        where: { ...resultIdentity, status: "GENERATING" },
-        data: { status: "FAILED", error: sanitizeOperationalError(error) },
-      });
+      const removedMissingPayload =
+        isMissingStealthBuildPayload(error) &&
+        (await deleteUnacceptedStealthBuild(existing.id));
+      if (!removedMissingPayload) {
+        await prisma.stealthGenerationResult.updateMany({
+          where: { ...resultIdentity, status: "GENERATING" },
+          data: { status: "FAILED", error: sanitizeOperationalError(error) },
+        });
+        await refreshStealthGenerationProgress(run.id);
+        return;
+      }
     }
-    await refreshStealthGenerationProgress(run.id);
-    return;
   }
 
   if (!run.variant.credential || !run.variant.endpointEnabled) {
@@ -490,9 +501,11 @@ export async function generateStealthPromptForRun(params: {
   const configuration = run.configuration as { maxAttempts?: number };
   const maxAttempts = Math.max(1, Math.min(MAX_GENERATION_ATTEMPTS, configuration.maxAttempts ?? 3));
   let attempts = 0;
+  let configuredApiKey: string | null = null;
   let generated: Awaited<ReturnType<typeof generateVoxelBuild>>;
   try {
     const config = decryptStealthEndpointConfig(run.variant.credential.encryptedConfig);
+    configuredApiKey = config.apiKey;
     generated = await generateVoxelBuild({
       ...stealthEndpointConfigToGenerateVoxelBuildArgs(config, {
         key: run.variant.model.key,
@@ -512,7 +525,11 @@ export async function generateStealthPromptForRun(params: {
   } catch (error) {
     await prisma.stealthGenerationResult.updateMany({
       where: { ...resultIdentity, status: "GENERATING" },
-      data: { status: "FAILED", attempts, error: sanitizeOperationalError(error) },
+      data: {
+        status: "FAILED",
+        attempts,
+        error: sanitizeOperationalError(error, configuredApiKey ? [configuredApiKey] : []),
+      },
     });
     await refreshStealthGenerationProgress(run.id);
     return;
@@ -526,7 +543,10 @@ export async function generateStealthPromptForRun(params: {
         attempts,
         generationTimeMs: generated.generationTimeMs,
         requestConfiguration: generated.requestConfiguration,
-        error: sanitizeOperationalError(generated.error),
+        error: sanitizeOperationalError(
+          generated.error,
+          configuredApiKey ? [configuredApiKey] : [],
+        ),
       },
     });
     await refreshStealthGenerationProgress(run.id);
@@ -597,9 +617,16 @@ async function refreshStealthGenerationProgress(runId: string): Promise<void> {
     if (!locked) return;
     const run = await tx.stealthGenerationRun.findUnique({
       where: { id: runId },
-      select: { id: true, variantId: true, status: true },
+      select: {
+        id: true,
+        variantId: true,
+        status: true,
+        variant: { select: { experimentId: true } },
+      },
     });
     if (!run || run.status !== "RUNNING") return;
+    const experiment = await lockExperiment(tx, run.variant.experimentId);
+    if (!experiment) return;
     const results = await tx.stealthGenerationResult.findMany({
       where: { runId },
       orderBy: { updatedAt: "asc" },
@@ -616,14 +643,16 @@ async function refreshStealthGenerationProgress(runId: string): Promise<void> {
         error: progress.lastError,
       },
     });
-    await tx.stealthVariant.update({
-      where: { id: run.variantId },
-      data: {
-        generatedBuildCount: progress.completedBuildCount,
-        generationFailureCount: progress.failedBuildCount,
-        lastGenerationError: progress.lastError,
-      },
-    });
+    if (experiment.status !== "CLOSED") {
+      await tx.stealthVariant.updateMany({
+        where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+        data: {
+          generatedBuildCount: progress.completedBuildCount,
+          generationFailureCount: progress.failedBuildCount,
+          lastGenerationError: progress.lastError,
+        },
+      });
+    }
   });
 }
 
@@ -636,6 +665,8 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       include: { variant: { include: { experiment: true } } },
     });
     if (!run || run.status !== "RUNNING") return;
+    const experiment = await lockExperiment(tx, run.variant.experimentId);
+    if (!experiment) return;
     const results = await tx.stealthGenerationResult.findMany({
       where: { runId: run.id },
       orderBy: { updatedAt: "asc" },
@@ -656,10 +687,12 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
     };
     if (progress.activePromptCount > 0) {
       await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
-      await tx.stealthVariant.updateMany({
-        where: { id: run.variantId, status: { not: "WITHDRAWN" } },
-        data: variantProgress,
-      });
+      if (experiment.status !== "CLOSED") {
+        await tx.stealthVariant.updateMany({
+          where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+          data: variantProgress,
+        });
+      }
       return;
     }
     const complete =
@@ -672,7 +705,7 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
         completedAt: new Date(),
       },
     });
-    if (run.variant.experiment.status === "CLOSED") {
+    if (experiment.status === "CLOSED") {
       if (complete) {
         await tx.stealthEndpointCredential.deleteMany({ where: { variantId: run.variantId } });
       }

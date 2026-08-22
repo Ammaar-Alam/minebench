@@ -122,7 +122,7 @@ function getInitialAdaptiveDeliveryClass(hints: ArenaBuildLoadHints): ArenaBuild
   return hints.initialDeliveryClass ?? hints.deliveryClass;
 }
 
-async function prepareArenaBuildById(buildId: string) {
+async function prepareArenaBuildById(buildId: string, privateAccessOnly = false) {
   const build = await prisma.build.findUnique({
     where: { id: buildId },
     select: {
@@ -139,7 +139,7 @@ async function prepareArenaBuildById(buildId: string) {
       voxelStorageEncoding: true,
     },
   });
-  return build ? prepareArenaBuild(build) : null;
+  return build ? prepareArenaBuild({ ...build, privateAccessOnly }) : null;
 }
 
 async function persistPreparedArenaBuildMetadata(
@@ -805,6 +805,8 @@ export async function GET(req: Request) {
   if (!buildA || !buildB) {
     return respondJson({ error: "Missing seeded build" }, { status: 500 });
   }
+  const privateBuildA = picked.stealthModelId === leftModel.id;
+  const privateBuildB = picked.stealthModelId === rightModel.id;
 
   const checksumA = normalizeArenaBuildChecksum(buildA.voxelSha256);
   const checksumB = normalizeArenaBuildChecksum(buildB.voxelSha256);
@@ -831,8 +833,14 @@ export async function GET(req: Request) {
   const artifactMissBuildIds = new Set<string>();
   const prepareStartedAt = performance.now();
   if (shouldPrepareA || shouldPrepareB) {
-    preparedA = shouldPrepareA && checksumA ? getCachedPreparedArenaBuild(buildA.id, checksumA) : null;
-    preparedB = shouldPrepareB && checksumB ? getCachedPreparedArenaBuild(buildB.id, checksumB) : null;
+    preparedA =
+      shouldPrepareA && checksumA && !privateBuildA
+        ? getCachedPreparedArenaBuild(buildA.id, checksumA)
+        : null;
+    preparedB =
+      shouldPrepareB && checksumB && !privateBuildB
+        ? getCachedPreparedArenaBuild(buildB.id, checksumB)
+        : null;
 
     try {
       const [buildAForPrepare, buildBForPrepare] = await Promise.all([
@@ -894,12 +902,12 @@ export async function GET(req: Request) {
 	        preparedA || persistedInitialBuildA
 	          ? Promise.resolve(preparedA)
 	          : buildAForPrepare
-	            ? prepareArenaBuildById(buildA.id)
+	            ? prepareArenaBuildById(buildA.id, privateBuildA)
 	            : Promise.resolve(null),
 	        preparedB || persistedInitialBuildB
 	          ? Promise.resolve(preparedB)
 	          : buildBForPrepare
-	            ? prepareArenaBuildById(buildB.id)
+	            ? prepareArenaBuildById(buildB.id, privateBuildB)
 	            : Promise.resolve(null),
       ]);
     } catch (err) {

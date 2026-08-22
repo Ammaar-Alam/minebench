@@ -4,8 +4,12 @@ import type {
   ArenaBuildVariant,
 } from "@/lib/arena/types";
 import type { VoxelBuild, VoxelBlock } from "@/lib/voxel/types";
-import { getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
 import {
+  deleteSupabaseStorageObjects,
+  getSupabaseStorageConfig,
+} from "@/lib/storage/buildPayload";
+import {
+  finalizeArenaBuildArtifactUpload,
   getArenaCanonicalStreamArtifactRef,
   getArenaLegacyStreamArtifactRef,
   getArenaStreamArtifactLocation,
@@ -632,6 +636,9 @@ export async function uploadArenaBuildStreamArtifact(
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`Stream artifact upload failed (${resp.status}): ${text || "empty response"}`);
+  }
+  if (!(await finalizeArenaBuildArtifactUpload(buildId, ref, deleteSupabaseStorageObjects))) {
+    throw new Error("Build was deleted during artifact upload");
   }
   clearArenaBuildStreamArtifactMiss(buildId, variant, checksum);
   return ref;

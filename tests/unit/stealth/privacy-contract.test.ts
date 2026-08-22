@@ -36,6 +36,14 @@ assert.match(generation, /Existing stealth build cannot be replaced/);
 const buildMetaCache = read("lib/arena/buildMetaCache.ts");
 assert.match(buildMetaCache, /privateAccessOnly/);
 assert.match(buildMetaCache, /stealthVariant/);
+assert.match(buildMetaCache, /!row\.privateAccessOnly/);
+
+const publication = read("lib/benchmark/publication.ts");
+const ratedCohortGuard = publication.slice(
+  publication.indexOf("export async function assertRatedModelCohortUnchanged"),
+  publication.indexOf("export function runPublicationStep"),
+);
+assert.match(ratedCohortGuard, /stealthVariantId:\s*null/);
 
 const leaderboardBuildRoute = read("app/api/leaderboard/builds/[buildId]/route.ts");
 assert.match(leaderboardBuildRoute, /stealthVariant/);

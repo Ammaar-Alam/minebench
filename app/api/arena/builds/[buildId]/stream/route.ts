@@ -411,7 +411,9 @@ export async function GET(
     );
   }
 
-  const cachedPrepared = getCachedPreparedArenaBuild(buildId, storedChecksum);
+  const cachedPrepared = meta.privateAccessOnly
+    ? null
+    : getCachedPreparedArenaBuild(buildId, storedChecksum);
   const build = cachedPrepared
     ? null
     : await prisma.build.findUnique({
@@ -520,7 +522,12 @@ export async function GET(
         try {
           if (closed || request.signal.aborted) return;
           // heavy parse starts after the response stream is open
-          const prepared = cachedPrepared ?? (await prepareArenaBuild(build!, { signal: request.signal }));
+          const prepared =
+            cachedPrepared ??
+            (await prepareArenaBuild(
+              { ...build!, privateAccessOnly: meta.privateAccessOnly },
+              { signal: request.signal },
+            ));
           if (closed || request.signal.aborted) return;
 
           if (!cachedPrepared) {

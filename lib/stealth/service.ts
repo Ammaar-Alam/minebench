@@ -311,9 +311,16 @@ function safeText(value: string | null | undefined, maxLength: number): string |
   return normalized || null;
 }
 
-export function sanitizeOperationalError(error: unknown): string {
+export function sanitizeOperationalError(
+  error: unknown,
+  exactSecrets: readonly string[] = [],
+): string {
   const raw = error instanceof Error ? error.message : String(error || "Operation failed");
-  const redacted = raw
+  const exactRedacted = exactSecrets.reduce(
+    (message, secret) => (secret ? message.split(secret).join("[redacted]") : message),
+    raw,
+  );
+  const redacted = exactRedacted
     .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]")
     .replace(
       /(api[_-]?key|authorization|x-api-key|key)["'\s:=]+[A-Za-z0-9._~+/-]+=*/gi,
@@ -1843,10 +1850,17 @@ export async function disableStealthEndpoint(
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
-    const variant = await lockVariant(tx, variantId);
-    if (!variant) throw new Error("Checkpoint not found");
-    const experiment = await lockExperiment(tx, variant.experimentId);
+    const identity = await tx.stealthVariant.findUnique({
+      where: { id: variantId },
+      select: { experimentId: true },
+    });
+    if (!identity) throw new Error("Checkpoint not found");
+    const experiment = await lockExperiment(tx, identity.experimentId);
     if (!experiment || experiment.organizationId !== organizationId) {
+      throw new Error("Checkpoint not found");
+    }
+    const variant = await lockVariant(tx, variantId);
+    if (!variant || variant.experimentId !== experiment.id) {
       throw new Error("Checkpoint not found");
     }
     if (experiment.status === "CLOSED") throw new Error("Closed evaluations are read-only");
@@ -1884,7 +1898,7 @@ export async function deleteUnusedDraftEvaluation(
   experimentId: string,
 ): Promise<void> {
   const now = new Date();
-  const prepare = async (tx: Prisma.TransactionClient) => {
+  await prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
     const experiment = await lockExperiment(tx, experimentId);
     if (!experiment || experiment.organizationId !== organizationId) {
@@ -1897,12 +1911,20 @@ export async function deleteUnusedDraftEvaluation(
     });
     const variantIds = variants.map((variant) => variant.id);
     const modelIds = variants.map((variant) => variant.modelId);
-    const [buildCount, matchupCount, voteCount] = await Promise.all([
-      tx.build.count({ where: { modelId: { in: modelIds } } }),
+    const [acceptedBuildCount, matchupCount, voteCount, activeRunCount] = await Promise.all([
+      tx.build.count({
+        where: {
+          modelId: { in: modelIds },
+          stealthGenerationResults: { some: { status: "READY" } },
+        },
+      }),
       tx.matchup.count({ where: { stealthVariantId: { in: variantIds } } }),
       tx.vote.count({ where: { matchup: { stealthVariantId: { in: variantIds } } } }),
+      tx.stealthGenerationRun.count({
+        where: { variantId: { in: variantIds }, status: "RUNNING" },
+      }),
     ]);
-    if (buildCount > 0 || matchupCount > 0 || voteCount > 0) {
+    if (acceptedBuildCount > 0 || matchupCount > 0 || voteCount > 0 || activeRunCount > 0) {
       throw new Error("Only unused drafts can be deleted");
     }
     const uploads = await tx.stealthCohortUpload.findMany({
@@ -1912,27 +1934,19 @@ export async function deleteUnusedDraftEvaluation(
     if (uploads.some((upload) => upload.expiresAt > now)) {
       throw new Error("A pending cohort upload must expire before this draft can be deleted");
     }
-    return { experiment, variantIds, modelIds, uploads };
-  };
-  const snapshot = await prisma.$transaction(prepare);
-  const buildStorageRefs = hasSupabaseStorageConfig()
-    ? await listStealthBuildStorageRefs(snapshot.variantIds)
-    : [];
-  await deleteSupabaseStorageObjects([...snapshot.uploads, ...buildStorageRefs]);
-  await prisma.$transaction(async (tx) => {
-    const current = await prepare(tx);
-    await tx.stealthCohortUpload.deleteMany({ where: { experimentId: current.experiment.id } });
+    await tx.stealthExperiment.update({
+      where: { id: experiment.id },
+      data: { status: "CLOSED", endedAt: now, retentionDeleteAt: now },
+    });
+    await tx.stealthVariant.updateMany({
+      where: { id: { in: variantIds } },
+      data: { status: "WITHDRAWN", endpointEnabled: false },
+    });
     await tx.stealthEndpointCredential.deleteMany({
-      where: { variantId: { in: current.variantIds } },
+      where: { variantId: { in: variantIds } },
     });
-    await tx.stealthGenerationResult.deleteMany({
-      where: { run: { variantId: { in: current.variantIds } } },
-    });
-    await tx.stealthGenerationRun.deleteMany({ where: { variantId: { in: current.variantIds } } });
-    await tx.stealthVariant.deleteMany({ where: { id: { in: current.variantIds } } });
-    await tx.stealthExperiment.delete({ where: { id: current.experiment.id } });
-    await tx.model.deleteMany({ where: { id: { in: current.modelIds } } });
   });
+  await purgeStealthEvaluationIfDue(experimentId, now);
 }
 
 export async function getProtectedStealthBuild(
@@ -1991,10 +2005,17 @@ export async function recordStealthReleaseMapping(
 
   return prisma.$transaction(async (tx) => {
     await assertOrganizationAdmin(tx, actor, organizationId);
-    const variant = await lockVariant(tx, input.variantId);
-    if (!variant) throw new Error("Checkpoint not found");
-    const experiment = await lockExperiment(tx, variant.experimentId);
+    const identity = await tx.stealthVariant.findUnique({
+      where: { id: input.variantId },
+      select: { experimentId: true },
+    });
+    if (!identity) throw new Error("Checkpoint not found");
+    const experiment = await lockExperiment(tx, identity.experimentId);
     if (!experiment || experiment.organizationId !== organizationId) {
+      throw new Error("Checkpoint not found");
+    }
+    const variant = await lockVariant(tx, input.variantId);
+    if (!variant || variant.experimentId !== experiment.id) {
       throw new Error("Checkpoint not found");
     }
     if (experiment.status !== "CLOSED") {
@@ -2139,23 +2160,25 @@ export async function purgeDueStealthEvaluations(
   });
   const purged: string[] = [];
   const failures: Array<{ evaluationId: string; error: string }> = [];
-  const expiredUploads = await prisma.stealthCohortUpload.findMany({
-    where: { expiresAt: { lte: now } },
-    orderBy: { expiresAt: "asc" },
-    take: 100,
-    select: { id: true, experimentId: true, bucket: true, path: true },
-  });
-  for (const upload of expiredUploads) {
-    try {
-      await deleteSupabaseStorageObjects([upload]);
-      await prisma.stealthCohortUpload.deleteMany({
-        where: { id: upload.id, expiresAt: { lte: now } },
-      });
-    } catch (error) {
-      failures.push({
-        evaluationId: upload.experimentId,
-        error: sanitizeOperationalError(error),
-      });
+  if (hasSupabaseStorageConfig()) {
+    const expiredUploads = await prisma.stealthCohortUpload.findMany({
+      where: { expiresAt: { lte: now } },
+      orderBy: { expiresAt: "asc" },
+      take: 100,
+      select: { id: true, experimentId: true, bucket: true, path: true },
+    });
+    for (const upload of expiredUploads) {
+      try {
+        await deleteSupabaseStorageObjects([upload]);
+        await prisma.stealthCohortUpload.deleteMany({
+          where: { id: upload.id, expiresAt: { lte: now } },
+        });
+      } catch (error) {
+        failures.push({
+          evaluationId: upload.experimentId,
+          error: sanitizeOperationalError(error),
+        });
+      }
     }
   }
   for (const evaluation of due) {
@@ -2194,6 +2217,7 @@ export async function purgeStealthEvaluationIfDue(
         voxelStorageBucket: true,
         voxelStoragePath: true,
         voxelSha256: true,
+        _count: { select: { arenaArtifacts: true } },
       },
     });
     const cohortUploads = await tx.stealthCohortUpload.findMany({
@@ -2235,25 +2259,38 @@ export async function purgeStealthEvaluationIfDue(
   });
   if (!snapshot) return false;
 
-  const variantStorageRefs = await listStealthBuildStorageRefs(
-    snapshot.variants.map((variant) => variant.id),
-  );
-  await deleteSupabaseStorageObjects(
-    [
-      ...variantStorageRefs,
-      ...snapshot.cohortUploads,
-      ...snapshot.builds.flatMap((build) =>
-        build.voxelStorageBucket && build.voxelStoragePath
-          ? [{ bucket: build.voxelStorageBucket, path: build.voxelStoragePath }]
-          : [],
-      ),
-    ].filter((ref) => !snapshot.survivingStorageRefs.has(`${ref.bucket}:${ref.path}`)),
-  );
-  await deleteArenaBuildArtifacts({
-    retiringBuilds: snapshot.builds,
-    survivingChecksums: snapshot.survivingChecksums,
-    deleteStorage: deleteSupabaseStorageObjects,
-  });
+  const storageConfigured = hasSupabaseStorageConfig();
+  const hasTrackedRemoteObjects =
+    snapshot.cohortUploads.length > 0 ||
+    snapshot.builds.some(
+      (build) =>
+        Boolean(build.voxelStorageBucket && build.voxelStoragePath) ||
+        build._count.arenaArtifacts > 0,
+    );
+  if (!storageConfigured && hasTrackedRemoteObjects) {
+    throw new Error("Storage configuration is required to purge remote private artifacts");
+  }
+  if (storageConfigured) {
+    const variantStorageRefs = await listStealthBuildStorageRefs(
+      snapshot.variants.map((variant) => variant.id),
+    );
+    await deleteSupabaseStorageObjects(
+      [
+        ...snapshot.cohortUploads,
+        ...variantStorageRefs,
+        ...snapshot.builds.flatMap((build) =>
+          build.voxelStorageBucket && build.voxelStoragePath
+            ? [{ bucket: build.voxelStorageBucket, path: build.voxelStoragePath }]
+            : [],
+        ),
+      ].filter((ref) => !snapshot.survivingStorageRefs.has(`${ref.bucket}:${ref.path}`)),
+    );
+    await deleteArenaBuildArtifacts({
+      retiringBuilds: snapshot.builds,
+      survivingChecksums: snapshot.survivingChecksums,
+      deleteStorage: deleteSupabaseStorageObjects,
+    });
+  }
 
   await prisma.$transaction(async (tx) => {
     const experiment = await lockExperiment(tx, snapshot.experimentId);

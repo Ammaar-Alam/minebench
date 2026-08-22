@@ -2,12 +2,14 @@ import type { PreparedArenaBuild } from "@/lib/arena/buildArtifacts";
 import { pickBuildVariant } from "@/lib/arena/buildArtifacts";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
 import {
+  deleteSupabaseStorageObjects,
   getSupabaseStorageConfig,
   hasSupabaseStorageConfig,
 } from "@/lib/storage/buildPayload";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import {
   getArenaSnapshotArtifactRef,
+  finalizeArenaBuildArtifactUpload,
   hasArenaSnapshotArtifactLocation,
   registerArenaBuildArtifact,
   type ArenaSnapshotArtifactFormat,
@@ -337,6 +339,16 @@ async function uploadSnapshotArtifactVariant(
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       throw new Error(`Snapshot artifact upload failed (${resp.status}): ${text || "empty response"}`);
+    }
+
+    if (
+      !(await finalizeArenaBuildArtifactUpload(
+        prepared.buildId,
+        ref,
+        deleteSupabaseStorageObjects,
+      ))
+    ) {
+      throw new Error("Build was deleted during artifact upload");
     }
 
     clearSnapshotArtifactMiss(prepared.buildId, variant, prepared.checksum, format);

@@ -21,6 +21,57 @@ const service = read("lib/stealth/service.ts");
 assert.match(service, /createSignedUploadUrl/);
 assert.match(service, /signedUrl: data\.signedUrl/);
 
+function assertOrder(body: string, first: string, second: string, message: string) {
+  const firstIndex = body.indexOf(first);
+  const secondIndex = body.indexOf(second);
+  assert.ok(firstIndex >= 0 && secondIndex >= 0 && firstIndex < secondIndex, message);
+}
+
+for (const functionName of ["disableStealthEndpoint", "recordStealthReleaseMapping"]) {
+  const start = service.indexOf(`export async function ${functionName}`);
+  const end = service.indexOf("\nexport async function ", start + 1);
+  const body = service.slice(start, end < 0 ? undefined : end);
+  assert.ok(start >= 0, `${functionName} must exist`);
+  assertOrder(
+    body,
+    "lockExperiment(tx",
+    "lockVariant(tx",
+    `${functionName} must lock the evaluation before its checkpoint`,
+  );
+}
+
+const generationRun = read("lib/stealth/generationRun.ts");
+for (const functionName of [
+  "failStealthGenerationRun",
+  "refreshStealthGenerationProgress",
+  "finishStealthGenerationRun",
+]) {
+  const resolvedStart = generationRun.indexOf(`function ${functionName}`);
+  const end = generationRun.indexOf("\nexport async function ", resolvedStart + 1);
+  const body = generationRun.slice(resolvedStart, end < 0 ? undefined : end);
+  assert.ok(resolvedStart >= 0, `${functionName} must exist`);
+  assertOrder(
+    body,
+    "lockExperiment(tx",
+    "stealthVariant.update",
+    `${functionName} must lock the evaluation before changing its checkpoint`,
+  );
+}
+assert.match(service, /if \(hasSupabaseStorageConfig\(\)\) \{[\s\S]*listStealthBuildStorageRefs/);
+
+const generationSource = read("lib/stealth/generation.ts");
+assert.match(
+  generationSource,
+  /isMissingStealthBuildPayload\(error\)[\s\S]*storePayload\(/,
+);
+assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);
+assert.match(generationRun, /deleteUnacceptedStealthBuild\(existing\.id\)/);
+assert.match(generationRun, /sanitizeOperationalError\([\s\S]*configuredApiKey/);
+
+for (const path of ["lib/arena/buildSnapshotArtifacts.ts", "lib/arena/buildStream.ts"]) {
+  assert.match(read(path), /finalizeArenaBuildArtifactUpload/);
+}
+
 const cli = read("scripts/stealth-eval.ts");
 assert.match(cli, /positiveInt\(args, \["--concurrency"\], 1, 4\)/);
 

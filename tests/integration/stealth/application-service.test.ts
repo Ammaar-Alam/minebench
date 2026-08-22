@@ -381,6 +381,36 @@ async function main() {
     /not ready/,
   );
 
+  const privateCacheVariant = await prisma.stealthVariant.findUniqueOrThrow({
+    where: { id: checkpoint.variantId },
+    select: { modelId: true },
+  });
+  const privateCachePrompt = await prisma.prompt.create({
+    data: { text: `Private cache ${suffix}` },
+  });
+  const privateCacheBuild = await prisma.build.create({
+    data: {
+      promptId: privateCachePrompt.id,
+      modelId: privateCacheVariant.modelId,
+      gridSize: 256,
+      palette: "simple",
+      mode: "precise",
+      voxelData: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+      voxelSha256: "private-cache-checksum",
+      blockCount: 1,
+      generationTimeMs: 0,
+    },
+  });
+  const { getArenaBuildMeta } = await import("../../../lib/arena/buildMetaCache");
+  assert.ok(await getArenaBuildMeta(privateCacheBuild.id, privateCacheBuild.voxelSha256));
+  await prisma.build.delete({ where: { id: privateCacheBuild.id } });
+  assert.equal(
+    await getArenaBuildMeta(privateCacheBuild.id, privateCacheBuild.voxelSha256),
+    null,
+    "retained private metadata must not survive database deletion",
+  );
+  await prisma.prompt.delete({ where: { id: privateCachePrompt.id } });
+
   await disableStealthEndpoint(memberActor, organization.id, checkpoint.variantId);
   assert.equal(
     await prisma.stealthEndpointCredential.count({ where: { variantId: checkpoint.variantId } }),
@@ -412,6 +442,11 @@ async function main() {
   process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
   global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     if (init?.method === "POST" && String(input).includes("/storage/v1/object/list/")) {
+      assert.equal(
+        (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: evaluation.id } })).status,
+        "CLOSED",
+        "draft deletion must reserve the evaluation before sweeping storage",
+      );
       return Response.json([{ id: "orphan", name: "orphan.json.gz" }]);
     }
     const body = JSON.parse(String(init?.body)) as { prefixes: string[] };
@@ -895,12 +930,23 @@ async function main() {
     });
     global.fetch = (async () => {
       failedProviderRequests += 1;
-      return new Response("Provider rejected request", { status: 401 });
+      return new Response('{"error":"generation-failure-secret-key"}', { status: 401 });
     }) as typeof fetch;
     await generateStealthPromptForRun({
       runId: noBuildRun.runId,
       promptSlug: providerFailurePrompt,
     });
+    const providerFailurePromptId = cohortPrompts.find(
+      (prompt) => prompt.slug === providerFailurePrompt,
+    )?.prompt.id;
+    assert.ok(providerFailurePromptId);
+    const providerFailure = await prisma.stealthGenerationResult.findUniqueOrThrow({
+      where: {
+        runId_promptId: { runId: noBuildRun.runId, promptId: providerFailurePromptId },
+      },
+    });
+    assert.doesNotMatch(providerFailure.error ?? "", /generation-failure-secret-key/);
+    assert.match(providerFailure.error ?? "", /\[redacted\]/);
     const failureVariant = await prisma.stealthVariant.findUniqueOrThrow({
       where: { id: failureCheckpoint.variantId },
       select: { modelId: true },
@@ -1211,6 +1257,82 @@ async function main() {
   assert.equal(await prisma.build.count({ where: { modelId: failedCreateModel.id } }), 0);
   await prisma.model.delete({ where: { id: failedCreateModel.id } });
 
+  const artifactFencePrompt = await prisma.prompt.create({
+    data: { text: `Artifact fence ${suffix}` },
+  });
+  const artifactFenceModel = await prisma.model.create({
+    data: {
+      key: `artifact-fence-${suffix}`,
+      provider: "Test",
+      modelId: `artifact-fence-${suffix}`,
+      displayName: "Artifact fence",
+      enabled: false,
+    },
+  });
+  const artifactFenceBuild = await prisma.build.create({
+    data: {
+      promptId: artifactFencePrompt.id,
+      modelId: artifactFenceModel.id,
+      gridSize: 256,
+      palette: "simple",
+      mode: "precise",
+      voxelData: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+      voxelSha256: `artifact-fence-${suffix}`,
+      blockCount: 1,
+      generationTimeMs: 0,
+    },
+  });
+  const artifactFenceStorageUrl = process.env.SUPABASE_URL;
+  const artifactFenceStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const artifactFenceFetch = global.fetch;
+  process.env.SUPABASE_URL = "https://storage.example.test";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "artifact-fence-key";
+  let markArtifactUploadStarted!: () => void;
+  let releaseArtifactUpload!: () => void;
+  const artifactUploadStarted = new Promise<void>((resolve) => {
+    markArtifactUploadStarted = resolve;
+  });
+  const artifactUploadRelease = new Promise<void>((resolve) => {
+    releaseArtifactUpload = resolve;
+  });
+  let artifactFenceDeletes = 0;
+  global.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      markArtifactUploadStarted();
+      await artifactUploadRelease;
+      return new Response(null, { status: 200 });
+    }
+    if (init?.method === "DELETE") {
+      artifactFenceDeletes += 1;
+      return new Response(null, { status: 200 });
+    }
+    throw new Error("Unexpected artifact fence request");
+  }) as typeof fetch;
+  const { uploadArenaBuildStreamArtifact } = await import("../../../lib/arena/buildStream");
+  const artifactUpload = uploadArenaBuildStreamArtifact(
+    artifactFenceBuild.id,
+    "full",
+    artifactFenceBuild.voxelSha256,
+    new TextEncoder().encode('{"type":"done"}\n'),
+  );
+  try {
+    await artifactUploadStarted;
+    await prisma.build.delete({ where: { id: artifactFenceBuild.id } });
+    releaseArtifactUpload();
+    await assert.rejects(artifactUpload, /deleted during artifact upload/i);
+    assert.equal(artifactFenceDeletes, 1, "a post-purge upload must be removed");
+  } finally {
+    releaseArtifactUpload();
+    await artifactUpload.catch(() => undefined);
+    global.fetch = artifactFenceFetch;
+    if (artifactFenceStorageUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = artifactFenceStorageUrl;
+    if (artifactFenceStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = artifactFenceStorageKey;
+  }
+  await prisma.model.delete({ where: { id: artifactFenceModel.id } });
+  await prisma.prompt.delete({ where: { id: artifactFencePrompt.id } });
+
   const uploadedEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Uploaded ${suffix}`,
   });
@@ -1454,6 +1576,17 @@ async function main() {
     name: `Retention ${suffix}`,
     retentionDays: 45,
   });
+  await configureStealthEndpoint(minebenchAdmin, otherOrganization.id, retained.id, {
+    codename: "Inline retained checkpoint",
+    config: {
+      protocol: "openai-compatible",
+      endpointUrl: "https://checkpoint.example.test/v1",
+      apiKey: "inline-retained-secret-key",
+      modelId: `inline-retained-${suffix}`,
+      requireStructuredOutput: true,
+      enableTools: true,
+    },
+  });
   await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, retained.id);
   const closed = await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: retained.id } });
   assert.equal(closed.retentionDays, 45);
@@ -1462,7 +1595,30 @@ async function main() {
     where: { id: retained.id },
     data: { retentionDeleteAt: due },
   });
-  assert.equal(await purgeStealthEvaluationIfDue(retained.id, new Date()), true);
+  const retainedStorageEnv = {
+    url: process.env.SUPABASE_URL,
+    publicUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    roleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
+    secretKey: process.env.SUPABASE_SECRET_KEY,
+  };
+  delete process.env.SUPABASE_URL;
+  delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.SUPABASE_SECRET_KEY;
+  try {
+    assert.equal(await purgeStealthEvaluationIfDue(retained.id, new Date()), true);
+  } finally {
+    if (retainedStorageEnv.url !== undefined) process.env.SUPABASE_URL = retainedStorageEnv.url;
+    if (retainedStorageEnv.publicUrl !== undefined) {
+      process.env.NEXT_PUBLIC_SUPABASE_URL = retainedStorageEnv.publicUrl;
+    }
+    if (retainedStorageEnv.roleKey !== undefined) {
+      process.env.SUPABASE_SERVICE_ROLE_KEY = retainedStorageEnv.roleKey;
+    }
+    if (retainedStorageEnv.secretKey !== undefined) {
+      process.env.SUPABASE_SECRET_KEY = retainedStorageEnv.secretKey;
+    }
+  }
   assert.equal(await purgeStealthEvaluationIfDue(retained.id, new Date()), false);
 
   const blockedPurge = await createStealthEvaluation(minebenchAdmin, otherOrganization.id, {

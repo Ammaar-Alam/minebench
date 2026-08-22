@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import {
+  getCachedPreparedArenaBuild,
   getPreparedArenaBuildCoreMetadataUpdate,
+  prepareArenaBuild,
   prepareArenaBuildFromBuild,
   type ArenaBuildSource,
 } from "../../../lib/arena/buildArtifacts";
@@ -47,6 +49,22 @@ async function main() {
   for (const key of SNAPSHOT_KEYS) {
     assert.ok(!(key in core), `metadata update must not carry ${key}`);
   }
+
+  const privateSource: ArenaBuildSource = {
+    ...makeSource(),
+    id: "private-build",
+    privateAccessOnly: true,
+    voxelData: {
+      version: "1.0",
+      blocks: [{ x: 0, y: 0, z: 0, type: "stone" }],
+    },
+  };
+  await prepareArenaBuild(privateSource);
+  assert.equal(
+    getCachedPreparedArenaBuild(privateSource.id, privateSource.voxelSha256),
+    null,
+    "private payloads must not remain in the shared prepared-build cache",
+  );
 
   console.log("build metadata update checks passed");
 }

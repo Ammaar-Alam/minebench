@@ -84,6 +84,7 @@ async function storePayload(params: {
   build: VoxelBuild;
   gzip: Buffer;
   sha256: string;
+  target?: { bucket: string; path: string };
 }): Promise<StoredPayload> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (isLoopbackDatabaseUrl(databaseUrl)) {
@@ -100,11 +101,12 @@ async function storePayload(params: {
   }
 
   assertStorageMatchesDatabase(config.url);
+  const bucket = params.target?.bucket ?? config.bucket;
   const path =
-    `${getStealthBuildStoragePrefix(params.variantId)}/` +
-    `${params.promptSlug}-${params.sha256}.json.gz`;
+    params.target?.path ??
+    `${getStealthBuildStoragePrefix(params.variantId)}/${params.promptSlug}-${params.sha256}.json.gz`;
   const response = await fetch(
-    `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodedStoragePath(path)}`,
+    `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedStoragePath(path)}`,
     {
       method: "POST",
       headers: {
@@ -122,14 +124,14 @@ async function storePayload(params: {
   if (!response.ok) {
     const body = await response.text();
     if (isExistingObjectUploadError(response.status, body)) {
-      await assertStoredPayloadMatches(config, path, params.sha256);
+      await assertStoredPayloadMatches({ ...config, bucket }, path, params.sha256);
     } else {
       throw new Error(`Stealth build storage upload failed (${response.status}): ${body}`);
     }
   }
   return {
     voxelData: Prisma.DbNull,
-    voxelStorageBucket: config.bucket,
+    voxelStorageBucket: bucket,
     voxelStoragePath: path,
     voxelStorageEncoding: "gzip",
   };
@@ -197,6 +199,24 @@ function validateExistingBuildIdentity(
   }
 }
 
+function retryPayloadTarget(build: ExistingBuild): { bucket: string; path: string } | undefined {
+  const inline = isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "");
+  if (inline) {
+    if (build.voxelStorageBucket || build.voxelStoragePath || build.voxelStorageEncoding) {
+      throw new Error("Existing stealth build storage identity does not match retry payload");
+    }
+    return undefined;
+  }
+  if (
+    !build.voxelStorageBucket ||
+    !build.voxelStoragePath ||
+    build.voxelStorageEncoding !== "gzip"
+  ) {
+    throw new Error("Existing stealth build storage identity does not match retry payload");
+  }
+  return { bucket: build.voxelStorageBucket, path: build.voxelStoragePath };
+}
+
 function isUniqueConstraintError(error: unknown): boolean {
   return (
     error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -207,7 +227,7 @@ function isUniqueConstraintError(error: unknown): boolean {
 async function maybePrecomputeRemoteArtifacts(build: ExistingBuild): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (!isLoopbackDatabaseUrl(databaseUrl)) {
-    await maybePrecomputeArenaArtifactsForBuild(build);
+    await maybePrecomputeArenaArtifactsForBuild({ ...build, privateAccessOnly: true });
   }
 }
 
@@ -250,7 +270,21 @@ export async function persistStealthBuild(params: {
   });
   if (existing) {
     validateExistingBuildIdentity(existing, expectedIdentity);
-    await maybePrecomputeRemoteArtifacts(existing);
+    const target = retryPayloadTarget(existing);
+    try {
+      await maybePrecomputeRemoteArtifacts(existing);
+    } catch (error) {
+      if (!isMissingStealthBuildPayload(error)) throw error;
+      await storePayload({
+        variantId: params.variantId,
+        promptSlug: params.promptSlug,
+        build: params.build,
+        gzip,
+        sha256,
+        target,
+      });
+      await maybePrecomputeRemoteArtifacts(existing);
+    }
     return { id: existing.id, blockCount: existing.blockCount, created: false };
   }
 
@@ -370,6 +404,10 @@ export async function deleteUnacceptedStealthBuild(buildId: string): Promise<boo
   return deleted.count === 1;
 }
 
+export function isMissingStealthBuildPayload(error: unknown): boolean {
+  return error instanceof Error && /Storage download failed \(404\)/.test(error.message);
+}
+
 export async function ensureStealthBuildArtifacts(buildId: string): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (isLoopbackDatabaseUrl(databaseUrl)) return;
@@ -383,5 +421,5 @@ export async function ensureStealthBuildArtifacts(buildId: string): Promise<void
     select: BUILD_SOURCE_SELECT,
   });
   if (!build) throw new Error(`Stealth build not found: ${buildId}`);
-  await maybePrecomputeArenaArtifactsForBuild(build);
+  await maybePrecomputeArenaArtifactsForBuild({ ...build, privateAccessOnly: true });
 }

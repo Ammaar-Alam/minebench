@@ -101,6 +101,23 @@ export type ArenaRegisteredArtifactOwnership = {
   survivingRefKeys: ReadonlySet<string>;
 };
 
+type ArenaArtifactBuildOwner = {
+  model: {
+    stealthVariant: {
+      experiment: { status: string; retentionDeleteAt: Date | null };
+    } | null;
+  };
+};
+
+function isRetainedArtifactBuild(build: ArenaArtifactBuildOwner, now: Date): boolean {
+  const experiment = build.model.stealthVariant?.experiment;
+  return !(
+    experiment?.status === "CLOSED" &&
+    experiment.retentionDeleteAt &&
+    experiment.retentionDeleteAt <= now
+  );
+}
+
 export async function registerArenaBuildArtifact(
   buildId: string,
   ref: ArenaArtifactStorageRef,
@@ -110,6 +127,44 @@ export async function registerArenaBuildArtifact(
     create: { buildId, bucket: ref.bucket, path: ref.path },
     update: {},
   });
+}
+
+export async function finalizeArenaBuildArtifactUpload(
+  buildId: string,
+  ref: ArenaArtifactStorageRef,
+  deleteStorage: (refs: ArenaArtifactStorageRef[]) => Promise<void>,
+): Promise<boolean> {
+  const owners = await prisma.arenaBuildArtifact.findMany({
+    where: { bucket: ref.bucket, path: ref.path },
+    select: {
+      buildId: true,
+      build: {
+        select: {
+          model: {
+            select: {
+              stealthVariant: {
+                select: {
+                  experiment: { select: { status: true, retentionDeleteAt: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  const now = new Date();
+  if (
+    owners.some(
+      (owner) => owner.buildId === buildId && isRetainedArtifactBuild(owner.build, now),
+    )
+  ) {
+    return true;
+  }
+  if (!owners.some((owner) => isRetainedArtifactBuild(owner.build, now))) {
+    await deleteStorage([ref]);
+  }
+  return false;
 }
 
 async function loadRegisteredArtifactOwnership(
