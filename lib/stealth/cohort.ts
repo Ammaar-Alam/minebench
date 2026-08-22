@@ -21,7 +21,7 @@ export async function prepareStealthCohortPrompts(): Promise<CohortPrompt[]> {
       prompt: await prisma.prompt.upsert({
         where: { text },
         create: { text, active: true },
-        update: { active: true },
+        update: {},
         select: { id: true },
       }),
     })),

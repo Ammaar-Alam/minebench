@@ -18,15 +18,18 @@ import { prisma } from "@/lib/prisma";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   decodeStoredBuildText,
+  deleteSupabaseStorageObjects,
   fetchStoredBuildBytes,
   getBuildStorageBucketFromEnv,
   getSupabaseStorageConfig,
+  hasSupabaseStorageConfig,
 } from "@/lib/storage/buildPayload";
 import {
   encryptStealthEndpointConfig,
   type StealthEndpointConfig,
 } from "@/lib/stealth/credentials";
 import {
+  deleteUnacceptedStealthBuild,
   getStealthBuildStoragePrefix,
   persistStealthBuild,
 } from "@/lib/stealth/generation";
@@ -151,6 +154,7 @@ export type StealthEvaluationWorkspace = {
     credentialConfigured: boolean;
     expectedBuildCount: number;
     generatedBuildCount: number;
+    persistedBuildCount: number;
     generationFailureCount: number;
     lastGenerationError: string | null;
     cohortGeneratedAt: Date | null;
@@ -228,7 +232,6 @@ type LockedVariant = {
 const { gridSize: GRID_SIZE, palette: PALETTE, mode: MODE } = STEALTH_COHORT_BUILD;
 const DEFAULT_RETENTION_DAYS = 30;
 const MAX_RETENTION_DAYS = 3650;
-const STORAGE_DELETE_BATCH_SIZE = 100;
 const COHORT_UPLOAD_PREFIX = "stealth-cohort-uploads/v1";
 const COHORT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1_000;
 const MAX_COHORT_UPLOAD_BYTES = 128 * 1_024 * 1_024;
@@ -507,6 +510,10 @@ async function assertNoCheckpointData(
   variantId: string,
   modelId: string,
 ): Promise<void> {
+  const activeRunCount = await db.stealthGenerationRun.count({
+    where: { variantId, status: "RUNNING" },
+  });
+  if (activeRunCount > 0) throw new Error("Generation is still running");
   const [buildCount, matchupCount, voteCount] = await Promise.all([
     db.build.count({ where: { modelId } }),
     db.matchup.count({ where: { stealthVariantId: variantId } }),
@@ -521,6 +528,10 @@ async function assertUploadCheckpointRetryable(
   db: PrismaExecutor,
   variant: Pick<LockedVariant, "id" | "modelId" | "source">,
 ): Promise<void> {
+  const activeRunCount = await db.stealthGenerationRun.count({
+    where: { variantId: variant.id, status: "RUNNING" },
+  });
+  if (activeRunCount > 0) throw new Error("Generation is still running");
   const [buildCount, matchupCount, voteCount] = await Promise.all([
     db.build.count({ where: { modelId: variant.modelId } }),
     db.matchup.count({ where: { stealthVariantId: variant.id } }),
@@ -1021,6 +1032,7 @@ export async function getStealthEvaluationWorkspace(
         orderBy: { codename: "asc" },
         include: {
           credential: { select: { id: true } },
+          model: { select: { _count: { select: { builds: true } } } },
           generationRuns: {
             orderBy: { startedAt: "desc" },
             take: 1,
@@ -1069,6 +1081,7 @@ export async function getStealthEvaluationWorkspace(
         credentialConfigured: Boolean(variant.credential),
         expectedBuildCount: variant.expectedBuildCount,
         generatedBuildCount: variant.generatedBuildCount,
+        persistedBuildCount: variant.model._count.builds,
         generationFailureCount: variant.generationFailureCount,
         lastGenerationError: variant.lastGenerationError
           ? sanitizeOperationalError(variant.lastGenerationError)
@@ -1347,6 +1360,7 @@ export async function completeUploadedStealthCohort(
         data: {
           codename,
           source: "UPLOAD",
+          status: "GENERATING",
           endpointEnabled: false,
           checkpointFingerprint: null,
           expectedBuildCount: prompts.length,
@@ -1361,8 +1375,13 @@ export async function completeUploadedStealthCohort(
         data: { displayName: codename, enabled: false },
       });
       await tx.stealthEndpointCredential.deleteMany({ where: { variantId: existing.id } });
+      const runId = await createStealthUploadRun(
+        tx,
+        existing.id,
+        prompts.map((prompt) => prompt.prompt.id),
+      );
       await syncExperimentReadiness(tx, experiment.id);
-      return { variantId: existing.id, modelId: existing.modelId };
+      return { variantId: existing.id, modelId: existing.modelId, runId };
     }
 
     const variantId = randomUUID();
@@ -1383,93 +1402,183 @@ export async function completeUploadedStealthCohort(
         experimentId: experiment.id,
         codename,
         source: "UPLOAD",
+        status: "GENERATING",
         modelId,
         endpointEnabled: false,
         expectedBuildCount: prompts.length,
       },
     });
+    const runId = await createStealthUploadRun(
+      tx,
+      variantId,
+      prompts.map((prompt) => prompt.prompt.id),
+    );
     await syncExperimentReadiness(tx, experiment.id);
-    return { variantId, modelId };
+    return { variantId, modelId, runId };
   });
 
-  const persisted: Array<{
-    prompt: (typeof validated)[number]["prompt"];
-    storedBuild: { id: string; blockCount: number };
-    generationTimeMs: number;
-  }> = [];
-  for (const entry of validated) {
-    await assertCohortUploadOpen(actor, organizationId, experimentId);
-    const build = await persistStealthBuild({
-      variantId: prepared.variantId,
-      modelId: prepared.modelId,
-      promptSlug: entry.prompt.slug,
-      promptText: entry.prompt.text,
-      build: entry.build,
-      generationTimeMs: entry.generationTimeMs,
-    });
-    persisted.push({
-      prompt: entry.prompt,
-      storedBuild: build,
-      generationTimeMs: entry.generationTimeMs,
-    });
-  }
-
-  return prisma.$transaction(async (tx) => {
-    const experiment = await lockExperiment(tx, experimentId);
-    if (!experiment || experiment.organizationId !== organizationId) {
-      throw new Error("Evaluation not found");
-    }
-    if (!isStealthCheckpointSetOpen(experiment.status)) {
-      throw new Error("Activated evaluations cannot accept new checkpoints");
-    }
-    const variant = await lockVariant(tx, prepared.variantId);
-    if (!variant || variant.experimentId !== experiment.id || variant.status === "WITHDRAWN") {
-      throw new Error("Checkpoint not found");
-    }
-    const run = await tx.stealthGenerationRun.create({
-      data: {
-        variantId: prepared.variantId,
-        status: "SUCCEEDED",
-        promptCohortId: BENCHMARK_PROMPT_COHORT_ID,
-        expectedBuildCount: prompts.length,
-        completedBuildCount: prompts.length,
-        failedBuildCount: 0,
-        providerCallCount: 0,
-        retryCount: 0,
-        completedAt: new Date(),
-        configuration: {
-          source: "upload",
-          gridSize: GRID_SIZE,
-          palette: PALETTE,
-          mode: MODE,
-        } satisfies Prisma.InputJsonObject,
-        results: {
-          createMany: {
-            data: persisted.map((entry) => ({
+  try {
+    for (const entry of validated) {
+      const claimed = await prisma.$transaction(async (tx) => {
+        const experiment = await lockExperiment(tx, experimentId);
+        if (
+          !experiment ||
+          experiment.organizationId !== organizationId ||
+          !isStealthCheckpointSetOpen(experiment.status)
+        ) {
+          return 0;
+        }
+        const run = await tx.stealthGenerationRun.findUnique({
+          where: { id: prepared.runId },
+          select: { status: true },
+        });
+        if (!run || run.status !== "RUNNING") return 0;
+        return (
+          await tx.stealthGenerationResult.updateMany({
+            where: {
+              runId: prepared.runId,
               promptId: entry.prompt.prompt.id,
-              buildId: entry.storedBuild.id,
-              status: "READY",
-              attempts: 0,
-              generationTimeMs: entry.generationTimeMs,
-            })),
+              status: "QUEUED",
+            },
+            data: { status: "VALIDATING" },
+          })
+        ).count;
+      });
+      if (claimed !== 1) throw new Error("Evaluation is no longer open");
+
+      const build = await persistStealthBuild({
+        variantId: prepared.variantId,
+        modelId: prepared.modelId,
+        promptSlug: entry.prompt.slug,
+        promptText: entry.prompt.text,
+        build: entry.build,
+        generationTimeMs: entry.generationTimeMs,
+      });
+      const accepted = await prisma.$transaction(async (tx) => {
+        const experiment = await lockExperiment(tx, experimentId);
+        if (
+          !experiment ||
+          experiment.organizationId !== organizationId ||
+          !isStealthCheckpointSetOpen(experiment.status)
+        ) {
+          return 0;
+        }
+        const run = await tx.stealthGenerationRun.findUnique({
+          where: { id: prepared.runId },
+          select: { status: true },
+        });
+        if (!run || run.status !== "RUNNING") return 0;
+        const result = await tx.stealthGenerationResult.updateMany({
+          where: {
+            runId: prepared.runId,
+            promptId: entry.prompt.prompt.id,
+            status: "VALIDATING",
           },
+          data: {
+            buildId: build.id,
+            status: "READY",
+            generationTimeMs: entry.generationTimeMs,
+            error: null,
+          },
+        });
+        if (result.count === 1) {
+          await tx.stealthGenerationRun.update({
+            where: { id: prepared.runId },
+            data: { completedBuildCount: { increment: 1 } },
+          });
+          await tx.stealthVariant.update({
+            where: { id: prepared.variantId },
+            data: { generatedBuildCount: { increment: 1 } },
+          });
+        }
+        return result.count;
+      });
+      if (accepted !== 1) {
+        if (build.created) await deleteUnacceptedStealthBuild(build.id);
+        throw new Error("Evaluation is no longer open");
+      }
+    }
+
+    return await prisma.$transaction(async (tx) => {
+      const experiment = await lockExperiment(tx, experimentId);
+      if (
+        !experiment ||
+        experiment.organizationId !== organizationId ||
+        !isStealthCheckpointSetOpen(experiment.status)
+      ) {
+        throw new Error("Evaluation is no longer open");
+      }
+      const completedBuildCount = await tx.stealthGenerationResult.count({
+        where: { runId: prepared.runId, status: "READY" },
+      });
+      if (completedBuildCount !== prompts.length) throw new Error("Upload is incomplete");
+      const completedAt = new Date();
+      await tx.stealthGenerationRun.updateMany({
+        where: { id: prepared.runId, status: "RUNNING" },
+        data: {
+          status: "SUCCEEDED",
+          completedBuildCount,
+          failedBuildCount: 0,
+          completedAt,
+          error: null,
         },
-      },
-      select: { id: true },
+      });
+      await tx.stealthVariant.update({
+        where: { id: prepared.variantId },
+        data: {
+          status: "READY",
+          generatedBuildCount: completedBuildCount,
+          generationFailureCount: 0,
+          cohortGeneratedAt: completedAt,
+          lastGenerationError: null,
+        },
+      });
+      await syncExperimentReadiness(tx, experimentId);
+      return { variantId: prepared.variantId, runId: prepared.runId };
     });
-    await tx.stealthVariant.update({
-      where: { id: prepared.variantId },
-      data: {
-        status: "READY",
-        generatedBuildCount: prompts.length,
-        generationFailureCount: 0,
-        cohortGeneratedAt: new Date(),
-        lastGenerationError: null,
-      },
+  } catch (error) {
+    const message = sanitizeOperationalError(error);
+    await prisma.$transaction(async (tx) => {
+      const experiment = await lockExperiment(tx, experimentId);
+      if (!experiment || experiment.organizationId !== organizationId || experiment.status === "CLOSED") {
+        return;
+      }
+      const run = await tx.stealthGenerationRun.findUnique({
+        where: { id: prepared.runId },
+        select: { status: true },
+      });
+      if (!run || run.status !== "RUNNING") return;
+      await tx.stealthGenerationResult.updateMany({
+        where: { runId: prepared.runId, status: { in: ["QUEUED", "VALIDATING"] } },
+        data: { status: "FAILED", error: message },
+      });
+      const completedBuildCount = await tx.stealthGenerationResult.count({
+        where: { runId: prepared.runId, status: "READY" },
+      });
+      const persistedBuildCount = await tx.build.count({ where: { modelId: prepared.modelId } });
+      await tx.stealthGenerationRun.update({
+        where: { id: prepared.runId },
+        data: {
+          status: completedBuildCount > 0 ? "PARTIAL" : "FAILED",
+          completedBuildCount,
+          failedBuildCount: prompts.length - completedBuildCount,
+          completedAt: new Date(),
+          error: message,
+        },
+      });
+      await tx.stealthVariant.updateMany({
+        where: { id: prepared.variantId, status: { not: "WITHDRAWN" } },
+        data: {
+          status: persistedBuildCount > 0 ? "GENERATING" : "DRAFT",
+          generatedBuildCount: completedBuildCount,
+          generationFailureCount: prompts.length - completedBuildCount,
+          lastGenerationError: message,
+        },
+      });
+      await syncExperimentReadiness(tx, experimentId);
     });
-    await syncExperimentReadiness(tx, experimentId);
-    return { variantId: prepared.variantId, runId: run.id };
-  });
+    throw error;
+  }
 }
 
 export async function completeUploadedStealthCohortFromStorage(
@@ -1520,7 +1629,7 @@ export async function completeUploadedStealthCohortFromStorage(
     });
   } finally {
     try {
-      await deleteStorageObjects([ref]);
+      await deleteSupabaseStorageObjects([ref]);
       await prisma.stealthCohortUpload.deleteMany({ where: { bucket: ref.bucket, path: ref.path } });
     } catch {
       // Retention owns tracked uploads that cannot be deleted here
@@ -1699,6 +1808,34 @@ export async function closeStealthEvaluation(
   invalidateStealthSamplingCache();
 }
 
+async function createStealthUploadRun(
+  tx: Prisma.TransactionClient,
+  variantId: string,
+  promptIds: string[],
+): Promise<string> {
+  const run = await tx.stealthGenerationRun.create({
+    data: {
+      variantId,
+      status: "RUNNING",
+      promptCohortId: BENCHMARK_PROMPT_COHORT_ID,
+      expectedBuildCount: promptIds.length,
+      configuration: {
+        source: "upload",
+        gridSize: GRID_SIZE,
+        palette: PALETTE,
+        mode: MODE,
+      } satisfies Prisma.InputJsonObject,
+      results: {
+        createMany: {
+          data: promptIds.map((promptId) => ({ promptId, status: "QUEUED" })),
+        },
+      },
+    },
+    select: { id: true },
+  });
+  return run.id;
+}
+
 export async function disableStealthEndpoint(
   actor: StealthActor,
   organizationId: string,
@@ -1778,7 +1915,10 @@ export async function deleteUnusedDraftEvaluation(
     return { experiment, variantIds, modelIds, uploads };
   };
   const snapshot = await prisma.$transaction(prepare);
-  await deleteStorageObjects(snapshot.uploads);
+  const buildStorageRefs = hasSupabaseStorageConfig()
+    ? await listStealthBuildStorageRefs(snapshot.variantIds)
+    : [];
+  await deleteSupabaseStorageObjects([...snapshot.uploads, ...buildStorageRefs]);
   await prisma.$transaction(async (tx) => {
     const current = await prepare(tx);
     await tx.stealthCohortUpload.deleteMany({ where: { experimentId: current.experiment.id } });
@@ -1926,36 +2066,16 @@ export async function reconcileStealthVoteGoals(
   return results.some(Boolean);
 }
 
-async function deleteStorageObjects(refs: Array<{ bucket: string; path: string }>): Promise<void> {
-  if (refs.length === 0) return;
-  const config = getSupabaseStorageConfig();
-  const byBucket = new Map<string, Set<string>>();
-  for (const ref of refs) {
-    const paths = byBucket.get(ref.bucket) ?? new Set<string>();
-    paths.add(ref.path);
-    byBucket.set(ref.bucket, paths);
-  }
-  for (const [bucket, pathSet] of byBucket) {
-    const paths = Array.from(pathSet);
-    for (let index = 0; index < paths.length; index += STORAGE_DELETE_BATCH_SIZE) {
-      const batch = paths.slice(index, index + STORAGE_DELETE_BATCH_SIZE);
-      const response = await fetch(
-        `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${config.serviceRoleKey}`,
-            apikey: config.serviceRoleKey,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ prefixes: batch }),
-        },
-      );
-      if (!response.ok) {
-        throw new Error(`Storage deletion failed (${response.status})`);
-      }
-    }
-  }
+export async function reconcileActiveStealthVoteGoals(): Promise<boolean> {
+  const evaluations = await prisma.stealthExperiment.findMany({
+    where: {
+      status: "ACTIVE",
+      pauseAtGoal: true,
+      targetDecisiveVotes: { not: null },
+    },
+    select: { id: true },
+  });
+  return reconcileStealthVoteGoals(evaluations.map((evaluation) => evaluation.id));
 }
 
 async function listStealthBuildStorageRefs(
@@ -2027,7 +2147,7 @@ export async function purgeDueStealthEvaluations(
   });
   for (const upload of expiredUploads) {
     try {
-      await deleteStorageObjects([upload]);
+      await deleteSupabaseStorageObjects([upload]);
       await prisma.stealthCohortUpload.deleteMany({
         where: { id: upload.id, expiresAt: { lte: now } },
       });
@@ -2118,7 +2238,7 @@ export async function purgeStealthEvaluationIfDue(
   const variantStorageRefs = await listStealthBuildStorageRefs(
     snapshot.variants.map((variant) => variant.id),
   );
-  await deleteStorageObjects(
+  await deleteSupabaseStorageObjects(
     [
       ...variantStorageRefs,
       ...snapshot.cohortUploads,
@@ -2132,7 +2252,7 @@ export async function purgeStealthEvaluationIfDue(
   await deleteArenaBuildArtifacts({
     retiringBuilds: snapshot.builds,
     survivingChecksums: snapshot.survivingChecksums,
-    deleteStorage: deleteStorageObjects,
+    deleteStorage: deleteSupabaseStorageObjects,
   });
 
   await prisma.$transaction(async (tx) => {

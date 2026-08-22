@@ -7,13 +7,13 @@ import {
   stealthEndpointConfigToGenerateVoxelBuildArgs,
 } from "@/lib/stealth/credentials";
 import {
+  deleteUnacceptedStealthBuild,
   ensureStealthBuildArtifacts,
   persistStealthBuild,
 } from "@/lib/stealth/generation";
 import {
   prepareStealthCohortPrompts,
   STEALTH_COHORT_BUILD,
-  type CohortPrompt,
 } from "@/lib/stealth/cohort";
 import {
   assertEvaluationOperator,
@@ -86,22 +86,6 @@ function generationConcurrency(configuration: unknown): number {
     : 1;
 }
 
-async function countCompletedBuilds(
-  db: Prisma.TransactionClient,
-  modelId: string,
-  prompts: CohortPrompt[],
-): Promise<number> {
-  return db.build.count({
-    where: {
-      modelId,
-      gridSize: GRID_SIZE,
-      palette: PALETTE,
-      mode: MODE,
-      prompt: { text: { in: prompts.map((prompt) => prompt.text) } },
-    },
-  });
-}
-
 async function createStealthGenerationRun(
   actor: StealthActor,
   organizationId: string,
@@ -111,13 +95,20 @@ async function createStealthGenerationRun(
   const maxAttempts = positiveInt(params.maxAttempts, "Attempts", MAX_GENERATION_ATTEMPTS);
   const concurrency = positiveInt(params.concurrency, "Concurrency", MAX_GENERATION_CONCURRENCY);
   const prompts = await prepareStealthCohortPrompts();
+  const identity = await prisma.stealthVariant.findUnique({
+    where: { id: variantId },
+    select: { experimentId: true },
+  });
+  if (!identity) throw new Error("Checkpoint not found");
 
   return prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
-    const variant = await lockVariant(tx, variantId);
-    if (!variant) throw new Error("Checkpoint not found");
-    const experiment = await lockExperiment(tx, variant.experimentId);
+    const experiment = await lockExperiment(tx, identity.experimentId);
     if (!experiment || experiment.organizationId !== organizationId) {
+      throw new Error("Checkpoint not found");
+    }
+    const variant = await lockVariant(tx, variantId);
+    if (!variant || variant.experimentId !== experiment.id) {
       throw new Error("Checkpoint not found");
     }
     if (experiment.status === "CLOSED") throw new Error("Closed evaluations are read-only");
@@ -139,28 +130,14 @@ async function createStealthGenerationRun(
       select: { id: true },
     });
     if (activeRun) throw new Error("Generation is already running");
-    const completedBuildCount = await countCompletedBuilds(tx, variant.modelId, prompts);
-    if (completedBuildCount === prompts.length) throw new Error("The cohort is already complete");
-
     const config = decryptStealthEndpointConfig(withCredential.credential.encryptedConfig);
-    const existingBuilds = await tx.build.findMany({
-      where: {
-        modelId: variant.modelId,
-        gridSize: GRID_SIZE,
-        palette: PALETTE,
-        mode: MODE,
-        prompt: { text: { in: prompts.map((prompt) => prompt.text) } },
-      },
-      select: { id: true, promptId: true },
-    });
-    const buildByPromptId = new Map(existingBuilds.map((build) => [build.promptId, build.id]));
     const run = await tx.stealthGenerationRun.create({
       data: {
         variantId: variant.id,
         status: "RUNNING",
         promptCohortId: BENCHMARK_PROMPT_COHORT_ID,
         expectedBuildCount: prompts.length,
-        completedBuildCount: existingBuilds.length,
+        completedBuildCount: 0,
         failedBuildCount: 0,
         providerCallCount: 0,
         retryCount: 0,
@@ -180,8 +157,7 @@ async function createStealthGenerationRun(
           createMany: {
             data: prompts.map((prompt) => ({
               promptId: prompt.prompt.id,
-              buildId: buildByPromptId.get(prompt.prompt.id) ?? null,
-              status: buildByPromptId.has(prompt.prompt.id) ? "READY" : "QUEUED",
+              status: "QUEUED",
               attempts: 0,
               generationTimeMs: 0,
             })),
@@ -195,7 +171,7 @@ async function createStealthGenerationRun(
       data: {
         status: "GENERATING",
         expectedBuildCount: prompts.length,
-        generatedBuildCount: existingBuilds.length,
+        generatedBuildCount: 0,
         generationFailureCount: 0,
         lastGenerationError: null,
       },
@@ -383,6 +359,40 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
   });
 }
 
+async function acceptStealthGenerationBuild(params: {
+  runId: string;
+  resultIdentity: { runId: string; promptId: string };
+  fromStatus: "GENERATING" | "VALIDATING";
+  buildId: string;
+  attempts: number;
+  generationTimeMs: number;
+  requestConfiguration: string | null;
+}): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const locked = await lockGenerationRun(tx, params.runId);
+    if (!locked) return false;
+    const run = await tx.stealthGenerationRun.findUnique({
+      where: { id: params.runId },
+      select: { status: true, variant: { select: { experimentId: true } } },
+    });
+    if (!run || run.status !== "RUNNING") return false;
+    const experiment = await lockExperiment(tx, run.variant.experimentId);
+    if (!experiment || !isStealthCheckpointSetOpen(experiment.status)) return false;
+    const accepted = await tx.stealthGenerationResult.updateMany({
+      where: { ...params.resultIdentity, status: params.fromStatus },
+      data: {
+        buildId: params.buildId,
+        status: "READY",
+        attempts: params.attempts,
+        generationTimeMs: params.generationTimeMs,
+        requestConfiguration: params.requestConfiguration,
+        error: null,
+      },
+    });
+    return accepted.count === 1;
+  });
+}
+
 export async function generateStealthPromptForRun(params: {
   runId: string;
   promptSlug: string;
@@ -449,15 +459,14 @@ export async function generateStealthPromptForRun(params: {
   if (existing) {
     try {
       await ensureStealthBuildArtifacts(existing.id);
-      await prisma.stealthGenerationResult.updateMany({
-        where: { ...resultIdentity, status: "GENERATING" },
-        data: {
-          buildId: existing.id,
-          status: "READY",
-          attempts: 0,
-          generationTimeMs: 0,
-          error: null,
-        },
+      await acceptStealthGenerationBuild({
+        runId: run.id,
+        resultIdentity,
+        fromStatus: "GENERATING",
+        buildId: existing.id,
+        attempts: 0,
+        generationTimeMs: 0,
+        requestConfiguration: null,
       });
     } catch (error) {
       await prisma.stealthGenerationResult.updateMany({
@@ -557,17 +566,16 @@ export async function generateStealthPromptForRun(params: {
       build: generated.build,
       generationTimeMs: generated.generationTimeMs,
     });
-    await prisma.stealthGenerationResult.updateMany({
-      where: { ...resultIdentity, status: "VALIDATING" },
-      data: {
-        buildId: build.id,
-        status: "READY",
-        attempts,
-        generationTimeMs: generated.generationTimeMs,
-        requestConfiguration: generated.requestConfiguration,
-        error: null,
-      },
+    const accepted = await acceptStealthGenerationBuild({
+      runId: run.id,
+      resultIdentity,
+      fromStatus: "VALIDATING",
+      buildId: build.id,
+      attempts,
+      generationTimeMs: generated.generationTimeMs,
+      requestConfiguration: generated.requestConfiguration ?? null,
     });
+    if (!accepted && build.created) await deleteUnacceptedStealthBuild(build.id);
   } catch (error) {
     await prisma.stealthGenerationResult.updateMany({
       where: { ...resultIdentity, status: "VALIDATING" },

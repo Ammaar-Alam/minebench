@@ -7,6 +7,7 @@ import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 export const DEFAULT_BUILD_STORAGE_BUCKET = "builds";
 export const LOCAL_BUILD_STORAGE_BUCKET = "__local_fs__";
+const STORAGE_DELETE_BATCH_SIZE = 100;
 
 export type BuildStorageRef = {
   bucket: string;
@@ -82,13 +83,15 @@ function encodingWantsGzip(encoding: string | null | undefined): boolean {
 
 export function getSupabaseStorageConfig(): SupabaseStorageConfig {
   const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  const serviceRoleKey = (
+    process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""
+  ).trim();
 
   if (!url) {
     throw new Error("Missing SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) for storage-backed build payloads");
   }
   if (!serviceRoleKey) {
-    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY for storage-backed build payloads");
+    throw new Error("Missing SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY for storage-backed build payloads");
   }
 
   return { url: trimTrailingSlashes(url), serviceRoleKey };
@@ -96,7 +99,9 @@ export function getSupabaseStorageConfig(): SupabaseStorageConfig {
 
 export function hasSupabaseStorageConfig(): boolean {
   const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  const serviceRoleKey = (
+    process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""
+  ).trim();
   return Boolean(url && serviceRoleKey);
 }
 
@@ -104,6 +109,37 @@ export function getBuildStorageBucketFromEnv(): string {
   // an env var present but blank must fall back, not silently disable artifact
   // delivery for every build
   return process.env.SUPABASE_STORAGE_BUCKET?.trim() || DEFAULT_BUILD_STORAGE_BUCKET;
+}
+
+export async function deleteSupabaseStorageObjects(
+  refs: ReadonlyArray<{ bucket: string; path: string }>,
+): Promise<void> {
+  if (refs.length === 0) return;
+  const config = getSupabaseStorageConfig();
+  const byBucket = new Map<string, Set<string>>();
+  for (const ref of refs) {
+    const paths = byBucket.get(ref.bucket) ?? new Set<string>();
+    paths.add(ref.path);
+    byBucket.set(ref.bucket, paths);
+  }
+  for (const [bucket, pathSet] of byBucket) {
+    const paths = Array.from(pathSet);
+    for (let index = 0; index < paths.length; index += STORAGE_DELETE_BATCH_SIZE) {
+      const response = await fetch(
+        `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${config.serviceRoleKey}`,
+            apikey: config.serviceRoleKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ prefixes: paths.slice(index, index + STORAGE_DELETE_BATCH_SIZE) }),
+        },
+      );
+      if (!response.ok) throw new Error(`Storage deletion failed (${response.status})`);
+    }
+  }
 }
 
 export async function getSupabaseStorageReadiness(): Promise<SupabaseStorageReadiness> {

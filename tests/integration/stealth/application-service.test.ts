@@ -2,6 +2,97 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../../lib/prisma";
 
+async function waitFor<T>(load: () => Promise<T | null>, label: string): Promise<T> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const value = await load();
+    if (value != null) return value;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${label}`);
+}
+
+async function installBuildInsertBarrier(params: {
+  name: string;
+  lockKey: number;
+  modelId?: string;
+}) {
+  const functionName = `block_${params.name}`;
+  const triggerName = `block_${params.name}_build`;
+  const lockStatement = `PERFORM pg_advisory_xact_lock(${params.lockKey});`;
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION "${functionName}"() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      ${params.modelId ? `IF NEW."modelId" = '${params.modelId}' THEN ${lockStatement} END IF;` : lockStatement}
+      RETURN NEW;
+    END
+    $$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER "${triggerName}"
+    BEFORE INSERT ON "Build"
+    FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+  `);
+  let release!: () => void;
+  let ready!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const acquired = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const holder = prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${params.lockKey})`);
+      ready();
+      await released;
+    },
+    { timeout: 30_000 },
+  );
+  await acquired;
+  return {
+    release: async () => {
+      release();
+      await holder;
+    },
+    uninstall: async () => {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "Build"`);
+      await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
+    },
+  };
+}
+
+async function installBuildInsertFailure(params: {
+  name: string;
+  modelId: string;
+  promptId?: string;
+  message: string;
+}) {
+  const functionName = `reject_${params.name}`;
+  const triggerName = `reject_${params.name}_build`;
+  const promptCondition = params.promptId ? ` AND NEW."promptId" = '${params.promptId}'` : "";
+  await prisma.$executeRawUnsafe(`
+    CREATE FUNCTION "${functionName}"() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+      IF NEW."modelId" = '${params.modelId}'${promptCondition} THEN
+        RAISE EXCEPTION '${params.message}';
+      END IF;
+      RETURN NEW;
+    END
+    $$
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE TRIGGER "${triggerName}"
+    BEFORE INSERT ON "Build"
+    FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
+  `);
+  return async () => {
+    await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "Build"`);
+    await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
+  };
+}
+
 async function main() {
   const schema = process.env.MINEBENCH_TEST_SCHEMA;
   if (!schema) {
@@ -32,6 +123,7 @@ async function main() {
     updateStealthEvaluation,
   } = await import("../../../lib/stealth/service");
   const { prepareStealthCohortPrompts } = await import("../../../lib/stealth/cohort");
+  const { persistStealthBuild } = await import("../../../lib/stealth/generation");
   const {
     failStealthGenerationRun,
     finishStealthGenerationRun,
@@ -76,6 +168,16 @@ async function main() {
   const memberActor = { organizationUser: { userId: member.id } } as const;
   const outsiderActor = { organizationUser: { userId: outsider.id } } as const;
   const minebenchAdmin = { minebenchAdmin: true } as const;
+  const cohortPrompts = await prepareStealthCohortPrompts();
+  const disabledPrompt = cohortPrompts[0];
+  assert.ok(disabledPrompt);
+  await prisma.prompt.update({ where: { id: disabledPrompt.prompt.id }, data: { active: false } });
+  await prepareStealthCohortPrompts();
+  assert.equal(
+    (await prisma.prompt.findUniqueOrThrow({ where: { id: disabledPrompt.prompt.id } })).active,
+    false,
+    "private cohort preparation must preserve public prompt eligibility",
+  );
 
   await assert.rejects(
     inviteOrganizationMember(memberActor, organization.id, {
@@ -308,7 +410,10 @@ async function main() {
   const deletedDraftUploads: string[] = [];
   process.env.SUPABASE_URL = "https://storage.example.test";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
-  global.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+  global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "POST" && String(input).includes("/storage/v1/object/list/")) {
+      return Response.json([{ id: "orphan", name: "orphan.json.gz" }]);
+    }
     const body = JSON.parse(String(init?.body)) as { prefixes: string[] };
     deletedDraftUploads.push(...body.prefixes);
     return new Response(null, { status: 200 });
@@ -322,7 +427,10 @@ async function main() {
     if (draftStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     else process.env.SUPABASE_SERVICE_ROLE_KEY = draftStorageKey;
   }
-  assert.deepEqual(deletedDraftUploads, [pendingUploadPath]);
+  assert.deepEqual(deletedDraftUploads, [
+    pendingUploadPath,
+    `stealth-builds/v1/${checkpoint.variantId}/orphan.json.gz`,
+  ]);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: evaluation.id } }), 0);
 
   const generationEvaluation = await createStealthEvaluation(memberActor, organization.id, {
@@ -509,6 +617,32 @@ async function main() {
       promptSlug: firstPrompt,
     });
     await firstRequestStarted;
+    await assert.rejects(
+      configureStealthEndpoint(memberActor, organization.id, generationEvaluation.id, {
+        variantId: generationCheckpoint.variantId,
+        codename: "Generation One",
+        config: {
+          protocol: "openrouter",
+          endpointUrl: "",
+          apiKey: "replacement-secret-key",
+          modelId: `replacement-${suffix}`,
+          requireStructuredOutput: true,
+          enableTools: false,
+        },
+      }),
+      /still running/,
+    );
+    await assert.rejects(
+      completeUploadedStealthCohort(memberActor, organization.id, generationEvaluation.id, {
+        variantId: generationCheckpoint.variantId,
+        codename: "Generation One",
+        builds: cohortPrompts.map((prompt) => ({
+          promptSlug: prompt.slug,
+          build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+        })),
+      }),
+      /still running/,
+    );
     const secondPrompt = promptSlugs[1];
     assert.ok(secondPrompt);
     await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: secondPrompt });
@@ -559,6 +693,12 @@ async function main() {
     }),
     0,
   );
+  assert.equal(
+    (await prisma.prompt.findUniqueOrThrow({ where: { id: disabledPrompt.prompt.id } })).active,
+    false,
+    "private build persistence must preserve public prompt eligibility",
+  );
+  await prisma.prompt.update({ where: { id: disabledPrompt.prompt.id }, data: { active: true } });
 
   const closingEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Closing generation ${suffix}`,
@@ -632,6 +772,85 @@ async function main() {
     (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: closingRun.runId } }))
       .status,
     "FAILED",
+  );
+
+  const persistenceRaceEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+    name: `Persistence race ${suffix}`,
+  });
+  const persistenceRaceCheckpoint = await configureStealthEndpoint(
+    memberActor,
+    organization.id,
+    persistenceRaceEvaluation.id,
+    {
+      codename: "Persistence race",
+      config: {
+        protocol: "openrouter",
+        endpointUrl: "",
+        apiKey: "persistence-race-secret-key",
+        modelId: `persistence-race-${suffix}`,
+        requireStructuredOutput: true,
+        enableTools: false,
+      },
+    },
+  );
+  const persistenceRaceRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    persistenceRaceCheckpoint.variantId,
+    { maxAttempts: 1, concurrency: 1 },
+    async (runId) => `workflow-${runId}`,
+  );
+  const persistenceRaceModelId = (
+    await prisma.stealthVariant.findUniqueOrThrow({
+      where: { id: persistenceRaceCheckpoint.variantId },
+      select: { modelId: true },
+    })
+  ).modelId;
+  const persistenceBarrier = await installBuildInsertBarrier({
+    name: `persistence_${suffix}`,
+    lockKey: Number.parseInt(suffix, 16),
+    modelId: persistenceRaceModelId,
+  });
+  global.fetch = (async () =>
+    Response.json({
+      choices: [
+        { message: { content: JSON.stringify({ version: "1.0", blocks: generatedBlocks }) } },
+      ],
+    })) as typeof fetch;
+  const persistenceRaceGeneration = generateStealthPromptForRun({
+    runId: persistenceRaceRun.runId,
+    promptSlug: cohortPrompts[0]!.slug,
+  });
+  try {
+    await waitFor(
+      async () => {
+        const result = await prisma.stealthGenerationResult.findUnique({
+          where: {
+            runId_promptId: {
+              runId: persistenceRaceRun.runId,
+              promptId: cohortPrompts[0]!.prompt.id,
+            },
+          },
+          select: { status: true },
+        });
+        return result?.status === "VALIDATING" ? result : null;
+      },
+      "generation persistence",
+    );
+    await closeStealthEvaluation(memberActor, organization.id, persistenceRaceEvaluation.id);
+  } finally {
+    await persistenceBarrier.release();
+    await persistenceRaceGeneration;
+    global.fetch = originalGenerationFetch;
+    await persistenceBarrier.uninstall();
+  }
+  const persistenceRaceVariant = await prisma.stealthVariant.findUniqueOrThrow({
+    where: { id: persistenceRaceCheckpoint.variantId },
+  });
+  assert.equal(
+    await prisma.build.count({ where: { modelId: persistenceRaceVariant.modelId } }),
+    0,
+    "a build that loses the close race must be removed",
   );
 
   const failureCheckpoint = await configureStealthEndpoint(
@@ -780,6 +999,19 @@ async function main() {
     { maxAttempts: 2, concurrency: 1 },
     async (runId) => `workflow-${runId}`,
   );
+  const reusePrompt = cohortPrompts.find((prompt) => prompt.slug === validationFailurePrompt);
+  assert.ok(reusePrompt);
+  assert.equal(
+    (
+      await prisma.stealthGenerationResult.findUniqueOrThrow({
+        where: {
+          runId_promptId: { runId: reuseRun.runId, promptId: reusePrompt.prompt.id },
+        },
+      })
+    ).status,
+    "QUEUED",
+    "persisted builds must be revalidated before a retry accepts them",
+  );
   global.fetch = (async () => {
     throw new Error("A completed prompt must not call the provider again");
   }) as typeof fetch;
@@ -791,7 +1023,193 @@ async function main() {
   } finally {
     global.fetch = originalGenerationFetch;
   }
+  assert.equal(
+    (
+      await prisma.stealthGenerationResult.findUniqueOrThrow({
+        where: {
+          runId_promptId: { runId: reuseRun.runId, promptId: reusePrompt.prompt.id },
+        },
+      })
+    ).status,
+    "READY",
+  );
   await failStealthGenerationRun(reuseRun.runId, "Test cleanup");
+
+  const reservedUploadEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+    name: `Reserved upload ${suffix}`,
+  });
+  const uploadBarrier = await installBuildInsertBarrier({
+    name: `upload_${suffix}`,
+    lockKey: Number.parseInt(suffix, 16) + 1,
+  });
+  const reservedUploadPromise = completeUploadedStealthCohort(
+    memberActor,
+    organization.id,
+    reservedUploadEvaluation.id,
+    {
+      codename: "Reserved upload",
+      builds: cohortPrompts.map((prompt) => ({
+        promptSlug: prompt.slug,
+        build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+      })),
+    },
+  );
+  let reservedUploadVariant!: { id: string };
+  try {
+    reservedUploadVariant = await waitFor(
+      async () => {
+        const variant = await prisma.stealthVariant.findFirst({
+          where: {
+            experimentId: reservedUploadEvaluation.id,
+            generationRuns: { some: { status: "RUNNING" } },
+          },
+          select: { id: true },
+        });
+        return variant;
+      },
+      "upload reservation",
+    );
+    await assert.rejects(
+      configureStealthEndpoint(memberActor, organization.id, reservedUploadEvaluation.id, {
+        variantId: reservedUploadVariant.id,
+        codename: "Reserved upload",
+        config: {
+          protocol: "openrouter",
+          endpointUrl: "",
+          apiKey: "competing-upload-secret-key",
+          modelId: `competing-upload-${suffix}`,
+          requireStructuredOutput: true,
+          enableTools: false,
+        },
+      }),
+      /still running/,
+    );
+  } finally {
+    await uploadBarrier.release();
+  }
+  let reservedUpload: Awaited<typeof reservedUploadPromise>;
+  try {
+    reservedUpload = await reservedUploadPromise;
+  } finally {
+    await uploadBarrier.uninstall();
+  }
+  assert.equal(reservedUpload.variantId, reservedUploadVariant.id);
+  assert.equal(
+    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: reservedUpload.runId } }))
+      .status,
+    "SUCCEEDED",
+  );
+
+  const partialUploadEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+    name: `Partial upload ${suffix}`,
+  });
+  const partialUploadModel = await prisma.model.create({
+    data: {
+      key: `partial-upload-${suffix}`,
+      provider: "Stealth",
+      modelId: `partial-upload-${suffix}`,
+      displayName: "Partial upload",
+      enabled: false,
+    },
+  });
+  const partialUploadVariant = await prisma.stealthVariant.create({
+    data: {
+      experimentId: partialUploadEvaluation.id,
+      codename: "Partial upload",
+      source: "UPLOAD",
+      modelId: partialUploadModel.id,
+      expectedBuildCount: cohortPrompts.length,
+    },
+  });
+  const removePartialUploadFailure = await installBuildInsertFailure({
+    name: `partial_upload_${suffix}`,
+    modelId: partialUploadModel.id,
+    promptId: cohortPrompts[1]!.prompt.id,
+    message: "forced partial upload failure",
+  });
+  try {
+    await assert.rejects(
+      completeUploadedStealthCohort(memberActor, organization.id, partialUploadEvaluation.id, {
+        variantId: partialUploadVariant.id,
+        codename: partialUploadVariant.codename,
+        builds: cohortPrompts.map((prompt) => ({
+          promptSlug: prompt.slug,
+          build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+        })),
+      }),
+    );
+  } finally {
+    await removePartialUploadFailure();
+  }
+  const partialUploadRun = await prisma.stealthGenerationRun.findFirstOrThrow({
+    where: { variantId: partialUploadVariant.id },
+    orderBy: { startedAt: "desc" },
+  });
+  assert.equal(partialUploadRun.status, "PARTIAL");
+  assert.equal(partialUploadRun.completedBuildCount, 1);
+  const partialUploadWorkspace = await getStealthEvaluationWorkspace(
+    memberActor,
+    organization.id,
+    partialUploadEvaluation.id,
+  );
+  assert.equal(partialUploadWorkspace?.checkpoints[0]?.persistedBuildCount, 1);
+  assert.equal(partialUploadWorkspace?.status, "GENERATING");
+  await closeStealthEvaluation(memberActor, organization.id, partialUploadEvaluation.id);
+
+  const failedCreateModel = await prisma.model.create({
+    data: {
+      key: `failed-create-${suffix}`,
+      provider: "Stealth",
+      modelId: `failed-create-${suffix}`,
+      displayName: "Failed create",
+      enabled: false,
+    },
+  });
+  const removeFailedCreateFailure = await installBuildInsertFailure({
+    name: `failed_create_${suffix}`,
+    modelId: failedCreateModel.id,
+    message: "forced build creation failure",
+  });
+  const failedCreateDatabaseUrl = process.env.DATABASE_URL;
+  const failedCreateStorageUrl = process.env.SUPABASE_URL;
+  const failedCreateStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const failedCreateFetch = global.fetch;
+  const failedCreateDeletes: string[] = [];
+  const storageProjectRef = "abcdefghijklmnopqrst";
+  process.env.DATABASE_URL = `postgresql://postgres@db.${storageProjectRef}.supabase.co:5432/postgres`;
+  process.env.SUPABASE_URL = `https://${storageProjectRef}.supabase.co`;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
+  global.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      const body = JSON.parse(String(init.body)) as { prefixes: string[] };
+      failedCreateDeletes.push(...body.prefixes);
+    }
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      persistStealthBuild({
+        variantId: randomUUID(),
+        modelId: failedCreateModel.id,
+        promptSlug: cohortPrompts[0]!.slug,
+        promptText: cohortPrompts[0]!.text,
+        build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
+        generationTimeMs: 0,
+      }),
+    );
+  } finally {
+    global.fetch = failedCreateFetch;
+    if (failedCreateDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = failedCreateDatabaseUrl;
+    if (failedCreateStorageUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = failedCreateStorageUrl;
+    if (failedCreateStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = failedCreateStorageKey;
+    await removeFailedCreateFailure();
+  }
+  assert.equal(failedCreateDeletes.length, 1, "failed Build creation must remove its raw upload");
+  assert.equal(await prisma.build.count({ where: { modelId: failedCreateModel.id } }), 0);
+  await prisma.model.delete({ where: { id: failedCreateModel.id } });
 
   const uploadedEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Uploaded ${suffix}`,

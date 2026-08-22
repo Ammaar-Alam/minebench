@@ -45,7 +45,7 @@ export default async function EvaluationSettingsPage({
   const draftDeletable =
     workspace.status === "DRAFT" &&
     workspace.checkpoints.every(
-      (checkpoint) => checkpoint.generatedBuildCount === 0 && checkpoint.totalVotes === 0,
+      (checkpoint) => checkpoint.persistedBuildCount === 0 && checkpoint.totalVotes === 0,
     );
 
   return (

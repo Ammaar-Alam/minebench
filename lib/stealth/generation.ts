@@ -2,12 +2,14 @@ import { createHash } from "node:crypto";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
+import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
 import {
   isLoopbackDatabaseUrl,
   supabaseProjectRefFromApiUrl,
   supabaseProjectRefFromDatabaseUrl,
 } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
+import { deleteSupabaseStorageObjects } from "@/lib/storage/buildPayload";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 const GRID_SIZE = 256;
@@ -216,7 +218,7 @@ export async function persistStealthBuild(params: {
   promptText: string;
   build: VoxelBuild;
   generationTimeMs: number;
-}): Promise<{ id: string; blockCount: number }> {
+}): Promise<{ id: string; blockCount: number; created: boolean }> {
   const json = Buffer.from(JSON.stringify(params.build), "utf8");
   const gzip = gzipSync(json);
   const sha256 = createHash("sha256").update(json).digest("hex");
@@ -224,7 +226,7 @@ export async function persistStealthBuild(params: {
   const prompt = await prisma.prompt.upsert({
     where: { text: params.promptText },
     create: { text: params.promptText, active: true },
-    update: { active: true },
+    update: {},
   });
 
   const buildKey = {
@@ -249,7 +251,7 @@ export async function persistStealthBuild(params: {
   if (existing) {
     validateExistingBuildIdentity(existing, expectedIdentity);
     await maybePrecomputeRemoteArtifacts(existing);
-    return { id: existing.id, blockCount: existing.blockCount };
+    return { id: existing.id, blockCount: existing.blockCount, created: false };
   }
 
   const payload = await storePayload({
@@ -278,19 +280,94 @@ export async function persistStealthBuild(params: {
       select: BUILD_SOURCE_SELECT,
     });
   } catch (error) {
-    if (!isUniqueConstraintError(error)) throw error;
     const raced = await prisma.build.findUnique({
       where: buildKey,
       select: BUILD_SOURCE_SELECT,
     });
-    if (!raced) throw error;
-    validateExistingBuildIdentity(raced, expectedIdentity);
-    await maybePrecomputeRemoteArtifacts(raced);
-    return { id: raced.id, blockCount: raced.blockCount };
+    if (raced) {
+      validateExistingBuildIdentity(raced, expectedIdentity);
+      await maybePrecomputeRemoteArtifacts(raced);
+      return { id: raced.id, blockCount: raced.blockCount, created: false };
+    }
+    if (!isUniqueConstraintError(error)) {
+      if (payload.voxelStorageBucket && payload.voxelStoragePath) {
+        await deleteSupabaseStorageObjects([
+          { bucket: payload.voxelStorageBucket, path: payload.voxelStoragePath },
+        ]);
+      }
+      throw error;
+    }
+    throw error;
   }
 
   await maybePrecomputeRemoteArtifacts(build);
-  return { id: build.id, blockCount };
+  return { id: build.id, blockCount, created: true };
+}
+
+export async function deleteUnacceptedStealthBuild(buildId: string): Promise<boolean> {
+  const build = await prisma.build.findUnique({
+    where: { id: buildId },
+    select: {
+      id: true,
+      voxelSha256: true,
+      voxelStorageBucket: true,
+      voxelStoragePath: true,
+      _count: {
+        select: {
+          matchupsAsA: true,
+          matchupsAsB: true,
+          stealthGenerationResults: { where: { status: "READY" } },
+        },
+      },
+    },
+  });
+  if (!build) return true;
+  if (
+    build._count.matchupsAsA > 0 ||
+    build._count.matchupsAsB > 0 ||
+    build._count.stealthGenerationResults > 0
+  ) {
+    return false;
+  }
+
+  const surviving = build.voxelSha256
+    ? await prisma.build.findMany({
+        where: { id: { not: build.id }, voxelSha256: build.voxelSha256 },
+        select: { voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+      })
+    : [];
+  const survivingChecksums = new Set(
+    surviving.flatMap((entry) => (entry.voxelSha256 ? [entry.voxelSha256] : [])),
+  );
+  const rawRef =
+    build.voxelStorageBucket && build.voxelStoragePath
+      ? { bucket: build.voxelStorageBucket, path: build.voxelStoragePath }
+      : null;
+  if (!isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "")) {
+    await deleteArenaBuildArtifacts({
+      retiringBuilds: [build],
+      survivingChecksums,
+      deleteStorage: deleteSupabaseStorageObjects,
+    });
+    if (
+      rawRef &&
+      !surviving.some(
+        (entry) =>
+          entry.voxelStorageBucket === rawRef.bucket && entry.voxelStoragePath === rawRef.path,
+      )
+    ) {
+      await deleteSupabaseStorageObjects([rawRef]);
+    }
+  }
+  const deleted = await prisma.build.deleteMany({
+    where: {
+      id: build.id,
+      matchupsAsA: { none: {} },
+      matchupsAsB: { none: {} },
+      stealthGenerationResults: { none: { status: "READY" } },
+    },
+  });
+  return deleted.count === 1;
 }
 
 export async function ensureStealthBuildArtifacts(buildId: string): Promise<void> {
