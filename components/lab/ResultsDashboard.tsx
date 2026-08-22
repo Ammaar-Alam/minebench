@@ -42,20 +42,17 @@ function FieldPosition({
   const fieldSize = Math.max(1, ...variants.map((variant) => variant.estimatedFieldSize));
 
   return (
-    <section className="rounded-3xl border border-border/70 bg-card/55 p-5 shadow-soft sm:p-6" aria-labelledby="field-position-heading">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="mb-eyebrow">Public field</p>
-          <h2 id="field-position-heading" className="mt-1.5 text-xl font-semibold tracking-tight text-fg">
-            Estimated position
-          </h2>
-        </div>
+    <section className="border-y border-border/70 py-6" aria-labelledby="field-position-heading">
+      <div className="flex flex-wrap items-baseline justify-between gap-4">
+        <h2 id="field-position-heading" className="text-lg font-semibold tracking-tight text-fg">
+          Estimated field position
+        </h2>
         <span className="font-mono text-[10px] tabular-nums text-muted">
-          #1 <span aria-hidden="true">←</span> public field <span aria-hidden="true">→</span> #{fieldSize}
+          #1 <span aria-hidden="true">←</span> field <span aria-hidden="true">→</span> #{fieldSize}
         </span>
       </div>
 
-      <div className="mt-6 space-y-2">
+      <div className="mt-5 divide-y divide-border/45">
         {variants.map((variant) => {
           const hasEvidence = variant.outcomes.decisiveVotes > 0;
           const position =
@@ -68,13 +65,14 @@ function FieldPosition({
             <button
               key={variant.id}
               type="button"
+              aria-pressed={active}
               onClick={() => onSelect(variant.id)}
-              className={`grid min-h-16 w-full gap-3 rounded-2xl px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 sm:grid-cols-[minmax(8rem,0.55fr)_minmax(12rem,1fr)_auto] sm:items-center ${
-                active ? "bg-bg/70 ring-1 ring-border/80" : "hover:bg-bg/40"
+              className={`grid min-h-16 w-full gap-3 px-2 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 sm:grid-cols-[minmax(8rem,0.55fr)_minmax(12rem,1fr)_auto] sm:items-center ${
+                active ? "bg-card/35" : "hover:bg-card/20"
               }`}
             >
               <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-fg">{variant.codename}</span>
+                <span className="block truncate text-sm font-medium text-fg">{variant.codename}</span>
                 <span className="mt-0.5 block text-[10px] text-muted">{variant.stability}</span>
               </span>
               <span className="relative block h-6" aria-hidden="true">
@@ -83,7 +81,7 @@ function FieldPosition({
                 <span className="absolute right-0 top-1/2 h-2 w-px -translate-y-1/2 bg-muted2/55" />
                 {hasEvidence ? (
                   <span
-                    className={`absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-card ${active ? "bg-accent shadow-[0_0_0_4px_hsl(var(--accent)_/_0.16)]" : "bg-muted2"}`}
+                    className={`absolute top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg ${active ? "bg-accent" : "bg-muted2"}`}
                     style={{ left: `${Math.max(1, Math.min(99, position))}%` }}
                   />
                 ) : null}
@@ -114,23 +112,20 @@ function OutcomeMix({ outcomes }: { outcomes: StealthOutcomeSummary }) {
   const total = outcomes.votes;
 
   return (
-    <section className="rounded-3xl border border-border/70 bg-card/45 p-5 sm:p-6" aria-labelledby="outcome-mix-heading">
+    <section className="p-5 sm:p-6" aria-labelledby="outcome-mix-heading">
       <div className="flex items-start justify-between gap-5">
-        <div>
-          <p className="mb-eyebrow">Preference</p>
-          <h3 id="outcome-mix-heading" className="mt-1.5 text-lg font-semibold tracking-tight text-fg">
-            Outcome mix
-          </h3>
-        </div>
+        <h3 id="outcome-mix-heading" className="text-base font-semibold tracking-tight text-fg">
+          Outcome mix
+        </h3>
         <div className="text-right">
-          <p className="text-3xl font-semibold tabular-nums text-fg">{formatPercent(outcomes.averageScore)}</p>
-          <p className="mt-1 text-[10px] uppercase tracking-[0.1em] text-muted2">Score</p>
+          <p className="font-mono text-2xl tabular-nums text-fg">{formatPercent(outcomes.averageScore)}</p>
+          <p className="mt-1 text-[10px] text-muted">score</p>
         </div>
       </div>
 
       <div
-        className="mt-7 flex h-4 overflow-hidden rounded-full bg-border/40"
-        aria-label={`${outcomes.wins} wins, ${outcomes.draws} ties, ${outcomes.losses} losses, ${outcomes.bothBad} both bad`}
+        className="mt-7 flex h-2 overflow-hidden bg-border/40"
+        aria-hidden="true"
       >
         {segments.map((segment) => (
           <span
@@ -144,7 +139,7 @@ function OutcomeMix({ outcomes }: { outcomes: StealthOutcomeSummary }) {
         {segments.map((segment) => (
           <div key={segment.label}>
             <dt className="flex items-center gap-2 text-xs text-muted">
-              <span aria-hidden="true" className={`h-2 w-2 rounded-full ${segment.className}`} />
+              <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${segment.className}`} />
               {segment.label}
             </dt>
             <dd className="mt-1.5 font-mono text-sm tabular-nums text-fg">
@@ -176,17 +171,12 @@ function EvidenceQuality({ variant }: { variant: ResultsDashboardVariant }) {
   ];
 
   return (
-    <section className="rounded-3xl border border-border/70 bg-card/45 p-5 sm:p-6" aria-labelledby="evidence-quality-heading">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="mb-eyebrow">Signal</p>
-          <h3 id="evidence-quality-heading" className="mt-1.5 text-lg font-semibold tracking-tight text-fg">
-            Evidence quality
-          </h3>
-        </div>
-        <span className="rounded-full border border-border/70 bg-bg/50 px-2.5 py-1 text-[10px] font-medium text-muted">
-          {variant.stability}
-        </span>
+    <section className="p-5 sm:p-6" aria-labelledby="evidence-quality-heading">
+      <div className="flex items-baseline justify-between gap-4">
+        <h3 id="evidence-quality-heading" className="text-base font-semibold tracking-tight text-fg">
+          Evidence quality
+        </h3>
+        <span className="text-xs text-muted">{variant.stability}</span>
       </div>
       <dl className="mt-6 space-y-5">
         {metrics.map((metric) => (
@@ -195,35 +185,27 @@ function EvidenceQuality({ variant }: { variant: ResultsDashboardVariant }) {
               <dt className="text-xs text-muted">{metric.label}</dt>
               <dd className="font-mono text-xs tabular-nums text-fg">{metric.text}</dd>
             </div>
-            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-border/45">
-              <div className="h-full rounded-full bg-accent" style={{ width: `${clampPercent(metric.value)}%` }} />
+            <div className="mt-2 h-1 bg-border/45">
+              <div className="h-full bg-fg/65" style={{ width: `${clampPercent(metric.value)}%` }} />
             </div>
           </div>
         ))}
       </dl>
-      <div className="mt-6 flex items-end justify-between border-t border-border/55 pt-4">
+      <dl className="mt-6 grid grid-cols-2 border-t border-border/55 pt-4">
         <div>
-          <p className="text-[10px] uppercase tracking-[0.1em] text-muted2">Rating</p>
-          <p className="mt-1 font-mono text-sm tabular-nums text-fg">{Math.round(variant.rating)}</p>
+          <dt className="text-[10px] text-muted">Rating</dt>
+          <dd className="mt-1 font-mono text-sm tabular-nums text-fg">{Math.round(variant.rating)}</dd>
         </div>
         <div className="text-right">
-          <p className="text-[10px] uppercase tracking-[0.1em] text-muted2">Deviation</p>
-          <p className="mt-1 font-mono text-sm tabular-nums text-fg">±{Math.round(variant.ratingDeviation)}</p>
+          <dt className="text-[10px] text-muted">Deviation</dt>
+          <dd className="mt-1 font-mono text-sm tabular-nums text-fg">±{Math.round(variant.ratingDeviation)}</dd>
         </div>
-      </div>
+      </dl>
     </section>
   );
 }
 
-function BreakdownVisual({
-  title,
-  eyebrow,
-  rows,
-}: {
-  title: string;
-  eyebrow: string;
-  rows: StealthBreakdown[];
-}) {
+function BreakdownVisual({ title, rows }: { title: string; rows: StealthBreakdown[] }) {
   const sortedRows = useMemo(
     () =>
       [...rows].sort(
@@ -234,15 +216,14 @@ function BreakdownVisual({
   );
 
   return (
-    <section className="min-w-0 rounded-3xl border border-border/70 bg-card/45 p-5 sm:p-6">
-      <p className="mb-eyebrow">{eyebrow}</p>
-      <h3 className="mt-1.5 text-lg font-semibold tracking-tight text-fg">{title}</h3>
-      <div className="mt-5 flex items-center justify-between px-1 text-[9px] uppercase tracking-[0.1em] text-muted2">
+    <section className="min-w-0 p-5 sm:p-6">
+      <h3 className="text-base font-semibold tracking-tight text-fg">{title}</h3>
+      <div className="mt-5 flex items-center justify-between text-[9px] text-muted2">
         <span>Lower</span>
         <span>50%</span>
         <span>Higher</span>
       </div>
-      <div className="mt-2 max-h-[30rem] space-y-1 overflow-y-auto overscroll-contain pr-1">
+      <div className="mt-2 max-h-[30rem] divide-y divide-border/40 overflow-y-auto overscroll-contain">
         {sortedRows.map((row) => {
           const score = row.averageScore;
           const scorePercent = score == null ? 50 : clampPercent(score);
@@ -250,7 +231,7 @@ function BreakdownVisual({
           const width = Math.abs(scorePercent - 50);
 
           return (
-            <div key={row.id} className="rounded-xl px-2 py-3 hover:bg-bg/40">
+            <div key={row.id} className="py-3">
               <div className="flex items-center justify-between gap-4">
                 <span title={row.label} className="min-w-0 truncate text-xs font-medium text-fg">
                   {row.label}
@@ -260,11 +241,11 @@ function BreakdownVisual({
                 </span>
               </div>
               <div className="mt-2 flex items-center gap-3">
-                <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-border/40">
+                <div className="relative h-1.5 flex-1 bg-border/40">
                   <span className="absolute inset-y-0 left-1/2 w-px bg-muted2/70" />
                   {score != null ? (
                     <span
-                      className={`absolute inset-y-0 rounded-full ${score >= 0.5 ? "bg-accent" : "bg-danger/70"}`}
+                      className={`absolute inset-y-0 ${score >= 0.5 ? "bg-fg/70" : "bg-danger/70"}`}
                       style={{ left: `${lower}%`, width: `${Math.max(1, width)}%` }}
                     />
                   ) : null}
@@ -276,7 +257,7 @@ function BreakdownVisual({
             </div>
           );
         })}
-        {rows.length === 0 ? <p className="py-6 text-sm text-muted">No votes yet.</p> : null}
+        {rows.length === 0 ? <p className="py-6 text-sm text-muted">No votes yet</p> : null}
       </div>
     </section>
   );
@@ -288,67 +269,43 @@ export function ResultsDashboard({ variants }: { variants: ResultsDashboardVaria
   const selected = variants.find((variant) => variant.id === selectedId) ?? variants[0] ?? null;
 
   if (!selected) {
-    return (
-      <div className="rounded-3xl border border-dashed border-border bg-card/30 p-8 text-sm text-muted">
-        Add a checkpoint to begin.
-      </div>
-    );
+    return <div className="border-y border-border/70 py-8 text-sm text-muted">Add a checkpoint to begin</div>;
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-10">
       <FieldPosition variants={variants} selectedId={selected.id} onSelect={setSelectedId} />
-
-      {variants.length > 1 ? (
-        <div className="overflow-x-auto [scrollbar-width:none]" role="tablist" aria-label="Checkpoint results">
-          <div className="flex min-w-max gap-2">
-            {variants.map((variant) => (
-              <button
-                key={variant.id}
-                type="button"
-                role="tab"
-                aria-selected={variant.id === selected.id}
-                onClick={() => setSelectedId(variant.id)}
-                className={`min-h-11 rounded-full px-4 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 ${
-                  variant.id === selected.id
-                    ? "bg-accent/15 text-accent ring-1 ring-accent/35"
-                    : "bg-card/45 text-muted ring-1 ring-border/70 hover:text-fg"
-                }`}
-              >
-                {variant.codename}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       {selected.outcomes.votes > 0 ? (
         <>
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.75fr)]">
+          <div className="grid border-y border-border/70 xl:grid-cols-[minmax(0,1.25fr)_minmax(18rem,0.75fr)] xl:divide-x xl:divide-border/60">
             <OutcomeMix outcomes={selected.outcomes} />
-            <EvidenceQuality variant={selected} />
+            <div className="border-t border-border/60 xl:border-t-0">
+              <EvidenceQuality variant={selected} />
+            </div>
           </div>
-          <div className="grid gap-6 xl:grid-cols-2">
-            <BreakdownVisual title="Prompt landscape" eyebrow="Strengths and gaps" rows={selected.prompts} />
-            <BreakdownVisual title="Opponent field" eyebrow="Public anchors" rows={selected.opponents} />
+          <div className="grid border-y border-border/70 xl:grid-cols-2 xl:divide-x xl:divide-border/60">
+            <BreakdownVisual title="Prompt landscape" rows={selected.prompts} />
+            <div className="border-t border-border/60 xl:border-t-0">
+              <BreakdownVisual title="Opponent field" rows={selected.opponents} />
+            </div>
           </div>
         </>
       ) : (
-        <div className="rounded-3xl border border-dashed border-border bg-card/30 p-8 sm:p-10">
-          <h2 className="text-xl font-semibold tracking-tight text-fg">Waiting for evidence</h2>
-          <p className="mt-2 text-sm text-muted">Results appear after Arena voting begins.</p>
+        <div className="border-y border-border/70 py-8">
+          <h2 className="text-lg font-semibold tracking-tight text-fg">Waiting for evidence</h2>
         </div>
       )}
 
-      <details className="group rounded-2xl border border-border/60 bg-card/30">
-        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-4 text-sm font-medium text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45">
-          How to read this
+      <details className="group border-y border-border/60">
+        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 text-sm text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45">
+          Method notes
           <span aria-hidden="true" className="text-lg transition-transform group-open:rotate-45 motion-reduce:transition-none">+</span>
         </summary>
-        <div className="grid gap-4 border-t border-border/55 px-4 py-5 text-xs leading-5 text-muted sm:grid-cols-3">
-          <p>Field position uses each checkpoint’s conservative rating against public models.</p>
-          <p>Preference score counts a win as one point and a tie as half a point.</p>
-          <p>Checkpoints are calibrated independently; their ordering is an estimate, not a head-to-head record.</p>
+        <div className="grid gap-4 border-t border-border/55 py-5 text-xs leading-5 text-muted sm:grid-cols-3">
+          <p>Position uses each checkpoint’s conservative rating against the public field.</p>
+          <p>A win is one point; a tie is half a point.</p>
+          <p>Checkpoint ordering is an estimate, not a head-to-head record.</p>
         </div>
       </details>
     </div>

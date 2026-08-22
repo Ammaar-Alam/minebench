@@ -46,7 +46,7 @@ function CubeMark() {
   );
 }
 
-function ThemeToggle() {
+function ThemeToggle({ quiet = false }: { quiet?: boolean }) {
   const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
@@ -73,7 +73,11 @@ function ThemeToggle() {
       type="button"
       aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-      className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className={
+        quiet
+          ? "grid h-11 w-11 place-items-center rounded-md border border-border/70 text-muted transition-colors hover:bg-card/30 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          : "grid h-10 w-10 place-items-center rounded-full bg-gradient-to-b from-bg/70 to-bg/45 text-muted ring-1 ring-border/80 shadow-[inset_0_1px_0_hsl(0_0%_100%_/_0.06)] transition hover:from-bg/80 hover:to-bg/55 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      }
       onClick={toggleTheme}
     >
       <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none">
@@ -96,6 +100,33 @@ function ThemeToggle() {
         )}
       </svg>
     </button>
+  );
+}
+
+function LabHeader() {
+  return (
+    <header className="sticky top-0 z-40 border-b border-border/70 bg-bg">
+      <div className="mx-auto flex min-h-16 w-full max-w-[92rem] items-center justify-between gap-5 px-4 sm:px-6 lg:px-8">
+        <a
+          href="#main"
+          className="sr-only bg-bg px-4 py-2 text-sm text-fg ring-1 ring-border focus:not-sr-only focus:absolute focus:left-4 focus:top-3"
+        >
+          Skip to content
+        </a>
+        <Link href="/lab" className="flex min-w-0 items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          <Image src={faviconIcon} alt="" className="h-7 w-7 object-contain" priority />
+          <span className="text-sm font-semibold tracking-tight text-fg">MineBench</span>
+          <span aria-hidden="true" className="h-4 w-px bg-border" />
+          <span className="text-sm text-muted">Lab</span>
+        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/" className="inline-flex min-h-11 items-center px-3 text-sm text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            Arena
+          </Link>
+          <ThemeToggle quiet />
+        </div>
+      </div>
+    </header>
   );
 }
 
@@ -170,6 +201,9 @@ function SocialIconLink({
 }
 
 export function SiteHeader() {
+  const pathname = usePathname();
+  if (pathname === "/lab" || pathname.startsWith("/lab/")) return <LabHeader />;
+
   return (
     <header className="relative sticky top-0 z-40 border-b border-border bg-bg/75 backdrop-blur">
       <div className="mx-auto flex w-full max-w-[92rem] flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-6 sm:py-3 lg:px-8">

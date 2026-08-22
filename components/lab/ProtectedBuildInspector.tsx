@@ -123,9 +123,8 @@ export function ProtectedBuildInspector({
 
   if (builds.length === 0) {
     return (
-      <section className="rounded-3xl border border-dashed border-border bg-card/30 p-8">
-        <h2 className="text-xl font-semibold tracking-tight text-fg">No builds yet</h2>
-        <p className="mt-2 text-sm text-muted">Completed builds will appear here.</p>
+      <section className="border-y border-border/70 py-8">
+        <h2 className="text-lg font-semibold tracking-tight text-fg">No builds yet</h2>
       </section>
     );
   }
@@ -136,14 +135,11 @@ export function ProtectedBuildInspector({
   };
 
   return (
-    <section className="overflow-hidden rounded-3xl border border-border/70 bg-card/55 shadow-soft" aria-labelledby="build-explorer-heading">
+    <section className="border-y border-border/70" aria-labelledby="build-explorer-heading">
       <header className="grid gap-4 border-b border-border/60 p-4 sm:p-5 xl:grid-cols-[minmax(11rem,1fr)_minmax(15rem,1.2fr)_auto_auto] xl:items-end">
-        <div>
-          <p className="mb-eyebrow">Cohort</p>
-          <h2 id="build-explorer-heading" className="mt-1.5 text-xl font-semibold tracking-tight text-fg">
-            Build explorer
-          </h2>
-        </div>
+        <h2 id="build-explorer-heading" className="text-lg font-semibold tracking-tight text-fg">
+          Build explorer
+        </h2>
         <label className="relative block">
           <span className="sr-only">Search builds</span>
           <svg viewBox="0 0 20 20" aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted2" fill="none">
@@ -194,7 +190,7 @@ export function ProtectedBuildInspector({
             <span>{filteredBuilds.length} shown</span>
             <span className="font-mono tabular-nums">{builds.length} total</span>
           </div>
-          <div className="max-h-[20rem] overflow-y-auto overscroll-contain lg:max-h-[39rem]">
+          <div className="max-h-[20rem] overflow-y-auto overscroll-contain lg:max-h-[42rem]">
             {filteredBuilds.map((build, index) => {
               const active = build.id === selected?.id;
               return (
@@ -204,10 +200,10 @@ export function ProtectedBuildInspector({
                   aria-pressed={active}
                   onClick={() => setSelectedId(build.id)}
                   className={`grid min-h-[4.75rem] w-full grid-cols-[2rem_minmax(0,1fr)] gap-2 border-b border-border/45 px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 last:border-0 ${
-                    active ? "bg-accent/[0.08]" : "hover:bg-bg/45"
+                    active ? "bg-card/40" : "hover:bg-card/20"
                   }`}
                 >
-                  <span className={`pt-0.5 font-mono text-[10px] tabular-nums ${active ? "text-accent" : "text-muted2"}`}>
+                  <span className={`pt-0.5 font-mono text-[10px] tabular-nums ${active ? "text-fg" : "text-muted2"}`}>
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <span className="min-w-0">
@@ -245,7 +241,7 @@ export function ProtectedBuildInspector({
                     onClick={() => selectRelative(-1)}
                     disabled={selectedIndex <= 0}
                     aria-label="Previous build"
-                    className="grid h-10 w-10 place-items-center rounded-xl border border-border/70 text-muted transition hover:bg-bg/60 hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
+                    className="grid h-11 w-11 place-items-center rounded-md border border-border/70 text-muted transition hover:bg-card/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
                   >
                     ←
                   </button>
@@ -254,7 +250,7 @@ export function ProtectedBuildInspector({
                     onClick={() => selectRelative(1)}
                     disabled={selectedIndex < 0 || selectedIndex >= filteredBuilds.length - 1}
                     aria-label="Next build"
-                    className="grid h-10 w-10 place-items-center rounded-xl border border-border/70 text-muted transition hover:bg-bg/60 hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
+                    className="grid h-11 w-11 place-items-center rounded-md border border-border/70 text-muted transition hover:bg-card/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
                   >
                     →
                   </button>
@@ -286,7 +282,7 @@ export function ProtectedBuildInspector({
                   skipValidation
                 />
               ) : (
-                <div className="grid min-h-[20rem] place-items-center rounded-2xl border border-dashed border-border bg-bg/35 p-7 text-center sm:min-h-[26rem]">
+                <div className="grid min-h-[20rem] place-items-center border border-border/60 p-7 text-center sm:min-h-[26rem]">
                   <div className="max-w-sm">
                     <span className={`inline-flex items-center gap-2 text-xs font-medium ${statusTone(selected.status)}`}>
                       <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
@@ -298,7 +294,7 @@ export function ProtectedBuildInspector({
                 </div>
               )}
 
-              <dl className="mt-3 grid grid-cols-3 divide-x divide-border/60 rounded-2xl border border-border/60 bg-bg/35 py-3 text-center">
+              <dl className="mt-3 grid grid-cols-3 divide-x divide-border/60 border-y border-border/60 py-3 text-center">
                 <div className="px-2">
                   <dt className="text-[9px] uppercase tracking-[0.1em] text-muted2">Blocks</dt>
                   <dd className="mt-1 font-mono text-xs tabular-nums text-fg">

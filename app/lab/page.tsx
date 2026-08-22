@@ -23,7 +23,7 @@ export default async function LabHomePage() {
       <header className="flex items-center justify-between gap-4 border-b border-border/70 pb-5">
         <h1 className="text-3xl font-semibold tracking-tight text-fg">Organizations</h1>
         <form action={signOutLab}>
-          <button type="submit" className="mb-btn mb-btn-ghost h-9 px-4 text-xs">Sign out</button>
+          <button type="submit" className="mb-btn mb-btn-ghost min-h-11 px-4 text-xs">Sign out</button>
         </form>
       </header>
 
