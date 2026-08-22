@@ -1,18 +1,19 @@
 import type { PreparedArenaBuild } from "@/lib/arena/buildArtifacts";
-import { getArenaPreviewTargetBlocks, pickBuildVariant } from "@/lib/arena/buildArtifacts";
-import { getArenaDeliveryPolicySignature } from "@/lib/arena/buildDeliveryPolicy";
+import { pickBuildVariant } from "@/lib/arena/buildArtifacts";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
 import {
-  getBuildStorageBucketFromEnv,
   getSupabaseStorageConfig,
   hasSupabaseStorageConfig,
 } from "@/lib/storage/buildPayload";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
+import {
+  getArenaSnapshotArtifactRef,
+  hasArenaSnapshotArtifactLocation,
+  type ArenaSnapshotArtifactFormat,
+} from "@/lib/arena/artifactOwnership";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
-
-export type ArenaSnapshotArtifactFormat = "json" | "binary";
 
 export function isBinarySnapshotArtifactEnabled(): boolean {
   return ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED;
@@ -24,25 +25,6 @@ export type ArenaSnapshotArtifactTarget = {
 };
 
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
-const ARENA_SNAPSHOT_ARTIFACT_PREFIX = normalizePrefix(
-  process.env.ARENA_SNAPSHOT_ARTIFACT_PREFIX ?? "arena-snapshot/v2-gzip",
-);
-const deliveryPolicySignature = getArenaDeliveryPolicySignature();
-// policy key invalidates old artifacts when delivery thresholds change
-const ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY = normalizePrefix(
-  [
-    "inline",
-    deliveryPolicySignature.inlineMaxBytes,
-    "snapshot",
-    deliveryPolicySignature.snapshotMaxBytes,
-    "artifact",
-    deliveryPolicySignature.artifactMinBytes,
-    "preview-trigger",
-    deliveryPolicySignature.previewTriggerBytes,
-    "preview-target",
-    getArenaPreviewTargetBlocks(),
-  ].join("-"),
-);
 // Binary artifacts are written alongside the JSON ones and read only when a
 // client asks for them, so this can be turned on to backfill before anything
 // reads it, and turned off without stranding a client on a format it cannot get.
@@ -50,8 +32,6 @@ const ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv(
   "ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED",
   false,
 );
-const ARENA_SNAPSHOT_ARTIFACT_BUCKET =
-  process.env.ARENA_SNAPSHOT_ARTIFACT_BUCKET?.trim() || getBuildStorageBucketFromEnv();
 const ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS",
   1_000,
@@ -121,10 +101,6 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
-}
-
-function normalizePrefix(value: string): string {
-  return value.trim().replace(/^\/+|\/+$/g, "");
 }
 
 function encodeStoragePath(path: string): string {
@@ -240,8 +216,7 @@ function setCachedSnapshotArtifactBody(cacheKey: string, bytes: Uint8Array): voi
 function isSnapshotArtifactEnabled(): boolean {
   return Boolean(
     ARENA_SNAPSHOT_ARTIFACTS_ENABLED &&
-      ARENA_SNAPSHOT_ARTIFACT_PREFIX &&
-      ARENA_SNAPSHOT_ARTIFACT_BUCKET &&
+      hasArenaSnapshotArtifactLocation() &&
       hasSupabaseStorageConfig(),
   );
 }
@@ -255,16 +230,9 @@ export function getSnapshotArtifactRef(
   checksum: string | null,
   format: ArenaSnapshotArtifactFormat = "json",
 ): ArenaBuildSnapshotArtifactRef | null {
-  const normalizedChecksum = checksum?.trim();
-  if (!normalizedChecksum || !isSnapshotArtifactEnabled()) return null;
+  if (!isSnapshotArtifactEnabled()) return null;
   if (format === "binary" && !ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) return null;
-  return {
-    bucket: ARENA_SNAPSHOT_ARTIFACT_BUCKET,
-    path:
-      `${ARENA_SNAPSHOT_ARTIFACT_PREFIX}/${ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY}/` +
-      `${buildId}/${variant}-${normalizedChecksum}` +
-      (format === "binary" ? ".mbv4" : ".json"),
-  };
+  return getArenaSnapshotArtifactRef(buildId, variant, checksum, format);
 }
 
 function createSnapshotArtifactPayload(

@@ -11,10 +11,10 @@ import {
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
   isBinarySnapshotArtifactEnabled,
-  type ArenaSnapshotArtifactFormat,
   healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
+import type { ArenaSnapshotArtifactFormat } from "@/lib/arena/artifactOwnership";
 import {
   getArenaBuildMeta,
   invalidateArenaBuildMeta,

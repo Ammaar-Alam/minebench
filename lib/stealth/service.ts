@@ -7,11 +7,7 @@ import {
   type StealthGenerationResultStatus,
   type StealthVariantStatus,
 } from "@prisma/client";
-import { getSnapshotArtifactRef } from "@/lib/arena/buildSnapshotArtifacts";
-import {
-  getArenaBuildStreamArtifactFetchRefs,
-  getArenaBuildStreamArtifactRef,
-} from "@/lib/arena/buildStream";
+import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import {
   BENCHMARK_PROMPT_COHORT_ID,
@@ -1813,35 +1809,6 @@ export async function reconcileStealthVoteGoals(
   return results.some(Boolean);
 }
 
-function currentStorageRefsForBuild(build: {
-  id: string;
-  voxelStorageBucket: string | null;
-  voxelStoragePath: string | null;
-  voxelSha256: string | null;
-}, options?: { preserveSharedStreamArtifacts?: boolean }): Array<{ bucket: string; path: string }> {
-  const refs = new Map<string, { bucket: string; path: string }>();
-  const add = (ref: { bucket: string; path: string } | null) => {
-    if (!ref) return;
-    if (!ref.bucket.trim() || !ref.path.trim()) return;
-    refs.set(`${ref.bucket}:${ref.path}`, { bucket: ref.bucket, path: ref.path });
-  };
-  if (build.voxelStorageBucket && build.voxelStoragePath) {
-    add({ bucket: build.voxelStorageBucket, path: build.voxelStoragePath });
-  }
-  for (const variant of ["full", "preview"] as const) {
-    add(getSnapshotArtifactRef(build.id, variant, build.voxelSha256, "json"));
-    add(getSnapshotArtifactRef(build.id, variant, build.voxelSha256, "binary"));
-    const sharedStreamRef = options?.preserveSharedStreamArtifacts
-      ? getArenaBuildStreamArtifactRef(build.id, variant, build.voxelSha256)
-      : null;
-    for (const ref of getArenaBuildStreamArtifactFetchRefs(build.id, variant, build.voxelSha256)) {
-      if (sharedStreamRef?.bucket === ref.bucket && sharedStreamRef.path === ref.path) continue;
-      add(ref);
-    }
-  }
-  return Array.from(refs.values());
-}
-
 async function deleteStorageObjects(refs: Array<{ bucket: string; path: string }>): Promise<void> {
   if (refs.length === 0) return;
   const config = getSupabaseStorageConfig();
@@ -1984,7 +1951,9 @@ export async function purgeStealthEvaluationIfDue(
       experimentId: experiment.id,
       variants,
       builds,
-      survivingChecksums: new Set(surviving.map((build) => build.voxelSha256).filter(Boolean)),
+      survivingChecksums: new Set(
+        surviving.flatMap((build) => (build.voxelSha256 ? [build.voxelSha256] : [])),
+      ),
       survivingStorageRefs: new Set(
         surviving.flatMap((build) =>
           build.voxelStorageBucket && build.voxelStoragePath
@@ -2003,14 +1972,17 @@ export async function purgeStealthEvaluationIfDue(
     [
       ...variantStorageRefs,
       ...snapshot.builds.flatMap((build) =>
-        currentStorageRefsForBuild(build, {
-          preserveSharedStreamArtifacts: Boolean(
-            build.voxelSha256 && snapshot.survivingChecksums.has(build.voxelSha256),
-          ),
-        }),
+        build.voxelStorageBucket && build.voxelStoragePath
+          ? [{ bucket: build.voxelStorageBucket, path: build.voxelStoragePath }]
+          : [],
       ),
     ].filter((ref) => !snapshot.survivingStorageRefs.has(`${ref.bucket}:${ref.path}`)),
   );
+  await deleteArenaBuildArtifacts({
+    retiringBuilds: snapshot.builds,
+    survivingChecksums: snapshot.survivingChecksums,
+    deleteStorage: deleteStorageObjects,
+  });
 
   await prisma.$transaction(async (tx) => {
     const experiment = await lockExperiment(tx, snapshot.experimentId);

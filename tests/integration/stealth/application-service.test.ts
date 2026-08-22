@@ -756,6 +756,8 @@ async function main() {
   const previousStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const originalFetch = global.fetch;
   const deletedPaths: string[] = [];
+  let deletionRequests = 0;
+  let failStorageOnce = true;
   process.env.SUPABASE_URL = "https://storage.example.test";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
   global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -767,6 +769,11 @@ async function main() {
     }
     const body = JSON.parse(init.body) as { prefixes: string[] };
     deletedPaths.push(...body.prefixes);
+    deletionRequests += 1;
+    if (failStorageOnce && deletionRequests === 2) {
+      failStorageOnce = false;
+      return new Response(null, { status: 503 });
+    }
     return new Response(null, { status: 200 });
   }) as typeof fetch;
   try {
@@ -783,6 +790,16 @@ async function main() {
     );
     assert.ok(fullArtifact);
     assert.ok(previewArtifact);
+    await assert.rejects(
+      purgeStealthEvaluationIfDue(uploadedEvaluation.id, new Date()),
+      /Storage deletion failed \(503\)/,
+    );
+    assert.equal(
+      await prisma.stealthExperiment.count({ where: { id: uploadedEvaluation.id } }),
+      1,
+      "storage failure must leave database records retryable",
+    );
+    assert.equal(await prisma.build.count({ where: { id: privateBuild.id } }), 1);
     assert.equal(await purgeStealthEvaluationIfDue(uploadedEvaluation.id, new Date()), true);
     assert.equal(deletedPaths.includes(fullArtifact.path), false);
     assert.equal(deletedPaths.includes(previewArtifact.path), false);
