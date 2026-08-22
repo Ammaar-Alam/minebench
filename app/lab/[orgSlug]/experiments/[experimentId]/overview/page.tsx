@@ -46,10 +46,10 @@ export default async function EvaluationOverviewPage({
   const currentStep = lifecycleStep(workspace.status);
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-8">
       <GenerationPoller active={generationActive} />
 
-      <section className="border-y border-border/70 py-6 sm:py-7">
+      <section className="py-1">
         <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-2xl font-semibold tracking-tight text-fg">
             {statusTitles[workspace.status] ?? statusTitles.DRAFT}
@@ -89,7 +89,7 @@ export default async function EvaluationOverviewPage({
           </div>
         </div>
 
-        <ol className="mt-7 grid grid-cols-5 border-t border-border/60 pt-3">
+        <ol className="mt-6 grid grid-cols-5 border-t border-border/60 pt-3">
           {stages.map((stage, index) => {
             const reached = index <= currentStep;
             const active = index === currentStep;
@@ -112,7 +112,7 @@ export default async function EvaluationOverviewPage({
         </h2>
 
         {workspace.checkpoints.length > 0 ? (
-          <div className="border-y border-border/70">
+          <div className="overflow-hidden rounded-md border border-border/70 px-4">
             <div className="hidden grid-cols-[minmax(10rem,0.85fr)_minmax(12rem,1.2fr)_8rem] gap-6 border-b border-border/55 py-2 font-mono text-[9px] uppercase tracking-[0.12em] text-muted2 md:grid">
               <span>Checkpoint</span>
               <span>Builds</span>
@@ -160,7 +160,7 @@ export default async function EvaluationOverviewPage({
             ))}
           </div>
         ) : (
-          <div className="border-y border-border/70 py-8">
+          <div className="py-8">
             <Link href={`${basePath}/settings`} className="text-sm font-medium text-accent hover:underline">
               Add checkpoint
             </Link>

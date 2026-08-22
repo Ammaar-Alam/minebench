@@ -29,7 +29,12 @@ export function EvaluationNav({ basePath }: { basePath: string }) {
               }`}
             >
               {label}
-              {active ? <span aria-hidden="true" className="absolute inset-x-0 bottom-0 h-px bg-fg" /> : null}
+              <span
+                aria-hidden="true"
+                className={`absolute inset-x-0 bottom-0 h-px origin-left bg-fg transition-transform duration-200 ease-out motion-reduce:transition-none ${
+                  active ? "scale-x-100" : "scale-x-0"
+                }`}
+              />
             </Link>
           );
         })}

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
-import { formatDuration, titleCase } from "@/components/lab/format";
+import { titleCase } from "@/components/lab/format";
 
 export type ProtectedBuildOption = {
   id: string;
@@ -123,7 +123,7 @@ export function ProtectedBuildInspector({
 
   if (builds.length === 0) {
     return (
-      <section className="border-y border-border/70 py-8">
+      <section className="py-8">
         <h2 className="text-lg font-semibold tracking-tight text-fg">No builds yet</h2>
       </section>
     );
@@ -133,64 +133,106 @@ export function ProtectedBuildInspector({
     const next = filteredBuilds[selectedIndex + offset];
     if (next) setSelectedId(next.id);
   };
+  const issueCount = builds.filter((build) => build.status === "FAILED" || build.error).length;
+  const viewerMetrics = payload
+    ? {
+        blockCount: payload.blockCount,
+        warnings: [],
+        generationTimeMs: payload.diagnostics.generationTimeMs,
+        attempts: payload.diagnostics.attempts,
+      }
+    : selected?.blockCount != null
+      ? {
+          blockCount: selected.blockCount,
+          warnings: [],
+          generationTimeMs: selected.generationTimeMs,
+          attempts: selected.attempts,
+        }
+      : undefined;
 
   return (
-    <section className="border-y border-border/70" aria-labelledby="build-explorer-heading">
-      <header className="grid gap-4 border-b border-border/60 p-4 sm:p-5 xl:grid-cols-[minmax(11rem,1fr)_minmax(15rem,1.2fr)_auto_auto] xl:items-end">
-        <h2 id="build-explorer-heading" className="text-lg font-semibold tracking-tight text-fg">
-          Build explorer
-        </h2>
-        <label className="relative block">
-          <span className="sr-only">Search builds</span>
-          <svg viewBox="0 0 20 20" aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted2" fill="none">
-            <circle cx="8.8" cy="8.8" r="5.2" stroke="currentColor" strokeWidth="1.4" />
-            <path d="m12.7 12.7 3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-          </svg>
-          <input
-            type="search"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search prompts"
-            className="mb-field h-11 pl-10"
-          />
-        </label>
-        <label>
-          <span className="sr-only">Checkpoint</span>
-          <select
-            value={checkpointFilter}
-            onChange={(event) => setCheckpointFilter(event.target.value)}
-            className="mb-field h-11 min-w-36"
-          >
-            <option value="ALL">All checkpoints</option>
-            {checkpoints.map((checkpoint) => (
-              <option key={checkpoint.id} value={checkpoint.id}>
-                {checkpoint.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span className="sr-only">Build status</span>
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value as BuildFilter)}
-            className="mb-field h-11 min-w-32"
-          >
-            <option value="ALL">All statuses</option>
-            <option value="READY">Ready</option>
-            <option value="PENDING">In progress</option>
-            <option value="ISSUES">Issues</option>
-          </select>
-        </label>
+    <section className="overflow-hidden rounded-lg border border-border/70 bg-bg" aria-labelledby="build-explorer-heading">
+      <header className="grid border-b border-border/60 lg:grid-cols-[21rem_minmax(0,1fr)]">
+        <div className="flex min-h-[3.75rem] items-center justify-between gap-4 px-4 lg:border-r lg:border-border/60">
+          <div className="flex min-w-0 items-baseline gap-3">
+            <h2 id="build-explorer-heading" className="truncate text-base font-semibold tracking-tight text-fg">
+              Build explorer
+            </h2>
+            {issueCount > 0 ? <span className="shrink-0 text-[10px] text-danger">{issueCount} issues</span> : null}
+          </div>
+          <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted">
+            {filteredBuilds.length}/{builds.length}
+          </span>
+        </div>
+        <div className="grid gap-2 border-t border-border/60 p-2 sm:grid-cols-[minmax(12rem,1fr)_10.5rem_9.5rem_auto] lg:border-t-0">
+          <label className="relative block">
+            <span className="sr-only">Search builds</span>
+            <svg viewBox="0 0 20 20" aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted2" fill="none">
+              <circle cx="8.8" cy="8.8" r="5.2" stroke="currentColor" strokeWidth="1.4" />
+              <path d="m12.7 12.7 3.5 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search prompts"
+              className="mb-field h-11 pl-10"
+            />
+          </label>
+          <label>
+            <span className="sr-only">Checkpoint</span>
+            <select
+              value={checkpointFilter}
+              onChange={(event) => setCheckpointFilter(event.target.value)}
+              className="mb-field h-11"
+            >
+              <option value="ALL">All checkpoints</option>
+              {checkpoints.map((checkpoint) => (
+                <option key={checkpoint.id} value={checkpoint.id}>
+                  {checkpoint.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className="sr-only">Build status</span>
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value as BuildFilter)}
+              className="mb-field h-11"
+            >
+              <option value="ALL">All statuses</option>
+              <option value="READY">Ready</option>
+              <option value="PENDING">In progress</option>
+              <option value="ISSUES">Issues</option>
+            </select>
+          </label>
+          <div className="flex overflow-hidden rounded-md border border-border/70">
+            <button
+              type="button"
+              onClick={() => selectRelative(-1)}
+              disabled={selectedIndex <= 0}
+              aria-label="Previous build"
+              className="grid h-11 w-11 place-items-center text-muted transition-colors hover:bg-card/40 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              onClick={() => selectRelative(1)}
+              disabled={selectedIndex < 0 || selectedIndex >= filteredBuilds.length - 1}
+              aria-label="Next build"
+              className="grid h-11 w-11 place-items-center border-l border-border/70 text-muted transition-colors hover:bg-card/40 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 disabled:cursor-not-allowed disabled:opacity-30"
+            >
+              →
+            </button>
+          </div>
+        </div>
       </header>
 
       <div className="grid min-w-0 lg:grid-cols-[21rem_minmax(0,1fr)]">
-        <div className="flex min-h-0 flex-col border-b border-border/60 lg:border-b-0 lg:border-r">
-          <div className="flex items-center justify-between border-b border-border/55 px-4 py-3 text-xs text-muted">
-            <span>{filteredBuilds.length} shown</span>
-            <span className="font-mono tabular-nums">{builds.length} total</span>
-          </div>
-          <div className="max-h-[20rem] overflow-y-auto overscroll-contain lg:max-h-[42rem]">
+        <div className="min-h-0 border-b border-border/60 lg:border-b-0 lg:border-r lg:border-border/60">
+          <div className="mb-lab-scroll max-h-[19rem] overflow-y-auto overscroll-contain lg:max-h-[37rem]">
             {filteredBuilds.map((build, index) => {
               const active = build.id === selected?.id;
               return (
@@ -199,10 +241,16 @@ export function ProtectedBuildInspector({
                   type="button"
                   aria-pressed={active}
                   onClick={() => setSelectedId(build.id)}
-                  className={`grid min-h-[4.75rem] w-full grid-cols-[2rem_minmax(0,1fr)] gap-2 border-b border-border/45 px-3 py-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 last:border-0 ${
-                    active ? "bg-card/40" : "hover:bg-card/20"
+                  className={`relative grid min-h-[4.5rem] w-full grid-cols-[2rem_minmax(0,1fr)] gap-2 px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 ${
+                    active ? "bg-card/45" : "hover:bg-card/25"
                   }`}
                 >
+                  <span
+                    aria-hidden="true"
+                    className={`absolute inset-y-3 left-0 w-px origin-center bg-accent transition-transform duration-200 ease-out motion-reduce:transition-none ${
+                      active ? "scale-y-100" : "scale-y-0"
+                    }`}
+                  />
                   <span className={`pt-0.5 font-mono text-[10px] tabular-nums ${active ? "text-fg" : "text-muted2"}`}>
                     {String(index + 1).padStart(2, "0")}
                   </span>
@@ -225,98 +273,39 @@ export function ProtectedBuildInspector({
           </div>
         </div>
 
-        <div className="min-w-0 p-3 sm:p-5">
+        <div className="min-w-0 bg-card/10">
           {selected ? (
-            <>
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-fg">{selected.checkpoint}</p>
-                  <p className="mt-0.5 font-mono text-[10px] tabular-nums text-muted">
-                    {selectedIndex + 1} / {filteredBuilds.length}
-                  </p>
-                </div>
-                <div className="flex gap-1">
-                  <button
-                    type="button"
-                    onClick={() => selectRelative(-1)}
-                    disabled={selectedIndex <= 0}
-                    aria-label="Previous build"
-                    className="grid h-11 w-11 place-items-center rounded-md border border-border/70 text-muted transition hover:bg-card/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
-                  >
-                    ←
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => selectRelative(1)}
-                    disabled={selectedIndex < 0 || selectedIndex >= filteredBuilds.length - 1}
-                    aria-label="Next build"
-                    className="grid h-11 w-11 place-items-center rounded-md border border-border/70 text-muted transition hover:bg-card/40 hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
-                  >
-                    →
-                  </button>
+            selected.status === "READY" && selected.resultId ? (
+              <VoxelViewerCard
+                key={selected.resultId}
+                title={payload?.checkpoint.codename ?? selected.checkpoint}
+                subtitle={<span className="line-clamp-1 text-muted">{payload?.prompt ?? selected.prompt}</span>}
+                voxelBuild={payload?.voxelBuild ?? null}
+                gridSize={payload?.gridSize ?? 256}
+                palette={payload?.palette ?? "simple"}
+                expectedBlockCount={payload?.blockCount ?? selected.blockCount ?? undefined}
+                autoRotate={false}
+                isLoading={loading}
+                loadingMessage="Loading build…"
+                error={error ?? undefined}
+                metrics={viewerMetrics}
+                skipValidation
+                embedded
+              />
+            ) : (
+              <div className="grid min-h-[24rem] place-items-center p-7 text-center sm:min-h-[32rem]">
+                <div className="max-w-sm">
+                  <span className={`inline-flex items-center gap-2 text-xs font-medium ${statusTone(selected.status)}`}>
+                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
+                    {titleCase(selected.status)}
+                  </span>
+                  <h3 className="mt-3 text-xl font-semibold tracking-tight text-fg">Preview unavailable</h3>
+                  {selected.error ? <p className="mt-2 text-sm text-danger">{selected.error}</p> : null}
                 </div>
               </div>
-
-              {selected.status === "READY" && selected.resultId ? (
-                <VoxelViewerCard
-                  key={selected.resultId}
-                  title={payload?.checkpoint.codename ?? selected.checkpoint}
-                  subtitle={<span className="line-clamp-1 text-muted">{payload?.prompt ?? selected.prompt}</span>}
-                  voxelBuild={payload?.voxelBuild ?? null}
-                  gridSize={payload?.gridSize ?? 256}
-                  palette={payload?.palette ?? "simple"}
-                  expectedBlockCount={payload?.blockCount ?? selected.blockCount ?? undefined}
-                  autoRotate={false}
-                  isLoading={loading}
-                  loadingMessage="Loading build…"
-                  error={error ?? undefined}
-                  metrics={
-                    payload
-                      ? {
-                          blockCount: payload.blockCount,
-                          warnings: [],
-                          generationTimeMs: payload.diagnostics.generationTimeMs,
-                        }
-                      : undefined
-                  }
-                  skipValidation
-                />
-              ) : (
-                <div className="grid min-h-[20rem] place-items-center border border-border/60 p-7 text-center sm:min-h-[26rem]">
-                  <div className="max-w-sm">
-                    <span className={`inline-flex items-center gap-2 text-xs font-medium ${statusTone(selected.status)}`}>
-                      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
-                      {titleCase(selected.status)}
-                    </span>
-                    <h3 className="mt-3 text-xl font-semibold tracking-tight text-fg">Preview unavailable</h3>
-                    {selected.error ? <p className="mt-2 text-sm text-danger">{selected.error}</p> : null}
-                  </div>
-                </div>
-              )}
-
-              <dl className="mt-3 grid grid-cols-3 divide-x divide-border/60 border-y border-border/60 py-3 text-center">
-                <div className="px-2">
-                  <dt className="text-[9px] uppercase tracking-[0.1em] text-muted2">Blocks</dt>
-                  <dd className="mt-1 font-mono text-xs tabular-nums text-fg">
-                    {selected.blockCount?.toLocaleString() ?? "—"}
-                  </dd>
-                </div>
-                <div className="px-2">
-                  <dt className="text-[9px] uppercase tracking-[0.1em] text-muted2">Attempts</dt>
-                  <dd className="mt-1 font-mono text-xs tabular-nums text-fg">
-                    {selected.attempts.toLocaleString()}
-                  </dd>
-                </div>
-                <div className="px-2">
-                  <dt className="text-[9px] uppercase tracking-[0.1em] text-muted2">Time</dt>
-                  <dd className="mt-1 font-mono text-xs tabular-nums text-fg">
-                    {formatDuration(selected.generationTimeMs)}
-                  </dd>
-                </div>
-              </dl>
-            </>
+            )
           ) : (
-            <div className="grid min-h-[28rem] place-items-center text-sm text-muted">Choose another filter.</div>
+            <div className="grid min-h-[28rem] place-items-center p-6 text-sm text-muted">No matching builds</div>
           )}
         </div>
       </div>
