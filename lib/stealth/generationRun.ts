@@ -252,6 +252,51 @@ export async function getStealthGenerationPlan(
   return { promptBatches };
 }
 
+export async function abortStealthGenerationRunsForEvaluation(
+  experimentId: string,
+): Promise<void> {
+  const runIds = await prisma.stealthGenerationRun.findMany({
+    where: { status: "RUNNING", variant: { experimentId } },
+    select: { id: true },
+  });
+  for (const { id } of runIds) {
+    await prisma.$transaction(async (tx) => {
+      const locked = await lockGenerationRun(tx, id);
+      if (!locked) return;
+      const run = await tx.stealthGenerationRun.findUnique({
+        where: { id },
+        select: { status: true, expectedBuildCount: true },
+      });
+      if (!run || run.status !== "RUNNING") return;
+      await tx.stealthGenerationResult.updateMany({
+        where: { runId: id, status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
+        data: { status: "FAILED", error: "Evaluation closed" },
+      });
+      const results = await tx.stealthGenerationResult.findMany({
+        where: { runId: id },
+        orderBy: { updatedAt: "asc" },
+        select: { status: true, attempts: true, error: true },
+      });
+      const progress = summarizeGenerationResults(results);
+      await tx.stealthGenerationRun.update({
+        where: { id },
+        data: {
+          status: progress.completedBuildCount > 0 ? "PARTIAL" : "FAILED",
+          completedBuildCount: progress.completedBuildCount,
+          failedBuildCount: Math.max(
+            progress.failedBuildCount,
+            run.expectedBuildCount - progress.completedBuildCount,
+          ),
+          providerCallCount: progress.providerCallCount,
+          retryCount: progress.retryCount,
+          error: "Evaluation closed",
+          completedAt: new Date(),
+        },
+      });
+    });
+  }
+}
+
 export async function failStealthGenerationRun(runId: string, error: unknown): Promise<void> {
   const message = sanitizeOperationalError(error);
   await prisma.$transaction(async (tx) => {
@@ -262,6 +307,45 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
       include: { variant: { include: { experiment: true } } },
     });
     if (!run || run.status !== "RUNNING") return;
+    const currentResults = await tx.stealthGenerationResult.findMany({
+      where: { runId: run.id },
+      orderBy: { updatedAt: "asc" },
+      select: { status: true, attempts: true, error: true },
+    });
+    const currentProgress = summarizeGenerationResults(currentResults);
+    const complete =
+      currentProgress.completedBuildCount === run.expectedBuildCount &&
+      currentProgress.failedBuildCount === 0;
+    if (complete) {
+      await tx.stealthGenerationRun.update({
+        where: { id: run.id },
+        data: {
+          status: "SUCCEEDED",
+          completedBuildCount: currentProgress.completedBuildCount,
+          failedBuildCount: 0,
+          providerCallCount: currentProgress.providerCallCount,
+          retryCount: currentProgress.retryCount,
+          error: null,
+          completedAt: new Date(),
+        },
+      });
+      if (run.variant.experiment.status !== "CLOSED") {
+        await tx.stealthVariant.updateMany({
+          where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+          data: {
+            status: "READY",
+            endpointEnabled: false,
+            generatedBuildCount: currentProgress.completedBuildCount,
+            generationFailureCount: 0,
+            cohortGeneratedAt: new Date(),
+            lastGenerationError: null,
+          },
+        });
+        await syncExperimentReadiness(tx, run.variant.experimentId);
+      }
+      await tx.stealthEndpointCredential.deleteMany({ where: { variantId: run.variantId } });
+      return;
+    }
     await tx.stealthGenerationResult.updateMany({
       where: { runId: run.id, status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
       data: { status: "FAILED", error: message },
@@ -285,8 +369,8 @@ export async function failStealthGenerationRun(runId: string, error: unknown): P
       },
     });
     if (run.variant.experiment.status !== "CLOSED") {
-      await tx.stealthVariant.update({
-        where: { id: run.variantId },
+      await tx.stealthVariant.updateMany({
+        where: { id: run.variantId, status: { not: "WITHDRAWN" } },
         data: {
           status: progress.completedBuildCount > 0 ? "GENERATING" : "DRAFT",
           generatedBuildCount: progress.completedBuildCount,
@@ -440,17 +524,29 @@ export async function generateStealthPromptForRun(params: {
     return;
   }
 
-  const validating = await prisma.stealthGenerationResult.updateMany({
-    where: { ...resultIdentity, status: "GENERATING" },
-    data: {
-      status: "VALIDATING",
-      attempts,
-      generationTimeMs: generated.generationTimeMs,
-      requestConfiguration: generated.requestConfiguration,
-      error: null,
-    },
+  const validating = await prisma.$transaction(async (tx) => {
+    const locked = await lockGenerationRun(tx, run.id);
+    if (!locked) return 0;
+    const current = await tx.stealthGenerationRun.findUnique({
+      where: { id: run.id },
+      select: { status: true, variant: { select: { experiment: { select: { status: true } } } } },
+    });
+    if (!current || current.status !== "RUNNING" || current.variant.experiment.status === "CLOSED") {
+      return 0;
+    }
+    const updated = await tx.stealthGenerationResult.updateMany({
+      where: { ...resultIdentity, status: "GENERATING" },
+      data: {
+        status: "VALIDATING",
+        attempts,
+        generationTimeMs: generated.generationTimeMs,
+        requestConfiguration: generated.requestConfiguration,
+        error: null,
+      },
+    });
+    return updated.count;
   });
-  if (validating.count !== 1) return;
+  if (validating !== 1) return;
 
   try {
     const build = await persistStealthBuild({
@@ -552,7 +648,10 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
     };
     if (progress.activePromptCount > 0) {
       await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
-      await tx.stealthVariant.update({ where: { id: run.variantId }, data: variantProgress });
+      await tx.stealthVariant.updateMany({
+        where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+        data: variantProgress,
+      });
       return;
     }
     const complete =
@@ -566,14 +665,13 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       },
     });
     if (run.variant.experiment.status === "CLOSED") {
-      await tx.stealthVariant.update({ where: { id: run.variantId }, data: variantProgress });
       if (complete) {
         await tx.stealthEndpointCredential.deleteMany({ where: { variantId: run.variantId } });
       }
       return;
     }
-    await tx.stealthVariant.update({
-      where: { id: run.variantId },
+    await tx.stealthVariant.updateMany({
+      where: { id: run.variantId, status: { not: "WITHDRAWN" } },
       data: {
         ...variantProgress,
         status: complete ? "READY" : "GENERATING",

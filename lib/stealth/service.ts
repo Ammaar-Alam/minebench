@@ -540,8 +540,8 @@ export async function syncExperimentReadiness(
     select: { status: true, generatedBuildCount: true, expectedBuildCount: true },
   });
   if (variants.length === 0) {
-    await db.stealthExperiment.update({
-      where: { id: experimentId },
+    await db.stealthExperiment.updateMany({
+      where: { id: experimentId, status: { in: [...CONFIGURABLE_EXPERIMENT_STATUSES] } },
       data: { status: "DRAFT" },
     });
     return;
@@ -553,8 +553,8 @@ export async function syncExperimentReadiness(
       variant.generatedBuildCount === variant.expectedBuildCount,
   );
   const generating = variants.some((variant) => variant.status === "GENERATING");
-  await db.stealthExperiment.update({
-    where: { id: experimentId },
+  await db.stealthExperiment.updateMany({
+    where: { id: experimentId, status: { in: [...CONFIGURABLE_EXPERIMENT_STATUSES] } },
     data: { status: allReady ? "READY" : generating ? "GENERATING" : "DRAFT" },
   });
 }
@@ -1371,6 +1371,7 @@ export async function completeUploadedStealthCohort(
     generationTimeMs: number;
   }> = [];
   for (const entry of validated) {
+    await assertCohortUploadOpen(actor, organizationId, experimentId);
     const build = await persistStealthBuild({
       variantId: prepared.variantId,
       modelId: prepared.modelId,
@@ -1387,6 +1388,17 @@ export async function completeUploadedStealthCohort(
   }
 
   return prisma.$transaction(async (tx) => {
+    const experiment = await lockExperiment(tx, experimentId);
+    if (!experiment || experiment.organizationId !== organizationId) {
+      throw new Error("Evaluation not found");
+    }
+    if (!isStealthCheckpointSetOpen(experiment.status)) {
+      throw new Error("Activated evaluations cannot accept new checkpoints");
+    }
+    const variant = await lockVariant(tx, prepared.variantId);
+    if (!variant || variant.experimentId !== experiment.id || variant.status === "WITHDRAWN") {
+      throw new Error("Checkpoint not found");
+    }
     const run = await tx.stealthGenerationRun.create({
       data: {
         variantId: prepared.variantId,
@@ -1562,9 +1574,19 @@ export async function resumeStealthEvaluation(
     if (experiment.status !== "PAUSED") throw new Error("Evaluation is not paused");
     const variants = await tx.stealthVariant.findMany({
       where: { experimentId: experiment.id, status: "ACTIVE" },
-      select: { modelId: true },
+      select: { modelId: true, winCount: true, lossCount: true },
     });
     if (variants.length === 0) throw new Error("Evaluation has no active checkpoints");
+    if (
+      experiment.pauseAtGoal &&
+      experiment.targetDecisiveVotes != null &&
+      variants.every(
+        (variant) =>
+          variant.winCount + variant.lossCount >= experiment.targetDecisiveVotes!,
+      )
+    ) {
+      throw new Error("Increase or remove the vote goal before resuming");
+    }
     await tx.model.updateMany({
       where: { id: { in: variants.map((variant) => variant.modelId) } },
       data: { enabled: true },
@@ -1620,6 +1642,9 @@ export async function closeStealthEvaluation(
       },
     });
   });
+  await (await import("@/lib/stealth/generationRun")).abortStealthGenerationRunsForEvaluation(
+    experimentId,
+  );
   invalidateStealthSamplingCache();
 }
 
@@ -1637,11 +1662,31 @@ export async function disableStealthEndpoint(
       throw new Error("Checkpoint not found");
     }
     if (experiment.status === "CLOSED") throw new Error("Closed evaluations are read-only");
+    if (variant.source !== "ENDPOINT") throw new Error("Checkpoint does not use an endpoint");
+    const [buildCount, activeRunCount] = await Promise.all([
+      tx.build.count({ where: { modelId: variant.modelId } }),
+      tx.stealthGenerationRun.count({ where: { variantId: variant.id, status: "RUNNING" } }),
+    ]);
+    if (activeRunCount > 0) throw new Error("Generation is still running");
+    if (buildCount > 0 && variant.status !== "READY") {
+      throw new Error("A partial generation must be completed before disabling its endpoint");
+    }
     await tx.stealthVariant.update({
       where: { id: variant.id },
-      data: { endpointEnabled: false },
+      data: {
+        endpointEnabled: false,
+        ...(buildCount === 0 && variant.status === "GENERATING"
+          ? {
+              status: "DRAFT" as const,
+              generatedBuildCount: 0,
+              generationFailureCount: 0,
+              lastGenerationError: null,
+            }
+          : {}),
+      },
     });
     await tx.stealthEndpointCredential.deleteMany({ where: { variantId: variant.id } });
+    await syncExperimentReadiness(tx, experiment.id);
   });
 }
 

@@ -22,10 +22,11 @@ async function main() {
     disableStealthEndpoint,
     getStealthEvaluationWorkspace,
     inviteOrganizationMember,
-    pauseStealthEvaluation,
+    reconcileStealthGoalPause,
     purgeStealthEvaluationIfDue,
     removeOrganizationMember,
     resumeStealthEvaluation,
+    syncExperimentReadiness,
     updateOrganizationMember,
     updateStealthEvaluation,
   } = await import("../../../lib/stealth/service");
@@ -493,7 +494,7 @@ async function main() {
     for (const promptSlug of promptSlugs.slice(1)) {
       await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug });
     }
-    await finishStealthGenerationRun(retryRun.runId);
+    await failStealthGenerationRun(retryRun.runId, "Final workflow step failed");
     await finishStealthGenerationRun(retryRun.runId);
   } finally {
     releaseFirstRequest();
@@ -518,6 +519,80 @@ async function main() {
       where: { variantId: generationCheckpoint.variantId },
     }),
     0,
+  );
+
+  const closingEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+    name: `Closing generation ${suffix}`,
+  });
+  const closingCheckpoint = await configureStealthEndpoint(
+    memberActor,
+    organization.id,
+    closingEvaluation.id,
+    {
+      codename: "Closing generation",
+      config: {
+        protocol: "openrouter",
+        endpointUrl: "",
+        apiKey: "closing-generation-secret-key",
+        modelId: `closing-generation-${suffix}`,
+        requireStructuredOutput: true,
+        enableTools: false,
+      },
+    },
+  );
+  const closingRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    closingCheckpoint.variantId,
+    { maxAttempts: 1, concurrency: 1 },
+    async (runId) => `workflow-${runId}`,
+  );
+  const closingPrompt = (await getStealthGenerationPlan(closingRun.runId))?.promptBatches[0]?.[0];
+  assert.ok(closingPrompt);
+  let markClosingRequestStarted!: () => void;
+  let releaseClosingRequest!: () => void;
+  const closingRequestStarted = new Promise<void>((resolve) => {
+    markClosingRequestStarted = resolve;
+  });
+  const closingRequestRelease = new Promise<void>((resolve) => {
+    releaseClosingRequest = resolve;
+  });
+  global.fetch = (async () => {
+    markClosingRequestStarted();
+    await closingRequestRelease;
+    return Response.json({
+      choices: [
+        { message: { content: JSON.stringify({ version: "1.0", blocks: generatedBlocks }) } },
+      ],
+    });
+  }) as typeof fetch;
+  const closingGeneration = generateStealthPromptForRun({
+    runId: closingRun.runId,
+    promptSlug: closingPrompt,
+  });
+  try {
+    await closingRequestStarted;
+    await closeStealthEvaluation(memberActor, organization.id, closingEvaluation.id);
+    releaseClosingRequest();
+    await closingGeneration;
+  } finally {
+    releaseClosingRequest();
+    await closingGeneration.catch(() => undefined);
+    global.fetch = originalGenerationFetch;
+  }
+  const closedGenerationVariant = await prisma.stealthVariant.findUniqueOrThrow({
+    where: { id: closingCheckpoint.variantId },
+  });
+  assert.equal(closedGenerationVariant.status, "WITHDRAWN");
+  assert.equal(
+    await prisma.build.count({ where: { modelId: closedGenerationVariant.modelId } }),
+    0,
+    "closing during provider work must fence build persistence",
+  );
+  assert.equal(
+    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: closingRun.runId } }))
+      .status,
+    "FAILED",
   );
 
   const failureCheckpoint = await configureStealthEndpoint(
@@ -614,6 +689,10 @@ async function main() {
   assert.equal(
     await prisma.stealthEndpointCredential.count({ where: { variantId: failureCheckpoint.variantId } }),
     1,
+  );
+  await assert.rejects(
+    disableStealthEndpoint(memberActor, organization.id, failureCheckpoint.variantId),
+    /partial generation/i,
   );
   assert.ok(conflictingBuildId);
   await prisma.build.delete({ where: { id: conflictingBuildId } });
@@ -746,7 +825,22 @@ async function main() {
     }),
     /identity is frozen/,
   );
-  await pauseStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id);
+  await updateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id, {
+    targetDecisiveVotes: 1,
+    pauseAtGoal: true,
+  });
+  await prisma.stealthVariant.updateMany({
+    where: { experimentId: uploadedEvaluation.id, status: "ACTIVE" },
+    data: { winCount: 1 },
+  });
+  assert.equal(await reconcileStealthGoalPause(uploadedEvaluation.id), true);
+  await assert.rejects(
+    resumeStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id),
+    /vote goal/i,
+  );
+  await updateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id, {
+    targetDecisiveVotes: 2,
+  });
   await resumeStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id);
   await closeStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id);
   const uploadedClosed = await prisma.stealthExperiment.findUniqueOrThrow({
@@ -754,6 +848,13 @@ async function main() {
   });
   assert.equal(uploadedClosed.status, "CLOSED");
   assert.ok(uploadedClosed.retentionDeleteAt);
+  await prisma.$transaction((tx) => syncExperimentReadiness(tx, uploadedEvaluation.id));
+  assert.equal(
+    (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: uploadedEvaluation.id } }))
+      .status,
+    "CLOSED",
+    "readiness synchronization must not reopen a closed evaluation",
+  );
   assert.equal(
     await prisma.stealthEndpointCredential.count({ where: { variantId: uploaded.variantId } }),
     0,
