@@ -91,6 +91,18 @@ function isModelDetailPath(pathname: string): boolean {
 }
 
 function normalizeRateLimitPath(pathname: string): string {
+  if (/^\/api\/lab\/organizations\/[^/]+\/builds\/[^/]+$/.test(pathname)) {
+    return "/api/lab/organizations/:orgSlug/builds/:resultId";
+  }
+  if (
+    /^\/api\/lab\/organizations\/[^/]+\/experiments\/[^/]+\/(?:cohort-upload|export)$/.test(
+      pathname,
+    )
+  ) {
+    return pathname.endsWith("/export")
+      ? "/api/lab/organizations/:orgSlug/experiments/:experimentId/export"
+      : "/api/lab/organizations/:orgSlug/experiments/:experimentId/cohort-upload";
+  }
   if (/^\/api\/arena\/builds\/[^/]+\/stream$/.test(pathname)) {
     return "/api/arena/builds/:buildId/stream";
   }

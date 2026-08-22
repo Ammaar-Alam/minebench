@@ -206,8 +206,12 @@ export async function fetchStoredBuildBytes(
     const text = await resp.text().catch(() => "");
     throw new Error(`Storage download failed (${resp.status}): ${text || "empty response"}`);
   }
+  const maxBytes = opts?.maxBytes;
+  if (maxBytes == null) {
+    return new Uint8Array(await resp.arrayBuffer());
+  }
   const contentLength = Number.parseInt(resp.headers.get("content-length") ?? "", 10);
-  if (opts?.maxBytes != null && Number.isFinite(contentLength) && contentLength > opts.maxBytes) {
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     await resp.body?.cancel().catch(() => undefined);
     throw new Error("Storage payload exceeds size limit");
   }
@@ -220,7 +224,7 @@ export async function fetchStoredBuildBytes(
       const next = await reader.read();
       if (next.done) break;
       length += next.value.byteLength;
-      if (opts?.maxBytes != null && length > opts.maxBytes) {
+      if (length > maxBytes) {
         await reader.cancel().catch(() => undefined);
         throw new Error("Storage payload exceeds size limit");
       }

@@ -79,13 +79,13 @@ async function main() {
   const labIp = "203.0.113.84";
   for (let index = 0; index < 18; index += 1) {
     const request = new NextRequest(
-      "http://localhost/api/lab/organizations/test/builds/private-build",
+      `http://localhost/api/lab/organizations/test-${index}/builds/private-build-${index}`,
       { headers: { "x-real-ip": labIp } },
     );
     assert.equal((await middleware(request)).status, 200);
   }
   const labLimited = await middleware(
-    new NextRequest("http://localhost/api/lab/organizations/test/builds/private-build", {
+    new NextRequest("http://localhost/api/lab/organizations/test-18/builds/private-build-18", {
       headers: { "x-real-ip": labIp },
     }),
   );
