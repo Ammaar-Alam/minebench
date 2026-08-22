@@ -9,10 +9,8 @@ datasource db {
 }
 
 enum OrganizationRole {
-  OWNER
   ADMIN
-  ANALYST
-  VIEWER
+  MEMBER
 }
 
 enum StealthExportPolicy {
@@ -22,27 +20,24 @@ enum StealthExportPolicy {
 
 enum StealthExperimentStatus {
   DRAFT
-  VALIDATING
   GENERATING
   READY
   ACTIVE
   PAUSED
-  STABLE
-  DEGRADED
-  WITHDRAWN
   CLOSED
-  RELEASED
 }
 
 enum StealthVariantStatus {
   DRAFT
-  VALIDATING
   GENERATING
   READY
   ACTIVE
-  DEGRADED
   WITHDRAWN
-  RELEASED
+}
+
+enum StealthVariantSource {
+  ENDPOINT
+  UPLOAD
 }
 
 enum StealthGenerationRunStatus {
@@ -53,17 +48,21 @@ enum StealthGenerationRunStatus {
 }
 
 enum StealthGenerationResultStatus {
-  SUCCEEDED
+  QUEUED
+  GENERATING
+  VALIDATING
+  READY
   FAILED
 }
 
 model User {
-  id          String    @id @db.Uuid
-  email       String    @unique
-  displayName String?
-  lastSeenAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id               String    @id @db.Uuid
+  email            String    @unique
+  displayName      String?
+  lastSeenAt       DateTime?
+  isMineBenchAdmin Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   memberships     OrganizationMembership[]
   acceptedInvites OrganizationInvitation[] @relation("AcceptedOrganizationInvites")
@@ -116,31 +115,36 @@ model OrganizationInvitation {
 }
 
 model StealthExperiment {
-  id                  String                  @id @default(cuid())
-  organizationId      String
-  slug                String
-  name                String
-  status              StealthExperimentStatus @default(DRAFT)
-  exportPolicy        StealthExportPolicy     @default(AGGREGATES_ONLY)
-  targetDecisiveVotes Int                     @default(1000)
-  agreementReference  String?
-  startsAt            DateTime?
-  endedAt             DateTime?
-  retentionDeleteAt   DateTime?
-  createdAt           DateTime                @default(now())
-  updatedAt           DateTime                @updatedAt
+  id                    String                  @id @default(cuid())
+  organizationId        String
+  slug                  String
+  name                  String
+  status                StealthExperimentStatus @default(DRAFT)
+  exportPolicy          StealthExportPolicy     @default(AGGREGATES_ONLY)
+  targetDecisiveVotes   Int?
+  pauseAtGoal           Boolean                 @default(true)
+  retentionDays         Int                     @default(30)
+  agreementReference    String?
+  startsAt              DateTime?
+  checkpointSetFrozenAt DateTime?
+  endedAt               DateTime?
+  retentionDeleteAt     DateTime?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
 
   organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   variants     StealthVariant[]
 
   @@unique([organizationId, slug])
   @@index([organizationId, status])
+  @@index([status, retentionDeleteAt])
 }
 
 model StealthVariant {
   id                     String               @id @default(cuid())
   experimentId           String
   codename               String
+  source                 StealthVariantSource @default(ENDPOINT)
   status                 StealthVariantStatus @default(DRAFT)
   modelId                String               @unique
   releasedModelId        String?
@@ -195,6 +199,7 @@ model StealthGenerationRun {
   id                  String                     @id @default(cuid())
   variantId           String
   status              StealthGenerationRunStatus @default(RUNNING)
+  workflowRunId       String?                    @unique
   promptCohortId      String
   configuration       Json
   expectedBuildCount  Int
@@ -218,11 +223,12 @@ model StealthGenerationResult {
   promptId             String
   buildId              String?
   status               StealthGenerationResultStatus
-  attempts             Int
-  generationTimeMs     Int
+  attempts             Int                           @default(0)
+  generationTimeMs     Int                           @default(0)
   requestConfiguration String?
   error                String?
   createdAt            DateTime                      @default(now())
+  updatedAt            DateTime                      @updatedAt
 
   run    StealthGenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   prompt Prompt               @relation(fields: [promptId], references: [id], onDelete: Restrict)

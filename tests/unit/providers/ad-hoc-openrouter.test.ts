@@ -18,6 +18,7 @@ runProviderConfigTest("ad hoc OpenRouter", {}, async (capture) => {
     gridSize: 64,
     palette: "simple",
     maxAttempts: 1,
+    maxOutputTokens: 4096,
     enableTools: false,
     providerKeys: { openrouter: 'Bearer "test-openrouter-key"' },
     allowServerKeys: false,
@@ -29,6 +30,7 @@ runProviderConfigTest("ad hoc OpenRouter", {}, async (capture) => {
   assert.equal(request.url, "https://openrouter.test/api/v1/chat/completions");
   assert.equal(request.headers.authorization, "Bearer test-openrouter-key");
   assert.equal(request.body.model, modelId);
+  assert.equal(request.body.max_tokens, 4096);
   assert.equal(Object.hasOwn(request.body, "provider"), false);
   assert.equal(
     (request.body.response_format as { type?: unknown })?.type,

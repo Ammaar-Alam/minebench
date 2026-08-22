@@ -251,6 +251,9 @@ export async function GET(
   if (!buildMeta) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });
   }
+  if (buildMeta.privateAccessOnly && !buildAccess) {
+    return NextResponse.json({ error: "Build not found" }, { status: 404 });
+  }
 
   const storedChecksum = buildMeta.voxelSha256?.trim() || null;
   const artifactAllowed =

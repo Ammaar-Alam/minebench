@@ -262,6 +262,9 @@ export async function GET(
   if (!meta) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });
   }
+  if (meta.privateAccessOnly && !buildAccess) {
+    return NextResponse.json({ error: "Build not found" }, { status: 404 });
+  }
 
   const storedChecksum = meta.voxelSha256?.trim() || null;
   if (expectedChecksum && storedChecksum && expectedChecksum !== storedChecksum) {

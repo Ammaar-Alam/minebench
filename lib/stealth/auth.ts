@@ -1,12 +1,14 @@
 import type { OrganizationRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { acceptExactEmailInvitations } from "@/lib/stealth/service";
 
 export type LabIdentity = {
   user: {
     id: string;
     email: string;
     displayName: string | null;
+    isMineBenchAdmin: boolean;
   };
   memberships: Array<{
     role: OrganizationRole;
@@ -27,7 +29,7 @@ export async function getLabIdentity(): Promise<LabIdentity | null> {
   const email = authUser?.email?.trim().toLowerCase();
   if (error || !authUser || !email) return null;
 
-  const user = await prisma.user.upsert({
+  const savedUser = await prisma.user.upsert({
     where: { id: authUser.id },
     create: {
       id: authUser.id,
@@ -46,6 +48,19 @@ export async function getLabIdentity(): Promise<LabIdentity | null> {
       id: true,
       email: true,
       displayName: true,
+      isMineBenchAdmin: true,
+    },
+  });
+
+  await acceptExactEmailInvitations(savedUser);
+
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: savedUser.id },
+    select: {
+      id: true,
+      email: true,
+      displayName: true,
+      isMineBenchAdmin: true,
       memberships: {
         orderBy: { organization: { name: "asc" } },
         select: {
@@ -78,6 +93,7 @@ export async function getLabIdentity(): Promise<LabIdentity | null> {
       id: user.id,
       email: user.email,
       displayName: user.displayName,
+      isMineBenchAdmin: user.isMineBenchAdmin,
     },
     memberships: user.memberships,
   };

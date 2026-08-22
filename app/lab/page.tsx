@@ -7,7 +7,7 @@ import { signOutLab } from "./sign-in/actions";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Evaluations",
+  title: "Organizations",
   robots: { index: false, follow: false },
 };
 
@@ -21,7 +21,7 @@ export default async function LabHomePage() {
   return (
     <div className="mx-auto w-full max-w-3xl space-y-8 py-6 sm:py-12">
       <header className="flex items-center justify-between gap-4 border-b border-border/70 pb-5">
-        <h1 className="text-3xl font-semibold tracking-tight text-fg">Evaluations</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-fg">Organizations</h1>
         <form action={signOutLab}>
           <button type="submit" className="mb-btn mb-btn-ghost h-9 px-4 text-xs">Sign out</button>
         </form>
@@ -46,8 +46,8 @@ export default async function LabHomePage() {
         </div>
       ) : (
         <section className="border-y border-border/70 py-8">
-          <h2 className="text-lg font-medium tracking-tight text-fg">No evaluations</h2>
-          <p className="mt-2 text-sm text-muted">This account is not linked to an evaluation.</p>
+          <h2 className="text-lg font-medium tracking-tight text-fg">No organizations</h2>
+          <p className="mt-2 text-sm text-muted">This account has no active invitation.</p>
         </section>
       )}
     </div>

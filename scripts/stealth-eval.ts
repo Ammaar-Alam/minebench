@@ -1,32 +1,17 @@
 #!/usr/bin/env -S tsx
 
 import "dotenv/config";
-import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import type {
   OrganizationRole,
-  StealthExperimentStatus,
-  StealthVariantStatus,
+  StealthExportPolicy,
 } from "@prisma/client";
-import { generateVoxelBuild } from "../lib/ai/generateVoxelBuild";
-import {
-  BENCHMARK_PROMPT_COHORT_ID,
-  BENCHMARK_PROMPT_MAP,
-} from "../lib/benchmark/prompts";
 import { prisma } from "../lib/prisma";
 import {
-  decryptStealthEndpointConfig,
-  encryptStealthEndpointConfig,
   generateStealthConfigEncryptionKey,
   type StealthEndpointConfig,
+  type StealthEndpointProtocol,
 } from "../lib/stealth/credentials";
-import {
-  ensureStealthBuildArtifacts,
-  persistStealthBuild,
-} from "../lib/stealth/generation";
-import {
-  normalizeStealthSlug,
-  opaqueStealthModelKey,
-} from "../lib/stealth/policy";
 
 type CliArgs = {
   command: string;
@@ -34,9 +19,24 @@ type CliArgs = {
   flags: Set<string>;
 };
 
-const EXPERIMENT_ACTIVATABLE: readonly StealthExperimentStatus[] = ["READY", "PAUSED"];
-const EXPERIMENT_CONFIGURABLE: readonly StealthExperimentStatus[] = ["DRAFT", "READY", "DEGRADED"];
-const VARIANT_CONFIGURABLE: readonly StealthVariantStatus[] = ["DRAFT", "READY", "DEGRADED"];
+type ServiceModule = typeof import("../lib/stealth/service");
+type WorkflowApiModule = typeof import("workflow/api");
+const OPERATOR_ACTOR = { minebenchAdmin: true } as const;
+const STEALTH_GENERATION_WORKFLOW = {
+  workflowId: "workflow//./workflows/stealth-generation//generateStealthCohortWorkflow",
+} as const;
+let servicePromise: Promise<ServiceModule> | null = null;
+let workflowPromise: Promise<WorkflowApiModule> | null = null;
+
+async function service(): Promise<ServiceModule> {
+  servicePromise ??= import("../lib/stealth/service");
+  return servicePromise;
+}
+
+async function workflow(): Promise<WorkflowApiModule> {
+  workflowPromise ??= import("workflow/api");
+  return workflowPromise;
+}
 
 function parseArgs(argv = process.argv.slice(2)): CliArgs {
   const [command = "help", ...rest] = argv;
@@ -56,27 +56,83 @@ function parseArgs(argv = process.argv.slice(2)): CliArgs {
   return { command, values, flags };
 }
 
-function value(args: CliArgs, name: string, required = true): string | undefined {
-  const result = args.values.get(name)?.trim();
-  if (!result && required) throw new Error(`Missing ${name}`);
-  return result || undefined;
+function option(args: CliArgs, ...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = args.values.get(name)?.trim();
+    if (value) return value;
+  }
+  return undefined;
 }
 
-function positiveInt(args: CliArgs, name: string, fallback: number, max: number): number {
-  const raw = value(args, name, false);
+function requiredOption(args: CliArgs, ...names: string[]): string {
+  const value = option(args, ...names);
+  if (!value) throw new Error(`Missing ${names[0]}`);
+  return value;
+}
+
+function normalizeSlug(raw: string, label: string): string {
+  const slug = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  if (!slug) throw new Error(`${label} must contain letters or numbers`);
+  return slug;
+}
+
+function normalizeEmail(raw: string): string {
+  const email = raw.trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    throw new Error("Enter a valid email");
+  }
+  return email;
+}
+
+function positiveInt(
+  args: CliArgs,
+  names: string[],
+  fallback: number | null,
+  max: number,
+): number | null {
+  const raw = option(args, ...names);
   if (!raw) return fallback;
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isInteger(parsed) || parsed <= 0 || parsed > max) {
-    throw new Error(`${name} must be an integer from 1 to ${max}`);
+    throw new Error(`${names[0]} must be from 1 to ${max}`);
   }
   return parsed;
 }
 
-function slugValue(args: CliArgs, name: string): string {
-  const raw = value(args, name) as string;
-  const slug = normalizeStealthSlug(raw);
-  if (!slug) throw new Error(`${name} must contain letters or numbers`);
-  return slug;
+function roleValue(args: CliArgs): OrganizationRole {
+  const role = requiredOption(args, "--role").toUpperCase();
+  if (role !== "ADMIN" && role !== "MEMBER") {
+    throw new Error("--role must be admin or member");
+  }
+  return role;
+}
+
+function exportPolicyValue(args: CliArgs): StealthExportPolicy | undefined {
+  const raw = option(args, "--export-policy");
+  if (!raw) return undefined;
+  const policy = raw.trim().toUpperCase().replaceAll("-", "_");
+  if (policy !== "AGGREGATES_ONLY" && policy !== "DEIDENTIFIED_VOTES") {
+    throw new Error("--export-policy must be aggregates-only or deidentified-votes");
+  }
+  return policy;
+}
+
+function protocolValue(args: CliArgs): StealthEndpointProtocol {
+  const protocol = option(args, "--protocol") ?? "openai-compatible";
+  if (
+    protocol !== "openai-compatible" &&
+    protocol !== "openrouter" &&
+    protocol !== "anthropic" &&
+    protocol !== "gemini"
+  ) {
+    throw new Error("--protocol must be openai-compatible, openrouter, anthropic, or gemini");
+  }
+  return protocol;
 }
 
 function endpointApiKey(): string {
@@ -85,810 +141,416 @@ function endpointApiKey(): string {
   return apiKey;
 }
 
-async function findExperiment(orgSlug: string, experimentSlug: string) {
-  const experiment = await prisma.stealthExperiment.findFirst({
-    where: {
-      slug: experimentSlug,
-      organization: { slug: orgSlug },
-    },
-    include: { organization: true },
-  });
-  if (!experiment) throw new Error(`Experiment not found: ${orgSlug}/${experimentSlug}`);
-  return experiment;
-}
-
-async function findVariant(orgSlug: string, experimentSlug: string, codename: string) {
-  const variant = await prisma.stealthVariant.findFirst({
-    where: {
-      codename,
-      experiment: {
-        slug: experimentSlug,
-        organization: { slug: orgSlug },
-      },
-    },
-    include: {
-      credential: true,
-      experiment: { include: { organization: true } },
-      model: true,
-    },
-  });
-  if (!variant) throw new Error(`Variant not found: ${orgSlug}/${experimentSlug}/${codename}`);
-  return variant;
-}
-
-function checkpointFingerprint(endpointUrl: string, modelId: string): string {
-  return createHash("sha256")
-    .update(`${endpointUrl.trim().replace(/\/+$/, "")}\n${modelId.trim()}`)
-    .digest("hex");
-}
-
-async function createExperiment(args: CliArgs): Promise<void> {
-  const orgSlug = slugValue(args, "--org");
-  const orgName = value(args, "--org-name") as string;
-  const experimentSlug = slugValue(args, "--experiment");
-  const experimentName = value(args, "--experiment-name") as string;
-  const targetDecisiveVotes = positiveInt(args, "--target-votes", 1000, 1_000_000);
-  const exportPolicyRaw =
-    value(args, "--export-policy", false)?.toUpperCase().replaceAll("-", "_") ??
-    "AGGREGATES_ONLY";
-  if (exportPolicyRaw !== "AGGREGATES_ONLY" && exportPolicyRaw !== "DEIDENTIFIED_VOTES") {
-    throw new Error("--export-policy must be aggregates-only or deidentified-votes");
-  }
-  const exportPolicy = exportPolicyRaw as
-    | "AGGREGATES_ONLY"
-    | "DEIDENTIFIED_VOTES";
-  const agreementReference = value(args, "--agreement", false);
-
-  const organization = await prisma.organization.upsert({
-    where: { slug: orgSlug },
-    create: { slug: orgSlug, name: orgName },
-    update: { name: orgName },
-  });
-  const experiment = await prisma.stealthExperiment.upsert({
-    where: { organizationId_slug: { organizationId: organization.id, slug: experimentSlug } },
-    create: {
-      organizationId: organization.id,
-      slug: experimentSlug,
-      name: experimentName,
-      targetDecisiveVotes,
-      exportPolicy,
-      agreementReference,
-    },
-    update: {
-      name: experimentName,
-      targetDecisiveVotes,
-      exportPolicy,
-      agreementReference,
-    },
-  });
-  console.log(`Experiment ready for configuration: ${organization.slug}/${experiment.slug}`);
-}
-
-function endpointConfig(args: CliArgs): StealthEndpointConfig {
-  return {
-    protocol: "openai-chat-completions",
-    endpointUrl: value(args, "--endpoint") as string,
-    apiKey: endpointApiKey(),
-    modelId: value(args, "--model-id") as string,
-    requireStructuredOutput: !args.flags.has("--allow-unstructured"),
-    enableTools: !args.flags.has("--no-tools"),
-    reasoning: value(args, "--reasoning", false),
-  };
-}
-
-async function configureVariant(args: CliArgs): Promise<void> {
-  const orgSlug = slugValue(args, "--org");
-  const experimentSlug = slugValue(args, "--experiment");
-  const codename = value(args, "--codename") as string;
-  const experiment = await findExperiment(orgSlug, experimentSlug);
-  if (!EXPERIMENT_CONFIGURABLE.includes(experiment.status)) {
-    throw new Error(`Experiment ${experiment.status.toLowerCase()} cannot accept endpoint changes`);
-  }
-  const config = endpointConfig(args);
-  const encrypted = encryptStealthEndpointConfig(config);
-  const fingerprint = checkpointFingerprint(config.endpointUrl, config.modelId);
-  const existing = await prisma.stealthVariant.findUnique({
-    where: { experimentId_codename: { experimentId: experiment.id, codename } },
-    include: { _count: { select: { matchups: true } } },
-  });
-
-  if (existing) {
-    if (!VARIANT_CONFIGURABLE.includes(existing.status)) {
-      throw new Error(`Variant ${existing.status.toLowerCase()} cannot be reconfigured`);
-    }
-    if (existing._count.matchups > 0) throw new Error("A sampled variant cannot be reconfigured");
-    if (
-      existing.generatedBuildCount > 0 &&
-      existing.checkpointFingerprint &&
-      existing.checkpointFingerprint !== fingerprint
-    ) {
-      throw new Error("Checkpoint identity cannot change after cohort generation has started");
-    }
-    await prisma.$transaction([
-      prisma.stealthVariant.update({
-        where: { id: existing.id },
-        data: {
-          checkpointFingerprint: fingerprint,
-          endpointEnabled: true,
-          lastGenerationError: null,
-        },
-      }),
-      prisma.stealthEndpointCredential.upsert({
-        where: { variantId: existing.id },
-        create: { variantId: existing.id, ...encrypted },
-        update: encrypted,
-      }),
-    ]);
-    console.log(`Endpoint configuration updated: ${orgSlug}/${experimentSlug}/${codename}`);
-    return;
-  }
-
-  const variantId = randomUUID();
-  const modelId = randomUUID();
-  await prisma.$transaction(async (tx) => {
-    await tx.model.create({
-      data: {
-        id: modelId,
-        key: opaqueStealthModelKey(experiment.id, variantId),
-        provider: "Stealth",
-        modelId: variantId,
-        displayName: codename,
-        enabled: false,
-      },
-    });
-    await tx.stealthVariant.create({
-      data: {
-        id: variantId,
-        experimentId: experiment.id,
-        codename,
-        modelId,
-        checkpointFingerprint: fingerprint,
-        endpointEnabled: true,
-        expectedBuildCount: Object.keys(BENCHMARK_PROMPT_MAP).length,
-        credential: { create: encrypted },
-      },
-    });
-  });
-  console.log(`Variant configured: ${orgSlug}/${experimentSlug}/${codename}`);
-}
-
-async function findAuthUserByEmail(email: string) {
+async function findSupabaseAuthUserIdByEmail(email: string): Promise<string | null> {
   const { createSupabaseAdminClient } = await import("../lib/supabase/admin");
   const supabase = createSupabaseAdminClient();
   for (let page = 1; page <= 10; page += 1) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
     if (error) throw error;
     const found = data.users.find((user) => user.email?.trim().toLowerCase() === email);
-    if (found) return { supabase, user: found, invited: false };
+    if (found) return found.id;
     if (data.users.length < 1000) break;
   }
-  const siteUrl = (process.env.MINEBENCH_SITE_URL ?? "").trim().replace(/\/+$/, "");
-  if (!siteUrl) throw new Error("Missing MINEBENCH_SITE_URL for the invitation redirect");
-  const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
-    redirectTo: `${siteUrl}/lab/auth/confirm?next=/lab`,
+  return null;
+}
+
+async function organizationBySlug(slug: string): Promise<{ id: string; slug: string; name: string }> {
+  const organization = await prisma.organization.findUnique({
+    where: { slug },
+    select: { id: true, slug: true, name: true },
   });
-  if (error) throw error;
-  if (!data.user) throw new Error("Supabase did not return the invited user");
-  return { supabase, user: data.user, invited: true };
+  if (!organization) throw new Error(`Organization not found: ${slug}`);
+  return organization;
+}
+
+async function evaluationId(args: CliArgs, organizationId: string): Promise<string> {
+  const explicitId = option(args, "--evaluation-id", "--experiment-id");
+  if (explicitId) {
+    const evaluation = await prisma.stealthExperiment.findFirst({
+      where: { id: explicitId, organizationId },
+      select: { id: true },
+    });
+    if (!evaluation) throw new Error(`Evaluation not found: ${explicitId}`);
+    return evaluation.id;
+  }
+  const slug = normalizeSlug(
+    requiredOption(args, "--evaluation", "--experiment"),
+    "--evaluation",
+  );
+  const evaluation = await prisma.stealthExperiment.findFirst({
+    where: { slug, organizationId },
+    select: { id: true },
+  });
+  if (!evaluation) throw new Error(`Evaluation not found: ${slug}`);
+  return evaluation.id;
+}
+
+async function variantId(
+  args: CliArgs,
+  organizationId: string,
+  experimentId: string,
+): Promise<string> {
+  const explicitId = option(args, "--variant-id", "--checkpoint-id");
+  if (explicitId) {
+    const variant = await prisma.stealthVariant.findFirst({
+      where: { id: explicitId, experiment: { id: experimentId, organizationId } },
+      select: { id: true },
+    });
+    if (!variant) throw new Error(`Checkpoint not found: ${explicitId}`);
+    return variant.id;
+  }
+  const codename = requiredOption(args, "--codename", "--checkpoint");
+  const variant = await prisma.stealthVariant.findFirst({
+    where: { codename, experiment: { id: experimentId, organizationId } },
+    select: { id: true },
+  });
+  if (!variant) throw new Error(`Checkpoint not found: ${codename}`);
+  return variant.id;
+}
+
+async function orgAndEvaluation(args: CliArgs): Promise<{
+  organization: { id: string; slug: string; name: string };
+  evaluationId: string;
+}> {
+  const organization = await organizationBySlug(
+    normalizeSlug(requiredOption(args, "--org"), "--org"),
+  );
+  return {
+    organization,
+    evaluationId: await evaluationId(args, organization.id),
+  };
+}
+
+function endpointConfig(args: CliArgs): StealthEndpointConfig {
+  const protocol = protocolValue(args);
+  return {
+    protocol,
+    endpointUrl: option(args, "--endpoint", "--endpoint-url") ?? "",
+    apiKey: endpointApiKey(),
+    modelId: requiredOption(args, "--model-id"),
+    maxOutputTokens: positiveInt(args, ["--max-output-tokens"], null, 1_000_000) ?? undefined,
+    requireStructuredOutput: !args.flags.has("--allow-unstructured"),
+    enableTools: !args.flags.has("--no-tools"),
+    reasoning: option(args, "--reasoning"),
+  };
+}
+
+function uploadBuildsFromJson(value: unknown): Array<{
+  promptSlug: string;
+  build: unknown;
+  generationTimeMs?: number | null;
+}> {
+  const rows =
+    Array.isArray(value)
+      ? value
+      : value && typeof value === "object" && Array.isArray((value as { builds?: unknown }).builds)
+        ? (value as { builds: unknown[] }).builds
+        : null;
+  if (!rows) throw new Error("Upload file must contain a cohort array or an object with builds");
+  return rows.map((entry) => {
+    if (!entry || typeof entry !== "object") throw new Error("Each upload row must be an object");
+    const row = entry as Record<string, unknown>;
+    return {
+      promptSlug: typeof row.promptSlug === "string" ? row.promptSlug : "",
+      build: row.build,
+      generationTimeMs:
+        typeof row.generationTimeMs === "number" ? row.generationTimeMs : undefined,
+    };
+  });
+}
+
+async function bootstrapAdmin(args: CliArgs): Promise<void> {
+  const email = normalizeEmail(requiredOption(args, "--email"));
+  const existing = await prisma.user.findUnique({
+    where: { email },
+    select: { id: true },
+  });
+  const userId = existing?.id ?? await findSupabaseAuthUserIdByEmail(email);
+  if (!userId) {
+    throw new Error(`No MineBench auth user found for ${email}`);
+  }
+  await prisma.user.upsert({
+    where: { id: userId },
+    create: { id: userId, email, isMineBenchAdmin: true },
+    update: { email, isMineBenchAdmin: true },
+  });
+  console.log(`MineBench admin enabled: ${email}`);
+}
+
+async function provisionOrganization(args: CliArgs): Promise<void> {
+  const result = await (await service()).provisionStealthOrganization(OPERATOR_ACTOR, {
+    slug: normalizeSlug(requiredOption(args, "--org", "--slug"), "--org"),
+    name: requiredOption(args, "--name", "--org-name"),
+    initialAdminEmail: normalizeEmail(requiredOption(args, "--admin-email")),
+  });
+  console.log(`Organization provisioned: ${result.slug} (${result.id})`);
+}
+
+async function listOrganizations(): Promise<void> {
+  const organizations = await (await service()).listStealthOrganizationsForAdmin(OPERATOR_ACTOR);
+  if (organizations.length === 0) {
+    console.log("No private evaluation organizations");
+    return;
+  }
+  for (const organization of organizations) {
+    console.log(
+      [
+        organization.slug,
+        organization.name,
+        `members=${organization.memberCount}`,
+        `evaluations=${organization.evaluationCount}`,
+        organization.adminEmails.length > 0
+          ? `admins=${organization.adminEmails.join(",")}`
+          : "admins=none",
+      ].join(" "),
+    );
+  }
+}
+
+async function createEvaluation(args: CliArgs): Promise<void> {
+  const organization = await organizationBySlug(
+    normalizeSlug(requiredOption(args, "--org"), "--org"),
+  );
+  const result = await (await service()).createStealthEvaluation(
+    OPERATOR_ACTOR,
+    organization.id,
+    {
+      name: requiredOption(args, "--name", "--evaluation-name", "--experiment-name"),
+      slug: option(args, "--slug", "--evaluation", "--experiment"),
+      targetDecisiveVotes: positiveInt(args, ["--target-votes"], null, 1_000_000),
+      pauseAtGoal: !args.flags.has("--no-pause-at-goal"),
+      exportPolicy: exportPolicyValue(args),
+      retentionDays: positiveInt(args, ["--retention-days"], null, 3650) ?? undefined,
+      agreementReference: option(args, "--agreement"),
+    },
+  );
+  console.log(`Evaluation created: ${organization.slug}/${result.slug} (${result.id})`);
+}
+
+async function configureEndpoint(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  const result = await (await service()).configureStealthEndpoint(
+    OPERATOR_ACTOR,
+    organization.id,
+    experimentId,
+    {
+      variantId: option(args, "--variant-id", "--checkpoint-id"),
+      codename: requiredOption(args, "--codename", "--checkpoint"),
+      config: endpointConfig(args),
+    },
+  );
+  console.log(`Checkpoint configured: ${result.variantId}`);
 }
 
 async function inviteMember(args: CliArgs): Promise<void> {
-  const orgSlug = slugValue(args, "--org");
-  const email = (value(args, "--email") as string).toLowerCase();
-  const role = (value(args, "--role") as string).toUpperCase() as OrganizationRole;
-  if (!(["OWNER", "ADMIN", "ANALYST", "VIEWER"] as const).includes(role)) {
-    throw new Error("--role must be owner, admin, analyst, or viewer");
-  }
-  const organization = await prisma.organization.findUnique({ where: { slug: orgSlug } });
-  if (!organization) throw new Error(`Organization not found: ${orgSlug}`);
-  const { user, invited } = await findAuthUserByEmail(email);
-  await prisma.$transaction([
-    prisma.user.upsert({
-      where: { id: user.id },
-      create: { id: user.id, email },
-      update: { email },
-    }),
-    prisma.organizationMembership.upsert({
-      where: { organizationId_userId: { organizationId: organization.id, userId: user.id } },
-      create: { organizationId: organization.id, userId: user.id, role },
-      update: { role },
-    }),
-    prisma.organizationInvitation.upsert({
-      where: { organizationId_email: { organizationId: organization.id, email } },
-      create: { organizationId: organization.id, email, role, authUserId: user.id },
-      update: { role, authUserId: user.id, revokedAt: null },
-    }),
-  ]);
-  console.log(`${invited ? "Invitation sent" : "Access granted"}: ${email} -> ${orgSlug} (${role.toLowerCase()})`);
+  const organization = await organizationBySlug(
+    normalizeSlug(requiredOption(args, "--org"), "--org"),
+  );
+  const email = normalizeEmail(requiredOption(args, "--email"));
+  await (await service()).inviteOrganizationMember(OPERATOR_ACTOR, organization.id, {
+    email,
+    role: roleValue(args),
+  });
+  console.log(`Member invited: ${email} -> ${organization.slug}`);
+}
+
+async function updateMemberRole(args: CliArgs): Promise<void> {
+  const organization = await organizationBySlug(
+    normalizeSlug(requiredOption(args, "--org"), "--org"),
+  );
+  const email = normalizeEmail(requiredOption(args, "--email"));
+  await (await service()).updateOrganizationMember(OPERATOR_ACTOR, organization.id, {
+    email,
+    role: roleValue(args),
+  });
+  console.log(`Member role updated: ${email} -> ${organization.slug}`);
 }
 
 async function revokeMember(args: CliArgs): Promise<void> {
-  const orgSlug = slugValue(args, "--org");
-  const email = (value(args, "--email") as string).toLowerCase();
-  const organization = await prisma.organization.findUnique({ where: { slug: orgSlug } });
-  if (!organization) throw new Error(`Organization not found: ${orgSlug}`);
-  const [membership, invitation] = await prisma.$transaction([
-    prisma.organizationMembership.deleteMany({
-      where: { organizationId: organization.id, user: { email } },
-    }),
-    prisma.organizationInvitation.updateMany({
-      where: { organizationId: organization.id, email, revokedAt: null },
-      data: { revokedAt: new Date() },
-    }),
-  ]);
-  console.log(
-    membership.count + invitation.count > 0
-      ? `Access revoked: ${email} -> ${orgSlug}`
-      : `Access already absent: ${email} -> ${orgSlug}`,
+  const organization = await organizationBySlug(
+    normalizeSlug(requiredOption(args, "--org"), "--org"),
   );
+  const email = normalizeEmail(requiredOption(args, "--email"));
+  await (await service()).removeOrganizationMember(OPERATOR_ACTOR, organization.id, { email });
+  console.log(`Member revoked: ${email} -> ${organization.slug}`);
 }
 
-async function prepareCohortPrompts() {
-  const entries = Object.entries(BENCHMARK_PROMPT_MAP);
-  const prompts = await Promise.all(
-    entries.map(async ([slug, text]) => ({
-      slug,
-      text,
-      prompt: await prisma.prompt.upsert({
-        where: { text },
-        create: { text, active: true },
-        update: { active: true },
-      }),
-    })),
-  );
-  return prompts.sort((a, b) => {
-    if (a.slug === "astronaut") return -1;
-    if (b.slug === "astronaut") return 1;
-    return a.slug.localeCompare(b.slug);
-  });
-}
-
-async function generateVariant(args: CliArgs): Promise<void> {
-  const orgSlug = slugValue(args, "--org");
-  const experimentSlug = slugValue(args, "--experiment");
-  const codename = value(args, "--codename") as string;
-  const maxAttempts = positiveInt(args, "--attempts", 3, 10);
-  const concurrency = positiveInt(args, "--concurrency", 1, 4);
-  const variant = await findVariant(orgSlug, experimentSlug, codename);
-  if (!variant.endpointEnabled || !variant.credential) {
-    throw new Error("Variant endpoint is disabled; configure it before generation");
-  }
-  if (!VARIANT_CONFIGURABLE.includes(variant.status)) {
-    throw new Error(`Variant ${variant.status.toLowerCase()} cannot generate a cohort`);
-  }
-  const config = decryptStealthEndpointConfig(variant.credential.encryptedConfig);
-  const prompts = await prepareCohortPrompts();
-  const expectedBuildCount = prompts.length;
-  const run = await prisma.$transaction(async (tx) => {
-    await tx.stealthVariant.update({
-      where: { id: variant.id },
-      data: { status: "VALIDATING", expectedBuildCount, lastGenerationError: null },
-    });
-    await tx.stealthExperiment.update({
-      where: { id: variant.experimentId },
-      data: { status: "VALIDATING" },
-    });
-    return tx.stealthGenerationRun.create({
-      data: {
-        variantId: variant.id,
-        promptCohortId: BENCHMARK_PROMPT_COHORT_ID,
-        expectedBuildCount,
-        configuration: {
-          protocol: config.protocol,
-          credentialFingerprint: variant.credential?.fingerprint,
-          gridSize: 256,
-          palette: "simple",
-          mode: "precise",
-          enableTools: config.enableTools,
-          requireStructuredOutput: config.requireStructuredOutput,
-          reasoning: config.reasoning ?? null,
-          maxAttempts,
-          concurrency,
-        },
-      },
-    });
-  });
-
-  let providerCallCount = 0;
-  let retryCount = 0;
-  let completedBuildCount = 0;
-  let failedBuildCount = 0;
-  let lastError: string | null = null;
-
-  const generateOne = async (entry: Awaited<ReturnType<typeof prepareCohortPrompts>>[number]) => {
-    const existing = await prisma.build.findUnique({
-      where: {
-        promptId_modelId_gridSize_palette_mode: {
-          promptId: entry.prompt.id,
-          modelId: variant.modelId,
-          gridSize: 256,
-          palette: "simple",
-          mode: "precise",
-        },
-      },
-      select: { id: true },
-    });
-    if (existing) {
-      try {
-        await ensureStealthBuildArtifacts(existing.id);
-        completedBuildCount += 1;
-        await prisma.stealthGenerationResult.upsert({
-          where: { runId_promptId: { runId: run.id, promptId: entry.prompt.id } },
-          create: {
-            runId: run.id,
-            promptId: entry.prompt.id,
-            buildId: existing.id,
-            status: "SUCCEEDED",
-            attempts: 0,
-            generationTimeMs: 0,
-          },
-          update: { buildId: existing.id, status: "SUCCEEDED", error: null },
-        });
-        console.log(`Reused ${entry.slug}`);
-        return true;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        failedBuildCount += 1;
-        lastError = message;
-        await prisma.stealthGenerationResult.upsert({
-          where: { runId_promptId: { runId: run.id, promptId: entry.prompt.id } },
-          create: {
-            runId: run.id,
-            promptId: entry.prompt.id,
-            buildId: existing.id,
-            status: "FAILED",
-            attempts: 0,
-            generationTimeMs: 0,
-            error: message.slice(0, 4000),
-          },
-          update: { status: "FAILED", error: message.slice(0, 4000) },
-        });
-        console.error(`Failed ${entry.slug}: ${message}`);
-        return false;
-      }
-    }
-
-    let attempts = 1;
-    const result = await generateVoxelBuild({
-      model: {
-        key: variant.model.key,
-        provider: "custom",
-        modelId: config.modelId,
-        displayName: codename,
-        baseUrl: config.endpointUrl,
-        requireStructuredOutput: config.requireStructuredOutput,
-      },
-      prompt: entry.text,
-      gridSize: 256,
-      palette: "simple",
-      maxAttempts,
-      enableTools: config.enableTools,
-      reasoning: config.reasoning,
-      providerKeys: { custom: config.apiKey },
-      allowServerKeys: false,
-      onProviderRequest: () => {
-        providerCallCount += 1;
-      },
-      onRetry: (attempt) => {
-        attempts = Math.max(attempts, attempt);
-        retryCount += 1;
-      },
-    });
-    if (!result.ok) {
-      failedBuildCount += 1;
-      lastError = result.error;
-      await prisma.stealthGenerationResult.create({
-        data: {
-          runId: run.id,
-          promptId: entry.prompt.id,
-          status: "FAILED",
-          attempts,
-          generationTimeMs: result.generationTimeMs,
-          requestConfiguration: result.requestConfiguration,
-          error: result.error.slice(0, 4000),
-        },
-      });
-      console.error(`Failed ${entry.slug}: ${result.error}`);
-      return false;
-    }
-
-    try {
-      const build = await persistStealthBuild({
-        variantId: variant.id,
-        modelId: variant.modelId,
-        promptSlug: entry.slug,
-        promptText: entry.text,
-        build: result.build,
-        generationTimeMs: result.generationTimeMs,
-      });
-      completedBuildCount += 1;
-      await prisma.stealthGenerationResult.create({
-        data: {
-          runId: run.id,
-          promptId: entry.prompt.id,
-          buildId: build.id,
-          status: "SUCCEEDED",
-          attempts,
-          generationTimeMs: result.generationTimeMs,
-          requestConfiguration: result.requestConfiguration,
-        },
-      });
-      console.log(`Generated ${entry.slug} (${build.blockCount} blocks)`);
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      failedBuildCount += 1;
-      lastError = message;
-      await prisma.stealthGenerationResult.create({
-        data: {
-          runId: run.id,
-          promptId: entry.prompt.id,
-          status: "FAILED",
-          attempts,
-          generationTimeMs: result.generationTimeMs,
-          requestConfiguration: result.requestConfiguration,
-          error: message.slice(0, 4000),
-        },
-      });
-      console.error(`Failed ${entry.slug}: ${message}`);
-      return false;
-    }
-  };
-
-  const pending = [] as typeof prompts;
-  for (const prompt of prompts) {
-    const exists = await prisma.build.findUnique({
-      where: {
-        promptId_modelId_gridSize_palette_mode: {
-          promptId: prompt.prompt.id,
-          modelId: variant.modelId,
-          gridSize: 256,
-          palette: "simple",
-          mode: "precise",
-        },
-      },
-      select: { id: true },
-    });
-    if (exists) pending.push(prompt);
-    else pending.unshift(prompt);
-  }
-  const validationPrompt = pending.shift();
-  const validated = validationPrompt ? await generateOne(validationPrompt) : true;
-  if (validated) {
-    await prisma.$transaction([
-      prisma.stealthVariant.update({
-        where: { id: variant.id },
-        data: { status: "GENERATING", lastValidatedAt: new Date() },
-      }),
-      prisma.stealthExperiment.update({
-        where: { id: variant.experimentId },
-        data: { status: "GENERATING" },
-      }),
-    ]);
-    let next = 0;
-    await Promise.all(
-      Array.from({ length: concurrency }, async () => {
-        while (next < pending.length) {
-          const entry = pending[next];
-          next += 1;
-          if (entry) await generateOne(entry);
-        }
-      }),
-    );
-  }
-
-  const generatedBuildCount = await prisma.build.count({
-    where: {
-      modelId: variant.modelId,
-      gridSize: 256,
-      palette: "simple",
-      mode: "precise",
-      prompt: { text: { in: prompts.map((entry) => entry.text) } },
+async function uploadCohort(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  const file = requiredOption(args, "--file");
+  const parsed = JSON.parse(await readFile(file, "utf8")) as unknown;
+  const result = await (await service()).completeUploadedStealthCohort(
+    OPERATOR_ACTOR,
+    organization.id,
+    experimentId,
+    {
+      variantId: option(args, "--variant-id", "--checkpoint-id"),
+      codename: requiredOption(args, "--codename", "--checkpoint"),
+      builds: uploadBuildsFromJson(parsed),
     },
-  });
-  const complete = generatedBuildCount === expectedBuildCount && failedBuildCount === 0;
-  const runStatus = complete ? "SUCCEEDED" : completedBuildCount > 0 ? "PARTIAL" : "FAILED";
-  await prisma.$transaction(async (tx) => {
-    await tx.stealthGenerationRun.update({
-      where: { id: run.id },
-      data: {
-        status: runStatus,
-        completedBuildCount,
-        failedBuildCount,
-        providerCallCount,
-        retryCount,
-        completedAt: new Date(),
-        error: lastError?.slice(0, 4000) ?? null,
-      },
-    });
-    await tx.stealthVariant.update({
-      where: { id: variant.id },
-      data: {
-        status: complete ? "READY" : "DEGRADED",
-        endpointEnabled: !complete,
-        expectedBuildCount,
-        generatedBuildCount,
-        generationFailureCount: failedBuildCount,
-        lastGenerationError: lastError?.slice(0, 4000) ?? null,
-        cohortGeneratedAt: complete ? new Date() : null,
-      },
-    });
-    if (complete) {
-      await tx.stealthEndpointCredential.deleteMany({ where: { variantId: variant.id } });
-    }
-    const incompleteVariants = await tx.stealthVariant.count({
-      where: { experimentId: variant.experimentId, status: { not: "READY" } },
-    });
-    await tx.stealthExperiment.update({
-      where: { id: variant.experimentId },
-      data: { status: incompleteVariants === 0 ? "READY" : "DEGRADED" },
-    });
-  });
-  if (!complete) throw new Error(lastError ?? "Cohort generation did not complete");
-  console.log(`Cohort ready: ${generatedBuildCount}/${expectedBuildCount} builds; endpoint credential deleted`);
-}
-
-async function activateExperiment(args: CliArgs): Promise<void> {
-  const experiment = await findExperiment(slugValue(args, "--org"), slugValue(args, "--experiment"));
-  if (!EXPERIMENT_ACTIVATABLE.includes(experiment.status)) {
-    throw new Error(`Experiment must be ready or paused, not ${experiment.status.toLowerCase()}`);
-  }
-  const variants = await prisma.stealthVariant.findMany({ where: { experimentId: experiment.id } });
-  const runnableVariants = variants.filter(
-    (variant) => variant.status !== "WITHDRAWN" && variant.status !== "RELEASED",
   );
-  if (runnableVariants.length === 0) throw new Error("Experiment has no runnable variants");
-  for (const variant of runnableVariants) {
-    if (variant.status !== "READY" && !(experiment.status === "PAUSED" && variant.status === "ACTIVE")) {
-      throw new Error(`Variant ${variant.codename} is not ready`);
-    }
-    if (variant.generatedBuildCount !== variant.expectedBuildCount || variant.expectedBuildCount === 0) {
-      throw new Error(`Variant ${variant.codename} does not have a complete cohort`);
-    }
-  }
-  await prisma.$transaction([
-    prisma.model.updateMany({
-      where: { id: { in: runnableVariants.map((variant) => variant.modelId) } },
-      data: { enabled: true },
-    }),
-    prisma.stealthVariant.updateMany({
-      where: { id: { in: runnableVariants.map((variant) => variant.id) } },
-      data: { status: "ACTIVE", endpointEnabled: false },
-    }),
-    prisma.stealthExperiment.update({
-      where: { id: experiment.id },
-      data: { status: "ACTIVE", startsAt: experiment.startsAt ?? new Date(), endedAt: null },
-    }),
-  ]);
-  console.log(`Experiment active: ${experiment.organization.slug}/${experiment.slug}`);
+  console.log(`Uploaded cohort accepted: variant=${result.variantId} run=${result.runId}`);
 }
 
-async function pauseExperiment(args: CliArgs): Promise<void> {
-  const experiment = await findExperiment(slugValue(args, "--org"), slugValue(args, "--experiment"));
-  if (experiment.status !== "ACTIVE" && experiment.status !== "STABLE") {
-    throw new Error("Only an active or stable experiment can be paused");
-  }
-  const variants = await prisma.stealthVariant.findMany({
-    where: { experimentId: experiment.id },
-    select: { modelId: true },
-  });
-  await prisma.$transaction([
-    prisma.model.updateMany({
-      where: { id: { in: variants.map((variant) => variant.modelId) } },
-      data: { enabled: false },
-    }),
-    prisma.stealthExperiment.update({ where: { id: experiment.id }, data: { status: "PAUSED" } }),
-  ]);
-  console.log(`Experiment paused: ${experiment.organization.slug}/${experiment.slug}`);
-}
-
-async function stabilizeExperiment(args: CliArgs): Promise<void> {
-  const experiment = await findExperiment(slugValue(args, "--org"), slugValue(args, "--experiment"));
-  if (experiment.status !== "ACTIVE") throw new Error("Only an active experiment can be stabilized");
-  const variants = await prisma.stealthVariant.findMany({
-    where: { experimentId: experiment.id, status: "ACTIVE" },
-  });
-  if (variants.length === 0) throw new Error("Experiment has no active variants");
-  const short = variants.find(
-    (variant) => variant.winCount + variant.lossCount < experiment.targetDecisiveVotes,
+async function startGeneration(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  const checkpointId = await variantId(args, organization.id, experimentId);
+  const { runId } = await (await service()).createStealthGenerationRun(
+    OPERATOR_ACTOR,
+    organization.id,
+    checkpointId,
+    {
+      maxAttempts: positiveInt(args, ["--attempts"], 3, 10) ?? 3,
+      concurrency: positiveInt(args, ["--concurrency"], 1, 4) ?? 1,
+    },
   );
-  if (short) {
-    throw new Error(
-      `${short.codename} has ${short.winCount + short.lossCount}/${experiment.targetDecisiveVotes} decisive votes`,
-    );
-  }
-  await prisma.stealthExperiment.update({ where: { id: experiment.id }, data: { status: "STABLE" } });
-  console.log(`Experiment stable: ${experiment.organization.slug}/${experiment.slug}`);
+  const { start } = await workflow();
+  const run = await start(STEALTH_GENERATION_WORKFLOW, [runId]);
+  await (await service()).attachWorkflowRunId(runId, run.runId);
+  console.log(`Generation started: run=${runId} workflow=${run.runId}`);
 }
 
-async function closeExperiment(args: CliArgs): Promise<void> {
-  const experiment = await findExperiment(slugValue(args, "--org"), slugValue(args, "--experiment"));
-  if (experiment.status === "RELEASED") {
-    throw new Error("A released evaluation cannot be closed again");
-  }
-  if (experiment.status === "CLOSED") {
-    console.log(
-      `Experiment already closed; retention deadline ${experiment.retentionDeleteAt?.toISOString() ?? "not set"}`,
-    );
-    return;
-  }
-  const retentionDays = positiveInt(args, "--retention-days", 30, 3650);
-  const variants = await prisma.stealthVariant.findMany({
-    where: { experimentId: experiment.id },
-    select: { id: true, modelId: true },
-  });
-  const endedAt = new Date();
-  const retentionDeleteAt = new Date(endedAt.getTime() + retentionDays * 86_400_000);
-  await prisma.$transaction([
-    prisma.model.updateMany({
-      where: { id: { in: variants.map((variant) => variant.modelId) } },
-      data: { enabled: false },
-    }),
-    prisma.stealthVariant.updateMany({
-      where: { experimentId: experiment.id, status: { not: "RELEASED" } },
-      data: { status: "WITHDRAWN", endpointEnabled: false },
-    }),
-    prisma.stealthEndpointCredential.deleteMany({
-      where: { variantId: { in: variants.map((variant) => variant.id) } },
-    }),
-    prisma.stealthExperiment.update({
-      where: { id: experiment.id },
-      data: { status: "CLOSED", endedAt, retentionDeleteAt },
-    }),
-  ]);
-  console.log(`Experiment closed; retention deadline ${retentionDeleteAt.toISOString()}`);
+async function activateEvaluation(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  await (await service()).activateStealthEvaluation(OPERATOR_ACTOR, organization.id, experimentId);
+  console.log("Evaluation active");
 }
 
-async function withdrawVariant(args: CliArgs): Promise<void> {
-  const variant = await findVariant(
-    slugValue(args, "--org"),
-    slugValue(args, "--experiment"),
-    value(args, "--codename") as string,
+async function pauseEvaluation(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  await (await service()).pauseStealthEvaluation(OPERATOR_ACTOR, organization.id, experimentId);
+  console.log("Evaluation paused");
+}
+
+async function resumeEvaluation(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  await (await service()).resumeStealthEvaluation(OPERATOR_ACTOR, organization.id, experimentId);
+  console.log("Evaluation active");
+}
+
+async function closeEvaluation(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  await (await service()).closeStealthEvaluation(
+    OPERATOR_ACTOR,
+    organization.id,
+    experimentId,
+    {
+      retentionDays: positiveInt(args, ["--retention-days"], null, 3650) ?? undefined,
+    },
   );
-  if (variant.status === "RELEASED") {
-    throw new Error("A released variant cannot be withdrawn");
-  }
-  if (variant.status === "WITHDRAWN") {
-    console.log(`Variant already withdrawn: ${variant.codename}`);
-    return;
-  }
-  await prisma.$transaction(async (tx) => {
-    await tx.model.update({ where: { id: variant.modelId }, data: { enabled: false } });
-    await tx.stealthVariant.update({
-      where: { id: variant.id },
-      data: { status: "WITHDRAWN", endpointEnabled: false },
-    });
-    await tx.stealthEndpointCredential.deleteMany({ where: { variantId: variant.id } });
-    const remaining = await tx.stealthVariant.count({
-      where: { experimentId: variant.experimentId, status: { in: ["ACTIVE", "READY"] } },
-    });
-    if (remaining === 0) {
-      const endedAt = new Date();
-      await tx.stealthExperiment.update({
-        where: { id: variant.experimentId },
-        data: {
-          status: "WITHDRAWN",
-          endedAt,
-          retentionDeleteAt:
-            variant.experiment.retentionDeleteAt ?? new Date(endedAt.getTime() + 30 * 86_400_000),
-        },
-      });
-    }
-  });
-  console.log(`Variant withdrawn: ${variant.codename}`);
+  console.log("Evaluation closed");
 }
 
-async function releaseVariant(args: CliArgs): Promise<void> {
-  if (!args.flags.has("--attest-exact-checkpoint")) {
-    throw new Error("Release requires --attest-exact-checkpoint");
-  }
-  const variant = await findVariant(
-    slugValue(args, "--org"),
-    slugValue(args, "--experiment"),
-    value(args, "--codename") as string,
+async function deleteDraftEvaluation(args: CliArgs): Promise<void> {
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  await (await service()).deleteUnusedDraftEvaluation(
+    OPERATOR_ACTOR,
+    organization.id,
+    experimentId,
   );
-  if (!variant.checkpointFingerprint || !variant.cohortGeneratedAt) {
-    throw new Error("Variant has no completed checkpoint cohort to attest");
-  }
-  if (variant.experiment.status !== "CLOSED" && variant.experiment.status !== "RELEASED") {
-    throw new Error("Close the evaluation before recording a public release mapping");
-  }
-  const publicModelKey = value(args, "--public-model") as string;
-  const publicModel = await prisma.model.findUnique({
-    where: { key: publicModelKey },
-    include: { stealthVariant: true },
-  });
-  if (!publicModel || publicModel.stealthVariant) {
-    throw new Error(`Public model not found: ${publicModelKey}`);
-  }
-  if (variant.status === "RELEASED") {
-    if (variant.releasedModelId === publicModel.id) {
-      console.log(`Release mapping already recorded: ${variant.codename} -> ${publicModel.key}`);
-      return;
-    }
-    throw new Error("A released variant cannot be mapped to a different public model");
-  }
-  await prisma.$transaction(async (tx) => {
-    await tx.model.update({ where: { id: variant.modelId }, data: { enabled: false } });
-    await tx.stealthEndpointCredential.deleteMany({ where: { variantId: variant.id } });
-    await tx.stealthVariant.update({
-      where: { id: variant.id },
-      data: {
-        status: "RELEASED",
-        endpointEnabled: false,
-        releasedModelId: publicModel.id,
-        releasedAt: new Date(),
-      },
-    });
-    const unreleased = await tx.stealthVariant.count({
-      where: { experimentId: variant.experimentId, status: { not: "RELEASED" } },
-    });
-    if (unreleased === 0) {
-      await tx.stealthExperiment.update({
-        where: { id: variant.experimentId },
-        data: { status: "RELEASED", endedAt: variant.experiment.endedAt ?? new Date() },
-      });
-    }
-  });
-  console.log(`Release mapping recorded: ${variant.codename} -> ${publicModel.key}`);
-  console.log("Private ratings were not transferred; the public model starts with its own votes");
+  console.log("Unused draft deleted");
 }
 
 async function disableEndpoint(args: CliArgs): Promise<void> {
-  const variant = await findVariant(
-    slugValue(args, "--org"),
-    slugValue(args, "--experiment"),
-    value(args, "--codename") as string,
-  );
-  await prisma.$transaction([
-    prisma.stealthVariant.update({
-      where: { id: variant.id },
-      data: { endpointEnabled: false },
-    }),
-    prisma.stealthEndpointCredential.deleteMany({ where: { variantId: variant.id } }),
-  ]);
-  console.log(`Endpoint credential deleted: ${variant.codename}`);
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  const checkpointId = await variantId(args, organization.id, experimentId);
+  await (await service()).disableStealthEndpoint(OPERATOR_ACTOR, organization.id, checkpointId);
+  console.log("Endpoint credential disabled");
 }
 
 async function printStatus(args: CliArgs): Promise<void> {
-  const experiment = await prisma.stealthExperiment.findFirst({
-    where: {
-      slug: slugValue(args, "--experiment"),
-      organization: { slug: slugValue(args, "--org") },
-    },
-    include: {
-      organization: true,
-      variants: {
-        orderBy: { codename: "asc" },
-        include: {
-          releasedModel: { select: { key: true } },
-          generationRuns: { orderBy: { startedAt: "desc" }, take: 1 },
-        },
-      },
-    },
-  });
-  if (!experiment) throw new Error("Experiment not found");
-  console.log(`${experiment.organization.name} / ${experiment.name}`);
-  console.log(`status=${experiment.status.toLowerCase()} export=${experiment.exportPolicy.toLowerCase()}`);
-  for (const variant of experiment.variants) {
-    const decisive = variant.winCount + variant.lossCount;
-    const latestRun = variant.generationRuns[0];
+  const orgSlug = option(args, "--org");
+  if (!orgSlug) {
+    await listOrganizations();
+    return;
+  }
+  const organization = await organizationBySlug(normalizeSlug(orgSlug, "--org"));
+  const evaluationRef = option(args, "--evaluation", "--experiment", "--evaluation-id", "--experiment-id");
+  if (!evaluationRef) {
+    const workspaces = await (await service()).listStealthEvaluationWorkspaces(
+      OPERATOR_ACTOR,
+      organization.id,
+    );
+    if (workspaces.length === 0) {
+      console.log(`No evaluations: ${organization.slug}`);
+      return;
+    }
+    for (const workspace of workspaces) {
+      console.log(
+        [
+          workspace.slug,
+          workspace.name,
+          `status=${workspace.status.toLowerCase()}`,
+          `checkpoints=${workspace.checkpointCount}`,
+          `builds=${workspace.buildProgress.completed}/${workspace.buildProgress.expected}`,
+          `votes=${workspace.voteProgress.decisiveVotes}/${workspace.voteProgress.targetDecisiveVotes ?? "none"}`,
+        ].join(" "),
+      );
+    }
+    return;
+  }
+  const experimentId = await evaluationId(args, organization.id);
+  const workspace = await (await service()).getStealthEvaluationWorkspace(
+    OPERATOR_ACTOR,
+    organization.id,
+    experimentId,
+  );
+  if (!workspace) throw new Error("Evaluation not found");
+  console.log(`${workspace.organization.slug}/${workspace.slug} ${workspace.name}`);
+  console.log(
+    [
+      `status=${workspace.status.toLowerCase()}`,
+      `export=${workspace.exportPolicy.toLowerCase()}`,
+      `retention_days=${workspace.retentionDays}`,
+      `delete_at=${workspace.retentionDeleteAt?.toISOString() ?? "n/a"}`,
+    ].join(" "),
+  );
+  for (const checkpoint of workspace.checkpoints) {
+    const run = checkpoint.latestGenerationRun;
     console.log(
       [
-        variant.codename,
-        `status=${variant.status.toLowerCase()}`,
-        `cohort=${variant.generatedBuildCount}/${variant.expectedBuildCount}`,
-        `votes=${decisive}/${experiment.targetDecisiveVotes}`,
-        `record=${variant.winCount}-${variant.lossCount}-${variant.drawCount}`,
-        `rd=${variant.glickoRd.toFixed(1)}`,
-        `endpoint=${variant.endpointEnabled ? "enabled" : "disabled"}`,
-        latestRun ? `last_run=${latestRun.status.toLowerCase()}` : null,
-        variant.releasedModel ? `released_as=${variant.releasedModel.key}` : null,
+        checkpoint.codename,
+        `source=${checkpoint.source.toLowerCase()}`,
+        `status=${checkpoint.status.toLowerCase()}`,
+        `endpoint=${checkpoint.endpointEnabled ? "enabled" : "disabled"}`,
+        `credential=${checkpoint.credentialConfigured ? "present" : "absent"}`,
+        `builds=${checkpoint.generatedBuildCount}/${checkpoint.expectedBuildCount}`,
+        `votes=${checkpoint.decisiveVotes}`,
+        run ? `run=${run.status.toLowerCase()}:${run.completedBuildCount}/${run.expectedBuildCount}` : null,
       ]
-        .filter(Boolean)
+        .filter((part): part is string => Boolean(part))
         .join(" "),
     );
   }
+}
+
+async function purgeDueEvaluations(args: CliArgs): Promise<void> {
+  const result = await (await service()).purgeDueStealthEvaluations(OPERATOR_ACTOR, {
+    limit: positiveInt(args, ["--limit"], 25, 100) ?? 25,
+  });
+  console.log(`Purged ${result.purged} evaluation(s)`);
+  for (const id of result.evaluationIds) console.log(id);
+}
+
+async function recordReleaseMapping(args: CliArgs): Promise<void> {
+  if (!args.flags.has("--attest-exact-checkpoint")) {
+    throw new Error("Release mapping requires --attest-exact-checkpoint");
+  }
+  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
+  const checkpointId = await variantId(args, organization.id, experimentId);
+  const codename = requiredOption(args, "--codename", "--checkpoint");
+  const result = await (await service()).recordStealthReleaseMapping(
+    OPERATOR_ACTOR,
+    organization.id,
+    {
+      variantId: checkpointId,
+      checkpointCodename: codename,
+      publicModelKey: requiredOption(args, "--public-model", "--public-model-key"),
+    },
+  );
+  console.log(
+    `Release mapping recorded: variant=${result.variantId} public_model=${result.releasedModelId} released_at=${result.releasedAt.toISOString()}`,
+  );
 }
 
 function printHelp(): void {
@@ -896,59 +558,105 @@ function printHelp(): void {
 
 Commands:
   keygen
-  create --org NAME --org-name NAME --experiment NAME --experiment-name NAME [--target-votes N] [--export-policy aggregates-only|deidentified-votes] [--agreement REF]
-  configure --org NAME --experiment NAME --codename NAME --endpoint URL --model-id ID [--reasoning MODE] [--no-tools] [--allow-unstructured]
-  invite --org NAME --email EMAIL --role owner|admin|analyst|viewer
-  revoke --org NAME --email EMAIL
-  generate --org NAME --experiment NAME --codename NAME [--attempts N] [--concurrency N]
-  activate --org NAME --experiment NAME
-  pause --org NAME --experiment NAME
-  stabilize --org NAME --experiment NAME
-  close --org NAME --experiment NAME [--retention-days N]
-  withdraw --org NAME --experiment NAME --codename NAME
-  release --org NAME --experiment NAME --codename NAME --public-model KEY --attest-exact-checkpoint
-  disable-endpoint --org NAME --experiment NAME --codename NAME
-  status --org NAME --experiment NAME
+  bootstrap-admin --email EMAIL
+  provision-org --org SLUG --name NAME --admin-email EMAIL
+  list-orgs
+  create --org SLUG --name NAME [--slug SLUG] [--target-votes N] [--no-pause-at-goal] [--export-policy aggregates-only|deidentified-votes] [--retention-days N] [--agreement REF]
+  configure --org SLUG --evaluation SLUG --codename NAME --protocol openai-compatible|openrouter|anthropic|gemini --model-id ID [--endpoint URL] [--max-output-tokens N] [--reasoning MODE] [--no-tools] [--allow-unstructured]
+  invite --org SLUG --email EMAIL --role admin|member
+  member-role --org SLUG --email EMAIL --role admin|member
+  revoke --org SLUG --email EMAIL
+  upload --org SLUG --evaluation SLUG --codename NAME --file cohort.json
+  generate --org SLUG --evaluation SLUG --codename NAME [--attempts N] [--concurrency N]
+  activate --org SLUG --evaluation SLUG
+  pause --org SLUG --evaluation SLUG
+  resume --org SLUG --evaluation SLUG
+  close --org SLUG --evaluation SLUG [--retention-days N]
+  delete --org SLUG --evaluation SLUG
+  disable --org SLUG --evaluation SLUG --codename NAME
+  status [--org SLUG [--evaluation SLUG]]
+  purge [--limit N]
+  release-map --org SLUG --evaluation SLUG --codename NAME --public-model KEY --attest-exact-checkpoint
 
-Set STEALTH_ENDPOINT_API_KEY only for configure. Never pass checkpoint keys on the command line.`);
+Aliases:
+  --experiment may be used in place of --evaluation.
+  --variant-id or --checkpoint-id may be used instead of --codename where applicable.
+  release maps to release-map, and disable-endpoint maps to disable.
+
+Configure reads checkpoint credentials from STEALTH_ENDPOINT_API_KEY.
+CLI mutations run as the MineBench operator service actor and never impersonate organization members.`);
 }
 
 async function main(): Promise<void> {
   const args = parseArgs();
   switch (args.command) {
-    case "keygen":
-      console.log(generateStealthConfigEncryptionKey());
-      return;
-    case "create":
-      return createExperiment(args);
-    case "configure":
-      return configureVariant(args);
-    case "invite":
-      return inviteMember(args);
-    case "revoke":
-      return revokeMember(args);
-    case "generate":
-      return generateVariant(args);
-    case "activate":
-      return activateExperiment(args);
-    case "pause":
-      return pauseExperiment(args);
-    case "stabilize":
-      return stabilizeExperiment(args);
-    case "close":
-      return closeExperiment(args);
-    case "withdraw":
-      return withdrawVariant(args);
-    case "release":
-      return releaseVariant(args);
-    case "disable-endpoint":
-      return disableEndpoint(args);
-    case "status":
-      return printStatus(args);
     case "help":
     case "--help":
     case "-h":
       printHelp();
+      return;
+    case "keygen":
+      console.log(generateStealthConfigEncryptionKey());
+      return;
+    case "bootstrap-admin":
+      await bootstrapAdmin(args);
+      return;
+    case "provision":
+    case "provision-org":
+      await provisionOrganization(args);
+      return;
+    case "list-orgs":
+      await listOrganizations();
+      return;
+    case "create":
+      await createEvaluation(args);
+      return;
+    case "configure":
+      await configureEndpoint(args);
+      return;
+    case "invite":
+      await inviteMember(args);
+      return;
+    case "member-role":
+      await updateMemberRole(args);
+      return;
+    case "revoke":
+      await revokeMember(args);
+      return;
+    case "upload":
+      await uploadCohort(args);
+      return;
+    case "generate":
+      await startGeneration(args);
+      return;
+    case "activate":
+      await activateEvaluation(args);
+      return;
+    case "pause":
+      await pauseEvaluation(args);
+      return;
+    case "resume":
+      await resumeEvaluation(args);
+      return;
+    case "close":
+      await closeEvaluation(args);
+      return;
+    case "delete":
+      await deleteDraftEvaluation(args);
+      return;
+    case "disable":
+    case "disable-endpoint":
+      await disableEndpoint(args);
+      return;
+    case "status":
+      await printStatus(args);
+      return;
+    case "purge":
+      await purgeDueEvaluations(args);
+      return;
+    case "release":
+    case "release-map":
+      await recordReleaseMapping(args);
       return;
     default:
       throw new Error(`Unknown command: ${args.command}`);
@@ -956,7 +664,7 @@ async function main(): Promise<void> {
 }
 
 main()
-  .catch((error) => {
+  .catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   })

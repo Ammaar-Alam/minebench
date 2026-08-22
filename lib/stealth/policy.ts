@@ -5,8 +5,12 @@ const DEFAULT_STEALTH_ARENA_SHARE = 0.25;
 
 export const ACTIVE_STEALTH_EXPERIMENT_STATUSES: readonly StealthExperimentStatus[] = [
   "ACTIVE",
-  "STABLE",
 ];
+
+export type StealthVoteGoalPolicy = {
+  targetDecisiveVotes: number | null;
+  pauseAtGoal: boolean;
+};
 
 export function readStealthArenaShare(raw = process.env.STEALTH_ARENA_SHARE): number {
   if (!raw?.trim()) return DEFAULT_STEALTH_ARENA_SHARE;
@@ -16,7 +20,29 @@ export function readStealthArenaShare(raw = process.env.STEALTH_ARENA_SHARE): nu
 }
 
 export function canExportStealthVotes(role: OrganizationRole): boolean {
-  return role === "OWNER" || role === "ADMIN" || role === "ANALYST";
+  return role === "ADMIN" || role === "MEMBER";
+}
+
+export function isStealthVoteGoalEnforced(policy: StealthVoteGoalPolicy): boolean {
+  return policy.pauseAtGoal && policy.targetDecisiveVotes != null;
+}
+
+export function hasReachedStealthVoteGoal(
+  policy: StealthVoteGoalPolicy,
+  decisiveVotes: number,
+): boolean {
+  return (
+    isStealthVoteGoalEnforced(policy) &&
+    decisiveVotes >= Math.max(1, policy.targetDecisiveVotes ?? 0)
+  );
+}
+
+export function stealthVoteGoalProgress(
+  targetDecisiveVotes: number | null,
+  decisiveVotes: number,
+): number | null {
+  if (targetDecisiveVotes == null) return null;
+  return Math.min(1, decisiveVotes / Math.max(1, targetDecisiveVotes));
 }
 
 export function normalizeStealthSlug(value: string): string {
