@@ -405,7 +405,13 @@ async function startGeneration(args: CliArgs): Promise<void> {
     },
   );
   const { start } = await workflow();
-  const run = await start(STEALTH_GENERATION_WORKFLOW, [runId]);
+  let run: Awaited<ReturnType<typeof start>>;
+  try {
+    run = await start(STEALTH_GENERATION_WORKFLOW, [runId]);
+  } catch (error) {
+    await (await service()).failStealthGenerationRun(runId, error);
+    throw error;
+  }
   await (await service()).attachWorkflowRunId(runId, run.runId);
   console.log(`Generation started: run=${runId} workflow=${run.runId}`);
 }

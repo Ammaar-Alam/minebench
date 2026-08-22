@@ -1,4 +1,5 @@
 import { EvaluationStatus } from "@/components/lab/EvaluationStatus";
+import { CohortUploadForm } from "@/components/lab/CohortUploadForm";
 import { formatDate, titleCase } from "@/components/lab/format";
 import { LabDisclosure } from "@/components/lab/LabDisclosure";
 import {
@@ -24,6 +25,7 @@ export default async function EvaluationSettingsPage({
   const closeAction = closeEvaluationAction.bind(null, orgSlug, experimentId);
   const deleteAction = deleteDraftEvaluationAction.bind(null, orgSlug, experimentId);
   const readOnly = workspace.status === "CLOSED";
+  const checkpointSetOpen = !readOnly && workspace.checkpointSetFrozenAt === null;
   const identityFrozen = workspace.status !== "DRAFT";
   const draftDeletable =
     workspace.status === "DRAFT" &&
@@ -161,7 +163,7 @@ export default async function EvaluationSettingsPage({
           ) : null}
         </div>
 
-        {workspace.status === "DRAFT" ? (
+        {checkpointSetOpen ? (
           <div className="mt-5 overflow-hidden rounded-md border border-border/70">
             <LabDisclosure
               title={<span className="text-sm font-medium text-fg">Add checkpoint</span>}
@@ -257,27 +259,10 @@ export default async function EvaluationSettingsPage({
               buttonClassName="px-4"
               panelClassName="px-4 pb-5 pt-2 sm:px-5"
             >
-          <form action={uploadAction} className="space-y-5">
-            <label className="block max-w-sm space-y-2 text-sm font-medium text-fg">
-              <span>Codename</span>
-              <input name="codename" required maxLength={80} className="mb-field h-11" />
-            </label>
-            <label className="block space-y-2 text-sm font-medium text-fg">
-              <span>Cohort JSON</span>
-              <textarea
-                name="cohort"
-                required
-                rows={8}
-                spellCheck={false}
-                className="mb-field min-h-40 resize-y py-3 font-mono text-xs"
+              <CohortUploadForm
+                action={uploadAction}
+                signUrl={`/api/lab/organizations/${encodeURIComponent(orgSlug)}/experiments/${encodeURIComponent(experimentId)}/cohort-upload`}
               />
-            </label>
-            <div className="flex justify-end">
-              <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5 text-sm">
-                Upload
-              </button>
-            </div>
-          </form>
             </LabDisclosure>
           </div>
         ) : null}

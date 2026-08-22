@@ -46,10 +46,12 @@ assert.match(labBuildRoute, /getLabIdentity/);
 assert.match(labBuildRoute, /identity\.user\.isMineBenchAdmin/);
 assert.match(labBuildRoute, /stealthGenerationResult\.findUnique/);
 assert.match(labBuildRoute, /organizationId !== organization\?\.id/);
-assert.match(labBuildRoute, /resolveBuildPayload/);
-assert.match(labBuildRoute, /validateVoxelBuild/);
+assert.match(labBuildRoute, /createArenaBuildAccessToken/);
+assert.match(labBuildRoute, /streamToken:/);
+assert.doesNotMatch(labBuildRoute, /resolveBuildPayload/);
+assert.doesNotMatch(labBuildRoute, /validateVoxelBuild/);
 assert.match(labBuildRoute, /resultId: result\.id/);
-assert.doesNotMatch(labBuildRoute, /buildId:|voxelSha256:/);
+assert.doesNotMatch(labBuildRoute, /voxelBuild[:,]/);
 
 const voteRoute = read("app/api/arena/vote/route.ts");
 assert.match(voteRoute, /const responseBody: ArenaVoteResponse/);

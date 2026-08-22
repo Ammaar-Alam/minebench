@@ -7,5 +7,8 @@ assert.ok(
   !inspectorSource.includes("autoRotate="),
   "protected build viewers should use the shared spin control",
 );
+assert.match(inspectorSource, /\/api\/arena\/builds\/.*\/stream\?variant=full/);
+assert.match(inspectorSource, /appendPackedVoxelBlocks/);
+assert.match(inspectorSource, /loadingProgress=/);
 
 console.log("lab viewer control checks passed");

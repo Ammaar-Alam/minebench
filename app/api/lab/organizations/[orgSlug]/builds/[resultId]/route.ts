@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
-import { maxBlocksForGrid } from "@/lib/ai/limits";
-import { getPalette } from "@/lib/blocks/palettes";
+import { createArenaBuildAccessToken } from "@/lib/arena/matchupToken";
 import { prisma } from "@/lib/prisma";
-import { resolveBuildPayload } from "@/lib/storage/buildPayload";
 import { getLabIdentity } from "@/lib/stealth/auth";
-import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,7 +41,7 @@ function diagnostics(result: {
 }
 
 export async function GET(
-  request: Request,
+  _request: Request,
   { params }: { params: Promise<{ orgSlug: string; resultId: string }> },
 ) {
   const { orgSlug, resultId } = await params;
@@ -82,19 +79,15 @@ export async function GET(
             select: {
               codename: true,
               source: true,
-              experiment: {
-                select: { organizationId: true },
-              },
+              experiment: { select: { organizationId: true } },
             },
           },
         },
       },
       build: {
         select: {
-          voxelData: true,
-          voxelStorageBucket: true,
-          voxelStoragePath: true,
-          voxelStorageEncoding: true,
+          id: true,
+          voxelSha256: true,
           gridSize: true,
           palette: true,
           mode: true,
@@ -106,8 +99,8 @@ export async function GET(
 
   if (
     !result ||
-    result.run.variant.experiment.organizationId !== organization?.id &&
-    !identity.user.isMineBenchAdmin
+    (result.run.variant.experiment.organizationId !== organization?.id &&
+      !identity.user.isMineBenchAdmin)
   ) {
     return NextResponse.json(
       { error: "Build not found" },
@@ -121,35 +114,11 @@ export async function GET(
       { status: 409, headers: privateHeaders() },
     );
   }
-
-  const gridSize = normalizeGridSize(result.build.gridSize);
-  const palette = normalizePalette(result.build.palette);
-  let payload: unknown;
-  try {
-    payload = await resolveBuildPayload(result.build, { signal: request.signal });
-  } catch {
+  if (!result.build.voxelSha256) {
     return NextResponse.json(
       { error: "Build payload is unavailable", diagnostics: diagnostics(result) },
       { status: 422, headers: privateHeaders() },
     );
-  }
-
-  const validated = validateVoxelBuild(payload, {
-    gridSize,
-    palette: getPalette(palette),
-    maxBlocks: maxBlocksForGrid(gridSize),
-  });
-
-  let voxelBuild = validated.ok ? validated.value.build : null;
-  if (!voxelBuild) {
-    const parsed = parseVoxelBuildSpec(payload);
-    if (!parsed.ok) {
-      return NextResponse.json(
-        { error: "Build payload is invalid", diagnostics: diagnostics(result) },
-        { status: 422, headers: privateHeaders() },
-      );
-    }
-    voxelBuild = parsed.value;
   }
 
   return NextResponse.json(
@@ -160,11 +129,14 @@ export async function GET(
         codename: result.run.variant.codename,
         source: result.run.variant.source,
       },
-      voxelBuild,
-      gridSize,
-      palette,
+      streamToken: createArenaBuildAccessToken({
+        buildId: result.build.id,
+        checksum: result.build.voxelSha256,
+      }),
+      gridSize: normalizeGridSize(result.build.gridSize),
+      palette: normalizePalette(result.build.palette),
       mode: result.build.mode,
-      blockCount: validated.ok ? validated.value.build.blocks.length : result.build.blockCount,
+      blockCount: result.build.blockCount,
       diagnostics: diagnostics(result),
     },
     { headers: privateHeaders() },

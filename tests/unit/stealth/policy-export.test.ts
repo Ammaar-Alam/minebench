@@ -47,4 +47,25 @@ assert.equal(
 assert.equal(csv.includes("session"), false);
 assert.equal(csv.includes("matchup"), false);
 
+const formulaCsv = serializeDeidentifiedStealthVotes([
+  {
+    day: "2026-08-21",
+    codename: "=2+3",
+    prompt: "+SUM(A1:A2)",
+    opponent: "@command",
+    variantSide: "A",
+    choice: "LOSS",
+  },
+  {
+    day: "2026-08-22",
+    codename: "-1+1",
+    prompt: "Safe",
+    opponent: "Safe",
+    variantSide: "B",
+    choice: "WIN",
+  },
+]);
+assert.match(formulaCsv, /,'=2\+3,'\+SUM\(A1:A2\),'@command,/);
+assert.match(formulaCsv, /,'-1\+1,Safe,Safe,/);
+
 console.log("stealth policy and deidentified export checks passed");

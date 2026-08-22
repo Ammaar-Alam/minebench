@@ -3,11 +3,6 @@ import { withWorkflow } from "workflow/next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  experimental: {
-    serverActions: {
-      bodySizeLimit: "4mb",
-    },
-  },
   webpack: (config, { dev }) => {
     if (dev) {
       // Avoid stale client/server bundle divergence when watch limits are hit locally.

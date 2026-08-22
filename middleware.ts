@@ -198,7 +198,11 @@ export async function middleware(req: NextRequest) {
   if (canonicalRedirect) return canonicalRedirect;
 
   const { pathname } = req.nextUrl;
-  if (pathname.startsWith("/lab") || pathname.startsWith("/api/lab/")) {
+  if (
+    pathname.startsWith("/lab") ||
+    pathname.startsWith("/api/lab/") ||
+    pathname.startsWith("/admin/private-evaluations")
+  ) {
     const { refreshSupabaseSession } = await import("@/lib/supabase/middleware");
     return refreshSupabaseSession(req);
   }

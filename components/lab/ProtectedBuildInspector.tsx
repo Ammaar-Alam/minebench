@@ -3,6 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { titleCase } from "@/components/lab/format";
+import {
+  isGzipStreamPrefix,
+  streamFromInitialChunks,
+} from "@/lib/arena/clientBuildResponse";
+import type { ArenaBuildStreamEvent } from "@/lib/arena/types";
+import {
+  appendPackedVoxelBlocks,
+  createPackedVoxelBlocks,
+  reservePackedVoxelBlocks,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 
 export type ProtectedBuildOption = {
   id: string;
@@ -22,7 +33,7 @@ type ProtectedBuildResponse = {
   resultId: string;
   prompt: string;
   checkpoint: { codename: string; source: string };
-  voxelBuild: unknown;
+  streamToken: string;
   gridSize: 64 | 256 | 512;
   palette: "simple" | "advanced";
   blockCount: number;
@@ -31,6 +42,8 @@ type ProtectedBuildResponse = {
     generationTimeMs: number;
   };
 };
+
+type LoadingProgress = { receivedBlocks: number; totalBlocks: number | null };
 
 type BuildFilter = "ALL" | "READY" | "PENDING" | "ISSUES";
 
@@ -48,6 +61,98 @@ function statusTone(status: string): string {
   return "text-muted";
 }
 
+async function readError(response: Response, fallback: string): Promise<string> {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    if (typeof body.error === "string" && body.error.trim()) return body.error;
+  } catch {
+    // use the stable fallback
+  }
+  return fallback;
+}
+
+async function streamProtectedBuild(
+  token: string,
+  signal: AbortSignal,
+  onProgress: (progress: LoadingProgress) => void,
+): Promise<RenderableVoxelBuild> {
+  const response = await fetch(
+    `/api/arena/builds/${encodeURIComponent(token)}/stream?variant=full`,
+    { cache: "no-store", signal },
+  );
+  if (!response.ok) throw new Error(await readError(response, "Build unavailable"));
+  if (!response.body) throw new Error("Build stream is unavailable");
+
+  const sourceReader = response.body.getReader();
+  const initialChunks: Uint8Array[] = [];
+  let initialByteCount = 0;
+  while (initialByteCount < 2) {
+    const initial = await sourceReader.read();
+    if (initial.done) break;
+    if (initial.value?.length) {
+      initialChunks.push(initial.value);
+      initialByteCount += initial.value.length;
+    }
+  }
+  if (initialChunks.length === 0) throw new Error("Build stream ended before loading");
+  const replay = streamFromInitialChunks(initialChunks, sourceReader);
+  const compressed = isGzipStreamPrefix(initialChunks);
+  if (compressed && typeof DecompressionStream !== "function") {
+    await sourceReader.cancel().catch(() => undefined);
+    throw new Error("Compressed builds are not supported by this browser");
+  }
+  const reader = compressed
+    ? replay
+        .pipeThrough(
+          new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>,
+        )
+        .getReader()
+    : replay.getReader();
+  const packed = createPackedVoxelBlocks(0);
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let totalBlocks: number | null = null;
+  let complete = false;
+
+  const processLine = (line: string) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as ArenaBuildStreamEvent;
+    if (event.type === "error") throw new Error(event.message || "Build stream failed");
+    if (event.type === "hello") {
+      totalBlocks = event.totalBlocks;
+      reservePackedVoxelBlocks(packed, event.totalBlocks);
+      onProgress({ receivedBlocks: packed.count, totalBlocks });
+    } else if (event.type === "chunk") {
+      appendPackedVoxelBlocks(packed, event.blocks);
+      totalBlocks = event.totalBlocks;
+      onProgress({ receivedBlocks: packed.count, totalBlocks });
+    } else if (event.type === "complete") {
+      complete = true;
+      totalBlocks = event.totalBlocks;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) processLine(line);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) processLine(buffer);
+  if (!complete || (totalBlocks !== null && packed.count < totalBlocks)) {
+    throw new Error("Build stream ended before loading completed");
+  }
+  return { version: "1.0", blocks: [], packed };
+}
+
 export function ProtectedBuildInspector({
   orgSlug,
   builds,
@@ -61,6 +166,8 @@ export function ProtectedBuildInspector({
   const [statusFilter, setStatusFilter] = useState<BuildFilter>("ALL");
   const [query, setQuery] = useState("");
   const [payload, setPayload] = useState<ProtectedBuildResponse | null>(null);
+  const [voxelBuild, setVoxelBuild] = useState<RenderableVoxelBuild | null>(null);
+  const [loadingProgress, setLoadingProgress] = useState<LoadingProgress | null>(null);
   const [loading, setLoading] = useState(Boolean(initialBuild?.resultId));
   const [error, setError] = useState<string | null>(null);
 
@@ -89,34 +196,49 @@ export function ProtectedBuildInspector({
   useEffect(() => {
     if (!selected?.resultId || selected.status !== "READY") {
       setPayload(null);
+      setVoxelBuild(null);
+      setLoadingProgress(null);
       setLoading(false);
       setError(null);
       return;
     }
 
     const controller = new AbortController();
+    const resultId = selected.resultId;
     setLoading(true);
     setError(null);
     setPayload(null);
+    setVoxelBuild(null);
+    setLoadingProgress(null);
 
-    void fetch(
-      `/api/lab/organizations/${encodeURIComponent(orgSlug)}/builds/${encodeURIComponent(selected.resultId)}`,
-      { cache: "no-store", signal: controller.signal },
-    )
-      .then(async (response) => {
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/lab/organizations/${encodeURIComponent(orgSlug)}/builds/${encodeURIComponent(resultId)}`,
+          { cache: "no-store", signal: controller.signal },
+        );
         const body = (await response.json()) as ProtectedBuildResponse | { error?: string };
         if (!response.ok) {
           throw new Error("error" in body && body.error ? body.error : "Build unavailable");
         }
-        setPayload(body as ProtectedBuildResponse);
-      })
-      .catch((reason: unknown) => {
+        const metadata = body as ProtectedBuildResponse;
+        const build = await streamProtectedBuild(
+          metadata.streamToken,
+          controller.signal,
+          (progress) => {
+            if (!controller.signal.aborted) setLoadingProgress(progress);
+          },
+        );
+        if (controller.signal.aborted) return;
+        setPayload(metadata);
+        setVoxelBuild(build);
+      } catch (reason) {
         if (controller.signal.aborted) return;
         setError(reason instanceof Error && reason.message ? reason.message : "Build unavailable");
-      })
-      .finally(() => {
+      } finally {
         if (!controller.signal.aborted) setLoading(false);
-      });
+      }
+    })();
 
     return () => controller.abort();
   }, [orgSlug, selected?.resultId, selected?.status]);
@@ -282,12 +404,13 @@ export function ProtectedBuildInspector({
                 key={selected.resultId}
                 title={payload?.checkpoint.codename ?? selected.checkpoint}
                 subtitle={<span className="line-clamp-1 text-muted">{payload?.prompt ?? selected.prompt}</span>}
-                voxelBuild={payload?.voxelBuild ?? null}
+                voxelBuild={voxelBuild}
                 gridSize={payload?.gridSize ?? 256}
                 palette={payload?.palette ?? "simple"}
                 expectedBlockCount={payload?.blockCount ?? selected.blockCount ?? undefined}
                 isLoading={loading}
                 loadingMessage="Loading build…"
+                loadingProgress={loadingProgress ?? undefined}
                 error={error ?? undefined}
                 metrics={viewerMetrics}
                 skipValidation

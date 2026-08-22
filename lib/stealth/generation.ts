@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import {
@@ -15,6 +15,10 @@ const PALETTE = "simple";
 const MODE = "precise";
 const DEFAULT_BUCKET = "builds";
 const STORAGE_PREFIX = "stealth-builds/v1";
+
+export function getStealthBuildStoragePrefix(variantId: string): string {
+  return `${STORAGE_PREFIX}/${variantId}`;
+}
 
 type StoredPayload = {
   voxelData: Prisma.InputJsonValue | typeof Prisma.DbNull;
@@ -77,6 +81,7 @@ async function storePayload(params: {
   promptSlug: string;
   build: VoxelBuild;
   gzip: Buffer;
+  sha256: string;
 }): Promise<StoredPayload> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (isLoopbackDatabaseUrl(databaseUrl)) {
@@ -93,7 +98,9 @@ async function storePayload(params: {
   }
 
   assertStorageMatchesDatabase(config.url);
-  const path = `${STORAGE_PREFIX}/${params.variantId}/${params.promptSlug}.json.gz`;
+  const path =
+    `${getStealthBuildStoragePrefix(params.variantId)}/` +
+    `${params.promptSlug}-${params.sha256}.json.gz`;
   const response = await fetch(
     `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodedStoragePath(path)}`,
     {
@@ -111,7 +118,12 @@ async function storePayload(params: {
     },
   );
   if (!response.ok) {
-    throw new Error(`Stealth build storage upload failed (${response.status}): ${await response.text()}`);
+    const body = await response.text();
+    if (isExistingObjectUploadError(response.status, body)) {
+      await assertStoredPayloadMatches(config, path, params.sha256);
+    } else {
+      throw new Error(`Stealth build storage upload failed (${response.status}): ${body}`);
+    }
   }
   return {
     voxelData: Prisma.DbNull,
@@ -119,6 +131,46 @@ async function storePayload(params: {
     voxelStoragePath: path,
     voxelStorageEncoding: "gzip",
   };
+}
+
+function isExistingObjectUploadError(status: number, body: string): boolean {
+  const normalized = body.toLowerCase();
+  return (
+    status === 409 ||
+    (status === 400 &&
+      (normalized.includes("already exists") ||
+        normalized.includes("duplicate") ||
+        normalized.includes("resource already exists")))
+  );
+}
+
+async function assertStoredPayloadMatches(
+  config: { url: string; key: string; bucket: string },
+  path: string,
+  expectedSha256: string,
+): Promise<void> {
+  const response = await fetch(
+    `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodedStoragePath(path)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${config.key}`,
+        apikey: config.key,
+      },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Stealth build storage identity check failed (${response.status})`);
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const text = bytes[0] === 0x1f && bytes[1] === 0x8b
+    ? gunzipSync(bytes).toString("utf8")
+    : bytes.toString("utf8");
+  const sha256 = createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
+  if (sha256 !== expectedSha256) {
+    throw new Error("Existing stealth build object checksum does not match retry payload");
+  }
 }
 
 function validateExistingBuildIdentity(
@@ -205,6 +257,7 @@ export async function persistStealthBuild(params: {
     promptSlug: params.promptSlug,
     build: params.build,
     gzip,
+    sha256,
   });
   let build: ExistingBuild;
   try {

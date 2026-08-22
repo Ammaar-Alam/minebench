@@ -10,12 +10,13 @@ import {
   activateStealthEvaluation,
   attachWorkflowRunId,
   closeStealthEvaluation,
-  completeUploadedStealthCohort,
+  completeUploadedStealthCohortFromStorage,
   configureStealthEndpoint,
   createStealthEvaluation,
   createStealthGenerationRun,
   deleteUnusedDraftEvaluation,
   disableStealthEndpoint,
+  failStealthGenerationRun,
   inviteOrganizationMember,
   pauseStealthEvaluation,
   removeOrganizationMember,
@@ -160,26 +161,11 @@ export async function uploadCohortAction(
   formData: FormData,
 ) {
   const context = await organizationContext(orgSlug);
-  let builds: unknown;
-  try {
-    builds = JSON.parse(text(formData, "cohort"));
-  } catch {
-    throw new Error("Cohort must be valid JSON");
-  }
-  if (!Array.isArray(builds)) throw new Error("Cohort must be a list of prompt builds");
-  await completeUploadedStealthCohort(context.actor, context.organizationId, experimentId, {
+  await completeUploadedStealthCohortFromStorage(context.actor, context.organizationId, experimentId, {
     variantId: text(formData, "variantId") || undefined,
     codename: text(formData, "codename"),
-    builds: builds.map((entry) => {
-      if (!entry || typeof entry !== "object") throw new Error("Each cohort entry is invalid");
-      const value = entry as Record<string, unknown>;
-      return {
-        promptSlug: typeof value.promptSlug === "string" ? value.promptSlug : "",
-        build: value.build,
-        generationTimeMs:
-          typeof value.generationTimeMs === "number" ? value.generationTimeMs : undefined,
-      };
-    }),
+    bucket: text(formData, "cohortUploadBucket"),
+    path: text(formData, "cohortUploadPath"),
   });
   revalidateEvaluation(orgSlug, experimentId);
 }
@@ -200,7 +186,13 @@ export async function startGenerationAction(
       concurrency: 1,
     },
   );
-  const run = await start(generateStealthCohortWorkflow, [runId]);
+  let run: Awaited<ReturnType<typeof start>>;
+  try {
+    run = await start(generateStealthCohortWorkflow, [runId]);
+  } catch (error) {
+    await failStealthGenerationRun(runId, error);
+    throw error;
+  }
   await attachWorkflowRunId(runId, run.runId);
   revalidateEvaluation(orgSlug, experimentId);
 }

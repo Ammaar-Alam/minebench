@@ -18,9 +18,12 @@ async function main() {
     completeUploadedStealthCohort,
     configureStealthEndpoint,
     createStealthEvaluation,
+    createStealthGenerationRun,
     deleteUnusedDraftEvaluation,
     disableStealthEndpoint,
+    failStealthGenerationRun,
     getStealthEvaluationWorkspace,
+    getStealthGenerationPlan,
     inviteOrganizationMember,
     pauseStealthEvaluation,
     prepareStealthCohortPrompts,
@@ -105,6 +108,69 @@ async function main() {
     email: invitee.email,
     role: "MEMBER",
   });
+  await assert.rejects(
+    inviteOrganizationMember(adminActor, organization.id, {
+      email: invitee.email,
+      role: "ADMIN",
+    }),
+    /already a member/,
+  );
+  assert.equal(
+    (
+      await prisma.organizationMembership.findUniqueOrThrow({
+        where: {
+          organizationId_userId: { organizationId: organization.id, userId: invitee.id },
+        },
+      })
+    ).role,
+    "MEMBER",
+  );
+
+  await prisma.organizationInvitation.create({
+    data: {
+      organizationId: organization.id,
+      email: admin.email,
+      role: "MEMBER",
+      authUserId: admin.id,
+    },
+  });
+  await acceptExactEmailInvitations({ id: admin.id, email: admin.email });
+  assert.equal(
+    (
+      await prisma.organizationMembership.findUniqueOrThrow({
+        where: { organizationId_userId: { organizationId: organization.id, userId: admin.id } },
+      })
+    ).role,
+    "ADMIN",
+    "a stale invitation cannot change an existing member role",
+  );
+  assert.ok(
+    (
+      await prisma.organizationInvitation.findUniqueOrThrow({
+        where: { organizationId_email: { organizationId: organization.id, email: admin.email } },
+      })
+    ).revokedAt,
+  );
+
+  const revokedInvitee = await prisma.user.create({
+    data: { id: randomUUID(), email: `revoked-${suffix}@example.test` },
+  });
+  await prisma.organizationInvitation.create({
+    data: {
+      organizationId: organization.id,
+      email: revokedInvitee.email,
+      role: "MEMBER",
+      authUserId: revokedInvitee.id,
+      revokedAt: new Date(),
+    },
+  });
+  await acceptExactEmailInvitations({ id: revokedInvitee.id, email: revokedInvitee.email });
+  assert.equal(
+    await prisma.organizationMembership.count({
+      where: { organizationId: organization.id, userId: revokedInvitee.id },
+    }),
+    0,
+  );
 
   const evaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Checkpoint service ${suffix}`,
@@ -135,6 +201,46 @@ async function main() {
   await assert.rejects(
     removeOrganizationMember(adminActor, organization.id, { email: admin.email }),
     /at least one Admin/,
+  );
+
+  const [adminA, adminB] = await Promise.all(
+    ["a", "b"].map((name) =>
+      prisma.user.create({
+        data: { id: randomUUID(), email: `concurrent-admin-${name}-${suffix}@example.test` },
+      }),
+    ),
+  );
+  const concurrentOrganization = await prisma.organization.create({
+    data: {
+      name: `Concurrent ${suffix}`,
+      slug: `concurrent-${suffix}`,
+      memberships: {
+        create: [
+          { userId: adminA.id, role: "ADMIN" },
+          { userId: adminB.id, role: "ADMIN" },
+        ],
+      },
+    },
+  });
+  const concurrentChanges = await Promise.allSettled([
+    updateOrganizationMember(
+      { organizationUser: { userId: adminA.id } },
+      concurrentOrganization.id,
+      { email: adminB.email, role: "MEMBER" },
+    ),
+    updateOrganizationMember(
+      { organizationUser: { userId: adminB.id } },
+      concurrentOrganization.id,
+      { email: adminA.email, role: "MEMBER" },
+    ),
+  ]);
+  assert.equal(concurrentChanges.filter((result) => result.status === "fulfilled").length, 1);
+  assert.equal(
+    await prisma.organizationMembership.count({
+      where: { organizationId: concurrentOrganization.id, role: "ADMIN" },
+    }),
+    1,
+    "concurrent membership changes must preserve an Admin",
   );
 
   const checkpoint = await configureStealthEndpoint(
@@ -174,6 +280,55 @@ async function main() {
   );
   await deleteUnusedDraftEvaluation(memberActor, organization.id, evaluation.id);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: evaluation.id } }), 0);
+
+  const generationEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+    name: `Generation ${suffix}`,
+  });
+  const generationCheckpoint = await configureStealthEndpoint(
+    memberActor,
+    organization.id,
+    generationEvaluation.id,
+    {
+      codename: "Generation One",
+      config: {
+        protocol: "openai-compatible",
+        endpointUrl: "https://checkpoint.example.test/v1",
+        apiKey: "generation-secret-key",
+        modelId: `generation-${suffix}`,
+        requireStructuredOutput: true,
+        enableTools: true,
+      },
+    },
+  );
+  const generationRun = await createStealthGenerationRun(
+    memberActor,
+    organization.id,
+    generationCheckpoint.variantId,
+    { maxAttempts: 3, concurrency: 3 },
+  );
+  assert.equal((await getStealthGenerationPlan(generationRun.runId))?.concurrency, 3);
+  await assert.rejects(
+    createStealthGenerationRun(
+      memberActor,
+      organization.id,
+      generationCheckpoint.variantId,
+      { maxAttempts: 3, concurrency: 1 },
+    ),
+    /already running/,
+  );
+  await failStealthGenerationRun(generationRun.runId, "Workflow startup failed");
+  assert.equal(
+    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: generationRun.runId } }))
+      .status,
+    "FAILED",
+  );
+  const retryRun = await createStealthGenerationRun(
+    memberActor,
+    organization.id,
+    generationCheckpoint.variantId,
+    { maxAttempts: 3, concurrency: 2 },
+  );
+  await failStealthGenerationRun(retryRun.runId, "Test cleanup");
 
   const uploadedEvaluation = await createStealthEvaluation(memberActor, organization.id, {
     name: `Uploaded ${suffix}`,
@@ -258,6 +413,100 @@ async function main() {
     await prisma.stealthEndpointCredential.count({ where: { variantId: uploaded.variantId } }),
     0,
   );
+
+  const sharedVariant = await prisma.stealthVariant.findUniqueOrThrow({
+    where: { id: uploaded.variantId },
+    select: { modelId: true },
+  });
+  const privateBuild = await prisma.build.findFirstOrThrow({
+    where: { modelId: sharedVariant.modelId },
+    select: {
+      id: true,
+      promptId: true,
+      gridSize: true,
+      palette: true,
+      mode: true,
+      voxelSha256: true,
+      blockCount: true,
+      generationTimeMs: true,
+    },
+  });
+  assert.ok(privateBuild.voxelSha256);
+  const publicModel = await prisma.model.create({
+    data: {
+      key: `shared-artifact-${suffix}`,
+      provider: "Test",
+      modelId: `shared-artifact-${suffix}`,
+      displayName: "Shared artifact",
+    },
+  });
+  const sharedRawPath = `stealth-builds/v1/${uploaded.variantId}/shared.json.gz`;
+  await prisma.build.update({
+    where: { id: privateBuild.id },
+    data: { voxelStorageBucket: "builds", voxelStoragePath: sharedRawPath },
+  });
+  const survivingBuild = await prisma.build.create({
+    data: {
+      promptId: privateBuild.promptId,
+      modelId: publicModel.id,
+      gridSize: privateBuild.gridSize,
+      palette: privateBuild.palette,
+      mode: privateBuild.mode,
+      voxelStorageBucket: "builds",
+      voxelStoragePath: sharedRawPath,
+      voxelSha256: privateBuild.voxelSha256,
+      blockCount: privateBuild.blockCount,
+      generationTimeMs: privateBuild.generationTimeMs,
+    },
+  });
+  const dueShared = new Date(Date.now() - 60_000);
+  await prisma.stealthExperiment.update({
+    where: { id: uploadedEvaluation.id },
+    data: { retentionDeleteAt: dueShared },
+  });
+  const previousStorageUrl = process.env.SUPABASE_URL;
+  const previousStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const originalFetch = global.fetch;
+  const deletedPaths: string[] = [];
+  process.env.SUPABASE_URL = "https://storage.example.test";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
+  global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "POST" && String(input).includes("/storage/v1/object/list/")) {
+      return Response.json([]);
+    }
+    if (init?.method !== "DELETE" || typeof init.body !== "string") {
+      throw new Error("Unexpected storage request");
+    }
+    const body = JSON.parse(init.body) as { prefixes: string[] };
+    deletedPaths.push(...body.prefixes);
+    return new Response(null, { status: 200 });
+  }) as typeof fetch;
+  try {
+    const { getArenaBuildStreamArtifactRef } = await import("../../../lib/arena/buildStream");
+    const fullArtifact = getArenaBuildStreamArtifactRef(
+      privateBuild.id,
+      "full",
+      privateBuild.voxelSha256,
+    );
+    const previewArtifact = getArenaBuildStreamArtifactRef(
+      privateBuild.id,
+      "preview",
+      privateBuild.voxelSha256,
+    );
+    assert.ok(fullArtifact);
+    assert.ok(previewArtifact);
+    assert.equal(await purgeStealthEvaluationIfDue(uploadedEvaluation.id, new Date()), true);
+    assert.equal(deletedPaths.includes(fullArtifact.path), false);
+    assert.equal(deletedPaths.includes(previewArtifact.path), false);
+    assert.equal(deletedPaths.includes(sharedRawPath), false);
+  } finally {
+    global.fetch = originalFetch;
+    if (previousStorageUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = previousStorageUrl;
+    if (previousStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = previousStorageKey;
+  }
+  assert.equal(await prisma.build.count({ where: { id: survivingBuild.id } }), 1);
 
   const retained = await createStealthEvaluation(minebenchAdmin, otherOrganization.id, {
     name: `Retention ${suffix}`,

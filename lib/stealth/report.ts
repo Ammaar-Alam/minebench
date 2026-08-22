@@ -458,7 +458,10 @@ export async function getDeidentifiedStealthVotes(
 }
 
 function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+  const neutralized = /^[=+\-@]/.test(value) ? `'${value}` : value;
+  return /[",\r\n]/.test(neutralized)
+    ? `"${neutralized.replaceAll('"', '""')}"`
+    : neutralized;
 }
 
 export function serializeDeidentifiedStealthVotes(rows: DeidentifiedStealthVote[]): string {
