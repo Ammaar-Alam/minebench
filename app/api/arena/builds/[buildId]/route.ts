@@ -382,7 +382,11 @@ export async function GET(
         try {
           artifactBytes = await withTimeout(
             (signal) =>
-              fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, { signal, format }),
+              fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, {
+                signal,
+                format,
+                cache: buildAccess ? "no-store" : "default",
+              }),
             SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
             "snapshot artifact fetch",
           );

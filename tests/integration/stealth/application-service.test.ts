@@ -601,6 +601,35 @@ async function main() {
       .status,
     "DRAFT",
   );
+  const interruptedRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    generationCheckpoint.variantId,
+    { maxAttempts: 3, concurrency: 1 },
+    async (runId) => `interrupted-${runId}`,
+  );
+  const staleAt = new Date(Date.now() - 20 * 60_000);
+  await prisma.stealthGenerationResult.updateMany({
+    where: { runId: interruptedRun.runId },
+    data: { updatedAt: staleAt },
+  });
+  await prisma.stealthGenerationRun.update({
+    where: { id: interruptedRun.runId },
+    data: { startedAt: staleAt },
+  });
+  const reclaimedRun = await startStealthGeneration(
+    memberActor,
+    organization.id,
+    generationCheckpoint.variantId,
+    { maxAttempts: 3, concurrency: 1 },
+    async (runId) => `reclaimed-${runId}`,
+  );
+  assert.equal(
+    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: interruptedRun.runId } }))
+      .status,
+    "FAILED",
+  );
+  await failStealthGenerationRun(reclaimedRun.runId, "Reclaimed reservation test complete");
   const retryRun = await startStealthGeneration(
     memberActor,
     organization.id,
@@ -1220,15 +1249,16 @@ async function main() {
   const failedCreateStorageUrl = process.env.SUPABASE_URL;
   const failedCreateStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const failedCreateFetch = global.fetch;
-  const failedCreateDeletes: string[] = [];
+  let failedCreateUploads = 0;
+  let failedCreateDeletes = 0;
   const storageProjectRef = "abcdefghijklmnopqrst";
   process.env.DATABASE_URL = `postgresql://postgres@db.${storageProjectRef}.supabase.co:5432/postgres`;
   process.env.SUPABASE_URL = `https://${storageProjectRef}.supabase.co`;
   process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
   global.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "POST") failedCreateUploads += 1;
     if (init?.method === "DELETE") {
-      const body = JSON.parse(String(init.body)) as { prefixes: string[] };
-      failedCreateDeletes.push(...body.prefixes);
+      failedCreateDeletes += 1;
     }
     return new Response(null, { status: 200 });
   }) as typeof fetch;
@@ -1253,7 +1283,8 @@ async function main() {
     else process.env.SUPABASE_SERVICE_ROLE_KEY = failedCreateStorageKey;
     await removeFailedCreateFailure();
   }
-  assert.equal(failedCreateDeletes.length, 1, "failed Build creation must remove its raw upload");
+  assert.equal(failedCreateUploads, 0, "raw storage writes must not precede Build ownership");
+  assert.equal(failedCreateDeletes, 0);
   assert.equal(await prisma.build.count({ where: { modelId: failedCreateModel.id } }), 0);
   await prisma.model.delete({ where: { id: failedCreateModel.id } });
 
@@ -1309,6 +1340,7 @@ async function main() {
     throw new Error("Unexpected artifact fence request");
   }) as typeof fetch;
   const { uploadArenaBuildStreamArtifact } = await import("../../../lib/arena/buildStream");
+  const { deleteArenaBuildArtifacts } = await import("../../../lib/arena/artifactOwnership");
   const artifactUpload = uploadArenaBuildStreamArtifact(
     artifactFenceBuild.id,
     "full",
@@ -1317,10 +1349,20 @@ async function main() {
   );
   try {
     await artifactUploadStarted;
-    await prisma.build.delete({ where: { id: artifactFenceBuild.id } });
+    const artifactDeletion = deleteArenaBuildArtifacts({
+      retiringBuilds: [artifactFenceBuild],
+      survivingChecksums: new Set(),
+      deleteStorage: async () => {
+        artifactFenceDeletes += 1;
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(artifactFenceDeletes, 0, "artifact deletion must wait for the matching upload");
     releaseArtifactUpload();
-    await assert.rejects(artifactUpload, /deleted during artifact upload/i);
-    assert.equal(artifactFenceDeletes, 1, "a post-purge upload must be removed");
+    await artifactUpload;
+    await artifactDeletion;
+    assert.equal(artifactFenceDeletes, 1);
+    await prisma.build.delete({ where: { id: artifactFenceBuild.id } });
   } finally {
     releaseArtifactUpload();
     await artifactUpload.catch(() => undefined);
@@ -1688,7 +1730,7 @@ async function main() {
   }) as typeof fetch;
   let batchPurge: Awaited<ReturnType<typeof purgeDueStealthEvaluations>>;
   try {
-    batchPurge = await purgeDueStealthEvaluations(minebenchAdmin, { now: purgeNow });
+    batchPurge = await purgeDueStealthEvaluations(minebenchAdmin, { now: purgeNow, limit: 1 });
   } finally {
     global.fetch = batchFetch;
     if (batchStorageUrl === undefined) delete process.env.SUPABASE_URL;

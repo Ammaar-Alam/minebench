@@ -3,19 +3,18 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
 import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
 import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
-import {
-  isLoopbackDatabaseUrl,
-  supabaseProjectRefFromApiUrl,
-  supabaseProjectRefFromDatabaseUrl,
-} from "@/lib/db/identity";
+import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
-import { deleteSupabaseStorageObjects } from "@/lib/storage/buildPayload";
+import {
+  deleteSupabaseStorageObjects,
+  getBuildStorageBucketFromEnv,
+  getSupabaseStorageConfig,
+} from "@/lib/storage/buildPayload";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 const GRID_SIZE = 256;
 const PALETTE = "simple";
 const MODE = "precise";
-const DEFAULT_BUCKET = "builds";
 const STORAGE_PREFIX = "stealth-builds/v1";
 
 export function getStealthBuildStoragePrefix(variantId: string): string {
@@ -27,6 +26,11 @@ type StoredPayload = {
   voxelStorageBucket: string | null;
   voxelStoragePath: string | null;
   voxelStorageEncoding: string | null;
+};
+
+type PreparedPayload = {
+  stored: StoredPayload;
+  remote: { url: string; key: string; bucket: string; path: string } | null;
 };
 
 const BUILD_SOURCE_SELECT = {
@@ -47,28 +51,19 @@ const BUILD_SOURCE_SELECT = {
 type ExistingBuild = Prisma.BuildGetPayload<{ select: typeof BUILD_SOURCE_SELECT }>;
 
 function storageConfig(): { url: string; key: string; bucket: string } | null {
-  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "")
-    .trim()
-    .replace(/\/+$/, "");
-  const key = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? "").trim();
-  if (!url && !key) return null;
-  if (!url || !key) {
-    throw new Error("Supabase build storage requires both SUPABASE_URL and a server secret key");
-  }
+  const hasUrl = Boolean(
+    (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim(),
+  );
+  const hasKey = Boolean(
+    (process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SECRET_KEY ?? "").trim(),
+  );
+  if (!hasUrl && !hasKey) return null;
+  const { url, serviceRoleKey } = getSupabaseStorageConfig();
   return {
     url,
-    key,
-    bucket: process.env.SUPABASE_STORAGE_BUCKET?.trim() || DEFAULT_BUCKET,
+    key: serviceRoleKey,
+    bucket: getBuildStorageBucketFromEnv(),
   };
-}
-
-function assertStorageMatchesDatabase(url: string): void {
-  const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
-  const databaseRef = supabaseProjectRefFromDatabaseUrl(databaseUrl);
-  const storageRef = supabaseProjectRefFromApiUrl(url);
-  if (!databaseRef || !storageRef || databaseRef !== storageRef) {
-    throw new Error("Stealth build storage and DATABASE_URL must target the same Supabase project");
-  }
 }
 
 function encodedStoragePath(path: string): string {
@@ -78,21 +73,23 @@ function encodedStoragePath(path: string): string {
     .join("/");
 }
 
-async function storePayload(params: {
+function preparePayload(params: {
   variantId: string;
   promptSlug: string;
   build: VoxelBuild;
-  gzip: Buffer;
   sha256: string;
   target?: { bucket: string; path: string };
-}): Promise<StoredPayload> {
+}): PreparedPayload {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (isLoopbackDatabaseUrl(databaseUrl)) {
     return {
-      voxelData: params.build as unknown as Prisma.InputJsonValue,
-      voxelStorageBucket: null,
-      voxelStoragePath: null,
-      voxelStorageEncoding: null,
+      stored: {
+        voxelData: params.build as unknown as Prisma.InputJsonValue,
+        voxelStorageBucket: null,
+        voxelStoragePath: null,
+        voxelStorageEncoding: null,
+      },
+      remote: null,
     };
   }
   const config = storageConfig();
@@ -100,13 +97,32 @@ async function storePayload(params: {
     throw new Error("Remote stealth generation requires Supabase build storage configuration");
   }
 
-  assertStorageMatchesDatabase(config.url);
   const bucket = params.target?.bucket ?? config.bucket;
   const path =
     params.target?.path ??
     `${getStealthBuildStoragePrefix(params.variantId)}/${params.promptSlug}-${params.sha256}.json.gz`;
+  return {
+    stored: {
+      voxelData: Prisma.DbNull,
+      voxelStorageBucket: bucket,
+      voxelStoragePath: path,
+      voxelStorageEncoding: "gzip",
+    },
+    remote: { ...config, bucket, path },
+  };
+}
+
+async function uploadPreparedPayload(
+  prepared: PreparedPayload,
+  gzip: Buffer,
+  sha256: string,
+): Promise<void> {
+  if (!prepared.remote) return;
+  const config = prepared.remote;
   const response = await fetch(
-    `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedStoragePath(path)}`,
+    `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodedStoragePath(
+      config.path,
+    )}`,
     {
       method: "POST",
       headers: {
@@ -114,27 +130,17 @@ async function storePayload(params: {
         apikey: config.key,
         "Content-Type": "application/gzip",
       },
-      body: new Uint8Array(
-        params.gzip.buffer as ArrayBuffer,
-        params.gzip.byteOffset,
-        params.gzip.byteLength,
-      ),
+      body: new Uint8Array(gzip.buffer as ArrayBuffer, gzip.byteOffset, gzip.byteLength),
     },
   );
   if (!response.ok) {
     const body = await response.text();
     if (isExistingObjectUploadError(response.status, body)) {
-      await assertStoredPayloadMatches({ ...config, bucket }, path, params.sha256);
+      await assertStoredPayloadMatches(config, config.path, sha256);
     } else {
       throw new Error(`Stealth build storage upload failed (${response.status}): ${body}`);
     }
   }
-  return {
-    voxelData: Prisma.DbNull,
-    voxelStorageBucket: bucket,
-    voxelStoragePath: path,
-    voxelStorageEncoding: "gzip",
-  };
 }
 
 function isExistingObjectUploadError(status: number, body: string): boolean {
@@ -217,13 +223,6 @@ function retryPayloadTarget(build: ExistingBuild): { bucket: string; path: strin
   return { bucket: build.voxelStorageBucket, path: build.voxelStoragePath };
 }
 
-function isUniqueConstraintError(error: unknown): boolean {
-  return (
-    error instanceof Prisma.PrismaClientKnownRequestError &&
-    error.code === "P2002"
-  );
-}
-
 async function maybePrecomputeRemoteArtifacts(build: ExistingBuild): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (!isLoopbackDatabaseUrl(databaseUrl)) {
@@ -275,24 +274,23 @@ export async function persistStealthBuild(params: {
       await maybePrecomputeRemoteArtifacts(existing);
     } catch (error) {
       if (!isMissingStealthBuildPayload(error)) throw error;
-      await storePayload({
+      const prepared = preparePayload({
         variantId: params.variantId,
         promptSlug: params.promptSlug,
         build: params.build,
-        gzip,
         sha256,
         target,
       });
+      await uploadPreparedPayload(prepared, gzip, sha256);
       await maybePrecomputeRemoteArtifacts(existing);
     }
     return { id: existing.id, blockCount: existing.blockCount, created: false };
   }
 
-  const payload = await storePayload({
+  const payload = preparePayload({
     variantId: params.variantId,
     promptSlug: params.promptSlug,
     build: params.build,
-    gzip,
     sha256,
   });
   let build: ExistingBuild;
@@ -304,7 +302,7 @@ export async function persistStealthBuild(params: {
         gridSize: GRID_SIZE,
         palette: PALETTE,
         mode: MODE,
-        ...payload,
+        ...payload.stored,
         voxelByteSize: json.byteLength,
         voxelCompressedByteSize: gzip.byteLength,
         voxelSha256: sha256,
@@ -320,20 +318,26 @@ export async function persistStealthBuild(params: {
     });
     if (raced) {
       validateExistingBuildIdentity(raced, expectedIdentity);
-      await maybePrecomputeRemoteArtifacts(raced);
-      return { id: raced.id, blockCount: raced.blockCount, created: false };
-    }
-    if (!isUniqueConstraintError(error)) {
-      if (payload.voxelStorageBucket && payload.voxelStoragePath) {
-        await deleteSupabaseStorageObjects([
-          { bucket: payload.voxelStorageBucket, path: payload.voxelStoragePath },
-        ]);
+      try {
+        await maybePrecomputeRemoteArtifacts(raced);
+      } catch (repairError) {
+        if (!isMissingStealthBuildPayload(repairError)) throw repairError;
+        const repair = preparePayload({
+          variantId: params.variantId,
+          promptSlug: params.promptSlug,
+          build: params.build,
+          sha256,
+          target: retryPayloadTarget(raced),
+        });
+        await uploadPreparedPayload(repair, gzip, sha256);
+        await maybePrecomputeRemoteArtifacts(raced);
       }
-      throw error;
+      return { id: raced.id, blockCount: raced.blockCount, created: false };
     }
     throw error;
   }
 
+  await uploadPreparedPayload(payload, gzip, sha256);
   await maybePrecomputeRemoteArtifacts(build);
   return { id: build.id, blockCount, created: true };
 }
@@ -415,7 +419,6 @@ export async function ensureStealthBuildArtifacts(buildId: string): Promise<void
   if (!config) {
     throw new Error("Remote stealth generation requires Supabase build storage configuration");
   }
-  assertStorageMatchesDatabase(config.url);
   const build = await prisma.build.findUnique({
     where: { id: buildId },
     select: BUILD_SOURCE_SELECT,

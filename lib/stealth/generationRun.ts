@@ -21,8 +21,10 @@ import {
   isStealthCheckpointSetOpen,
   lockExperiment,
   lockVariant,
+  reclaimStaleStealthGenerationRuns,
   sanitizeOperationalError,
   syncExperimentReadiness,
+  withStealthGenerationHeartbeat,
   type StealthActor,
 } from "@/lib/stealth/service";
 
@@ -116,6 +118,7 @@ async function createStealthGenerationRun(
     if (!isStealthCheckpointSetOpen(experiment.status)) {
       throw new Error("Only draft evaluations can generate builds");
     }
+    await reclaimStaleStealthGenerationRuns(tx, variant.id);
     const withCredential = await tx.stealthVariant.findUnique({
       where: { id: variant.id },
       include: { credential: true },
@@ -461,7 +464,9 @@ export async function generateStealthPromptForRun(params: {
   });
   if (existing) {
     try {
-      await ensureStealthBuildArtifacts(existing.id);
+      await withStealthGenerationHeartbeat(run.id, entry.prompt.id, () =>
+        ensureStealthBuildArtifacts(existing.id),
+      );
       const accepted = await acceptStealthGenerationBuild({
         runId: run.id,
         resultIdentity,
@@ -506,22 +511,24 @@ export async function generateStealthPromptForRun(params: {
   try {
     const config = decryptStealthEndpointConfig(run.variant.credential.encryptedConfig);
     configuredApiKey = config.apiKey;
-    generated = await generateVoxelBuild({
-      ...stealthEndpointConfigToGenerateVoxelBuildArgs(config, {
-        key: run.variant.model.key,
-        displayName: run.variant.codename,
+    generated = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, () =>
+      generateVoxelBuild({
+        ...stealthEndpointConfigToGenerateVoxelBuildArgs(config, {
+          key: run.variant.model.key,
+          displayName: run.variant.codename,
+        }),
+        prompt: entry.text,
+        gridSize: GRID_SIZE,
+        palette: PALETTE,
+        maxAttempts,
+        onProviderRequest: (attempt) => {
+          attempts = Math.max(attempts, attempt);
+        },
+        onRetry: (attempt) => {
+          attempts = Math.max(attempts, attempt);
+        },
       }),
-      prompt: entry.text,
-      gridSize: GRID_SIZE,
-      palette: PALETTE,
-      maxAttempts,
-      onProviderRequest: (attempt) => {
-        attempts = Math.max(attempts, attempt);
-      },
-      onRetry: (attempt) => {
-        attempts = Math.max(attempts, attempt);
-      },
-    });
+    );
   } catch (error) {
     await prisma.stealthGenerationResult.updateMany({
       where: { ...resultIdentity, status: "GENERATING" },
@@ -578,14 +585,16 @@ export async function generateStealthPromptForRun(params: {
   if (validating !== 1) return;
 
   try {
-    const build = await persistStealthBuild({
-      variantId: run.variant.id,
-      modelId: run.variant.modelId,
-      promptSlug: entry.slug,
-      promptText: entry.text,
-      build: generated.build,
-      generationTimeMs: generated.generationTimeMs,
-    });
+    const build = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, () =>
+      persistStealthBuild({
+        variantId: run.variant.id,
+        modelId: run.variant.modelId,
+        promptSlug: entry.slug,
+        promptText: entry.text,
+        build: generated.build,
+        generationTimeMs: generated.generationTimeMs,
+      }),
+    );
     const accepted = await acceptStealthGenerationBuild({
       runId: run.id,
       resultIdentity,

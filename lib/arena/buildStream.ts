@@ -9,11 +9,10 @@ import {
   getSupabaseStorageConfig,
 } from "@/lib/storage/buildPayload";
 import {
-  finalizeArenaBuildArtifactUpload,
   getArenaCanonicalStreamArtifactRef,
   getArenaLegacyStreamArtifactRef,
   getArenaStreamArtifactLocation,
-  registerArenaBuildArtifact,
+  uploadArenaBuildArtifact,
 } from "@/lib/arena/artifactOwnership";
 import { gzipSync } from "node:zlib";
 
@@ -615,29 +614,34 @@ export async function uploadArenaBuildStreamArtifact(
   const ref = getArenaBuildStreamArtifactRef(buildId, variant, checksum);
   if (!ref) return null;
 
-  await registerArenaBuildArtifact(buildId, ref);
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(ref.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
   const payload = gzipSync(Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength));
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      apikey: config.serviceRoleKey,
-      "x-upsert": "true",
-      "cache-control": ARENA_STREAM_ARTIFACT_CACHE_CONTROL,
-      "Content-Encoding": "gzip",
-      "Content-Type": "application/x-ndjson",
+  const accepted = await uploadArenaBuildArtifact(
+    buildId,
+    ref,
+    async () => {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          apikey: config.serviceRoleKey,
+          "x-upsert": "true",
+          "cache-control": ARENA_STREAM_ARTIFACT_CACHE_CONTROL,
+          "Content-Encoding": "gzip",
+          "Content-Type": "application/x-ndjson",
+        },
+        body: payload,
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        throw new Error(`Stream artifact upload failed (${resp.status}): ${text || "empty response"}`);
+      }
     },
-    body: payload,
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Stream artifact upload failed (${resp.status}): ${text || "empty response"}`);
-  }
-  if (!(await finalizeArenaBuildArtifactUpload(buildId, ref, deleteSupabaseStorageObjects))) {
+    deleteSupabaseStorageObjects,
+  );
+  if (!accepted) {
     throw new Error("Build was deleted during artifact upload");
   }
   clearArenaBuildStreamArtifactMiss(buildId, variant, checksum);

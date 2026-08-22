@@ -26,6 +26,8 @@ for (const path of [
   assert.match(buildRoute, /private, no-store/);
   assert.match(buildRoute, /privateAccessOnly && !buildAccess/);
 }
+assert.match(read("app/api/arena/builds/[buildId]/route.ts"), /cache: buildAccess \? "no-store"/);
+assert.match(read("app/api/arena/matchup/route.ts"), /cache: privateAccessOnly \? "no-store"/);
 
 const generation = read("lib/stealth/generation.ts");
 assert.doesNotMatch(generation, /prisma\.build\.upsert/);

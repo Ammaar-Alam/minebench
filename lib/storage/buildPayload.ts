@@ -3,6 +3,7 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { supabaseProjectRefFromApiUrl } from "@/lib/db/identity";
+import { getSupabaseServerConfig } from "@/lib/supabase/config";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 export const DEFAULT_BUILD_STORAGE_BUCKET = "builds";
@@ -43,10 +44,6 @@ export type SupabaseStorageReadiness = {
   error: string | null;
 };
 
-function trimTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
 function encodePath(path: string): string {
   return path
     .split("/")
@@ -82,19 +79,8 @@ function encodingWantsGzip(encoding: string | null | undefined): boolean {
 }
 
 export function getSupabaseStorageConfig(): SupabaseStorageConfig {
-  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (
-    process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""
-  ).trim();
-
-  if (!url) {
-    throw new Error("Missing SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) for storage-backed build payloads");
-  }
-  if (!serviceRoleKey) {
-    throw new Error("Missing SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY for storage-backed build payloads");
-  }
-
-  return { url: trimTrailingSlashes(url), serviceRoleKey };
+  const config = getSupabaseServerConfig();
+  return { url: config.url, serviceRoleKey: config.secretKey };
 }
 
 export function hasSupabaseStorageConfig(): boolean {

@@ -163,6 +163,7 @@ async function resolveInitialBuildSnapshot(
   buildId: string,
   hints: ArenaBuildLoadHints,
   row: { voxelSha256: string | null },
+  privateAccessOnly: boolean,
 ): Promise<ArenaMatchup["a"]["build"]> {
   const storedChecksum = row.voxelSha256?.trim() || null;
   // the checksum-addressed artifact is the canonical snapshot; a miss falls
@@ -172,7 +173,10 @@ async function resolveInitialBuildSnapshot(
       buildId,
       hints.initialVariant,
       storedChecksum,
-      { signal: AbortSignal.timeout(SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS) },
+      {
+        signal: AbortSignal.timeout(SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS),
+        cache: privateAccessOnly ? "no-store" : "default",
+      },
     );
     if (artifact) return artifact.voxelBuild as ArenaMatchup["a"]["build"];
   } catch {
@@ -880,10 +884,10 @@ export async function GET(req: Request) {
 
       [persistedInitialBuildA, persistedInitialBuildB] = await Promise.all([
         checksumA && shouldPrepareA && !preparedA && buildAForPrepare
-          ? resolveInitialBuildSnapshot(buildA.id, shellHintsA, buildAForPrepare)
+          ? resolveInitialBuildSnapshot(buildA.id, shellHintsA, buildAForPrepare, privateBuildA)
           : Promise.resolve(null),
         checksumB && shouldPrepareB && !preparedB && buildBForPrepare
-          ? resolveInitialBuildSnapshot(buildB.id, shellHintsB, buildBForPrepare)
+          ? resolveInitialBuildSnapshot(buildB.id, shellHintsB, buildBForPrepare, privateBuildB)
           : Promise.resolve(null),
       ]);
 

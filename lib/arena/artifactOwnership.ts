@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { getArenaPreviewTargetBlocks } from "@/lib/arena/buildArtifacts";
 import { getArenaDeliveryPolicySignature } from "@/lib/arena/buildDeliveryPolicy";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
@@ -32,6 +33,7 @@ const STREAM_PREFIX = normalizePrefix(
 );
 const STREAM_BUCKET =
   process.env.ARENA_STREAM_ARTIFACT_BUCKET?.trim() || getBuildStorageBucketFromEnv();
+const ARTIFACT_LOCK_TIMEOUT_MS = 5 * 60_000;
 
 function normalizePrefix(value: string): string {
   return value.trim().replace(/^\/+|\/+$/g, "");
@@ -118,53 +120,78 @@ function isRetainedArtifactBuild(build: ArenaArtifactBuildOwner, now: Date): boo
   );
 }
 
-export async function registerArenaBuildArtifact(
-  buildId: string,
-  ref: ArenaArtifactStorageRef,
+async function lockArtifactRefs(
+  tx: Prisma.TransactionClient,
+  refs: ReadonlyArray<ArenaArtifactStorageRef>,
 ): Promise<void> {
-  await prisma.arenaBuildArtifact.upsert({
-    where: { buildId_bucket_path: { buildId, bucket: ref.bucket, path: ref.path } },
-    create: { buildId, bucket: ref.bucket, path: ref.path },
-    update: {},
-  });
+  const keys = Array.from(new Set(refs.map(refKey))).sort();
+  for (const key of keys) {
+    await tx.$executeRaw(Prisma.sql`
+      SELECT pg_advisory_xact_lock(hashtextextended(${`arena-artifact:${key}`}, 0))
+    `);
+  }
 }
 
-export async function finalizeArenaBuildArtifactUpload(
-  buildId: string,
-  ref: ArenaArtifactStorageRef,
-  deleteStorage: (refs: ArenaArtifactStorageRef[]) => Promise<void>,
-): Promise<boolean> {
-  const owners = await prisma.arenaBuildArtifact.findMany({
-    where: { bucket: ref.bucket, path: ref.path },
+const ARTIFACT_OWNER_SELECT = {
+  buildId: true,
+  bucket: true,
+  path: true,
+  build: {
     select: {
-      buildId: true,
-      build: {
+      model: {
         select: {
-          model: {
+          stealthVariant: {
             select: {
-              stealthVariant: {
-                select: {
-                  experiment: { select: { status: true, retentionDeleteAt: true } },
-                },
-              },
+              experiment: { select: { status: true, retentionDeleteAt: true } },
             },
           },
         },
       },
     },
-  });
-  const now = new Date();
-  if (
-    owners.some(
-      (owner) => owner.buildId === buildId && isRetainedArtifactBuild(owner.build, now),
-    )
-  ) {
-    return true;
-  }
-  if (!owners.some((owner) => isRetainedArtifactBuild(owner.build, now))) {
-    await deleteStorage([ref]);
-  }
-  return false;
+  },
+} satisfies Prisma.ArenaBuildArtifactSelect;
+
+export async function uploadArenaBuildArtifact(
+  buildId: string,
+  ref: ArenaArtifactStorageRef,
+  upload: () => Promise<void>,
+  deleteStorage: (refs: ArenaArtifactStorageRef[]) => Promise<void>,
+): Promise<boolean> {
+  const outcome = await prisma.$transaction(
+    async (tx) => {
+      await lockArtifactRefs(tx, [ref]);
+      let failure: unknown = null;
+      try {
+        await tx.arenaBuildArtifact.upsert({
+          where: { buildId_bucket_path: { buildId, bucket: ref.bucket, path: ref.path } },
+          create: { buildId, bucket: ref.bucket, path: ref.path },
+          update: {},
+        });
+        await upload();
+      } catch (error) {
+        failure = error;
+      }
+      const owners = await tx.arenaBuildArtifact.findMany({
+        where: { bucket: ref.bucket, path: ref.path },
+        select: ARTIFACT_OWNER_SELECT,
+      });
+      const now = new Date();
+      const accepted = owners.some(
+        (owner) => owner.buildId === buildId && isRetainedArtifactBuild(owner.build, now),
+      );
+      if (!owners.some((owner) => isRetainedArtifactBuild(owner.build, now))) {
+        try {
+          await deleteStorage([ref]);
+        } catch (error) {
+          failure ??= error;
+        }
+      }
+      return { accepted, failure };
+    },
+    { maxWait: 10_000, timeout: ARTIFACT_LOCK_TIMEOUT_MS },
+  );
+  if (outcome.failure) throw outcome.failure;
+  return outcome.accepted;
 }
 
 async function loadRegisteredArtifactOwnership(
@@ -175,19 +202,9 @@ async function loadRegisteredArtifactOwnership(
     select: { bucket: true, path: true },
   });
   const refs = Array.from(new Map(retiring.map((ref) => [refKey(ref), ref])).values());
-  const surviving =
-    refs.length === 0
-      ? []
-      : await prisma.arenaBuildArtifact.findMany({
-          where: {
-            buildId: { notIn: retiringBuildIds },
-            OR: refs.map((ref) => ({ bucket: ref.bucket, path: ref.path })),
-          },
-          select: { bucket: true, path: true },
-        });
   return {
     retiringRefs: refs,
-    survivingRefKeys: new Set(surviving.map(refKey)),
+    survivingRefKeys: new Set(),
   };
 }
 
@@ -199,6 +216,7 @@ export async function deleteArenaBuildArtifacts(params: {
 }): Promise<{ deleted: number; preserved: number }> {
   const deleting = new Map<string, ArenaArtifactStorageRef>();
   const preserving = new Set<string>();
+  const canonicalChecksums = new Map<string, string>();
   const addDeleting = (ref: ArenaArtifactStorageRef | null) => {
     if (ref) deleting.set(refKey(ref), ref);
   };
@@ -216,16 +234,73 @@ export async function deleteArenaBuildArtifacts(params: {
       addDeleting(getArenaLegacyStreamArtifactRef(build.id, variant, checksum));
       const shared = getArenaCanonicalStreamArtifactRef(variant, checksum);
       if (!shared) continue;
-      if (checksum && params.survivingChecksums.has(checksum)) {
+      if (params.registeredOwnership && checksum && params.survivingChecksums.has(checksum)) {
         preserving.add(refKey(shared));
       } else {
         addDeleting(shared);
+        if (checksum) canonicalChecksums.set(refKey(shared), checksum);
       }
     }
   }
 
-  for (const key of preserving) deleting.delete(key);
-  const refs = Array.from(deleting.values());
-  if (refs.length > 0) await params.deleteStorage(refs);
-  return { deleted: refs.length, preserved: preserving.size };
+  if (params.registeredOwnership) {
+    for (const key of preserving) deleting.delete(key);
+    const refs = Array.from(deleting.values());
+    if (refs.length > 0) await params.deleteStorage(refs);
+    return { deleted: refs.length, preserved: preserving.size };
+  }
+
+  const candidates = Array.from(deleting.values());
+  if (candidates.length === 0) return { deleted: 0, preserved: 0 };
+  return prisma.$transaction(
+    async (tx) => {
+      await lockArtifactRefs(tx, candidates);
+      const retiringBuildIds = new Set(params.retiringBuilds.map((build) => build.id));
+      const owners = await tx.arenaBuildArtifact.findMany({
+        where: { OR: candidates.map((ref) => ({ bucket: ref.bucket, path: ref.path })) },
+        select: ARTIFACT_OWNER_SELECT,
+      });
+      const now = new Date();
+      for (const owner of owners) {
+        if (!retiringBuildIds.has(owner.buildId) && isRetainedArtifactBuild(owner.build, now)) {
+          preserving.add(refKey(owner));
+        }
+      }
+
+      const checksums = Array.from(new Set(canonicalChecksums.values()));
+      if (checksums.length > 0) {
+        const builds = await tx.build.findMany({
+          where: {
+            id: { notIn: Array.from(retiringBuildIds) },
+            voxelSha256: { in: checksums },
+          },
+          select: {
+            voxelSha256: true,
+            model: {
+              select: {
+                stealthVariant: {
+                  select: {
+                    experiment: { select: { status: true, retentionDeleteAt: true } },
+                  },
+                },
+              },
+            },
+          },
+        });
+        const retainedChecksums = new Set(
+          builds
+            .filter((build) => isRetainedArtifactBuild(build, now))
+            .flatMap((build) => (build.voxelSha256 ? [build.voxelSha256] : [])),
+        );
+        for (const [key, checksum] of canonicalChecksums) {
+          if (retainedChecksums.has(checksum)) preserving.add(key);
+        }
+      }
+
+      const refs = candidates.filter((ref) => !preserving.has(refKey(ref)));
+      if (refs.length > 0) await params.deleteStorage(refs);
+      return { deleted: refs.length, preserved: preserving.size };
+    },
+    { maxWait: 10_000, timeout: ARTIFACT_LOCK_TIMEOUT_MS },
+  );
 }

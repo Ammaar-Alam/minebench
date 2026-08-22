@@ -9,10 +9,9 @@ import {
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import {
   getArenaSnapshotArtifactRef,
-  finalizeArenaBuildArtifactUpload,
   hasArenaSnapshotArtifactLocation,
-  registerArenaBuildArtifact,
   type ArenaSnapshotArtifactFormat,
+  uploadArenaBuildArtifact,
 } from "@/lib/arena/artifactOwnership";
 import { gunzipSync, gzipSync } from "node:zlib";
 
@@ -313,7 +312,6 @@ async function uploadSnapshotArtifactVariant(
   }
 
   const promise = (async () => {
-    await registerArenaBuildArtifact(prepared.buildId, ref);
     const config = getSupabaseStorageConfig();
     const encodedPath = encodeStoragePath(ref.path);
     const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
@@ -322,32 +320,35 @@ async function uploadSnapshotArtifactVariant(
       format === "binary"
         ? encodeBinarySnapshotArtifactPayload(artifact)
         : encodeSnapshotArtifactPayload(artifact);
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.serviceRoleKey}`,
-        apikey: config.serviceRoleKey,
-        "x-upsert": "true",
-        "cache-control": ARENA_SNAPSHOT_ARTIFACT_CACHE_CONTROL,
-        "Content-Encoding": "gzip",
-        "Content-Type":
-          format === "binary" ? "application/octet-stream" : "application/json; charset=utf-8",
+    const accepted = await uploadArenaBuildArtifact(
+      prepared.buildId,
+      ref,
+      async () => {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.serviceRoleKey}`,
+            apikey: config.serviceRoleKey,
+            "x-upsert": "true",
+            "cache-control": ARENA_SNAPSHOT_ARTIFACT_CACHE_CONTROL,
+            "Content-Encoding": "gzip",
+            "Content-Type":
+              format === "binary"
+                ? "application/octet-stream"
+                : "application/json; charset=utf-8",
+          },
+          body: Buffer.from(payload.buffer as ArrayBuffer, payload.byteOffset, payload.byteLength),
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          throw new Error(
+            `Snapshot artifact upload failed (${resp.status}): ${text || "empty response"}`,
+          );
+        }
       },
-      body: Buffer.from(payload.buffer as ArrayBuffer, payload.byteOffset, payload.byteLength),
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      throw new Error(`Snapshot artifact upload failed (${resp.status}): ${text || "empty response"}`);
-    }
-
-    if (
-      !(await finalizeArenaBuildArtifactUpload(
-        prepared.buildId,
-        ref,
-        deleteSupabaseStorageObjects,
-      ))
-    ) {
+      deleteSupabaseStorageObjects,
+    );
+    if (!accepted) {
       throw new Error("Build was deleted during artifact upload");
     }
 
@@ -389,26 +390,31 @@ export async function fetchArenaBuildSnapshotArtifact(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
-  opts?: { signal?: AbortSignal; format?: ArenaSnapshotArtifactFormat },
+  opts?: {
+    signal?: AbortSignal;
+    format?: ArenaSnapshotArtifactFormat;
+    cache?: "default" | "no-store";
+  },
 ): Promise<Uint8Array | null> {
   const format = opts?.format ?? "json";
   const ref = getSnapshotArtifactRef(buildId, variant, checksum, format);
   if (!ref) return null;
 
+  const useCache = opts?.cache !== "no-store";
   const cacheKey = getArtifactCacheKey(buildId, variant, checksum, format);
   const now = Date.now();
-  maybePruneArtifactCaches(now);
-  if (hasFreshArtifactMiss(cacheKey)) {
+  if (useCache) maybePruneArtifactCaches(now);
+  if (useCache && hasFreshArtifactMiss(cacheKey)) {
     // recent miss means the db snapshot path should win immediately
     return null;
   }
 
-  const cached = getCachedSnapshotArtifactBody(cacheKey);
+  const cached = useCache ? getCachedSnapshotArtifactBody(cacheKey) : null;
   if (cached) {
     return cached;
   }
 
-  const inflight = artifactBodyInflight.get(cacheKey);
+  const inflight = useCache ? artifactBodyInflight.get(cacheKey) : null;
   if (inflight) {
     // share supabase reads across concurrent requests
     return inflight;
@@ -436,8 +442,10 @@ export async function fetchArenaBuildSnapshotArtifact(
 
     if (resp.ok) {
       const bytes = maybeGunzipArtifactBytes(new Uint8Array(await resp.arrayBuffer()));
-      clearSnapshotArtifactMiss(buildId, variant, checksum, format);
-      setCachedSnapshotArtifactBody(cacheKey, bytes);
+      if (useCache) {
+        clearSnapshotArtifactMiss(buildId, variant, checksum, format);
+        setCachedSnapshotArtifactBody(cacheKey, bytes);
+      }
       return bytes;
     }
 
@@ -448,13 +456,14 @@ export async function fetchArenaBuildSnapshotArtifact(
       normalized.includes("object not found") ||
       normalized.includes("\"error\":\"not_found\"");
     if (resp.status === 404 || (resp.status === 400 && objectMissing)) {
-      rememberSnapshotArtifactMiss(buildId, variant, checksum, format);
+      if (useCache) rememberSnapshotArtifactMiss(buildId, variant, checksum, format);
       return null;
     }
 
     throw new Error(`Snapshot artifact fetch failed (${resp.status}): ${text || "empty response"}`);
   })();
 
+  if (!useCache) return promise;
   artifactBodyInflight.set(cacheKey, promise);
   try {
     return await promise;
@@ -467,7 +476,7 @@ export async function fetchArenaBuildSnapshotArtifactPayload(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; cache?: "default" | "no-store" },
 ): Promise<SnapshotArtifactPayload | null> {
   const bytes = await fetchArenaBuildSnapshotArtifact(buildId, variant, checksum, opts);
   if (!bytes) return null;

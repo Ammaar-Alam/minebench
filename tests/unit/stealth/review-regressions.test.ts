@@ -62,14 +62,14 @@ assert.match(service, /if \(hasSupabaseStorageConfig\(\)\) \{[\s\S]*listStealthB
 const generationSource = read("lib/stealth/generation.ts");
 assert.match(
   generationSource,
-  /isMissingStealthBuildPayload\(error\)[\s\S]*storePayload\(/,
+  /isMissingStealthBuildPayload\(error\)[\s\S]*uploadPreparedPayload\(/,
 );
 assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);
 assert.match(generationRun, /deleteUnacceptedStealthBuild\(existing\.id\)/);
 assert.match(generationRun, /sanitizeOperationalError\([\s\S]*configuredApiKey/);
 
 for (const path of ["lib/arena/buildSnapshotArtifacts.ts", "lib/arena/buildStream.ts"]) {
-  assert.match(read(path), /finalizeArenaBuildArtifactUpload/);
+  assert.match(read(path), /uploadArenaBuildArtifact/);
 }
 
 const cli = read("scripts/stealth-eval.ts");
