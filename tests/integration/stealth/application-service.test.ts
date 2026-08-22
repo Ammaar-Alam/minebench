@@ -422,7 +422,7 @@ async function main() {
     memberActor,
     organization.id,
     generationCheckpoint.variantId,
-    { maxAttempts: 3, concurrency: 2 },
+    { maxAttempts: 3, concurrency: 1 },
     async (runId) => `workflow-${runId}`,
   );
   const generatedBlocks = Array.from({ length: 500 }, (_, index) => ({
@@ -469,6 +469,14 @@ async function main() {
       promptSlug: firstPrompt,
     });
     await firstRequestStarted;
+    const secondPrompt = promptSlugs[1];
+    assert.ok(secondPrompt);
+    await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: secondPrompt });
+    assert.equal(
+      generationRequestCount,
+      1,
+      "duplicate workflow delivery must honor the persisted concurrency limit",
+    );
     await generateStealthPromptForRun({ runId: retryRun.runId, promptSlug: firstPrompt });
     assert.equal(generationRequestCount, 1, "an in-flight prompt must not call the provider twice");
     await finishStealthGenerationRun(retryRun.runId);

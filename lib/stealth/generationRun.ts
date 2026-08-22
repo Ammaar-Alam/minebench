@@ -74,6 +74,18 @@ function summarizeGenerationResults(
   };
 }
 
+function generationConcurrency(configuration: unknown): number {
+  const configured =
+    typeof configuration === "object" &&
+    configuration !== null &&
+    "concurrency" in configuration
+      ? configuration.concurrency
+      : undefined;
+  return typeof configured === "number" && Number.isInteger(configured)
+    ? Math.max(1, Math.min(MAX_GENERATION_CONCURRENCY, configured))
+    : 1;
+}
+
 async function countCompletedBuilds(
   db: Prisma.TransactionClient,
   modelId: string,
@@ -231,11 +243,7 @@ export async function getStealthGenerationPlan(
   });
   if (!run) throw new Error("Generation run not found");
   if (run.status !== "RUNNING") return null;
-  const configured = (run.configuration as { concurrency?: unknown }).concurrency;
-  const concurrency =
-    typeof configured === "number" && Number.isInteger(configured)
-      ? Math.max(1, Math.min(MAX_GENERATION_CONCURRENCY, configured))
-      : 1;
+  const concurrency = generationConcurrency(run.configuration);
   const promptSlugs = (await prepareStealthCohortPrompts()).map((prompt) => prompt.slug);
   const promptBatches: string[][] = [];
   for (let index = 0; index < promptSlugs.length; index += concurrency) {
@@ -327,6 +335,13 @@ export async function generateStealthPromptForRun(params: {
       select: { status: true },
     });
     if (prior.status !== "QUEUED") return null;
+    const activePromptCount = await tx.stealthGenerationResult.count({
+      where: {
+        runId: currentRun.id,
+        status: { in: ["GENERATING", "VALIDATING"] },
+      },
+    });
+    if (activePromptCount >= generationConcurrency(currentRun.configuration)) return null;
     const claimed = await tx.stealthGenerationResult.updateMany({
       where: { ...resultIdentity, status: "QUEUED" },
       data: { status: "GENERATING", error: null },
