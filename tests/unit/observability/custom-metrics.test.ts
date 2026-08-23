@@ -102,6 +102,32 @@ async function main() {
     false,
   );
 
+  const errorEmissions: Emission[] = [];
+  emitArenaBuildCustomMetrics(
+    {
+      access: "blind",
+      variant: "full",
+      requestedFormat: "v4",
+      servedFormat: "json",
+      deliveryClass: "snapshot",
+      source: "live",
+      artifactOutcome: "error",
+      blockCount: 10_000,
+      responseBytes: 2_000,
+      transferBytes: 1_000,
+      decodedBytes: 4_000,
+      optimizedExpected: true,
+      optimizedDelivered: false,
+    },
+    { artifact_fetch: 50, total: 100 },
+    200,
+    (name, value, tags = {}) => errorEmissions.push({ name, value, tags }),
+  );
+  assert.equal(
+    errorEmissions.find((entry) => entry.name === "minebench.arena.build.request")?.tags.outcome,
+    "error",
+  );
+
   const parsed = clientMetricBatchSchema.safeParse({ samples: [validMatchupSample] });
   assert.equal(parsed.success, true);
   assert.equal(

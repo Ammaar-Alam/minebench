@@ -171,6 +171,7 @@ function normalizeArtifactOutcome(value: string): string {
     "redirect",
     "hit",
     "miss",
+    "error",
     "response-cache",
     "redirect-miss",
     "not-eligible",
