@@ -1538,15 +1538,27 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                  identical cards. */}
               <div className="mb-metric-row">
                 <MetricTile
-                  label="Rank score"
+                  label="Rating"
                   tone="text-accent"
                   value={
-                    <AnimatedNumber
-                      value={data.model.rankScore}
-                      format={(v) => Math.round(v).toLocaleString()}
-                    />
+                    <div className="flex items-baseline gap-1.5">
+                      <AnimatedNumber
+                        value={data.model.rankScore}
+                        format={(v) => Math.round(v).toLocaleString()}
+                      />
+                      {data.model.ci95 != null ? (
+                        <span className="text-xs font-normal text-muted2">
+                          <span className="text-muted2/70 font-sans font-light">±</span>
+                          {data.model.ci95.toFixed(1)}
+                        </span>
+                      ) : null}
+                    </div>
                   }
-                  sub={`Raw ${Math.round(data.model.eloRating).toLocaleString()}`}
+                  sub={
+                    data.model.ciLower != null && data.model.ciUpper != null
+                      ? `[${data.model.ciLower.toLocaleString()}, ${data.model.ciUpper.toLocaleString()}]`
+                      : `SE ${Math.round(data.model.ratingDeviation)}`
+                  }
                 />
                 <MetricTile
                   label="Confidence"
@@ -1556,7 +1568,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                       format={(v) => `${Math.round(v)}%`}
                     />
                   }
-                  sub={`RD ${Math.round(data.model.ratingDeviation)}`}
+                  sub={`SE ${Math.round(data.model.ratingDeviation)}`}
                 />
                 <MetricTile
                   label="Coverage"
