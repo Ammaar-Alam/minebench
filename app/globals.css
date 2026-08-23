@@ -88,7 +88,7 @@
 
   html,
   body {
-    height: 100%;
+    min-height: 100%;
   }
 
   html {
@@ -793,9 +793,41 @@
     @apply w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none transition;
   }
 
+  select.mb-field {
+    appearance: none;
+    padding-right: 2.5rem;
+    background-image:
+      linear-gradient(45deg, transparent 42%, hsl(var(--muted)) 43% 57%, transparent 58%),
+      linear-gradient(135deg, transparent 42%, hsl(var(--muted)) 43% 57%, transparent 58%);
+    background-position:
+      calc(100% - 1.5rem) 50%,
+      calc(100% - 1.1875rem) 50%;
+    background-repeat: no-repeat;
+    background-size: 0.3125rem 0.3125rem;
+  }
+
+  select.mb-field.mb-select-trailing-action {
+    padding-right: 5rem;
+    background-position:
+      calc(100% - 4.25rem) 50%,
+      calc(100% - 3.9375rem) 50%;
+  }
+
   .mb-field:focus-visible {
     border-color: hsl(var(--accent) / 0.55);
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.16);
+  }
+
+  @media (forced-colors: active) {
+    select.mb-field {
+      appearance: auto;
+      background-image: none;
+      padding-right: 0.75rem;
+    }
+
+    select.mb-field.mb-select-trailing-action {
+      padding-right: 5rem;
+    }
   }
 
   #mb-lab-canvas .mb-field {

@@ -226,8 +226,10 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
         answer: [
           "MineBench is open source. Useful contributions include harder prompts, model integrations, renderer improvements, methodology improvements, UI changes, and bug fixes.",
           "Financial support primarily goes toward API inference, which is the largest constraint on expanding the set of models, prompts, and evaluation settings.",
+          "Bug reports, feature requests, and feedback can be sent directly to MineBench.",
         ],
         links: [
+          { label: "Contact MineBench", href: "/contact" },
           {
             label: "Contributing guide",
             href: "https://github.com/Ammaar-Alam/minebench/blob/master/.github/CONTRIBUTING.md",

@@ -105,9 +105,9 @@ export default function PrivateEvaluationsPage() {
                 <dd className="mt-1">
                   <a
                     className="text-fg underline decoration-border/70 underline-offset-4 hover:decoration-fg"
-                    href="mailto:ammaar@princeton.edu?subject=MineBench%20Private%20Evaluations"
+                    href="mailto:support@minebench.ai?subject=MineBench%20Private%20Evaluations"
                   >
-                    ammaar@princeton.edu
+                    support@minebench.ai
                   </a>
                 </dd>
               </div>
@@ -154,7 +154,7 @@ export default function PrivateEvaluationsPage() {
             <div className="flex flex-wrap gap-3 pt-1">
               <a
                 className="mb-btn mb-btn-primary h-11 px-5 text-sm"
-                href="mailto:ammaar@princeton.edu?subject=MineBench%20Private%20Evaluations"
+                href="mailto:support@minebench.ai?subject=MineBench%20Private%20Evaluations"
               >
                 Request access
               </a>

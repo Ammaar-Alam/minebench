@@ -177,7 +177,7 @@ export default async function LabOrganizationPage({
               </label>
               <label className="space-y-2 text-sm font-medium text-fg">
                 <span>Role</span>
-                <select name="role" defaultValue="MEMBER" className="mb-field h-11 w-24 pr-8">
+                <select name="role" defaultValue="MEMBER" className="mb-field h-11 w-24">
                   <option value="MEMBER">Member</option>
                   <option value="ADMIN">Admin</option>
                 </select>
@@ -197,7 +197,7 @@ export default async function LabOrganizationPage({
                       <>
                         <form action={updateRoleAction} className="flex items-center gap-2">
                           <input type="hidden" name="email" value={user.email} />
-                          <select name="role" defaultValue={role} aria-label={`Role for ${user.email}`} className="mb-field h-11 w-24 pr-8 text-xs">
+                          <select name="role" defaultValue={role} aria-label={`Role for ${user.email}`} className="mb-field h-11 w-24 text-xs">
                             <option value="MEMBER">Member</option>
                             <option value="ADMIN">Admin</option>
                           </select>
@@ -223,7 +223,7 @@ export default async function LabOrganizationPage({
                   <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                     <form action={updateRoleAction} className="flex items-center gap-2">
                       <input type="hidden" name="email" value={invitation.email} />
-                      <select name="role" defaultValue={invitation.role} aria-label={`Role for ${invitation.email}`} className="mb-field h-11 w-24 pr-8 text-xs">
+                      <select name="role" defaultValue={invitation.role} aria-label={`Role for ${invitation.email}`} className="mb-field h-11 w-24 text-xs">
                         <option value="MEMBER">Member</option>
                         <option value="ADMIN">Admin</option>
                       </select>

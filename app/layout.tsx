@@ -102,6 +102,9 @@ export const viewport: Viewport = {
     { media: "(prefers-color-scheme: light)", color: "#f6f8fb" },
     { media: "(prefers-color-scheme: dark)", color: "#06080b" },
   ],
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 const structuredData = {
