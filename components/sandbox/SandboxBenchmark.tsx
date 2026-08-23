@@ -26,7 +26,7 @@ import type {
 } from "@/lib/arena/types";
 import {
   IncompleteBuildStreamError,
-  readBuildVariantJson,
+  readBuildVariantPayload,
   readBuildVariantStream,
   type BuildStreamProgress,
   type BuildVariantStreamResponse,
@@ -43,8 +43,14 @@ import {
   buildSandboxComparisonPath,
   parseSandboxComparisonDeepLink,
 } from "@/lib/deepLinks";
-import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
-import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
+import {
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
+import {
+  enqueueDeliveryMetric,
+  enqueueVoxelMetric,
+} from "@/lib/observability/clientMetrics";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -293,15 +299,31 @@ async function fetchBuildVariantSnapshot(
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
+  url.searchParams.set("format", "v4");
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
   const timed = makeTimeoutSignal(signal, timeoutMs);
+  const startedAt = performance.now();
   try {
     const res = await fetch(url, {
       method: "GET",
       signal: timed.signal,
     });
     if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load build"));
-    return await readBuildVariantJson<BuildVariantResponse>(res);
+    const result = await readBuildVariantPayload(res, { fallbackIdentity: ref });
+    const totalMs = performance.now() - startedAt;
+    enqueueDeliveryMetric({
+      surface: "sandbox",
+      variant: ref.variant,
+      transport: "snapshot",
+      requestedFormat: "v4",
+      servedFormat: result.servedFormat,
+      response: res,
+      blockCount: voxelBuildBlockCount(result.payload.voxelBuild),
+      totalMs,
+      bodyBytes: result.bodyBytes,
+      compressed: result.compressed,
+    });
+    return result.payload;
   } finally {
     timed.cleanup();
   }
@@ -334,14 +356,41 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return readBuildVariantJson<BuildVariantResponse>(res);
+    const result = await readBuildVariantPayload(res, { fallbackIdentity: ref });
+    enqueueDeliveryMetric({
+      surface: "sandbox",
+      variant: ref.variant,
+      transport: useArtifact ? "stream-artifact" : "stream-live",
+      requestedFormat: "ndjson",
+      servedFormat: result.servedFormat,
+      response: res,
+      blockCount: voxelBuildBlockCount(result.payload.voxelBuild),
+      totalMs: null,
+      bodyBytes: result.bodyBytes,
+      compressed: result.compressed,
+    });
+    return result.payload;
   }
 
   try {
-    return await readBuildVariantStream(res, {
+    const startedAt = performance.now();
+    const payload = await readBuildVariantStream(res, {
       signal: opts?.signal,
       onProgress: opts?.onProgress,
     });
+    enqueueDeliveryMetric({
+      surface: "sandbox",
+      variant: ref.variant,
+      transport: useArtifact ? "stream-artifact" : "stream-live",
+      requestedFormat: "ndjson",
+      servedFormat: "ndjson",
+      response: res,
+      blockCount: voxelBuildBlockCount(payload.voxelBuild),
+      totalMs: performance.now() - startedAt,
+      bodyBytes: null,
+      compressed: res.headers.get("content-encoding")?.includes("gzip") || false,
+    });
+    return payload;
   } catch (error) {
     if (
       error instanceof IncompleteBuildStreamError &&

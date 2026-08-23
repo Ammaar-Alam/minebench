@@ -14,14 +14,14 @@ import {
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import {
   IncompleteBuildStreamError,
-  readBuildVariantArtifact,
+  packDeliveredBuild,
+  readBuildVariantPayload,
   readBuildVariantStream,
-  type BuildVariantArtifactReadEvent,
+  type BuildVariantPayloadResult,
   type BuildStreamProgress,
   type BuildVariantStreamResponse,
 } from "@/lib/arena/clientBuildResponse";
 import {
-  packVoxelBlocks,
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
@@ -45,6 +45,7 @@ import {
 import {
   enqueueClientMetric,
   enqueueVoxelMetric,
+  normalizeDeliverySource,
 } from "@/lib/observability/clientMetrics";
 
 type ArenaState =
@@ -91,72 +92,6 @@ const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
 );
 let snapshotStorageRedirectBlocked = false;
 let streamStorageRedirectBlocked = false;
-
-// Parsing JSON produces one object per block. Packing at the delivery boundary
-// lets that array go instead of keeping it alive for as long as a lane holds
-// the build, which on a matchup means two of them at once.
-function packDeliveredBuild(
-  build: ArenaMatchup["a"]["build"],
-): ArenaMatchup["a"]["build"] {
-  if (!build || build.packed || build.blocks.length === 0) return build;
-  return { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) };
-}
-
-function packBuildVariantResponse(payload: BuildVariantResponse): BuildVariantResponse {
-  const packedBuild = packDeliveredBuild(payload.voxelBuild);
-  if (!packedBuild) return payload;
-  return packedBuild === payload.voxelBuild ? payload : { ...payload, voxelBuild: packedBuild };
-}
-
-// The binary artifact already carries its blocks as typed arrays, so it needs
-// no packing step and never becomes a string or per-block objects.
-type BuildVariantPayloadResult = {
-  payload: BuildVariantResponse;
-  servedFormat: "binary" | "json";
-  bodyBytes: number | null;
-  compressed: boolean;
-};
-
-async function readBuildVariantPayload(
-  res: Response,
-  onStage?: (event: BuildVariantArtifactReadEvent) => void,
-): Promise<BuildVariantPayloadResult> {
-  let bodyBytes: number | null = null;
-  let compressed = false;
-  const artifact = await readBuildVariantArtifact<BuildVariantResponse>(res, {
-    onStage(event) {
-      if (event.stage === "body_complete") bodyBytes = event.bytes;
-      if (event.stage === "inflate_complete") {
-        compressed = event.compressed;
-      }
-      onStage?.(event);
-    },
-  });
-  if (artifact.kind === "json") {
-    return {
-      payload: packBuildVariantResponse(artifact.value),
-      servedFormat: "json",
-      bodyBytes,
-      compressed,
-    };
-  }
-  const envelope = artifact.envelope as Omit<BuildVariantResponse, "voxelBuild"> & {
-    version?: string;
-  };
-  return {
-    payload: {
-      buildId: envelope.buildId,
-      variant: envelope.variant,
-      checksum: envelope.checksum ?? null,
-      serverValidated: Boolean(envelope.serverValidated),
-      buildLoadHints: envelope.buildLoadHints,
-      voxelBuild: { version: "1.0", blocks: [], packed: artifact.blocks },
-    },
-    servedFormat: "binary",
-    bodyBytes,
-    compressed,
-  };
-}
 
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const trace = createBrowserPerformanceTrace("matchup");
@@ -335,26 +270,6 @@ async function readMeasuredBuildVariantPayload(
   return result;
 }
 
-type BuildMetricSource =
-  | "artifact"
-  | "live"
-  | "artifact-required"
-  | "artifact-redirect"
-  | "response-cache"
-  | "unknown";
-
-function normalizeBuildSource(response: Response): BuildMetricSource {
-  const source =
-    response.headers.get("x-build-source") ?? response.headers.get("x-build-stream-source");
-  if (source === "artifact") return "artifact";
-  if (source === "live") return "live";
-  if (source === "artifact-required") return "artifact-required";
-  if (source === "artifact-redirect") return "artifact-redirect";
-  if (source?.startsWith("response-cache:")) return "response-cache";
-  if (response.redirected) return "artifact-redirect";
-  return "unknown";
-}
-
 function normalizeBuildDeliveryClass(response: Response): ArenaBuildDeliveryClass | "unknown" {
   const value = response.headers.get("x-build-delivery-class");
   return value === "inline" ||
@@ -376,7 +291,7 @@ function reportBuildDeliveryMetrics(opts: {
   compressed: boolean;
 }) {
   const { metrics } = opts;
-  const source = normalizeBuildSource(opts.response);
+  const source = normalizeDeliverySource(opts.response);
   const deliveryClass = normalizeBuildDeliveryClass(opts.response);
   const blockCountBucket = getArenaBlockCountBucket(
     voxelBuildBlockCount(opts.payload.voxelBuild),
@@ -424,12 +339,13 @@ function reportBuildDeliveryMetrics(opts: {
   });
   enqueueClientMetric({
     kind: "delivery",
+    surface: "arena",
     purpose: metrics.purpose,
     variant: opts.ref.variant,
     transport: metrics.transport,
     requestedFormat: opts.requestedFormat,
     servedFormat: opts.servedFormat,
-    source,
+    delivery_source: source,
     blockCountBucket,
     compressed: opts.compressed,
     optimized,
