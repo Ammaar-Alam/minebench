@@ -17,95 +17,67 @@ This document explains how MineBench ranking works today in code, including the 
 8. Leaderboard metrics and formulas
 9. What changed from the older Elo model
 
-## 1) Why MineBench moved beyond pure Elo
+## 1) Why MineBench uses Global Bradley-Terry Ratings
 
-MineBench originally used Elo-style point updates and largely random sampling. That is simple, but it has limits under finite traffic:
+MineBench uses a **global Bradley-Terry maximum likelihood estimator** with regularized Fisher information covariance estimation for leaderboard rankings:
 
-- Elo gives a point estimate but no uncertainty interval.
-- Random sampling can under-cover important top-vs-top pairs and prompt subsets.
-- `BOTH_BAD` is a quality-floor signal, not a clean pairwise-skill signal.
-
-The current system keeps pairwise head-to-head updates, but adds:
-
-- Glicko-style uncertainty (`RD`, volatility).
-- Conservative rank score (`rating - 2 * RD`) for public ordering.
-- Lane-based matchup scheduling to explicitly improve coverage quality.
-- `BOTH_BAD` tracked as quality floor (not as skill loss).
+- Each model checkpoint has a fixed underlying capability (unlike human chess players whose skill evolves over time).
+- Sequential Glicko-2 updates are order-dependent and penalize models artificially through conservative rank scoring (`rating - 2 * RD`).
+- Global Bradley-Terry fits all pairwise outcomes jointly, yielding unbiased point estimates on a standard Elo scale (centered at 1500) alongside 95% Confidence Intervals ($\text{CI}_{95} = 1.95996 \times SE$).
+- Models with overlapping confidence intervals share confidence-aware tied ranks.
+- `BOTH_BAD` is excluded from pairwise skill estimation and tracked separately as a quality floor metric.
 
 ## 2) Rating model and math
 
-Implementation: `lib/arena/rating.ts`.
+Implementation: `lib/arena/rating.ts`, `lib/arena/stats.ts`.
 
-Each model state:
+### 2.1 Bradley-Terry Formulation
 
-- `rating` (starts at 1500)
-- `rd` (rating deviation, starts at 350)
-- `volatility` (starts at 0.06)
+Under the Bradley-Terry model, the probability that model $A$ (with latent capability $\theta_A$) beats model $B$ (with latent capability $\theta_B$) is:
 
-Constants:
+$$P(A > B) = \frac{e^{\theta_A}}{e^{\theta_A} + e^{\theta_B}} = \frac{1}{1 + e^{-(\theta_A - \theta_B)}}$$
 
-- `INITIAL_RATING = 1500`
-- `GLICKO_SCALE = 173.7178`
-- `RD_FLOOR = 30`, `RD_CEILING = 350`
-- `TAU = 0.5` (named `VOLATILITY_TAU`)
-- Conservative score sigmas = `2`
+Let $\pi_i = e^{\theta_i}$ be the latent strength of model $i$. Given observed pairwise wins $W_{ij}$ and total comparisons $N_{ij}$ between models $i$ and $j$, we apply a symmetric edge prior ($W_{ij} += 0.5$, $N_{ij} += 1.0$) to ensure connected component convergence and prevent infinite divergence for zero-loss or zero-win models.
 
-### 2.1 Scale conversion
+The maximum likelihood parameters $\pi_i$ are solved iteratively:
 
-For a player with `(r, RD)`:
+$$\pi_i^{(t+1)} = \frac{W_i}{\sum_{j \neq i} \frac{N_{ij}}{\pi_i^{(t)} + \pi_j^{(t)}}}$$
 
-- `mu = (r - 1500) / 173.7178`
-- `phi = clamp(RD, 30, 350) / 173.7178`
+### 2.2 Fisher Information and Variance Estimation
 
-Back-conversion:
+To compute asymptotic standard errors and confidence intervals, we compute the negative Hessian (Fisher Information Laplacian) matrix $L$:
 
-- `r' = 1500 + mu' * 173.7178`
-- `RD' = clamp(phi' * 173.7178, 30, 350)`
+$$L_{ii} = \sum_{j \neq i} N_{ij} \frac{\pi_i \pi_j}{(\pi_i + \pi_j)^2}$$
+$$L_{ij} = -N_{ij} \frac{\pi_i \pi_j}{(\pi_i + \pi_j)^2} \quad (i \neq j)$$
 
-### 2.2 Expected score (Glicko form)
+Using the regularized Moore-Penrose pseudo-inverse with centering matrix $\mathbf{J} = \mathbf{1}\mathbf{1}^T$:
 
-- `g(phi_j) = 1 / sqrt(1 + 3*phi_j^2 / pi^2)`
-- `E = 1 / (1 + exp(-g(phi_j) * (mu - mu_j)))`
+$$\Sigma = \left( L + \frac{1}{n}\mathbf{J} + \epsilon I \right)^{-1} - \frac{1}{n}\mathbf{J}$$
 
-Outcome score `s`:
+The parameter variances $\operatorname{Var}(\theta_i) = \Sigma_{ii}$ yield standard errors and 95% confidence intervals on the 400-point Elo scale:
 
-- win: `1`
-- draw: `0.5`
-- loss: `0`
+$$R_i = 1500 + (\theta_i - \bar{\theta}) \times \frac{400}{\ln(10)}$$
+$$SE(R_i) = \frac{400}{\ln(10)} \sqrt{\operatorname{Var}(\theta_i)}$$
+$$\text{CI}_{95}(R_i) = 1.95996 \times SE(R_i)$$
 
-### 2.3 Update terms
+### 2.3 Confidence-Aware Tied Ranks
 
-- `v = 1 / (g(phi_j)^2 * E * (1 - E))`
-- `delta = v * g(phi_j) * (s - E)`
+Leaderboard ranks account for statistical uncertainty. A model $M_i$ has rank:
 
-Volatility update `sigma'` is solved numerically (`solveNewVolatility`) using the standard Glicko-2 root finding approach.
+$$\text{Rank}(M_i) = 1 + \sum_{j < i} \mathbf{1}\left( R_j - R_i > 1.95996 \sqrt{SE_j^2 + SE_i^2} \right)$$
 
-Then:
+Models whose scores cannot be statistically separated at the 95% confidence level share the same rank.
 
-- `phi* = sqrt(phi^2 + sigma'^2)`
-- `phi' = 1 / sqrt(1/(phi*^2) + 1/v)`
-- `mu' = mu + (phi'^2) * g(phi_j) * (s - E)`
-
-Both models are updated symmetrically in `updateRatingPair`.
-
-### 2.4 Public rank score
-
-MineBench orders by conservative score:
-
-- `rankScore = rating - 2 * RD`
-
-This penalizes uncertain models and reduces lucky short-run spikes.
-
-### 2.5 Confidence and stability
+### 2.4 Confidence and Stability Tiers
 
 Confidence shown on leaderboard:
 
-- `confidence = round((1 - (clampRd(RD) - 30) / (350 - 30)) * 100)`
+- `confidence = round(max(10, min(99, 100 - min(90, ci95 * 0.85))))`
 
 Stability tier (`lib/arena/rating.ts`):
 
-- `Stable`: decisive votes >= 200, prompt coverage >= 0.9, RD <= 60
-- `Established`: decisive votes >= 80, prompt coverage >= 0.8, RD <= 90
+- `Stable`: decisive votes $\ge 200$, prompt coverage $\ge 0.90$, $\text{CI}_{95} \le 20$
+- `Established`: decisive votes $\ge 80$, prompt coverage $\ge 0.80$, $\text{CI}_{95} \le 35$
 - otherwise `Provisional`
 
 ## 3) Vote handling and counters

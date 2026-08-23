@@ -110,6 +110,9 @@ export type LeaderboardResponse = {
     eloRating: number;
     ratingDeviation: number;
     rankScore: number;
+    ci95?: number;
+    ciLower?: number;
+    ciUpper?: number;
     confidence: number;
     rank: number;
     rankDelta24h: number | null;

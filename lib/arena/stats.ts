@@ -2,7 +2,24 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
-import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
+import {
+  BT_CONVERGENCE_EPSILON,
+  BT_EDGE_PRIOR_POINTS,
+  BT_EDGE_PRIOR_TOTAL,
+  BT_MAX_ITERS,
+  BT_PSEUDOINVERSE_RIDGE,
+  BT_VARIANCE_FLOOR,
+  INITIAL_RATING,
+  StabilityTier,
+  computeConfidenceAwareRanks,
+  confidenceFromCi,
+  confidenceFromRd,
+  confidenceInterval95,
+  conservativeScore,
+  stabilityTier,
+  thetaToRating,
+  varianceToStandardError,
+} from "@/lib/arena/rating";
 import {
   ARENA_BUILD_GRID_SIZE,
   ARENA_BUILD_MODE,
@@ -21,13 +38,6 @@ const RECENT_FORM_WINDOW = 30;
 const LEADERBOARD_CACHE_TTL_MS = 120_000;
 const MODEL_DETAIL_CACHE_TTL_MS = 120_000;
 const PROMPT_SIGNAL_CACHE_TTL_MS = 120_000;
-// 600 iters converges for our model count; 2000 was a safety margin from earlier tuning
-const BT_MAX_ITERS = 600;
-const BT_CONVERGENCE_EPSILON = 1e-9;
-const BT_PSEUDOINVERSE_RIDGE = 1e-9;
-const BT_VARIANCE_FLOOR = 1e-6;
-const BT_EDGE_PRIOR_POINTS = 0.5;
-const BT_EDGE_PRIOR_TOTAL = 1;
 
 type NumberLike = number | bigint | string | null;
 
@@ -43,7 +53,7 @@ type PromptScoreSample = {
   promptStrengthPercentile: number | null;
 };
 
-type PairwiseRow = {
+export type PairwiseRow = {
   modelAId: string;
   modelBId: string;
   pointsA: number;
@@ -105,10 +115,34 @@ type PromptStrengthStats = {
   shrinkage: number | null;
 };
 
-type PromptSignalSnapshot = {
+export type GlobalModelBradleyTerryStats = {
+  id: string;
+  key: string;
+  provider: string;
+  displayName: string;
+  theta: number;
+  rawTheta: number;
+  strength: number;
+  variance: number;
+  standardError: number;
+  ci95: number;
+  ciLower: number;
+  ciUpper: number;
+  rating: number;
+  rankScore: number;
+  rank: number;
+  confidence: number;
+  stability: StabilityTier;
+};
+
+export type PromptSignalSnapshot = {
   eligiblePromptIds: string[];
   activeModelIds: string[];
   byPromptModel: Map<string, PromptStrengthStats>;
+  globalModels: GlobalModelBradleyTerryStats[];
+  byModelId: Map<string, GlobalModelBradleyTerryStats>;
+  byModelKey: Map<string, GlobalModelBradleyTerryStats>;
+  alphaByModelId: Map<string, number>;
 };
 
 type RankedPromptStrengthRow = PromptStrengthStats & {
@@ -176,6 +210,9 @@ export type ModelDetailStats = {
     eloRating: number;
     ratingDeviation: number;
     rankScore: number;
+    ci95?: number;
+    ciLower?: number;
+    ciUpper?: number;
     confidence: number;
     stability: "Provisional" | "Established" | "Stable";
     shownCount: number;
@@ -410,7 +447,7 @@ function aggregatePairRow(
   pairRows.set(key, row);
 }
 
-type BradleyTerryFitRow = {
+export type BradleyTerryFitRow = {
   id: string;
   theta: number;
   rawTheta: number;
@@ -498,7 +535,7 @@ export function fitBradleyTerryConnectedComponent(
     });
 }
 
-function fitBradleyTerry(
+export function fitBradleyTerry(
   modelIds: Iterable<string>,
   pairRows: PairwiseRow[],
   displayNames: Map<string, string>,
@@ -700,17 +737,42 @@ function sqlInColumn(column: Prisma.Sql, values: string[]): Prisma.Sql {
 async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
   const eligiblePromptIds = await getArenaEligiblePromptIds();
   if (eligiblePromptIds.length === 0) {
-    return { eligiblePromptIds, activeModelIds: [], byPromptModel: new Map() };
+    return {
+      eligiblePromptIds,
+      activeModelIds: [],
+      byPromptModel: new Map(),
+      globalModels: [],
+      byModelId: new Map(),
+      byModelKey: new Map(),
+      alphaByModelId: new Map(),
+    };
   }
 
   const models = await prisma.model.findMany({
     where: { enabled: true, isBaseline: false },
-    select: { id: true, displayName: true },
+    select: {
+      id: true,
+      key: true,
+      provider: true,
+      displayName: true,
+      winCount: true,
+      lossCount: true,
+      drawCount: true,
+      bothBadCount: true,
+    },
   });
 
   const activeModelIds = models.map((model) => model.id);
   if (activeModelIds.length === 0) {
-    return { eligiblePromptIds, activeModelIds, byPromptModel: new Map() };
+    return {
+      eligiblePromptIds,
+      activeModelIds,
+      byPromptModel: new Map(),
+      globalModels: [],
+      byModelId: new Map(),
+      byModelKey: new Map(),
+      alphaByModelId: new Map(),
+    };
   }
 
   const displayNames = new Map(models.map((model) => [model.id, model.displayName]));
@@ -774,6 +836,49 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
 
   const alphaRows = fitBradleyTerry(activeModelIds, [...globalPairRows.values()], displayNames);
   const alphaByModelId = new Map(alphaRows.map((row) => [row.id, row.theta]));
+  const rowByModelId = new Map(alphaRows.map((row) => [row.id, row]));
+
+  const rawGlobalModels = models.map((model) => {
+    const row = rowByModelId.get(model.id);
+    const theta = row?.theta ?? 0;
+    const rawTheta = row?.rawTheta ?? 0;
+    const strength = row?.strength ?? 1;
+    const variance = row?.variance ?? 1;
+    const rating = thetaToRating(theta);
+    const standardError = varianceToStandardError(variance);
+    const ci95 = confidenceInterval95(standardError);
+    const confidence = confidenceFromCi(ci95);
+    const decisiveVotes = model.winCount + model.lossCount + model.drawCount;
+    const stability = stabilityTier({
+      decisiveVotes,
+      promptCoverage: 1.0,
+      ci95,
+    });
+
+    return {
+      id: model.id,
+      key: model.key,
+      provider: model.provider,
+      displayName: resolveModelDisplayName(model.key, model.displayName),
+      theta,
+      rawTheta,
+      strength,
+      variance,
+      standardError,
+      ci95,
+      ciLower: Math.round(rating - ci95),
+      ciUpper: Math.round(rating + ci95),
+      rating,
+      rankScore: rating,
+      confidence,
+      stability,
+    };
+  });
+
+  const rankedGlobalModels = computeConfidenceAwareRanks(rawGlobalModels);
+  const byModelId = new Map(rankedGlobalModels.map((m) => [m.id, m]));
+  const byModelKey = new Map(rankedGlobalModels.map((m) => [m.key, m]));
+
   const byPromptModel = new Map<string, PromptStrengthStats>();
 
   for (const promptId of eligiblePromptIds) {
@@ -802,10 +907,18 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
     });
   }
 
-  return { eligiblePromptIds, activeModelIds, byPromptModel };
+  return {
+    eligiblePromptIds,
+    activeModelIds,
+    byPromptModel,
+    globalModels: rankedGlobalModels,
+    byModelId,
+    byModelKey,
+    alphaByModelId,
+  };
 }
 
-async function getPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
+export async function getPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
   const now = Date.now();
   if (promptSignalCache && promptSignalCache.expiresAt > now) {
     return promptSignalCache.value;
@@ -827,6 +940,10 @@ async function getPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
     });
 
   return promptSignalInFlight;
+}
+
+export async function getGlobalBradleyTerrySnapshot(): Promise<PromptSignalSnapshot> {
+  return getPromptSignalSnapshot();
 }
 
 async function queryLeaderboardDispersionByModelId(): Promise<Map<string, ScoreDispersion>> {
@@ -1234,14 +1351,19 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   const recentForm = average(recentScores);
   const priorForm = average(priorScores);
 
+  const btModel = promptSignal.byModelKey.get(modelKey) ?? promptSignal.byModelId.get(model.id);
   const { decisiveVotes, totalVotes } = summarizeArenaVotes(model);
-  const ratingDeviation = Number(model.glickoRd);
-  const rawRating = Number(model.eloRating);
-  const rankScore = Number(model.conservativeRating ?? conservativeScore(rawRating, ratingDeviation));
-  const confidence = confidenceFromRd(ratingDeviation);
+  const rawRating = Math.round(btModel?.rating ?? Number(model.eloRating));
+  const ratingDeviation = Math.round(btModel?.standardError ?? Number(model.glickoRd));
+  const rankScore = rawRating;
+  const ci95 = btModel ? Number(btModel.ci95.toFixed(1)) : undefined;
+  const ciLower = btModel ? Math.round(btModel.rating - btModel.ci95) : undefined;
+  const ciUpper = btModel ? Math.round(btModel.rating + btModel.ci95) : undefined;
+  const confidence = btModel?.confidence ?? confidenceFromRd(ratingDeviation);
   const stability = stabilityTier({
     decisiveVotes,
     promptCoverage: dispersion.promptCoverage,
+    ci95: btModel?.ci95,
     rd: ratingDeviation,
   });
   const qualityFloorScore =
@@ -1255,6 +1377,9 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
       eloRating: rawRating,
       ratingDeviation,
       rankScore,
+      ci95,
+      ciLower,
+      ciUpper,
       confidence,
       stability,
       shownCount: model.shownCount,

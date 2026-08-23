@@ -17,7 +17,9 @@ if (argv.length === 0) {
   process.exit(1);
 }
 
-const [command, ...args] = argv;
+const [rawCommand, ...args] = argv;
+const localBinPath = path.join(repoRoot, "node_modules", ".bin", rawCommand);
+const command = fs.existsSync(localBinPath) ? localBinPath : rawCommand;
 const parsed = dotenv.parse(fs.readFileSync(envPath, "utf8"));
 const child = spawn(command, args, {
   stdio: "inherit",

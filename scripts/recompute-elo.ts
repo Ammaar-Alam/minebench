@@ -1,6 +1,6 @@
 #!/usr/bin/env -S tsx
 /**
- * Recompute Arena rating + vote counters from stored vote history.
+ * Recompute Arena Bradley-Terry rating + vote counters from stored vote history.
  *
  * Usage:
  *   pnpm elo:recompute         # dry run
@@ -10,24 +10,22 @@
 import "dotenv/config";
 import { prisma } from "../lib/prisma";
 import {
+  BT_EDGE_PRIOR_POINTS,
+  BT_EDGE_PRIOR_TOTAL,
   INITIAL_RATING,
-  INITIAL_RD,
-  INITIAL_VOLATILITY,
-  conservativeScore,
-  updateRatingPair,
+  computeConfidenceAwareRanks,
+  confidenceFromCi,
+  confidenceInterval95,
+  stabilityTier,
+  thetaToRating,
+  varianceToStandardError,
 } from "../lib/arena/rating";
+import {
+  type PairwiseRow,
+  fitBradleyTerry,
+} from "../lib/arena/stats";
 
 type Choice = "A" | "B" | "TIE" | "BOTH_BAD";
-
-type ModelState = {
-  rating: number;
-  rd: number;
-  volatility: number;
-  winCount: number;
-  lossCount: number;
-  drawCount: number;
-  bothBadCount: number;
-};
 
 function parseArgs(argv: string[]) {
   return {
@@ -41,7 +39,11 @@ function isChoice(value: string): value is Choice {
 }
 
 function formatDelta(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
+}
+
+function pairKey(modelAId: string, modelBId: string): string {
+  return modelAId < modelBId ? `${modelAId}|${modelBId}` : `${modelBId}|${modelAId}`;
 }
 
 async function main() {
@@ -49,7 +51,7 @@ async function main() {
 
   if (args.help) {
     console.log(`
-Recompute MineBench Arena rating + counters from vote history.
+Recompute MineBench Arena Bradley-Terry ratings + counters from vote history.
 
 Usage:
   pnpm elo:recompute
@@ -64,6 +66,9 @@ Usage:
         id: true,
         key: true,
         displayName: true,
+        provider: true,
+        enabled: true,
+        isBaseline: true,
         eloRating: true,
         glickoRd: true,
         glickoVolatility: true,
@@ -80,6 +85,7 @@ Usage:
         choice: true,
         matchup: {
           select: {
+            promptId: true,
             modelAId: true,
             modelBId: true,
           },
@@ -88,12 +94,18 @@ Usage:
     }),
   ]);
 
-  const stateByModelId = new Map<string, ModelState>();
+  const modelMap = new Map(models.map((m) => [m.id, m]));
+  const activeModels = models.filter((m) => m.enabled && !m.isBaseline);
+  const activeModelIdSet = new Set(activeModels.map((m) => m.id));
+  const displayNames = new Map(models.map((m) => [m.id, m.displayName]));
+
+  const countersByModelId = new Map<
+    string,
+    { winCount: number; lossCount: number; drawCount: number; bothBadCount: number }
+  >();
+
   for (const model of models) {
-    stateByModelId.set(model.id, {
-      rating: INITIAL_RATING,
-      rd: INITIAL_RD,
-      volatility: INITIAL_VOLATILITY,
+    countersByModelId.set(model.id, {
       winCount: 0,
       lossCount: 0,
       drawCount: 0,
@@ -101,110 +113,173 @@ Usage:
     });
   }
 
+  const pairRowsMap = new Map<string, PairwiseRow>();
+
   for (const vote of votes) {
     if (!isChoice(vote.choice)) continue;
-    const a = stateByModelId.get(vote.matchup.modelAId);
-    const b = stateByModelId.get(vote.matchup.modelBId);
-    if (!a || !b) continue;
+    const modelAId = vote.matchup.modelAId;
+    const modelBId = vote.matchup.modelBId;
+    const countersA = countersByModelId.get(modelAId);
+    const countersB = countersByModelId.get(modelBId);
 
     if (vote.choice === "BOTH_BAD") {
-      a.bothBadCount += 1;
-      b.bothBadCount += 1;
+      if (countersA) countersA.bothBadCount += 1;
+      if (countersB) countersB.bothBadCount += 1;
       continue;
     }
 
-    const outcome = vote.choice === "A" ? "A_WIN" : vote.choice === "B" ? "B_WIN" : "DRAW";
-    const updated = updateRatingPair({
-      a: { rating: a.rating, rd: a.rd, volatility: a.volatility },
-      b: { rating: b.rating, rd: b.rd, volatility: b.volatility },
-      outcome,
+    if (vote.choice === "A") {
+      if (countersA) countersA.winCount += 1;
+      if (countersB) countersB.lossCount += 1;
+    } else if (vote.choice === "B") {
+      if (countersA) countersA.lossCount += 1;
+      if (countersB) countersB.winCount += 1;
+    } else {
+      if (countersA) countersA.drawCount += 1;
+      if (countersB) countersB.drawCount += 1;
+    }
+
+    // Only active, non-baseline pairwise matchups contribute to global Bradley-Terry fit
+    if (!activeModelIdSet.has(modelAId) || !activeModelIdSet.has(modelBId) || modelAId === modelBId) {
+      continue;
+    }
+
+    const canonicalA = modelAId < modelBId ? modelAId : modelBId;
+    const canonicalB = canonicalA === modelAId ? modelBId : modelAId;
+    const pointsA = vote.choice === "A" ? 1 : vote.choice === "B" ? 0 : 0.5;
+    const pointsB = 1 - pointsA;
+    const canonicalPointsA = canonicalA === modelAId ? pointsA : pointsB;
+    const canonicalPointsB = canonicalA === modelAId ? pointsB : pointsA;
+
+    const key = pairKey(canonicalA, canonicalB);
+    const existing = pairRowsMap.get(key) ?? {
+      modelAId: canonicalA,
+      modelBId: canonicalB,
+      pointsA: 0,
+      pointsB: 0,
+      total: 0,
+    };
+    existing.pointsA += canonicalPointsA;
+    existing.pointsB += canonicalPointsB;
+    existing.total += 1;
+    pairRowsMap.set(key, existing);
+  }
+
+  const activeModelIds = activeModels.map((m) => m.id);
+  const btFitRows = fitBradleyTerry(activeModelIds, [...pairRowsMap.values()], displayNames);
+  const btRowByModelId = new Map(btFitRows.map((r) => [r.id, r]));
+
+  const rawRanked = activeModels.map((m) => {
+    const bt = btRowByModelId.get(m.id);
+    const theta = bt?.theta ?? 0;
+    const variance = bt?.variance ?? 1;
+    const rating = thetaToRating(theta);
+    const standardError = varianceToStandardError(variance);
+    const ci95 = confidenceInterval95(standardError);
+    const confidence = confidenceFromCi(ci95);
+    const counters = countersByModelId.get(m.id) ?? {
+      winCount: 0,
+      lossCount: 0,
+      drawCount: 0,
+      bothBadCount: 0,
+    };
+    const decisiveVotes = counters.winCount + counters.lossCount + counters.drawCount;
+    const totalVotes = decisiveVotes + counters.bothBadCount;
+    const stability = stabilityTier({
+      decisiveVotes,
+      promptCoverage: 1.0,
+      ci95,
     });
 
-    a.rating = updated.a.rating;
-    a.rd = updated.a.rd;
-    a.volatility = updated.a.volatility;
-    b.rating = updated.b.rating;
-    b.rd = updated.b.rd;
-    b.volatility = updated.b.volatility;
+    return {
+      id: m.id,
+      key: m.key,
+      displayName: m.displayName,
+      oldRating: Number(m.eloRating),
+      oldConservative: Number(m.conservativeRating),
+      oldRd: Number(m.glickoRd),
+      rating,
+      standardError,
+      ci95,
+      ciLower: Math.round(rating - ci95),
+      ciUpper: Math.round(rating + ci95),
+      confidence,
+      stability,
+      counters,
+      decisiveVotes,
+      totalVotes,
+    };
+  });
 
-    if (outcome === "A_WIN") {
-      a.winCount += 1;
-      b.lossCount += 1;
-    } else if (outcome === "B_WIN") {
-      a.lossCount += 1;
-      b.winCount += 1;
-    } else {
-      a.drawCount += 1;
-      b.drawCount += 1;
-    }
-  }
+  const rankedModels = computeConfidenceAwareRanks(rawRanked);
 
-  const diffs = models
-    .map((model) => {
-      const recomputed = stateByModelId.get(model.id);
-      if (!recomputed) return null;
-      return {
-        id: model.id,
-        key: model.key,
-        displayName: model.displayName,
-        oldRating: Number(model.eloRating),
-        newRating: recomputed.rating,
-        oldRd: Number(model.glickoRd),
-        newRd: recomputed.rd,
-        oldVolatility: Number(model.glickoVolatility),
-        newVolatility: recomputed.volatility,
-        oldConservative: Number(model.conservativeRating),
-        newConservative: conservativeScore(recomputed.rating, recomputed.rd),
-        oldWinCount: model.winCount,
-        newWinCount: recomputed.winCount,
-        oldLossCount: model.lossCount,
-        newLossCount: recomputed.lossCount,
-        oldDrawCount: model.drawCount,
-        newDrawCount: recomputed.drawCount,
-        oldBothBadCount: model.bothBadCount,
-        newBothBadCount: recomputed.bothBadCount,
-      };
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry != null)
-    .sort(
-      (a, b) =>
-        Math.abs(b.newConservative - b.oldConservative) -
-        Math.abs(a.newConservative - a.oldConservative),
-    );
+  console.log(`========================================================================================`);
+  console.log(`MineBench Global Bradley-Terry Leaderboard (Recomputed from ${votes.length} votes)`);
+  console.log(`========================================================================================`);
+  console.log(
+    `Rank | Model                               | Rating | 95% CI   | Interval     | Record (W-L-D)   | Conf | Old Glicko | Delta`,
+  );
+  console.log(
+    `-----+-------------------------------------+--------+----------+--------------+------------------+------+------------+-------`,
+  );
 
-  console.log(`models: ${models.length}`);
-  console.log(`votes replayed: ${votes.length}`);
-  console.log("top conservative-score deltas:");
-  for (const diff of diffs.slice(0, 10)) {
+  for (const m of rankedModels) {
+    const rankStr = `#${m.rank}`.padEnd(4);
+    const nameStr = m.displayName.slice(0, 35).padEnd(35);
+    const ratingStr = Math.round(m.rating).toString().padStart(6);
+    const ciStr = `±${m.ci95.toFixed(1)}`.padStart(8);
+    const intervalStr = `[${m.ciLower}, ${m.ciUpper}]`.padStart(12);
+    const recordStr = `${m.counters.winCount}-${m.counters.lossCount}-${m.counters.drawCount}`.padStart(16);
+    const confStr = `${m.confidence}%`.padStart(4);
+    const oldScoreStr = Math.round(m.oldConservative).toString().padStart(10);
+    const deltaStr = formatDelta(m.rating - m.oldConservative).padStart(6);
+
     console.log(
-      `- ${diff.displayName} (${diff.key}): ${diff.oldConservative.toFixed(2)} -> ${diff.newConservative.toFixed(2)} (${formatDelta(diff.newConservative - diff.oldConservative)})`,
+      `${rankStr} | ${nameStr} | ${ratingStr} | ${ciStr} | ${intervalStr} | ${recordStr} | ${confStr} | ${oldScoreStr} | ${deltaStr}`,
     );
   }
+  console.log(`========================================================================================`);
 
   if (!args.yes) {
-    console.log("dry run: pass --yes to apply");
+    console.log("\nDry run completed. Pass --yes to apply recomputed Bradley-Terry ratings to the database.");
     return;
   }
 
   await prisma.$transaction(async (tx) => {
-    for (const diff of diffs) {
+    for (const m of rankedModels) {
       await tx.model.update({
-        where: { id: diff.id },
+        where: { id: m.id },
         data: {
-          eloRating: diff.newRating,
-          glickoRd: diff.newRd,
-          glickoVolatility: diff.newVolatility,
-          conservativeRating: diff.newConservative,
-          winCount: diff.newWinCount,
-          lossCount: diff.newLossCount,
-          drawCount: diff.newDrawCount,
-          bothBadCount: diff.newBothBadCount,
+          eloRating: Math.round(m.rating),
+          conservativeRating: Math.round(m.rating),
+          glickoRd: Math.round(m.standardError),
+          glickoVolatility: 0.0,
+          winCount: m.counters.winCount,
+          lossCount: m.counters.lossCount,
+          drawCount: m.counters.drawCount,
+          bothBadCount: m.counters.bothBadCount,
+        },
+      });
+    }
+
+    // Also update any inactive/baseline models' counters
+    const inactiveModels = models.filter((m) => !activeModelIdSet.has(m.id));
+    for (const m of inactiveModels) {
+      const counters = countersByModelId.get(m.id);
+      if (!counters) continue;
+      await tx.model.update({
+        where: { id: m.id },
+        data: {
+          winCount: counters.winCount,
+          lossCount: counters.lossCount,
+          drawCount: counters.drawCount,
+          bothBadCount: counters.bothBadCount,
         },
       });
     }
   });
 
-  console.log("done");
+  console.log(`\nSuccessfully applied Bradley-Terry ratings and counters to ${models.length} models.`);
 }
 
 main()

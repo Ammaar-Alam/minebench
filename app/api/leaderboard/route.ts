@@ -2,7 +2,10 @@ import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { LeaderboardResponse } from "@/lib/arena/types";
-import { getLeaderboardDispersionByModelId } from "@/lib/arena/stats";
+import {
+  getGlobalBradleyTerrySnapshot,
+  getLeaderboardDispersionByModelId,
+} from "@/lib/arena/stats";
 import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
@@ -64,17 +67,18 @@ export async function GET() {
   const movementAnchorTime = new Date(Date.now() - MOVEMENT_LOOKBACK_MS);
   let models: LeaderboardModelRow[];
   let dispersionByModelId: Awaited<ReturnType<typeof getLeaderboardDispersionByModelId>>;
+  let btSnapshot: Awaited<ReturnType<typeof getGlobalBradleyTerrySnapshot>>;
   let eligiblePromptIds: Awaited<ReturnType<typeof getArenaEligiblePromptIds>>;
   let baselineAnchor: BaselineAnchor;
 
   try {
-    [models, dispersionByModelId, eligiblePromptIds, baselineAnchor] = await Promise.all([
+    [models, dispersionByModelId, btSnapshot, eligiblePromptIds, baselineAnchor] = await Promise.all([
       prisma.model.findMany({
         where: { isBaseline: false, enabled: true },
-        orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
         select: LEADERBOARD_MODEL_SELECT,
       }),
       getLeaderboardDispersionByModelId(),
+      getGlobalBradleyTerrySnapshot(),
       getArenaEligiblePromptIds(),
       prisma.modelRankSnapshot.findFirst({
         where: { capturedAt: { lte: movementAnchorTime } },
@@ -106,7 +110,15 @@ export async function GET() {
     baselineRanksByModelId = new Map(rows.map((row) => [row.modelId, row.rank]));
   }
 
-  const topBandIds = models.slice(0, CONTENDER_BAND_SIZE).map((m) => m.id);
+  const sortedModels = [...models].sort((a, b) => {
+    const btA = btSnapshot.byModelId.get(a.id);
+    const btB = btSnapshot.byModelId.get(b.id);
+    const ratingA = btA?.rating ?? Number(a.eloRating);
+    const ratingB = btB?.rating ?? Number(b.eloRating);
+    return ratingB - ratingA || a.displayName.localeCompare(b.displayName);
+  });
+
+  const topBandIds = sortedModels.slice(0, CONTENDER_BAND_SIZE).map((m) => m.id);
   let pairCoverageByKey = new Map<string, PairCoverage>();
 
   if (topBandIds.length >= 2 && eligiblePromptIds.length > 0) {
@@ -114,7 +126,7 @@ export async function GET() {
   }
 
   const body: LeaderboardResponse = {
-    models: models.map((m, index) => {
+    models: sortedModels.map((m, index) => {
       const dispersion = dispersionByModelId.get(m.id) ?? {
         meanScore: null,
         scoreVariance: null,
@@ -127,11 +139,15 @@ export async function GET() {
         sampledVotes: 0,
       };
 
-      const rawRating = Number(m.eloRating);
-      const ratingDeviation = Number(m.glickoRd);
-      const rankScore = Number(m.conservativeRating ?? conservativeScore(rawRating, ratingDeviation));
-      const confidence = confidenceFromRd(ratingDeviation);
-      const rank = index + 1;
+      const bt = btSnapshot.byModelId.get(m.id);
+      const rawRating = Math.round(bt?.rating ?? Number(m.eloRating));
+      const ratingDeviation = Math.round(bt?.standardError ?? Number(m.glickoRd));
+      const rankScore = rawRating;
+      const ci95 = bt ? Number(bt.ci95.toFixed(1)) : undefined;
+      const ciLower = bt ? Math.round(bt.rating - bt.ci95) : undefined;
+      const ciUpper = bt ? Math.round(bt.rating + bt.ci95) : undefined;
+      const confidence = bt?.confidence ?? confidenceFromRd(ratingDeviation);
+      const rank = bt?.rank ?? index + 1;
       const baselineRank = baselineRanksByModelId.get(m.id);
       const hasBaseline24h = hasGlobalBaseline && baselineRank != null;
       const rankDelta24h = hasBaseline24h ? baselineRank - rank : null;
@@ -141,11 +157,14 @@ export async function GET() {
         voteSummary.totalVotes > 0
           ? Math.max(0, 1 - m.bothBadCount / voteSummary.totalVotes)
           : null;
-      const stability = stabilityTier({
-        decisiveVotes: voteSummary.decisiveVotes,
-        promptCoverage: dispersion.promptCoverage,
-        rd: ratingDeviation,
-      });
+      const stability =
+        bt?.stability ??
+        stabilityTier({
+          decisiveVotes: voteSummary.decisiveVotes,
+          promptCoverage: dispersion.promptCoverage,
+          ci95: bt?.ci95,
+          rd: ratingDeviation,
+        });
 
       let pairCoverageScore: number | null = null;
       if (index < topBandIds.length) {
@@ -171,6 +190,9 @@ export async function GET() {
         eloRating: rawRating,
         ratingDeviation,
         rankScore,
+        ci95,
+        ciLower,
+        ciUpper,
         confidence,
         rank,
         rankDelta24h,
