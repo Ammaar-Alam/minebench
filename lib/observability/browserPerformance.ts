@@ -4,12 +4,14 @@ export type BrowserPerformanceTrace = {
   mark: (stage: string) => number;
   measure: (name: string, startStage: string, endStage: string) => number | null;
   duration: (startStage: string, endStage: string) => number | null;
+  clear: () => void;
 };
 
 export function createBrowserPerformanceTrace(kind: string): BrowserPerformanceTrace {
   traceSequence += 1;
   const prefix = `minebench:arena:${kind}:${traceSequence}`;
   const marks = new Map<string, number>();
+  const measures = new Set<string>();
 
   const mark = (stage: string): number => {
     const at = performance.now();
@@ -35,6 +37,7 @@ export function createBrowserPerformanceTrace(kind: string): BrowserPerformanceT
     measure(name, startStage, endStage) {
       const measured = duration(startStage, endStage);
       if (measured == null) return null;
+      measures.add(name);
       try {
         performance.measure(`${prefix}:${name}`, {
           start: `${prefix}:${startStage}`,
@@ -44,6 +47,24 @@ export function createBrowserPerformanceTrace(kind: string): BrowserPerformanceT
         // Performance entries are diagnostic only
       }
       return measured;
+    },
+    clear() {
+      for (const stage of marks.keys()) {
+        try {
+          performance.clearMarks(`${prefix}:${stage}`);
+        } catch {
+          // Performance entries are diagnostic only
+        }
+      }
+      for (const name of measures) {
+        try {
+          performance.clearMeasures(`${prefix}:${name}`);
+        } catch {
+          // Performance entries are diagnostic only
+        }
+      }
+      marks.clear();
+      measures.clear();
     },
   };
 }

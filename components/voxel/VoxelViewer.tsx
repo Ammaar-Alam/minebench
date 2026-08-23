@@ -431,6 +431,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const pendingFirstRenderRef = useRef<{
     group: THREE.Group;
     report: () => void;
+    discard: () => void;
   } | null>(null);
   const requestRenderRef = useRef<(() => void) | null>(null);
   const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -549,6 +550,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
     if (voxelGroupRef.current) {
       if (pendingFirstRenderRef.current?.group === voxelGroupRef.current.group) {
+        pendingFirstRenderRef.current.discard();
         pendingFirstRenderRef.current = null;
       }
       three.scene.remove(voxelGroupRef.current.group);
@@ -668,6 +670,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     let meshStarted = false;
     let meshStrategy: VoxelMeshStrategy = "local";
     let meshCacheStatus: VoxelMeshCacheStatus = "not-used";
+    let traceRetainedForFirstRender = false;
+    let traceAbandoned = false;
 
     try {
       const tex = await loadAtlasTexture();
@@ -747,35 +751,43 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       let metricsReported = false;
       let revealAnimated = false;
       const maybeReportBuildMetrics = () => {
+        if (metricsReported) return;
         if (
-          metricsReported ||
+          traceAbandoned ||
           !buildReady ||
-          !firstRenderComplete ||
-          !revealComplete ||
           controller.signal.aborted ||
           !sameIdentity(identityRef.current, incomingIdentity) ||
           voxelGroupRef.current?.group !== vg.group
         ) {
+          buildTrace.clear();
+          return;
+        }
+        if (!firstRenderComplete || !revealComplete) {
           return;
         }
         metricsReported = true;
         buildTrace.mark("complete");
-        onBuildMetricsRef.current?.({
-          inputBlockCount: blockLimit,
-          renderedBlockCount: vg.stats.blockCount,
-          strategy: meshStrategy,
-          cacheStatus: meshCacheStatus,
-          animated: revealAnimated,
-          queueMs: buildTrace.duration("mesh_queued", "mesh_started"),
-          atlasMs: buildTrace.duration("mesh_queued", "atlas_ready"),
-          payloadMs: buildTrace.duration("mesh_started", "mesh_payload_complete"),
-          groupMs: buildTrace.duration("mesh_payload_complete", "three_group_complete"),
-          meshMs: buildTrace.duration("mesh_started", "three_group_complete"),
-          firstRenderMs: buildTrace.duration("three_group_complete", "first_render"),
-          revealMs: buildTrace.duration("three_group_complete", "reveal_complete"),
-          totalMs: buildTrace.duration("mesh_queued", "complete"),
-        });
+        try {
+          onBuildMetricsRef.current?.({
+            inputBlockCount: blockLimit,
+            renderedBlockCount: vg.stats.blockCount,
+            strategy: meshStrategy,
+            cacheStatus: meshCacheStatus,
+            animated: revealAnimated,
+            queueMs: buildTrace.duration("mesh_queued", "mesh_started"),
+            atlasMs: buildTrace.duration("mesh_queued", "atlas_ready"),
+            payloadMs: buildTrace.duration("mesh_started", "mesh_payload_complete"),
+            groupMs: buildTrace.duration("mesh_payload_complete", "three_group_complete"),
+            meshMs: buildTrace.duration("mesh_started", "three_group_complete"),
+            firstRenderMs: buildTrace.duration("three_group_complete", "first_render"),
+            revealMs: buildTrace.duration("three_group_complete", "reveal_complete"),
+            totalMs: buildTrace.duration("mesh_queued", "complete"),
+          });
+        } finally {
+          buildTrace.clear();
+        }
       };
+      pendingFirstRenderRef.current?.discard();
       pendingFirstRenderRef.current = {
         group: vg.group,
         report() {
@@ -783,7 +795,11 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           firstRenderComplete = true;
           maybeReportBuildMetrics();
         },
+        discard() {
+          buildTrace.clear();
+        },
       };
+      traceRetainedForFirstRender = true;
       requestRenderRef.current?.();
 
       const revealFromFraction =
@@ -857,6 +873,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       reportReady(buildReady);
       requestRenderRef.current?.();
     } catch (err: unknown) {
+      traceAbandoned = true;
+      buildTrace.clear();
       if (err instanceof DOMException && err.name === "AbortError") return;
       console.warn("VoxelViewer build failed", err);
       onBuildErrorChangeRef.current?.(
@@ -870,6 +888,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         activeJobRef.current.identity = null;
       }
       onBuildProgressChangeRef.current?.(null);
+      if (!traceRetainedForFirstRender) buildTrace.clear();
       if (buildPendingRef.current.dirty) scheduleKick();
     }
   }, [clearVoxelGroup, fitView, reportReady, scheduleKick]);
@@ -1119,6 +1138,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
             pendingFirstRender.report();
           } else {
             pendingFirstRenderRef.current = null;
+            pendingFirstRender.discard();
           }
         }
         needsFollowupFrame = Boolean(controlsChanged || shouldAutoRotate);
@@ -1215,6 +1235,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         voxelGroupRef.current.dispose();
         voxelGroupRef.current = null;
       }
+      pendingFirstRenderRef.current?.discard();
       pendingFirstRenderRef.current = null;
       boundsRef.current = null;
 
@@ -1256,6 +1277,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       job.controller?.abort();
       job.controller = null;
       job.identity = null;
+      pendingFirstRenderRef.current?.discard();
       pendingFirstRenderRef.current = null;
     };
   }, []);

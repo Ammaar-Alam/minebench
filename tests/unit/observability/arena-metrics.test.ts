@@ -29,6 +29,21 @@ async function main() {
   assert.ok((trace.duration("start", "end") ?? -1) >= 0);
   assert.ok((trace.measure("total", "start", "end") ?? -1) >= 0);
   assert.equal(trace.duration("missing", "end"), null);
+  assert.equal(
+    performance
+      .getEntries()
+      .some((entry) => entry.name.startsWith("minebench:arena:test:")),
+    true,
+  );
+  trace.clear();
+  assert.equal(trace.duration("start", "end"), null);
+  assert.equal(
+    performance
+      .getEntries()
+      .some((entry) => entry.name.startsWith("minebench:arena:test:")),
+    false,
+  );
+  trace.clear();
 
   console.log("arena observability metric checks passed");
 }

@@ -157,32 +157,36 @@ async function readBuildVariantPayload(
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const trace = createBrowserPerformanceTrace("matchup");
   trace.mark("fetch_start");
-  const url = new URL("/api/arena/matchup", window.location.origin);
-  if (promptId) url.searchParams.set("promptId", promptId);
-  // Adaptive mode keeps small builds instant while deferring large payloads.
-  url.searchParams.set("payload", "adaptive");
-  const res = await fetch(url, { method: "GET", credentials: "include", signal });
-  trace.mark("headers_received");
-  if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load matchup"));
-  const matchup = (await res.json()) as ArenaMatchup;
-  const packedMatchup = {
-    ...matchup,
-    a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
-    b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
-  };
-  trace.mark("matchup_received");
-  const totalMs = trace.measure("total", "fetch_start", "matchup_received") ?? 0;
-  trackEvent("arena_matchup_received", {
-    path: `${promptId ? "forced" : "random"}:adaptive`,
-    samplingLane: matchup.samplingLane ?? "unknown",
-    laneABlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build)),
-    laneBBlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build)),
-    headersMs: roundMetricMs(trace.measure("headers", "fetch_start", "headers_received")),
-    bodyMs: roundMetricMs(trace.measure("body", "headers_received", "matchup_received")),
-    totalMs: roundMetricMs(totalMs),
-    latency: getArenaLatencyBucket(totalMs),
-  });
-  return packedMatchup;
+  try {
+    const url = new URL("/api/arena/matchup", window.location.origin);
+    if (promptId) url.searchParams.set("promptId", promptId);
+    // Adaptive mode keeps small builds instant while deferring large payloads.
+    url.searchParams.set("payload", "adaptive");
+    const res = await fetch(url, { method: "GET", credentials: "include", signal });
+    trace.mark("headers_received");
+    if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load matchup"));
+    const matchup = (await res.json()) as ArenaMatchup;
+    const packedMatchup = {
+      ...matchup,
+      a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
+      b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
+    };
+    trace.mark("matchup_received");
+    const totalMs = trace.measure("total", "fetch_start", "matchup_received") ?? 0;
+    trackEvent("arena_matchup_received", {
+      path: `${promptId ? "forced" : "random"}:adaptive`,
+      samplingLane: matchup.samplingLane ?? "unknown",
+      laneABlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build)),
+      laneBBlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build)),
+      headersMs: roundMetricMs(trace.measure("headers", "fetch_start", "headers_received")),
+      bodyMs: roundMetricMs(trace.measure("body", "headers_received", "matchup_received")),
+      totalMs: roundMetricMs(totalMs),
+      latency: getArenaLatencyBucket(totalMs),
+    });
+    return packedMatchup;
+  } finally {
+    trace.clear();
+  }
 }
 
 async function fetchMatchup(
@@ -608,7 +612,11 @@ async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
   timeoutMs = SNAPSHOT_FETCH_TIMEOUT_MS,
-  opts?: { redirect?: boolean; purpose?: BuildRequestPurpose },
+  opts?: {
+    redirect?: boolean;
+    purpose?: BuildRequestPurpose;
+    metrics?: BuildDeliveryMetrics;
+  },
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
@@ -616,11 +624,10 @@ async function fetchBuildVariantSnapshot(
   const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
   if (BINARY_ARTIFACT_READS_ENABLED) url.searchParams.set("format", "v4");
-  const metrics = startBuildDeliveryMetrics(
-    ref,
-    opts?.purpose ?? "visible",
-    "snapshot",
-  );
+  const ownsMetrics = opts?.metrics == null;
+  const metrics =
+    opts?.metrics ??
+    startBuildDeliveryMetrics(ref, opts?.purpose ?? "visible", "snapshot");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
     let res: Response;
@@ -635,18 +642,20 @@ async function fetchBuildVariantSnapshot(
     } catch (err: unknown) {
       if (allowRedirect && !isAbortError(err)) {
         markStorageRedirectBlocked("snapshot");
-        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
+        return await fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
           redirect: false,
           purpose: opts?.purpose,
+          metrics,
         });
       }
       throw err;
     }
     if (!res.ok) {
       if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
-        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
+        return await fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
           redirect: false,
           purpose: opts?.purpose,
+          metrics,
         });
       }
       const message = await readClientErrorResponse(res, "Couldn't load build");
@@ -667,12 +676,31 @@ async function fetchBuildVariantSnapshot(
     return result.payload;
   } finally {
     timed.cleanup();
+    if (ownsMetrics) metrics.trace.clear();
   }
 }
 
 async function fetchBuildVariantStreamOnce(
   ref: ArenaBuildRef,
   useArtifact: boolean,
+  opts?: FetchBuildVariantStreamOptions,
+): Promise<BuildVariantResponse> {
+  const metrics = startBuildDeliveryMetrics(
+    ref,
+    opts?.purpose ?? "visible",
+    useArtifact ? "stream-artifact" : "stream-live",
+  );
+  try {
+    return await fetchBuildVariantStreamOnceWithMetrics(ref, useArtifact, metrics, opts);
+  } finally {
+    metrics.trace.clear();
+  }
+}
+
+async function fetchBuildVariantStreamOnceWithMetrics(
+  ref: ArenaBuildRef,
+  useArtifact: boolean,
+  metrics: BuildDeliveryMetrics,
   opts?: FetchBuildVariantStreamOptions,
 ): Promise<BuildVariantResponse> {
   const url = new URL(
@@ -682,11 +710,6 @@ async function fetchBuildVariantStreamOnce(
   url.searchParams.set("variant", ref.variant);
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
   if (!useArtifact) url.searchParams.set("artifact", "0");
-  const metrics = startBuildDeliveryMetrics(
-    ref,
-    opts?.purpose ?? "visible",
-    useArtifact ? "stream-artifact" : "stream-live",
-  );
 
   const requestTimed = makeTimeoutSignal(opts?.signal, STREAM_REQUEST_TIMEOUT_MS);
   let res: Response;
