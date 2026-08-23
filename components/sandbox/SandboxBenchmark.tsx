@@ -47,6 +47,7 @@ import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 import {
   enqueueDeliveryMetric,
   enqueueVoxelMetric,
@@ -1036,6 +1037,18 @@ export function SandboxBenchmark() {
               ? "No seeded build found for this model/prompt pair."
               : undefined;
 
+        const isReady = laneState.phase === "ready" && Boolean(laneState.build);
+        const meshCacheKey = isReady
+          ? createPublicMeshCacheKey({
+              checksum: build?.checksum ?? build?.buildRef.checksum ?? null,
+              variant: "full",
+              palette,
+              blockCount:
+                build?.metrics.blockCount ??
+                (laneState.build ? voxelBuildBlockCount(laneState.build as RenderableVoxelBuild) : 0),
+            })
+          : null;
+
         return (
           <VoxelViewerCard
             key={`${slot}:${build?.buildId ?? "none"}:${model?.key ?? selectedModelKey}`}
@@ -1052,9 +1065,11 @@ export function SandboxBenchmark() {
             }
             voxelBuild={laneState.build}
             skipValidation={laneState.serverValidated || Boolean(build?.serverValidated)}
+            meshCacheKey={meshCacheKey}
             gridSize={gridSize}
             palette={palette}
             animateIn
+            useFirstRenderReady
             isLoading={isHydrating}
             loadingMessage={loadingMessage}
             loadingProgress={isHydrating ? laneState.progress ?? undefined : undefined}

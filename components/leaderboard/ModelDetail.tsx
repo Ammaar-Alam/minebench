@@ -32,11 +32,15 @@ import type {
 } from "@/components/voxel/VoxelViewer";
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
+import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
-import { enqueueDeliveryMetric } from "@/lib/observability/clientMetrics";
+import {
+  enqueueDeliveryMetric,
+  enqueueVoxelMetric,
+} from "@/lib/observability/clientMetrics";
 import { ModelLateralNav, PromptLateralNav } from "@/components/leaderboard/LateralNav";
 import {
   SandboxGifExportButton,
@@ -775,6 +779,16 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
     ? loadingLabel ?? "Retrieving build..."
     : formatVoxelLoadingMessage(placementProgress?.stageLabel ?? "Placing blocks", placementProgress);
 
+  const meshCacheKey = useMemo(() => {
+    if (!build?.checksum) return null;
+    return createPublicMeshCacheKey({
+      checksum: build.checksum,
+      variant: build.variant,
+      palette: build.palette,
+      blockCount: build.blockCount,
+    });
+  }, [build?.checksum, build?.variant, build?.palette, build?.blockCount]);
+
   if (loading && !build) {
     return (
       <div className={`relative flex w-full items-center justify-center overflow-hidden rounded-md bg-bg/42 ring-1 ring-border/65 ${heightClass}`}>
@@ -801,10 +815,15 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
         ref={viewerRef}
         voxelBuild={build.voxelBuild}
         palette={build.palette}
+        meshCacheKey={meshCacheKey}
         autoRotate
         showControls={false}
         onBuildReadyChange={handleBuildReadyChange}
         onBuildProgressChange={handleBuildProgressChange}
+        onBuildMetrics={(metrics) => {
+          if (!build?.checksum) return;
+          enqueueVoxelMetric("leaderboard", build.variant, metrics);
+        }}
       />
       {loading || placementLoading ? (
         <VoxelLoadingHud

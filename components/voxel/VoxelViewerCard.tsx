@@ -34,6 +34,7 @@ export function VoxelViewerCard({
   autoRotate = true,
   animateIn,
   onBuildReadyChange,
+  onFirstRenderReadyChange,
   onBuildMetrics,
   isLoading,
   loadingMode = "overlay",
@@ -58,6 +59,7 @@ export function VoxelViewerCard({
   viewerRef,
   skipValidation = false,
   embedded = false,
+  useFirstRenderReady = false,
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -67,7 +69,9 @@ export function VoxelViewerCard({
   gridSize?: 64 | 256 | 512;
   autoRotate?: boolean;
   animateIn?: boolean;
+  useFirstRenderReady?: boolean;
   onBuildReadyChange?: (ready: boolean) => void;
+  onFirstRenderReadyChange?: (ready: boolean) => void;
   onBuildMetrics?: (metrics: VoxelViewerBuildMetrics) => void;
   isLoading?: boolean;
   loadingMode?: "overlay" | "silent";
@@ -209,7 +213,13 @@ export function VoxelViewerCard({
           ? "Streaming…"
           : "Generating…");
   const showLoadingOverlay = loadingMode !== "silent";
-  const placementLoading = Boolean(showBuildView && build && !combinedError && !viewerReady);
+  const [firstRenderReady, setFirstRenderReady] = useState(false);
+  const placementLoading = Boolean(
+    showBuildView &&
+      build &&
+      !combinedError &&
+      !(useFirstRenderReady ? firstRenderReady : viewerReady),
+  );
   const hudProgress = isLoading
     ? loadingProgress
       ? {
@@ -231,6 +241,7 @@ export function VoxelViewerCard({
 
   useEffect(() => {
     setViewerReady(false);
+    setFirstRenderReady(false);
     setPlacementProgress(null);
     setPlacementError(null);
   }, [buildBlocksRef, palette]);
@@ -245,6 +256,18 @@ export function VoxelViewerCard({
       onBuildReadyChange?.(ready);
     },
     [onBuildReadyChange],
+  );
+
+  const handleFirstRenderReadyChange = useCallback(
+    (ready: boolean) => {
+      setFirstRenderReady(ready);
+      if (ready) {
+        setPlacementProgress(null);
+        setPlacementError(null);
+      }
+      onFirstRenderReadyChange?.(ready);
+    },
+    [onFirstRenderReadyChange],
   );
 
   const handleBuildProgressChange = useCallback(
@@ -267,6 +290,7 @@ export function VoxelViewerCard({
     if (message) {
       setPlacementProgress(null);
       setViewerReady(false);
+      setFirstRenderReady(false);
     }
   }, []);
 
@@ -372,6 +396,7 @@ export function VoxelViewerCard({
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
               animateIn={Boolean(animateIn && !isLoading)}
               onBuildReadyChange={handleBuildReadyChange}
+              onFirstRenderReadyChange={handleFirstRenderReadyChange}
               onBuildMetrics={onBuildMetrics}
               onBuildProgressChange={handleBuildProgressChange}
               onBuildErrorChange={handleBuildErrorChange}

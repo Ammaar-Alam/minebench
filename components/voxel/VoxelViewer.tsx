@@ -55,6 +55,7 @@ type ViewerProps = {
   animateIn?: boolean;
   showControls?: boolean;
   onBuildReadyChange?: (ready: boolean) => void;
+  onFirstRenderReadyChange?: (ready: boolean) => void;
   onBuildProgressChange?: (progress: VoxelViewerBuildProgress | null) => void;
   onBuildErrorChange?: (message: string | null) => void;
   onBuildMetrics?: (metrics: VoxelViewerBuildMetrics) => void;
@@ -406,6 +407,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     animateIn,
     showControls = true,
     onBuildReadyChange,
+    onFirstRenderReadyChange,
     onBuildProgressChange,
     onBuildErrorChange,
     onBuildMetrics,
@@ -421,6 +423,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const autoRotateRef = useRef(false);
   const userInteractingRef = useRef(false);
   const onBuildReadyChangeRef = useRef<((ready: boolean) => void) | undefined>(undefined);
+  const onFirstRenderReadyChangeRef = useRef<((ready: boolean) => void) | undefined>(undefined);
   const onBuildProgressChangeRef = useRef<((progress: VoxelViewerBuildProgress | null) => void) | undefined>(
     undefined,
   );
@@ -490,11 +493,18 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   const kickBuildRef = useRef<(() => void) | null>(null);
   const lastBuiltRef = useRef<{ blockLimit: number; at: number }>({ blockLimit: 0, at: 0 });
   const readyRef = useRef(false);
+  const firstRenderReadyRef = useRef(false);
 
   const reportReady = useCallback((ready: boolean) => {
     if (readyRef.current === ready) return;
     readyRef.current = ready;
     onBuildReadyChangeRef.current?.(ready);
+  }, []);
+
+  const reportFirstRenderReady = useCallback((ready: boolean) => {
+    if (firstRenderReadyRef.current === ready) return;
+    firstRenderReadyRef.current = ready;
+    onFirstRenderReadyChangeRef.current?.(ready);
   }, []);
 
   const getExportRenderer = useCallback(() => {
@@ -517,6 +527,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   useEffect(() => {
     onBuildReadyChangeRef.current = onBuildReadyChange;
   }, [onBuildReadyChange]);
+
+  useEffect(() => {
+    onFirstRenderReadyChangeRef.current = onFirstRenderReadyChange;
+  }, [onFirstRenderReadyChange]);
 
   useEffect(() => {
     onBuildProgressChangeRef.current = onBuildProgressChange;
@@ -560,9 +574,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     boundsRef.current = null;
     lastBuiltRef.current = { blockLimit: 0, at: 0 };
     reportReady(false);
+    reportFirstRenderReady(true);
     onBuildProgressChangeRef.current?.(null);
     requestRenderRef.current?.();
-  }, [reportReady]);
+  }, [reportFirstRenderReady, reportReady]);
 
   const scheduleKick = useCallback(() => {
     if (kickScheduledRef.current) return;
@@ -627,7 +642,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
       // Even if we don't rebuild, ensure our "ready" signal stays false while we haven't reached
       // the expected block count (e.g. during stream hydration).
-      reportReady(Boolean(voxelGroupRef.current && lastBuiltBlocks >= requiredBlocks));
+      const currentReady = Boolean(voxelGroupRef.current && lastBuiltBlocks >= requiredBlocks);
+      reportReady(currentReady);
+      reportFirstRenderReady(currentReady);
       buildPendingRef.current.dirty = desiredBlocks > lastBuiltBlocks;
       buildPendingRef.current.force = false;
       return;
@@ -638,6 +655,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
     buildInProgressRef.current = true;
     reportReady(false);
+    reportFirstRenderReady(false);
     onBuildErrorChangeRef.current?.(null);
     onBuildProgressChangeRef.current?.({
       processedBlocks: 0,
@@ -793,6 +811,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         report() {
           buildTrace.mark("first_render");
           firstRenderComplete = true;
+          reportFirstRenderReady(buildReady);
           maybeReportBuildMetrics();
         },
         discard() {
@@ -881,6 +900,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         err instanceof Error && err.message.trim() ? err.message.trim() : "Build placement failed.",
       );
       reportReady(false);
+      reportFirstRenderReady(false);
     } finally {
       buildInProgressRef.current = false;
       if (activeJobRef.current.controller === controller) {
@@ -891,7 +911,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       if (!traceRetainedForFirstRender) buildTrace.clear();
       if (buildPendingRef.current.dirty) scheduleKick();
     }
-  }, [clearVoxelGroup, fitView, reportReady, scheduleKick]);
+  }, [clearVoxelGroup, fitView, reportFirstRenderReady, reportReady, scheduleKick]);
 
   kickBuildRef.current = () => {
     void kickBuild();
