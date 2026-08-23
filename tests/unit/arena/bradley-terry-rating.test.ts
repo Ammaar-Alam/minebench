@@ -3,6 +3,7 @@ import {
   BT_SCALE,
   INITIAL_RATING,
   computeConfidenceAwareRanks,
+  computeOrdinalRanks,
   confidenceFromCi,
   confidenceInterval95,
   expectedScore,
@@ -61,7 +62,7 @@ assert.equal(
   "Low votes or wide CI should be Provisional",
 );
 
-// 5. Confidence-Aware Tied Ranking
+// 5. Ordinal Ranking
 const modelA = {
   id: "a",
   rating: 2100,
@@ -71,23 +72,23 @@ const modelA = {
 };
 const modelB = {
   id: "b",
-  rating: 2095, // 5 points apart, statistically indistinguishable
+  rating: 2095,
   variance: 0.005,
   standardError: 12.28,
   ci95: 24.0,
 };
 const modelC = {
   id: "c",
-  rating: 1950, // 145 points lower, statistically separated
+  rating: 1950,
   variance: 0.005,
   standardError: 12.28,
   ci95: 24.0,
 };
 
-const ranked = computeConfidenceAwareRanks([modelA, modelB, modelC]);
+const ranked = computeOrdinalRanks([modelA, modelB, modelC]);
 assert.equal(ranked[0].rank, 1, "Model A should be rank 1");
-assert.equal(ranked[1].rank, 1, "Model B should share rank 1 with Model A (within CI)");
-assert.equal(ranked[2].rank, 3, "Model C should be rank 3 (separated from both A and B)");
+assert.equal(ranked[1].rank, 2, "Model B should be rank 2");
+assert.equal(ranked[2].rank, 3, "Model C should be rank 3");
 
 // 6. Expected score
 assert.ok(Math.abs(expectedScore(1500, 1500) - 0.5) < 1e-6, "Equal ratings have 50% expected win rate");

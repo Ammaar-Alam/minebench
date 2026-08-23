@@ -147,7 +147,7 @@ export async function GET() {
       const ciLower = bt ? Math.round(bt.rating - bt.ci95) : undefined;
       const ciUpper = bt ? Math.round(bt.rating + bt.ci95) : undefined;
       const confidence = bt?.confidence ?? confidenceFromRd(ratingDeviation);
-      const rank = bt?.rank ?? index + 1;
+      const rank = index + 1;
       const baselineRank = baselineRanksByModelId.get(m.id);
       const hasBaseline24h = hasGlobalBaseline && baselineRank != null;
       const rankDelta24h = hasBaseline24h ? baselineRank - rank : null;

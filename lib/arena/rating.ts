@@ -88,8 +88,8 @@ export function stabilityTier(params: {
   return "Provisional";
 }
 
-export function computeConfidenceAwareRanks<
-  T extends { rating: number; standardError: number; displayName?: string; key?: string },
+export function computeOrdinalRanks<
+  T extends { rating: number; displayName?: string; key?: string },
 >(models: T[]): Array<T & { rank: number }> {
   const sorted = [...models].sort(
     (a, b) =>
@@ -97,21 +97,13 @@ export function computeConfidenceAwareRanks<
       (a.displayName ?? a.key ?? "").localeCompare(b.displayName ?? b.key ?? ""),
   );
 
-  return sorted.map((model, i) => {
-    let significantlyBetterCount = 0;
-    for (let j = 0; j < i; j += 1) {
-      const diff = sorted[j].rating - model.rating;
-      const combinedSe = Math.hypot(sorted[j].standardError, model.standardError);
-      if (diff > Z_95 * combinedSe) {
-        significantlyBetterCount += 1;
-      }
-    }
-    return {
-      ...model,
-      rank: significantlyBetterCount + 1,
-    };
-  });
+  return sorted.map((model, i) => ({
+    ...model,
+    rank: i + 1,
+  }));
 }
+
+export const computeConfidenceAwareRanks = computeOrdinalRanks;
 
 export function updateRatingPair(params: {
   a: RatingState;
