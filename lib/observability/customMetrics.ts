@@ -30,6 +30,17 @@ const matchupMetricSchema = z
   })
   .strict();
 
+const matchupStageMetricSchema = z
+  .object({
+    kind: z.literal("matchup-stage"),
+    stage: z.enum(["preview_ready", "vote_ready"]),
+    mode: z.enum(["random", "forced"]),
+    laneABlocks: blockCountBucketSchema,
+    laneBBlocks: blockCountBucketSchema,
+    durationMs: durationSchema,
+  })
+  .strict();
+
 const deliveryMetricSchema = z
   .object({
     kind: z.literal("delivery"),
@@ -65,7 +76,7 @@ const voxelMetricSchema = z
     surface: z.enum(["arena", "sandbox", "leaderboard"]),
     variant: z.enum(["preview", "full"]),
     strategy: z.enum(["local", "worker", "worker-fallback"]),
-    cacheStatus: z.enum(["hit", "miss", "disabled", "not-used"]),
+    cacheStatus: z.enum(["hit", "miss", "disabled", "not-used", "prewarm-hit"]),
     blockCountBucket: blockCountBucketSchema,
     renderedBlockCountBucket: blockCountBucketSchema,
     animated: z.boolean(),
@@ -86,6 +97,7 @@ export const clientMetricBatchSchema = z
       .array(
         z.discriminatedUnion("kind", [
           matchupMetricSchema,
+          matchupStageMetricSchema,
           deliveryMetricSchema,
           voxelMetricSchema,
         ]),
@@ -271,6 +283,17 @@ export function emitClientCustomMetrics(
         total: sample.totalMs,
       });
       emitMetric(emit, "minebench.arena.matchup.complete", 1, tags);
+      continue;
+    }
+
+    if (sample.kind === "matchup-stage") {
+      const tags = {
+        mode: sample.mode,
+        stage: sample.stage,
+        lane_a_blocks: sample.laneABlocks,
+        lane_b_blocks: sample.laneBBlocks,
+      };
+      emitMetric(emit, "minebench.arena.matchup.stage_ms", sample.durationMs, tags);
       continue;
     }
 

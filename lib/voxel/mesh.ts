@@ -38,7 +38,7 @@ type BuildProgress = {
 };
 
 export type VoxelMeshStrategy = "local" | "worker" | "worker-fallback";
-export type VoxelMeshCacheStatus = "hit" | "miss" | "disabled" | "not-used";
+export type VoxelMeshCacheStatus = "hit" | "miss" | "disabled" | "not-used" | "prewarm-hit";
 export type VoxelMeshStageEvent = {
   stage: "mesh_started" | "mesh_payload_complete" | "three_group_complete";
   strategy: VoxelMeshStrategy;
@@ -56,6 +56,9 @@ type CreateVoxelGroupAsyncOpts = {
   blockLimit?: number;
   // Stable checksum-keyed cache identifier for persistent browser-side mesh payload reuse.
   cacheKey?: string | null;
+  // Optional in-flight or resolved worker mesh promise (e.g. from background premeshing).
+  premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
+  onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
 };
 
 const LOCAL_MESH_MAX_BLOCKS = Number.parseInt(
@@ -1017,7 +1020,7 @@ type MeshWorkerResponse =
   | { type: "complete"; payload: VoxelMeshPayload }
   | { type: "error"; message: string };
 
-function createVoxelGroupFromMeshPayload(
+export function createVoxelGroupFromMeshPayload(
   payload: VoxelMeshPayload,
   atlasTexture: THREE.Texture,
 ): VoxelGroup {
@@ -1081,7 +1084,7 @@ function createVoxelGroupFromMeshPayload(
   };
 }
 
-async function createVoxelMeshPayloadInWorker(
+export async function createVoxelMeshPayloadInWorker(
   build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
@@ -1355,6 +1358,34 @@ export async function createVoxelGroupAsync(
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelGroup> {
+  const premeshedPayloadPromise = opts?.premeshedPayloadPromise;
+  if (premeshedPayloadPromise) {
+    try {
+      opts?.onStage?.({ stage: "mesh_started", strategy: "worker" });
+      const payload = await premeshedPayloadPromise;
+      opts?.onStage?.({
+        stage: "mesh_payload_complete",
+        strategy: "worker",
+        cacheStatus: "prewarm-hit",
+        blockCount: payload.filteredBlockCount,
+      });
+      throwIfAborted(opts?.signal);
+      const group = createVoxelGroupFromMeshPayload(payload, atlasTexture);
+      opts?.onStage?.({
+        stage: "three_group_complete",
+        strategy: "worker",
+        cacheStatus: "prewarm-hit",
+        blockCount: group.stats.blockCount,
+      });
+      return group;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") throw err;
+      // Background premeshing failed or was aborted; fall back gracefully to normal pipeline.
+    } finally {
+      opts?.onPremeshedPayloadConsumed?.(premeshedPayloadPromise);
+    }
+  }
+
   const blockLimit =
     typeof opts?.blockLimit === "number" && Number.isFinite(opts.blockLimit)
       ? Math.max(0, Math.floor(opts.blockLimit))

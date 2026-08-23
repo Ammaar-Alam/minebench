@@ -39,6 +39,23 @@ export function enqueueClientMetric(sample: ClientMetricSample) {
   }
 }
 
+export function enqueueMatchupStageMetric(params: {
+  stage: "preview_ready" | "vote_ready";
+  mode: "random" | "forced";
+  laneABlocks: number;
+  laneBBlocks: number;
+  durationMs: number | null;
+}) {
+  enqueueClientMetric({
+    kind: "matchup-stage",
+    stage: params.stage,
+    mode: params.mode,
+    laneABlocks: getArenaBlockCountBucket(params.laneABlocks),
+    laneBBlocks: getArenaBlockCountBucket(params.laneBBlocks),
+    durationMs: roundMetricMs(params.durationMs),
+  });
+}
+
 export function enqueueVoxelMetric(
   surface: "arena" | "sandbox" | "leaderboard",
   variant: ArenaBuildVariant,
