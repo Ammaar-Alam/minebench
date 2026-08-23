@@ -6,6 +6,7 @@ export interface FaqLink {
 export interface FaqItem {
   id: string;
   question: string;
+  navLabel?: string;
   answer: readonly string[];
   links?: readonly FaqLink[];
 }
@@ -24,6 +25,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "what-is-minebench",
         question: "What is MineBench?",
+        navLabel: "What is MineBench?",
         answer: [
           "MineBench evaluates spatial reasoning through 3D voxel construction.",
           "Models receive natural-language prompts and construct the requested scene programmatically. Their outputs are rendered into 3D builds and compared through blind human pairwise voting.",
@@ -33,6 +35,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "how-do-models-create-builds",
         question: "How do models actually create the builds?",
+        navLabel: "How models create builds",
         answer: [
           "Models generate JavaScript using MineBench's voxel-building API.",
           "The API exposes primitives for constructing geometry, such as blocks, boxes, and lines. The model writes JavaScript that calls those primitives to construct the requested scene.",
@@ -49,6 +52,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "why-do-models-add-extra-scenery",
         question: "Why do some models add objects or scenery that were not explicitly requested?",
+        navLabel: "Extra scenery & creativity",
         answer: [
           "The system prompt intentionally allows models to use creativity, environmental context, detail, and composition when constructing the requested scene.",
           "Additional content is not automatically rewarded. A model can add substantially more geometry and still lose if those additions hurt prompt adherence, composition, or the quality of the requested object.",
@@ -65,6 +69,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "how-are-models-ranked",
         question: "How are models ranked if there is no single correct build?",
+        navLabel: "Head-to-head ranking",
         answer: [
           "MineBench uses blind head-to-head voting.",
           "Two builds generated from the same prompt are shown without revealing which model produced either one. Pairwise preferences are then aggregated into the leaderboard rating.",
@@ -82,6 +87,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "can-minebench-be-contaminated-or-benchmaxxed",
         question: "Can models train on MineBench or “benchmax” it?",
+        navLabel: "Contamination & benchmaxxing",
         answer: [
           "Potentially, but MineBench does not have a fixed answer key that a model can simply memorize.",
           "There is no canonical correct output for a castle, fighter jet, city, or any other prompt. Simply knowing that a prompt asks for a castle does not give a model the ability to actually construct a good castle in 3D. The model still has to reason about its structure, proportions, geometry, spatial relationships, and composition, then generate the JavaScript required to construct the build.",
@@ -94,6 +100,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "how-do-grid-size-block-limits-and-leaderboard-settings-work",
         question: "How do grid size, block limits, and different leaderboard settings work?",
+        navLabel: "Grid sizes & block limits",
         answer: [
           "Models compared on the same leaderboard need to be generated under the same conditions.",
           "Grid size matters because it determines how much 3D space is available. A larger grid gives models more room for larger structures, scenery, separation between objects, and fine detail. Builds generated on different grid sizes therefore cannot be fairly mixed into the same leaderboard.",
@@ -105,6 +112,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "why-not-add-more-evaluation-modes",
         question: "Why not add more prompts, grid sizes, block-limited settings, and other evaluation modes?",
+        navLabel: "More evaluation modes",
         answer: [
           "The primary limitation is API cost.",
           "A new prompt needs to be generated across the model set. A new grid size, block limit, or other configuration effectively creates another evaluation suite and requires another set of generations across the relevant prompts and models.",
@@ -115,6 +123,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "are-generations-one-shot",
         question: "Are generations one-shot?",
+        navLabel: "One-shot generation",
         answer: [
           "Models do not see renders of their builds and iteratively revise them based on visual feedback.",
           "They receive the prompt and voxel-building interface, generate the JavaScript used to construct the scene, and that program produces the final voxel output.",
@@ -131,6 +140,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "can-i-compare-models-directly",
         question: "Can I compare different models directly?",
+        navLabel: "Direct model comparison",
         answer: [
           "Yes.",
           "The MineBench Sandbox allows direct comparisons of up to four models at once for the same prompt and evaluation setting.",
@@ -141,10 +151,12 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "can-unofficial-models-be-tested",
         question: "Can models that are not on the official leaderboard be tested?",
+        navLabel: "Unofficial & custom models",
         answer: [
           "Yes.",
           "The Sandbox Import workspace allows MineBench instructions to be used with models that are not directly integrated. The model can generate the expected output externally, and the result can then be loaded into MineBench and rendered.",
           "Those generations are useful for experimentation but should not be treated as official leaderboard results unless they were produced under the same controlled settings.",
+          "The Sandbox also allows live generations through the site with any provider endpoint (e.g. testing custom openrouter models).",
         ],
         links: [{ label: "Open Import", href: "/sandbox?mode=import" }],
       },
@@ -167,6 +179,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "why-is-a-model-missing",
         question: "Why isn't a particular model on the leaderboard?",
+        navLabel: "Missing models",
         answer: [
           "The usual reasons are API availability, integration work, or API cost.",
           "New models are released much faster than the full MineBench evaluation can reasonably be rerun, so models have to be prioritized.",
@@ -182,6 +195,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "can-i-export-builds",
         question: "Can MineBench builds be exported?",
+        navLabel: "Exporting builds",
         answer: [
           "Yes.",
           "MineBench supports WorldEdit .schem for Minecraft-compatible workflows, GLB for general 3D workflows, and STL for applications such as 3D printing.",
@@ -197,6 +211,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "is-this-minecraft-mcp-blender-mcp-or-a-coding-agent",
         question: "Is MineBench using Minecraft MCP, Blender MCP, or a coding agent?",
+        navLabel: "MCP & coding agents",
         answer: [
           "No.",
           "MineBench uses its own constrained voxel-building interface so that models are evaluated with the same tools.",
@@ -207,6 +222,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
       {
         id: "how-can-i-support-or-contribute",
         question: "How can MineBench be supported or contributed to?",
+        navLabel: "Contributing & support",
         answer: [
           "MineBench is open source. Useful contributions include harder prompts, model integrations, renderer improvements, methodology improvements, UI changes, and bug fixes.",
           "Financial support primarily goes toward API inference, which is the largest constraint on expanding the set of models, prompts, and evaluation settings.",

@@ -93,6 +93,7 @@ export default function FaqPage() {
               items: section.items.map((item) => ({
                 id: item.id,
                 question: item.question,
+                navLabel: item.navLabel,
               })),
             }))}
           />

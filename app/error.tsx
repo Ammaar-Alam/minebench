@@ -19,7 +19,7 @@ export default function RouteError({ error, reset }: { error: Error & { digest?:
 
   return (
     <div className="flex min-h-[60vh] w-full items-center justify-center px-4 py-10">
-      <div className="mx-auto w-full max-w-sm rounded-xl border border-border bg-card p-6 shadow-soft">
+      <div className="mx-auto w-full max-w-sm rounded-md border border-border bg-card p-6">
         <div className="space-y-3">
           <h1 className="text-xl font-semibold leading-tight tracking-tight">{title}</h1>
           <p className="max-w-[32ch] text-sm leading-6 text-muted">{message}</p>

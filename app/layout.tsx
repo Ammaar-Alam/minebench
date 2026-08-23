@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Spline_Sans, Unbounded } from "next/font/google";
-import Script from "next/script";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import { OfflineBanner } from "@/components/OfflineBanner";
@@ -113,33 +112,24 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html
       lang="en"
-      data-theme="dark"
       suppressHydrationWarning
       className={`${fontSans.variable} ${fontDisplay.variable} ${fontMono.variable}`}
     >
       <body className="relative min-h-dvh bg-bg text-fg antialiased isolate">
         <script
+          // Applies a stored theme choice before first paint. With no stored
+          // choice the stylesheet's prefers-color-scheme rules already match,
+          // so nothing is written and nothing flashes.
+          dangerouslySetInnerHTML={{
+            __html: `(()=>{try{var t=localStorage.getItem("mb-theme");if(t==="light"||t==="dark"){var d=document.documentElement;d.dataset.theme=t;d.style.colorScheme=t}}catch(e){}})();`,
+          }}
+        />
+
+        <script
           type="application/ld+json"
           // Structured data for search engines.
           dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
         />
-
-        <Script id="mb-theme" strategy="beforeInteractive">{`
-(() => {
-  try {
-    const key = "mb-theme";
-    const saved = localStorage.getItem(key);
-    const theme = saved === "light" ? "light" : "dark";
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = theme;
-  } catch {}
-})();
-        `}</Script>
-
-        <div aria-hidden="true" className="pointer-events-none fixed inset-0 z-0">
-          <div className="absolute inset-0 mb-bg-halo" />
-          <div className="absolute inset-0 mb-bg-grid" />
-        </div>
 
         <OfflineBanner />
         <SiteHealthBanner />

@@ -5,6 +5,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 interface FaqNavigationItem {
   id: string;
   question: string;
+  navLabel?: string;
 }
 
 interface FaqNavigationSection {
@@ -46,7 +47,6 @@ export function FaqNavigation({
 
   useLayoutEffect(() => {
     let animationFrame = 0;
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
     function measureRail() {
       const track = trackRef.current;
@@ -64,7 +64,7 @@ export function FaqNavigation({
         const linkRect = link.getBoundingClientRect();
         contentTops.push(content.getBoundingClientRect().top + window.scrollY);
         markerTops.push(
-          linkRect.top - trackTop + Math.min(linkRect.height, 20) / 2 - 3,
+          linkRect.top - trackTop + linkRect.height / 2 - 4,
         );
       }
 
@@ -81,57 +81,28 @@ export function FaqNavigation({
       const lastIndex = itemIds.length - 1;
       const atPageEnd =
         window.scrollY + window.innerHeight >=
-        document.documentElement.scrollHeight - 2;
-      const readingLine = window.scrollY + Math.min(window.innerHeight * 0.32, 280);
+        document.documentElement.scrollHeight - 4;
+      const readingLine = window.scrollY + window.innerHeight * 0.45;
 
-      let fromIndex = 0;
+      let activeIndex = 0;
       if (atPageEnd) {
-        fromIndex = lastIndex;
+        activeIndex = lastIndex;
       } else {
         while (
-          fromIndex < lastIndex &&
-          readingLine >= measurements.contentTops[fromIndex + 1]
+          activeIndex < lastIndex &&
+          readingLine >= measurements.contentTops[activeIndex + 1]
         ) {
-          fromIndex += 1;
+          activeIndex += 1;
         }
       }
 
-      const toIndex = Math.min(fromIndex + 1, lastIndex);
-      const start = measurements.contentTops[fromIndex];
-      const end = measurements.contentTops[toIndex];
-      const rawProgress =
-        fromIndex === toIndex ? 0 : clamp((readingLine - start) / (end - start), 0, 1);
-      const travelProgress = reducedMotion.matches
-        ? rawProgress >= 0.7
-          ? 1
-          : 0
-        : smoothstep(rawProgress);
-      const emphasisProgress = reducedMotion.matches
-        ? travelProgress
-        : smoothstep(clamp((rawProgress - 0.5) / 0.4, 0, 1));
-      const markerTop =
-        measurements.markerTops[fromIndex] +
-        (measurements.markerTops[toIndex] - measurements.markerTops[fromIndex]) *
-          travelProgress;
-
+      const markerTop = measurements.markerTops[activeIndex] ?? 0;
       marker.style.opacity = "1";
       marker.style.transform = `translate3d(0, ${markerTop}px, 0)`;
 
-      for (const [index, id] of itemIds.entries()) {
-        const link = document.getElementById(`faq-nav-${id}`);
-        if (!link) continue;
-
-        let emphasis = 0;
-        if (fromIndex === toIndex && index === fromIndex) emphasis = 1;
-        else if (index === fromIndex) emphasis = 1 - emphasisProgress;
-        else if (index === toIndex) emphasis = emphasisProgress;
-        link.style.opacity = String(0.55 + emphasis * 0.45);
-      }
-
-      const nextActiveIndex = emphasisProgress >= 0.5 ? toIndex : fromIndex;
-      if (nextActiveIndex !== activeIndexRef.current) {
-        activeIndexRef.current = nextActiveIndex;
-        setActiveId(itemIds[nextActiveIndex]);
+      if (activeIndex !== activeIndexRef.current) {
+        activeIndexRef.current = activeIndex;
+        setActiveId(itemIds[activeIndex]);
       }
     }
 
@@ -150,16 +121,14 @@ export function FaqNavigation({
     window.addEventListener("scroll", requestRailUpdate, { passive: true });
     window.addEventListener("resize", handleResize);
     window.addEventListener("hashchange", requestRailUpdate);
-    reducedMotion.addEventListener("change", requestRailUpdate);
 
     return () => {
       window.cancelAnimationFrame(animationFrame);
       window.removeEventListener("scroll", requestRailUpdate);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("hashchange", requestRailUpdate);
-      reducedMotion.removeEventListener("change", requestRailUpdate);
     };
-  }, [itemIds]);
+  }, [itemIds, activeId]);
 
   function navigateTo(id: string) {
     setActiveId(id);
@@ -191,35 +160,41 @@ export function FaqNavigation({
         })}
       </nav>
 
-      <aside className="sticky top-20 hidden self-start lg:block">
-        <nav aria-label="FAQ questions">
-          <div className="relative space-y-6" ref={trackRef}>
+      <aside className="sticky top-1/2 -translate-y-1/2 hidden self-start lg:block">
+        <nav aria-label="FAQ questions" className="py-1 pl-3 pr-2">
+          <div className="relative space-y-4" ref={trackRef}>
             <span
               aria-hidden="true"
-              className="pointer-events-none absolute -left-[3px] top-0 z-10 h-1.5 w-1.5 rounded-full bg-accent opacity-0 shadow-[0_0_0_4px_hsl(var(--accent)/0.12),0_0_12px_hsl(var(--accent)/0.65)] will-change-transform motion-reduce:transition-none"
+              className="pointer-events-none absolute -left-[4px] top-0 z-10 h-2 w-2 rounded-full bg-accent opacity-0 shadow-[0_0_0_4px_hsl(var(--accent)/0.18),0_0_12px_hsl(var(--accent)/0.7)] transition-transform duration-200 ease-out will-change-transform motion-reduce:transition-none"
               ref={markerRef}
             />
             {sections.map((section) => (
               <div key={section.id}>
                 <a
-                  className="text-sm font-semibold text-fg transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"
+                  className="text-[11px] font-semibold uppercase tracking-wider text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"
                   href={`#${section.id}`}
                 >
                   {section.title}
                 </a>
-                <ol className="mt-2 border-l border-border/70 pl-4">
+                <ol className="mt-1.5 border-l border-border/70 pl-3.5">
                   {section.items.map((item) => {
                     const active = activeId === item.id;
                     return (
-                      <li key={item.id}>
+                      <li key={item.id} className="transition-all duration-150 ease-out">
                         <a
                           aria-current={active ? "location" : undefined}
-                          className="relative block py-1 text-xs leading-5 text-fg opacity-55 hover:!opacity-100 focus-visible:!opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                          className={`relative block transition-all duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+                            active
+                              ? "py-1 text-xs font-semibold text-fg"
+                              : "py-0.5 text-xs text-muted/70 hover:text-fg"
+                          }`}
                           href={`#${item.id}`}
                           id={`faq-nav-${item.id}`}
                           onClick={() => navigateTo(item.id)}
                         >
-                          {item.question}
+                          <span className="block leading-snug">
+                            {active ? item.question : (item.navLabel ?? item.question)}
+                          </span>
                         </a>
                       </li>
                     );

@@ -137,7 +137,7 @@ function CopyButton({
         type="button"
         aria-describedby={description ? descriptionId : undefined}
         className={cx(
-          "mb-btn h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs",
+          "mb-btn h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs",
           tone === "primary" ? "mb-btn-primary" : "mb-btn-ghost",
           className,
         )}
@@ -153,7 +153,7 @@ function CopyButton({
         <span
           id={descriptionId}
           role="tooltip"
-          className="pointer-events-none invisible absolute bottom-[calc(100%+0.625rem)] right-0 z-50 w-64 rounded-xl bg-card px-3 py-2.5 text-left text-[11px] leading-relaxed text-fg/90 opacity-0 shadow-2xl ring-1 ring-border transition-opacity after:absolute after:-bottom-1 after:right-8 after:h-2 after:w-2 after:rotate-45 after:border-b after:border-r after:border-border after:bg-card group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 sm:w-72"
+          className="pointer-events-none invisible absolute bottom-[calc(100%+0.625rem)] right-0 z-50 w-64 rounded-md bg-card px-3 py-2.5 text-left text-[11px] leading-relaxed text-fg/90 opacity-0 shadow-2xl ring-1 ring-border transition-opacity after:absolute after:-bottom-1 after:right-8 after:h-2 after:w-2 after:rotate-45 after:border-b after:border-r after:border-border after:bg-card group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100 sm:w-72"
         >
           {description}
         </span>
@@ -184,7 +184,7 @@ function SegmentedControl({
   return (
     <div
       className={cx(
-        "relative flex rounded-xl bg-bg/60 p-1 ring-1 ring-border",
+        "relative flex rounded-md bg-bg/60 p-1 ring-1 ring-border",
         className,
       )}
     >
@@ -649,7 +649,7 @@ export function LocalLab() {
                 />
                 <button
                   type="button"
-                  className="mb-btn mb-btn-ghost h-8 rounded-full px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
+                  className="mb-btn mb-btn-ghost h-8 px-2.5 text-[11px] sm:h-9 sm:px-3 sm:text-xs"
                   disabled={systemIsDefault}
                   onClick={() => {
                     setSystemPrompt(defaultSystem);
@@ -716,7 +716,7 @@ export function LocalLab() {
               onChange={(e) => setTaskPrompt(e.target.value)}
               placeholder="Describe the build..."
             />
-            <div className="mt-2 min-h-[142px] rounded-xl border border-border/70 bg-bg/40 p-3 font-mono text-[12px] leading-snug text-muted">
+            <div className="mt-2 min-h-[142px] rounded-md border border-border/70 bg-bg/40 p-3 font-mono text-[12px] leading-snug text-muted">
               {taskPrompt.trim() ? (
                 <pre className="max-h-56 overflow-auto whitespace-pre-wrap">{userPrompt}</pre>
               ) : (
@@ -737,7 +737,7 @@ export function LocalLab() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  className="mb-btn mb-btn-ghost h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
+                  className="mb-btn mb-btn-ghost h-8 px-3 text-xs sm:h-9 sm:px-4"
                   onClick={clearModelInput}
                   disabled={!hasInput}
                 >
@@ -745,7 +745,7 @@ export function LocalLab() {
                 </button>
                 <button
                   type="button"
-                  className="mb-btn mb-btn-primary h-8 rounded-full px-3 text-xs sm:h-9 sm:px-4"
+                  className="mb-btn mb-btn-primary h-8 px-3 text-xs sm:h-9 sm:px-4"
                   onClick={renderFromInput}
                 >
                   <span className="inline-flex items-center gap-1.5">

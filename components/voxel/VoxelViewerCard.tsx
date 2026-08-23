@@ -194,7 +194,7 @@ export function VoxelViewerCard({
 
   const viewerHeightClass =
     viewerSize === "arena"
-      ? "relative h-[42svh] min-h-[250px] max-h-[360px] w-full sm:h-[44vh] sm:min-h-[260px] sm:max-h-[360px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
+      ? "relative h-[48svh] min-h-[260px] max-h-[440px] w-full sm:h-[48vh] sm:min-h-[280px] sm:max-h-[450px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
       : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
   const loadingLabel =
     loadingMessage?.trim() ||
@@ -270,32 +270,24 @@ export function VoxelViewerCard({
   return (
     <div className={embedded ? "overflow-hidden bg-card/25" : "mb-panel"}>
       <div className="mb-panel-inner">
-        <div className="border-b border-border/60 bg-bg/35 px-3 py-2 sm:px-4 sm:py-2.5">
-          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-3">
-                <div className="max-w-48 shrink-0 truncate whitespace-nowrap font-display text-base font-semibold tracking-tight text-fg">
-                  {title}
-                </div>
-                {subtitle ? (
-                  <div className="min-h-[1.1rem] min-w-0 text-[12px] sm:text-[13px]">{subtitle}</div>
-                ) : null}
+        <div className="border-b border-border/70 bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
+          <div className="flex items-center justify-between gap-2 sm:gap-3">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className="shrink-0 font-display text-sm font-semibold tracking-tight text-fg sm:text-base">
+                {title}
               </div>
+              {subtitle ? (
+                <div className="min-w-0 truncate text-xs sm:text-[13px]">{subtitle}</div>
+              ) : null}
               {build ? (
-                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted sm:hidden">
-                  <span className="font-mono">
-                    {blockCount.toLocaleString()} blocks
-                  </span>
-                  {timing ? (
-                    <span className="font-mono text-muted2">
-                      {timing}
-                    </span>
-                  ) : null}
+                <div className="flex items-center gap-1 font-mono text-[11px] text-muted sm:hidden">
+                  <span className="text-muted/40">•</span>
+                  <span>{blockCount.toLocaleString()}</span>
                 </div>
               ) : null}
             </div>
 
-            <div className="flex items-center justify-between gap-2 sm:shrink-0 sm:justify-end sm:gap-2">
+            <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
               {showViewToggle ? (
                 <div className="relative flex w-[182px] rounded-full bg-bg/55 p-1 ring-1 ring-border/80 sm:w-[210px]">
                   <div className="pointer-events-none absolute inset-1 rounded-full">
