@@ -162,7 +162,7 @@ export function renderContactReceipt(submission: ContactSubmission): {
   html: string;
 } {
   const category = getContactCategoryLabel(submission.category);
-  const intro = `We received your ${category.toLowerCase()}. If we need more information, we'll reply to this address.`;
+  const intro = `We received your ${category.toLowerCase()} submission. If we need more information or follow-up, our team will reply directly to this address.`;
 
   return {
     subject: "MineBench received your message",
@@ -172,10 +172,6 @@ export function renderContactReceipt(submission: ContactSubmission): {
       intro,
       "",
       `Category: ${category}`,
-      `Title: ${submission.title}`,
-      "",
-      "Message",
-      submission.message,
       "",
       "MineBench",
       SUPPORT_EMAIL,
@@ -184,9 +180,14 @@ export function renderContactReceipt(submission: ContactSubmission): {
       preheader: "MineBench received your message",
       eyebrow: "Message received",
       heading: "Thanks for reaching out",
-      content: `<p style="margin:0 0 26px 0; font-size:15px; line-height:1.7; color:#555555;">${escapeHtml(intro)}</p>
-        ${renderSubmissionDetails(submission, false)}
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:28px;">
+      content: `<p style="margin:0 0 24px 0; font-size:15px; line-height:1.7; color:#555555;">${escapeHtml(intro)}</p>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; margin:0 0 24px 0;">
+          <tr>
+            <td style="padding:5px 18px 5px 0; font-size:12px; line-height:18px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; color:#898989;">Category</td>
+            <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333;">${escapeHtml(category)}</td>
+          </tr>
+        </table>
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:24px;">
           <tr>
             <td bgcolor="#181818" style="border-radius:8px;">
               <a href="${MINEBENCH_URL}" style="display:inline-block; padding:12px 18px; border-radius:8px; color:#ffffff; font-size:14px; line-height:20px; font-weight:650; text-decoration:none;">Return to MineBench</a>
