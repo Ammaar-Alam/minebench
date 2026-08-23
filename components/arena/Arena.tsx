@@ -42,6 +42,10 @@ import {
   createBrowserPerformanceTrace,
   type BrowserPerformanceTrace,
 } from "@/lib/observability/browserPerformance";
+import {
+  enqueueClientMetric,
+  enqueueVoxelMetric,
+} from "@/lib/observability/clientMetrics";
 
 type ArenaState =
   | { kind: "loading" }
@@ -173,15 +177,32 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
     };
     trace.mark("matchup_received");
     const totalMs = trace.measure("total", "fetch_start", "matchup_received") ?? 0;
+    const headersMs = roundMetricMs(
+      trace.measure("headers", "fetch_start", "headers_received"),
+    );
+    const bodyMs = roundMetricMs(
+      trace.measure("body", "headers_received", "matchup_received"),
+    );
+    const laneABlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build));
+    const laneBBlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build));
     trackEvent("arena_matchup_received", {
       path: `${promptId ? "forced" : "random"}:adaptive`,
       samplingLane: matchup.samplingLane ?? "unknown",
-      laneABlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build)),
-      laneBBlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build)),
-      headersMs: roundMetricMs(trace.measure("headers", "fetch_start", "headers_received")),
-      bodyMs: roundMetricMs(trace.measure("body", "headers_received", "matchup_received")),
+      laneABlocks,
+      laneBBlocks,
+      headersMs,
+      bodyMs,
       totalMs: roundMetricMs(totalMs),
       latency: getArenaLatencyBucket(totalMs),
+    });
+    enqueueClientMetric({
+      kind: "matchup",
+      mode: promptId ? "forced" : "random",
+      laneABlocks,
+      laneBBlocks,
+      headersMs,
+      bodyMs,
+      totalMs: roundMetricMs(totalMs),
     });
     return packedMatchup;
   } finally {
@@ -314,7 +335,15 @@ async function readMeasuredBuildVariantPayload(
   return result;
 }
 
-function normalizeBuildSource(response: Response): string {
+type BuildMetricSource =
+  | "artifact"
+  | "live"
+  | "artifact-required"
+  | "artifact-redirect"
+  | "response-cache"
+  | "unknown";
+
+function normalizeBuildSource(response: Response): BuildMetricSource {
   const source =
     response.headers.get("x-build-source") ?? response.headers.get("x-build-stream-source");
   if (source === "artifact") return "artifact";
@@ -359,6 +388,18 @@ function reportBuildDeliveryMetrics(opts: {
     opts.requestedFormat === "v4" &&
     opts.servedFormat === "binary" &&
     (source === "artifact" || source === "artifact-redirect");
+  const headersMs = roundMetricMs(
+    metrics.trace.measure("headers", metrics.startStage, "headers_received"),
+  );
+  const bodyMs = roundMetricMs(
+    metrics.trace.measure("body", "headers_received", "body_complete"),
+  );
+  const inflateMs = roundMetricMs(
+    metrics.trace.measure("inflate", "body_complete", "inflate_complete"),
+  );
+  const decodeMs = roundMetricMs(
+    metrics.trace.measure("decode", "inflate_complete", "decode_complete"),
+  );
 
   // Web Analytics Plus accepts at most eight properties per custom event
   trackEvent("arena_build_delivery", {
@@ -374,18 +415,28 @@ function reportBuildDeliveryMetrics(opts: {
   trackEvent("arena_build_delivery_timing", {
     path: `${path}:${opts.servedFormat}`,
     blockCountBucket,
-    headersMs: roundMetricMs(
-      metrics.trace.measure("headers", metrics.startStage, "headers_received"),
-    ),
-    bodyMs: roundMetricMs(
-      metrics.trace.measure("body", "headers_received", "body_complete"),
-    ),
-    inflateMs: roundMetricMs(
-      metrics.trace.measure("inflate", "body_complete", "inflate_complete"),
-    ),
-    decodeMs: roundMetricMs(
-      metrics.trace.measure("decode", "inflate_complete", "decode_complete"),
-    ),
+    headersMs,
+    bodyMs,
+    inflateMs,
+    decodeMs,
+    totalMs: roundMetricMs(totalMs),
+    bodyBytes: opts.bodyBytes,
+  });
+  enqueueClientMetric({
+    kind: "delivery",
+    purpose: metrics.purpose,
+    variant: opts.ref.variant,
+    transport: metrics.transport,
+    requestedFormat: opts.requestedFormat,
+    servedFormat: opts.servedFormat,
+    source,
+    blockCountBucket,
+    compressed: opts.compressed,
+    optimized,
+    headersMs,
+    bodyMs,
+    inflateMs,
+    decodeMs,
     totalMs: roundMetricMs(totalMs),
     bodyBytes: opts.bodyBytes,
   });
@@ -416,6 +467,7 @@ function reportBuildRenderMetrics(
     totalMs: roundMetricMs(metrics.totalMs),
     animated: metrics.animated,
   });
+  enqueueVoxelMetric("arena", variant, metrics);
 }
 
 type FetchBuildVariantStreamOptions = {

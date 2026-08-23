@@ -44,6 +44,7 @@ import {
   parseSandboxComparisonDeepLink,
 } from "@/lib/deepLinks";
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
+import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -1009,6 +1010,11 @@ export function SandboxBenchmark() {
             loadingMessage={loadingMessage}
             loadingProgress={isHydrating ? laneState.progress ?? undefined : undefined}
             viewerRef={viewerRef}
+            onBuildMetrics={
+              laneState.phase === "ready"
+                ? (metrics) => enqueueVoxelMetric("sandbox", "full", metrics)
+                : undefined
+            }
             enableBuildExport={hasRenderableBuild && laneState.phase === "ready" && Boolean(build && model)}
             exportLabel={title}
             exportPrompt={selectedPromptText}
