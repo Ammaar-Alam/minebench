@@ -96,6 +96,13 @@ export function enqueueDeliveryMetric(params: {
   compressed?: boolean;
 }) {
   const source = normalizeDeliverySource(params.response);
+  const encoding = (
+    params.response.headers.get("content-encoding") ??
+    params.response.headers.get("x-build-content-encoding") ??
+    ""
+  ).toLowerCase();
+  const isGzip = encoding.includes("gzip");
+  const compressed = Boolean(params.compressed || isGzip);
   const optimized =
     params.requestedFormat === "v4" &&
     params.servedFormat === "binary" &&
@@ -110,7 +117,7 @@ export function enqueueDeliveryMetric(params: {
     servedFormat: params.servedFormat,
     delivery_source: source,
     blockCountBucket: getArenaBlockCountBucket(params.blockCount),
-    compressed: Boolean(params.compressed),
+    compressed,
     optimized,
     headersMs: roundMetricMs(params.headersMs),
     bodyMs: roundMetricMs(params.bodyMs),

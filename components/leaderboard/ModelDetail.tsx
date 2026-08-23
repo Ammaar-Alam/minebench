@@ -284,10 +284,24 @@ async function fetchBuildVariantStreamOnce(
   }
 
   try {
-    return await readBuildVariantStream(res, {
+    const startedAt = performance.now();
+    const payload = await readBuildVariantStream(res, {
       signal: opts?.signal,
       onProgress: opts?.onProgress,
     });
+    enqueueDeliveryMetric({
+      surface: "leaderboard",
+      variant: ref.variant,
+      transport: useArtifact ? "stream-artifact" : "stream-live",
+      requestedFormat: "ndjson",
+      servedFormat: "ndjson",
+      response: res,
+      blockCount: voxelBuildBlockCount(payload.voxelBuild),
+      totalMs: performance.now() - startedAt,
+      bodyBytes: null,
+      compressed: res.headers.get("content-encoding")?.includes("gzip") || false,
+    });
+    return payload;
   } catch (error) {
     if (error instanceof IncompleteBuildStreamError) {
       return fetchBuildVariantSnapshot(ref, opts?.signal);
