@@ -697,8 +697,11 @@ async function findOrInviteSupabaseAuthUserByEmail(email: string): Promise<strin
     page = data.nextPage;
   }
 
-  const siteUrl = (process.env.MINEBENCH_SITE_URL ?? "").trim().replace(/\/+$/, "");
-  if (!siteUrl) throw new Error("Missing MINEBENCH_SITE_URL for the invitation redirect");
+  const siteUrl = (
+    process.env.MINEBENCH_SITE_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "") ||
+    "https://alpha.minebench.ai"
+  ).replace(/\/+$/, "");
   const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
     redirectTo: `${siteUrl}/lab/auth/confirm?next=/lab`,
   });
@@ -974,9 +977,14 @@ export async function removeOrganizationMember(
   params: { email: string },
 ): Promise<void> {
   const email = normalizeEmail(params.email);
+  let authUserIdToDelete: string | null = null;
+
   await prisma.$transaction(async (tx) => {
     await lockOrganizationMembershipChange(tx, actor, organizationId);
-    const user = await tx.user.findUnique({ where: { email }, select: { id: true } });
+    const user = await tx.user.findUnique({
+      where: { email },
+      select: { id: true, isMineBenchAdmin: true },
+    });
     if (user) await assertNotLastAdmin(tx, organizationId, user.id);
     await tx.organizationMembership.deleteMany({
       where: {
@@ -988,7 +996,34 @@ export async function removeOrganizationMember(
       where: { organizationId, email, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+
+    if (user && !user.isMineBenchAdmin) {
+      const remainingMemberships = await tx.organizationMembership.count({
+        where: { userId: user.id },
+      });
+      const remainingActiveInvites = await tx.organizationInvitation.count({
+        where: { email, revokedAt: null, acceptedAt: null },
+      });
+      if (remainingMemberships === 0 && remainingActiveInvites === 0) {
+        await tx.organizationInvitation.deleteMany({
+          where: { email },
+        });
+        await tx.user.delete({
+          where: { id: user.id },
+        });
+        authUserIdToDelete = user.id;
+      }
+    }
   });
+
+  if (authUserIdToDelete) {
+    try {
+      const supabase = createSupabaseAdminClient();
+      await supabase.auth.admin.deleteUser(authUserIdToDelete);
+    } catch {
+      // Best-effort auth cleanup
+    }
+  }
 }
 
 export async function createStealthEvaluation(
