@@ -10,6 +10,7 @@ import {
   iterateArenaBuildChunks,
   iterateArenaBuildStreamEvents,
   planArenaBuildStream,
+  rewriteBlindArenaBuildStreamIdentity,
   uploadArenaBuildStreamArtifact,
 } from "@/lib/arena/buildStream";
 import {
@@ -137,40 +138,6 @@ function chunkStreamArtifactBytes(events: Iterable<ArenaBuildStreamEvent>) {
     offset += part.length;
   }
   return out;
-}
-
-function rewriteBlindStreamIdentity(
-  body: ReadableStream<Uint8Array>,
-  buildId: string,
-): ReadableStream<Uint8Array> {
-  const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let pending = "";
-  const rewriteLine = (line: string) => {
-    if (!line.trim()) return line;
-    try {
-      const event = JSON.parse(line) as ArenaBuildStreamEvent;
-      return event.type === "hello"
-        ? JSON.stringify({ ...event, buildId, checksum: null })
-        : line;
-    } catch {
-      return line;
-    }
-  };
-  return body.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        pending += decoder.decode(chunk, { stream: true });
-        const lines = pending.split("\n");
-        pending = lines.pop() ?? "";
-        for (const line of lines) controller.enqueue(encoder.encode(`${rewriteLine(line)}\n`));
-      },
-      flush(controller) {
-        pending += decoder.decode();
-        if (pending) controller.enqueue(encoder.encode(rewriteLine(pending)));
-      },
-    }),
-  );
 }
 
 function warmStreamArtifactInBackground(opts: {
@@ -331,9 +298,17 @@ export async function GET(
             privateAccess: true,
           });
           timing.apply(headers);
-          return new Response(rewriteBlindStreamIdentity(artifactResponse.body, clientBuildId), {
-            headers,
-          });
+          const body = await withTimeout(
+            (signal) =>
+              rewriteBlindArenaBuildStreamIdentity(
+                artifactResponse.body!,
+                clientBuildId,
+                signal,
+              ),
+            ARTIFACT_FETCH_TIMEOUT_MS,
+            "artifact decode",
+          );
+          return new Response(body, { headers });
         }
       } else {
         const artifactSignedUrl = await withTimeout(

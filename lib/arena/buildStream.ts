@@ -219,6 +219,94 @@ export function encodeArenaBuildStreamEvent(event: ArenaBuildStreamEvent): Uint8
   return ENCODER.encode(`${JSON.stringify(event)}\n`);
 }
 
+async function readArtifactChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
+) {
+  if (!signal) return reader.read();
+  if (signal.aborted) throw signal.reason;
+  return new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      cleanup();
+      void reader.cancel(signal.reason).catch(() => undefined);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (value) => {
+        cleanup();
+        resolve(value);
+      },
+      (error) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
+}
+
+export async function rewriteBlindArenaBuildStreamIdentity(
+  body: ReadableStream<Uint8Array>,
+  buildId: string,
+  signal?: AbortSignal,
+): Promise<ReadableStream<Uint8Array>> {
+  const [probe, replay] = body.tee();
+  const reader = probe.getReader();
+  const prefix: number[] = [];
+  try {
+    while (prefix.length < 2) {
+      const next = await readArtifactChunk(reader, signal);
+      if (next.done) break;
+      for (const byte of next.value) {
+        prefix.push(byte);
+        if (prefix.length === 2) break;
+      }
+    }
+  } catch (error) {
+    void replay.cancel(error).catch(() => undefined);
+    throw error;
+  } finally {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  const decoded =
+    prefix[0] === 0x1f && prefix[1] === 0x8b
+      ? replay.pipeThrough(
+          new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>,
+        )
+      : replay;
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let pending = "";
+  const rewriteLine = (line: string) => {
+    if (!line.trim()) return line;
+    try {
+      const event = JSON.parse(line) as ArenaBuildStreamEvent;
+      return event.type === "hello"
+        ? JSON.stringify({ ...event, buildId, checksum: null })
+        : line;
+    } catch {
+      return line;
+    }
+  };
+  return decoded.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        pending += decoder.decode(chunk, { stream: true });
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) controller.enqueue(encoder.encode(`${rewriteLine(line)}\n`));
+      },
+      flush(controller) {
+        pending += decoder.decode();
+        if (pending) controller.enqueue(encoder.encode(rewriteLine(pending)));
+      },
+    }),
+  );
+}
+
 export const ARENA_BUILD_STREAM_HELLO_PAD =
   ARENA_STREAM_HELLO_PAD_BYTES > 0 ? " ".repeat(ARENA_STREAM_HELLO_PAD_BYTES) : "";
 

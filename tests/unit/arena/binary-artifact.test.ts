@@ -3,8 +3,12 @@ import {
   decodeBinaryArtifact,
   encodeBinaryArtifact,
   isBinaryArtifact,
+  rewriteBlindBinaryArtifactIdentity,
 } from "../../../lib/arena/binaryArtifact";
-import { BinaryBuildFormatError } from "../../../lib/voxel/binaryBuild";
+import {
+  BinaryBuildFormatError,
+  readBinaryVoxelBuildHeader,
+} from "../../../lib/voxel/binaryBuild";
 import { unpackVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 import type { VoxelBlock } from "../../../lib/voxel/types";
 
@@ -32,6 +36,25 @@ async function main() {
     assert.deepEqual(decoded.envelope, envelope);
     assert.equal(decoded.blocks.count, blocks.length);
     assert.deepEqual(unpackVoxelBlocks(decoded.blocks), blocks);
+  }
+
+  {
+    const encoded = encodeBinaryArtifact(envelope, blocks, "deadbeef" + "0".repeat(56));
+    const blinded = rewriteBlindBinaryArtifactIdentity(encoded, "b1.blind-build");
+    const decoded = decodeBinaryArtifact(blinded);
+    const envelopeBytes = new DataView(
+      blinded.buffer,
+      blinded.byteOffset,
+      blinded.byteLength,
+    ).getUint32(4, false);
+
+    assert.deepEqual(decoded.envelope, {
+      ...envelope,
+      buildId: "b1.blind-build",
+      checksum: null,
+    });
+    assert.deepEqual(unpackVoxelBlocks(decoded.blocks), blocks);
+    assert.equal(readBinaryVoxelBuildHeader(blinded.subarray(8 + envelopeBytes)).checksumPrefix, 0);
   }
 
   {

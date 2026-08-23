@@ -15,6 +15,7 @@ import {
   fetchArenaBuildSnapshotArtifact,
 } from "@/lib/arena/buildSnapshotArtifacts";
 import type { ArenaSnapshotArtifactFormat } from "@/lib/arena/artifactOwnership";
+import { rewriteBlindBinaryArtifactIdentity } from "@/lib/arena/binaryArtifact";
 import {
   getArenaBuildMeta,
   invalidateArenaBuildMeta,
@@ -268,7 +269,7 @@ export async function GET(
     arenaBuildHints: buildMeta.arenaBuildHints,
   });
   const deliveryClass = variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass;
-  const binaryFormatRequested = !buildAccess && url.searchParams.get("format") === "v4";
+  const binaryFormatRequested = url.searchParams.get("format") === "v4";
   const binaryArtifactRequested =
     binaryFormatRequested && isBinarySnapshotArtifactEnabled();
   const fullUsesStreamDelivery =
@@ -404,7 +405,9 @@ export async function GET(
         timing.end("artifact_hit", artifactStartedAt);
         timing.end("total", requestStartedAt);
         const responseArtifactBytes = buildAccess
-          ? rewriteBlindSnapshotIdentity(artifactBytes, clientBuildId)
+          ? servedArtifactFormat === "binary"
+            ? rewriteBlindBinaryArtifactIdentity(artifactBytes, clientBuildId)
+            : rewriteBlindSnapshotIdentity(artifactBytes, clientBuildId)
           : artifactBytes;
         // the stored object is gzip; proxying it verbatim to a gzip-capable
         // client keeps snapshot-class fallbacks off the uncompressed path

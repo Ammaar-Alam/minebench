@@ -28,7 +28,10 @@ for (const path of [
   assert.match(buildRoute, /private, no-store/);
   assert.match(buildRoute, /privateAccessOnly && !buildAccess/);
 }
-assert.match(read("app/api/arena/builds/[buildId]/route.ts"), /cache: buildAccess \? "no-store"/);
+const arenaBuildRoute = read("app/api/arena/builds/[buildId]/route.ts");
+assert.match(arenaBuildRoute, /cache: buildAccess \? "no-store"/);
+assert.match(arenaBuildRoute, /const binaryFormatRequested = url\.searchParams\.get\("format"\) === "v4"/);
+assert.match(arenaBuildRoute, /rewriteBlindBinaryArtifactIdentity\(artifactBytes, clientBuildId\)/);
 assert.match(read("app/api/arena/matchup/route.ts"), /cache: privateAccessOnly \? "no-store"/);
 
 const generation = read("lib/stealth/generation.ts");
