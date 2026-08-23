@@ -5,7 +5,12 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
-import { createVoxelGroupAsync, VoxelGroup } from "@/lib/voxel/mesh";
+import {
+  createVoxelGroupAsync,
+  VoxelGroup,
+  type VoxelMeshCacheStatus,
+  type VoxelMeshStrategy,
+} from "@/lib/voxel/mesh";
 import {
   voxelBuildBlockCount,
   voxelBuildBlocksRef,
@@ -17,11 +22,28 @@ import {
   retargetDistanceForAspect,
   type RotatingBoundsFraming,
 } from "@/lib/voxel/framing";
+import { createBrowserPerformanceTrace } from "@/lib/observability/browserPerformance";
 
 export type VoxelViewerBuildProgress = {
   processedBlocks: number;
   totalBlocks: number;
   stageLabel?: string | null;
+};
+
+export type VoxelViewerBuildMetrics = {
+  inputBlockCount: number;
+  renderedBlockCount: number;
+  strategy: VoxelMeshStrategy;
+  cacheStatus: VoxelMeshCacheStatus;
+  animated: boolean;
+  queueMs: number | null;
+  atlasMs: number | null;
+  payloadMs: number | null;
+  groupMs: number | null;
+  meshMs: number | null;
+  firstRenderMs: number | null;
+  revealMs: number | null;
+  totalMs: number | null;
 };
 
 type ViewerProps = {
@@ -35,6 +57,7 @@ type ViewerProps = {
   onBuildReadyChange?: (ready: boolean) => void;
   onBuildProgressChange?: (progress: VoxelViewerBuildProgress | null) => void;
   onBuildErrorChange?: (message: string | null) => void;
+  onBuildMetrics?: (metrics: VoxelViewerBuildMetrics) => void;
 };
 
 export type VoxelViewerHandle = {
@@ -385,6 +408,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     onBuildReadyChange,
     onBuildProgressChange,
     onBuildErrorChange,
+    onBuildMetrics,
   },
   ref
 ) {
@@ -401,6 +425,14 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     undefined,
   );
   const onBuildErrorChangeRef = useRef<((message: string | null) => void) | undefined>(undefined);
+  const onBuildMetricsRef = useRef<((metrics: VoxelViewerBuildMetrics) => void) | undefined>(
+    undefined,
+  );
+  const pendingFirstRenderRef = useRef<{
+    group: THREE.Group;
+    report: () => void;
+    discard: () => void;
+  } | null>(null);
   const requestRenderRef = useRef<(() => void) | null>(null);
   const exportRendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const tapStartRef = useRef<{ x: number; y: number; at: number } | null>(null);
@@ -494,6 +526,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     onBuildErrorChangeRef.current = onBuildErrorChange;
   }, [onBuildErrorChange]);
 
+  useEffect(() => {
+    onBuildMetricsRef.current = onBuildMetrics;
+  }, [onBuildMetrics]);
+
   const fitView = useCallback(() => {
     const three = threeRef.current;
     const vg = voxelGroupRef.current;
@@ -513,6 +549,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     }
 
     if (voxelGroupRef.current) {
+      if (pendingFirstRenderRef.current?.group === voxelGroupRef.current.group) {
+        pendingFirstRenderRef.current.discard();
+        pendingFirstRenderRef.current = null;
+      }
       three.scene.remove(voxelGroupRef.current.group);
       voxelGroupRef.current.dispose();
       voxelGroupRef.current = null;
@@ -625,9 +665,17 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const buildSnapshot = latest.voxelBuild;
     const expectedSnapshot = latest.expectedBlockCount;
     const meshCacheKeySnapshot = latest.meshCacheKey;
+    const buildTrace = createBrowserPerformanceTrace("voxel-build");
+    buildTrace.mark("mesh_queued");
+    let meshStarted = false;
+    let meshStrategy: VoxelMeshStrategy = "local";
+    let meshCacheStatus: VoxelMeshCacheStatus = "not-used";
+    let traceRetainedForFirstRender = false;
+    let traceAbandoned = false;
 
     try {
       const tex = await loadAtlasTexture();
+      buildTrace.mark("atlas_ready");
       if (controller.signal.aborted) return;
       if (!sameIdentity(identityRef.current, incomingIdentity)) return;
       if (!buildSnapshot) return;
@@ -637,6 +685,20 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         blockLimit,
         cacheKey: meshCacheKeySnapshot,
         yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
+        onStage(event) {
+          meshStrategy = event.strategy;
+          if (event.cacheStatus) meshCacheStatus = event.cacheStatus;
+          if (event.stage === "mesh_started") {
+            if (!meshStarted) {
+              meshStarted = true;
+              buildTrace.mark("mesh_started");
+            }
+          } else if (event.stage === "mesh_payload_complete") {
+            buildTrace.mark("mesh_payload_complete");
+          } else {
+            buildTrace.mark("three_group_complete");
+          }
+        },
         onProgress(progress) {
           onBuildProgressChangeRef.current?.({
             processedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
@@ -681,6 +743,63 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       const expectedNow = normalizeExpectedBlockCount(expectedSnapshot);
       const desiredNow = Math.max(0, voxelBuildBlockCount(latestRef.current.voxelBuild));
       const requiredNow = expectedNow ?? desiredNow;
+      const buildReady = Boolean(
+        requiredNow <= 0 || (blockLimit >= requiredNow && desiredNow >= requiredNow),
+      );
+      let firstRenderComplete = false;
+      let revealComplete = false;
+      let metricsReported = false;
+      let revealAnimated = false;
+      const maybeReportBuildMetrics = () => {
+        if (metricsReported) return;
+        if (
+          traceAbandoned ||
+          !buildReady ||
+          controller.signal.aborted ||
+          !sameIdentity(identityRef.current, incomingIdentity) ||
+          voxelGroupRef.current?.group !== vg.group
+        ) {
+          buildTrace.clear();
+          return;
+        }
+        if (!firstRenderComplete || !revealComplete) {
+          return;
+        }
+        metricsReported = true;
+        buildTrace.mark("complete");
+        try {
+          onBuildMetricsRef.current?.({
+            inputBlockCount: blockLimit,
+            renderedBlockCount: vg.stats.blockCount,
+            strategy: meshStrategy,
+            cacheStatus: meshCacheStatus,
+            animated: revealAnimated,
+            queueMs: buildTrace.duration("mesh_queued", "mesh_started"),
+            atlasMs: buildTrace.duration("mesh_queued", "atlas_ready"),
+            payloadMs: buildTrace.duration("mesh_started", "mesh_payload_complete"),
+            groupMs: buildTrace.duration("mesh_payload_complete", "three_group_complete"),
+            meshMs: buildTrace.duration("mesh_started", "three_group_complete"),
+            firstRenderMs: buildTrace.duration("three_group_complete", "first_render"),
+            revealMs: buildTrace.duration("three_group_complete", "reveal_complete"),
+            totalMs: buildTrace.duration("mesh_queued", "complete"),
+          });
+        } finally {
+          buildTrace.clear();
+        }
+      };
+      pendingFirstRenderRef.current?.discard();
+      pendingFirstRenderRef.current = {
+        group: vg.group,
+        report() {
+          buildTrace.mark("first_render");
+          firstRenderComplete = true;
+          maybeReportBuildMetrics();
+        },
+        discard() {
+          buildTrace.clear();
+        },
+      };
+      traceRetainedForFirstRender = true;
       requestRenderRef.current?.();
 
       const revealFromFraction =
@@ -702,6 +821,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       if (shouldAnimateReveal) {
         const geometries = collectRevealGeometries(vg.group);
         if (geometries.length > 0) {
+          revealAnimated = true;
           applyRevealFraction(geometries, revealFromFraction);
           requestRenderRef.current?.();
 
@@ -745,11 +865,16 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         }
       }
 
+      buildTrace.mark("reveal_complete");
+      revealComplete = true;
+      maybeReportBuildMetrics();
       onBuildProgressChangeRef.current?.(null);
       onBuildErrorChangeRef.current?.(null);
-      reportReady(Boolean(requiredNow <= 0 || (blockLimit >= requiredNow && desiredNow >= requiredNow)));
+      reportReady(buildReady);
       requestRenderRef.current?.();
     } catch (err: unknown) {
+      traceAbandoned = true;
+      buildTrace.clear();
       if (err instanceof DOMException && err.name === "AbortError") return;
       console.warn("VoxelViewer build failed", err);
       onBuildErrorChangeRef.current?.(
@@ -763,6 +888,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         activeJobRef.current.identity = null;
       }
       onBuildProgressChangeRef.current?.(null);
+      if (!traceRetainedForFirstRender) buildTrace.clear();
       if (buildPendingRef.current.dirty) scheduleKick();
     }
   }, [clearVoxelGroup, fitView, reportReady, scheduleKick]);
@@ -1005,6 +1131,16 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           vg.group.rotation.y += dt * 0.25;
         }
         renderer.render(scene, camera);
+        const pendingFirstRender = pendingFirstRenderRef.current;
+        if (pendingFirstRender) {
+          if (pendingFirstRender.group === voxelGroupRef.current?.group) {
+            pendingFirstRenderRef.current = null;
+            pendingFirstRender.report();
+          } else {
+            pendingFirstRenderRef.current = null;
+            pendingFirstRender.discard();
+          }
+        }
         needsFollowupFrame = Boolean(controlsChanged || shouldAutoRotate);
       } finally {
         rendering = false;
@@ -1099,6 +1235,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         voxelGroupRef.current.dispose();
         voxelGroupRef.current = null;
       }
+      pendingFirstRenderRef.current?.discard();
+      pendingFirstRenderRef.current = null;
       boundsRef.current = null;
 
       scene.remove(grid);
@@ -1139,6 +1277,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       job.controller?.abort();
       job.controller = null;
       job.identity = null;
+      pendingFirstRenderRef.current?.discard();
+      pendingFirstRenderRef.current = null;
     };
   }, []);
 

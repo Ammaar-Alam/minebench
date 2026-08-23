@@ -16,6 +16,7 @@ import {
   IncompleteBuildStreamError,
   readBuildVariantArtifact,
   readBuildVariantStream,
+  type BuildVariantArtifactReadEvent,
   type BuildStreamProgress,
   type BuildVariantStreamResponse,
 } from "@/lib/arena/clientBuildResponse";
@@ -25,12 +26,22 @@ import {
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import type { VoxelViewerBuildMetrics } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoteBar, type VoteConfirmTarget } from "@/components/arena/VoteBar";
 import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
 import { ErrorState } from "@/components/ErrorState";
 import { trackEvent } from "@/lib/analytics";
+import {
+  getArenaBlockCountBucket,
+  getArenaLatencyBucket,
+  roundMetricMs,
+} from "@/lib/observability/arenaMetrics";
+import {
+  createBrowserPerformanceTrace,
+  type BrowserPerformanceTrace,
+} from "@/lib/observability/browserPerformance";
 
 type ArenaState =
   | { kind: "loading" }
@@ -95,35 +106,87 @@ function packBuildVariantResponse(payload: BuildVariantResponse): BuildVariantRe
 
 // The binary artifact already carries its blocks as typed arrays, so it needs
 // no packing step and never becomes a string or per-block objects.
-async function readBuildVariantPayload(res: Response): Promise<BuildVariantResponse> {
-  const artifact = await readBuildVariantArtifact<BuildVariantResponse>(res);
-  if (artifact.kind === "json") return packBuildVariantResponse(artifact.value);
+type BuildVariantPayloadResult = {
+  payload: BuildVariantResponse;
+  servedFormat: "binary" | "json";
+  bodyBytes: number | null;
+  compressed: boolean;
+};
+
+async function readBuildVariantPayload(
+  res: Response,
+  onStage?: (event: BuildVariantArtifactReadEvent) => void,
+): Promise<BuildVariantPayloadResult> {
+  let bodyBytes: number | null = null;
+  let compressed = false;
+  const artifact = await readBuildVariantArtifact<BuildVariantResponse>(res, {
+    onStage(event) {
+      if (event.stage === "body_complete") bodyBytes = event.bytes;
+      if (event.stage === "inflate_complete") {
+        compressed = event.compressed;
+      }
+      onStage?.(event);
+    },
+  });
+  if (artifact.kind === "json") {
+    return {
+      payload: packBuildVariantResponse(artifact.value),
+      servedFormat: "json",
+      bodyBytes,
+      compressed,
+    };
+  }
   const envelope = artifact.envelope as Omit<BuildVariantResponse, "voxelBuild"> & {
     version?: string;
   };
   return {
-    buildId: envelope.buildId,
-    variant: envelope.variant,
-    checksum: envelope.checksum ?? null,
-    serverValidated: Boolean(envelope.serverValidated),
-    buildLoadHints: envelope.buildLoadHints,
-    voxelBuild: { version: "1.0", blocks: [], packed: artifact.blocks },
+    payload: {
+      buildId: envelope.buildId,
+      variant: envelope.variant,
+      checksum: envelope.checksum ?? null,
+      serverValidated: Boolean(envelope.serverValidated),
+      buildLoadHints: envelope.buildLoadHints,
+      voxelBuild: { version: "1.0", blocks: [], packed: artifact.blocks },
+    },
+    servedFormat: "binary",
+    bodyBytes,
+    compressed,
   };
 }
 
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
-  const url = new URL("/api/arena/matchup", window.location.origin);
-  if (promptId) url.searchParams.set("promptId", promptId);
-  // Adaptive mode keeps small builds instant while deferring large payloads.
-  url.searchParams.set("payload", "adaptive");
-  const res = await fetch(url, { method: "GET", credentials: "include", signal });
-  if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load matchup"));
-  const matchup = (await res.json()) as ArenaMatchup;
-  return {
-    ...matchup,
-    a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
-    b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
-  };
+  const trace = createBrowserPerformanceTrace("matchup");
+  trace.mark("fetch_start");
+  try {
+    const url = new URL("/api/arena/matchup", window.location.origin);
+    if (promptId) url.searchParams.set("promptId", promptId);
+    // Adaptive mode keeps small builds instant while deferring large payloads.
+    url.searchParams.set("payload", "adaptive");
+    const res = await fetch(url, { method: "GET", credentials: "include", signal });
+    trace.mark("headers_received");
+    if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load matchup"));
+    const matchup = (await res.json()) as ArenaMatchup;
+    const packedMatchup = {
+      ...matchup,
+      a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
+      b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
+    };
+    trace.mark("matchup_received");
+    const totalMs = trace.measure("total", "fetch_start", "matchup_received") ?? 0;
+    trackEvent("arena_matchup_received", {
+      path: `${promptId ? "forced" : "random"}:adaptive`,
+      samplingLane: matchup.samplingLane ?? "unknown",
+      laneABlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build)),
+      laneBBlocks: getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build)),
+      headersMs: roundMetricMs(trace.measure("headers", "fetch_start", "headers_received")),
+      bodyMs: roundMetricMs(trace.measure("body", "headers_received", "matchup_received")),
+      totalMs: roundMetricMs(totalMs),
+      latency: getArenaLatencyBucket(totalMs),
+    });
+    return packedMatchup;
+  } finally {
+    trace.clear();
+  }
 }
 
 async function fetchMatchup(
@@ -211,12 +274,156 @@ async function submitArenaAction(matchupId: string, action: ArenaAction): Promis
 }
 
 type BuildVariantResponse = BuildVariantStreamResponse;
+type BuildRequestPurpose = "visible" | "prefetch";
+type BuildTransport = "snapshot" | "stream-artifact" | "stream-live";
+
+type BuildDeliveryMetrics = {
+  trace: BrowserPerformanceTrace;
+  startStage: "preview_fetch_start" | "full_fetch_start";
+  purpose: BuildRequestPurpose;
+  transport: BuildTransport;
+};
+
+function startBuildDeliveryMetrics(
+  ref: ArenaBuildRef,
+  purpose: BuildRequestPurpose,
+  transport: BuildTransport,
+): BuildDeliveryMetrics {
+  const trace = createBrowserPerformanceTrace("build-delivery");
+  const startStage = ref.variant === "preview" ? "preview_fetch_start" : "full_fetch_start";
+  trace.mark(startStage);
+  return { trace, startStage, purpose, transport };
+}
+
+async function readMeasuredBuildVariantPayload(
+  response: Response,
+  metrics: BuildDeliveryMetrics,
+): Promise<BuildVariantPayloadResult> {
+  const result = await readBuildVariantPayload(response, (event) => {
+    if (event.stage === "body_complete") metrics.trace.mark("body_complete");
+    if (event.stage === "inflate_complete") metrics.trace.mark("inflate_complete");
+    if (
+      event.stage === "binary_decode_complete" ||
+      event.stage === "json_decode_complete"
+    ) {
+      metrics.trace.mark(event.stage);
+      metrics.trace.mark("decode_complete");
+    }
+  });
+  metrics.trace.mark("payload_ready");
+  return result;
+}
+
+function normalizeBuildSource(response: Response): string {
+  const source =
+    response.headers.get("x-build-source") ?? response.headers.get("x-build-stream-source");
+  if (source === "artifact") return "artifact";
+  if (source === "live") return "live";
+  if (source === "artifact-required") return "artifact-required";
+  if (source === "artifact-redirect") return "artifact-redirect";
+  if (source?.startsWith("response-cache:")) return "response-cache";
+  if (response.redirected) return "artifact-redirect";
+  return "unknown";
+}
+
+function normalizeBuildDeliveryClass(response: Response): ArenaBuildDeliveryClass | "unknown" {
+  const value = response.headers.get("x-build-delivery-class");
+  return value === "inline" ||
+    value === "snapshot" ||
+    value === "stream-live" ||
+    value === "stream-artifact"
+    ? value
+    : "unknown";
+}
+
+function reportBuildDeliveryMetrics(opts: {
+  metrics: BuildDeliveryMetrics;
+  ref: ArenaBuildRef;
+  response: Response;
+  requestedFormat: "v4" | "json" | "ndjson";
+  servedFormat: "binary" | "json" | "ndjson";
+  payload: BuildVariantResponse;
+  bodyBytes: number | null;
+  compressed: boolean;
+}) {
+  const { metrics } = opts;
+  const source = normalizeBuildSource(opts.response);
+  const deliveryClass = normalizeBuildDeliveryClass(opts.response);
+  const blockCountBucket = getArenaBlockCountBucket(
+    voxelBuildBlockCount(opts.payload.voxelBuild),
+  );
+  const path = `${metrics.purpose}:${opts.ref.variant}:${metrics.transport}`;
+  const totalMs =
+    metrics.trace.measure("total", metrics.startStage, "payload_ready") ?? 0;
+  const optimized =
+    opts.requestedFormat === "v4" &&
+    opts.servedFormat === "binary" &&
+    (source === "artifact" || source === "artifact-redirect");
+
+  // Web Analytics Plus accepts at most eight properties per custom event
+  trackEvent("arena_build_delivery", {
+    path,
+    requestedFormat: opts.requestedFormat,
+    servedFormat: opts.servedFormat,
+    source,
+    deliveryClass,
+    optimized,
+    blockCountBucket,
+    gzip: opts.compressed,
+  });
+  trackEvent("arena_build_delivery_timing", {
+    path: `${path}:${opts.servedFormat}`,
+    blockCountBucket,
+    headersMs: roundMetricMs(
+      metrics.trace.measure("headers", metrics.startStage, "headers_received"),
+    ),
+    bodyMs: roundMetricMs(
+      metrics.trace.measure("body", "headers_received", "body_complete"),
+    ),
+    inflateMs: roundMetricMs(
+      metrics.trace.measure("inflate", "body_complete", "inflate_complete"),
+    ),
+    decodeMs: roundMetricMs(
+      metrics.trace.measure("decode", "inflate_complete", "decode_complete"),
+    ),
+    totalMs: roundMetricMs(totalMs),
+    bodyBytes: opts.bodyBytes,
+  });
+}
+
+function reportBuildRenderMetrics(
+  variant: ArenaBuildVariant,
+  metrics: VoxelViewerBuildMetrics,
+) {
+  const path = `${variant}:${metrics.strategy}:${metrics.cacheStatus}`;
+  const blockCountBucket = getArenaBlockCountBucket(metrics.inputBlockCount);
+  trackEvent("arena_build_mesh_timing", {
+    path,
+    blockCountBucket,
+    queueMs: roundMetricMs(metrics.queueMs),
+    atlasMs: roundMetricMs(metrics.atlasMs),
+    payloadMs: roundMetricMs(metrics.payloadMs),
+    groupMs: roundMetricMs(metrics.groupMs),
+    meshMs: roundMetricMs(metrics.meshMs),
+    totalMs: roundMetricMs(metrics.totalMs),
+  });
+  trackEvent("arena_build_render_timing", {
+    path,
+    blockCountBucket,
+    renderedBlockCountBucket: getArenaBlockCountBucket(metrics.renderedBlockCount),
+    firstRenderMs: roundMetricMs(metrics.firstRenderMs),
+    revealMs: roundMetricMs(metrics.revealMs),
+    totalMs: roundMetricMs(metrics.totalMs),
+    animated: metrics.animated,
+  });
+}
 
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
   onProgress?: (build: ArenaMatchup["a"]["build"], progress: BuildStreamProgress) => void;
   allowSnapshotFallback?: boolean;
   allowLiveFallback?: boolean;
+  purpose?: BuildRequestPurpose;
 };
 
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
@@ -405,7 +612,11 @@ async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
   timeoutMs = SNAPSHOT_FETCH_TIMEOUT_MS,
-  opts?: { redirect?: boolean },
+  opts?: {
+    redirect?: boolean;
+    purpose?: BuildRequestPurpose;
+    metrics?: BuildDeliveryMetrics;
+  },
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
@@ -413,6 +624,10 @@ async function fetchBuildVariantSnapshot(
   const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
   if (BINARY_ARTIFACT_READS_ENABLED) url.searchParams.set("format", "v4");
+  const ownsMetrics = opts?.metrics == null;
+  const metrics =
+    opts?.metrics ??
+    startBuildDeliveryMetrics(ref, opts?.purpose ?? "visible", "snapshot");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
     let res: Response;
@@ -423,29 +638,69 @@ async function fetchBuildVariantSnapshot(
         signal: timed.signal,
         redirect: "follow",
       });
+      metrics.trace.mark("headers_received");
     } catch (err: unknown) {
       if (allowRedirect && !isAbortError(err)) {
         markStorageRedirectBlocked("snapshot");
-        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+        return await fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
+          redirect: false,
+          purpose: opts?.purpose,
+          metrics,
+        });
       }
       throw err;
     }
     if (!res.ok) {
       if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
-        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+        return await fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
+          redirect: false,
+          purpose: opts?.purpose,
+          metrics,
+        });
       }
       const message = await readClientErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
-    return await readBuildVariantPayload(res);
+    const result = await readMeasuredBuildVariantPayload(res, metrics);
+    reportBuildDeliveryMetrics({
+      metrics,
+      ref,
+      response: res,
+      requestedFormat: BINARY_ARTIFACT_READS_ENABLED ? "v4" : "json",
+      servedFormat: result.servedFormat,
+      payload: result.payload,
+      bodyBytes: result.bodyBytes,
+      compressed:
+        result.compressed || /\bgzip\b/i.test(res.headers.get("content-encoding") ?? ""),
+    });
+    return result.payload;
   } finally {
     timed.cleanup();
+    if (ownsMetrics) metrics.trace.clear();
   }
 }
 
 async function fetchBuildVariantStreamOnce(
   ref: ArenaBuildRef,
   useArtifact: boolean,
+  opts?: FetchBuildVariantStreamOptions,
+): Promise<BuildVariantResponse> {
+  const metrics = startBuildDeliveryMetrics(
+    ref,
+    opts?.purpose ?? "visible",
+    useArtifact ? "stream-artifact" : "stream-live",
+  );
+  try {
+    return await fetchBuildVariantStreamOnceWithMetrics(ref, useArtifact, metrics, opts);
+  } finally {
+    metrics.trace.clear();
+  }
+}
+
+async function fetchBuildVariantStreamOnceWithMetrics(
+  ref: ArenaBuildRef,
+  useArtifact: boolean,
+  metrics: BuildDeliveryMetrics,
   opts?: FetchBuildVariantStreamOptions,
 ): Promise<BuildVariantResponse> {
   const url = new URL(
@@ -464,6 +719,7 @@ async function fetchBuildVariantStreamOnce(
       credentials: "same-origin",
       signal: requestTimed.signal,
     });
+    metrics.trace.mark("headers_received");
   } catch (error) {
     if (useArtifact && !isAbortError(error)) markStorageRedirectBlocked("stream");
     throw error;
@@ -481,20 +737,56 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return readBuildVariantPayload(res);
+    const result = await readMeasuredBuildVariantPayload(res, metrics);
+    reportBuildDeliveryMetrics({
+      metrics,
+      ref,
+      response: res,
+      requestedFormat: "ndjson",
+      servedFormat: result.servedFormat,
+      payload: result.payload,
+      bodyBytes: result.bodyBytes,
+      compressed:
+        result.compressed || /\bgzip\b/i.test(res.headers.get("content-encoding") ?? ""),
+    });
+    return result.payload;
   }
 
   try {
-    return await readBuildVariantStream(res, {
+    const payload = await readBuildVariantStream(res, {
       signal: opts?.signal,
       onProgress: opts?.onProgress,
+      onStage(stage) {
+        if (stage === "body_complete") {
+          metrics.trace.mark("body_complete");
+          // Stream decompression and decoding happen incrementally while the body arrives.
+          metrics.trace.mark("inflate_complete");
+        } else {
+          metrics.trace.mark("decode_complete");
+        }
+      },
     });
+    metrics.trace.mark("payload_ready");
+    const contentLength = Number.parseInt(res.headers.get("content-length") ?? "", 10);
+    reportBuildDeliveryMetrics({
+      metrics,
+      ref,
+      response: res,
+      requestedFormat: "ndjson",
+      servedFormat: "ndjson",
+      payload,
+      bodyBytes: Number.isFinite(contentLength) && contentLength >= 0 ? contentLength : null,
+      compressed: /\bgzip\b/i.test(res.headers.get("content-encoding") ?? ""),
+    });
+    return payload;
   } catch (error) {
     if (
       error instanceof IncompleteBuildStreamError &&
       opts?.allowSnapshotFallback !== false
     ) {
-      return fetchBuildVariantSnapshot(ref, opts?.signal);
+      return fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS, {
+        purpose: opts?.purpose,
+      });
     }
     throw error;
   }
@@ -513,7 +805,11 @@ async function fetchBuildVariantStream(
     attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
   }
   if (opts?.allowSnapshotFallback !== false) {
-    attempts.push(() => fetchBuildVariantSnapshot(ref, opts?.signal));
+    attempts.push(() =>
+      fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS, {
+        purpose: opts?.purpose,
+      }),
+    );
   }
 
   for (const attempt of attempts) {
@@ -1726,11 +2022,14 @@ export function Arena() {
         const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
         const allowLiveFallback = deliveryClass !== "stream-artifact";
         const payload = shouldHydrateViaSnapshot(deliveryClass)
-          ? await fetchBuildVariantSnapshot(ref, controller.signal).catch(() =>
+          ? await fetchBuildVariantSnapshot(ref, controller.signal, SNAPSHOT_FETCH_TIMEOUT_MS, {
+              purpose: "prefetch",
+            }).catch(() =>
               fetchBuildVariantStream(ref, {
                 signal: controller.signal,
                 allowSnapshotFallback,
                 allowLiveFallback,
+                purpose: "prefetch",
                 onProgress: (_build, progress) => emitPrefetchProgress(progress),
               }),
             )
@@ -1738,6 +2037,7 @@ export function Arena() {
               signal: controller.signal,
               allowSnapshotFallback,
               allowLiveFallback,
+              purpose: "prefetch",
               onProgress: (_build, progress) => emitPrefetchProgress(progress),
             });
         const resolvedRef: ArenaBuildRef = {
@@ -2519,6 +2819,10 @@ export function Arena() {
                     return { ...prev, a: ready };
                   });
                 }}
+                onBuildMetrics={(metrics) => {
+                  if (!matchup) return;
+                  reportBuildRenderMetrics(getLaneHydratedVariant(matchup.a), metrics);
+                }}
                 isLoading={buildALoading}
                 loadingMode={buildALoadingMode}
                 loadingMessage={buildALoadingMessage}
@@ -2571,6 +2875,10 @@ export function Arena() {
                     if (prev.b === ready) return prev;
                     return { ...prev, b: ready };
                   });
+                }}
+                onBuildMetrics={(metrics) => {
+                  if (!matchup) return;
+                  reportBuildRenderMetrics(getLaneHydratedVariant(matchup.b), metrics);
                 }}
                 isLoading={buildBLoading}
                 loadingMode={buildBLoadingMode}

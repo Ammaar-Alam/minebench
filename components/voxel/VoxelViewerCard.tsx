@@ -8,6 +8,7 @@ import {
 } from "@/components/voxel/VoxelLoadingHud";
 import {
   VoxelViewer,
+  type VoxelViewerBuildMetrics,
   type VoxelViewerBuildProgress,
   type VoxelViewerHandle,
 } from "@/components/voxel/VoxelViewer";
@@ -33,6 +34,7 @@ export function VoxelViewerCard({
   autoRotate = true,
   animateIn,
   onBuildReadyChange,
+  onBuildMetrics,
   isLoading,
   loadingMode = "overlay",
   loadingProgress,
@@ -66,6 +68,7 @@ export function VoxelViewerCard({
   autoRotate?: boolean;
   animateIn?: boolean;
   onBuildReadyChange?: (ready: boolean) => void;
+  onBuildMetrics?: (metrics: VoxelViewerBuildMetrics) => void;
   isLoading?: boolean;
   loadingMode?: "overlay" | "silent";
   loadingProgress?: { receivedBlocks: number; totalBlocks: number | null };
@@ -369,6 +372,7 @@ export function VoxelViewerCard({
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
               animateIn={Boolean(animateIn && !isLoading)}
               onBuildReadyChange={handleBuildReadyChange}
+              onBuildMetrics={onBuildMetrics}
               onBuildProgressChange={handleBuildProgressChange}
               onBuildErrorChange={handleBuildErrorChange}
             />

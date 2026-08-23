@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Spline_Sans, Unbounded } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { SiteFooter } from "@/components/SiteFooter";
@@ -144,6 +145,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
         </div>
         <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );

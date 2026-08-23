@@ -13,6 +13,7 @@ import {
   type ArenaSnapshotArtifactFormat,
   uploadArenaBuildArtifact,
 } from "@/lib/arena/artifactOwnership";
+import { withServerSpanSync } from "@/lib/observability/serverTracing";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
@@ -24,6 +25,19 @@ export function isBinarySnapshotArtifactEnabled(): boolean {
 export type ArenaSnapshotArtifactTarget = {
   variant: ArenaBuildVariant;
   format: ArenaSnapshotArtifactFormat;
+};
+
+export type ArenaSnapshotArtifactFetchMetrics = {
+  cacheStatus:
+    | "not-eligible"
+    | "negative-cache"
+    | "body-cache"
+    | "inflight"
+    | "miss"
+    | "bypass";
+  transferBytes?: number;
+  decodedBytes?: number;
+  inflateMs?: number;
 };
 
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
@@ -290,9 +304,38 @@ export function expectedSnapshotArtifactTargets(
   return targets;
 }
 
-function maybeGunzipArtifactBytes(bytes: Uint8Array): Uint8Array {
-  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
-  return gunzipSync(Buffer.from(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength));
+function maybeGunzipArtifactBytes(
+  bytes: Uint8Array,
+  variant: ArenaBuildVariant,
+  format: ArenaSnapshotArtifactFormat,
+  metrics?: ArenaSnapshotArtifactFetchMetrics,
+): Uint8Array {
+  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) {
+    if (metrics) metrics.decodedBytes = bytes.byteLength;
+    return bytes;
+  }
+
+  const startedAt = performance.now();
+  try {
+    const decoded = withServerSpanSync(
+      "arena.artifact.inflate",
+      { "arena.variant": variant, "arena.format": format },
+      (span) => {
+        const result = gunzipSync(
+          Buffer.from(bytes.buffer as ArrayBuffer, bytes.byteOffset, bytes.byteLength),
+        );
+        span.setAttributes({
+          "arena.transfer_bytes": bytes.byteLength,
+          "arena.decoded_bytes": result.byteLength,
+        });
+        return result;
+      },
+    );
+    if (metrics) metrics.decodedBytes = decoded.byteLength;
+    return decoded;
+  } finally {
+    if (metrics) metrics.inflateMs = performance.now() - startedAt;
+  }
 }
 
 async function uploadSnapshotArtifactVariant(
@@ -394,11 +437,15 @@ export async function fetchArenaBuildSnapshotArtifact(
     signal?: AbortSignal;
     format?: ArenaSnapshotArtifactFormat;
     cache?: "default" | "no-store";
+    metrics?: ArenaSnapshotArtifactFetchMetrics;
   },
 ): Promise<Uint8Array | null> {
   const format = opts?.format ?? "json";
   const ref = getSnapshotArtifactRef(buildId, variant, checksum, format);
-  if (!ref) return null;
+  if (!ref) {
+    if (opts?.metrics) opts.metrics.cacheStatus = "not-eligible";
+    return null;
+  }
 
   const useCache = opts?.cache !== "no-store";
   const cacheKey = getArtifactCacheKey(buildId, variant, checksum, format);
@@ -406,19 +453,29 @@ export async function fetchArenaBuildSnapshotArtifact(
   if (useCache) maybePruneArtifactCaches(now);
   if (useCache && hasFreshArtifactMiss(cacheKey)) {
     // recent miss means the db snapshot path should win immediately
+    if (opts?.metrics) opts.metrics.cacheStatus = "negative-cache";
     return null;
   }
 
   const cached = useCache ? getCachedSnapshotArtifactBody(cacheKey) : null;
   if (cached) {
+    if (opts?.metrics) {
+      opts.metrics.cacheStatus = "body-cache";
+      opts.metrics.decodedBytes = cached.byteLength;
+    }
     return cached;
   }
 
   const inflight = useCache ? artifactBodyInflight.get(cacheKey) : null;
   if (inflight) {
     // share supabase reads across concurrent requests
-    return inflight;
+    if (opts?.metrics) opts.metrics.cacheStatus = "inflight";
+    const bytes = await inflight;
+    if (opts?.metrics && bytes) opts.metrics.decodedBytes = bytes.byteLength;
+    return bytes;
   }
+
+  if (opts?.metrics) opts.metrics.cacheStatus = useCache ? "miss" : "bypass";
 
   const promise = (async () => {
     let config: ReturnType<typeof getSupabaseStorageConfig>;
@@ -441,7 +498,9 @@ export async function fetchArenaBuildSnapshotArtifact(
     });
 
     if (resp.ok) {
-      const bytes = maybeGunzipArtifactBytes(new Uint8Array(await resp.arrayBuffer()));
+      const transferred = new Uint8Array(await resp.arrayBuffer());
+      if (opts?.metrics) opts.metrics.transferBytes = transferred.byteLength;
+      const bytes = maybeGunzipArtifactBytes(transferred, variant, format, opts?.metrics);
       if (useCache) {
         clearSnapshotArtifactMiss(buildId, variant, checksum, format);
         setCachedSnapshotArtifactBody(cacheKey, bytes);

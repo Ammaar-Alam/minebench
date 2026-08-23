@@ -32,6 +32,18 @@ const arenaBuildRoute = read("app/api/arena/builds/[buildId]/route.ts");
 assert.match(arenaBuildRoute, /cache: buildAccess \? "no-store"/);
 assert.match(arenaBuildRoute, /const binaryFormatRequested = url\.searchParams\.get\("format"\) === "v4"/);
 assert.match(arenaBuildRoute, /rewriteBlindBinaryArtifactIdentity\(artifactBytes, clientBuildId\)/);
+const serverDeliveryTelemetry = arenaBuildRoute.slice(
+  arenaBuildRoute.indexOf("function logArenaBuildDelivery"),
+  arenaBuildRoute.indexOf("// short process cache"),
+);
+assert.doesNotMatch(serverDeliveryTelemetry, /buildId|checksum|requestedBuildId|clientBuildId/);
+
+const arenaClient = read("components/arena/Arena.tsx");
+const clientDeliveryTelemetry = arenaClient.slice(
+  arenaClient.indexOf("function reportBuildDeliveryMetrics"),
+  arenaClient.indexOf("type FetchBuildVariantStreamOptions"),
+);
+assert.doesNotMatch(clientDeliveryTelemetry, /buildId|checksum|requestedBuildId|clientBuildId/);
 assert.match(read("app/api/arena/matchup/route.ts"), /cache: privateAccessOnly \? "no-store"/);
 
 const generation = read("lib/stealth/generation.ts");

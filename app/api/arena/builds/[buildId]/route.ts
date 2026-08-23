@@ -13,6 +13,7 @@ import {
   isBinarySnapshotArtifactEnabled,
   healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifact,
+  type ArenaSnapshotArtifactFetchMetrics,
 } from "@/lib/arena/buildSnapshotArtifacts";
 import type { ArenaSnapshotArtifactFormat } from "@/lib/arena/artifactOwnership";
 import { rewriteBlindBinaryArtifactIdentity } from "@/lib/arena/binaryArtifact";
@@ -24,6 +25,16 @@ import { parseArenaBuildAccessToken } from "@/lib/arena/matchupToken";
 import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
 import { ServerTiming } from "@/lib/serverTiming";
+import { trackServerEvent } from "@/lib/analytics.server";
+import {
+  getArenaBlockCountBucket,
+  roundMetricMs,
+} from "@/lib/observability/arenaMetrics";
+import {
+  setActiveServerSpanAttributes,
+  withServerSpan,
+  withServerSpanSync,
+} from "@/lib/observability/serverTracing";
 
 export const runtime = "nodejs";
 
@@ -62,6 +73,96 @@ type CachedJsonResponse = {
   byteWeight: number;
   touchedAt: number;
 };
+
+type ArenaBuildTimingStage =
+  | "token_validate"
+  | "artifact_resolve"
+  | "artifact_fetch"
+  | "inflate"
+  | "identity_rewrite"
+  | "deflate"
+  | "body_ready"
+  | "total";
+
+type ArenaBuildDeliveryObservation = {
+  access: "blind" | "public";
+  variant: ArenaBuildVariant;
+  requestedFormat: "v4" | "legacy";
+  servedFormat: "binary" | "json" | "ndjson" | "none";
+  deliveryClass: string;
+  source: string;
+  artifactOutcome: string;
+  artifactCacheStatus: string;
+  fallbackReason: string | null;
+  blockCount: number | null;
+  responseBytes: number | null;
+  transferBytes: number | null;
+  decodedBytes: number | null;
+  gzip: boolean;
+  optimizedExpected: boolean;
+  optimizedDelivered: boolean;
+};
+
+function logArenaBuildDelivery(
+  observation: ArenaBuildDeliveryObservation,
+  stages: Partial<Record<ArenaBuildTimingStage, number>>,
+  status: number,
+) {
+  const blockCountBucket = getArenaBlockCountBucket(observation.blockCount);
+  const path = [
+    observation.variant,
+    observation.requestedFormat,
+    observation.servedFormat,
+    observation.source,
+    observation.artifactOutcome,
+  ].join(":");
+  const roundedStages = {
+    tokenValidateMs: roundMetricMs(stages.token_validate),
+    artifactResolveMs: roundMetricMs(stages.artifact_resolve),
+    artifactFetchMs: roundMetricMs(stages.artifact_fetch),
+    inflateMs: roundMetricMs(stages.inflate),
+    identityRewriteMs: roundMetricMs(stages.identity_rewrite),
+    deflateMs: roundMetricMs(stages.deflate),
+    bodyReadyMs: roundMetricMs(stages.body_ready),
+    totalMs: roundMetricMs(stages.total),
+  };
+
+  console.info(
+    JSON.stringify({
+      event: "arena_build_delivery",
+      status,
+      ...observation,
+      blockCountBucket,
+      ...roundedStages,
+    }),
+  );
+
+  // Web Analytics Plus accepts at most eight properties per custom event
+  after(async () => {
+    await trackServerEvent("arena_build_server_timing", {
+      path,
+      blockCountBucket,
+      tokenMs: roundedStages.tokenValidateMs,
+      resolveMs: roundedStages.artifactResolveMs,
+      bodyReadyMs: roundedStages.bodyReadyMs,
+      totalMs: roundedStages.totalMs,
+      status,
+      optimized: observation.optimizedDelivered,
+    });
+    if (stages.artifact_fetch != null) {
+      await trackServerEvent("arena_artifact_server_timing", {
+        path,
+        cache: observation.artifactCacheStatus,
+        fetchMs: roundedStages.artifactFetchMs,
+        inflateMs: roundedStages.inflateMs,
+        rewriteMs: roundedStages.identityRewriteMs,
+        deflateMs: roundedStages.deflateMs,
+        transferBytes: observation.transferBytes,
+        decodedBytes: observation.decodedBytes,
+      });
+    }
+  });
+}
 
 // short process cache avoids rebuilding the same snapshot json
 const jsonResponseCache = new Map<string, CachedJsonResponse>();
@@ -226,10 +327,113 @@ export async function GET(
 ) {
   const timing = new ServerTiming();
   const requestStartedAt = timing.start();
+  const stages: Partial<Record<ArenaBuildTimingStage, number>> = {};
+  const url = new URL(request.url);
+  const variant = parseVariant(url.searchParams.get("variant"));
+  const binaryFormatRequested = url.searchParams.get("format") === "v4";
+  const shouldGzip = acceptsGzip(request);
+  let observation: ArenaBuildDeliveryObservation = {
+    access: "public",
+    variant,
+    requestedFormat: binaryFormatRequested ? "v4" : "legacy",
+    servedFormat: "none",
+    deliveryClass: "unknown",
+    source: "unknown",
+    artifactOutcome: "not-attempted",
+    artifactCacheStatus: "not-attempted",
+    fallbackReason: null,
+    blockCount: null,
+    responseBytes: null,
+    transferBytes: null,
+    decodedBytes: null,
+    gzip: shouldGzip,
+    optimizedExpected: binaryFormatRequested,
+    optimizedDelivered: false,
+  };
+
+  const recordStage = (stage: ArenaBuildTimingStage, durationMs: number) => {
+    if (!Number.isFinite(durationMs) || durationMs < 0) return;
+    stages[stage] = (stages[stage] ?? 0) + durationMs;
+    timing.add(stage, durationMs);
+  };
+  const measureStageSync = <T,>(
+    stage: ArenaBuildTimingStage,
+    spanName: string,
+    attributes: Record<string, string | number | boolean>,
+    operation: () => T,
+  ): T => {
+    const startedAt = performance.now();
+    try {
+      return withServerSpanSync(spanName, attributes, () => operation());
+    } finally {
+      recordStage(stage, performance.now() - startedAt);
+    }
+  };
+  const measureStage = async <T,>(
+    stage: ArenaBuildTimingStage,
+    spanName: string,
+    attributes: Record<string, string | number | boolean>,
+    operation: () => Promise<T>,
+  ): Promise<T> => {
+    const startedAt = performance.now();
+    try {
+      return await withServerSpan(spanName, attributes, () => operation());
+    } finally {
+      recordStage(stage, performance.now() - startedAt);
+    }
+  };
+  const finishResponse = (
+    response: Response,
+    updates?: Partial<ArenaBuildDeliveryObservation>,
+  ): Response => {
+    observation = { ...observation, ...updates };
+    if (observation.responseBytes == null) {
+      const contentLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+      if (Number.isFinite(contentLength) && contentLength >= 0) {
+        observation.responseBytes = contentLength;
+      }
+    }
+    recordStage("body_ready", performance.now() - requestStartedAt);
+    recordStage("total", performance.now() - requestStartedAt);
+    timing.apply(response.headers);
+    setActiveServerSpanAttributes({
+      "arena.access": observation.access,
+      "arena.variant": observation.variant,
+      "arena.requested_format": observation.requestedFormat,
+      "arena.served_format": observation.servedFormat,
+      "arena.delivery_class": observation.deliveryClass,
+      "arena.source": observation.source,
+      "arena.artifact_outcome": observation.artifactOutcome,
+      "arena.artifact_cache": observation.artifactCacheStatus,
+      "arena.optimized_expected": observation.optimizedExpected,
+      "arena.optimized_delivered": observation.optimizedDelivered,
+      "arena.block_count_bucket": getArenaBlockCountBucket(observation.blockCount),
+      ...(observation.fallbackReason
+        ? { "arena.fallback_reason": observation.fallbackReason }
+        : {}),
+    });
+    logArenaBuildDelivery(observation, stages, response.status);
+    return response;
+  };
+
   const { buildId: requestedBuildId } = await params;
-  const buildAccess = parseArenaBuildAccessToken(requestedBuildId);
+  observation.access = requestedBuildId.startsWith("b1.") ? "blind" : "public";
+  const buildAccess = measureStageSync(
+    "token_validate",
+    "arena.token.validate",
+    {
+      "arena.access": observation.access,
+      "arena.variant": variant,
+      "arena.requested_format": observation.requestedFormat,
+    },
+    () => parseArenaBuildAccessToken(requestedBuildId),
+  );
   if (requestedBuildId.startsWith("b1.") && !buildAccess) {
-    return NextResponse.json({ error: "Build not found" }, { status: 404 });
+    return finishResponse(NextResponse.json({ error: "Build not found" }, { status: 404 }), {
+      source: "rejected",
+      artifactOutcome: "invalid-token",
+      servedFormat: "json",
+    });
   }
   const buildId = buildAccess?.buildId ?? requestedBuildId;
   const clientBuildId = buildAccess ? requestedBuildId : buildId;
@@ -237,23 +441,44 @@ export async function GET(
     buildAccess &&
       isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? ""),
   );
-  const url = new URL(request.url);
-  const variant = parseVariant(url.searchParams.get("variant"));
   const requestedChecksum = url.searchParams.get("checksum")?.trim() || null;
   if (buildAccess && requestedChecksum && requestedChecksum !== buildAccess.checksum) {
-    return NextResponse.json({ error: "Build checksum mismatch" }, { status: 409 });
+    return finishResponse(
+      NextResponse.json({ error: "Build checksum mismatch" }, { status: 409 }),
+      {
+        source: "rejected",
+        artifactOutcome: "checksum-mismatch",
+        servedFormat: "json",
+      },
+    );
   }
   const expectedChecksum = buildAccess?.checksum ?? requestedChecksum;
-  const shouldGzip = acceptsGzip(request);
   // pass the client-supplied checksum so the meta cache can detect stale
   // entries left behind by an overwrite import that landed on another lambda
-  const buildMeta = await getArenaBuildMeta(buildId, expectedChecksum);
+  const buildMeta = await measureStage(
+    "artifact_resolve",
+    "arena.artifact.resolve",
+    {
+      "arena.access": observation.access,
+      "arena.variant": variant,
+      "arena.requested_format": observation.requestedFormat,
+    },
+    () => getArenaBuildMeta(buildId, expectedChecksum),
+  );
 
   if (!buildMeta) {
-    return NextResponse.json({ error: "Build not found" }, { status: 404 });
+    return finishResponse(NextResponse.json({ error: "Build not found" }, { status: 404 }), {
+      source: "metadata-miss",
+      artifactOutcome: "not-found",
+      servedFormat: "json",
+    });
   }
   if (buildMeta.privateAccessOnly && !buildAccess) {
-    return NextResponse.json({ error: "Build not found" }, { status: 404 });
+    return finishResponse(NextResponse.json({ error: "Build not found" }, { status: 404 }), {
+      source: "rejected",
+      artifactOutcome: "private",
+      servedFormat: "json",
+    });
   }
 
   const storedChecksum = buildMeta.voxelSha256?.trim() || null;
@@ -269,7 +494,9 @@ export async function GET(
     arenaBuildHints: buildMeta.arenaBuildHints,
   });
   const deliveryClass = variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass;
-  const binaryFormatRequested = url.searchParams.get("format") === "v4";
+  observation.deliveryClass = deliveryClass;
+  observation.blockCount =
+    variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount;
   const binaryArtifactRequested =
     binaryFormatRequested && isBinarySnapshotArtifactEnabled();
   const fullUsesStreamDelivery =
@@ -289,15 +516,22 @@ export async function GET(
   const avoidWholeBodyJsonFallback = binaryFormatRequested && fullUsesStreamDelivery;
   let shouldRequireStreamFallbackOnSnapshotMiss = avoidWholeBodyJsonFallback;
   if (expectedChecksum && storedChecksum && expectedChecksum !== storedChecksum) {
-    return NextResponse.json(
-      buildAccess
-        ? { error: "Build changed" }
-        : {
-            error: "Build checksum mismatch",
-            expectedChecksum,
-            actualChecksum: storedChecksum,
-          },
-      { status: 409 },
+    return finishResponse(
+      NextResponse.json(
+        buildAccess
+          ? { error: "Build changed" }
+          : {
+              error: "Build checksum mismatch",
+              expectedChecksum,
+              actualChecksum: storedChecksum,
+            },
+        { status: 409 },
+      ),
+      {
+        source: "rejected",
+        artifactOutcome: "checksum-mismatch",
+        servedFormat: "json",
+      },
     );
   }
 
@@ -326,18 +560,28 @@ export async function GET(
       let signedUrl: string | null = null;
       for (const format of artifactFormats) {
         try {
-          signedUrl = await withTimeout(
-            (signal) =>
-              createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, storedChecksum, {
-                signal,
-                expiresInSec: SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC,
-                format,
-              }),
-            SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS,
-            "snapshot artifact sign",
+          signedUrl = await withServerSpan(
+            "arena.artifact.sign",
+            {
+              "arena.access": observation.access,
+              "arena.variant": variant,
+              "arena.format": format,
+            },
+            () =>
+              withTimeout(
+                (signal) =>
+                  createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, storedChecksum, {
+                    signal,
+                    expiresInSec: SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC,
+                    format,
+                  }),
+                SNAPSHOT_ARTIFACT_SIGN_TIMEOUT_MS,
+                "snapshot artifact sign",
+              ),
           );
         } catch (error) {
           if (format === "json") throw error;
+          observation.fallbackReason = "binary-sign-error";
           console.warn("arena binary snapshot artifact sign failed; falling back", error);
           continue;
         }
@@ -347,20 +591,25 @@ export async function GET(
         }
       }
       if (signedUrl) {
-        timing.end("total", requestStartedAt);
         const headers = new Headers({
           "Cache-Control": createSignedRedirectCacheControl(SNAPSHOT_ARTIFACT_SIGN_URL_TTL_SEC),
           Location: signedUrl,
           "x-build-delivery-class": deliveryClass,
           "x-build-source": "artifact-redirect",
         });
-        timing.apply(headers);
-        return new Response(null, { status: 307, headers });
+        return finishResponse(new Response(null, { status: 307, headers }), {
+          source: "artifact-redirect",
+          artifactOutcome: "redirect",
+          servedFormat: servedArtifactFormat === "binary" ? "binary" : "json",
+          optimizedDelivered: servedArtifactFormat === "binary",
+        });
       }
     } catch {
       // snapshot miss can still use the db snapshot
+      observation.fallbackReason ??= "artifact-sign-error";
     }
     if (requireStreamFallbackOnMiss) {
+      observation.artifactOutcome = "redirect-miss";
       shouldRequireStreamFallbackOnSnapshotMiss = true;
     }
   }
@@ -375,44 +624,96 @@ export async function GET(
         shouldGzip,
       );
   // storage-first: the checksum-addressed artifact is the canonical snapshot
+  let artifactFetchStartedAt: number | null = null;
   try {
     if (artifactAllowed && canServeSnapshotArtifact) {
-      const artifactStartedAt = timing.start();
+      artifactFetchStartedAt = performance.now();
       let artifactBytes: Uint8Array | null = null;
       for (const format of artifactFormats) {
+        const fetchMetrics: ArenaSnapshotArtifactFetchMetrics = { cacheStatus: "miss" };
         try {
-          artifactBytes = await withTimeout(
-            (signal) =>
-              fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, {
-                signal,
-                format,
-                cache: buildAccess ? "no-store" : "default",
-              }),
-            SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
-            "snapshot artifact fetch",
+          artifactBytes = await withServerSpan(
+            "arena.artifact.fetch",
+            {
+              "arena.access": observation.access,
+              "arena.variant": variant,
+              "arena.format": format,
+            },
+            async (span) => {
+              const bytes = await withTimeout(
+                (signal) =>
+                  fetchArenaBuildSnapshotArtifact(buildId, variant, storedChecksum, {
+                    signal,
+                    format,
+                    cache: buildAccess ? "no-store" : "default",
+                    metrics: fetchMetrics,
+                  }),
+                SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
+                "snapshot artifact fetch",
+              );
+              span.setAttributes({
+                "arena.artifact_cache": fetchMetrics.cacheStatus,
+                "arena.artifact_hit": Boolean(bytes),
+                ...(fetchMetrics.transferBytes != null
+                  ? { "arena.transfer_bytes": fetchMetrics.transferBytes }
+                  : {}),
+                ...(fetchMetrics.decodedBytes != null
+                  ? { "arena.decoded_bytes": fetchMetrics.decodedBytes }
+                  : {}),
+              });
+              return bytes;
+            },
           );
         } catch (error) {
           if (format === "json") throw error;
+          observation.fallbackReason = "binary-artifact-error";
           console.warn("arena binary snapshot artifact fetch failed; falling back", error);
           continue;
+        } finally {
+          observation.artifactCacheStatus = fetchMetrics.cacheStatus;
+          observation.transferBytes = fetchMetrics.transferBytes ?? observation.transferBytes;
+          observation.decodedBytes = fetchMetrics.decodedBytes ?? observation.decodedBytes;
+          if (fetchMetrics.inflateMs != null) {
+            recordStage("inflate", fetchMetrics.inflateMs);
+          }
         }
         if (artifactBytes) {
           servedArtifactFormat = format;
           break;
         }
       }
+      const artifactFetchMs = performance.now() - artifactFetchStartedAt;
+      recordStage("artifact_fetch", artifactFetchMs);
+      artifactFetchStartedAt = null;
       if (artifactBytes) {
-        timing.end("artifact_hit", artifactStartedAt);
-        timing.end("total", requestStartedAt);
+        timing.add("artifact_hit", artifactFetchMs);
+        observation.artifactOutcome = "hit";
         const responseArtifactBytes = buildAccess
-          ? servedArtifactFormat === "binary"
-            ? rewriteBlindBinaryArtifactIdentity(artifactBytes, clientBuildId)
-            : rewriteBlindSnapshotIdentity(artifactBytes, clientBuildId)
+          ? measureStageSync(
+              "identity_rewrite",
+              "arena.artifact.identity_rewrite",
+              {
+                "arena.variant": variant,
+                "arena.format": servedArtifactFormat,
+              },
+              () =>
+                servedArtifactFormat === "binary"
+                  ? rewriteBlindBinaryArtifactIdentity(artifactBytes, clientBuildId)
+                  : rewriteBlindSnapshotIdentity(artifactBytes, clientBuildId),
+            )
           : artifactBytes;
         // the stored object is gzip; proxying it verbatim to a gzip-capable
         // client keeps snapshot-class fallbacks off the uncompressed path
         const body = shouldGzip
-          ? gzipSync(Buffer.from(responseArtifactBytes))
+          ? measureStageSync(
+              "deflate",
+              "arena.response.deflate",
+              {
+                "arena.variant": variant,
+                "arena.format": servedArtifactFormat,
+              },
+              () => gzipSync(Buffer.from(responseArtifactBytes)),
+            )
           : responseArtifactBytes;
         const headers = new Headers({
           "Cache-Control": buildAccess
@@ -430,12 +731,27 @@ export async function GET(
           headers.set("Content-Encoding", "gzip");
           headers.set("Vary", "Accept-Encoding");
         }
-        timing.apply(headers);
-        return new Response(Buffer.from(body), { headers });
+        return finishResponse(new Response(Buffer.from(body), { headers }), {
+          source: "artifact",
+          servedFormat: servedArtifactFormat === "binary" ? "binary" : "json",
+          optimizedDelivered: servedArtifactFormat === "binary",
+          fallbackReason:
+            binaryFormatRequested && servedArtifactFormat !== "binary"
+              ? observation.fallbackReason ?? "binary-artifact-miss"
+              : observation.fallbackReason,
+          responseBytes: body.byteLength,
+        });
       }
-      timing.end("artifact_miss", artifactStartedAt);
+      observation.artifactOutcome = "miss";
+      timing.add("artifact_miss", artifactFetchMs);
     }
   } catch (error) {
+    if (artifactFetchStartedAt != null) {
+      recordStage("artifact_fetch", performance.now() - artifactFetchStartedAt);
+      artifactFetchStartedAt = null;
+    }
+    observation.artifactOutcome = "error";
+    observation.fallbackReason ??= "artifact-fetch-error";
     console.warn("arena snapshot artifact fetch failed", error);
   }
 
@@ -462,15 +778,25 @@ export async function GET(
     after(async () => {
       await healArenaBuildSnapshotArtifactsOnce(cachedPreparedForHeal);
     });
-    timing.end("total", requestStartedAt);
     const headers = createJsonHeaders({
       byteLength: cachedJsonResponse.bytes.byteLength,
       deliveryClass: variant === "preview" ? shellHints.initialDeliveryClass : shellHints.deliveryClass,
       source: `response-cache:${cachedJsonResponse.source}`,
       gzip: shouldGzip,
     });
-    timing.apply(headers);
-    return new Response(Buffer.from(cachedJsonResponse.bytes), { headers });
+    return finishResponse(new Response(Buffer.from(cachedJsonResponse.bytes), { headers }), {
+      source: `response-cache:${cachedJsonResponse.source}`,
+      artifactOutcome:
+        observation.artifactOutcome === "not-attempted"
+          ? "response-cache"
+          : observation.artifactOutcome,
+      servedFormat: "json",
+      optimizedDelivered: false,
+      fallbackReason: binaryFormatRequested
+        ? observation.fallbackReason ?? "binary-artifact-unavailable"
+        : observation.fallbackReason,
+      responseBytes: cachedJsonResponse.bytes.byteLength,
+    });
   }
 
   if (shouldRequireStreamFallbackOnSnapshotMiss) {
@@ -481,14 +807,23 @@ export async function GET(
       "x-build-delivery-class": deliveryClass,
       "x-build-source": "artifact-redirect-miss",
     });
-    timing.end("total", requestStartedAt);
-    timing.apply(headers);
-    return NextResponse.json(
+    return finishResponse(
+      NextResponse.json(
+        {
+          error: "Full build artifact is still warming. Use stream fallback.",
+          retryVia: "stream",
+        },
+        { status: 503, headers },
+      ),
       {
-        error: "Full build artifact is still warming. Use stream fallback.",
-        retryVia: "stream",
+        source: "artifact-redirect-miss",
+        artifactOutcome:
+          observation.artifactOutcome === "not-attempted"
+            ? "redirect-miss"
+            : observation.artifactOutcome,
+        servedFormat: "json",
+        fallbackReason: observation.fallbackReason ?? "stream-fallback-required",
       },
-      { status: 503, headers },
     );
   }
 
@@ -499,14 +834,20 @@ export async function GET(
       "x-build-delivery-class": shellHints.deliveryClass,
       "x-build-source": "stream-required",
     });
-    timing.end("total", requestStartedAt);
-    timing.apply(headers);
-    return NextResponse.json(
+    return finishResponse(
+      NextResponse.json(
+        {
+          error: "Build must be loaded through the stream artifact endpoint.",
+          retryVia: "stream",
+        },
+        { status: 503, headers },
+      ),
       {
-        error: "Build must be loaded through the stream artifact endpoint.",
-        retryVia: "stream",
+        source: "stream-required",
+        artifactOutcome: "not-eligible",
+        servedFormat: "json",
+        fallbackReason: "stream-required",
       },
-      { status: 503, headers },
     );
   }
 
@@ -536,30 +877,55 @@ export async function GET(
     const prepareStartedAt = timing.start();
     try {
       if (!build) {
-        return NextResponse.json({ error: "Build not found" }, { status: 404 });
+        return finishResponse(NextResponse.json({ error: "Build not found" }, { status: 404 }), {
+          source: "live-prepare",
+          artifactOutcome: "not-found",
+          servedFormat: "json",
+        });
       }
-      prepared = await prepareArenaBuild(
-        { ...build, privateAccessOnly: buildMeta.privateAccessOnly },
-        { signal: request.signal },
+      prepared = await withServerSpan(
+        "arena.build.prepare",
+        {
+          "arena.access": observation.access,
+          "arena.variant": variant,
+          "arena.delivery_class": deliveryClass,
+        },
+        () =>
+          prepareArenaBuild(
+            { ...build, privateAccessOnly: buildMeta.privateAccessOnly },
+            { signal: request.signal },
+          ),
       );
     } catch (err) {
       const message =
         !buildAccess && err instanceof Error ? err.message : "Failed to load build payload";
-      return NextResponse.json({ error: message }, { status: 422 });
+      return finishResponse(NextResponse.json({ error: message }, { status: 422 }), {
+        source: "live-prepare",
+        artifactOutcome: "prepare-error",
+        servedFormat: "json",
+        fallbackReason: observation.fallbackReason ?? "live-prepare-error",
+      });
     }
     timing.end("prepare", prepareStartedAt);
   }
 
   if (expectedChecksum && expectedChecksum !== prepared.checksum) {
-    return NextResponse.json(
-      buildAccess
-        ? { error: "Build changed" }
-        : {
-            error: "Build checksum mismatch",
-            expectedChecksum,
-            actualChecksum: prepared.checksum,
-          },
-      { status: 409 },
+    return finishResponse(
+      NextResponse.json(
+        buildAccess
+          ? { error: "Build changed" }
+          : {
+              error: "Build checksum mismatch",
+              expectedChecksum,
+              actualChecksum: prepared.checksum,
+            },
+        { status: 409 },
+      ),
+      {
+        source: "live-prepare",
+        artifactOutcome: "checksum-mismatch",
+        servedFormat: "json",
+      },
     );
   }
 
@@ -581,17 +947,29 @@ export async function GET(
     if (!privateLoopbackAccess) await healArenaBuildSnapshotArtifactsOnce(prepared);
   });
 
-  const responseBytes = jsonBytes(
-    {
-      buildId: clientBuildId,
-      variant,
-      checksum: buildAccess ? null : prepared.checksum,
-      serverValidated: true,
-      buildLoadHints: prepared.hints,
-      voxelBuild,
-    },
-    shouldGzip,
-  );
+  const createResponseBytes = () =>
+    jsonBytes(
+      {
+        buildId: clientBuildId,
+        variant,
+        checksum: buildAccess ? null : prepared.checksum,
+        serverValidated: true,
+        buildLoadHints: prepared.hints,
+        voxelBuild,
+      },
+      shouldGzip,
+    );
+  const responseBytes = shouldGzip
+    ? measureStageSync(
+        "deflate",
+        "arena.response.deflate",
+        {
+          "arena.variant": variant,
+          "arena.format": "json",
+        },
+        createResponseBytes,
+      )
+    : createResponseBytes();
   if (!buildAccess) {
     rememberJsonResponse(
       prepared.buildId,
@@ -603,7 +981,6 @@ export async function GET(
       "live",
     );
   }
-  timing.end("total", requestStartedAt);
   const headers = createJsonHeaders({
     byteLength: responseBytes.byteLength,
     deliveryClass: variant === "preview" ? prepared.hints.initialDeliveryClass : prepared.hints.deliveryClass,
@@ -611,7 +988,15 @@ export async function GET(
     gzip: shouldGzip,
     privateAccess: Boolean(buildAccess),
   });
-  timing.apply(headers);
-
-  return new Response(Buffer.from(responseBytes), { headers });
+  return finishResponse(new Response(Buffer.from(responseBytes), { headers }), {
+    source: "live",
+    artifactOutcome:
+      observation.artifactOutcome === "not-attempted" ? "live" : observation.artifactOutcome,
+    servedFormat: "json",
+    optimizedDelivered: false,
+    fallbackReason: binaryFormatRequested
+      ? observation.fallbackReason ?? "binary-artifact-unavailable"
+      : observation.fallbackReason,
+    responseBytes: responseBytes.byteLength,
+  });
 }

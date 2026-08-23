@@ -60,10 +60,13 @@
     "stealth:eval": "tsx scripts/stealth-eval.ts"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
     "@prisma/client": "^6.0.0",
     "@supabase/ssr": "0.12.4",
     "@supabase/supabase-js": "2.112.3",
     "@vercel/analytics": "^1.6.1",
+    "@vercel/otel": "^2.1.3",
+    "@vercel/speed-insights": "^2.0.0",
     "fflate": "^0.8.3",
     "gifenc": "^1.0.3",
     "gifsicle-wasm-browser": "^1.5.19",
