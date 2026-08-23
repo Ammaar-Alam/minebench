@@ -87,8 +87,9 @@ async function main() {
 
   // 4. Sitemap Generation
   const sitemapEntries = await sitemap();
-  assert.ok(sitemapEntries.length >= 5 + MODEL_CATALOG.filter((m) => m.enabled).length);
+  assert.ok(sitemapEntries.length >= 6 + MODEL_CATALOG.filter((m) => m.enabled).length);
   const staticUrls = sitemapEntries.map((e) => e.url);
+  assert.ok(staticUrls.includes("https://minebench.ai/contact"));
   assert.ok(staticUrls.includes("https://minebench.ai/private-evaluations"));
 
   const modelUrls = sitemapEntries

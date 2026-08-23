@@ -5,6 +5,9 @@ import { resolveModelSlug } from "@/lib/ai/modelCatalog";
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
 const MAX_PER_WINDOW_LOCAL_EXEC = 6;
+const CONTACT_WINDOW_MS = 60 * 60 * 1000;
+const CONTACT_MAX_PER_SESSION = 3;
+const CONTACT_MAX_PER_IP = 10;
 const NO_IP_MODEL_GLOBAL_GUARDRAIL_MULTIPLIER = 10;
 const RATE_LIMIT_SESSION_COOKIE = "mb_rls";
 const ARENA_IP_GUARDRAIL_MULTIPLIER = readIntEnv("ARENA_IP_GUARDRAIL_MULTIPLIER", 250, 1, 1000);
@@ -24,7 +27,7 @@ const BUCKET_PRUNE_INTERVAL = 256;
 
 type Bucket = { resetAt: number; count: number };
 const buckets = new Map<string, Bucket>();
-type RateLimitRule = { key: string; maxPerWindow: number };
+type RateLimitRule = { key: string; maxPerWindow: number; windowMs?: number };
 type IpInfo = { value: string | null; trusted: boolean };
 let requestsSinceLastPrune = 0;
 type BucketPreview = { key: string; resetAt: number; nextCount: number };
@@ -158,7 +161,8 @@ function consumeBuckets(rules: RateLimitRule[], now: number) {
 
   for (const rule of rules) {
     const bucket = buckets.get(rule.key);
-    const resetAt = !bucket || bucket.resetAt <= now ? now + WINDOW_MS : bucket.resetAt;
+    const resetAt =
+      !bucket || bucket.resetAt <= now ? now + (rule.windowMs ?? WINDOW_MS) : bucket.resetAt;
     const nextCount = !bucket || bucket.resetAt <= now ? 1 : bucket.count + 1;
 
     if (nextCount > rule.maxPerWindow) {
@@ -250,6 +254,7 @@ export async function middleware(req: NextRequest) {
   }
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
+  const isContactApi = pathname === "/api/contact";
   const isArenaApi = pathname.startsWith("/api/arena/");
   const isModelDetailApi = isModelDetailPath(pathname);
   const isArenaBuildAsset = /^\/api\/arena\/builds\/[^/]+(?:\/stream)?$/.test(pathname);
@@ -265,6 +270,10 @@ export async function middleware(req: NextRequest) {
   const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);
+  const contactIp = hasTrustedIp ? ip : null;
+  const contactSession = isContactApi
+    ? getRateLimitSession(req, getAnonymousBucketId(req, contactIp))
+    : null;
   const arenaSession = isArenaApi
     ? getRateLimitSession(req, getAnonymousBucketId(req, ip))
     : null;
@@ -287,7 +296,24 @@ export async function middleware(req: NextRequest) {
           },
         ]
       : [];
-  const rules: RateLimitRule[] = isArenaApi
+  const rules: RateLimitRule[] = isContactApi
+    ? [
+        ...(contactIp
+          ? [
+              {
+                key: `ip:${contactIp}:${bucketPath}`,
+                maxPerWindow: CONTACT_MAX_PER_IP,
+                windowMs: CONTACT_WINDOW_MS,
+              },
+            ]
+          : []),
+        {
+          key: `session:${contactSession!.bucketId}:${bucketPath}`,
+          maxPerWindow: CONTACT_MAX_PER_SESSION,
+          windowMs: CONTACT_WINDOW_MS,
+        },
+      ]
+    : isArenaApi
     ? isArenaBuildAsset
       ? ip
         ? [
@@ -338,7 +364,7 @@ export async function middleware(req: NextRequest) {
   const response = isLabApi
     ? await (await import("@/lib/supabase/middleware")).refreshSupabaseSession(req)
     : NextResponse.next();
-  const rateLimitSession = arenaSession ?? modelSession;
+  const rateLimitSession = arenaSession ?? modelSession ?? contactSession;
   if (rateLimitSession?.cookieValue) {
     response.cookies.set(RATE_LIMIT_SESSION_COOKIE, rateLimitSession.cookieValue, {
       httpOnly: true,

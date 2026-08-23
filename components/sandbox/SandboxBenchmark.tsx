@@ -180,27 +180,6 @@ function makeTimeoutSignal(
   };
 }
 
-function SelectChevron({ withTrailingAction = false }: { withTrailingAction?: boolean }) {
-  return (
-    <svg
-      aria-hidden="true"
-      className={`pointer-events-none absolute top-1/2 h-4 w-4 -translate-y-1/2 text-muted ${
-        withTrailingAction ? "right-14" : "right-3"
-      }`}
-      viewBox="0 0 24 24"
-      fill="none"
-    >
-      <path
-        d="m7 10 5 5 5-5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
-    </svg>
-  );
-}
-
 function providerLabel(provider: string): string {
   if (provider === "openai") return "OpenAI";
   if (provider === "anthropic") return "Anthropic";
@@ -1254,8 +1233,8 @@ export function SandboxBenchmark() {
                 <div className="relative min-w-0">
                   <select
                     id={selectId}
-                    className={`mb-field h-11 w-full appearance-none ${
-                      active && removable ? "pr-20" : "pr-10"
+                    className={`mb-field h-11 w-full ${
+                      active && removable ? "mb-select-trailing-action" : ""
                     } ${
                       active ? "" : "border-dashed text-muted"
                     }`}
@@ -1289,7 +1268,6 @@ export function SandboxBenchmark() {
                       </optgroup>
                     ))}
                   </select>
-                  <SelectChevron withTrailingAction={active && removable} />
                   {active && removable ? (
                     <button
                       type="button"

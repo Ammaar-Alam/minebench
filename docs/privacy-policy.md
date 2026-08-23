@@ -1,6 +1,6 @@
 # MineBench Privacy Policy
 
-Effective and last updated: August 21, 2026
+Effective and last updated: August 23, 2026
 
 MineBench is an independent service operated by Ammaar Alam in the United States. This Privacy Policy explains how MineBench handles information when you use [minebench.ai](https://minebench.ai), participate in model evaluations, use MineBench's generation tools, or communicate with MineBench.
 
@@ -14,7 +14,7 @@ MineBench may collect:
 - **Content:** prompts, model selections, settings, imported files, model outputs, uploaded cohorts, builds, exports, and feedback you submit or generate.
 - **Technical data:** IP address, request headers, browser and device information, general location, pages viewed, referrers, performance data, errors, and security events.
 - **Account and organization data:** name, email address, organization, invitations, role, permissions, authentication data, and evaluation requests if you create an account or work with MineBench.
-- **Communications:** information you provide in support requests, emails, security reports, meetings, or other correspondence.
+- **Communications:** the category, title, message, optional reply email, and other information you provide through the contact form, support requests, emails, security reports, meetings, or other correspondence.
 
 Public Arena voting does not require an account. Its session identifier distinguishes browser sessions but is not intended to identify you by name.
 
@@ -100,6 +100,8 @@ MineBench may also share information at your direction or with your consent. Min
 
 MineBench retains information only as long as reasonably necessary to provide the service, maintain benchmark integrity, meet contractual commitments, resolve disputes, protect the service, and comply with law.
 
+Contact-form submissions and optional reply addresses remain in MineBench's support mailbox only as long as reasonably necessary to respond, keep an appropriate support record, and protect the service from abuse.
+
 Sandbox credentials remain in your browser until you remove them or clear site data. Arena vote and session records may be retained to reproduce rankings and investigate manipulation. Unless an evaluation agreement states otherwise, private evaluation data is deleted from active systems within 30 days after closure, final delivery, or termination and may remain in backups for up to 90 additional days. Private endpoint credentials are deleted or disabled when revoked, when a cohort completes, or when the evaluation ends.
 
 MineBench uses reasonable technical and organizational safeguards designed to protect information from unauthorized access, loss, misuse, alteration, or disclosure. No internet service can guarantee absolute security.
@@ -130,4 +132,4 @@ Changes to this policy do not override an existing evaluation agreement or data 
 
 ## Contact
 
-- Email: [ammaar@princeton.edu](mailto:ammaar@princeton.edu)
+- Email: [support@minebench.ai](mailto:support@minebench.ai)

@@ -238,7 +238,7 @@ export function ProtectedBuildInspector({
             <select
               value={checkpointFilter}
               onChange={(event) => setCheckpointFilter(event.target.value)}
-              className="mb-field h-11 pr-8"
+              className="mb-field h-11"
             >
               <option value="ALL">All checkpoints</option>
               {checkpoints.map((checkpoint) => (
@@ -253,7 +253,7 @@ export function ProtectedBuildInspector({
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as BuildFilter)}
-              className="mb-field h-11 pr-8"
+              className="mb-field h-11"
             >
               <option value="ALL">All statuses</option>
               <option value="READY">Ready</option>

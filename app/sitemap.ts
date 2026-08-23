@@ -3,13 +3,14 @@ import { MODEL_CATALOG } from "@/lib/ai/modelCatalog";
 import { absoluteUrl } from "@/lib/seo";
 
 // Stable baseline timestamp prevents Googlebot from ignoring freshness headers on every crawl
-const SITEMAP_LAST_MODIFIED = new Date("2026-08-20T00:00:00.000Z");
+const SITEMAP_LAST_MODIFIED = new Date("2026-08-23T00:00:00.000Z");
 
 const PUBLIC_ROUTES = [
   { path: "/", priority: 1, changeFrequency: "daily" },
   { path: "/sandbox", priority: 0.9, changeFrequency: "daily" },
   { path: "/leaderboard", priority: 0.9, changeFrequency: "hourly" },
   { path: "/faq", priority: 0.7, changeFrequency: "monthly" },
+  { path: "/contact", priority: 0.6, changeFrequency: "monthly" },
   { path: "/private-evaluations", priority: 0.8, changeFrequency: "monthly" },
 ] as const;
 

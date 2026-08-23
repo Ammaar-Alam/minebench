@@ -55,7 +55,7 @@ export function PromptPicker({
       <div className="text-xs font-medium text-muted">Prompt</div>
       <div className="relative">
         <select
-          className="mb-field h-10 w-full appearance-none pr-10"
+          className="mb-field h-10 w-full"
           value={selectedPromptId ?? ""}
           onChange={(e) => onChangePromptId(e.target.value)}
         >
@@ -75,20 +75,6 @@ export function PromptPicker({
             </option>
           ))}
         </select>
-        <svg
-          aria-hidden="true"
-          className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-          viewBox="0 0 24 24"
-          fill="none"
-        >
-          <path
-            d="m7 10 5 5 5-5"
-            stroke="currentColor"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth="1.8"
-          />
-        </svg>
       </div>
       {status === "error" && error ? (
         <div className="flex items-center justify-between gap-2 text-xs text-danger">

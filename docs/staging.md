@@ -18,7 +18,8 @@ The alpha Supabase branch has its own Postgres, storage, and service-role key.
 Point the branch-scoped Vercel variables (`DATABASE_URL`, `DIRECT_URL`,
 `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`,
 `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `STEALTH_CONFIG_ENCRYPTION_KEY`,
-`MINEBENCH_SITE_URL`, `SUPABASE_STORAGE_BUCKET`, `ADMIN_TOKEN`) at it; the app needs no code awareness
+`MINEBENCH_SITE_URL`, `SUPABASE_STORAGE_BUCKET`, `ADMIN_TOKEN`,
+`CONTACT_SMTP_PASSWORD`) at it; the app needs no code awareness
 of which environment it is in. Vercel crons only fire on production deployments,
 which is fine — the drains also run inline from request `after()` hooks.
 

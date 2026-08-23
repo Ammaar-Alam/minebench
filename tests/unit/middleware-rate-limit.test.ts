@@ -91,6 +91,52 @@ async function main() {
   );
   assert.equal(labLimited.status, 429);
 
+  const contactSessionHeaders = {
+    cookie: "mb_rls=contact-session",
+    "user-agent": "contact-form-client",
+  };
+  for (let index = 0; index < 3; index += 1) {
+    const response = await middleware(
+      new NextRequest("http://localhost/api/contact", {
+        method: "POST",
+        headers: contactSessionHeaders,
+      }),
+    );
+    assert.equal(response.status, 200);
+  }
+  const contactSessionLimited = await middleware(
+    new NextRequest("http://localhost/api/contact", {
+      method: "POST",
+      headers: contactSessionHeaders,
+    }),
+  );
+  assert.equal(contactSessionLimited.status, 429);
+  assert.ok(Number(contactSessionLimited.headers.get("retry-after")) > 3_500);
+
+  const contactIp = "203.0.113.119";
+  for (let index = 0; index < 10; index += 1) {
+    const response = await middleware(
+      new NextRequest("http://localhost/api/contact", {
+        method: "POST",
+        headers: {
+          cookie: `mb_rls=contact-ip-session-${index}`,
+          "x-real-ip": contactIp,
+        },
+      }),
+    );
+    assert.equal(response.status, 200);
+  }
+  const contactIpLimited = await middleware(
+    new NextRequest("http://localhost/api/contact", {
+      method: "POST",
+      headers: {
+        cookie: "mb_rls=contact-ip-session-10",
+        "x-real-ip": contactIp,
+      },
+    }),
+  );
+  assert.equal(contactIpLimited.status, 429);
+
   console.log("middleware rate-limit contract checks passed");
 }
 
