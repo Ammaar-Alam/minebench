@@ -61,7 +61,9 @@ const stagingEnv = {
 
 console.log(`Running against alpha staging: ${stagingEnv.MINEBENCH_SITE_URL}`);
 
-const [command, ...args] = argv;
+const [rawCommand, ...args] = argv;
+const localBinPath = path.join(repoRoot, "node_modules", ".bin", rawCommand);
+const command = fs.existsSync(localBinPath) ? localBinPath : rawCommand;
 const child = spawn(command, args, {
   stdio: "inherit",
   env: {

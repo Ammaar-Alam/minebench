@@ -245,9 +245,9 @@ Usage:
     return;
   }
 
-  await prisma.$transaction(async (tx) => {
-    for (const m of rankedModels) {
-      await tx.model.update({
+  const updates = [
+    ...rankedModels.map((m) =>
+      prisma.model.update({
         where: { id: m.id },
         data: {
           eloRating: Math.round(m.rating),
@@ -259,25 +259,27 @@ Usage:
           drawCount: m.counters.drawCount,
           bothBadCount: m.counters.bothBadCount,
         },
-      });
-    }
+      }),
+    ),
+    ...models
+      .filter((m) => !activeModelIdSet.has(m.id))
+      .map((m) => {
+        const counters = countersByModelId.get(m.id);
+        return prisma.model.update({
+          where: { id: m.id },
+          data: {
+            winCount: counters?.winCount ?? 0,
+            lossCount: counters?.lossCount ?? 0,
+            drawCount: counters?.drawCount ?? 0,
+            bothBadCount: counters?.bothBadCount ?? 0,
+          },
+        });
+      }),
+  ];
 
-    // Also update any inactive/baseline models' counters
-    const inactiveModels = models.filter((m) => !activeModelIdSet.has(m.id));
-    for (const m of inactiveModels) {
-      const counters = countersByModelId.get(m.id);
-      if (!counters) continue;
-      await tx.model.update({
-        where: { id: m.id },
-        data: {
-          winCount: counters.winCount,
-          lossCount: counters.lossCount,
-          drawCount: counters.drawCount,
-          bothBadCount: counters.bothBadCount,
-        },
-      });
-    }
-  });
+  for (const update of updates) {
+    await update;
+  }
 
   console.log(`\nSuccessfully applied Bradley-Terry ratings and counters to ${models.length} models.`);
 }
