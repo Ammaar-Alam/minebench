@@ -254,12 +254,17 @@ function computeBuildBounds(
 type BuildIdentity = {
   palette: "simple" | "advanced";
   blocksRef: object | null;
+  meshCacheKey: string | null;
 };
 
 function sameIdentity(a: BuildIdentity | null, b: BuildIdentity | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.palette === b.palette && a.blocksRef === b.blocksRef;
+  return (
+    a.palette === b.palette &&
+    a.blocksRef === b.blocksRef &&
+    a.meshCacheKey === b.meshCacheKey
+  );
 }
 
 function normalizeExpectedBlockCount(value: number | null | undefined): number | null {
@@ -596,7 +601,11 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
     const latest = latestRef.current;
     const incomingIdentity: BuildIdentity | null = latest.voxelBuild
-      ? { palette: latest.palette, blocksRef: voxelBuildBlocksRef(latest.voxelBuild) }
+      ? {
+          palette: latest.palette,
+          blocksRef: voxelBuildBlocksRef(latest.voxelBuild),
+          meshCacheKey: latest.meshCacheKey ?? null,
+        }
       : null;
 
     if (!incomingIdentity) {
@@ -1303,7 +1312,13 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
   }, []);
 
   useEffect(() => {
-    const incomingIdentity: BuildIdentity | null = voxelBuild ? { palette, blocksRef: voxelBuildBlocksRef(voxelBuild) } : null;
+    const incomingIdentity: BuildIdentity | null = voxelBuild
+      ? {
+          palette,
+          blocksRef: voxelBuildBlocksRef(voxelBuild),
+          meshCacheKey: meshCacheKey ?? null,
+        }
+      : null;
     const activeIdentity = activeJobRef.current.identity;
     if (activeJobRef.current.controller && activeIdentity && !sameIdentity(activeIdentity, incomingIdentity)) {
       activeJobRef.current.controller.abort();
