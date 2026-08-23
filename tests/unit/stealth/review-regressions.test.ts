@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 const read = (path: string) => readFileSync(path, "utf8");
 
 const settings = read("app/lab/[orgSlug]/experiments/[experimentId]/settings/page.tsx");
-assert.match(settings, /checkpointSetOpen = !readOnly && workspace\.checkpointSetFrozenAt === null/);
+assert.match(settings, /checkpointSetOpen = mutable && workspace\.checkpointSetFrozenAt === null/);
 assert.match(settings, /\{checkpointSetOpen \? \(/);
 
 const nextConfig = read("next.config.ts");
@@ -56,10 +56,23 @@ assert.match(activation, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
 const closeEvaluation = functionBody(service, "closeStealthEvaluation");
 assertOrder(
   closeEvaluation,
-  'data: { status: "PAUSED", endedAt }',
+  'data: { status: "PAUSED", endedAt, retentionDays }',
   "drainStealthVoteJobsForExperiment",
   "closure must become non-votable before draining accepted votes",
 );
+const closeReservation = closeEvaluation.slice(
+  0,
+  closeEvaluation.indexOf("drainStealthVoteJobsForExperiment"),
+);
+assert.match(closeReservation, /endpointEnabled: false/);
+assert.match(closeReservation, /stealthEndpointCredential\.deleteMany/);
+assert.match(closeReservation, /retentionDays/);
+const staleReclaimer = functionBody(service, "reclaimStaleStealthGenerationRuns");
+assert.match(staleReclaimer, /complete[\s\S]*status: "READY"/);
+assert.match(staleReclaimer, /complete[\s\S]*stealthEndpointCredential\.deleteMany/);
+const uploadCompletion = functionBody(service, "completeUploadedStealthCohort");
+assert.match(uploadCompletion, /complete \? "SUCCEEDED"/);
+assert.match(uploadCompletion, /complete \? "READY"/);
 assert.match(functionBody(service, "resumeStealthEvaluation"), /if \(experiment\.endedAt\)/);
 assert.doesNotMatch(service, /for \(let page = 1; page <= 10/);
 assert.match(service, /if \(!data\.nextPage\) break/);
@@ -148,6 +161,24 @@ assert.match(
   sampling,
   /voteJobs: \{ where: \{ processedAt: null, choice: \{ in: \["A", "B"\] \} \} \}/,
 );
+const matchupPicker = functionBody(sampling, "pickStealthMatchup");
+assert.match(matchupPicker, /voteJobs:[\s\S]*processedAt: null/);
+assert.match(matchupPicker, /hasReachedStealthVoteGoal/);
+
+const buildsPage = read("app/lab/[orgSlug]/experiments/[experimentId]/builds/page.tsx");
+assert.match(buildsPage, /promptCohortCurrent/);
+assert.match(buildsPage, /currentExpectedBuildCount/);
+const overviewPage = read("app/lab/[orgSlug]/experiments/[experimentId]/overview/page.tsx");
+assert.match(overviewPage, /canResume/);
+const adminEvaluationPage = read("app/admin/private-evaluations/[experimentId]/page.tsx");
+assert.match(adminEvaluationPage, /canResume/);
+const arena = read("components/arena/Arena.tsx");
+assert.match(arena, /loadNextMatchup/);
+const nextMatchupLoader = arena.slice(
+  arena.indexOf("function loadNextMatchup"),
+  arena.indexOf("async function handleVote"),
+);
+assert.doesNotMatch(nextMatchupLoader, /setReveal\(\{ kind: "none" \}\)/);
 
 const voteJobs = read("lib/arena/voteJobs.ts");
 assert.match(voteJobs, /drainStealthVoteJobsForExperiment/);

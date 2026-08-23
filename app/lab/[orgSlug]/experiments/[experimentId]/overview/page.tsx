@@ -45,6 +45,14 @@ export default async function EvaluationOverviewPage({
   const pauseAction = pauseEvaluationAction.bind(null, orgSlug, experimentId);
   const resumeAction = resumeEvaluationAction.bind(null, orgSlug, experimentId);
   const currentStep = lifecycleStep(workspace.status);
+  const pausedAtGoal =
+    workspace.pauseAtGoal &&
+    workspace.targetDecisiveVotes != null &&
+    workspace.checkpoints.length > 0 &&
+    workspace.checkpoints.every(
+      (checkpoint) => checkpoint.decisiveVotes >= workspace.targetDecisiveVotes!,
+    );
+  const canResume = workspace.status === "PAUSED" && !workspace.endedAt && !pausedAtGoal;
 
   return (
     <div className="space-y-8">
@@ -76,7 +84,7 @@ export default async function EvaluationOverviewPage({
                 <LifecycleActionButton label="Pause" pendingLabel="Pausing…" tone="ghost" />
               </form>
             ) : null}
-            {workspace.status === "PAUSED" ? (
+            {canResume ? (
               <form action={resumeAction}>
                 <LifecycleActionButton label="Resume" pendingLabel="Resuming…" tone="primary" />
               </form>

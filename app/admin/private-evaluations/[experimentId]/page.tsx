@@ -50,6 +50,14 @@ export default async function PrivateEvaluationAdminDetail({
     getStealthExperimentReport(experimentId),
   ]);
   if (!workspace || !organization || report?.organization.id !== organizationId) notFound();
+  const pausedAtGoal =
+    workspace.pauseAtGoal &&
+    workspace.targetDecisiveVotes != null &&
+    workspace.checkpoints.length > 0 &&
+    workspace.checkpoints.every(
+      (checkpoint) => checkpoint.decisiveVotes >= workspace.targetDecisiveVotes!,
+    );
+  const canResume = workspace.status === "PAUSED" && !workspace.endedAt && !pausedAtGoal;
   const builds: ProtectedBuildOption[] = report.variants.flatMap((variant) =>
     variant.builds.map((build) => ({
       id: `${variant.id}:${build.promptId}`,
@@ -147,7 +155,7 @@ export default async function PrivateEvaluationAdminDetail({
         {workspace.status === "ACTIVE" ? (
           <form action={pauseAdminEvaluationAction.bind(null, organizationId, experimentId)}><button className="mb-btn mb-btn-ghost" type="submit">Pause</button></form>
         ) : null}
-        {workspace.status === "PAUSED" ? (
+        {canResume ? (
           <form action={resumeAdminEvaluationAction.bind(null, organizationId, experimentId)}><button className="mb-btn mb-btn-primary" type="submit">Resume</button></form>
         ) : null}
         {workspace.status !== "CLOSED" ? (

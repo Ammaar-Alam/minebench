@@ -39,9 +39,11 @@ async function uploadCohortFile(
 export function CohortUploadForm({
   action,
   signUrl,
+  checkpoint,
 }: {
   action: (formData: FormData) => Promise<{ ok: true } | { ok: false; error: string }>;
   signUrl: string;
+  checkpoint?: { id: string; codename: string };
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
@@ -91,10 +93,18 @@ export function CohortUploadForm({
 
   return (
     <form onSubmit={onSubmit} className="space-y-5">
-      <label className="block max-w-sm space-y-2 text-sm font-medium text-fg">
-        <span>Codename</span>
-        <input name="codename" required maxLength={80} className="mb-field h-11" />
-      </label>
+      {checkpoint ? (
+        <>
+          <input type="hidden" name="variantId" value={checkpoint.id} />
+          <input type="hidden" name="codename" value={checkpoint.codename} />
+          <p className="text-sm font-medium text-fg">{checkpoint.codename}</p>
+        </>
+      ) : (
+        <label className="block max-w-sm space-y-2 text-sm font-medium text-fg">
+          <span>Codename</span>
+          <input name="codename" required maxLength={80} className="mb-field h-11" />
+        </label>
+      )}
       <label className="block space-y-2 text-sm font-medium text-fg">
         <span>Cohort file</span>
         <input
@@ -112,7 +122,7 @@ export function CohortUploadForm({
           disabled={pending}
           className="mb-btn mb-btn-primary min-h-11 px-5 text-sm disabled:cursor-wait disabled:opacity-60"
         >
-          {pending ? `Uploading ${progress}%` : "Upload"}
+          {pending ? `Uploading ${progress}%` : checkpoint ? "Refresh" : "Upload"}
         </button>
       </div>
     </form>

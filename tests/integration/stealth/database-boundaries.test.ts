@@ -314,11 +314,10 @@ async function main() {
     data: { enabled: true },
   });
 
-  invalidateStealthSamplingCache();
   assert.equal(
     await pickStealthMatchup({ publicState: fixture.publicState }),
     null,
-    "an enforced checkpoint goal must remove the checkpoint from sampling",
+    "the live goal fence must reject a stale cached checkpoint after its vote is accepted",
   );
 
   const reconciliationRetry = await drainArenaVoteJobs({ maxJobs: 1, maxMs: 10_000 });

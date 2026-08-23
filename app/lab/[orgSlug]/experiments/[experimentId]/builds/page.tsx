@@ -21,8 +21,8 @@ export default async function EvaluationBuildsPage({
   const pendingCheckpoints = workspace.checkpoints.filter(
     (checkpoint) =>
       checkpoint.latestGenerationRun?.status === "RUNNING" ||
-      checkpoint.expectedBuildCount === 0 ||
-      checkpoint.generatedBuildCount < checkpoint.expectedBuildCount,
+      !checkpoint.promptCohortCurrent ||
+      checkpoint.currentGeneratedBuildCount < checkpoint.currentExpectedBuildCount,
   );
   const builds: ProtectedBuildOption[] = report.variants.flatMap((variant) =>
     variant.builds.map((build) => ({
@@ -60,19 +60,21 @@ export default async function EvaluationBuildsPage({
                     workspace.status !== "CLOSED" &&
                     checkpoint.credentialConfigured &&
                     !running &&
-                    (checkpoint.expectedBuildCount === 0 ||
-                      checkpoint.generatedBuildCount < checkpoint.expectedBuildCount);
+                    (!checkpoint.promptCohortCurrent ||
+                      checkpoint.currentGeneratedBuildCount < checkpoint.currentExpectedBuildCount);
                   const startAction = startGenerationAction.bind(
                     null,
                     orgSlug,
                     experimentId,
                     checkpoint.id,
                   );
-                  const percent = checkpoint.expectedBuildCount
+                  const percent = checkpoint.currentExpectedBuildCount
                     ? Math.min(
                         100,
                         Math.round(
-                          (checkpoint.generatedBuildCount / checkpoint.expectedBuildCount) * 100,
+                          (checkpoint.currentGeneratedBuildCount /
+                            checkpoint.currentExpectedBuildCount) *
+                            100,
                         ),
                       )
                     : 0;
@@ -90,7 +92,8 @@ export default async function EvaluationBuildsPage({
                         <div className="flex items-center justify-between gap-3 font-mono text-xs tabular-nums text-muted">
                           <span>Builds</span>
                           <span className="text-fg">
-                            {checkpoint.generatedBuildCount}/{checkpoint.expectedBuildCount}
+                            {checkpoint.currentGeneratedBuildCount}/
+                            {checkpoint.currentExpectedBuildCount}
                           </span>
                         </div>
                         <div className="mt-2 h-px bg-border/60">
@@ -104,6 +107,13 @@ export default async function EvaluationBuildsPage({
                             Generate
                           </button>
                         </form>
+                      ) : !checkpoint.promptCohortCurrent && !running ? (
+                        <Link
+                          href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                          className="mb-btn mb-btn-ghost min-h-11 px-4 text-xs"
+                        >
+                          Refresh
+                        </Link>
                       ) : (
                         <span className="hidden w-24 sm:block" />
                       )}

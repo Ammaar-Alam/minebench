@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { EvaluationStatus } from "@/components/lab/EvaluationStatus";
 import { CohortUploadForm } from "@/components/lab/CohortUploadForm";
 import { formatDate, titleCase } from "@/components/lab/format";
@@ -29,18 +30,31 @@ function needsEndpointKey(checkpoint: {
 
 export default async function EvaluationSettingsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ orgSlug: string; experimentId: string }>;
+  searchParams: Promise<{ checkpoint?: string }>;
 }) {
   const { orgSlug, experimentId } = await params;
+  const { checkpoint: refreshCheckpointId } = await searchParams;
   const { workspace } = await loadEvaluationWorkspace(orgSlug, experimentId);
+  const refreshCheckpoint = workspace.checkpoints.find(
+    (checkpoint) =>
+      checkpoint.id === refreshCheckpointId &&
+      checkpoint.status === "READY" &&
+      !checkpoint.promptCohortCurrent,
+  );
+  const refreshEndpoint = refreshCheckpoint?.source === "ENDPOINT" ? refreshCheckpoint : null;
+  const refreshUpload = refreshCheckpoint?.source === "UPLOAD" ? refreshCheckpoint : null;
   const configureAction = configureEndpointAction.bind(null, orgSlug, experimentId);
   const uploadAction = uploadCohortAction.bind(null, orgSlug, experimentId);
   const updateAction = updateEvaluationAction.bind(null, orgSlug, experimentId);
   const closeAction = closeEvaluationAction.bind(null, orgSlug, experimentId);
   const deleteAction = deleteDraftEvaluationAction.bind(null, orgSlug, experimentId);
   const readOnly = workspace.status === "CLOSED";
-  const checkpointSetOpen = !readOnly && workspace.checkpointSetFrozenAt === null;
+  const closing = !readOnly && Boolean(workspace.endedAt);
+  const mutable = !readOnly && !closing;
+  const checkpointSetOpen = mutable && workspace.checkpointSetFrozenAt === null;
   const identityFrozen = workspace.status !== "DRAFT";
   const draftDeletable =
     workspace.status === "DRAFT" &&
@@ -89,7 +103,7 @@ export default async function EvaluationSettingsPage({
           </div>
         </dl>
 
-        {!readOnly ? (
+        {mutable ? (
           <LabDisclosure
             title={<span className="text-sm font-medium text-fg">Evaluation settings</span>}
             className="mt-6 border-t border-border/60"
@@ -152,11 +166,22 @@ export default async function EvaluationSettingsPage({
                 <div className="mt-1 text-xs text-muted">
                   {titleCase(checkpoint.source)}
                   {needsEndpointKey(checkpoint) ? " · Needs key" : ""}
+                  {checkpoint.status === "READY" && !checkpoint.promptCohortCurrent
+                    ? " · Refresh required"
+                    : ""}
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-3">
                 <EvaluationStatus status={checkpoint.status} />
-                {!readOnly && checkpoint.credentialConfigured ? (
+                {mutable && checkpoint.status === "READY" && !checkpoint.promptCohortCurrent ? (
+                  <Link
+                    href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                    className="min-h-11 px-2 py-3 text-xs text-muted hover:text-fg"
+                  >
+                    Refresh
+                  </Link>
+                ) : null}
+                {mutable && checkpoint.credentialConfigured ? (
                   <form
                     action={disableEndpointAction.bind(
                       null,
@@ -181,17 +206,35 @@ export default async function EvaluationSettingsPage({
         {checkpointSetOpen ? (
           <div className="mt-5 overflow-hidden rounded-md border border-border/70">
             <LabDisclosure
-              title={<span className="text-sm font-medium text-fg">Add checkpoint</span>}
+              title={
+                <span className="text-sm font-medium text-fg">
+                  {refreshEndpoint ? "Refresh checkpoint" : "Add checkpoint"}
+                </span>
+              }
               className="border-b border-border/55"
               buttonClassName="px-4"
               panelClassName="px-4 pb-5 pt-2 sm:px-5"
+              defaultOpen={Boolean(refreshEndpoint)}
             >
           <form action={configureAction} className="space-y-5">
+            {refreshEndpoint ? (
+              <>
+                <input type="hidden" name="variantId" value={refreshEndpoint.id} />
+                <input type="hidden" name="codename" value={refreshEndpoint.codename} />
+              </>
+            ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="space-y-2 text-sm font-medium text-fg">
-                <span>Codename</span>
-                <input name="codename" required maxLength={80} className="mb-field h-11" />
-              </label>
+              {refreshEndpoint ? (
+                <div className="space-y-2 text-sm font-medium text-fg">
+                  <span>Checkpoint</span>
+                  <div className="flex h-11 items-center">{refreshEndpoint.codename}</div>
+                </div>
+              ) : (
+                <label className="space-y-2 text-sm font-medium text-fg">
+                  <span>Codename</span>
+                  <input name="codename" required maxLength={80} className="mb-field h-11" />
+                </label>
+              )}
               <label className="space-y-2 text-sm font-medium text-fg">
                 <span>Model</span>
                 <input name="modelId" required autoComplete="off" className="mb-field h-11" />
@@ -264,19 +307,29 @@ export default async function EvaluationSettingsPage({
             </div>
             <div className="flex justify-end">
               <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5 text-sm">
-                Add checkpoint
+                {refreshEndpoint ? "Save & refresh" : "Add checkpoint"}
               </button>
             </div>
           </form>
             </LabDisclosure>
             <LabDisclosure
-              title={<span className="text-sm font-medium text-fg">Upload cohort</span>}
+              title={
+                <span className="text-sm font-medium text-fg">
+                  {refreshUpload ? "Refresh cohort" : "Upload cohort"}
+                </span>
+              }
               buttonClassName="px-4"
               panelClassName="px-4 pb-5 pt-2 sm:px-5"
+              defaultOpen={Boolean(refreshUpload)}
             >
               <CohortUploadForm
                 action={uploadAction}
                 signUrl={`/api/lab/organizations/${encodeURIComponent(orgSlug)}/experiments/${encodeURIComponent(experimentId)}/cohort-upload`}
+                checkpoint={
+                  refreshUpload
+                    ? { id: refreshUpload.id, codename: refreshUpload.codename }
+                    : undefined
+                }
               />
             </LabDisclosure>
           </div>
@@ -291,6 +344,8 @@ export default async function EvaluationSettingsPage({
           <p className="mt-1 text-sm text-muted">
             {readOnly
               ? "This evaluation is read-only."
+              : closing
+                ? "Close is ready to finish."
               : draftDeletable
                 ? "Unused drafts can be deleted."
                 : "Closing is final and stops Arena sampling."}
@@ -313,7 +368,7 @@ export default async function EvaluationSettingsPage({
               Close this evaluation
             </label>
             <button type="submit" className="mb-btn mb-btn-danger min-h-11 px-5 text-sm">
-              Close
+              {closing ? "Retry close" : "Close"}
             </button>
           </form>
         ) : null}

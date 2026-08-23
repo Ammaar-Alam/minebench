@@ -164,6 +164,7 @@ export type StealthEvaluationWorkspace = {
     latestGenerationRun: {
       id: string;
       status: string;
+      promptCohortId: string;
       workflowRunId: string | null;
       completedBuildCount: number;
       expectedBuildCount: number;
@@ -187,6 +188,9 @@ export type StealthEvaluationWorkspace = {
         } | null;
       }>;
     } | null;
+    promptCohortCurrent: boolean;
+    currentExpectedBuildCount: number;
+    currentGeneratedBuildCount: number;
   }>;
 };
 
@@ -529,8 +533,14 @@ export async function reclaimStaleStealthGenerationRuns(
       startedAt: { lte: cutoff },
       results: { none: { updatedAt: { gt: cutoff } } },
     },
-    select: { id: true, expectedBuildCount: true },
+    select: {
+      id: true,
+      expectedBuildCount: true,
+      variantId: true,
+      variant: { select: { experimentId: true } },
+    },
   });
+  const completedExperimentIds = new Set<string>();
   for (const run of staleRuns) {
     await db.stealthGenerationResult.updateMany({
       where: { runId: run.id, status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
@@ -550,6 +560,25 @@ export async function reclaimStaleStealthGenerationRuns(
         error: complete ? null : "Generation reservation expired",
       },
     });
+    if (complete) {
+      await db.stealthVariant.updateMany({
+        where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+        data: {
+          status: "READY",
+          endpointEnabled: false,
+          expectedBuildCount: run.expectedBuildCount,
+          generatedBuildCount: completedBuildCount,
+          generationFailureCount: 0,
+          cohortGeneratedAt: now,
+          lastGenerationError: null,
+        },
+      });
+      await db.stealthEndpointCredential.deleteMany({ where: { variantId: run.variantId } });
+      completedExperimentIds.add(run.variant.experimentId);
+    }
+  }
+  for (const experimentId of completedExperimentIds) {
+    await syncExperimentReadiness(db, experimentId);
   }
   return staleRuns.length;
 }
@@ -575,22 +604,31 @@ export async function withStealthGenerationHeartbeat<T>(
   }
 }
 
-async function assertNoCheckpointData(
+async function assertCheckpointRetryable(
   db: Prisma.TransactionClient,
   variantId: string,
-  modelId: string,
 ): Promise<void> {
   await reclaimStaleStealthGenerationRuns(db, variantId);
   const activeRunCount = await db.stealthGenerationRun.count({
     where: { variantId, status: "RUNNING" },
   });
   if (activeRunCount > 0) throw new Error("Generation is still running");
-  const [buildCount, matchupCount, voteCount] = await Promise.all([
-    db.build.count({ where: { modelId } }),
+  const [matchupCount, voteCount] = await Promise.all([
     db.matchup.count({ where: { stealthVariantId: variantId } }),
     db.vote.count({ where: { matchup: { stealthVariantId: variantId } } }),
   ]);
-  if (buildCount > 0 || matchupCount > 0 || voteCount > 0) {
+  if (matchupCount > 0 || voteCount > 0) {
+    throw new Error("A checkpoint with votes is immutable");
+  }
+}
+
+async function assertNoCheckpointData(
+  db: Prisma.TransactionClient,
+  variantId: string,
+  modelId: string,
+): Promise<void> {
+  await assertCheckpointRetryable(db, variantId);
+  if (await db.build.count({ where: { modelId } })) {
     throw new Error("A checkpoint with builds or votes is immutable");
   }
 }
@@ -599,22 +637,24 @@ async function assertUploadCheckpointRetryable(
   db: Prisma.TransactionClient,
   variant: Pick<LockedVariant, "id" | "modelId" | "source">,
 ): Promise<void> {
-  await reclaimStaleStealthGenerationRuns(db, variant.id);
-  const activeRunCount = await db.stealthGenerationRun.count({
-    where: { variantId: variant.id, status: "RUNNING" },
-  });
-  if (activeRunCount > 0) throw new Error("Generation is still running");
-  const [buildCount, matchupCount, voteCount] = await Promise.all([
-    db.build.count({ where: { modelId: variant.modelId } }),
-    db.matchup.count({ where: { stealthVariantId: variant.id } }),
-    db.vote.count({ where: { matchup: { stealthVariantId: variant.id } } }),
-  ]);
-  if (matchupCount > 0 || voteCount > 0) {
-    throw new Error("A checkpoint with votes is immutable");
-  }
+  await assertCheckpointRetryable(db, variant.id);
+  const buildCount = await db.build.count({ where: { modelId: variant.modelId } });
   if (buildCount > 0 && variant.source !== "UPLOAD") {
     throw new Error("A checkpoint with endpoint builds cannot be converted to upload");
   }
+}
+
+async function isOutdatedReadyCheckpoint(
+  db: Prisma.TransactionClient,
+  variant: Pick<LockedVariant, "id" | "status">,
+): Promise<boolean> {
+  if (variant.status !== "READY") return false;
+  const run = await db.stealthGenerationRun.findFirst({
+    where: { variantId: variant.id, status: "SUCCEEDED" },
+    orderBy: { completedAt: "desc" },
+    select: { promptCohortId: true },
+  });
+  return run?.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID;
 }
 
 export async function syncExperimentReadiness(
@@ -1002,6 +1042,7 @@ export async function updateStealthEvaluation(
       throw new Error("Evaluation not found");
     }
     if (experiment.status === "CLOSED") throw new Error("Closed evaluations are read-only");
+    if (experiment.endedAt) throw new Error("Evaluation is closing");
     if (
       experiment.status !== "DRAFT" &&
       (input.name !== undefined || input.slug !== undefined)
@@ -1133,7 +1174,15 @@ export async function getStealthEvaluationWorkspace(
         orderBy: { codename: "asc" },
         include: {
           credential: { select: { id: true } },
-          model: { select: { _count: { select: { builds: true } } } },
+          model: {
+            select: {
+              _count: { select: { builds: true } },
+              builds: {
+                where: { prompt: { text: { in: Object.values(BENCHMARK_PROMPT_MAP) } } },
+                select: { id: true },
+              },
+            },
+          },
           generationRuns: {
             orderBy: { startedAt: "desc" },
             take: 1,
@@ -1183,6 +1232,9 @@ export async function getStealthEvaluationWorkspace(
         expectedBuildCount: variant.expectedBuildCount,
         generatedBuildCount: variant.generatedBuildCount,
         persistedBuildCount: variant.model._count.builds,
+        promptCohortCurrent: latestRun?.promptCohortId === BENCHMARK_PROMPT_COHORT_ID,
+        currentExpectedBuildCount: Object.keys(BENCHMARK_PROMPT_MAP).length,
+        currentGeneratedBuildCount: variant.model.builds.length,
         generationFailureCount: variant.generationFailureCount,
         lastGenerationError: variant.lastGenerationError
           ? sanitizeOperationalError(variant.lastGenerationError)
@@ -1194,6 +1246,7 @@ export async function getStealthEvaluationWorkspace(
           ? {
               id: latestRun.id,
               status: latestRun.status,
+              promptCohortId: latestRun.promptCohortId,
               workflowRunId: latestRun.workflowRunId,
               completedBuildCount: latestRun.completedBuildCount,
               expectedBuildCount: latestRun.expectedBuildCount,
@@ -1250,15 +1303,25 @@ export async function configureStealthEndpoint(
       : await lockVariantByCodename(tx, experiment.id, codename);
     if (existing) {
       if (existing.experimentId !== experiment.id) throw new Error("Checkpoint not found");
-      if (!CONFIGURABLE_VARIANT_STATUSES.includes(existing.status)) {
+      const refreshingOutdatedCheckpoint =
+        existing.source === "ENDPOINT" && (await isOutdatedReadyCheckpoint(tx, existing));
+      if (
+        !CONFIGURABLE_VARIANT_STATUSES.includes(existing.status) &&
+        !refreshingOutdatedCheckpoint
+      ) {
         throw new Error("This checkpoint cannot be changed");
       }
-      await assertNoCheckpointData(tx, existing.id, existing.modelId);
+      if (refreshingOutdatedCheckpoint) {
+        await assertCheckpointRetryable(tx, existing.id);
+      } else {
+        await assertNoCheckpointData(tx, existing.id, existing.modelId);
+      }
       await tx.stealthVariant.update({
         where: { id: existing.id },
         data: {
           codename,
           source: "ENDPOINT",
+          ...(refreshingOutdatedCheckpoint ? { status: "DRAFT" as const } : {}),
           checkpointFingerprint: fingerprint,
           endpointEnabled: true,
           expectedBuildCount: Object.keys(BENCHMARK_PROMPT_MAP).length,
@@ -1460,7 +1523,12 @@ export async function completeUploadedStealthCohort(
       : await lockVariantByCodename(tx, experiment.id, codename);
     if (existing) {
       if (existing.experimentId !== experiment.id) throw new Error("Checkpoint not found");
-      if (!CONFIGURABLE_VARIANT_STATUSES.includes(existing.status)) {
+      const refreshingOutdatedCheckpoint =
+        existing.source === "UPLOAD" && (await isOutdatedReadyCheckpoint(tx, existing));
+      if (
+        !CONFIGURABLE_VARIANT_STATUSES.includes(existing.status) &&
+        !refreshingOutdatedCheckpoint
+      ) {
         throw new Error("This checkpoint cannot be changed");
       }
       await assertUploadCheckpointRetryable(tx, existing);
@@ -1652,16 +1720,16 @@ export async function completeUploadedStealthCohort(
     });
   } catch (error) {
     const message = sanitizeOperationalError(error);
-    await prisma.$transaction(async (tx) => {
+    const recoveredComplete = await prisma.$transaction(async (tx) => {
       const experiment = await lockExperiment(tx, experimentId);
       if (!experiment || experiment.organizationId !== organizationId || experiment.status === "CLOSED") {
-        return;
+        return false;
       }
       const run = await tx.stealthGenerationRun.findUnique({
         where: { id: prepared.runId },
         select: { status: true },
       });
-      if (!run || run.status !== "RUNNING") return;
+      if (!run || run.status !== "RUNNING") return false;
       await tx.stealthGenerationResult.updateMany({
         where: { runId: prepared.runId, status: { in: ["QUEUED", "VALIDATING"] } },
         data: { status: "FAILED", error: message },
@@ -1670,27 +1738,32 @@ export async function completeUploadedStealthCohort(
         where: { runId: prepared.runId, status: "READY" },
       });
       const persistedBuildCount = await tx.build.count({ where: { modelId: prepared.modelId } });
+      const complete = completedBuildCount === prompts.length;
+      const completedAt = new Date();
       await tx.stealthGenerationRun.update({
         where: { id: prepared.runId },
         data: {
-          status: completedBuildCount > 0 ? "PARTIAL" : "FAILED",
+          status: complete ? "SUCCEEDED" : completedBuildCount > 0 ? "PARTIAL" : "FAILED",
           completedBuildCount,
           failedBuildCount: prompts.length - completedBuildCount,
-          completedAt: new Date(),
-          error: message,
+          completedAt,
+          error: complete ? null : message,
         },
       });
       await tx.stealthVariant.updateMany({
         where: { id: prepared.variantId, status: { not: "WITHDRAWN" } },
         data: {
-          status: persistedBuildCount > 0 ? "GENERATING" : "DRAFT",
+          status: complete ? "READY" : persistedBuildCount > 0 ? "GENERATING" : "DRAFT",
           generatedBuildCount: completedBuildCount,
           generationFailureCount: prompts.length - completedBuildCount,
-          lastGenerationError: message,
+          cohortGeneratedAt: complete ? completedAt : null,
+          lastGenerationError: complete ? null : message,
         },
       });
       await syncExperimentReadiness(tx, experimentId);
+      return complete;
     });
+    if (recoveredComplete) return { variantId: prepared.variantId, runId: prepared.runId };
     throw error;
   }
 }
@@ -1907,7 +1980,7 @@ export async function closeStealthEvaluation(
     if (experiment.status === "CLOSED") return null;
     const variants = await tx.stealthVariant.findMany({
       where: { experimentId: experiment.id },
-      select: { modelId: true },
+      select: { id: true, modelId: true },
     });
     const retentionDays =
       params?.retentionDays === undefined
@@ -1918,9 +1991,16 @@ export async function closeStealthEvaluation(
       where: { id: { in: variants.map((variant) => variant.modelId) } },
       data: { enabled: false },
     });
+    await tx.stealthVariant.updateMany({
+      where: { id: { in: variants.map((variant) => variant.id) } },
+      data: { endpointEnabled: false },
+    });
+    await tx.stealthEndpointCredential.deleteMany({
+      where: { variantId: { in: variants.map((variant) => variant.id) } },
+    });
     await tx.stealthExperiment.update({
       where: { id: experiment.id },
-      data: { status: "PAUSED", endedAt },
+      data: { status: "PAUSED", endedAt, retentionDays },
     });
     return { retentionDays, endedAt };
   });

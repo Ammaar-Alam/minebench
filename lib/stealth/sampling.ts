@@ -224,15 +224,31 @@ export async function pickStealthMatchup(params: {
   const stealthBuild = variant.buildsByPromptId.get(prompt.id) ?? null;
   if (!publicModel || !stealthBuild) return null;
 
-  const stillActive = await prisma.stealthVariant.count({
+  const liveVariant = await prisma.stealthVariant.findFirst({
     where: {
       id: variant.id,
       status: "ACTIVE",
       experiment: { status: { in: [...ACTIVE_STEALTH_EXPERIMENT_STATUSES] } },
       model: { enabled: true },
     },
+    select: {
+      winCount: true,
+      lossCount: true,
+      _count: {
+        select: {
+          voteJobs: { where: { processedAt: null, choice: { in: ["A", "B"] } } },
+        },
+      },
+      experiment: { select: { targetDecisiveVotes: true, pauseAtGoal: true } },
+    },
   });
-  if (stillActive === 0) {
+  const liveDecisiveVotes = liveVariant
+    ? liveVariant.winCount + liveVariant.lossCount + liveVariant._count.voteJobs
+    : 0;
+  if (
+    !liveVariant ||
+    hasReachedStealthVoteGoal(liveVariant.experiment, liveDecisiveVotes)
+  ) {
     invalidateStealthSamplingCache();
     return null;
   }

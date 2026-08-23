@@ -938,12 +938,16 @@ export function Arena() {
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
   const advanceNowRequestedAtRef = useRef<number | null>(null);
+  const nextMatchupLoadingRef = useRef(false);
   const handleVoteRef = useRef<(choice: VoteChoice) => Promise<void>>(
     async () => undefined
   );
   const handleSkipRef = useRef<() => Promise<void>>(async () => undefined);
   const advanceToNextRef = useRef<(matchupId: string, next: ArenaMatchup) => Promise<void>>(
     async () => undefined
+  );
+  const loadNextMatchupRef = useRef<(matchupId: string, advanceAt: number) => Promise<void>>(
+    async () => undefined,
   );
 
   const setLaneLoadPhase = useCallback((matchupId: string, side: "a" | "b", phase: SideLoadPhase) => {
@@ -2012,6 +2016,8 @@ export function Arena() {
     });
     if (current.next) {
       void advanceToNextRef.current(matchupId, current.next);
+    } else {
+      void loadNextMatchupRef.current(matchupId, Math.min(current.advanceAt, now));
     }
   }, []);
 
@@ -2105,6 +2111,21 @@ export function Arena() {
     setSubmitting(false);
   }
 
+  async function loadNextMatchup(matchupId: string, advanceAt: number) {
+    if (nextMatchupLoadingRef.current) return;
+    nextMatchupLoadingRef.current = true;
+    try {
+      queueNextMatchup(matchupId, advanceAt, await fetchMatchup(undefined));
+    } catch (err) {
+      clearAutoAdvance();
+      flashVoteWarning(
+        err instanceof Error ? err.message : "Couldn't load the next matchup",
+      );
+    } finally {
+      nextMatchupLoadingRef.current = false;
+    }
+  }
+
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     if (isMatchupVoteBlocked(matchup, sideLoadStateRef.current)) return;
@@ -2129,19 +2150,7 @@ export function Arena() {
     }
 
     // Do not create the next matchup until the vote is durable.
-    try {
-      queueNextMatchup(matchup.id, advanceAt, await fetchMatchup(undefined));
-    } catch (err) {
-      // Vote already persisted; this is a pure next-matchup load failure,
-      // so show the full error state (nothing to present next).
-      clearAutoAdvance();
-      setState({
-        kind: "error",
-        message: err instanceof Error ? err.message : "Couldn't load the next matchup",
-      });
-      setReveal({ kind: "none" });
-      setSubmitting(false);
-    }
+    await loadNextMatchup(matchup.id, advanceAt);
   }
 
   async function handleSkip() {
@@ -2156,13 +2165,10 @@ export function Arena() {
     abortFullHydrations(matchup.id);
     abortFullPrefetches(matchup.id);
 
+    let advanceAt: number;
     try {
-      const revealPromise = submitArenaAction(matchup.id, "SKIP").then((response) =>
-        completeReveal(matchup.id, response, REVEAL_MS_AFTER_SKIP),
-      );
-      const nextPromise = fetchMatchup(undefined);
-      const [advanceAt, fetchedNext] = await Promise.all([revealPromise, nextPromise]);
-      queueNextMatchup(matchup.id, advanceAt, fetchedNext);
+      const response = await submitArenaAction(matchup.id, "SKIP");
+      advanceAt = completeReveal(matchup.id, response, REVEAL_MS_AFTER_SKIP);
     } catch (err) {
       clearAutoAdvance();
       setState({
@@ -2171,12 +2177,15 @@ export function Arena() {
       });
       setReveal({ kind: "none" });
       setSubmitting(false);
+      return;
     }
+    await loadNextMatchup(matchup.id, advanceAt);
   }
 
   handleVoteRef.current = handleVote;
   handleSkipRef.current = handleSkip;
   advanceToNextRef.current = advanceToNext;
+  loadNextMatchupRef.current = loadNextMatchup;
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
