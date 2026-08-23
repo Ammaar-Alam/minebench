@@ -14,6 +14,7 @@ import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
+import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -893,6 +894,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         jsonText={r?.rawText}
         palette={palette}
         viewerRef={viewerRef}
+        onBuildMetrics={
+          r?.status === "success"
+            ? (metrics) => enqueueVoxelMetric("sandbox", "full", metrics)
+            : undefined
+        }
         enableBuildJsonToggle
         enableBuildExport={r?.status === "success"}
         exportLabel={modelName}

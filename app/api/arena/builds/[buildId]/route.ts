@@ -31,6 +31,11 @@ import {
   roundMetricMs,
 } from "@/lib/observability/arenaMetrics";
 import {
+  emitArenaBuildCustomMetrics,
+  type ArenaBuildMetricObservation,
+  type ArenaBuildMetricStage,
+} from "@/lib/observability/customMetrics";
+import {
   setActiveServerSpanAttributes,
   withServerSpan,
   withServerSpanSync,
@@ -74,38 +79,15 @@ type CachedJsonResponse = {
   touchedAt: number;
 };
 
-type ArenaBuildTimingStage =
-  | "token_validate"
-  | "artifact_resolve"
-  | "artifact_fetch"
-  | "inflate"
-  | "identity_rewrite"
-  | "deflate"
-  | "body_ready"
-  | "total";
-
-type ArenaBuildDeliveryObservation = {
-  access: "blind" | "public";
-  variant: ArenaBuildVariant;
-  requestedFormat: "v4" | "legacy";
-  servedFormat: "binary" | "json" | "ndjson" | "none";
-  deliveryClass: string;
-  source: string;
-  artifactOutcome: string;
+type ArenaBuildDeliveryObservation = ArenaBuildMetricObservation & {
   artifactCacheStatus: string;
   fallbackReason: string | null;
-  blockCount: number | null;
-  responseBytes: number | null;
-  transferBytes: number | null;
-  decodedBytes: number | null;
   gzip: boolean;
-  optimizedExpected: boolean;
-  optimizedDelivered: boolean;
 };
 
 function logArenaBuildDelivery(
   observation: ArenaBuildDeliveryObservation,
-  stages: Partial<Record<ArenaBuildTimingStage, number>>,
+  stages: Partial<Record<ArenaBuildMetricStage, number>>,
   status: number,
 ) {
   const blockCountBucket = getArenaBlockCountBucket(observation.blockCount);
@@ -136,6 +118,7 @@ function logArenaBuildDelivery(
       ...roundedStages,
     }),
   );
+  emitArenaBuildCustomMetrics(observation, stages, status);
 
   // Web Analytics Plus accepts at most eight properties per custom event
   after(async () => {
@@ -327,7 +310,7 @@ export async function GET(
 ) {
   const timing = new ServerTiming();
   const requestStartedAt = timing.start();
-  const stages: Partial<Record<ArenaBuildTimingStage, number>> = {};
+  const stages: Partial<Record<ArenaBuildMetricStage, number>> = {};
   const url = new URL(request.url);
   const variant = parseVariant(url.searchParams.get("variant"));
   const binaryFormatRequested = url.searchParams.get("format") === "v4";
@@ -351,13 +334,13 @@ export async function GET(
     optimizedDelivered: false,
   };
 
-  const recordStage = (stage: ArenaBuildTimingStage, durationMs: number) => {
+  const recordStage = (stage: ArenaBuildMetricStage, durationMs: number) => {
     if (!Number.isFinite(durationMs) || durationMs < 0) return;
     stages[stage] = (stages[stage] ?? 0) + durationMs;
     timing.add(stage, durationMs);
   };
   const measureStageSync = <T,>(
-    stage: ArenaBuildTimingStage,
+    stage: ArenaBuildMetricStage,
     spanName: string,
     attributes: Record<string, string | number | boolean>,
     operation: () => T,
@@ -370,7 +353,7 @@ export async function GET(
     }
   };
   const measureStage = async <T,>(
-    stage: ArenaBuildTimingStage,
+    stage: ArenaBuildMetricStage,
     spanName: string,
     attributes: Record<string, string | number | boolean>,
     operation: () => Promise<T>,
