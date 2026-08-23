@@ -161,11 +161,75 @@ try {
   );
   assert.throws(
     () => encryptStealthEndpointConfig({
-      protocol: "gemini",
+      protocol: "openai-chat-completions",
+      endpointUrl: "http://checkpoints.example.ai/v1",
       apiKey: "key",
-      modelId: "gemini-checkpoint",
-      maxOutputTokens: 2_000_000,
+      modelId: "checkpoint",
     }),
+    /endpointUrl must use HTTPS/,
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://user:pass@checkpoints.example.ai/v1",
+      apiKey: "key",
+      modelId: "checkpoint",
+    }),
+    /endpointUrl must not include embedded credentials/,
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://localhost:8080/v1",
+      apiKey: "key",
+      modelId: "checkpoint",
+    }),
+    /endpointUrl must not target localhost/,
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://127.0.0.1:8000/v1",
+      apiKey: "key",
+      modelId: "checkpoint",
+    }),
+    /endpointUrl must not target private or loopback IP addresses/,
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://169.254.169.254/latest",
+      apiKey: "key",
+      modelId: "checkpoint",
+    }),
+    /endpointUrl must not target private or loopback IP addresses/,
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://10.0.1.5/v1",
+      apiKey: "key",
+      modelId: "checkpoint",
+    }),
+    /endpointUrl must not target private or loopback IP addresses/,
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://192.168.1.1/v1",
+      apiKey: "key",
+      modelId: "checkpoint",
+    }),
+    /endpointUrl must not target private or loopback IP addresses/,
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://[::1]:8000/v1",
+      apiKey: "key",
+      modelId: "checkpoint",
+    }),
+    /endpointUrl must not target private or loopback IP addresses/,
   );
 
   console.log("stealth credential envelope checks passed");

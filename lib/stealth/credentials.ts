@@ -4,6 +4,8 @@ import {
   createHmac,
   randomBytes,
 } from "node:crypto";
+import net from "node:net";
+import { isDisallowedIpAddress } from "@/lib/ai/providers/customApiGuard";
 import type { GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
 import { z } from "zod";
 
@@ -52,15 +54,72 @@ export const stealthEndpointConfigSchema = z.object({
       });
       return;
     }
+    let parsed: URL;
     try {
-      new URL(endpointUrl);
+      parsed = new URL(endpointUrl);
     } catch {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["endpointUrl"],
         message: "endpointUrl must be a valid URL",
       });
+      return;
     }
+
+    if (parsed.protocol !== "https:") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endpointUrl"],
+        message: "endpointUrl must use HTTPS",
+      });
+      return;
+    }
+
+    if (parsed.username || parsed.password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endpointUrl"],
+        message: "endpointUrl must not include embedded credentials",
+      });
+      return;
+    }
+
+    const rawHostname = parsed.hostname.trim().toLowerCase();
+    const hostname = rawHostname.replace(/^\[(.*)\]$/, "$1");
+    if (
+      !hostname ||
+      hostname === "localhost" ||
+      hostname === "localhost.localdomain" ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".local")
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endpointUrl"],
+        message: "endpointUrl must not target localhost or local network hosts",
+      });
+      return;
+    }
+
+    const hostFamily = net.isIP(hostname);
+    if (hostFamily !== 0) {
+      if (isDisallowedIpAddress(hostname)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["endpointUrl"],
+          message: "endpointUrl must not target private or loopback IP addresses",
+        });
+        return;
+      }
+    } else if (!hostname.includes(".")) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["endpointUrl"],
+        message: "endpointUrl must use a public hostname",
+      });
+      return;
+    }
+
     return;
   }
 
