@@ -7,6 +7,7 @@ import type {
 import {
   appendPackedVoxelBlocks,
   createPackedVoxelBlocks,
+  packVoxelBlocks,
   reservePackedVoxelBlocks,
   type PackedVoxelBlocks,
   type RenderableVoxelBuild,
@@ -162,6 +163,151 @@ function isBuildLoadHints(value: unknown): value is ArenaBuildLoadHints {
     (value.initialEstimatedBytes === null || isNonNegativeInt(value.initialEstimatedBytes)) &&
     (value.fullEstimatedBytes === null || isNonNegativeInt(value.fullEstimatedBytes))
   );
+}
+
+// Parsing JSON produces one object per block. Packing at the delivery boundary
+// lets that array go instead of keeping it alive for as long as a lane holds
+// the build, which on a matchup means two of them at once.
+export function packDeliveredBuild(
+  build: RenderableVoxelBuild,
+): RenderableVoxelBuild;
+export function packDeliveredBuild(
+  build: RenderableVoxelBuild | null,
+): RenderableVoxelBuild | null;
+export function packDeliveredBuild(
+  build: RenderableVoxelBuild | null | undefined,
+): RenderableVoxelBuild | null | undefined;
+export function packDeliveredBuild(
+  build: RenderableVoxelBuild | null | undefined,
+): RenderableVoxelBuild | null | undefined {
+  if (!build) return build;
+  if (build.packed || !Array.isArray(build.blocks) || build.blocks.length === 0) {
+    return build;
+  }
+  return { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) };
+}
+
+export type BuildVariantPayloadResult = {
+  payload: BuildVariantStreamResponse;
+  servedFormat: "binary" | "json";
+  bodyBytes: number | null;
+  compressed: boolean;
+};
+
+export type ReadBuildVariantPayloadOptions = {
+  fallbackIdentity?: {
+    buildId?: string;
+    variant?: ArenaBuildVariant;
+    checksum?: string | null;
+  };
+  onStage?: (event: BuildVariantArtifactReadEvent) => void;
+};
+
+export async function readBuildVariantPayload(
+  res: Response,
+  optionsOrOnStage?:
+    | ReadBuildVariantPayloadOptions
+    | ((event: BuildVariantArtifactReadEvent) => void),
+): Promise<BuildVariantPayloadResult> {
+  const options: ReadBuildVariantPayloadOptions =
+    typeof optionsOrOnStage === "function"
+      ? { onStage: optionsOrOnStage }
+      : optionsOrOnStage ?? {};
+
+  let bodyBytes: number | null = null;
+  let compressed = false;
+  const artifact = await readBuildVariantArtifact<BuildVariantStreamResponse>(res, {
+    onStage(event) {
+      if (event.stage === "body_complete") bodyBytes = event.bytes;
+      if (event.stage === "inflate_complete") {
+        compressed = event.compressed;
+      }
+      options.onStage?.(event);
+    },
+  });
+
+  if (artifact.kind === "json") {
+    const raw = artifact.value;
+    if (!isRecord(raw)) throw new Error("Malformed build response JSON");
+    const rawVariant = typeof raw.variant === "string" ? raw.variant : undefined;
+    if (rawVariant && options.fallbackIdentity?.variant && rawVariant !== options.fallbackIdentity.variant) {
+      throw new Error("Contradictory variant in build response");
+    }
+    const variant = (isVariant(rawVariant) ? rawVariant : options.fallbackIdentity?.variant) as ArenaBuildVariant;
+    if (!isVariant(variant)) {
+      throw new Error("Invalid or missing variant in build response");
+    }
+    const buildId =
+      typeof raw.buildId === "string" && raw.buildId.length > 0
+        ? raw.buildId
+        : (options.fallbackIdentity?.buildId ?? "");
+    const checksum =
+      typeof raw.checksum === "string"
+        ? raw.checksum
+        : (raw.checksum === null ? null : (options.fallbackIdentity?.checksum ?? null));
+    const serverValidated = typeof raw.serverValidated === "boolean" ? raw.serverValidated : false;
+    const buildLoadHints = isBuildLoadHints(raw.buildLoadHints) ? raw.buildLoadHints : undefined;
+
+    const voxelBuild = (isRecord(raw.voxelBuild) ? raw.voxelBuild : raw) as RenderableVoxelBuild;
+    const packedVoxelBuild = packDeliveredBuild(voxelBuild) ?? {
+      version: "1.0",
+      blocks: [],
+      packed: createPackedVoxelBlocks(0),
+    };
+
+    return {
+      payload: {
+        buildId,
+        variant,
+        checksum,
+        serverValidated,
+        buildLoadHints,
+        voxelBuild: packedVoxelBuild,
+      },
+      servedFormat: "json",
+      bodyBytes,
+      compressed,
+    };
+  }
+
+  const envelope = (artifact.envelope ?? {}) as Partial<BuildVariantStreamResponse> & {
+    version?: string;
+  };
+  const expectedVariant = options.fallbackIdentity?.variant;
+  if (envelope.variant && expectedVariant && envelope.variant !== expectedVariant) {
+    throw new Error("Contradictory variant in build response");
+  }
+
+  const resolvedVariant = (envelope.variant ?? expectedVariant) as ArenaBuildVariant;
+  if (!isVariant(resolvedVariant)) {
+    throw new Error("Invalid or missing variant in build response");
+  }
+
+  const buildId =
+    typeof envelope.buildId === "string" && envelope.buildId.length > 0
+      ? envelope.buildId
+      : (options.fallbackIdentity?.buildId ?? "");
+
+  const checksum =
+    typeof envelope.checksum === "string"
+      ? envelope.checksum
+      : (envelope.checksum === null ? null : (options.fallbackIdentity?.checksum ?? null));
+
+  return {
+    payload: {
+      buildId,
+      variant: resolvedVariant,
+      checksum,
+      serverValidated: Boolean(envelope.serverValidated),
+      buildLoadHints: isBuildLoadHints(envelope.buildLoadHints)
+        ? envelope.buildLoadHints
+        : undefined,
+      voxelBuild: { version: "1.0", blocks: [], packed: artifact.blocks },
+    },
+    servedFormat: "binary",
+    bodyBytes,
+    compressed,
+  };
 }
 
 function isVoxelBlock(value: unknown): boolean {

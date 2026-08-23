@@ -128,11 +128,38 @@ async function main() {
     "error",
   );
 
-  const parsed = clientMetricBatchSchema.safeParse({ samples: [validMatchupSample] });
+  const validDeliverySample = {
+    kind: "delivery" as const,
+    surface: "sandbox" as const,
+    purpose: "visible" as const,
+    variant: "full" as const,
+    transport: "snapshot" as const,
+    requestedFormat: "v4" as const,
+    servedFormat: "binary" as const,
+    delivery_source: "artifact" as const,
+    blockCountBucket: "50k-150k" as const,
+    compressed: true,
+    optimized: true,
+    headersMs: 15.0,
+    bodyMs: 25.0,
+    inflateMs: 2.0,
+    decodeMs: 0.5,
+    totalMs: 42.5,
+    bodyBytes: 120_000,
+  };
+
+  const parsed = clientMetricBatchSchema.safeParse({ samples: [validMatchupSample, validDeliverySample] });
   assert.equal(parsed.success, true);
   assert.equal(
     clientMetricBatchSchema.safeParse({
       samples: [{ ...validMatchupSample, buildId: "secret-build-id" }],
+    }).success,
+    false,
+  );
+  // Rejects old `source` on delivery metric (must use delivery_source)
+  assert.equal(
+    clientMetricBatchSchema.safeParse({
+      samples: [{ ...validDeliverySample, source: "artifact", delivery_source: undefined }],
     }).success,
     false,
   );
@@ -141,6 +168,7 @@ async function main() {
   emitClientCustomMetrics(
     [
       validMatchupSample,
+      validDeliverySample,
       {
         kind: "voxel",
         surface: "sandbox",
@@ -170,7 +198,17 @@ async function main() {
     true,
   );
   assert.equal(
-    clientEmissions.every((entry) => Object.keys(entry.tags).length <= 8),
+    clientEmissions.some(
+      (entry) =>
+        entry.name === "minebench.arena.delivery.stage_ms" &&
+        entry.tags.delivery_source === "artifact" &&
+        entry.tags.surface === "sandbox" &&
+        !("source" in entry.tags),
+    ),
+    true,
+  );
+  assert.equal(
+    clientEmissions.every((entry) => Object.keys(entry.tags).length <= 9),
     true,
   );
 

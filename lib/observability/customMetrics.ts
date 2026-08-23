@@ -33,12 +33,13 @@ const matchupMetricSchema = z
 const deliveryMetricSchema = z
   .object({
     kind: z.literal("delivery"),
+    surface: z.enum(["arena", "sandbox", "leaderboard"]),
     purpose: z.enum(["visible", "prefetch"]),
     variant: z.enum(["preview", "full"]),
     transport: z.enum(["snapshot", "stream-artifact", "stream-live"]),
     requestedFormat: z.enum(["v4", "json", "ndjson"]),
     servedFormat: z.enum(["binary", "json", "ndjson"]),
-    source: z.enum([
+    delivery_source: z.enum([
       "artifact",
       "live",
       "artifact-required",
@@ -61,7 +62,7 @@ const deliveryMetricSchema = z
 const voxelMetricSchema = z
   .object({
     kind: z.literal("voxel"),
-    surface: z.enum(["arena", "sandbox"]),
+    surface: z.enum(["arena", "sandbox", "leaderboard"]),
     variant: z.enum(["preview", "full"]),
     strategy: z.enum(["local", "worker", "worker-fallback"]),
     cacheStatus: z.enum(["hit", "miss", "disabled", "not-used"]),
@@ -205,7 +206,7 @@ export function emitArenaBuildCustomMetrics(
     access: observation.access,
     variant: observation.variant,
     format: `${observation.requestedFormat}-${observation.servedFormat}`,
-    source: normalizeServerSource(observation.source),
+    delivery_source: normalizeServerSource(observation.source),
     outcome: normalizeArtifactOutcome(observation.artifactOutcome),
     delivery_class: normalizeDeliveryClass(observation.deliveryClass),
     block_bucket: getArenaBlockCountBucket(observation.blockCount),
@@ -275,11 +276,12 @@ export function emitClientCustomMetrics(
 
     if (sample.kind === "delivery") {
       const tags = {
+        surface: sample.surface,
         purpose: sample.purpose,
         variant: sample.variant,
         transport: sample.transport,
         format: `${sample.requestedFormat}-${sample.servedFormat}`,
-        source: sample.source,
+        delivery_source: sample.delivery_source,
         block_bucket: sample.blockCountBucket,
         encoding: sample.compressed ? "gzip" : "identity",
       };

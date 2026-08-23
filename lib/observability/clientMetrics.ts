@@ -40,7 +40,7 @@ export function enqueueClientMetric(sample: ClientMetricSample) {
 }
 
 export function enqueueVoxelMetric(
-  surface: "arena" | "sandbox",
+  surface: "arena" | "sandbox" | "leaderboard",
   variant: ArenaBuildVariant,
   metrics: VoxelViewerBuildMetrics,
 ) {
@@ -61,5 +61,62 @@ export function enqueueVoxelMetric(
     firstRenderMs: roundMetricMs(metrics.firstRenderMs),
     revealMs: roundMetricMs(metrics.revealMs),
     totalMs: roundMetricMs(metrics.totalMs),
+  });
+}
+
+export function normalizeDeliverySource(
+  response: Response,
+): "artifact" | "live" | "artifact-required" | "artifact-redirect" | "response-cache" | "unknown" {
+  const source =
+    response.headers.get("x-build-source") ?? response.headers.get("x-build-stream-source");
+  if (source === "artifact") return "artifact";
+  if (source === "live") return "live";
+  if (source === "artifact-required") return "artifact-required";
+  if (source === "artifact-redirect") return "artifact-redirect";
+  if (source?.startsWith("response-cache:")) return "response-cache";
+  if (response.redirected) return "artifact-redirect";
+  return "unknown";
+}
+
+export function enqueueDeliveryMetric(params: {
+  surface: "arena" | "sandbox" | "leaderboard";
+  purpose?: "visible" | "prefetch";
+  variant: ArenaBuildVariant;
+  transport: "snapshot" | "stream-artifact" | "stream-live";
+  requestedFormat: "v4" | "json" | "ndjson";
+  servedFormat: "binary" | "json" | "ndjson";
+  response: Response;
+  blockCount: number;
+  totalMs: number | null;
+  headersMs?: number | null;
+  bodyMs?: number | null;
+  inflateMs?: number | null;
+  decodeMs?: number | null;
+  bodyBytes?: number | null;
+  compressed?: boolean;
+}) {
+  const source = normalizeDeliverySource(params.response);
+  const optimized =
+    params.requestedFormat === "v4" &&
+    params.servedFormat === "binary" &&
+    (source === "artifact" || source === "artifact-redirect");
+  enqueueClientMetric({
+    kind: "delivery",
+    surface: params.surface,
+    purpose: params.purpose ?? "visible",
+    variant: params.variant,
+    transport: params.transport,
+    requestedFormat: params.requestedFormat,
+    servedFormat: params.servedFormat,
+    delivery_source: source,
+    blockCountBucket: getArenaBlockCountBucket(params.blockCount),
+    compressed: Boolean(params.compressed),
+    optimized,
+    headersMs: roundMetricMs(params.headersMs),
+    bodyMs: roundMetricMs(params.bodyMs),
+    inflateMs: roundMetricMs(params.inflateMs),
+    decodeMs: roundMetricMs(params.decodeMs),
+    totalMs: roundMetricMs(params.totalMs),
+    bodyBytes: params.bodyBytes ?? null,
   });
 }

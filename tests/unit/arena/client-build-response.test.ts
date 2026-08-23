@@ -78,6 +78,7 @@ async function main() {
     isGzipStreamPrefix,
     readBuildVariantArtifact,
     readBuildVariantJson,
+    readBuildVariantPayload,
     readBuildVariantStream,
     streamFromInitialChunks,
   } = await import("../../../lib/arena/clientBuildResponse");
@@ -368,6 +369,107 @@ async function main() {
   );
   await assert.rejects(readBuildVariantStream(sourceFailureResponse), /source failed/);
   assert.equal(sourceFailureResponse.body?.locked, false);
+
+  // readBuildVariantPayload tests
+  const testBlocks = [
+    { x: 10, y: 20, z: 30, type: "oak_planks" },
+    { x: 11, y: 20, z: 30, type: "stone" },
+    { x: 12, y: 20, z: 30, type: "glass" },
+  ];
+  const fullJsonPayload = {
+    buildId: "bench-build-1",
+    variant: "full",
+    checksum: "sha256-abc",
+    serverValidated: true,
+    voxelBuild: {
+      version: "1.0",
+      blocks: testBlocks,
+    },
+  };
+  const gzippedJsonPayload = gzipSync(Buffer.from(JSON.stringify(fullJsonPayload)));
+  const jsonStages: string[] = [];
+  const payloadFromJson = await readBuildVariantPayload(new Response(gzippedJsonPayload), {
+    onStage: (event) => jsonStages.push(event.stage),
+  });
+  assert.equal(payloadFromJson.servedFormat, "json");
+  assert.equal(payloadFromJson.compressed, true);
+  assert.equal(payloadFromJson.payload.buildId, "bench-build-1");
+  assert.equal(payloadFromJson.payload.variant, "full");
+  assert.equal(payloadFromJson.payload.checksum, "sha256-abc");
+  assert.equal(payloadFromJson.payload.voxelBuild.packed?.count, 3);
+  assert.equal(payloadFromJson.payload.voxelBuild.blocks.length, 0); // packed at delivery boundary
+  assert.deepEqual(jsonStages, [
+    "body_complete",
+    "inflate_complete",
+    "json_decode_complete",
+  ]);
+
+  // Binary payload
+  const binaryBytes = encodeBinaryArtifact(
+    { buildId: "bench-build-1", variant: "full", checksum: "sha256-abc", serverValidated: true },
+    testBlocks,
+  );
+  const gzippedBinary = gzipSync(Buffer.from(binaryBytes));
+  const binaryStages: string[] = [];
+  const payloadFromBinary = await readBuildVariantPayload(new Response(gzippedBinary), {
+    onStage: (event) => binaryStages.push(event.stage),
+  });
+  assert.equal(payloadFromBinary.servedFormat, "binary");
+  assert.equal(payloadFromBinary.compressed, true);
+  assert.equal(payloadFromBinary.payload.buildId, "bench-build-1");
+  assert.equal(payloadFromBinary.payload.variant, "full");
+  assert.equal(payloadFromBinary.payload.checksum, "sha256-abc");
+  assert.equal(payloadFromBinary.payload.voxelBuild.packed?.count, 3);
+  assert.deepEqual(binaryStages, [
+    "body_complete",
+    "inflate_complete",
+    "binary_decode_complete",
+  ]);
+
+  // Equivalence between binary and JSON delivery
+  assert.equal(
+    payloadFromBinary.payload.voxelBuild.packed?.count,
+    payloadFromJson.payload.voxelBuild.packed?.count,
+  );
+  assert.deepEqual(
+    payloadFromBinary.payload.voxelBuild.packed?.positions.slice(0, 9),
+    payloadFromJson.payload.voxelBuild.packed?.positions.slice(0, 9),
+  );
+  assert.deepEqual(
+    payloadFromBinary.payload.voxelBuild.packed?.typeNames,
+    payloadFromJson.payload.voxelBuild.packed?.typeNames,
+  );
+
+  // Fallback identity when binary envelope has missing fields
+  const strippedBinaryBytes = encodeBinaryArtifact(
+    { serverValidated: true }, // missing buildId, variant, checksum
+    testBlocks,
+  );
+  const fallbackResult = await readBuildVariantPayload(
+    new Response(Buffer.from(strippedBinaryBytes)),
+    {
+      fallbackIdentity: {
+        buildId: "fallback-id",
+        variant: "preview",
+        checksum: "fallback-checksum",
+      },
+    },
+  );
+  assert.equal(fallbackResult.payload.buildId, "fallback-id");
+  assert.equal(fallbackResult.payload.variant, "preview");
+  assert.equal(fallbackResult.payload.checksum, "fallback-checksum");
+
+  // Contradictory variant rejection
+  const previewBinaryBytes = encodeBinaryArtifact(
+    { buildId: "test", variant: "preview" },
+    testBlocks,
+  );
+  await assert.rejects(
+    readBuildVariantPayload(new Response(Buffer.from(previewBinaryBytes)), {
+      fallbackIdentity: { variant: "full" },
+    }),
+    /Contradictory variant in build response/,
+  );
 }
 
 main().catch((error) => {

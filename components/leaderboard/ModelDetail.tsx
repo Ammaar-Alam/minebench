@@ -16,7 +16,7 @@ import type {
 } from "@/lib/arena/types";
 import {
   IncompleteBuildStreamError,
-  readBuildVariantJson,
+  readBuildVariantPayload,
   readBuildVariantStream,
   type BuildStreamProgress,
   type BuildVariantStreamResponse,
@@ -36,6 +36,7 @@ import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import { enqueueDeliveryMetric } from "@/lib/observability/clientMetrics";
 import { ModelLateralNav, PromptLateralNav } from "@/components/leaderboard/LateralNav";
 import {
   SandboxGifExportButton,
@@ -120,6 +121,7 @@ type LoadedPromptBuild = {
   gridSize: number;
   palette: "simple" | "advanced";
   mode: string;
+  checksum?: string | null;
   blockCount: number;
 };
 
@@ -180,15 +182,18 @@ async function fetchBuildVariantSnapshot(
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
+  url.searchParams.set("format", "v4");
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
   const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
   const timed = makeTimeoutSignal(signal, timeoutMs);
+  const startedAt = performance.now();
   try {
     let res: Response;
     try {
       res = await fetch(url, {
         method: "GET",
+        headers: { accept: "application/octet-stream, application/json;q=0.9" },
         credentials: "same-origin",
         signal: timed.signal,
         redirect: "follow",
@@ -207,7 +212,21 @@ async function fetchBuildVariantSnapshot(
       throw new Error(await readClientErrorResponse(res, "Failed to load build"));
     }
     try {
-      return await readBuildVariantJson<BuildVariantResponse>(res);
+      const result = await readBuildVariantPayload(res, { fallbackIdentity: ref });
+      const totalMs = performance.now() - startedAt;
+      enqueueDeliveryMetric({
+        surface: "leaderboard",
+        variant: ref.variant,
+        transport: "snapshot",
+        requestedFormat: "v4",
+        servedFormat: result.servedFormat,
+        response: res,
+        blockCount: voxelBuildBlockCount(result.payload.voxelBuild),
+        totalMs,
+        bodyBytes: result.bodyBytes,
+        compressed: result.compressed,
+      });
+      return result.payload;
     } catch (err: unknown) {
       if (allowRedirect && !isAbortError(err)) {
         snapshotStorageRedirectBlocked = true;
@@ -248,7 +267,20 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return readBuildVariantJson<BuildVariantResponse>(res);
+    const result = await readBuildVariantPayload(res, { fallbackIdentity: ref });
+    enqueueDeliveryMetric({
+      surface: "leaderboard",
+      variant: ref.variant,
+      transport: useArtifact ? "stream-artifact" : "stream-live",
+      requestedFormat: "ndjson",
+      servedFormat: result.servedFormat,
+      response: res,
+      blockCount: voxelBuildBlockCount(result.payload.voxelBuild),
+      totalMs: null,
+      bodyBytes: result.bodyBytes,
+      compressed: result.compressed,
+    });
+    return result.payload;
   }
 
   try {
@@ -1109,6 +1141,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
         gridSize: activeBuildMeta.gridSize,
         palette: activeBuildMeta.palette,
         mode: activeBuildMeta.mode,
+        checksum: payload.checksum ?? activeBuildMeta.checksum ?? null,
         blockCount:
           payload.variant === "full"
             ? Math.max(activeBuildMeta.blockCount, receivedBlockCount)
