@@ -629,7 +629,7 @@ function HeadToHeadCard({ opponent }: { opponent: ModelOpponentBreakdown }) {
 
   return (
     <Link
-      href={`/leaderboard/${opponent.key}`}
+      href={`/leaderboard/${encodeURIComponent(opponent.slug || opponent.key)}`}
       className="mb-head-to-head-card mb-card-enter group block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       aria-label={`Open ${opponent.displayName} profile`}
     >

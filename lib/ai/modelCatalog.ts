@@ -625,3 +625,11 @@ export function getModelByKey(key: ModelKey): ModelCatalogEntry {
 export function resolveModelDisplayName(key: string, fallback: string): string {
   return MODEL_CATALOG.find((model) => model.key === key)?.displayName ?? fallback;
 }
+
+export function resolveModelSlug(keyOrSlug: string): string {
+  const normalized = keyOrSlug.trim();
+  const entry = MODEL_CATALOG.find(
+    (model) => model.key === normalized || model.slug === normalized,
+  );
+  return entry?.slug ?? normalized;
+}

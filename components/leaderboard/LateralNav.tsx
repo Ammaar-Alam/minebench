@@ -6,6 +6,7 @@ import {
   fetchLeaderboardOrder,
   readLeaderboardOrderFromCache,
 } from "@/lib/leaderboardOrder";
+import { resolveModelSlug } from "@/lib/ai/modelCatalog";
 
 // generic helpers ------------------------------------------------------------
 
@@ -303,7 +304,7 @@ export function ModelLateralNav({
   const goto = useCallback(
     (key: string | null) => {
       if (!key) return;
-      router.push(`/leaderboard/${encodeURIComponent(key)}`);
+      router.push(`/leaderboard/${encodeURIComponent(resolveModelSlug(key))}`);
     },
     [router],
   );
@@ -315,8 +316,8 @@ export function ModelLateralNav({
 
   // prefetch neighbors so the route transition is instant
   useEffect(() => {
-    if (prevKey) router.prefetch(`/leaderboard/${encodeURIComponent(prevKey)}`);
-    if (nextKey) router.prefetch(`/leaderboard/${encodeURIComponent(nextKey)}`);
+    if (prevKey) router.prefetch(`/leaderboard/${encodeURIComponent(resolveModelSlug(prevKey))}`);
+    if (nextKey) router.prefetch(`/leaderboard/${encodeURIComponent(resolveModelSlug(nextKey))}`);
   }, [prevKey, nextKey, router]);
 
   const shortcutsEnabled = !modalOpen && !neighbors.loading && neighbors.rank != null;

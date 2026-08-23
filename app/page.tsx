@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Arena } from "@/components/arena/Arena";
-import { breadcrumbJsonLd, DEFAULT_OG_IMAGE, SEO_KEYWORDS } from "@/lib/seo";
+import { breadcrumbJsonLd, datasetJsonLd, DEFAULT_OG_IMAGE, SEO_KEYWORDS } from "@/lib/seo";
 
 export const metadata: Metadata = {
   description:
@@ -32,6 +32,10 @@ export default function HomePage() {
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbData) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(datasetJsonLd) }}
       />
       <h1 className="sr-only">MineBench AI voxel build benchmark</h1>
       <Arena />
