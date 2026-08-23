@@ -76,6 +76,7 @@ async function main() {
     IncompleteBuildStreamError,
     isGzipChunk,
     isGzipStreamPrefix,
+    readBuildVariantArtifact,
     readBuildVariantJson,
     readBuildVariantStream,
     streamFromInitialChunks,
@@ -95,8 +96,48 @@ async function main() {
   const decodedJson = await readBuildVariantJson<typeof payload>(new Response(gzippedJson));
   assert.deepEqual(decodedJson, payload);
 
+  const jsonArtifactStages: string[] = [];
+  const jsonArtifact = await readBuildVariantArtifact<typeof payload>(new Response(gzippedJson), {
+    onStage(event) {
+      jsonArtifactStages.push(event.stage);
+    },
+  });
+  assert.equal(jsonArtifact.kind, "json");
+  assert.deepEqual(jsonArtifactStages, [
+    "body_complete",
+    "inflate_complete",
+    "json_decode_complete",
+  ]);
+
+  const { encodeBinaryArtifact } = await import("../../../lib/arena/binaryArtifact");
+  const binaryArtifactStages: string[] = [];
+  const encodedBinaryArtifact = encodeBinaryArtifact(
+    { buildId: "test-build", variant: "preview", serverValidated: true },
+    payload.voxelBuild.blocks,
+  );
+  const binaryArtifact = await readBuildVariantArtifact(
+    new Response(
+      encodedBinaryArtifact.buffer.slice(
+        encodedBinaryArtifact.byteOffset,
+        encodedBinaryArtifact.byteOffset + encodedBinaryArtifact.byteLength,
+      ) as ArrayBuffer,
+    ),
+    {
+      onStage(event) {
+        binaryArtifactStages.push(event.stage);
+      },
+    },
+  );
+  assert.equal(binaryArtifact.kind, "binary");
+  assert.deepEqual(binaryArtifactStages, [
+    "body_complete",
+    "inflate_complete",
+    "binary_decode_complete",
+  ]);
+
   const { blocks, events } = successfulEvents();
   const progressBuilds: object[] = [];
+  const streamStages: string[] = [];
   const progress: Array<{
     receivedBlocks: number;
     totalBlocks: number | null;
@@ -105,6 +146,9 @@ async function main() {
   }> = [];
   const plainResponse = responseFromChunks([ndjson(...events)]);
   const decoded = await readBuildVariantStream(plainResponse, {
+    onStage(stage) {
+      streamStages.push(stage);
+    },
     onProgress(build, value) {
       progressBuilds.push(build);
       progress.push(value);
@@ -127,6 +171,7 @@ async function main() {
   assert.equal(progress.at(-1)?.chunkIndex, 2);
   assert.equal(progress.at(-1)?.chunkCount, 2);
   assert.equal(plainResponse.body?.locked, false);
+  assert.deepEqual(streamStages, ["body_complete", "stream_decode_complete"]);
 
   const repeatedHello = await readBuildVariantStream(
     responseFromChunks([

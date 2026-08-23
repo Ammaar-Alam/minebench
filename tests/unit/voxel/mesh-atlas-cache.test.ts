@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import * as THREE from "three";
-import { configureAtlasTexture } from "../../../lib/voxel/mesh";
+import { getPalette } from "../../../lib/blocks/palettes";
+import {
+  configureAtlasTexture,
+  createVoxelGroupAsync,
+  type VoxelMeshStageEvent,
+} from "../../../lib/voxel/mesh";
 import {
   CACHE_VERSION,
   buildPersistentMeshCacheKey,
@@ -65,6 +70,31 @@ async function main() {
     assert.equal(table.get(0, 0, 513), -1);
     assert.equal(table.get(-1, 0, 0), -1);
     assert.equal(table.get(1024, 0, 0), -1);
+  }
+
+  {
+    const stages: VoxelMeshStageEvent[] = [];
+    const group = await createVoxelGroupAsync(
+      {
+        version: "1.0",
+        blocks: [{ x: 0, y: 0, z: 0, type: "stone" }],
+      },
+      getPalette("simple"),
+      new THREE.Texture(),
+      {
+        yieldAfterMs: Number.POSITIVE_INFINITY,
+        onStage(event) {
+          stages.push(event);
+        },
+      },
+    );
+    assert.deepEqual(
+      stages.map((event) => event.stage),
+      ["mesh_started", "mesh_payload_complete", "three_group_complete"],
+    );
+    assert.ok(stages.every((event) => event.strategy === "local"));
+    assert.equal(stages.at(-1)?.cacheStatus, "not-used");
+    group.dispose();
   }
 
   console.log("mesh atlas cache and texture configuration checks passed");

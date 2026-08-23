@@ -37,9 +37,19 @@ type BuildProgress = {
   stageLabel?: string;
 };
 
+export type VoxelMeshStrategy = "local" | "worker" | "worker-fallback";
+export type VoxelMeshCacheStatus = "hit" | "miss" | "disabled" | "not-used";
+export type VoxelMeshStageEvent = {
+  stage: "mesh_started" | "mesh_payload_complete" | "three_group_complete";
+  strategy: VoxelMeshStrategy;
+  cacheStatus?: VoxelMeshCacheStatus;
+  blockCount?: number;
+};
+
 type CreateVoxelGroupAsyncOpts = {
   signal?: AbortSignal;
   onProgress?: (progress: BuildProgress) => void;
+  onStage?: (event: VoxelMeshStageEvent) => void;
   // Yield to the main thread when we've spent about this many ms in a tight loop.
   yieldAfterMs?: number;
   // When set, only process the first N input blocks. Useful for progressive streaming without copying arrays.
@@ -1075,12 +1085,13 @@ async function createVoxelMeshPayloadInWorker(
   build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
-): Promise<VoxelMeshPayload> {
+): Promise<{ payload: VoxelMeshPayload; cacheStatus: VoxelMeshCacheStatus }> {
   const cacheKey = opts?.cacheKey?.trim();
   if (cacheKey) {
     const cached = await getCachedMeshPayload(cacheKey);
-    if (cached) return cached;
+    if (cached) return { payload: cached, cacheStatus: "hit" };
   }
+  const cacheStatus: VoxelMeshCacheStatus = cacheKey ? "miss" : "disabled";
 
   if (typeof Worker === "undefined") {
     throw new Error("Web Workers are unavailable in this environment");
@@ -1091,7 +1102,7 @@ async function createVoxelMeshPayloadInWorker(
     worker.terminate();
   };
 
-  return await new Promise<VoxelMeshPayload>((resolve, reject) => {
+  const payload = await new Promise<VoxelMeshPayload>((resolve, reject) => {
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null =
       Number.isFinite(MESH_WORKER_TIMEOUT_MS) && MESH_WORKER_TIMEOUT_MS > 0
@@ -1170,6 +1181,7 @@ async function createVoxelMeshPayloadInWorker(
     };
     worker.postMessage(request, [blocks.positions.buffer, blocks.typeIds.buffer]);
   });
+  return { payload, cacheStatus };
 }
 
 export async function warmVoxelMeshPayload(
@@ -1192,6 +1204,7 @@ async function createVoxelGroupAsyncLocal(
   palette: BlockDefinition[],
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
+  strategy: VoxelMeshStrategy = "local",
 ): Promise<VoxelGroup> {
   // Main-thread meshing walks block objects. This is the small-build path and
   // the worker-failure fallback, so materializing here costs no more than the
@@ -1237,6 +1250,12 @@ async function createVoxelGroupAsyncLocal(
   }
 
   const water = await buildWaterSurfaceBucketAsync(prepared, maybeYield);
+  opts?.onStage?.({
+    stage: "mesh_payload_complete",
+    strategy,
+    cacheStatus: "not-used",
+    blockCount: prepared.filteredBlockCount,
+  });
 
   const geometryStageCount = 5;
   const geometryStageTotal = prepared.filteredBlockCount + geometryStageCount;
@@ -1345,16 +1364,52 @@ export async function createVoxelGroupAsync(
     LOCAL_MESH_MAX_BLOCKS > 0 &&
     blockLimit <= LOCAL_MESH_MAX_BLOCKS
   ) {
-    return createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts);
+    opts?.onStage?.({ stage: "mesh_started", strategy: "local" });
+    const group = await createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts, "local");
+    opts?.onStage?.({
+      stage: "three_group_complete",
+      strategy: "local",
+      cacheStatus: "not-used",
+      blockCount: group.stats.blockCount,
+    });
+    return group;
   }
 
   try {
-    const payload = await createVoxelMeshPayloadInWorker(build, palette, opts);
+    opts?.onStage?.({ stage: "mesh_started", strategy: "worker" });
+    const { payload, cacheStatus } = await createVoxelMeshPayloadInWorker(build, palette, opts);
+    opts?.onStage?.({
+      stage: "mesh_payload_complete",
+      strategy: "worker",
+      cacheStatus,
+      blockCount: payload.filteredBlockCount,
+    });
     throwIfAborted(opts?.signal);
-    return createVoxelGroupFromMeshPayload(payload, atlasTexture);
+    const group = createVoxelGroupFromMeshPayload(payload, atlasTexture);
+    opts?.onStage?.({
+      stage: "three_group_complete",
+      strategy: "worker",
+      cacheStatus,
+      blockCount: group.stats.blockCount,
+    });
+    return group;
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
     console.warn("Voxel mesh worker failed, falling back to main-thread meshing", err);
-    return createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts);
+    opts?.onStage?.({ stage: "mesh_started", strategy: "worker-fallback" });
+    const group = await createVoxelGroupAsyncLocal(
+      build,
+      palette,
+      atlasTexture,
+      opts,
+      "worker-fallback",
+    );
+    opts?.onStage?.({
+      stage: "three_group_complete",
+      strategy: "worker-fallback",
+      cacheStatus: "not-used",
+      blockCount: group.stats.blockCount,
+    });
+    return group;
   }
 }

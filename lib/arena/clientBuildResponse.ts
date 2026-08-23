@@ -73,14 +73,33 @@ export type BuildVariantArtifact<T> =
   | { kind: "json"; value: T }
   | { kind: "binary"; envelope: Record<string, unknown>; blocks: PackedVoxelBlocks };
 
-export async function readBuildVariantArtifact<T>(res: Response): Promise<BuildVariantArtifact<T>> {
+export type BuildVariantArtifactReadEvent =
+  | { stage: "body_complete"; bytes: number }
+  | { stage: "inflate_complete"; bytes: number; compressed: boolean }
+  | { stage: "binary_decode_complete"; blockCount: number }
+  | { stage: "json_decode_complete" };
+
+export async function readBuildVariantArtifact<T>(
+  res: Response,
+  options?: { onStage?: (event: BuildVariantArtifactReadEvent) => void },
+): Promise<BuildVariantArtifact<T>> {
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const body = isGzipChunk(bytes) ? await gunzipBytes(bytes) : bytes;
+  options?.onStage?.({ stage: "body_complete", bytes: bytes.byteLength });
+  const compressed = isGzipChunk(bytes);
+  const body = compressed ? await gunzipBytes(bytes) : bytes;
+  options?.onStage?.({
+    stage: "inflate_complete",
+    bytes: body.byteLength,
+    compressed,
+  });
   if (isBinaryArtifact(body)) {
     const { envelope, blocks } = decodeBinaryArtifact(body);
+    options?.onStage?.({ stage: "binary_decode_complete", blockCount: blocks.count });
     return { kind: "binary", envelope, blocks };
   }
-  return { kind: "json", value: JSON.parse(new TextDecoder().decode(body)) as T };
+  const value = JSON.parse(new TextDecoder().decode(body)) as T;
+  options?.onStage?.({ stage: "json_decode_complete" });
+  return { kind: "json", value };
 }
 
 export type BuildVariantStreamResponse = {
@@ -254,6 +273,7 @@ export async function readBuildVariantStream(
   response: Response,
   options?: {
     signal?: AbortSignal;
+    onStage?: (stage: "body_complete" | "stream_decode_complete") => void;
     onProgress?: (
       build: RenderableVoxelBuild,
       progress: BuildStreamProgress,
@@ -418,6 +438,7 @@ export async function readBuildVariantStream(
       buffer = lines.pop() ?? "";
       for (const line of lines) processLine(line);
     }
+    options?.onStage?.("body_complete");
     buffer += decoder.decode();
     if (buffer.trim()) processLine(buffer);
 
@@ -427,6 +448,7 @@ export async function readBuildVariantStream(
     if (nextChunkIndex - 1 !== chunkCount) {
       throw new IncompleteBuildStreamError("Build stream ended before all chunks loaded");
     }
+    options?.onStage?.("stream_decode_complete");
     return {
       buildId,
       variant,
