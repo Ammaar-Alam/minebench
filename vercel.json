@@ -11,6 +11,10 @@
     {
       "path": "/api/admin/arena/drain-shown-jobs",
       "schedule": "5,20,35,50 * * * *"
+    },
+    {
+      "path": "/api/admin/private-evaluations/purge",
+      "schedule": "17 3 * * *"
     }
   ]
 }

@@ -1,6 +1,6 @@
 # MineBench Privacy Policy
 
-Effective and last updated: August 19, 2026
+Effective and last updated: August 21, 2026
 
 MineBench is an independent service operated by Ammaar Alam in the United States. This Privacy Policy explains how MineBench handles information when you use [minebench.ai](https://minebench.ai), participate in model evaluations, use MineBench's generation tools, or communicate with MineBench.
 
@@ -11,9 +11,9 @@ MineBench does not sell personal information or use it for targeted advertising.
 MineBench may collect:
 
 - **Evaluation activity:** a pseudonymous session identifier, matchups shown, votes, timestamps, and related evaluation data.
-- **Content:** prompts, model selections, settings, imported files, model outputs, builds, exports, and feedback you submit or generate.
+- **Content:** prompts, model selections, settings, imported files, model outputs, uploaded cohorts, builds, exports, and feedback you submit or generate.
 - **Technical data:** IP address, request headers, browser and device information, general location, pages viewed, referrers, performance data, errors, and security events.
-- **Account and organization data:** name, email address, organization, role, permissions, authentication data, and evaluation requests if you create an account or work with MineBench.
+- **Account and organization data:** name, email address, organization, invitations, role, permissions, authentication data, and evaluation requests if you create an account or work with MineBench.
 - **Communications:** information you provide in support requests, emails, security reports, meetings, or other correspondence.
 
 Public Arena voting does not require an account. Its session identifier distinguishes browser sessions but is not intended to identify you by name.
@@ -62,9 +62,9 @@ MineBench does not attempt to reidentify data it has released as de-identified.
 
 ## Private Evaluations
 
-MineBench conducts private evaluations for model providers, research labs, developers, and other organizations. Private evaluations compare unreleased models, checkpoints, or configurations under confidential codenames, using pre-generated outputs or private model endpoints and either public or invited evaluators.
+MineBench conducts private evaluations for model providers, research labs, developers, and other organizations. Private evaluations compare unreleased models, checkpoints, or configurations under confidential codenames, using provider-uploaded cohorts or private model endpoints and either public or invited evaluators.
 
-Private evaluation data may include model identities, prompts, outputs, builds, votes, feedback, endpoint information, credentials, metrics, reports, and security records. MineBench uses this information only to provide, secure, support, analyze, and report the applicable evaluation, follow the participating organization's instructions, and comply with law.
+Private evaluation data may include model identities, prompts, outputs, uploaded cohorts, builds, votes, feedback, endpoint information, credentials, durable processing status, metrics, reports, and security records. MineBench uses this information only to provide, secure, support, analyze, and report the applicable evaluation, follow the participating organization's instructions, and comply with law.
 
 Unless the participating organization authorizes it in writing, MineBench does not:
 
@@ -77,7 +77,9 @@ Unless the participating organization authorizes it in writing, MineBench does n
 
 MineBench shows evaluators model outputs and confidential codenames only as necessary to conduct an evaluation. Evaluators are informed that their votes and feedback are provided to the sponsoring organization. The organization controls whether and when its identity, model identity, results, or evaluation materials are made public.
 
-Access is limited to authorized personnel, evaluators, and service providers that need the information to perform the evaluation. Credentials and secrets are excluded from evaluator-facing and public results.
+Access is limited to authorized organization members, MineBench personnel, evaluators, and service providers that need the information to perform the evaluation. Credentials and secrets are excluded from organization reports, evaluator-facing surfaces, exports, and public results.
+
+For endpoint-generated private evaluations, MineBench encrypts a checkpoint endpoint credential while building the evaluation cohort. Generation may continue after an organization user closes the browser because progress is processed and stored server-side. MineBench disables or deletes the stored credential when the cohort completes, the credential is revoked, or the evaluation closes. Arena voters receive stored MineBench build artifacts; their browsers do not connect to the private checkpoint endpoint.
 
 Evaluation agreements and data processing addenda set additional protections, retention terms, and instructions. If an agreement conflicts with this Privacy Policy regarding private evaluation data, the agreement controls.
 
@@ -98,7 +100,7 @@ MineBench may also share information at your direction or with your consent. Min
 
 MineBench retains information only as long as reasonably necessary to provide the service, maintain benchmark integrity, meet contractual commitments, resolve disputes, protect the service, and comply with law.
 
-Sandbox credentials remain in your browser until you remove them or clear site data. Arena vote and session records may be retained to reproduce rankings and investigate manipulation. Unless an evaluation agreement states otherwise, private evaluation data is deleted from active systems within 30 days after final delivery or termination and may remain in backups for up to 90 additional days. Private endpoint credentials are deleted or disabled when revoked or when the evaluation ends.
+Sandbox credentials remain in your browser until you remove them or clear site data. Arena vote and session records may be retained to reproduce rankings and investigate manipulation. Unless an evaluation agreement states otherwise, private evaluation data is deleted from active systems within 30 days after closure, final delivery, or termination and may remain in backups for up to 90 additional days. Private endpoint credentials are deleted or disabled when revoked, when a cohort completes, or when the evaluation ends.
 
 MineBench uses reasonable technical and organizational safeguards designed to protect information from unauthorized access, loss, misuse, alteration, or disclosure. No internet service can guarantee absolute security.
 

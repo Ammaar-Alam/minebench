@@ -34,10 +34,11 @@ export async function GET(
       palette: true,
       mode: true,
       blockCount: true,
+      model: { select: { stealthVariant: { select: { id: true } } } },
     },
   });
 
-  if (!build) {
+  if (!build || build.model.stealthVariant) {
     return NextResponse.json({ error: "Build not found" }, { status: 404 });
   }
 

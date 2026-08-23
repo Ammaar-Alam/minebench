@@ -4,7 +4,16 @@ import type {
   ArenaBuildVariant,
 } from "@/lib/arena/types";
 import type { VoxelBuild, VoxelBlock } from "@/lib/voxel/types";
-import { getBuildStorageBucketFromEnv, getSupabaseStorageConfig } from "@/lib/storage/buildPayload";
+import {
+  deleteSupabaseStorageObjects,
+  getSupabaseStorageConfig,
+} from "@/lib/storage/buildPayload";
+import {
+  getArenaCanonicalStreamArtifactRef,
+  getArenaLegacyStreamArtifactRef,
+  getArenaStreamArtifactLocation,
+  uploadArenaBuildArtifact,
+} from "@/lib/arena/artifactOwnership";
 import { gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
@@ -47,11 +56,6 @@ const ARENA_STREAM_HELLO_PAD_BYTES = readIntEnv(
 );
 
 const ARENA_STREAM_ARTIFACTS_ENABLED = readBoolEnv("ARENA_STREAM_ARTIFACTS_ENABLED", true);
-const ARENA_STREAM_ARTIFACT_PREFIX = normalizePrefix(
-  process.env.ARENA_STREAM_ARTIFACT_PREFIX ?? "arena-stream/v3-gzip",
-);
-const ARENA_STREAM_ARTIFACT_BUCKET =
-  process.env.ARENA_STREAM_ARTIFACT_BUCKET?.trim() || getBuildStorageBucketFromEnv();
 const ARENA_STREAM_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_STREAM_ARTIFACT_MISS_TTL_MS",
   1_000,
@@ -86,10 +90,6 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
-}
-
-function normalizePrefix(value: string): string {
-  return value.trim().replace(/^\/+|\/+$/g, "");
 }
 
 function encodeStoragePath(path: string): string {
@@ -243,7 +243,7 @@ const ARTIFACT_MISS_CACHE_PRUNE_INTERVAL = 256;
 let artifactMissCacheTouches = 0;
 
 export function isArenaBuildStreamArtifactEnabled(): boolean {
-  return Boolean(ARENA_STREAM_ARTIFACTS_ENABLED && ARENA_STREAM_ARTIFACT_PREFIX && ARENA_STREAM_ARTIFACT_BUCKET);
+  return Boolean(ARENA_STREAM_ARTIFACTS_ENABLED && getArenaStreamArtifactLocation());
 }
 
 function getArtifactMissCacheKey(
@@ -304,39 +304,13 @@ export function clearArenaBuildStreamArtifactMiss(
   artifactMissCache.delete(getArtifactMissCacheKey(buildId, variant, checksum));
 }
 
-function getArenaBuildStreamArtifactRefByChecksum(
-  _buildId: string,
-  variant: ArenaBuildVariant,
-  checksum: string,
-): ArenaBuildStreamArtifactRef | null {
-  if (!isArenaBuildStreamArtifactEnabled()) return null;
-  return {
-    bucket: ARENA_STREAM_ARTIFACT_BUCKET,
-    path: `${ARENA_STREAM_ARTIFACT_PREFIX}/checksum/${checksum}/${variant}.ndjson`,
-  };
-}
-
-function getLegacyArenaBuildStreamArtifactRef(
-  buildId: string,
-  variant: ArenaBuildVariant,
-  checksum: string,
-): ArenaBuildStreamArtifactRef | null {
-  if (!isArenaBuildStreamArtifactEnabled()) return null;
-  const path = `${ARENA_STREAM_ARTIFACT_PREFIX}/${buildId}/${variant}-${checksum}.ndjson`;
-  return {
-    bucket: ARENA_STREAM_ARTIFACT_BUCKET,
-    path,
-  };
-}
-
 export function getArenaBuildStreamArtifactRef(
-  buildId: string,
+  _buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
 ): ArenaBuildStreamArtifactRef | null {
-  const normalizedChecksum = checksum?.trim();
-  if (!normalizedChecksum) return null;
-  return getArenaBuildStreamArtifactRefByChecksum(buildId, variant, normalizedChecksum);
+  if (!isArenaBuildStreamArtifactEnabled()) return null;
+  return getArenaCanonicalStreamArtifactRef(variant, checksum);
 }
 
 export function getArenaBuildStreamArtifactFetchRefs(
@@ -344,14 +318,13 @@ export function getArenaBuildStreamArtifactFetchRefs(
   variant: ArenaBuildVariant,
   checksum: string | null,
 ): ArenaBuildStreamArtifactRef[] {
-  const normalizedChecksum = checksum?.trim();
-  if (!normalizedChecksum || !isArenaBuildStreamArtifactEnabled()) return [];
+  if (!checksum?.trim() || !isArenaBuildStreamArtifactEnabled()) return [];
 
   const refs: ArenaBuildStreamArtifactRef[] = [];
-  const preferred = getArenaBuildStreamArtifactRefByChecksum(buildId, variant, normalizedChecksum);
+  const preferred = getArenaCanonicalStreamArtifactRef(variant, checksum);
   if (preferred) refs.push(preferred);
 
-  const legacy = getLegacyArenaBuildStreamArtifactRef(buildId, variant, normalizedChecksum);
+  const legacy = getArenaLegacyStreamArtifactRef(buildId, variant, checksum);
   if (legacy && (!preferred || legacy.path !== preferred.path || legacy.bucket !== preferred.bucket)) {
     refs.push(legacy);
   }
@@ -373,6 +346,11 @@ async function discoverLegacyArenaBuildStreamArtifactRef(
     legacyArtifactDiscoveryCache.set(cacheKey, null);
     return null;
   }
+  const location = getArenaStreamArtifactLocation();
+  if (!location) {
+    legacyArtifactDiscoveryCache.set(cacheKey, null);
+    return null;
+  }
 
   let config: ReturnType<typeof getSupabaseStorageConfig>;
   try {
@@ -382,9 +360,9 @@ async function discoverLegacyArenaBuildStreamArtifactRef(
     return null;
   }
 
-  const prefix = `${ARENA_STREAM_ARTIFACT_PREFIX}/${buildId}`;
+  const prefix = `${location.prefix}/${buildId}`;
   const resp = await fetch(
-    `${config.url}/storage/v1/object/list/${encodeURIComponent(ARENA_STREAM_ARTIFACT_BUCKET)}`,
+    `${config.url}/storage/v1/object/list/${encodeURIComponent(location.bucket)}`,
     {
       method: "POST",
       headers: {
@@ -423,7 +401,7 @@ async function discoverLegacyArenaBuildStreamArtifactRef(
   const name = items[0]?.name?.trim();
   const ref = name
     ? {
-        bucket: ARENA_STREAM_ARTIFACT_BUCKET,
+        bucket: location.bucket,
         path: `${prefix}/${name}`,
       }
     : null;
@@ -640,22 +618,31 @@ export async function uploadArenaBuildStreamArtifact(
   const encodedPath = encodeStoragePath(ref.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
   const payload = gzipSync(Buffer.from(body.buffer as ArrayBuffer, body.byteOffset, body.byteLength));
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      apikey: config.serviceRoleKey,
-      "x-upsert": "true",
-      "cache-control": ARENA_STREAM_ARTIFACT_CACHE_CONTROL,
-      "Content-Encoding": "gzip",
-      "Content-Type": "application/x-ndjson",
+  const accepted = await uploadArenaBuildArtifact(
+    buildId,
+    ref,
+    async () => {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          apikey: config.serviceRoleKey,
+          "x-upsert": "true",
+          "cache-control": ARENA_STREAM_ARTIFACT_CACHE_CONTROL,
+          "Content-Encoding": "gzip",
+          "Content-Type": "application/x-ndjson",
+        },
+        body: payload,
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        throw new Error(`Stream artifact upload failed (${resp.status}): ${text || "empty response"}`);
+      }
     },
-    body: payload,
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Stream artifact upload failed (${resp.status}): ${text || "empty response"}`);
+    deleteSupabaseStorageObjects,
+  );
+  if (!accepted) {
+    throw new Error("Build was deleted during artifact upload");
   }
   clearArenaBuildStreamArtifactMiss(buildId, variant, checksum);
   return ref;

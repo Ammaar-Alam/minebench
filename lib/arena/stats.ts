@@ -704,7 +704,7 @@ async function queryPromptSignalSnapshot(): Promise<PromptSignalSnapshot> {
   }
 
   const models = await prisma.model.findMany({
-    where: { enabled: true, isBaseline: false },
+    where: { enabled: true, isBaseline: false, stealthVariant: null },
     select: { id: true, displayName: true },
   });
 
@@ -938,7 +938,7 @@ export async function getLeaderboardDispersionByModelId(): Promise<Map<string, S
 
 async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats | null> {
   const model = await prisma.model.findFirst({
-    where: { key: modelKey, enabled: true, isBaseline: false },
+    where: { key: modelKey, enabled: true, isBaseline: false, stealthVariant: null },
     select: {
       id: true,
       key: true,
@@ -1060,6 +1060,9 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
         AND ${filter}
         AND opponent.enabled = true
         AND opponent."isBaseline" = false
+        AND NOT EXISTS (
+          SELECT 1 FROM "StealthVariant" variant WHERE variant."modelId" = opponent.id
+        )
       GROUP BY opponent.id, opponent.key, opponent."displayName"
     `,
     prisma.$queryRaw<RecentScoreRow[]>`

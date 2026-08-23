@@ -12,17 +12,17 @@ async function main() {
       `http://localhost/api/leaderboard/models/model-${index}`,
       { headers: { "x-real-ip": ip } },
     );
-    assert.equal(middleware(request).status, 200);
+    assert.equal((await middleware(request)).status, 200);
   }
 
-  const limited = middleware(
+  const limited = await middleware(
     new NextRequest("http://localhost/api/leaderboard/models/model-18", {
       headers: { "x-real-ip": ip },
     }),
   );
   assert.equal(limited.status, 429);
 
-  const firstAnonymous = middleware(
+  const firstAnonymous = await middleware(
     new NextRequest("http://localhost/api/leaderboard/models/anonymous-model-0"),
   );
   assert.equal(firstAnonymous.status, 200);
@@ -32,10 +32,10 @@ async function main() {
     const request = new NextRequest(
       `http://localhost/api/leaderboard/models/anonymous-model-${index}`,
     );
-    assert.equal(middleware(request).status, 200);
+    assert.equal((await middleware(request)).status, 200);
   }
 
-  const anonymousLimited = middleware(
+  const anonymousLimited = await middleware(
     new NextRequest("http://localhost/api/leaderboard/models/anonymous-model-18"),
   );
   assert.equal(anonymousLimited.status, 429);
@@ -50,7 +50,7 @@ async function main() {
         },
       },
     );
-    assert.equal(middleware(request).status, 200);
+    assert.equal((await middleware(request)).status, 200);
   }
 
   for (let index = 0; index < 18; index += 1) {
@@ -63,10 +63,10 @@ async function main() {
         },
       },
     );
-    assert.equal(middleware(request).status, 200);
+    assert.equal((await middleware(request)).status, 200);
   }
 
-  const sessionLimited = middleware(
+  const sessionLimited = await middleware(
     new NextRequest("http://localhost/api/leaderboard/models/session-model-18", {
       headers: {
         cookie: "mb_rls=review-session",
@@ -75,6 +75,21 @@ async function main() {
     }),
   );
   assert.equal(sessionLimited.status, 429);
+
+  const labIp = "203.0.113.84";
+  for (let index = 0; index < 18; index += 1) {
+    const request = new NextRequest(
+      `http://localhost/api/lab/organizations/test-${index}/builds/private-build-${index}`,
+      { headers: { "x-real-ip": labIp } },
+    );
+    assert.equal((await middleware(request)).status, 200);
+  }
+  const labLimited = await middleware(
+    new NextRequest("http://localhost/api/lab/organizations/test-18/builds/private-build-18", {
+      headers: { "x-real-ip": labIp },
+    }),
+  );
+  assert.equal(labLimited.status, 429);
 
   console.log("middleware rate-limit contract checks passed");
 }

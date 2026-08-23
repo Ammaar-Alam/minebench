@@ -2,13 +2,15 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { after, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import type { VoteChoice } from "@/lib/arena/types";
+import type { ArenaAction, ArenaModelReveal, ArenaVoteResponse, VoteChoice } from "@/lib/arena/types";
 import { hasArenaMatchupSigningSecret, parseArenaMatchupToken } from "@/lib/arena/matchupToken";
 import { recordArenaVoteQueuedForSampling } from "@/lib/arena/coverage";
 import { shouldScheduleArenaVoteJobDrainAfterResponse } from "@/lib/arena/drainConfig";
 import { scheduleArenaVoteJobDrain } from "@/lib/arena/voteJobs";
 import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetry";
 import { ServerTiming } from "@/lib/serverTiming";
+import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
+import { invalidateStealthSamplingCache } from "@/lib/stealth/sampling";
 
 export const runtime = "nodejs";
 
@@ -16,31 +18,57 @@ const SESSION_COOKIE = "mb_session";
 
 const reqSchema = z.object({
   matchupId: z.string().min(1).max(2048),
-  choice: z.union([z.literal("A"), z.literal("B"), z.literal("TIE"), z.literal("BOTH_BAD")]),
+  choice: z.union([
+    z.literal("A"),
+    z.literal("B"),
+    z.literal("TIE"),
+    z.literal("BOTH_BAD"),
+    z.literal("SKIP"),
+  ]),
 });
 
-function getOrSetSessionId(res: NextResponse, req: Request) {
+function getOrCreateSessionId(req: Request): { id: string; cookieValue: string | null } {
   const cookieHeader = req.headers.get("cookie") ?? "";
   const match = cookieHeader.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`));
   const existing = match?.[1];
-  if (existing) return existing;
+  if (existing) return { id: existing, cookieValue: null };
 
   const id = crypto.randomUUID();
-  res.cookies.set(SESSION_COOKIE, id, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 365,
-  });
-  return id;
+  return { id, cookieValue: id };
 }
 
 function isCapacityVoteError(error: unknown): boolean {
   return isArenaCapacityError(error);
 }
 
-function isDuplicateVoteError(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+async function loadMatchupReveal(
+  modelAId: string,
+  modelBId: string,
+): Promise<ArenaVoteResponse["reveal"] | null> {
+  const models = await prisma.model.findMany({
+    where: { id: { in: [modelAId, modelBId] } },
+    select: {
+      id: true,
+      key: true,
+      provider: true,
+      displayName: true,
+      stealthVariant: { select: { codename: true } },
+    },
+  });
+  const reveals = new Map<string, ArenaModelReveal>(
+    models.map((model) => [
+      model.id,
+      model.stealthVariant
+        ? { provider: "Stealth", displayName: model.stealthVariant.codename }
+        : {
+            provider: model.provider,
+            displayName: resolveModelDisplayName(model.key, model.displayName),
+          },
+    ]),
+  );
+  const a = reveals.get(modelAId);
+  const b = reveals.get(modelBId);
+  return a && b ? { a, b } : null;
 }
 
 export async function POST(req: Request) {
@@ -68,7 +96,7 @@ export async function POST(req: Request) {
     return respondJson({ error: parsed.error.message }, { status: 400 });
   }
 
-  const { matchupId, choice } = parsed.data as { matchupId: string; choice: VoteChoice };
+  const { matchupId, choice: action } = parsed.data as { matchupId: string; choice: ArenaAction };
 
   let res: NextResponse | null = null;
   let queuedVoteJobs = 0;
@@ -79,6 +107,7 @@ export async function POST(req: Request) {
         modelAId: string;
         modelBId: string;
         choice: VoteChoice;
+        stealthVariantId?: string;
       }
     | null = null;
 
@@ -102,9 +131,28 @@ export async function POST(req: Request) {
       buildBId: tokenMatchup.buildBId,
       samplingLane: tokenMatchup.samplingLane ?? null,
       samplingReason: tokenMatchup.samplingReason ?? null,
+      stealthVariantId: tokenMatchup.stealthVariantId ?? null,
     };
-    res = NextResponse.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
-    const sessionId = getOrSetSessionId(res, req);
+    if (action === "SKIP") {
+      const revealStartedAt = timing.start();
+      const reveal = await loadMatchupReveal(matchup.modelAId, matchup.modelBId);
+      timing.end("reveal", revealStartedAt);
+      if (!reveal) {
+        return respondJson({ error: "Matchup reveal is unavailable" }, { status: 409 });
+      }
+      const responseBody: ArenaVoteResponse = { ok: true, reveal };
+      return respondJson(responseBody, { headers: { "Cache-Control": "no-store" } });
+    }
+
+    const choice: VoteChoice = action;
+    const revealStartedAt = timing.start();
+    const reveal = await loadMatchupReveal(matchup.modelAId, matchup.modelBId);
+    timing.end("reveal", revealStartedAt);
+    if (!reveal) {
+      return respondJson({ error: "Matchup reveal is unavailable" }, { status: 409 });
+    }
+    const session = getOrCreateSessionId(req);
+    const sessionId = session.id;
     const txStartedAt = timing.start();
     const voteId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
@@ -124,6 +172,33 @@ export async function POST(req: Request) {
         AND build_b."modelId" = ${tokenMatchup.modelBId}
         AND BTRIM(build_b."voxelSha256") = ${tokenMatchup.buildBChecksum}
         AND model_b."enabled" = true
+        AND ${
+          tokenMatchup.stealthVariantId
+            ? Prisma.sql`EXISTS (
+                SELECT 1
+                FROM "StealthVariant" variant
+                INNER JOIN "StealthExperiment" experiment ON experiment.id = variant."experimentId"
+                WHERE variant.id = ${tokenMatchup.stealthVariantId}
+                  AND variant.status = 'ACTIVE'
+                  AND experiment.status = 'ACTIVE'
+                  AND (
+                    (variant."modelId" = ${tokenMatchup.modelAId} AND variant."modelId" <> ${tokenMatchup.modelBId}) OR
+                    (variant."modelId" = ${tokenMatchup.modelBId} AND variant."modelId" <> ${tokenMatchup.modelAId})
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM "StealthVariant" other_variant
+                    WHERE other_variant.id <> variant.id
+                      AND other_variant."modelId" IN (${tokenMatchup.modelAId}, ${tokenMatchup.modelBId})
+                  )
+                FOR SHARE OF variant, experiment
+              )`
+            : Prisma.sql`NOT EXISTS (
+                SELECT 1
+                FROM "StealthVariant" variant
+                WHERE variant."modelId" IN (${tokenMatchup.modelAId}, ${tokenMatchup.modelBId})
+              )`
+        }
       FOR SHARE OF build_a, build_b, model_a, model_b
     `;
     const [voteWrite] = await withArenaWriteRetry(async () => {
@@ -140,7 +215,8 @@ export async function POST(req: Request) {
             "buildAId",
             "buildBId",
             "samplingLane",
-            "samplingReason"
+            "samplingReason",
+            "stealthVariantId"
           )
           SELECT
             ${dbMatchupId},
@@ -150,7 +226,8 @@ export async function POST(req: Request) {
             ${matchup.buildAId},
             ${matchup.buildBId},
             ${matchup.samplingLane},
-            ${matchup.samplingReason}
+            ${matchup.samplingReason},
+            ${matchup.stealthVariantId}
           FROM valid_matchup
           ON CONFLICT ("id") DO NOTHING
         ),
@@ -174,7 +251,8 @@ export async function POST(req: Request) {
             "promptId",
             "modelAId",
             "modelBId",
-            "choice"
+            "choice",
+            "stealthVariantId"
           )
           SELECT
             ${jobId},
@@ -183,7 +261,8 @@ export async function POST(req: Request) {
             ${matchup.promptId},
             ${matchup.modelAId},
             ${matchup.modelBId},
-            ${choice}
+            ${choice},
+            ${matchup.stealthVariantId}
           FROM inserted_vote
           RETURNING "voteId"
         )
@@ -205,17 +284,24 @@ export async function POST(req: Request) {
         modelAId: matchup.modelAId,
         modelBId: matchup.modelBId,
         choice,
+        ...(matchup.stealthVariantId ? { stealthVariantId: matchup.stealthVariantId } : {}),
       };
     }
-  } catch (err) {
-    if (res && isDuplicateVoteError(err)) {
-      if (!finalized) {
-        timing.end("total", requestStartedAt);
-        finalized = true;
-      }
-      timing.apply(res.headers);
-      return res;
+
+    const responseBody: ArenaVoteResponse = {
+      ok: true,
+      reveal,
+    };
+    res = NextResponse.json(responseBody, { headers: { "Cache-Control": "no-store" } });
+    if (session.cookieValue) {
+      res.cookies.set(SESSION_COOKIE, session.cookieValue, {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 60 * 24 * 365,
+      });
     }
+  } catch (err) {
     const capacityError = isCapacityVoteError(err);
     const msg = err instanceof Error ? err.message : "Vote failed";
     return respondJson(
@@ -234,8 +320,10 @@ export async function POST(req: Request) {
   if (!res) {
     return respondJson({ error: "Vote failed" }, { status: 409 });
   }
-  if (queuedVoteJobInput) {
+  if (queuedVoteJobInput && !queuedVoteJobInput.stealthVariantId) {
     recordArenaVoteQueuedForSampling(queuedVoteJobInput);
+  } else if (queuedVoteJobInput?.stealthVariantId) {
+    invalidateStealthSamplingCache();
   }
   if (shouldScheduleArenaVoteJobDrainAfterResponse(queuedVoteJobs)) {
     after(() =>

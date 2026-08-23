@@ -410,9 +410,14 @@ export async function openrouterGenerateText(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("OpenRouter request timed out");
     }
-    console.error("OpenRouter network error:", err);
-    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
-    throw new Error(`OpenRouter request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
+    const redactApiKey = (value: string) => value.split(apiKey).join("[redacted]");
+    const message = redactApiKey(err instanceof Error ? err.message : String(err));
+    const cause =
+      err instanceof Error && err.cause
+        ? ` (cause: ${redactApiKey(String(err.cause))})`
+        : "";
+    console.error("OpenRouter network error:", message);
+    throw new Error(`OpenRouter request failed: ${message}${cause}`);
   } finally {
     detachAbort();
     if (timeout) clearTimeout(timeout);

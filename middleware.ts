@@ -91,6 +91,18 @@ function isModelDetailPath(pathname: string): boolean {
 }
 
 function normalizeRateLimitPath(pathname: string): string {
+  if (/^\/api\/lab\/organizations\/[^/]+\/builds\/[^/]+$/.test(pathname)) {
+    return "/api/lab/organizations/:orgSlug/builds/:resultId";
+  }
+  if (
+    /^\/api\/lab\/organizations\/[^/]+\/experiments\/[^/]+\/(?:cohort-upload|export)$/.test(
+      pathname,
+    )
+  ) {
+    return pathname.endsWith("/export")
+      ? "/api/lab/organizations/:orgSlug/experiments/:experimentId/export"
+      : "/api/lab/organizations/:orgSlug/experiments/:experimentId/cohort-upload";
+  }
   if (/^\/api\/arena\/builds\/[^/]+\/stream$/.test(pathname)) {
     return "/api/arena/builds/:buildId/stream";
   }
@@ -193,11 +205,20 @@ function getRateLimitSession(req: NextRequest, fallbackBucketId: string) {
   };
 }
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const canonicalRedirect = maybeRedirectToCanonicalHost(req);
   if (canonicalRedirect) return canonicalRedirect;
 
   const { pathname } = req.nextUrl;
+  const isLabApi = pathname.startsWith("/api/lab/");
+  const refreshesSupabase =
+    pathname.startsWith("/lab") ||
+    isLabApi ||
+    pathname.startsWith("/admin/private-evaluations");
+  if (refreshesSupabase && !isLabApi) {
+    const { refreshSupabaseSession } = await import("@/lib/supabase/middleware");
+    return refreshSupabaseSession(req);
+  }
   if (!pathname.startsWith("/api/")) return NextResponse.next();
   if (pathname.startsWith("/api/admin/")) return NextResponse.next();
   const isArenaApi = pathname.startsWith("/api/arena/");
@@ -285,7 +306,9 @@ export function middleware(req: NextRequest) {
     return rateLimitedResponse(rateLimit.retryAfterSeconds);
   }
 
-  const response = NextResponse.next();
+  const response = isLabApi
+    ? await (await import("@/lib/supabase/middleware")).refreshSupabaseSession(req)
+    : NextResponse.next();
   const rateLimitSession = arenaSession ?? modelSession;
   if (rateLimitSession?.cookieValue) {
     response.cookies.set(RATE_LIMIT_SESSION_COOKIE, rateLimitSession.cookieValue, {
@@ -300,5 +323,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.well-known/workflow/).*)"],
 };

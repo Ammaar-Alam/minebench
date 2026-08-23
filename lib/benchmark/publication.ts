@@ -254,6 +254,7 @@ export async function assertRatedModelCohortUnchanged(
   const votedMatchups = await prisma.matchup.count({
     where: {
       OR: [{ modelAId: model.id }, { modelBId: model.id }],
+      stealthVariantId: null,
       votes: { some: {} },
     },
   });

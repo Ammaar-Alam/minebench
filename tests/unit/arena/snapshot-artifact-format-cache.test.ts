@@ -50,6 +50,17 @@ async function main() {
   assert.equal(new TextDecoder().decode(json), '{"ok":true}');
   assert.equal(requests.length, 2, "a binary miss must not suppress the JSON request");
 
+  const privateBuildId = "private-format-cache-build";
+  await fetchArenaBuildSnapshotArtifact(privateBuildId, "full", checksum, {
+    format: "json",
+    cache: "no-store",
+  });
+  await fetchArenaBuildSnapshotArtifact(privateBuildId, "full", checksum, {
+    format: "json",
+    cache: "no-store",
+  });
+  assert.equal(requests.length, 4, "private artifact bodies must never enter the process cache");
+
   console.log("snapshot artifact format cache checks passed");
 }
 

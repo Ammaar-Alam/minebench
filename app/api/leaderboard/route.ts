@@ -70,7 +70,7 @@ export async function GET() {
   try {
     [models, dispersionByModelId, eligiblePromptIds, baselineAnchor] = await Promise.all([
       prisma.model.findMany({
-        where: { isBaseline: false, enabled: true },
+        where: { isBaseline: false, enabled: true, stealthVariant: null },
         orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
         select: LEADERBOARD_MODEL_SELECT,
       }),

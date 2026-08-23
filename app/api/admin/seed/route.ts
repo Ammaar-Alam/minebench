@@ -163,7 +163,7 @@ export async function POST(req: Request) {
   if (!generateBuilds) {
     const [promptCount, modelCount] = await Promise.all([
       prisma.prompt.count({ where: { active: true } }),
-      prisma.model.count({ where: { enabled: true, isBaseline: false } }),
+      prisma.model.count({ where: { enabled: true, isBaseline: false, stealthVariant: null } }),
     ]);
 
     return NextResponse.json({

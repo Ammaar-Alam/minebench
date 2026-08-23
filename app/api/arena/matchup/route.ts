@@ -19,7 +19,11 @@ import {
 import { createArenaBuildStreamArtifactSignedUrl } from "@/lib/arena/buildStream";
 import { invalidateArenaBuildMeta } from "@/lib/arena/buildMetaCache";
 import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
-import { createArenaMatchupToken, hasArenaMatchupSigningSecret } from "@/lib/arena/matchupToken";
+import {
+  createArenaBuildAccessToken,
+  createArenaMatchupToken,
+  hasArenaMatchupSigningSecret,
+} from "@/lib/arena/matchupToken";
 import { isArenaCapacityError } from "@/lib/arena/writeRetry";
 import {
   databaseUnavailableBody,
@@ -27,18 +31,21 @@ import {
   getErrorMessage,
   isDatabaseUnavailableError,
 } from "@/lib/db/errors";
+import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 import {
   getArenaMatchupSamplingStateWithMeta,
   invalidateArenaCoverageCache,
   recordArenaMatchupShown,
   type CoverageState,
+  type EligibleBuildMeta,
   type EligibleModel,
   type EligiblePrompt,
 } from "@/lib/arena/coverage";
 import { enqueueArenaMatchupShownDurably } from "@/lib/arena/shownJobs";
 import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
-import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
+import { readStealthArenaShare } from "@/lib/stealth/policy";
+import { pickStealthMatchup } from "@/lib/stealth/sampling";
 
 export const runtime = "nodejs";
 
@@ -73,6 +80,9 @@ type MatchupChoice = {
   prompt: EligiblePrompt;
   modelA: EligibleModel;
   modelB: EligibleModel;
+  stealthVariantId?: string;
+  stealthModelId?: string;
+  stealthBuild?: EligibleBuildMeta;
 };
 
 function getOrSetSessionId(res: NextResponse, req: Request) {
@@ -112,7 +122,7 @@ function getInitialAdaptiveDeliveryClass(hints: ArenaBuildLoadHints): ArenaBuild
   return hints.initialDeliveryClass ?? hints.deliveryClass;
 }
 
-async function prepareArenaBuildById(buildId: string) {
+async function prepareArenaBuildById(buildId: string, privateAccessOnly = false) {
   const build = await prisma.build.findUnique({
     where: { id: buildId },
     select: {
@@ -129,7 +139,7 @@ async function prepareArenaBuildById(buildId: string) {
       voxelStorageEncoding: true,
     },
   });
-  return build ? prepareArenaBuild(build) : null;
+  return build ? prepareArenaBuild({ ...build, privateAccessOnly }) : null;
 }
 
 async function persistPreparedArenaBuildMetadata(
@@ -153,6 +163,7 @@ async function resolveInitialBuildSnapshot(
   buildId: string,
   hints: ArenaBuildLoadHints,
   row: { voxelSha256: string | null },
+  privateAccessOnly: boolean,
 ): Promise<ArenaMatchup["a"]["build"]> {
   const storedChecksum = row.voxelSha256?.trim() || null;
   // the checksum-addressed artifact is the canonical snapshot; a miss falls
@@ -162,7 +173,10 @@ async function resolveInitialBuildSnapshot(
       buildId,
       hints.initialVariant,
       storedChecksum,
-      { signal: AbortSignal.timeout(SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS) },
+      {
+        signal: AbortSignal.timeout(SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS),
+        cache: privateAccessOnly ? "no-store" : "default",
+      },
     );
     if (artifact) return artifact.voxelBuild as ArenaMatchup["a"]["build"];
   } catch {
@@ -743,7 +757,27 @@ export async function GET(req: Request) {
   const forcedPromptId = prompts.some((prompt) => prompt.id === requestedPromptId)
     ? requestedPromptId
     : undefined;
-  const picked = pickMatchup({
+  let picked: MatchupChoice | null = null;
+  if (Math.random() < readStealthArenaShare()) {
+    try {
+      const stealth = await pickStealthMatchup({ publicState: sampling.state, forcedPromptId });
+      if (stealth) {
+        picked = {
+          lane: chooseLane(),
+          reason: `stealth:${stealth.stealthVariantId}`,
+          prompt: stealth.prompt,
+          modelA: stealth.stealthModel,
+          modelB: stealth.publicModel,
+          stealthVariantId: stealth.stealthVariantId,
+          stealthModelId: stealth.stealthModel.id,
+          stealthBuild: stealth.stealthBuild,
+        };
+      }
+    } catch (error) {
+      console.warn("stealth matchup sampling failed", getErrorMessage(error, "unknown error"));
+    }
+  }
+  picked ??= pickMatchup({
     prompts,
     modelsById,
     promptIdsByModelId,
@@ -763,15 +797,20 @@ export async function GET(req: Request) {
   const rightModel = swapSides ? picked.modelA : picked.modelB;
 
   const buildMetaStartedAt = performance.now();
-  const buildA = buildsByModelPromptKey.get(modelPromptKey(leftModel.id, picked.prompt.id)) ?? null;
-  const buildB =
-    buildsByModelPromptKey.get(modelPromptKey(rightModel.id, picked.prompt.id)) ?? null;
+  const selectedBuild = (modelId: string) =>
+    picked.stealthModelId === modelId
+      ? picked.stealthBuild ?? null
+      : buildsByModelPromptKey.get(modelPromptKey(modelId, picked.prompt.id)) ?? null;
+  const buildA = selectedBuild(leftModel.id);
+  const buildB = selectedBuild(rightModel.id);
   const buildMetaMs = performance.now() - buildMetaStartedAt;
   timing.add("build_meta", buildMetaMs);
 
   if (!buildA || !buildB) {
     return respondJson({ error: "Missing seeded build" }, { status: 500 });
   }
+  const privateBuildA = picked.stealthModelId === leftModel.id;
+  const privateBuildB = picked.stealthModelId === rightModel.id;
 
   const checksumA = normalizeArenaBuildChecksum(buildA.voxelSha256);
   const checksumB = normalizeArenaBuildChecksum(buildB.voxelSha256);
@@ -798,8 +837,14 @@ export async function GET(req: Request) {
   const artifactMissBuildIds = new Set<string>();
   const prepareStartedAt = performance.now();
   if (shouldPrepareA || shouldPrepareB) {
-    preparedA = shouldPrepareA && checksumA ? getCachedPreparedArenaBuild(buildA.id, checksumA) : null;
-    preparedB = shouldPrepareB && checksumB ? getCachedPreparedArenaBuild(buildB.id, checksumB) : null;
+    preparedA =
+      shouldPrepareA && checksumA && !privateBuildA
+        ? getCachedPreparedArenaBuild(buildA.id, checksumA)
+        : null;
+    preparedB =
+      shouldPrepareB && checksumB && !privateBuildB
+        ? getCachedPreparedArenaBuild(buildB.id, checksumB)
+        : null;
 
     try {
       const [buildAForPrepare, buildBForPrepare] = await Promise.all([
@@ -839,10 +884,10 @@ export async function GET(req: Request) {
 
       [persistedInitialBuildA, persistedInitialBuildB] = await Promise.all([
         checksumA && shouldPrepareA && !preparedA && buildAForPrepare
-          ? resolveInitialBuildSnapshot(buildA.id, shellHintsA, buildAForPrepare)
+          ? resolveInitialBuildSnapshot(buildA.id, shellHintsA, buildAForPrepare, privateBuildA)
           : Promise.resolve(null),
         checksumB && shouldPrepareB && !preparedB && buildBForPrepare
-          ? resolveInitialBuildSnapshot(buildB.id, shellHintsB, buildBForPrepare)
+          ? resolveInitialBuildSnapshot(buildB.id, shellHintsB, buildBForPrepare, privateBuildB)
           : Promise.resolve(null),
       ]);
 
@@ -861,12 +906,12 @@ export async function GET(req: Request) {
 	        preparedA || persistedInitialBuildA
 	          ? Promise.resolve(preparedA)
 	          : buildAForPrepare
-	            ? prepareArenaBuildById(buildA.id)
+	            ? prepareArenaBuildById(buildA.id, privateBuildA)
 	            : Promise.resolve(null),
 	        preparedB || persistedInitialBuildB
 	          ? Promise.resolve(preparedB)
 	          : buildBForPrepare
-	            ? prepareArenaBuildById(buildB.id)
+	            ? prepareArenaBuildById(buildB.id, privateBuildB)
 	            : Promise.resolve(null),
       ]);
     } catch (err) {
@@ -944,9 +989,23 @@ export async function GET(req: Request) {
     buildBChecksum: tokenBuildBChecksum,
     samplingLane: picked.lane,
     samplingReason: picked.reason,
+    stealthVariantId: picked.stealthVariantId,
   });
+  const blindBuildAccess = {
+    a: createArenaBuildAccessToken({
+      buildId: buildA.id,
+      checksum: tokenBuildAChecksum,
+    }),
+    b: createArenaBuildAccessToken({
+      buildId: buildB.id,
+      checksum: tokenBuildBChecksum,
+    }),
+  };
   const txMs = 0;
   timing.add("tx", txMs);
+  const allowArtifactHealing =
+    !picked.stealthVariantId ||
+    !isLoopbackDatabaseUrl(process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "");
   const preparedForPersistence = [preparedA, preparedB].filter(
     (value): value is NonNullable<typeof value> =>
       Boolean(value) && !repairedBuildIds.has(value?.buildId ?? ""),
@@ -961,7 +1020,7 @@ export async function GET(req: Request) {
           // build route that would upload the missing artifact. Restricted to
           // builds that live-prepared after an artifact miss, since ensure
           // upserts unconditionally and warm traffic would re-upload snapshots.
-          if (artifactMissBuildIds.has(prepared.buildId)) {
+          if (allowArtifactHealing && artifactMissBuildIds.has(prepared.buildId)) {
             await healArenaBuildSnapshotArtifactsOnce(prepared);
           }
         }),
@@ -969,7 +1028,7 @@ export async function GET(req: Request) {
     });
   }
 
-  if (MATCHUP_ARTIFACT_URL_WARMING_ENABLED) {
+  if (MATCHUP_ARTIFACT_URL_WARMING_ENABLED && !picked.stealthVariantId) {
     // warm signing caches after the matchup is already ready
     after(async () => {
       await Promise.allSettled([
@@ -984,64 +1043,52 @@ export async function GET(req: Request) {
     samplingLane: picked.lane,
     prompt: { id: picked.prompt.id, text: picked.prompt.text },
     a: {
-      model: {
-        key: leftModel.key,
-        provider: leftModel.provider,
-        displayName: resolveModelDisplayName(leftModel.key, leftModel.displayName),
-        eloRating: leftModel.eloRating,
-      },
+      model: null,
       build:
         (preparedA && shouldInlineA
           ? pickInitialBuild(preparedA)
           : shouldInlineA
             ? persistedInitialBuildA
             : null) as ArenaMatchup["a"]["build"],
-      buildRef: preparedA?.buildRef ?? {
-        buildId: buildA.id,
-        variant: "full",
-        checksum: tokenBuildAChecksum,
-      },
-      previewRef: preparedA?.previewRef ?? {
-        buildId: buildA.id,
-        variant: "preview",
-        checksum: tokenBuildAChecksum,
-      },
+      buildRef: { buildId: blindBuildAccess.a, variant: "full", checksum: null },
+      previewRef: { buildId: blindBuildAccess.a, variant: "preview", checksum: null },
       serverValidated: Boolean(preparedA || (shouldInlineA && persistedInitialBuildA)),
       buildLoadHints: preparedA?.hints ?? shellHintsA,
     },
     b: {
-      model: {
-        key: rightModel.key,
-        provider: rightModel.provider,
-        displayName: resolveModelDisplayName(rightModel.key, rightModel.displayName),
-        eloRating: rightModel.eloRating,
-      },
+      model: null,
       build:
         (preparedB && shouldInlineB
           ? pickInitialBuild(preparedB)
           : shouldInlineB
             ? persistedInitialBuildB
             : null) as ArenaMatchup["b"]["build"],
-      buildRef: preparedB?.buildRef ?? {
-        buildId: buildB.id,
-        variant: "full",
-        checksum: tokenBuildBChecksum,
-      },
-      previewRef: preparedB?.previewRef ?? {
-        buildId: buildB.id,
-        variant: "preview",
-        checksum: tokenBuildBChecksum,
-      },
+      buildRef: { buildId: blindBuildAccess.b, variant: "full", checksum: null },
+      previewRef: { buildId: blindBuildAccess.b, variant: "preview", checksum: null },
       serverValidated: Boolean(preparedB || (shouldInlineB && persistedInitialBuildB)),
       buildLoadHints: preparedB?.hints ?? shellHintsB,
     },
   };
-  recordArenaMatchupShown([leftModel.id, rightModel.id]);
-  after(() => {
-    return enqueueArenaMatchupShownDurably([leftModel.id, rightModel.id]).catch((error) => {
-      console.warn("arena shown-count enqueue failed", error);
+  if (!picked.stealthVariantId) {
+    recordArenaMatchupShown([leftModel.id, rightModel.id]);
+    after(() => {
+      return enqueueArenaMatchupShownDurably([leftModel.id, rightModel.id]).catch((error) => {
+        console.warn("arena shown-count enqueue failed", error);
+      });
     });
-  });
+  }
+  if (picked.stealthVariantId) {
+    after(() =>
+      prisma.stealthVariant
+        .updateMany({
+          where: { id: picked.stealthVariantId, status: "ACTIVE" },
+          data: { shownCount: { increment: 1 } },
+        })
+        .catch((error) => {
+          console.warn("stealth shown-count update failed", error);
+        }),
+    );
+  }
 
   const totalMs = performance.now() - requestStartedAt;
   if (Number.isFinite(totalMs) && totalMs >= MATCHUP_SLOW_EVENT_MS) {

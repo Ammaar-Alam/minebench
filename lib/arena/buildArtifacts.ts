@@ -33,6 +33,7 @@ export type ArenaBuildLoadHints = {
 
 export type ArenaBuildSource = {
   id: string;
+  privateAccessOnly?: boolean;
   gridSize: number;
   palette: string;
   blockCount: number;
@@ -652,10 +653,11 @@ export async function prepareArenaBuild(
     return prepared;
   }
 
-  // Without a durable content checksum we skip cache reuse to avoid stale artifacts after in-place overwrites.
-  if (!storedChecksum) {
+  // Private payloads must remain tied to a live database ownership check, and
+  // checksumless payloads cannot safely reuse entries after in-place writes.
+  if (!storedChecksum || source.privateAccessOnly) {
     const parsed = await parseAndValidateBuild(source, opts);
-    return createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, null);
+    return createPrepared(source, parsed.build, parsed.payloadEstimatedBytes, storedChecksum);
   }
 
   const cacheKey = buildCacheKey(source, storedChecksum);

@@ -1,18 +1,21 @@
 import type { PreparedArenaBuild } from "@/lib/arena/buildArtifacts";
-import { getArenaPreviewTargetBlocks, pickBuildVariant } from "@/lib/arena/buildArtifacts";
-import { getArenaDeliveryPolicySignature } from "@/lib/arena/buildDeliveryPolicy";
+import { pickBuildVariant } from "@/lib/arena/buildArtifacts";
 import type { ArenaBuildVariant } from "@/lib/arena/types";
 import {
-  getBuildStorageBucketFromEnv,
+  deleteSupabaseStorageObjects,
   getSupabaseStorageConfig,
   hasSupabaseStorageConfig,
 } from "@/lib/storage/buildPayload";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
+import {
+  getArenaSnapshotArtifactRef,
+  hasArenaSnapshotArtifactLocation,
+  type ArenaSnapshotArtifactFormat,
+  uploadArenaBuildArtifact,
+} from "@/lib/arena/artifactOwnership";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
-
-export type ArenaSnapshotArtifactFormat = "json" | "binary";
 
 export function isBinarySnapshotArtifactEnabled(): boolean {
   return ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED;
@@ -24,25 +27,6 @@ export type ArenaSnapshotArtifactTarget = {
 };
 
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
-const ARENA_SNAPSHOT_ARTIFACT_PREFIX = normalizePrefix(
-  process.env.ARENA_SNAPSHOT_ARTIFACT_PREFIX ?? "arena-snapshot/v2-gzip",
-);
-const deliveryPolicySignature = getArenaDeliveryPolicySignature();
-// policy key invalidates old artifacts when delivery thresholds change
-const ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY = normalizePrefix(
-  [
-    "inline",
-    deliveryPolicySignature.inlineMaxBytes,
-    "snapshot",
-    deliveryPolicySignature.snapshotMaxBytes,
-    "artifact",
-    deliveryPolicySignature.artifactMinBytes,
-    "preview-trigger",
-    deliveryPolicySignature.previewTriggerBytes,
-    "preview-target",
-    getArenaPreviewTargetBlocks(),
-  ].join("-"),
-);
 // Binary artifacts are written alongside the JSON ones and read only when a
 // client asks for them, so this can be turned on to backfill before anything
 // reads it, and turned off without stranding a client on a format it cannot get.
@@ -50,8 +34,6 @@ const ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv(
   "ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED",
   false,
 );
-const ARENA_SNAPSHOT_ARTIFACT_BUCKET =
-  process.env.ARENA_SNAPSHOT_ARTIFACT_BUCKET?.trim() || getBuildStorageBucketFromEnv();
 const ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS",
   1_000,
@@ -121,10 +103,6 @@ function readIntEnv(name: string, fallback: number, min: number, max: number): n
   const parsed = Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(min, Math.min(max, parsed));
-}
-
-function normalizePrefix(value: string): string {
-  return value.trim().replace(/^\/+|\/+$/g, "");
 }
 
 function encodeStoragePath(path: string): string {
@@ -240,8 +218,7 @@ function setCachedSnapshotArtifactBody(cacheKey: string, bytes: Uint8Array): voi
 function isSnapshotArtifactEnabled(): boolean {
   return Boolean(
     ARENA_SNAPSHOT_ARTIFACTS_ENABLED &&
-      ARENA_SNAPSHOT_ARTIFACT_PREFIX &&
-      ARENA_SNAPSHOT_ARTIFACT_BUCKET &&
+      hasArenaSnapshotArtifactLocation() &&
       hasSupabaseStorageConfig(),
   );
 }
@@ -255,16 +232,9 @@ export function getSnapshotArtifactRef(
   checksum: string | null,
   format: ArenaSnapshotArtifactFormat = "json",
 ): ArenaBuildSnapshotArtifactRef | null {
-  const normalizedChecksum = checksum?.trim();
-  if (!normalizedChecksum || !isSnapshotArtifactEnabled()) return null;
+  if (!isSnapshotArtifactEnabled()) return null;
   if (format === "binary" && !ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) return null;
-  return {
-    bucket: ARENA_SNAPSHOT_ARTIFACT_BUCKET,
-    path:
-      `${ARENA_SNAPSHOT_ARTIFACT_PREFIX}/${ARENA_SNAPSHOT_ARTIFACT_POLICY_KEY}/` +
-      `${buildId}/${variant}-${normalizedChecksum}` +
-      (format === "binary" ? ".mbv4" : ".json"),
-  };
+  return getArenaSnapshotArtifactRef(buildId, variant, checksum, format);
 }
 
 function createSnapshotArtifactPayload(
@@ -350,23 +320,36 @@ async function uploadSnapshotArtifactVariant(
       format === "binary"
         ? encodeBinarySnapshotArtifactPayload(artifact)
         : encodeSnapshotArtifactPayload(artifact);
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.serviceRoleKey}`,
-        apikey: config.serviceRoleKey,
-        "x-upsert": "true",
-        "cache-control": ARENA_SNAPSHOT_ARTIFACT_CACHE_CONTROL,
-        "Content-Encoding": "gzip",
-        "Content-Type":
-          format === "binary" ? "application/octet-stream" : "application/json; charset=utf-8",
+    const accepted = await uploadArenaBuildArtifact(
+      prepared.buildId,
+      ref,
+      async () => {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${config.serviceRoleKey}`,
+            apikey: config.serviceRoleKey,
+            "x-upsert": "true",
+            "cache-control": ARENA_SNAPSHOT_ARTIFACT_CACHE_CONTROL,
+            "Content-Encoding": "gzip",
+            "Content-Type":
+              format === "binary"
+                ? "application/octet-stream"
+                : "application/json; charset=utf-8",
+          },
+          body: Buffer.from(payload.buffer as ArrayBuffer, payload.byteOffset, payload.byteLength),
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          throw new Error(
+            `Snapshot artifact upload failed (${resp.status}): ${text || "empty response"}`,
+          );
+        }
       },
-      body: Buffer.from(payload.buffer as ArrayBuffer, payload.byteOffset, payload.byteLength),
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      throw new Error(`Snapshot artifact upload failed (${resp.status}): ${text || "empty response"}`);
+      deleteSupabaseStorageObjects,
+    );
+    if (!accepted) {
+      throw new Error("Build was deleted during artifact upload");
     }
 
     clearSnapshotArtifactMiss(prepared.buildId, variant, prepared.checksum, format);
@@ -407,26 +390,31 @@ export async function fetchArenaBuildSnapshotArtifact(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
-  opts?: { signal?: AbortSignal; format?: ArenaSnapshotArtifactFormat },
+  opts?: {
+    signal?: AbortSignal;
+    format?: ArenaSnapshotArtifactFormat;
+    cache?: "default" | "no-store";
+  },
 ): Promise<Uint8Array | null> {
   const format = opts?.format ?? "json";
   const ref = getSnapshotArtifactRef(buildId, variant, checksum, format);
   if (!ref) return null;
 
+  const useCache = opts?.cache !== "no-store";
   const cacheKey = getArtifactCacheKey(buildId, variant, checksum, format);
   const now = Date.now();
-  maybePruneArtifactCaches(now);
-  if (hasFreshArtifactMiss(cacheKey)) {
+  if (useCache) maybePruneArtifactCaches(now);
+  if (useCache && hasFreshArtifactMiss(cacheKey)) {
     // recent miss means the db snapshot path should win immediately
     return null;
   }
 
-  const cached = getCachedSnapshotArtifactBody(cacheKey);
+  const cached = useCache ? getCachedSnapshotArtifactBody(cacheKey) : null;
   if (cached) {
     return cached;
   }
 
-  const inflight = artifactBodyInflight.get(cacheKey);
+  const inflight = useCache ? artifactBodyInflight.get(cacheKey) : null;
   if (inflight) {
     // share supabase reads across concurrent requests
     return inflight;
@@ -454,8 +442,10 @@ export async function fetchArenaBuildSnapshotArtifact(
 
     if (resp.ok) {
       const bytes = maybeGunzipArtifactBytes(new Uint8Array(await resp.arrayBuffer()));
-      clearSnapshotArtifactMiss(buildId, variant, checksum, format);
-      setCachedSnapshotArtifactBody(cacheKey, bytes);
+      if (useCache) {
+        clearSnapshotArtifactMiss(buildId, variant, checksum, format);
+        setCachedSnapshotArtifactBody(cacheKey, bytes);
+      }
       return bytes;
     }
 
@@ -466,13 +456,14 @@ export async function fetchArenaBuildSnapshotArtifact(
       normalized.includes("object not found") ||
       normalized.includes("\"error\":\"not_found\"");
     if (resp.status === 404 || (resp.status === 400 && objectMissing)) {
-      rememberSnapshotArtifactMiss(buildId, variant, checksum, format);
+      if (useCache) rememberSnapshotArtifactMiss(buildId, variant, checksum, format);
       return null;
     }
 
     throw new Error(`Snapshot artifact fetch failed (${resp.status}): ${text || "empty response"}`);
   })();
 
+  if (!useCache) return promise;
   artifactBodyInflight.set(cacheKey, promise);
   try {
     return await promise;
@@ -485,7 +476,7 @@ export async function fetchArenaBuildSnapshotArtifactPayload(
   buildId: string,
   variant: ArenaBuildVariant,
   checksum: string | null,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; cache?: "default" | "no-store" },
 ): Promise<SnapshotArtifactPayload | null> {
   const bytes = await fetchArenaBuildSnapshotArtifact(buildId, variant, checksum, opts);
   if (!bytes) return null;

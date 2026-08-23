@@ -55,6 +55,7 @@ export function VoxelViewerCard({
   actions,
   viewerRef,
   skipValidation = false,
+  embedded = false,
 }: {
   title: string;
   subtitle?: ReactNode;
@@ -71,7 +72,7 @@ export function VoxelViewerCard({
   attempt?: number;
   retryReason?: string;
   elapsedMs?: number;
-  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number };
+  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number; attempts?: number };
   error?: string;
   loadingMessage?: string;
   jsonText?: string;
@@ -87,6 +88,7 @@ export function VoxelViewerCard({
   actions?: ReactNode;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
+  embedded?: boolean;
 }) {
   type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
 
@@ -266,7 +268,7 @@ export function VoxelViewerCard({
   }, []);
 
   return (
-    <div className="mb-panel">
+    <div className={embedded ? "overflow-hidden bg-card/25" : "mb-panel"}>
       <div className="mb-panel-inner">
         <div className="border-b border-border/70 bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
           <div className="flex items-center justify-between gap-2 sm:gap-3">
@@ -338,6 +340,11 @@ export function VoxelViewerCard({
                   <div className="items-center gap-2 font-mono sm:flex">
                     <span>{blockCount.toLocaleString()} blocks</span>
                     {timing ? <span>• {timing}</span> : null}
+                    {metrics?.attempts ? (
+                      <span>
+                        • {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
                     {warnings.length ? (
                       <span>
                         • {warnings.length} warning{warnings.length === 1 ? "" : "s"}

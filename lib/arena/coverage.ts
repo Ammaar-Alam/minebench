@@ -415,7 +415,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
       gridSize: ARENA_GRID_SIZE,
       palette: ARENA_PALETTE,
       mode: ARENA_MODE,
-      model: { enabled: true, isBaseline: false },
+      model: { enabled: true, isBaseline: false, stealthVariant: null },
       prompt: { active: true },
     },
     select: {
@@ -488,6 +488,7 @@ async function queryArenaMatchupSamplingState(): Promise<ArenaMatchupSamplingRes
       where: {
         enabled: true,
         isBaseline: false,
+        stealthVariant: null,
         id: { in: Array.from(promptIdsByModelId.keys()) },
       },
       select: {
@@ -866,6 +867,7 @@ export async function rebuildArenaCoverageTables(client: PrismaClient = prisma):
       INNER JOIN "Matchup" matchup ON matchup.id = vote."matchupId"
       LEFT JOIN "ArenaVoteJob" job ON job."voteId" = vote.id
       WHERE vote.choice IN ('A', 'B')
+        AND matchup."stealthVariantId" IS NULL
         -- pending jobs will add themselves when drained
         AND (job.id IS NULL OR job."processedAt" IS NOT NULL)
       GROUP BY matchup."modelAId", matchup."modelBId", matchup."promptId"

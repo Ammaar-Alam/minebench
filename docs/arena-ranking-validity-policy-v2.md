@@ -52,6 +52,14 @@ A model’s public stability label depends on:
 - prompt coverage,
 - uncertainty (`RD`).
 
+### 4.4 Private evaluation isolation
+
+Private checkpoints are evaluated against public models as read-only anchors.
+Private matchups and votes never affect public model ratings, rankings, counters,
+coverage, rank snapshots, benchmark metrics, or leaderboard eligibility. A
+private checkpoint that later becomes public starts its public record from fresh
+public votes.
+
 ## 5. Matchmaking Policy
 
 Each matchup request is assigned one lane:
