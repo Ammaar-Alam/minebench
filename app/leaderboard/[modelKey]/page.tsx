@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { notFound, permanentRedirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { ModelDetail } from "@/components/leaderboard/ModelDetail";
 import { getModelDetailStats } from "@/lib/arena/stats";
 import { findCatalogEntryBySlugOrKey } from "@/lib/ai/modelCatalog";
@@ -61,10 +61,6 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 export default async function ModelLeaderboardPage({ params }: PageProps) {
   const { modelKey } = await params;
   const entry = findCatalogEntryBySlugOrKey(modelKey);
-  if (entry && modelKey !== entry.slug) {
-    permanentRedirect(`/leaderboard/${encodeURIComponent(entry.slug)}`);
-  }
-
   const data = await getModelDetailStats(modelKey);
   if (!data) notFound();
 

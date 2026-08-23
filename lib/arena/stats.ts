@@ -1318,3 +1318,31 @@ export async function getModelDetailStats(modelKey: string): Promise<ModelDetail
   modelDetailInFlight.set(modelKey, queryPromise);
   return queryPromise;
 }
+
+export type LeaderboardRankingItem = {
+  name: string;
+  rank: number;
+  path: string;
+};
+
+export async function getLeaderboardItemListRankings(): Promise<LeaderboardRankingItem[]> {
+  if (!process.env.DATABASE_URL) return [];
+  try {
+    const models = await prisma.model.findMany({
+      where: { isBaseline: false, enabled: true, stealthVariant: null },
+      orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
+      select: { key: true, displayName: true },
+    });
+    return models.map((model, index) => {
+      const slug = resolveModelSlug(model.key);
+      const displayName = resolveModelDisplayName(model.key, model.displayName);
+      return {
+        name: displayName,
+        rank: index + 1,
+        path: `/leaderboard/${encodeURIComponent(slug)}`,
+      };
+    });
+  } catch {
+    return [];
+  }
+}

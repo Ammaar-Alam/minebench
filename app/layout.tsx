@@ -7,7 +7,6 @@ import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 import { SiteHealthBanner } from "@/components/SiteHealthBanner";
 import {
-  datasetJsonLd,
   DEFAULT_OG_IMAGE,
   SEO_KEYWORDS,
   SITE_DESCRIPTION,
@@ -106,7 +105,7 @@ export const viewport: Viewport = {
 
 const structuredData = {
   "@context": "https://schema.org",
-  "@graph": [websiteJsonLd, softwareApplicationJsonLd, datasetJsonLd],
+  "@graph": [websiteJsonLd, softwareApplicationJsonLd],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

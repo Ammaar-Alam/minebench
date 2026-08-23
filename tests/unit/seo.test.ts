@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { NextRequest } from "next/server";
 import {
   findCatalogEntryBySlugOrKey,
   MODEL_CATALOG,
@@ -14,6 +15,8 @@ import {
 } from "../../lib/seo";
 import sitemap from "../../app/sitemap";
 import robots from "../../app/robots";
+import { middleware } from "../../middleware";
+import { getLeaderboardItemListRankings } from "../../lib/arena/stats";
 
 async function main() {
   // 1. Model Slug Resolution
@@ -107,6 +110,62 @@ async function main() {
   assert.ok(primaryRule.disallow.includes("/api/"));
   assert.ok(primaryRule.disallow.includes("/admin/"));
   assert.ok(primaryRule.disallow.includes("/local"));
+
+  // 6. Middleware 308 Permanent Redirect for Legacy Model Keys with Query Preservation
+  const legacyReqWithQuery = new NextRequest(
+    "https://minebench.ai/leaderboard/openai_gpt_5_6_luna?tab=prompts&build=build-1&utm_source=share",
+  );
+  const legacyRedirectRes = await middleware(legacyReqWithQuery);
+  assert.equal(legacyRedirectRes.status, 308, "Legacy model keys must redirect with HTTP 308");
+  assert.equal(
+    legacyRedirectRes.headers.get("location"),
+    "https://minebench.ai/leaderboard/gpt-5-6-luna?tab=prompts&build=build-1&utm_source=share",
+    "308 redirect must preserve query parameters and target canonical slug",
+  );
+
+  const canonicalReq = new NextRequest(
+    "https://minebench.ai/leaderboard/gpt-5-6-luna?tab=prompts&build=build-1",
+  );
+  const canonicalRes = await middleware(canonicalReq);
+  assert.equal(
+    canonicalRes.status,
+    200,
+    "Canonical slugs must pass through middleware without redirect",
+  );
+
+  // 7. Malformed percent-encoded paths guard
+  const malformedReq1 = new NextRequest("https://minebench.ai/leaderboard/foo%bar");
+  const malformedRes1 = await middleware(malformedReq1);
+  assert.equal(
+    malformedRes1.status,
+    200,
+    "Malformed percent-encoded paths (e.g. %bar) must pass through safely without 500 error",
+  );
+
+  const malformedReq2 = new NextRequest("https://minebench.ai/leaderboard/%ED%A0%80");
+  const malformedRes2 = await middleware(malformedReq2);
+  assert.equal(
+    malformedRes2.status,
+    200,
+    "Invalid UTF-8 surrogate percent-encoded paths must pass through safely without 500 error",
+  );
+
+  // 8. Live Leaderboard ItemList Rankings Helper
+  const rankings = await getLeaderboardItemListRankings();
+  assert.ok(Array.isArray(rankings), "getLeaderboardItemListRankings must return an array");
+  for (const item of rankings) {
+    assert.ok(typeof item.name === "string" && item.name.length > 0);
+    assert.ok(typeof item.rank === "number" && item.rank > 0);
+    assert.ok(item.path.startsWith("/leaderboard/"));
+  }
+
+  // 9. Leaderboard page ISR revalidation
+  const leaderboardPageModule = await import("../../app/leaderboard/page");
+  assert.equal(
+    leaderboardPageModule.revalidate,
+    60,
+    "app/leaderboard/page.tsx must export revalidate = 60 for ISR freshness",
+  );
 
   console.log("SEO tests passed successfully");
 }

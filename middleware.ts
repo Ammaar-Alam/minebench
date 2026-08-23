@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { LEGACY_HOSTS, SITE_HOST } from "@/lib/seo";
+import { resolveModelSlug } from "@/lib/ai/modelCatalog";
 
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 18;
@@ -84,6 +85,31 @@ function maybeRedirectToCanonicalHost(req: NextRequest) {
   nextUrl.protocol = "https";
   nextUrl.host = SITE_HOST;
   return NextResponse.redirect(nextUrl, 308);
+}
+
+function safeDecodeURIComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return null;
+  }
+}
+
+function maybeRedirectToCanonicalModelSlug(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+  const match = pathname.match(/^\/leaderboard\/([^/]+)$/);
+  if (!match) return null;
+
+  const rawKey = safeDecodeURIComponent(match[1]);
+  if (!rawKey) return null;
+
+  const canonicalSlug = resolveModelSlug(rawKey);
+  if (canonicalSlug && canonicalSlug !== rawKey) {
+    const nextUrl = req.nextUrl.clone();
+    nextUrl.pathname = `/leaderboard/${encodeURIComponent(canonicalSlug)}`;
+    return NextResponse.redirect(nextUrl, 308);
+  }
+  return null;
 }
 
 function isModelDetailPath(pathname: string): boolean {
@@ -208,6 +234,9 @@ function getRateLimitSession(req: NextRequest, fallbackBucketId: string) {
 export async function middleware(req: NextRequest) {
   const canonicalRedirect = maybeRedirectToCanonicalHost(req);
   if (canonicalRedirect) return canonicalRedirect;
+
+  const modelSlugRedirect = maybeRedirectToCanonicalModelSlug(req);
+  if (modelSlugRedirect) return modelSlugRedirect;
 
   const { pathname } = req.nextUrl;
   const isLabApi = pathname.startsWith("/api/lab/");
