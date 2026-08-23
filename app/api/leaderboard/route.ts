@@ -7,7 +7,7 @@ import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
 import { getArenaPairCoverageByKey } from "@/lib/arena/coverage";
-import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
+import { resolveModelDisplayName, resolveModelSlug } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
 import {
   databaseUnavailableBody,
@@ -165,6 +165,7 @@ export async function GET() {
 
       return {
         key: m.key,
+        slug: resolveModelSlug(m.key),
         provider: m.provider,
         displayName: resolveModelDisplayName(m.key, m.displayName),
         stability,

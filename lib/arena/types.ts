@@ -118,6 +118,7 @@ export type PromptListResponse = {
 export type LeaderboardResponse = {
   models: {
     key: string;
+    slug?: string;
     provider: string;
     displayName: string;
     stability: "Provisional" | "Established" | "Stable";

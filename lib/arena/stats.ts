@@ -1,6 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
-import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
+import {
+  findCatalogEntryBySlugOrKey,
+  resolveModelDisplayName,
+  resolveModelSlug,
+} from "@/lib/ai/modelCatalog";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
 import {
@@ -159,6 +163,7 @@ export type ModelPromptBreakdown = {
 
 export type ModelOpponentBreakdown = {
   key: string;
+  slug?: string;
   displayName: string;
   votes: number;
   averageScore: number;
@@ -171,6 +176,7 @@ export type ModelOpponentBreakdown = {
 export type ModelDetailStats = {
   model: {
     key: string;
+    slug?: string;
     provider: string;
     displayName: string;
     eloRating: number;
@@ -936,9 +942,11 @@ export async function getLeaderboardDispersionByModelId(): Promise<Map<string, S
   return leaderboardInFlight;
 }
 
-async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats | null> {
+async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetailStats | null> {
+  const catalogEntry = findCatalogEntryBySlugOrKey(modelKeyOrSlug);
+  const targetKey = catalogEntry?.key ?? modelKeyOrSlug;
   const model = await prisma.model.findFirst({
-    where: { key: modelKey, enabled: true, isBaseline: false, stealthVariant: null },
+    where: { key: targetKey, enabled: true, isBaseline: false, stealthVariant: null },
     select: {
       id: true,
       key: true,
@@ -1219,6 +1227,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   const opponents: ModelOpponentBreakdown[] = opponentRows
     .map((row) => ({
       key: row.key,
+      slug: resolveModelSlug(row.key),
       displayName: resolveModelDisplayName(row.key, row.displayName),
       votes: toNumber(row.votes),
       averageScore: toNumber(row.averageScore),
@@ -1253,6 +1262,7 @@ async function queryModelDetailStats(modelKey: string): Promise<ModelDetailStats
   return {
     model: {
       key: model.key,
+      slug: catalogEntry?.slug ?? resolveModelSlug(model.key),
       provider: model.provider,
       displayName: resolveModelDisplayName(model.key, model.displayName),
       eloRating: rawRating,

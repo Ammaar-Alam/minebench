@@ -9,6 +9,7 @@ import { getConsistencyBand } from "@/lib/arena/consistencyBands";
 import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
 import { matchesLeaderboardModelQuery } from "@/lib/leaderboardSearch";
 import { formatAge, readStale, writeStale } from "@/lib/staleCache";
+import { resolveModelSlug } from "@/lib/ai/modelCatalog";
 import {
   ModelBenchmarkDetails,
   ModelBenchmarkDetailsInline,
@@ -350,7 +351,8 @@ export function Leaderboard() {
     modelSearchInputRef.current?.focus();
   }, []);
 
-  const getModelPath = (modelKey: string) => `/leaderboard/${encodeURIComponent(modelKey)}`;
+  const getModelPath = (modelKey: string) =>
+    `/leaderboard/${encodeURIComponent(resolveModelSlug(modelKey))}`;
   const navigateToModel = (modelKey: string) => {
     if (navigatingModelKey === modelKey) return;
     setNavigatingModelKey(modelKey);
