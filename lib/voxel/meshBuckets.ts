@@ -90,6 +90,7 @@ export function appendQuad(
         readonly [number, number, number],
       ],
   uv: readonly [number, number, number, number, number, number, number, number],
+  ambientOcclusion?: readonly [number, number, number, number],
 ): void {
   ensureCapacity(bucket, 4, 6);
 
@@ -97,19 +98,21 @@ export function appendQuad(
   const nx = normal.nx * NORMAL_UNIT;
   const ny = normal.ny * NORMAL_UNIT;
   const nz = normal.nz * NORMAL_UNIT;
-  const isPerVertex = Array.isArray(tint[0]);
+  const hasPerVertexTint = Array.isArray(tint[0]);
+  const isPerVertex = ambientOcclusion !== undefined || hasPerVertexTint;
 
   let l0 = 0, l1 = 0, l2 = 0, l3 = 0;
 
   for (let i = 0; i < 4; i += 1) {
     const vert = verts[i];
     const p = (baseIndex + i) * 3;
-    const t = isPerVertex
+    const t = hasPerVertexTint
       ? (tint as readonly (readonly [number, number, number])[])[i]
       : (tint as readonly [number, number, number]);
-    const r = Math.round(clamp01(t[0]) * COLOR_UNIT);
-    const g = Math.round(clamp01(t[1]) * COLOR_UNIT);
-    const b = Math.round(clamp01(t[2]) * COLOR_UNIT);
+    const shade = ambientOcclusion?.[i] ?? 1;
+    const r = Math.round(clamp01(t[0] * shade) * COLOR_UNIT);
+    const g = Math.round(clamp01(t[1] * shade) * COLOR_UNIT);
+    const b = Math.round(clamp01(t[2] * shade) * COLOR_UNIT);
 
     bucket.positions[p] = vert[0];
     bucket.positions[p + 1] = vert[1];
