@@ -9,10 +9,9 @@ import type {
 } from "@/lib/voxel/mesh";
 import { appendQuad, makeBucket, serializeBucket, type MeshBucket } from "@/lib/voxel/meshBuckets";
 import {
-  canBlockEmitAnyFace,
-  computeFaceAO,
   DIRS,
   SpatialBlockTable,
+  type CornerOffset,
   type Direction,
 } from "@/lib/voxel/ambientOcclusion";
 
@@ -39,8 +38,8 @@ type PreparedMeshData = {
   table: SpatialBlockTable;
   materialOccluding: Uint8Array;
   typeNames: string[];
-  typeIdsByName: Map<string, number>;
   blocks: TransferableVoxelBlocks;
+  visibleFaceMasks: Uint8Array;
   nonWaterBlockIndices: Int32Array;
   nonWaterCount: number;
   waterBlockIndices: Int32Array;
@@ -67,6 +66,16 @@ type PreResolvedFaceTable = {
   isEmissive: Uint8Array;
   tints: Array<FaceTint | null>;
   uvs: Array<FaceUv | null>;
+};
+
+type NeighborhoodCache = {
+  table: SpatialBlockTable;
+  materialOccluding: Uint8Array;
+  x: number;
+  y: number;
+  z: number;
+  knownMask: number;
+  occludingMask: number;
 };
 
 const workerScope = (typeof self !== "undefined" ? self : globalThis) as unknown as typeof globalThis & {
@@ -192,6 +201,85 @@ function postProgress(processedBlocks: number, totalBlocks: number, stageLabel: 
   workerScope.postMessage(message);
 }
 
+function computeVisibleFaceMask(
+  x: number,
+  y: number,
+  z: number,
+  typeId: number,
+  table: SpatialBlockTable,
+  materialOccluding: Uint8Array,
+): number {
+  let mask = 0;
+  for (let dIdx = 0; dIdx < 6; dIdx += 1) {
+    const d = DIRS[dIdx];
+    const neighborTypeId = table.get(x + d.dx, y + d.dy, z + d.dz);
+    if (
+      neighborTypeId === -1 ||
+      (neighborTypeId !== typeId && materialOccluding[neighborTypeId] !== 1)
+    ) {
+      mask |= 1 << dIdx;
+    }
+  }
+  return mask;
+}
+
+function isOccludingInNeighborhood(
+  cache: NeighborhoodCache,
+  dx: number,
+  dy: number,
+  dz: number,
+): boolean {
+  const bit = 1 << ((dx + 1) * 9 + (dy + 1) * 3 + dz + 1);
+  if ((cache.knownMask & bit) === 0) {
+    const typeId = cache.table.get(cache.x + dx, cache.y + dy, cache.z + dz);
+    cache.knownMask |= bit;
+    if (typeId !== -1 && cache.materialOccluding[typeId] === 1) {
+      cache.occludingMask |= bit;
+    }
+  }
+  return (cache.occludingMask & bit) !== 0;
+}
+
+function cachedCornerFactor(
+  corner: CornerOffset,
+  direction: Direction,
+  cache: NeighborhoodCache,
+): number {
+  const sideA = isOccludingInNeighborhood(
+    cache,
+    direction.dx + corner.sideA[0],
+    direction.dy + corner.sideA[1],
+    direction.dz + corner.sideA[2],
+  );
+  const sideB = isOccludingInNeighborhood(
+    cache,
+    direction.dx + corner.sideB[0],
+    direction.dy + corner.sideB[1],
+    direction.dz + corner.sideB[2],
+  );
+  if (sideA && sideB) return 0.58;
+  const diagonal = isOccludingInNeighborhood(
+    cache,
+    direction.dx + corner.diag[0],
+    direction.dy + corner.diag[1],
+    direction.dz + corner.diag[2],
+  );
+  const level = 3 - ((sideA ? 1 : 0) + (sideB ? 1 : 0) + (diagonal ? 1 : 0));
+  return 0.58 + (level / 3) * 0.42;
+}
+
+function computeFaceAOWithCache(
+  direction: Direction,
+  cache: NeighborhoodCache,
+): readonly [number, number, number, number] {
+  return [
+    cachedCornerFactor(direction.corners[0], direction, cache),
+    cachedCornerFactor(direction.corners[1], direction, cache),
+    cachedCornerFactor(direction.corners[2], direction, cache),
+    cachedCornerFactor(direction.corners[3], direction, cache),
+  ];
+}
+
 function prepareMeshData(
   blocks: TransferableVoxelBlocks,
   allowedBlockIds: string[],
@@ -209,14 +297,13 @@ function prepareMeshData(
 
   const table = new SpatialBlockTable(maxInputBlocks);
   const materialOccluding = new Uint8Array(typeNames.length);
-  const typeIdsByName = new Map<string, number>();
 
   for (let i = 0; i < typeNames.length; i += 1) {
     const name = typeNames[i];
-    typeIdsByName.set(name, i);
     materialOccluding[i] = isVoxelOccluder(name) ? 1 : 0;
   }
 
+  const visibleFaceMasks = new Uint8Array(maxInputBlocks);
   const nonWaterBlockIndices = new Int32Array(maxInputBlocks);
   const waterBlockIndices = new Int32Array(maxInputBlocks);
   let nonWaterCount = 0;
@@ -256,7 +343,9 @@ function prepareMeshData(
     const y = positions[i * 3 + 1];
     const z = positions[i * 3 + 2];
 
-    if (!canBlockEmitAnyFace(x, y, z, typeId, table, materialOccluding)) continue;
+    const visibleFaceMask = computeVisibleFaceMask(x, y, z, typeId, table, materialOccluding);
+    visibleFaceMasks[i] = visibleFaceMask;
+    if (visibleFaceMask === 0) continue;
 
     if (type === WATER_BLOCK_ID) {
       waterBlockIndices[waterCount] = i;
@@ -281,8 +370,8 @@ function prepareMeshData(
     table,
     materialOccluding,
     typeNames,
-    typeIdsByName,
     blocks,
+    visibleFaceMasks,
     nonWaterBlockIndices,
     nonWaterCount,
     waterBlockIndices,
@@ -306,6 +395,7 @@ function appendStandardFaces(
   prepared: PreparedMeshData,
   faceTable: PreResolvedFaceTable,
   bucketList: [MeshBucket, MeshBucket, MeshBucket, MeshBucket],
+  neighborhoodCache: NeighborhoodCache,
 ) {
   const { positions, typeIds } = prepared.blocks;
   const typeId = typeIds[blockIdx];
@@ -315,17 +405,18 @@ function appendStandardFaces(
   const bx = x - prepared.cx;
   const by = y - prepared.cy;
   const bz = z - prepared.cz;
+  const visibleFaceMask = prepared.visibleFaceMasks[blockIdx];
+  neighborhoodCache.x = x;
+  neighborhoodCache.y = y;
+  neighborhoodCache.z = z;
+  neighborhoodCache.knownMask = 0;
+  neighborhoodCache.occludingMask = 0;
 
   const baseFaceIdx = typeId * 6;
 
   for (let dIdx = 0; dIdx < 6; dIdx += 1) {
+    if ((visibleFaceMask & (1 << dIdx)) === 0) continue;
     const d = DIRS[dIdx];
-    const neighborTypeId = prepared.table.get(x + d.dx, y + d.dy, z + d.dz);
-    if (neighborTypeId !== -1) {
-      if (neighborTypeId === typeId) continue;
-      if (prepared.materialOccluding[neighborTypeId] === 1) continue;
-    }
-
     const faceIdx = baseFaceIdx + dIdx;
     if (faceTable.valid[faceIdx] === 0) continue;
 
@@ -334,7 +425,7 @@ function appendStandardFaces(
     const uv = faceTable.uvs[faceIdx]!;
     const ao = faceTable.isEmissive[faceIdx] === 1
       ? undefined
-      : computeFaceAO(d, x, y, z, prepared.table, prepared.materialOccluding);
+      : computeFaceAOWithCache(d, neighborhoodCache);
 
     appendQuad(
       bucket,
@@ -507,7 +598,6 @@ function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
   const bucket = makeBucket({ repeatingUvs: true });
   const planes = new Map<string, { face: Face; plane: number; cells: Set<number> }>();
   if (!prepared.allowed.has(WATER_BLOCK_ID) || prepared.waterCount === 0) return bucket;
-  const waterTypeId = prepared.typeIdsByName.get(WATER_BLOCK_ID) ?? -1;
   const { positions } = prepared.blocks;
 
   for (let i = 0; i < prepared.waterCount; i += 1) {
@@ -515,18 +605,11 @@ function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
     const x = positions[blockIdx * 3];
     const y = positions[blockIdx * 3 + 1];
     const z = positions[blockIdx * 3 + 2];
+    const visibleFaceMask = prepared.visibleFaceMasks[blockIdx];
 
-    for (const d of DIRS) {
-      const neighborTypeId = prepared.table.get(
-        x + d.dx,
-        y + d.dy,
-        z + d.dz,
-      );
-      if (neighborTypeId !== -1) {
-        if (neighborTypeId === waterTypeId) continue;
-        if (prepared.materialOccluding[neighborTypeId] === 1) continue;
-      }
-
+    for (let dIdx = 0; dIdx < 6; dIdx += 1) {
+      if ((visibleFaceMask & (1 << dIdx)) === 0) continue;
+      const d = DIRS[dIdx];
       switch (d.face) {
         case "east":
           getOrCreatePlane(planes, d.face, x + 1).cells.add(packPlaneCell(y, z));
@@ -584,10 +667,19 @@ export function buildMeshPayload(
     transparent,
     emissive,
   ];
+  const neighborhoodCache: NeighborhoodCache = {
+    table: prepared.table,
+    materialOccluding: prepared.materialOccluding,
+    x: 0,
+    y: 0,
+    z: 0,
+    knownMask: 0,
+    occludingMask: 0,
+  };
 
   for (let i = 0; i < prepared.nonWaterCount; i += 1) {
     const blockIdx = prepared.nonWaterBlockIndices[i];
-    appendStandardFaces(blockIdx, prepared, faceTable, bucketList);
+    appendStandardFaces(blockIdx, prepared, faceTable, bucketList, neighborhoodCache);
     if ((i & (PROGRESS_EVERY - 1)) === 0) {
       postProgress(i, Math.max(1, prepared.nonWaterCount), "Meshing blocks");
     }

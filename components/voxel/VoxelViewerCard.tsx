@@ -31,7 +31,7 @@ export function VoxelViewerCard({
   voxelBuild,
   expectedBlockCount,
   meshCacheKey,
-  premeshedPayloadPromise,
+  getPremeshedPayloadPromise,
   onPremeshedPayloadConsumed,
   gridSize = 256,
   autoRotate = true,
@@ -69,7 +69,7 @@ export function VoxelViewerCard({
   voxelBuild: unknown | null;
   expectedBlockCount?: number;
   meshCacheKey?: string | null;
-  premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
+  getPremeshedPayloadPromise?: () => Promise<VoxelMeshPayload> | null;
   onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
   gridSize?: 64 | 256 | 512;
   autoRotate?: boolean;
@@ -397,7 +397,7 @@ export function VoxelViewerCard({
               palette={palette}
               expectedBlockCount={expectedBlockCount}
               meshCacheKey={meshCacheKey}
-              premeshedPayloadPromise={premeshedPayloadPromise}
+              getPremeshedPayloadPromise={getPremeshedPayloadPromise}
               onPremeshedPayloadConsumed={onPremeshedPayloadConsumed}
               autoRotate={autoRotate}
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
