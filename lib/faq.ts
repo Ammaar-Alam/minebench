@@ -78,8 +78,8 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
         ],
         links: [
           {
-            label: "Ranking policy",
-            href: "https://github.com/Ammaar-Alam/minebench/blob/master/docs/arena-ranking-validity-policy-v2.md",
+            label: "Arena ranking",
+            href: "https://github.com/Ammaar-Alam/minebench/blob/master/docs/arena-ranking-system.md",
           },
           { label: "View Leaderboard", href: "/leaderboard" },
         ],

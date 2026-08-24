@@ -249,6 +249,5 @@ Add new export formats under `lib/voxel/export/`, wire them through `components/
 ## 9) Related docs
 
 - Ranking system: `docs/arena-ranking-system.md`
-- Policy layer: `docs/arena-ranking-validity-policy-v2.md`
 - Build export and import guide: `docs/build-export-import.md`
 - Prompt template: `docs/chatgpt-web-voxel-prompt.md`
