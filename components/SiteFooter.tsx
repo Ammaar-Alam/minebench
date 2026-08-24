@@ -29,12 +29,6 @@ export function SiteFooter() {
             >
               Contact
             </Link>
-            <Link
-              href="/private-evaluations"
-              className="rounded-sm transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            >
-              Private Evaluations
-            </Link>
             <a
               href={BUY_ME_A_COFFEE_URL}
               target="_blank"

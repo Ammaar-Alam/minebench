@@ -43,7 +43,7 @@ async function main() {
   );
   assert.ok(keywordSet.has("llm arena"), "SEO_KEYWORDS must include 'llm arena'");
   assert.ok(keywordSet.has("lm arena"), "SEO_KEYWORDS must include 'lm arena'");
-  assert.ok(keywordSet.has("private evals"), "SEO_KEYWORDS must include 'private evals'");
+  assert.ok(!keywordSet.has("private evals"), "SEO_KEYWORDS must not promote private evals");
   assert.ok(
     keywordSet.has("spatial reasoning benchmark"),
     "SEO_KEYWORDS must include 'spatial reasoning benchmark'",
@@ -60,7 +60,7 @@ async function main() {
   assert.ok(datasetJsonLd.keywords.includes("voxelbench"));
   assert.ok(datasetJsonLd.keywords.includes("voxel bench"));
   assert.ok(datasetJsonLd.keywords.includes("llm arena"));
-  assert.ok(datasetJsonLd.keywords.includes("private evals"));
+  assert.ok(!datasetJsonLd.keywords.includes("private evals"));
 
   const sampleItemList = leaderboardItemListJsonLd([
     { name: "Model A", rank: 1, path: "/leaderboard/model-a" },
@@ -87,10 +87,10 @@ async function main() {
 
   // 4. Sitemap Generation
   const sitemapEntries = await sitemap();
-  assert.ok(sitemapEntries.length >= 6 + MODEL_CATALOG.filter((m) => m.enabled).length);
+  assert.ok(sitemapEntries.length >= 5 + MODEL_CATALOG.filter((m) => m.enabled).length);
   const staticUrls = sitemapEntries.map((e) => e.url);
   assert.ok(staticUrls.includes("https://minebench.ai/contact"));
-  assert.ok(staticUrls.includes("https://minebench.ai/private-evaluations"));
+  assert.ok(!staticUrls.includes("https://minebench.ai/private-evaluations"));
 
   const modelUrls = sitemapEntries
     .map((e) => e.url)
@@ -106,7 +106,7 @@ async function main() {
   assert.ok(Array.isArray(robotsRules.rules));
   const primaryRule = robotsRules.rules[0];
   assert.ok(Array.isArray(primaryRule.allow));
-  assert.ok(primaryRule.allow.includes("/private-evaluations"));
+  assert.ok(!primaryRule.allow.includes("/private-evaluations"));
   assert.ok(Array.isArray(primaryRule.disallow));
   assert.ok(primaryRule.disallow.includes("/api/"));
   assert.ok(primaryRule.disallow.includes("/admin/"));

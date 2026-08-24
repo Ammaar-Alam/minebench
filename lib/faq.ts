@@ -169,7 +169,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
           "Private matchups use the normal Arena surface with one private checkpoint and one public model. Public ratings, rankings, counters, and coverage are not changed by private votes.",
         ],
         links: [
-          { label: "Private Evaluations", href: "/private-evaluations" },
+          { label: "Contact", href: "/contact" },
           {
             label: "Policy",
             href: "https://github.com/Ammaar-Alam/minebench/blob/master/docs/private-evaluations.md",

@@ -33,10 +33,6 @@ export const SEO_KEYWORDS = [
   "AI model leaderboard",
   "LLM leaderboard",
   "open-source voxel AI benchmark",
-  "private evals",
-  "private model evaluation",
-  "private llm benchmark",
-  "checkpoint evaluation",
 ] as const;
 
 export function absoluteUrl(path = "/") {
@@ -115,7 +111,6 @@ export const softwareApplicationJsonLd = {
     "Prompt-driven sandbox generation and 3D spatial evaluation",
     "Leaderboard with live Elo model rankings",
     "Blind LLM arena for 3D spatial reasoning",
-    "Confidential private model evaluations and checkpoint benchmarking",
     "Open-source voxel and Minecraft-style LLM spatial reasoning benchmark",
   ],
 };
@@ -138,7 +133,6 @@ export const datasetJsonLd = {
     "minecraft ai benchmark",
     "3d reasoning evaluation",
     "llm leaderboard",
-    "private evals",
   ],
   creator: {
     "@type": "Organization",

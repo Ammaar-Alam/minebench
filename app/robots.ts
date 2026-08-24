@@ -12,7 +12,6 @@ export default function robots(): MetadataRoute.Robots {
           "/leaderboard/",
           "/sandbox",
           "/faq",
-          "/private-evaluations",
         ],
         disallow: ["/api/", "/admin/", "/local"],
       },

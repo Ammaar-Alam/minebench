@@ -79,7 +79,6 @@ The full FAQ is available at **[minebench.ai/faq](https://minebench.ai/faq)**. E
 
 * [Can I compare different models directly?](https://minebench.ai/faq#can-i-compare-models-directly)
 * [Can models that are not on the official leaderboard be tested?](https://minebench.ai/faq#can-unofficial-models-be-tested)
-* [Can organizations run private checkpoint evaluations?](https://minebench.ai/faq#can-organizations-run-private-evaluations)
 * [Why isn't a particular model on the leaderboard?](https://minebench.ai/faq#why-is-a-model-missing)
 * [Can MineBench builds be exported?](https://minebench.ai/faq#can-i-export-builds)
 * [Is MineBench using Minecraft MCP, Blender MCP, or a coding agent?](https://minebench.ai/faq#is-this-minecraft-mcp-blender-mcp-or-a-coding-agent)

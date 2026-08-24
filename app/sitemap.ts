@@ -11,7 +11,6 @@ const PUBLIC_ROUTES = [
   { path: "/leaderboard", priority: 0.9, changeFrequency: "hourly" },
   { path: "/faq", priority: 0.7, changeFrequency: "monthly" },
   { path: "/contact", priority: 0.6, changeFrequency: "monthly" },
-  { path: "/private-evaluations", priority: 0.8, changeFrequency: "monthly" },
 ] as const;
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
