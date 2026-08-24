@@ -112,8 +112,11 @@ assert.ok(privateBranch >= 0 && publicTouch > privateBranch);
 assert.match(voteJobs.slice(privateBranch, publicTouch), /applyStealthRatingVote/);
 assert.match(voteJobs.slice(privateBranch, publicTouch), /continue/);
 
+const leaderboardRoute = read("app/api/leaderboard/route.ts");
+assert.match(leaderboardRoute, /getLeaderboardData/);
+
 for (const path of [
-  "app/api/leaderboard/route.ts",
+  "lib/arena/leaderboard.ts",
   "app/api/sandbox/benchmark/route.ts",
   "lib/arena/coverage.ts",
   "lib/arena/eligibility.ts",

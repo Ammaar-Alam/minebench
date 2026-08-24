@@ -7,6 +7,10 @@ import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { ErrorState } from "@/components/ErrorState";
 import { getConsistencyBand } from "@/lib/arena/consistencyBands";
 import { FetchError, fetchWithRetry } from "@/lib/fetchWithRetry";
+import {
+  LEADERBOARD_CACHE_KEY,
+  LEADERBOARD_STALE_MAX_AGE_MS,
+} from "@/lib/leaderboardOrder";
 import { matchesLeaderboardModelQuery } from "@/lib/leaderboardSearch";
 import { formatAge, readStale, writeStale } from "@/lib/staleCache";
 import { resolveModelSlug } from "@/lib/ai/modelCatalog";
@@ -15,10 +19,8 @@ import {
   ModelBenchmarkDetailsInline,
   ModelBenchmarkDetailsTrigger,
 } from "@/components/leaderboard/ModelBenchmarkDetails";
+import { LeaderboardSkeleton } from "@/components/leaderboard/LeaderboardSkeleton";
 
-const LEADERBOARD_CACHE_KEY = "mb-leaderboard-v4";
-// accept cached data up to 10 min — older than that we prefer "loading…" over shipping stale rankings
-const LEADERBOARD_STALE_MAX_AGE_MS = 10 * 60 * 1000;
 const LEADERBOARD_SLOW_THRESHOLD_MS = 5_000;
 const LEADERBOARD_TIMEOUT_MS = 10_000;
 
@@ -231,10 +233,15 @@ function ModelSearchEmptyState({ onClear }: { onClear: () => void }) {
   );
 }
 
-export function Leaderboard() {
-  const [data, setData] = useState<LeaderboardResponse | null>(null);
+export function Leaderboard({
+  initialData = null,
+}: {
+  initialData?: LeaderboardResponse | null;
+}) {
+  const [hydrated, setHydrated] = useState(false);
+  const [data, setData] = useState<LeaderboardResponse | null>(initialData);
   const [dataAgeMs, setDataAgeMs] = useState<number | null>(null);
-  const [isStale, setIsStale] = useState(false);
+  const [isStale, setIsStale] = useState(initialData != null);
   const [slow, setSlow] = useState(false);
   const [refreshError, setRefreshError] = useState<unknown>(null);
   const [error, setError] = useState<unknown>(null);
@@ -245,6 +252,7 @@ export function Leaderboard() {
   const [expandedMobileModelKey, setExpandedMobileModelKey] = useState<string | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const modelSearchInputRef = useRef<HTMLInputElement>(null);
+  const initialDataCachedRef = useRef(false);
   const router = useRouter();
   const activeModelCount = data?.models.length ?? 0;
   const topModel = data?.models[0] ?? null;
@@ -269,6 +277,10 @@ export function Leaderboard() {
       : "";
 
   useEffect(() => {
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
 
@@ -278,11 +290,16 @@ export function Leaderboard() {
     //    the primary table would mislead users; we'd rather show the loader
     //    and fall through to error handling if the fetch can't recover.
     const cached = readStale<LeaderboardResponse>(LEADERBOARD_CACHE_KEY, LEADERBOARD_STALE_MAX_AGE_MS);
-    if (cached.value && cached.isFresh) {
+    if (!initialData && cached.value && cached.isFresh) {
       setData(cached.value);
       setDataAgeMs(cached.ageMs);
       setIsStale(true);
     }
+    if (initialData && !initialDataCachedRef.current) {
+      writeStale(LEADERBOARD_CACHE_KEY, initialData);
+      initialDataCachedRef.current = true;
+    }
+    const hasFallbackData = initialData != null || Boolean(cached.value && cached.isFresh);
 
     setError(null);
     setRefreshError(null);
@@ -320,7 +337,7 @@ export function Leaderboard() {
         // paint in the first place; otherwise fall through to the full error
         // state so we don't leave hours-old rankings on screen with a soft
         // "couldn't refresh" note pretending they're current.
-        if (cached.value && cached.isFresh) {
+        if (hasFallbackData) {
           setRefreshError(fetchErr);
         } else {
           setError(fetchErr);
@@ -336,7 +353,7 @@ export function Leaderboard() {
       cancelled = true;
       controller.abort();
     };
-  }, [reloadToken]);
+  }, [initialData, reloadToken]);
 
   const handleRetry = useCallback(() => {
     setRetrying(true);
@@ -361,6 +378,10 @@ export function Leaderboard() {
   const prefetchModel = (modelKey: string) => {
     router.prefetch(getModelPath(modelKey));
   };
+
+  if (!hydrated || (!data && !error)) {
+    return <LeaderboardSkeleton slow={slow} />;
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 sm:gap-5">
@@ -528,16 +549,6 @@ export function Leaderboard() {
           className="shrink-0"
         />
       ) : null}
-      {!data && slow ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="mb-subpanel shrink-0 flex items-center gap-2 rounded-md px-3 py-2 text-xs text-muted"
-        >
-          <span className="mb-progress-wait relative h-1.5 w-6 overflow-hidden rounded-full bg-border/40" aria-hidden="true" />
-          <span>Taking longer than usual — MineBench may be under heavy load.</span>
-        </div>
-      ) : null}
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
         <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
@@ -691,11 +702,6 @@ export function Leaderboard() {
 	            })}
             {data && visibleModels.length === 0 ? (
               <ModelSearchEmptyState onClear={clearModelQuery} />
-            ) : null}
-            {!data ? (
-              <div className="mx-auto w-fit animate-pulse rounded-full bg-border/22 px-4 py-1.5 font-mono text-xs text-muted">
-                Loading…
-              </div>
             ) : null}
           </div>
 
@@ -970,15 +976,6 @@ export function Leaderboard() {
                 <tr>
                   <td colSpan={showDetailed ? 9 : 6}>
                     <ModelSearchEmptyState onClear={clearModelQuery} />
-                  </td>
-                </tr>
-              ) : null}
-              {!data ? (
-                <tr role="status" aria-live="polite">
-                  <td className="px-3 py-6 text-muted sm:px-4" colSpan={showDetailed ? 9 : 6}>
-                    <div className="mx-auto w-fit animate-pulse rounded-full bg-border/22 px-4 py-1.5 font-mono text-xs text-muted">
-                      Loading…
-                    </div>
                   </td>
                 </tr>
               ) : null}

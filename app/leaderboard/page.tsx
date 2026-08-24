@@ -3,6 +3,8 @@ import { Leaderboard } from "@/components/leaderboard/Leaderboard";
 import { LeaderboardPageShell } from "@/components/leaderboard/LeaderboardPageShell";
 import { breadcrumbJsonLd, DEFAULT_OG_IMAGE, leaderboardItemListJsonLd } from "@/lib/seo";
 import { getLeaderboardItemListRankings } from "@/lib/arena/stats";
+import { getLeaderboardData } from "@/lib/arena/leaderboard";
+import type { LeaderboardResponse } from "@/lib/arena/types";
 
 // ISR for leaderboard; refreshes crawlable rankings and ItemList structured data periodically.
 export const revalidate = 60;
@@ -42,7 +44,20 @@ const breadcrumbData = breadcrumbJsonLd([
 ]);
 
 export default async function LeaderboardPage() {
-  const rankings = await getLeaderboardItemListRankings();
+  let initialData: LeaderboardResponse | null = null;
+  try {
+    initialData = (await getLeaderboardData()).data;
+  } catch {
+    // The client keeps the existing retry and stale-cache recovery path
+  }
+
+  const rankings = initialData
+    ? initialData.models.map((model, index) => ({
+        name: model.displayName,
+        rank: index + 1,
+        path: `/leaderboard/${encodeURIComponent(model.slug ?? model.key)}`,
+      }))
+    : await getLeaderboardItemListRankings();
   const itemListData = rankings.length > 0 ? leaderboardItemListJsonLd(rankings) : null;
 
   return (
@@ -59,7 +74,7 @@ export default async function LeaderboardPage() {
       )}
       <h1 className="sr-only">MineBench AI benchmark leaderboard</h1>
       <div className="h-full min-h-0">
-        <Leaderboard />
+        <Leaderboard initialData={initialData} />
       </div>
     </LeaderboardPageShell>
   );

@@ -329,6 +329,39 @@
     -webkit-appearance: none;
   }
 
+  .mb-leaderboard-skeleton-block {
+    position: relative;
+    overflow: hidden;
+    background-color: hsl(var(--border) / 0.32);
+  }
+
+  .mb-leaderboard-skeleton-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(
+      100deg,
+      transparent 20%,
+      hsl(var(--fg) / 0.08) 50%,
+      transparent 80%
+    );
+    animation: mb-sheen-pass 1.6s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+    animation-delay: var(--mb-skeleton-delay, 0s);
+  }
+
+  .mb-leaderboard-skeleton-row:nth-child(4n + 2) {
+    --mb-skeleton-delay: -0.4s;
+  }
+
+  .mb-leaderboard-skeleton-row:nth-child(4n + 3) {
+    --mb-skeleton-delay: -0.8s;
+  }
+
+  .mb-leaderboard-skeleton-row:nth-child(4n) {
+    --mb-skeleton-delay: -1.2s;
+  }
+
   /* Applied to the optional detail columns (th + td) so they fade in when
      the Details toggle flips on. The header row's min-height keeps its
      size stable across the toggle, so only the cell contents animate. */
@@ -360,6 +393,11 @@
     .mb-leaderboard-detail-col,
     .mb-refresh-retry {
       animation: none;
+    }
+
+    .mb-leaderboard-skeleton-shimmer::after {
+      animation: none;
+      opacity: 0;
     }
 
     .mb-details-toggle {
