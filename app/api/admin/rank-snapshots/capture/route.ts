@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { confidenceFromRd } from "@/lib/arena/rating";
+import { getGlobalBradleyTerrySnapshot } from "@/lib/arena/stats";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
@@ -45,23 +45,14 @@ async function capture(req: Request) {
 
   const capturedAt = floorToUtcHour(anchor);
 
-  const models = await prisma.model.findMany({
-    where: { enabled: true, isBaseline: false, stealthVariant: null },
-    orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
-    select: {
-      id: true,
-      key: true,
-      displayName: true,
-      conservativeRating: true,
-      glickoRd: true,
-    },
-  });
+  const btSnapshot = await getGlobalBradleyTerrySnapshot();
+  const models = btSnapshot.globalModels;
 
-  const snapshots = models.map((model, index) => ({
+  const snapshots = models.map((model) => ({
     modelId: model.id,
-    rank: index + 1,
-    rankScore: Number(model.conservativeRating),
-    confidence: confidenceFromRd(Number(model.glickoRd)),
+    rank: model.rank,
+    rankScore: Number(model.rankScore),
+    confidence: model.confidence,
   }));
 
   if (snapshots.length > 0) {
@@ -96,10 +87,10 @@ async function capture(req: Request) {
     capturedAt: capturedAt.toISOString(),
     modelCount: snapshots.length,
     updated: snapshots.length,
-    top: models.slice(0, 3).map((model, index) => ({
+    top: models.slice(0, 3).map((model) => ({
       key: model.key,
       displayName: model.displayName,
-      rank: index + 1,
+      rank: model.rank,
     })),
   });
 }

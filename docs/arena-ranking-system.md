@@ -1,446 +1,132 @@
-# MineBench Arena Ranking System (Implementation Guide)
+# Arena Ranking
 
-This document explains how MineBench ranking works today in code, including the math, matchup selection, and what users see on the leaderboard.
+MineBench ranks public models from blind head-to-head votes using a global Bradley-Terry model. Matchmaking separately maintains lightweight operational rating state so it can schedule informative comparisons without changing the published ranking method.
 
-- Source of truth: `app/api/arena/matchup/route.ts`, `app/api/arena/vote/route.ts`, `lib/arena/rating.ts`, `lib/arena/stats.ts`, `app/api/leaderboard/route.ts`.
-- Companion policy: `docs/arena-ranking-validity-policy-v2.md`.
+## Eligible evidence
 
-## Table of Contents
+A vote enters the public fit only when:
 
-1. Why MineBench moved beyond pure Elo
-2. Rating model and math
-3. Vote handling and counters
-4. Matchmaking lanes
-5. Prompt selection math (for a chosen pair)
-6. Worked example: GPT 5.2 Pro vs Gemini 3.1 Pro
-7. Coverage and eligibility (why denominator matters)
-8. Leaderboard metrics and formulas
-9. What changed from the older Elo model
+- both models are enabled, non-baseline public models;
+- the prompt is active and has Arena-ready builds from at least two eligible models; and
+- the choice is `A`, `B`, or `TIE`.
 
-## 1) Why MineBench moved beyond pure Elo
+`A` contributes `1` point to model A, `B` contributes `1` point to model B, and `TIE` contributes `0.5` to each. `BOTH_BAD` is tracked as a quality signal and does not enter the skill fit.
 
-MineBench originally used Elo-style point updates and largely random sampling. That is simple, but it has limits under finite traffic:
+Private checkpoint matchups are excluded from public ratings, counters, coverage, rank snapshots, and leaderboard eligibility.
 
-- Elo gives a point estimate but no uncertainty interval.
-- Random sampling can under-cover important top-vs-top pairs and prompt subsets.
-- `BOTH_BAD` is a quality-floor signal, not a clean pairwise-skill signal.
+## Bradley-Terry model
 
-The current system keeps pairwise head-to-head updates, but adds:
-
-- Glicko-style uncertainty (`RD`, volatility).
-- Conservative rank score (`rating - 2 * RD`) for public ordering.
-- Lane-based matchup scheduling to explicitly improve coverage quality.
-- `BOTH_BAD` tracked as quality floor (not as skill loss).
-
-## 2) Rating model and math
-
-Implementation: `lib/arena/rating.ts`.
-
-Each model state:
-
-- `rating` (starts at 1500)
-- `rd` (rating deviation, starts at 350)
-- `volatility` (starts at 0.06)
-
-Constants:
-
-- `INITIAL_RATING = 1500`
-- `GLICKO_SCALE = 173.7178`
-- `RD_FLOOR = 30`, `RD_CEILING = 350`
-- `TAU = 0.5` (named `VOLATILITY_TAU`)
-- Conservative score sigmas = `2`
-
-### 2.1 Scale conversion
-
-For a player with `(r, RD)`:
-
-- `mu = (r - 1500) / 173.7178`
-- `phi = clamp(RD, 30, 350) / 173.7178`
-
-Back-conversion:
-
-- `r' = 1500 + mu' * 173.7178`
-- `RD' = clamp(phi' * 173.7178, 30, 350)`
-
-### 2.2 Expected score (Glicko form)
-
-- `g(phi_j) = 1 / sqrt(1 + 3*phi_j^2 / pi^2)`
-- `E = 1 / (1 + exp(-g(phi_j) * (mu - mu_j)))`
-
-Outcome score `s`:
-
-- win: `1`
-- draw: `0.5`
-- loss: `0`
-
-### 2.3 Update terms
-
-- `v = 1 / (g(phi_j)^2 * E * (1 - E))`
-- `delta = v * g(phi_j) * (s - E)`
-
-Volatility update `sigma'` is solved numerically (`solveNewVolatility`) using the standard Glicko-2 root finding approach.
-
-Then:
-
-- `phi* = sqrt(phi^2 + sigma'^2)`
-- `phi' = 1 / sqrt(1/(phi*^2) + 1/v)`
-- `mu' = mu + (phi'^2) * g(phi_j) * (s - E)`
-
-Both models are updated symmetrically in `updateRatingPair`.
-
-### 2.4 Public rank score
-
-MineBench orders by conservative score:
-
-- `rankScore = rating - 2 * RD`
-
-This penalizes uncertain models and reduces lucky short-run spikes.
-
-### 2.5 Confidence and stability
-
-Confidence shown on leaderboard:
-
-- `confidence = round((1 - (clampRd(RD) - 30) / (350 - 30)) * 100)`
-
-Stability tier (`lib/arena/rating.ts`):
-
-- `Stable`: decisive votes >= 200, prompt coverage >= 0.9, RD <= 60
-- `Established`: decisive votes >= 80, prompt coverage >= 0.8, RD <= 90
-- otherwise `Provisional`
-
-## 3) Vote handling and counters
-
-Implementation: `app/api/arena/vote/route.ts`, `lib/arena/voteMath.ts`.
-
-Vote choices:
-
-- `A`, `B`, `TIE`, `BOTH_BAD`
-
-Behavior:
-
-- `A/B/TIE`:
-  - map to `A_WIN/B_WIN/DRAW`
-  - update both models via `updateRatingPair`
-  - recompute `conservativeRating`
-  - increment `winCount/lossCount/drawCount`
-- `BOTH_BAD`:
-  - increment only `bothBadCount` on both models
-  - do not change rating/RD/volatility
-
-Aggregates:
-
-- `decisiveLossCount = lossCount`
-- `decisiveVotes = winCount + decisiveLossCount + drawCount`
-- `totalVotes = decisiveVotes + bothBadCount`
-
-## 4) Matchmaking lanes
-
-Implementation: `app/api/arena/matchup/route.ts`.
-
-Lane weights:
-
-- Coverage: `0.4`
-- Contender: `0.3`
-- Uncertainty: `0.2`
-- Exploration: `0.1`
-
-System tries the sampled primary lane first, then falls back through the others if needed.
-
-### 4.1 Coverage lane
-
-Goal: improve weak coverage first.
-
-- Anchor model: lowest prompt coverage, then lower `shownCount`.
-- Opponent: lowest prior pair decisive votes, then smallest coverage gap.
-- Prompt: chosen by lane-specific prompt score (see section 5).
-
-### 4.2 Contender lane
-
-Goal: stabilize ordering near top of leaderboard.
-
-- Build contender band = top `K=8` by conservative score.
-- First priority: adjacent pair deficits.
-  - Vote deficit: `max(0, 12 - pairVotes)`
-  - Prompt deficit: `max(0, 6 - pairPromptCountDistinct)`
-- If an adjacent pair is below floor, it is preferred.
-- Otherwise choose anchor/opponent by conservative-rating proximity with weighted buckets:
-  - 70% nearest neighbor
-  - 20% other contender by closest rating distance
-  - 10% challenger from below band
-
-### 4.3 Uncertainty lane
-
-Goal: reduce uncertainty fastest.
-
-- Anchor weight: `RD * (1 + (1 - promptCoverage))`
-- Opponent score:
-  - `prediction = expectedScore(anchorConservative, candidateConservative)`
-  - `infoGain = 1 - 2*abs(prediction - 0.5)`
-  - `coverageBonus = 1 / (pairVotes + 1)`
-  - `score = infoGain + 0.25 * coverageBonus`
-- Pick highest score.
-
-### 4.4 Exploration lane
-
-Goal: keep discovery and avoid overfitting top traffic.
-
-- Prompt weight: inverse of total decisive votes for that prompt.
-- Model weights: inverse `shownCount`.
-
-### 4.5 New model onboarding behavior
-
-When a new model is introduced, the system does prioritize calibration exposure, but it does not enforce equal total vote counts.
-
-How it is prioritized:
-
-- Coverage lane (40% of traffic) prefers the lowest prompt-coverage model first, then lower `shownCount`.
-- Uncertainty lane (20%) weights anchors by `RD * (1 + (1 - promptCoverage))`; new models typically start with high RD and low coverage, so they are heavily favored.
-- Exploration lane (10%) uses inverse `shownCount`, which also favors newly introduced models.
-
-What it does not guarantee:
-
-- No hard rule says a new model must exactly \"catch up\" to every other model’s total vote count.
-- The target is improved calibration quality (coverage + uncertainty reduction), not strict equalized vote totals.
-
-Important eligibility requirement:
-
-- A model cannot appear in arena sampling until it has eligible builds (arena settings) on prompts that have at least two enabled models with builds.
-
-## 5) Prompt selection math (for a chosen pair)
-
-For a specific pair `(modelA, modelB)`, only shared prompt IDs are candidates.
-
-Definitions per prompt `p`:
-
-- `votesA = decisive votes for modelA on prompt p`
-- `votesB = decisive votes for modelB on prompt p`
-- `pairPromptVotes = decisive votes for this exact pair on prompt p`
-
-Prompt score by lane:
-
-- Coverage lane:
-  - `score = votesA + votesB + 6 * pairPromptVotes`
-- Contender lane:
-  - `score = 10 * pairPromptVotes + 0.25 * abs(votesA - votesB)`
-- Uncertainty lane:
-  - `score = 3 * pairPromptVotes + abs(votesA - votesB) + (votesA + votesB)/2`
-- Exploration lane:
-  - `score = 2 * pairPromptVotes + (votesA + votesB)/2`
-
-The prompt with the **lowest** score is selected.
-
-Interpretation: lower score means less sampled / less balanced for the lane’s objective.
-
-## 6) Worked example: GPT 5.2 Pro vs Gemini 3.1 Pro
-
-Assume contender lane is active and these two are in (or near) adjacent top ranks.
-
-### 6.1 Pair selection
-
-Contender lane checks adjacent-pair floors first.
-
-If this pair is short on:
-
-- `pairVotes < 12`, or
-- `distinctPairPrompts < 6`
-
-then this pair gets prioritized before random contender pairing.
-
-### 6.2 Prompt selection for this pair
-
-Suppose candidate prompts have:
-
-- `P1`: `pairPromptVotes=5`, `votesA=20`, `votesB=18`
-- `P2`: `pairPromptVotes=2`, `votesA=11`, `votesB=10`
-
-Contender lane scores:
-
-- `P1 = 10*5 + 0.25*|20-18| = 50.5`
-- `P2 = 10*2 + 0.25*|11-10| = 20.25`
-
-`P2` is chosen because it is less covered for this exact pair.
-
-This is why users may repeatedly see under-covered prompts for top rivals until floor targets are satisfied.
-
-## 7) Coverage and eligibility (why denominator matters)
-
-Coverage denominator must match the actual arena prompt universe.
-
-MineBench now uses **arena-eligible prompts**, not all active prompts.
-
-A prompt is eligible for arena coverage if:
-
-- prompt is active, and
-- at least two enabled non-baseline models have builds for arena settings:
-  - `gridSize=256`, `palette=simple`, `mode=precise`
-
-Relevant implementation:
-
-- `lib/arena/eligibility.ts`
-- `app/api/arena/prompts/route.ts`
-- `lib/arena/stats.ts`
-
-This resolves the historical mismatch where UI could show `covered / active` (for example `15/16`) while matchmaking only sampled 15 eligible prompts.
-
-## 8) Leaderboard metrics and formulas
-
-Implementation: `app/api/leaderboard/route.ts`, `lib/arena/stats.ts`, `components/leaderboard/Leaderboard.tsx`.
-
-### 8.1 Core columns
-
-- `Model`: display name/provider/stability chip
-- `Rating`: conservative rank score (`rankScore`), with raw rating shown beneath
-- `Confidence`: derived from RD
-- `Coverage`: `coveredPrompts / activePrompts` plus percent
-- `Consistency`: shrunk prompt-strength ES-gap mapped onto a `0-100` score
-- `Spread`: stddev of per-prompt observed scores across covered prompts
-- `Avg score`: unweighted mean of per-prompt observed scores across covered prompts
-- `Record`: W/L/D
-- `Votes`: total votes + both-bad count
-
-### 8.2 Derived metrics
-
-- `qualityFloorScore = max(0, 1 - bothBadCount / totalVotes)`
-- `pairCoverageScore` (top band):
-  - for each adjacent neighbor, compute `pairCompletion`
-  - `pairCompletion = min(1, decisiveVotes/12, promptCount/6)`
-  - score shown as average completion percent across immediate neighbors
-
-### 8.3 Dispersion and consistency
-
-`lib/arena/stats.ts` computes per-model prompt samples from decisive outcomes.
-
-All three public prompt-summary stats retain prompts with at least 2 decisive votes for that model.
-
-Raw prompt score inputs on that retained prompt set:
-
-- per prompt average score in `[0,1]`
-- `meanScore = average(promptAverages)`
-- `scoreSpread = sqrt(VAR_POP(promptAverages))`
-
-That retained prompt sample is built from:
-
-- eligible prompts only
-- decisive votes only
-- active ranked models on both sides of the matchup
-
-The important design change is that public prompt consistency should no longer be driven by raw observed prompt-score spread alone.
-
-Prompt-local percentile is the right primitive:
-
-For each prompt:
-
-- fit a prompt-local Bradley-Terry model from decisive votes on that prompt
-- rank active leaderboard models by prompt-local latent strength
-- convert rank to percentile, where `100 = best on that prompt` and `0 = weakest`
-
-Implemented branch version:
-
-- keep prompts with at least 2 decisive votes
-- if fewer than 5 prompts remain, `consistency = null`
-- fit a global Bradley-Terry baseline across decisive votes
-- fit prompt-local Bradley-Terry strengths with a symmetric `0.5`/`0.5` pseudo-point prior on each observed model-pair edge
-- estimate prompt-level variances from the same prior-augmented edge totals
-- shrink prompt-local strengths back toward the global baseline before ranking
-- convert shrunk prompt-local ranks to prompt-strength percentiles
-- sort prompt-strength percentiles ascending
-- let `k = max(1, ceil(0.2 * n))`
-- `lowTail = average(bottom k percentiles)`
-- `highTail = average(top k percentiles)`
-- `gap = highTail - lowTail`
-- `consistency = round(clamp(100 - gap - 0.75 * gap^2 / 100, 0, 100), 1)`
-
-Notation:
-
-- \(i\) = model
-- \(p\) = prompt
-- \(N_p\) = active ranked models with usable prompt signal on prompt \(p\)
-- \(n_i\) = retained prompts for model \(i\)
-- \(k_i = \max(1, \lceil 0.2 \cdot n_i \rceil)\)
-- \(\tilde{r}_{i,p}\) = shrunk prompt-local rank
-- \(\tilde{q}_{i,p}\) = shrunk prompt-strength percentile
-
-The percentile mapping is:
+For latent abilities \(\theta_A\) and \(\theta_B\):
 
 \[
-\tilde{q}_{i,p} =
-\begin{cases}
-100, & N_p \le 1 \\
-100 \cdot \dfrac{N_p - \tilde{r}_{i,p}}{N_p - 1}, & N_p > 1
-\end{cases}
+P(A > B) = \frac{1}{1 + e^{-(\theta_A - \theta_B)}}
 \]
 
-For each model \(i\), let \(\tilde{q}_{i,(t)}\) be the ordered retained prompt-strength percentiles. Then:
+Votes are aggregated by model pair. Each observed edge receives a symmetric prior of `0.5` points per model and `1` total comparison, preventing infinite estimates when one model has no wins or losses on that edge.
+
+With \(\pi_i = e^{\theta_i}\), the iterative update is:
 
 \[
-L_i = \frac{1}{k_i}\sum_{t=1}^{k_i} \tilde{q}_{i,(t)}, \qquad
-U_i = \frac{1}{k_i}\sum_{t=n_i-k_i+1}^{n_i} \tilde{q}_{i,(t)}
+\pi_i^{(t+1)} =
+\frac{W_i}{\sum_{j \ne i} \frac{N_{ij}}{\pi_i^{(t)} + \pi_j^{(t)}}}
+\]
+
+The fitted abilities are centered and converted to a 1500-centered, 400-point Elo scale:
+
+\[
+R_i = 1500 + (\theta_i - \bar{\theta})\frac{400}{\ln 10}
+\]
+
+The observed Fisher information supplies an asymptotic variance for each fitted ability. MineBench reports:
+
+\[
+SE(R_i) = \frac{400}{\ln 10}\sqrt{\operatorname{Var}(\theta_i)}
 \]
 
 \[
-G_i = U_i - L_i
+CI_{95}(R_i) = 1.95996 \times SE(R_i)
 \]
 
-\[
-\operatorname{Consistency}_i =
-\operatorname{clamp}\left(100 - G_i - 0.75 \cdot \frac{G_i^2}{100}, 0, 100\right)
-\]
+The public comparison graph should remain connected. Disconnected components are fit independently and therefore do not have a shared absolute offset.
 
-See [Consistency Metric: Prompt-Strength Tail Gap](./consistency-metric-percentile-band.md) for:
+## Rank, confidence, and stability
 
-- the schedule-confounding problem
-- the empirical-Bayes shrinkage path
-- the residual-based alternative
-- the April 22, 2026 validation snapshot
+Models are sorted by Bradley-Terry point estimate, with display name as the deterministic tiebreaker. Sorted index \(i\) receives rank \(i + 1\); confidence-interval overlap does not create tied ranks.
 
-So the intended public split is:
+The displayed confidence indicator is a bounded transformation of interval width:
 
-- `Consistency`: strongest-vs-weakest prompt-strength tail gap, inverted onto `0-100`
-- `Spread`: raw observed prompt-score variability
-- `Avg score`: unweighted mean of per-prompt observed scores
+```text
+round(max(10, min(99, 100 - min(90, CI95 * 0.85))))
+```
 
-### 8.4 Model detail prompt graph
+Stability also requires sufficient rated outcomes and prompt coverage:
 
-The model detail page graph uses prompt-local strength percentile as its primary prompt signal.
+| Tier | W/L/D outcomes | Prompt coverage | 95% interval half-width |
+| --- | ---: | ---: | ---: |
+| Stable | at least 200 | at least 90% | at most 20 |
+| Established | at least 80 | at least 80% | at most 35 |
+| Provisional | otherwise | otherwise | otherwise |
 
-That means the page now answers:
+Rank snapshots use the same Bradley-Terry fit, rank, and confidence values as the leaderboard.
 
-- how strong is this model on each prompt relative to the field
+## Vote processing and rating boundaries
 
-instead of:
+Public votes are written first and processed by `ArenaVoteJob`. The job updates W/L/D/`BOTH_BAD` counters, coverage, and sequential operational Glicko state used by matchmaking.
 
-- how many raw head-to-head points did it earn against the sampled opponents on that prompt
+The operational state is not the published score. The leaderboard and model detail pages refit Bradley-Terry from eligible public vote history.
 
-Raw observed prompt score still appears as secondary context on the detail page.
+For private matchups, the public model is a read-only anchor. Only the private `StealthVariant` rating and counters change.
 
-The companion consistency doc explains why this separation matters:
+## Matchmaking
 
-- prompt graph = field-relative prompt strength
-- public consistency = an aggregate of those field-relative prompt strengths
-- residual-based schedule adjustment is more appropriate as a research/diagnostic lens than as the headline public stat
+Each matchup request samples a lane and falls back to the others if the selected lane cannot produce a valid pair.
 
-## 9) What changed from older Elo behavior
+| Lane | Weight | Purpose |
+| --- | ---: | --- |
+| Coverage | 40% | Fill weak model, pair, and prompt coverage |
+| Contender | 30% | Improve ordering among nearby top models |
+| Uncertainty | 20% | Prefer comparisons with high expected information |
+| Exploration | 10% | Preserve discovery and low-exposure traffic |
 
-Old behavior (historical):
+The contender band contains the top eight models by operational conservative score. Adjacent pairs are prioritized until they have at least 12 decisive votes across at least 6 prompts.
 
-- Elo-only public rating
-- weaker coverage control
-- `BOTH_BAD` affected loss/rating path
+For a selected pair, the lowest-scoring shared prompt is chosen:
 
-Current behavior:
+| Lane | Prompt score |
+| --- | --- |
+| Coverage | `votesA + votesB + 6 * pairPromptVotes` |
+| Contender | `10 * pairPromptVotes + 0.25 * abs(votesA - votesB)` |
+| Uncertainty | `3 * pairPromptVotes + abs(votesA - votesB) + (votesA + votesB) / 2` |
+| Exploration | `2 * pairPromptVotes + (votesA + votesB) / 2` |
 
-- Glicko-style updates with uncertainty
-- conservative public ordering
-- lane-driven sampling for coverage/top-pair validity
-- `BOTH_BAD` as quality-floor diagnostic only
+Here, `votesA` and `votesB` are decisive votes for each model on the prompt, and `pairPromptVotes` is decisive coverage for that exact pair and prompt.
 
-## Implementation References
+## Leaderboard metrics
 
-- Rating math: `lib/arena/rating.ts`
+- `Rating`: Bradley-Terry point estimate and 95% confidence interval
+- `Confidence`: interval-width indicator
+- `Coverage`: prompts with sufficient decisive evidence divided by Arena-eligible prompts
+- `Consistency`: prompt-strength tail-gap score
+- `Spread`: standard deviation of retained per-prompt observed scores
+- `Avg score`: unweighted mean of retained per-prompt observed scores
+- `Record`: wins, losses, and draws
+- `Votes`: rated outcomes plus `BOTH_BAD`
+- `Quality floor`: `max(0, 1 - bothBadCount / totalVotes)`
+- `Pair coverage`: adjacent top-band completion against the 12-vote, 6-prompt target
+
+The consistency estimator is documented separately in [Consistency Metric](./consistency-metric-percentile-band.md).
+
+## Operations
+
+`pnpm elo:recompute` performs a read-only replay. `pnpm elo:recompute --yes` writes current public Bradley-Terry ratings and counters while independently replaying private variant state. Private votes never enter the public fit.
+
+## Implementation references
+
+- Rating helpers: `lib/arena/rating.ts`
+- Bradley-Terry fit and leaderboard statistics: `lib/arena/stats.ts`
 - Matchmaking: `app/api/arena/matchup/route.ts`
-- Vote update transaction: `app/api/arena/vote/route.ts`
-- Stats and coverage: `lib/arena/stats.ts`
+- Vote processing: `lib/arena/voteJobs.ts`
 - Eligible prompt universe: `lib/arena/eligibility.ts`
-- Leaderboard API payload: `app/api/leaderboard/route.ts`
-- Leaderboard UI: `components/leaderboard/Leaderboard.tsx`
-- Consistency companion doc: `docs/consistency-metric-percentile-band.md`
+- Leaderboard API: `app/api/leaderboard/route.ts`
+- Rank snapshots: `app/api/admin/rank-snapshots/capture/route.ts`
+- Rating replay: `scripts/recompute-elo.ts`

@@ -1,6 +1,6 @@
 #!/usr/bin/env -S tsx
 /**
- * Recompute Arena rating + vote counters from stored vote history.
+ * Recompute public Bradley-Terry ratings and all Arena vote counters from history.
  *
  * Usage:
  *   pnpm elo:recompute         # dry run
@@ -13,9 +13,16 @@ import {
   INITIAL_RATING,
   INITIAL_RD,
   INITIAL_VOLATILITY,
+  computeOrdinalRanks,
+  confidenceFromCi,
+  confidenceInterval95,
   conservativeScore,
+  thetaToRating,
   updateRatingPair,
+  varianceToStandardError,
 } from "../lib/arena/rating";
+import { aggregatePairRow, type PairwiseRow, fitBradleyTerry } from "../lib/arena/stats";
+import { getArenaEligiblePromptIds } from "../lib/arena/eligibility";
 import { applyStealthRatingVote } from "../lib/stealth/rating";
 
 type Choice = "A" | "B" | "TIE" | "BOTH_BAD";
@@ -42,7 +49,19 @@ function isChoice(value: string): value is Choice {
 }
 
 function formatDelta(value: number) {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
+}
+
+function initialState(): ModelState {
+  return {
+    rating: INITIAL_RATING,
+    rd: INITIAL_RD,
+    volatility: INITIAL_VOLATILITY,
+    winCount: 0,
+    lossCount: 0,
+    drawCount: 0,
+    bothBadCount: 0,
+  };
 }
 
 async function main() {
@@ -50,7 +69,7 @@ async function main() {
 
   if (args.help) {
     console.log(`
-Recompute MineBench Arena rating + counters from vote history.
+Recompute MineBench public Bradley-Terry ratings and Arena counters from vote history.
 
 Usage:
   pnpm elo:recompute
@@ -59,16 +78,17 @@ Usage:
     return;
   }
 
-  const [models, variants, votes] = await Promise.all([
+  const [models, variants, votes, eligiblePromptIds] = await Promise.all([
     prisma.model.findMany({
       where: { stealthVariant: null },
       select: {
         id: true,
         key: true,
         displayName: true,
+        enabled: true,
+        isBaseline: true,
         eloRating: true,
         glickoRd: true,
-        glickoVolatility: true,
         conservativeRating: true,
         winCount: true,
         lossCount: true,
@@ -81,14 +101,7 @@ Usage:
         id: true,
         codename: true,
         modelId: true,
-        eloRating: true,
-        glickoRd: true,
-        glickoVolatility: true,
         conservativeRating: true,
-        winCount: true,
-        lossCount: true,
-        drawCount: true,
-        bothBadCount: true,
       },
     }),
     prisma.vote.findMany({
@@ -97,6 +110,7 @@ Usage:
         choice: true,
         matchup: {
           select: {
+            promptId: true,
             modelAId: true,
             modelBId: true,
             stealthVariantId: true,
@@ -104,47 +118,38 @@ Usage:
         },
       },
     }),
+    getArenaEligiblePromptIds(),
   ]);
 
-  const stateByModelId = new Map<string, ModelState>();
-  for (const model of models) {
-    stateByModelId.set(model.id, {
-      rating: INITIAL_RATING,
-      rd: INITIAL_RD,
-      volatility: INITIAL_VOLATILITY,
-      winCount: 0,
-      lossCount: 0,
-      drawCount: 0,
-      bothBadCount: 0,
-    });
-  }
-  const stateByVariantId = new Map<string, ModelState>();
+  const activeModels = models.filter((model) => model.enabled && !model.isBaseline);
+  const activeModelIdSet = new Set(activeModels.map((model) => model.id));
+  const eligiblePromptIdSet = new Set(eligiblePromptIds);
+  const displayNames = new Map(models.map((model) => [model.id, model.displayName]));
+  const stateByModelId = new Map(models.map((model) => [model.id, initialState()]));
+  const stateByVariantId = new Map(variants.map((variant) => [variant.id, initialState()]));
   const variantById = new Map(variants.map((variant) => [variant.id, variant]));
-  for (const variant of variants) {
-    stateByVariantId.set(variant.id, {
-      rating: INITIAL_RATING,
-      rd: INITIAL_RD,
-      volatility: INITIAL_VOLATILITY,
-      winCount: 0,
-      lossCount: 0,
-      drawCount: 0,
-      bothBadCount: 0,
-    });
-  }
+  const pairRows = new Map<string, PairwiseRow>();
+  let publicVotesReplayed = 0;
+  let privateVotesReplayed = 0;
+  let fittedPublicVotes = 0;
 
   for (const vote of votes) {
     if (!isChoice(vote.choice)) continue;
+
     if (vote.matchup.stealthVariantId) {
       const variantRecord = variantById.get(vote.matchup.stealthVariantId);
       const variant = stateByVariantId.get(vote.matchup.stealthVariantId);
       if (!variantRecord || !variant) continue;
+
       const variantIsA = vote.matchup.modelAId === variantRecord.modelId;
       const variantIsB = vote.matchup.modelBId === variantRecord.modelId;
       if (variantIsA === variantIsB) continue;
-      const publicModel = stateByModelId.get(
+
+      const publicAnchor = stateByModelId.get(
         variantIsA ? vote.matchup.modelBId : vote.matchup.modelAId,
       );
-      if (!publicModel) continue;
+      if (!publicAnchor) continue;
+
       const updated = applyStealthRatingVote({
         variant: {
           eloRating: variant.rating,
@@ -157,13 +162,14 @@ Usage:
           bothBadCount: variant.bothBadCount,
         },
         publicAnchor: {
-          eloRating: publicModel.rating,
-          glickoRd: publicModel.rd,
-          glickoVolatility: publicModel.volatility,
+          eloRating: publicAnchor.rating,
+          glickoRd: publicAnchor.rd,
+          glickoVolatility: publicAnchor.volatility,
         },
         variantSide: variantIsA ? "A" : "B",
         choice: vote.choice,
       });
+
       variant.rating = updated.eloRating;
       variant.rd = updated.glickoRd;
       variant.volatility = updated.glickoVolatility;
@@ -171,76 +177,90 @@ Usage:
       variant.lossCount = updated.lossCount;
       variant.drawCount = updated.drawCount;
       variant.bothBadCount = updated.bothBadCount;
+      privateVotesReplayed += 1;
       continue;
     }
-    const a = stateByModelId.get(vote.matchup.modelAId);
-    const b = stateByModelId.get(vote.matchup.modelBId);
-    if (!a || !b) continue;
+
+    const modelAId = vote.matchup.modelAId;
+    const modelBId = vote.matchup.modelBId;
+    const modelA = stateByModelId.get(modelAId);
+    const modelB = stateByModelId.get(modelBId);
+    if (!modelA || !modelB) continue;
+    publicVotesReplayed += 1;
 
     if (vote.choice === "BOTH_BAD") {
-      a.bothBadCount += 1;
-      b.bothBadCount += 1;
+      modelA.bothBadCount += 1;
+      modelB.bothBadCount += 1;
       continue;
     }
 
     const outcome = vote.choice === "A" ? "A_WIN" : vote.choice === "B" ? "B_WIN" : "DRAW";
     const updated = updateRatingPair({
-      a: { rating: a.rating, rd: a.rd, volatility: a.volatility },
-      b: { rating: b.rating, rd: b.rd, volatility: b.volatility },
+      a: { rating: modelA.rating, rd: modelA.rd, volatility: modelA.volatility },
+      b: { rating: modelB.rating, rd: modelB.rd, volatility: modelB.volatility },
       outcome,
     });
 
-    a.rating = updated.a.rating;
-    a.rd = updated.a.rd;
-    a.volatility = updated.a.volatility;
-    b.rating = updated.b.rating;
-    b.rd = updated.b.rd;
-    b.volatility = updated.b.volatility;
+    modelA.rating = updated.a.rating;
+    modelA.rd = updated.a.rd;
+    modelA.volatility = updated.a.volatility;
+    modelB.rating = updated.b.rating;
+    modelB.rd = updated.b.rd;
+    modelB.volatility = updated.b.volatility;
 
-    if (outcome === "A_WIN") {
-      a.winCount += 1;
-      b.lossCount += 1;
-    } else if (outcome === "B_WIN") {
-      a.lossCount += 1;
-      b.winCount += 1;
+    if (vote.choice === "A") {
+      modelA.winCount += 1;
+      modelB.lossCount += 1;
+    } else if (vote.choice === "B") {
+      modelA.lossCount += 1;
+      modelB.winCount += 1;
     } else {
-      a.drawCount += 1;
-      b.drawCount += 1;
+      modelA.drawCount += 1;
+      modelB.drawCount += 1;
     }
+
+    if (
+      !eligiblePromptIdSet.has(vote.matchup.promptId) ||
+      !activeModelIdSet.has(modelAId) ||
+      !activeModelIdSet.has(modelBId) ||
+      modelAId === modelBId
+    ) {
+      continue;
+    }
+
+    const pointsA = vote.choice === "A" ? 1 : vote.choice === "B" ? 0 : 0.5;
+    aggregatePairRow(pairRows, modelAId, modelBId, pointsA, 1 - pointsA);
+    fittedPublicVotes += 1;
   }
 
-  const diffs = models
-    .map((model) => {
-      const recomputed = stateByModelId.get(model.id);
-      if (!recomputed) return null;
+  const fittedRows = fitBradleyTerry(
+    activeModelIdSet,
+    [...pairRows.values()],
+    displayNames,
+  );
+  const fittedByModelId = new Map(fittedRows.map((row) => [row.id, row]));
+  const rankedModels = computeOrdinalRanks(
+    activeModels.map((model) => {
+      const fitted = fittedByModelId.get(model.id);
+      const rating = thetaToRating(fitted?.theta ?? 0);
+      const standardError = varianceToStandardError(fitted?.variance ?? 1);
+      const ci95 = confidenceInterval95(standardError);
+      const counters = stateByModelId.get(model.id) as ModelState;
+
       return {
         id: model.id,
-        key: model.key,
         displayName: model.displayName,
-        oldRating: Number(model.eloRating),
-        newRating: recomputed.rating,
-        oldRd: Number(model.glickoRd),
-        newRd: recomputed.rd,
-        oldVolatility: Number(model.glickoVolatility),
-        newVolatility: recomputed.volatility,
         oldConservative: Number(model.conservativeRating),
-        newConservative: conservativeScore(recomputed.rating, recomputed.rd),
-        oldWinCount: model.winCount,
-        newWinCount: recomputed.winCount,
-        oldLossCount: model.lossCount,
-        newLossCount: recomputed.lossCount,
-        oldDrawCount: model.drawCount,
-        newDrawCount: recomputed.drawCount,
-        oldBothBadCount: model.bothBadCount,
-        newBothBadCount: recomputed.bothBadCount,
+        rating,
+        standardError,
+        ci95,
+        ciLower: Math.round(rating - ci95),
+        ciUpper: Math.round(rating + ci95),
+        confidence: confidenceFromCi(ci95),
+        counters,
       };
-    })
-    .filter((entry): entry is NonNullable<typeof entry> => entry != null)
-    .sort(
-      (a, b) =>
-        Math.abs(b.newConservative - b.oldConservative) -
-        Math.abs(a.newConservative - a.oldConservative),
-    );
+    }),
+  );
 
   const variantDiffs = variants.map((variant) => {
     const recomputed = stateByVariantId.get(variant.id) as ModelState;
@@ -259,60 +279,105 @@ Usage:
     };
   });
 
-  console.log(`models: ${models.length}`);
-  console.log(`stealth variants: ${variants.length}`);
-  console.log(`votes replayed: ${votes.length}`);
-  console.log("top conservative-score deltas:");
-  for (const diff of diffs.slice(0, 10)) {
+  console.log("========================================================================================");
+  console.log(
+    `MineBench Global Bradley-Terry Leaderboard (${fittedPublicVotes} eligible public outcomes)`,
+  );
+  console.log("========================================================================================");
+  console.log(
+    "Rank | Model                               | Rating | 95% CI   | Interval     | Record (W-L-D)   | Conf | Old Score | Delta",
+  );
+  console.log(
+    "-----+-------------------------------------+--------+----------+--------------+------------------+------+-----------+-------",
+  );
+
+  for (const model of rankedModels) {
+    const rank = `#${model.rank}`.padEnd(4);
+    const name = model.displayName.slice(0, 35).padEnd(35);
+    const rating = Math.round(model.rating).toString().padStart(6);
+    const ci = `±${model.ci95.toFixed(1)}`.padStart(8);
+    const interval = `[${model.ciLower}, ${model.ciUpper}]`.padStart(12);
+    const record = `${model.counters.winCount}-${model.counters.lossCount}-${model.counters.drawCount}`.padStart(16);
+    const confidence = `${model.confidence}%`.padStart(4);
+    const oldScore = Math.round(model.oldConservative).toString().padStart(9);
+    const delta = formatDelta(model.rating - model.oldConservative).padStart(6);
     console.log(
-      `- ${diff.displayName} (${diff.key}): ${diff.oldConservative.toFixed(2)} -> ${diff.newConservative.toFixed(2)} (${formatDelta(diff.newConservative - diff.oldConservative)})`,
+      `${rank} | ${name} | ${rating} | ${ci} | ${interval} | ${record} | ${confidence} | ${oldScore} | ${delta}`,
     );
   }
-  for (const diff of variantDiffs) {
+  console.log("========================================================================================");
+  console.log(`Public votes replayed: ${publicVotesReplayed}`);
+  console.log(`Private votes replayed: ${privateVotesReplayed}`);
+  for (const variant of variantDiffs) {
     console.log(
-      `- Stealth ${diff.codename}: ${diff.oldConservative.toFixed(2)} -> ${diff.newConservative.toFixed(2)} (${formatDelta(diff.newConservative - diff.oldConservative)})`,
+      `- Stealth ${variant.codename}: ${variant.oldConservative.toFixed(2)} -> ${variant.newConservative.toFixed(2)} (${formatDelta(variant.newConservative - variant.oldConservative)})`,
     );
   }
 
   if (!args.yes) {
-    console.log("dry run: pass --yes to apply");
+    console.log("\nDry run completed. Pass --yes to apply the recomputed values.");
     return;
   }
 
-  await prisma.$transaction(async (tx) => {
-    for (const diff of diffs) {
-      await tx.model.update({
-        where: { id: diff.id },
+  const updates = [];
+  for (const model of rankedModels) {
+    const rating = Math.round(model.rating);
+    const standardError = Math.round(model.standardError);
+    updates.push(
+      prisma.model.update({
+        where: { id: model.id },
         data: {
-          eloRating: diff.newRating,
-          glickoRd: diff.newRd,
-          glickoVolatility: diff.newVolatility,
-          conservativeRating: diff.newConservative,
-          winCount: diff.newWinCount,
-          lossCount: diff.newLossCount,
-          drawCount: diff.newDrawCount,
-          bothBadCount: diff.newBothBadCount,
+          eloRating: rating,
+          glickoRd: standardError,
+          conservativeRating: conservativeScore(rating, standardError),
+          winCount: model.counters.winCount,
+          lossCount: model.counters.lossCount,
+          drawCount: model.counters.drawCount,
+          bothBadCount: model.counters.bothBadCount,
         },
-      });
-    }
-    for (const diff of variantDiffs) {
-      await tx.stealthVariant.update({
-        where: { id: diff.id },
-        data: {
-          eloRating: diff.newRating,
-          glickoRd: diff.newRd,
-          glickoVolatility: diff.newVolatility,
-          conservativeRating: diff.newConservative,
-          winCount: diff.winCount,
-          lossCount: diff.lossCount,
-          drawCount: diff.drawCount,
-          bothBadCount: diff.bothBadCount,
-        },
-      });
-    }
-  });
+      }),
+    );
+  }
 
-  console.log("done");
+  for (const model of models) {
+    if (activeModelIdSet.has(model.id)) continue;
+    const counters = stateByModelId.get(model.id) as ModelState;
+    updates.push(
+      prisma.model.update({
+        where: { id: model.id },
+        data: {
+          winCount: counters.winCount,
+          lossCount: counters.lossCount,
+          drawCount: counters.drawCount,
+          bothBadCount: counters.bothBadCount,
+        },
+      }),
+    );
+  }
+
+  for (const variant of variantDiffs) {
+    updates.push(
+      prisma.stealthVariant.update({
+        where: { id: variant.id },
+        data: {
+          eloRating: variant.newRating,
+          glickoRd: variant.newRd,
+          glickoVolatility: variant.newVolatility,
+          conservativeRating: variant.newConservative,
+          winCount: variant.winCount,
+          lossCount: variant.lossCount,
+          drawCount: variant.drawCount,
+          bothBadCount: variant.bothBadCount,
+        },
+      }),
+    );
+  }
+
+  await prisma.$transaction(updates);
+
+  console.log(
+    `\nApplied public ratings and counters to ${models.length} models and ${variants.length} private variants.`,
+  );
 }
 
 main()

@@ -22,7 +22,7 @@
 
 **A benchmark for evaluating AI spatial reasoning through Minecraft-style voxel construction.**
 
-Models are given a natural-language prompt and must produce raw 3D coordinates as JSON. In tool mode, models call `voxel.exec` (minimal primitives: `block`, `box`, `line`) to generate large builds beyond token-only JSON limits. MineBench visualizes the output and ranks models via head-to-head voting with a confidence-aware Glicko-style system (public ordering by conservative score).
+Models are given a natural-language prompt and must produce raw 3D coordinates as JSON. In tool mode, models call `voxel.exec` (minimal primitives: `block`, `box`, `line`) to generate large builds beyond token-only JSON limits. MineBench visualizes the output and ranks models from blind head-to-head votes using a global Bradley-Terry model with uncertainty intervals.
 
 **[Try it live](https://minebench.ai)**
 
@@ -54,7 +54,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 * Full docs index: [`docs/README.md`](docs/README.md)
 * Local development: [`docs/local-development.md`](docs/local-development.md)
 * Operations and API reference: [`docs/operations.md`](docs/operations.md)
-* Ranking policy: [`docs/arena-ranking-validity-policy-v2.md`](docs/arena-ranking-validity-policy-v2.md)
+* Arena ranking: [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md)
 * Build export and imports: [`docs/build-export-import.md`](docs/build-export-import.md)
 
 ## Frequently Asked Questions

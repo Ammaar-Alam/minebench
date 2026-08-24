@@ -23,9 +23,10 @@ Use this guide for arena behavior, voxel runtime details, import workflows, and 
 - A session cookie (`mb_session`) is used so each session can vote once per matchup.
 - Vote options: `A`, `B`, `TIE`, `BOTH_BAD`.
 - Rating updates:
-  - `A`, `B`, and `TIE`: Glicko-style pair update (rating, RD, volatility)
-  - public leaderboard order uses conservative score: `rating - 2*RD`
-  - `BOTH_BAD`: updates `bothBadCount` only and does not mutate pairwise skill rating
+  - eligible public `A`, `B`, and `TIE` outcomes enter the global Bradley-Terry leaderboard fit
+  - public ranks use the Bradley-Terry point estimate with 95% confidence intervals shown separately
+  - sequential rating state is retained for matchmaking and private public anchors
+  - `BOTH_BAD` updates `bothBadCount` only and stays out of the skill fit
 
 For formulas and worked examples, see [Arena Ranking System](./arena-ranking-system.md).
 

@@ -121,7 +121,7 @@ and private reports do not transfer into public rankings.
 Organizations interested in a private evaluation can contact
 [ammaar@princeton.edu](mailto:ammaar@princeton.edu).
 
-Related policies:
+Related documentation:
 
 - [Privacy Policy](./privacy-policy.md)
-- [Arena Ranking Validity Policy](./arena-ranking-validity-policy-v2.md)
+- [Arena Ranking](./arena-ranking-system.md)

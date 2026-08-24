@@ -610,11 +610,17 @@ export function Leaderboard() {
 	                    <div className="text-right">
 	                      <div className="font-mono text-[10px] uppercase tracking-[0.13em] text-muted2">
 	                        Rating
-                      </div>
-                      <div className="font-mono text-[1.15rem] font-semibold text-fg">
-                        {Math.round(m.rankScore).toLocaleString()}
-                      </div>
-                    </div>
+	                      </div>
+	                      <div className="font-mono text-[1.15rem] font-semibold text-fg flex items-baseline justify-end gap-1">
+	                        <span>{Math.round(m.rankScore).toLocaleString()}</span>
+	                        {m.ci95 != null ? (
+	                          <span className="text-[11px] font-normal text-muted2">
+	                            <span className="text-muted2/70 font-sans font-light">±</span>
+	                            {m.ci95.toFixed(1)}
+	                          </span>
+	                        ) : null}
+	                      </div>
+	                    </div>
                   </div>
 
                   <ModelBenchmarkDetailsInline
@@ -724,8 +730,8 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Primary rank score used for ordering. Gray subtext shows raw rating before uncertainty adjustment."
-                  aria-label="Rating. Confidence-adjusted rank score used for ordering."
+                  data-help="Global Bradley-Terry rating on a standard 400-point Elo scale with 95% confidence interval (±). Expanded detail shows the interval range."
+                  aria-label="Rating. Global Bradley-Terry rating on a 400-point Elo scale with 95% confidence interval."
                   tabIndex={0}
                 >
                   <span className="mb-col-help-label">Rating</span>
@@ -733,8 +739,8 @@ export function Leaderboard() {
                 <th
                   scope="col"
                   className="mb-leaderboard-header mb-leaderboard-col-label mb-col-help text-center"
-                  data-help="Top percent is confidence. Gray RD is rating deviation (uncertainty): lower RD means more reliable."
-                  aria-label="Confidence. Higher confidence means lower uncertainty."
+                  data-help="Top percent is confidence. Gray SE is standard error: lower SE produces tighter confidence intervals."
+                  aria-label="Confidence. Statistical confidence based on estimation uncertainty."
                   tabIndex={0}
                 >
                   <span className="mb-col-help-label">Confidence</span>
@@ -857,8 +863,14 @@ export function Leaderboard() {
                     </td>
                     <td className="mb-leaderboard-cell px-3 py-3 text-center sm:px-4 sm:py-3.5">
                       <div className="mb-leaderboard-rating-stack font-mono">
-                        <div className="mb-leaderboard-rating-primary font-semibold tracking-tight text-fg/95">
-                          {Math.round(m.rankScore).toLocaleString()}
+                        <div className="mb-leaderboard-rating-primary font-semibold tracking-tight text-fg/95 flex items-baseline justify-center gap-1">
+                          <span>{Math.round(m.rankScore).toLocaleString()}</span>
+                          {m.ci95 != null ? (
+                            <span className="text-[11px] font-normal text-muted2 tracking-normal">
+                              <span className="text-muted2/70 font-sans font-light">±</span>
+                              {m.ci95.toFixed(1)}
+                            </span>
+                          ) : null}
                         </div>
                         <div
                           className={`mb-leaderboard-rating-detail ${
@@ -866,7 +878,11 @@ export function Leaderboard() {
                           }`}
                           aria-hidden={!showDetailed}
                         >
-                          <span>raw {Math.round(m.eloRating).toLocaleString()}</span>
+                          <span>
+                            {m.ciLower != null && m.ciUpper != null
+                              ? `[${m.ciLower.toLocaleString()}, ${m.ciUpper.toLocaleString()}]`
+                              : `SE ${Math.round(m.ratingDeviation)}`}
+                          </span>
                         </div>
                       </div>
                     </td>
@@ -874,7 +890,7 @@ export function Leaderboard() {
                       <div className={`font-mono text-sm ${confidenceClass(m.confidence)}`}>
                         {m.confidence}%
                       </div>
-                      <div className="text-[11px] text-muted2">RD {Math.round(m.ratingDeviation)}</div>
+                      <div className="text-[11px] text-muted2">SE {Math.round(m.ratingDeviation)}</div>
                     </td>
                     {showDetailed ? (
                       <td className="mb-leaderboard-cell mb-leaderboard-detail-col px-3 py-3 text-center sm:px-4 sm:py-3.5">
