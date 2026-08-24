@@ -197,6 +197,32 @@ export function isOccludingAt(
   return tid !== -1 && materialOccluding[tid] === 1;
 }
 
+export function computeVisibleFaceMask(
+  x: number,
+  y: number,
+  z: number,
+  typeId: number,
+  table: SpatialBlockTable,
+  materialOccluding: Uint8Array,
+): number {
+  let mask = 0;
+  for (let dIdx = 0; dIdx < DIRS.length; dIdx += 1) {
+    const direction = DIRS[dIdx];
+    const neighborTypeId = table.get(
+      x + direction.dx,
+      y + direction.dy,
+      z + direction.dz,
+    );
+    if (
+      neighborTypeId === -1 ||
+      (neighborTypeId !== typeId && materialOccluding[neighborTypeId] !== 1)
+    ) {
+      mask |= 1 << dIdx;
+    }
+  }
+  return mask;
+}
+
 function cornerFactor(
   corner: CornerOffset,
   ox: number,

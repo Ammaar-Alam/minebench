@@ -28,6 +28,10 @@ import {
   SpatialBlockTable,
   type Direction,
 } from "@/lib/voxel/ambientOcclusion";
+import {
+  copyVoxelMeshFacts,
+  type VoxelMeshFacts,
+} from "@/lib/voxel/meshFacts";
 
 export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
@@ -37,7 +41,7 @@ type BuildProgress = {
   stageLabel?: string;
 };
 
-export type VoxelMeshStrategy = "local" | "worker" | "worker-fallback";
+export type VoxelMeshStrategy = "local" | "worker" | "worker-facts" | "worker-fallback";
 export type VoxelMeshCacheStatus = "hit" | "miss" | "disabled" | "not-used" | "prewarm-hit";
 export type VoxelMeshStageEvent = {
   stage: "mesh_started" | "mesh_payload_complete" | "three_group_complete";
@@ -1008,17 +1012,32 @@ export function encodeTransferableVoxelBlocks(
   return packVoxelBlocks(blocks);
 }
 
-type MeshWorkerRequest = {
-  type: "build";
-  blocks: TransferableVoxelBlocks;
-  allowedBlockIds: string[];
-  blockLimit?: number;
-};
+type MeshWorkerRequest =
+  | {
+      type: "build";
+      blocks: TransferableVoxelBlocks;
+      allowedBlockIds: string[];
+      blockLimit?: number;
+    }
+  | {
+      type: "mesh-facts";
+      facts: VoxelMeshFacts;
+      allowedBlockIds: string[];
+    };
 
 type MeshWorkerResponse =
   | { type: "progress"; progress: BuildProgress }
   | { type: "complete"; payload: VoxelMeshPayload }
   | { type: "error"; message: string };
+
+function getUsableMeshFacts(
+  build: RenderableVoxelBuild,
+  blockLimit?: number,
+): VoxelMeshFacts | null {
+  const facts = build.meshFacts;
+  if (!facts) return null;
+  return blockLimit == null || blockLimit >= facts.blocks.count ? facts : null;
+}
 
 export function createVoxelGroupFromMeshPayload(
   payload: VoxelMeshPayload,
@@ -1168,6 +1187,23 @@ export async function createVoxelMeshPayloadInWorker(
       return;
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
+
+    const usableMeshFacts = getUsableMeshFacts(build, opts?.blockLimit);
+    if (usableMeshFacts) {
+      const facts = copyVoxelMeshFacts(usableMeshFacts);
+      const request: MeshWorkerRequest = {
+        type: "mesh-facts",
+        facts,
+        allowedBlockIds: palette.map((entry) => entry.id),
+      };
+      worker.postMessage(request, [
+        facts.blocks.positions.buffer,
+        facts.blocks.typeIds.buffer,
+        facts.visibilityMasks.buffer,
+        facts.ambientOcclusion.buffer,
+      ]);
+      return;
+    }
 
     // A packed build is still being hydrated in place, so the worker gets a
     // trimmed copy: transferring the live arrays would detach them.
@@ -1407,11 +1443,14 @@ export async function createVoxelGroupAsync(
   }
 
   try {
-    opts?.onStage?.({ stage: "mesh_started", strategy: "worker" });
+    const workerStrategy: VoxelMeshStrategy = getUsableMeshFacts(build, blockLimit)
+      ? "worker-facts"
+      : "worker";
+    opts?.onStage?.({ stage: "mesh_started", strategy: workerStrategy });
     const { payload, cacheStatus } = await createVoxelMeshPayloadInWorker(build, palette, opts);
     opts?.onStage?.({
       stage: "mesh_payload_complete",
-      strategy: "worker",
+      strategy: workerStrategy,
       cacheStatus,
       blockCount: payload.filteredBlockCount,
     });
@@ -1419,7 +1458,7 @@ export async function createVoxelGroupAsync(
     const group = createVoxelGroupFromMeshPayload(payload, atlasTexture);
     opts?.onStage?.({
       stage: "three_group_complete",
-      strategy: "worker",
+      strategy: workerStrategy,
       cacheStatus,
       blockCount: group.stats.blockCount,
     });
