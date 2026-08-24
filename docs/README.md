@@ -5,6 +5,7 @@ Documentation for running, extending, and understanding MineBench.
 ## Getting Started
 
 - [Local Development](./local-development.md)
+- [Architecture](./architecture.md)
 - [Adding a Model](./adding-a-model.md)
 - [Operations and API Reference](./operations.md)
 - [Deployment](./deployment.md)

@@ -9,6 +9,8 @@ import {
   prepareArenaBuild,
 } from "../lib/arena/buildArtifacts";
 import { encodeBinaryArtifact } from "../lib/arena/binaryArtifact";
+import { packVoxelBlocks } from "../lib/voxel/packedBlocks";
+import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "../lib/voxel/meshFacts";
 import {
   ensureArenaBuildSnapshotArtifacts,
   expectedSnapshotArtifactTargets,
@@ -97,7 +99,11 @@ function estimateSnapshotArtifactBytes(
     buildLoadHints: prepared.hints,
   };
   const raw =
-    target.format === "binary"
+    target.format === "mesh-facts"
+      ? Buffer.from(
+          encodeVoxelMeshFacts(createVoxelMeshFacts(packVoxelBlocks(voxelBuild.blocks))),
+        )
+      : target.format === "binary"
       ? Buffer.from(
           encodeBinaryArtifact(
             { ...envelope, version: voxelBuild.version },
@@ -150,7 +156,9 @@ async function main() {
               // still needs work, or the faster read path never gets an object
               status.missing.some(
                 (requirement) =>
-                  requirement.kind === "snapshot" || requirement.kind === "snapshot-binary",
+                  requirement.kind === "snapshot" ||
+                  requirement.kind === "snapshot-binary" ||
+                  requirement.kind === "snapshot-mesh-facts",
               ),
           )
           .map((status) => status.buildId),

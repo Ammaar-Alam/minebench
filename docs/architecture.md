@@ -1,110 +1,162 @@
-# Architecture: Data Model and Build Delivery
+# Architecture
 
-Three views of how MineBench stores and serves arena builds: the database
-entities, the lifecycle of a build from generation to a rendered mesh, and the
-decision flow that picks a delivery route per request.
+MineBench keeps benchmark evidence separate from the optimized data sent to the
+viewer. A model's source JSON remains the reproducible record used for metrics,
+while validated builds are compiled into compact, immutable render artifacts.
 
-## Database entities
+## System map
+
+```mermaid
+flowchart LR
+    MODEL["Model provider"] --> GEN["Generation + voxel.exec"]
+    GEN --> SOURCE["Source build JSON"]
+
+    SOURCE --> METRICS["Benchmark metrics<br/>original bytes + primitive usage"]
+    SOURCE --> IMPORT["Import + validation<br/>expand primitives, normalize,<br/>bounds-check, deduplicate"]
+
+    IMPORT --> DB[("Postgres<br/>models, prompts, build metadata,<br/>ratings, votes, storage pointers")]
+    IMPORT --> RAW[("Supabase Storage<br/>gzip source JSON")]
+    IMPORT --> PREP["Arena preparation<br/>render filtering + preview"]
+    PREP --> ARTIFACTS[("Supabase Storage<br/>MBV4 + MBF1 artifacts")]
+    ARTIFACTS --> COVERAGE["Artifact coverage audit"]
+    COVERAGE --> ARENA["Arena, Sandbox,<br/>Leaderboard"]
+    ARENA --> VIEWER["Decode → mesh worker<br/>→ Three.js → first frame"]
+```
+
+The source and render paths intentionally diverge after import. Expanding a
+`box` or `line`, removing an invalid block, or filtering hidden render data does
+not rewrite the original model output or its benchmark metrics.
+
+## Build representations
+
+| Representation | Role | Contents |
+| --- | --- | --- |
+| Source JSON | Benchmark record and reprocessing source | `blocks`, `boxes`, and `lines` exactly as produced or imported |
+| MBV4 | Compact validated block data | Palette names plus packed coordinates and palette indices |
+| MBA4 | Arena delivery container for MBV4 | Small response metadata followed by an MBV4 body |
+| MBF1 | Pre-meshed facts for large full builds | MBV4 blocks, visible-face masks, and packed ambient-occlusion levels |
+
+The stored `.mbv4` arena object is an MBA4 container whose block body uses
+MBV4. MBF1 is used for full builds with at least 150,000 validated renderable
+blocks. It moves face visibility and ambient-occlusion work out of the browser's
+critical path while preserving the same final Three.js geometry contract.
+
+Gzip wraps source and derived artifacts in Storage and over the network; it is
+transport compression, not another build representation.
+
+## Import and publication
+
+```mermaid
+flowchart TD
+    FILE["uploads/&lt;prompt&gt;/&lt;build&gt;.json"] --> VALIDATE["Validate source<br/>and count expanded blocks"]
+    VALIDATE --> UPLOAD["Upload source JSON.gz"]
+    UPLOAD --> ROW["Upsert Build<br/>source checksum, byte sizes,<br/>block count, storage pointer"]
+    ROW --> PREPARE["Prepare render build<br/>and surface preview"]
+
+    PREPARE --> V4["MBA4 / MBV4<br/>preview when needed + full"]
+    PREPARE --> SIZE{"Full renderable blocks<br/>≥ 150,000?"}
+    SIZE -- yes --> FACTS["MBF1 full<br/>blocks + visibility + AO"]
+    SIZE -- no --> V4
+
+    V4 --> STORE[("Checksum-addressed artifacts")]
+    FACTS --> STORE
+    STORE --> AUDIT{"Required artifacts present<br/>and valid?"}
+    AUDIT -- no --> STOP["Publication stops"]
+    AUDIT -- yes --> ENABLE["Enable model<br/>and invalidate caches"]
+```
+
+`pnpm model:publish` coordinates import, missing-only artifact generation,
+coverage verification, metric refresh, and activation. The same native artifact
+maintenance runs when new builds are imported, so future builds do not require
+a separate MBF1 migration.
+
+Derived objects are immutable and checksum-addressed. `ArenaBuildArtifact`
+rows record which build owns each Storage object so lifecycle cleanup can remove
+unreferenced artifacts without guessing from path names.
+
+## Arena delivery and rendering
+
+```mermaid
+flowchart TD
+    MATCHUP["Matchup shell<br/>blind refs + load hints"] --> INITIAL["Initial variant request<br/>preview or full"]
+    MATCHUP --> FULL["Authoritative full request<br/>format=mbf1"]
+
+    INITIAL --> ROUTE["Build route"]
+    FULL --> ROUTE
+    ROUTE --> TOKEN["Validate blind token<br/>and resolve artifact"]
+    TOKEN --> CHOOSE{"Full build<br/>≥ 150,000 blocks?"}
+
+    CHOOSE -- no --> MBA4["MBA4 / MBV4"]
+    CHOOSE -- yes --> MBF1["Identity-free MBF1"]
+
+    MBA4 --> DECODE["Decode to packed blocks"]
+    MBF1 --> FACTDECODE["Decode blocks + mesh facts"]
+
+    DECODE --> WORKER["Priority mesh worker<br/>spatial lookup, visibility, AO"]
+    FACTDECODE --> FASTWORKER["Priority mesh worker<br/>expand supplied visibility + AO"]
+
+    WORKER --> GEOMETRY["Shared mesh payload<br/>materials, vertices, indices"]
+    FASTWORKER --> GEOMETRY
+    GEOMETRY --> THREE["Three.js group + camera fit"]
+    THREE --> FRAME["First rendered frame"]
+    FRAME --> REVEAL["Reveal animation"]
+```
+
+Arena refs do not expose the canonical build identity before voting. MBF1 has
+no embedded build ID or checksum, so its stored gzip body can pass through the
+private build route unchanged. Smaller MBA4 responses are rewritten to the
+blind request identity before delivery.
+
+The two-worker mesh pool prioritizes currently visible lanes. MBF1 skips the
+worker's spatial-table construction, hidden-face traversal, and AO neighborhood
+queries; it still builds the final vertex and index buffers needed by Three.js.
+
+## Core data model
 
 ```mermaid
 erDiagram
-    Model ||--o{ Build : "generates"
-    Model ||--o{ ModelRankSnapshot : "rank history"
-    Model ||--o{ ArenaShownJob : "impression queue"
-    Prompt ||--o{ Build : "answered by"
-    Prompt ||--o{ Matchup : "compared on"
-    Model ||--o{ Matchup : "as A or B"
-    Build ||--o{ Matchup : "as A or B"
-    Matchup ||--o{ Vote : "receives"
-    Vote ||--o| ArenaVoteJob : "queues"
-    Model ||--o{ ArenaCoverageModelPrompt : "decisive votes"
-    Prompt ||--o{ ArenaCoverageModelPrompt : ""
-    Model ||--o{ ArenaCoveragePair : "as low or high"
-    Model ||--o{ ArenaCoveragePairPrompt : "as low or high"
+    Model ||--o{ Build : generates
+    Prompt ||--o{ Build : answers
+    Build ||--o{ ArenaBuildArtifact : owns
+    Prompt ||--o{ Matchup : selects
+    Model ||--o{ Matchup : competes
+    Build ||--o{ Matchup : renders
+    Matchup ||--o{ Vote : receives
+    Vote ||--o{ ArenaVoteJob : queues
+    Model ||--o{ ModelRankSnapshot : records
 
-    Model {
-        string key UK
-        boolean enabled "activation boundary"
-        float eloRating
-        float glickoRd
-        float conservativeRating
-        int shownCount
-    }
-    Prompt {
-        string text
-        boolean active "benchmark cohort or imported custom"
-    }
     Build {
+        string id PK
         int gridSize
         string palette
-        string mode
-        json voxelData "inline payload, small builds only"
-        string voxelStoragePath "canonical gzip payload in storage"
-        string voxelSha256 "content checksum, addresses artifacts"
-        json arenaBuildHints "delivery class, variants, sizes"
+        int blockCount
+        string voxelStoragePath
+        int voxelByteSize
+        int voxelCompressedByteSize
+        string voxelSha256
+        json arenaBuildHints
+    }
+    ArenaBuildArtifact {
+        string buildId FK
+        string bucket
+        string path
+    }
+    Matchup {
+        string id PK
+        string promptId FK
+        string buildAId FK
+        string buildBId FK
+        string samplingLane
     }
     Vote {
+        string matchupId FK
         string sessionId
-        string choice "A / B / TIE / BOTH_BAD"
-    }
-    ArenaVoteJob {
-        datetime processedAt "drained by SKIP LOCKED batches"
-    }
-    ArenaShownJob {
-        datetime processedAt "drained by SKIP LOCKED batches"
-        int count
+        string choice
     }
 ```
 
-Rating state lives on `Model` and is updated only by the vote-job drain (one
-advisory-locked writer). Coverage tables hold decisive-vote tallies for
-matchup sampling. Both job tables are append-then-drain queues; processed rows
-older than 30 days are pruned by `pnpm arena:jobs:prune`.
-
-## Build lifecycle
-
-```mermaid
-flowchart TD
-    G["pnpm batch:generate --generate<br/>provider adapters, validation"] --> U["uploads/&lt;prompt&gt;/&lt;prompt&gt;-&lt;slug&gt;.json<br/>box/block spec + raw artifacts"]
-    U --> P["pnpm model:publish --model &lt;slug&gt;"]
-    P --> I["POST /api/admin/import-build<br/>expands spec, stores gzip payload,<br/>upserts Build (staged: enabled=false)"]
-    I --> S[("Supabase Storage<br/>canonical build payloads")]
-    P --> M["maintenance, missing-only:<br/>metadata backfill, snapshot artifacts,<br/>stream artifacts"]
-    M --> A[("checksum-addressed artifacts<br/>arena-snapshot/v2-gzip<br/>arena-stream/v3-gzip")]
-    P --> V{"policy-aware verification<br/>getArenaArtifactCoverage"}
-    V -- incomplete --> X["hard fail, model stays disabled"]
-    V -- complete --> R["metrics refresh<br/>(records promptCohortId)"]
-    R --> E["activation: enabled=true<br/>arena + leaderboard caches invalidated"]
-    E --> D["delivery: matchup / build / stream routes"]
-    D --> W["client: gzip JSON to blocks<br/>transferable typed arrays to mesh worker<br/>meshed geometry back via transfer"]
-```
-
-A model can never reach public surfaces with a partial cohort: imports stage it
-disabled and only publish verification activates it. `arena:artifacts:audit
---deep` re-validates everything end to end (fetch, decompress, parse, checksum,
-signed-URL delivery).
-
-## Delivery decision flow
-
-```mermaid
-flowchart TD
-    Q["request for build variant<br/>(preview or full)"] --> C{"delivery class<br/>from arenaBuildHints"}
-    C -- "inline ≤2MiB" --> IN["inlined in matchup response<br/>(adaptive mode, prepared cache or snapshot)"]
-    C -- "snapshot ≤15MiB" --> SR{"signed-URL redirect<br/>available?"}
-    C -- "stream-artifact" --> ST["stream route: 307 to ndjson artifact,<br/>else live-parsed ndjson stream"]
-    SR -- yes --> S307["307 to immutable storage object<br/>(browser downloads directly)"]
-    SR -- no --> AF{"snapshot artifact<br/>fetch (storage-first)"}
-    AF -- hit --> ASRV["serve artifact bytes"]
-    AF -- miss --> LP["live prepare: parse canonical payload,<br/>validate, cache, heal metadata<br/>and upload the missing artifact"]
-    ST --> VOTE
-    IN --> VOTE
-    S307 --> VOTE
-    ASRV --> VOTE
-    LP --> VOTE["voting unlocks only after<br/>the full build hydrates"]
-```
-
-Artifacts are immutable and checksum-addressed, so every cache layer (CDN,
-signed-URL cache, in-process body caches, client IndexedDB mesh cache) can
-treat a hit as final. Snapshots live only in storage; a miss falls through to a
-live prepare, which serves the request and uploads the absent artifact so the
-next request hits storage.
+Postgres contains relational state and payload metadata, not large render
+artifacts. Supabase Storage contains the source JSON and derived binary objects.
+Vercel route handlers own sampling, blind-token validation, artifact resolution,
+and response observability; the browser owns decoding, geometry construction,
+and rendering.

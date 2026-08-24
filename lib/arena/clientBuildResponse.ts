@@ -12,6 +12,11 @@ import {
   type PackedVoxelBlocks,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import {
+  decodeVoxelMeshFacts,
+  isVoxelMeshFacts,
+  type VoxelMeshFacts,
+} from "@/lib/voxel/meshFacts";
 
 const GZIP_MAGIC_0 = 0x1f;
 const GZIP_MAGIC_1 = 0x8b;
@@ -72,12 +77,14 @@ export async function readBuildVariantJson<T>(res: Response): Promise<T> {
 // what was asked for.
 export type BuildVariantArtifact<T> =
   | { kind: "json"; value: T }
-  | { kind: "binary"; envelope: Record<string, unknown>; blocks: PackedVoxelBlocks };
+  | { kind: "binary"; envelope: Record<string, unknown>; blocks: PackedVoxelBlocks }
+  | { kind: "mesh-facts"; facts: VoxelMeshFacts };
 
 export type BuildVariantArtifactReadEvent =
   | { stage: "body_complete"; bytes: number }
   | { stage: "inflate_complete"; bytes: number; compressed: boolean }
   | { stage: "binary_decode_complete"; blockCount: number }
+  | { stage: "mesh_facts_decode_complete"; blockCount: number }
   | { stage: "json_decode_complete" };
 
 export async function readBuildVariantArtifact<T>(
@@ -97,6 +104,11 @@ export async function readBuildVariantArtifact<T>(
     const { envelope, blocks } = decodeBinaryArtifact(body);
     options?.onStage?.({ stage: "binary_decode_complete", blockCount: blocks.count });
     return { kind: "binary", envelope, blocks };
+  }
+  if (isVoxelMeshFacts(body)) {
+    const facts = decodeVoxelMeshFacts(body);
+    options?.onStage?.({ stage: "mesh_facts_decode_complete", blockCount: facts.blocks.count });
+    return { kind: "mesh-facts", facts };
   }
   const value = JSON.parse(new TextDecoder().decode(body)) as T;
   options?.onStage?.({ stage: "json_decode_complete" });
@@ -189,7 +201,7 @@ export function packDeliveredBuild(
 
 export type BuildVariantPayloadResult = {
   payload: BuildVariantStreamResponse;
-  servedFormat: "binary" | "json";
+  servedFormat: "mesh-facts" | "binary" | "json";
   bodyBytes: number | null;
   compressed: boolean;
 };
@@ -265,6 +277,31 @@ export async function readBuildVariantPayload(
         voxelBuild: packedVoxelBuild,
       },
       servedFormat: "json",
+      bodyBytes,
+      compressed,
+    };
+  }
+
+  if (artifact.kind === "mesh-facts") {
+    const buildId = options.fallbackIdentity?.buildId ?? "";
+    const variant = options.fallbackIdentity?.variant;
+    if (!buildId || !isVariant(variant)) {
+      throw new Error("MBF1 build response requires request identity");
+    }
+    return {
+      payload: {
+        buildId,
+        variant,
+        checksum: options.fallbackIdentity?.checksum ?? null,
+        serverValidated: true,
+        voxelBuild: {
+          version: "1.0",
+          blocks: [],
+          packed: artifact.facts.blocks,
+          meshFacts: artifact.facts,
+        },
+      },
+      servedFormat: "mesh-facts",
       bodyBytes,
       compressed,
     };

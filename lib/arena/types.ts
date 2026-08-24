@@ -18,6 +18,7 @@ export type ArenaVoteResponse = {
 };
 
 export type ArenaBuildVariant = "preview" | "full";
+export const ARENA_MESH_FACTS_MIN_BLOCKS = 150_000;
 
 export type ArenaBuildDeliveryClass =
   | "inline"

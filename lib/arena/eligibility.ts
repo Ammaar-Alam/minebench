@@ -4,12 +4,7 @@ export const ARENA_BUILD_GRID_SIZE = 256;
 export const ARENA_BUILD_PALETTE = "simple";
 export const ARENA_BUILD_MODE = "precise";
 
-// Prisma filter for the arena benchmark cohort, shared by the maintenance
-// scripts and the admin status route so the scope cannot drift between them.
-// Naming models explicitly also selects staged (disabled) ones: publication
-// has to compute and verify their artifacts before activation, while the
-// unscoped arena view stays limited to what is already live.
-export function arenaCohortBuildWhere(modelKeys?: readonly string[]) {
+function benchmarkBuildWhere(modelKeys: readonly string[] | undefined, publicOnly: boolean) {
   const scoped = Boolean(modelKeys && modelKeys.length > 0);
   return {
     gridSize: ARENA_BUILD_GRID_SIZE,
@@ -18,10 +13,20 @@ export function arenaCohortBuildWhere(modelKeys?: readonly string[]) {
     model: {
       ...(scoped ? { key: { in: [...modelKeys!] } } : { enabled: true }),
       isBaseline: false,
-      stealthVariant: null,
+      ...(publicOnly ? { stealthVariant: null } : {}),
     },
     prompt: { active: true },
   };
+}
+
+// Public cohort scope used by sampling and publication checks
+export function arenaCohortBuildWhere(modelKeys?: readonly string[]) {
+  return benchmarkBuildWhere(modelKeys, true);
+}
+
+// Delivery artifacts are also required by enabled private checkpoints
+export function arenaArtifactBuildWhere(modelKeys?: readonly string[]) {
+  return benchmarkBuildWhere(modelKeys, false);
 }
 
 type EligiblePromptRow = {
