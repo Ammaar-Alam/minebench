@@ -13,6 +13,7 @@ export type ArenaBuildMetaRow = {
   voxelCompressedByteSize: number | null;
   voxelSha256: string | null;
   arenaBuildHints: unknown | null;
+  privateAccessOnly: boolean;
 };
 
 type CacheEntry = {
@@ -99,7 +100,10 @@ export async function getArenaBuildMeta(
     const cached = cache.get(buildId);
     if (cached && cached.expiresAt > now) {
       const cachedChecksum = cached.row?.voxelSha256?.trim() || null;
-      if (cachedChecksum && cachedChecksum !== expected) {
+      if (cached.row?.privateAccessOnly) {
+        // private ownership and retention are revalidated on every request
+        cache.delete(buildId);
+      } else if (cachedChecksum && cachedChecksum !== expected) {
         // overwrite landed elsewhere; drop the stale row and refetch
         cache.delete(buildId);
       } else {
@@ -114,7 +118,7 @@ export async function getArenaBuildMeta(
 
   const startGen = getGeneration(buildId);
   const promise = (async () => {
-    const row = await prisma.build.findUnique({
+    const build = await prisma.build.findUnique({
       where: { id: buildId },
       select: {
         id: true,
@@ -125,11 +129,39 @@ export async function getArenaBuildMeta(
         voxelCompressedByteSize: true,
         voxelSha256: true,
         arenaBuildHints: true,
+        model: {
+          select: {
+            stealthVariant: {
+              select: {
+                experiment: { select: { status: true, retentionDeleteAt: true } },
+              },
+            },
+          },
+        },
       },
     });
+    const privateExperiment = build?.model.stealthVariant?.experiment;
+    const retentionExpired = Boolean(
+      privateExperiment?.status === "CLOSED" &&
+        privateExperiment.retentionDeleteAt &&
+        privateExperiment.retentionDeleteAt <= new Date(),
+    );
+    const row = build && !retentionExpired
+      ? {
+          id: build.id,
+          gridSize: build.gridSize,
+          palette: build.palette,
+          blockCount: build.blockCount,
+          voxelByteSize: build.voxelByteSize,
+          voxelCompressedByteSize: build.voxelCompressedByteSize,
+          voxelSha256: build.voxelSha256,
+          arenaBuildHints: build.arenaBuildHints,
+          privateAccessOnly: Boolean(build.model.stealthVariant),
+        }
+      : null;
     // skip the cache write if an invalidation landed while we were fetching;
     // the row may already reflect an out-of-date checksum write.
-    if (getGeneration(buildId) === startGen) {
+    if (getGeneration(buildId) === startGen && (!row || !row.privateAccessOnly)) {
       cache.set(buildId, { expiresAt: Date.now() + TTL_MS, row });
       pruneExpired(Date.now());
     }

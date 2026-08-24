@@ -19,10 +19,11 @@ v2 exists to ensure:
 
 ## 2. Policy Outcome (What v2 changed)
 
-v2 replaces Elo-first ordering with a confidence-aware system:
+v2 replaces sequential-rating leaderboard ordering with a global model:
 
-- Glicko-style rating state (`rating`, `RD`, `volatility`)
-- public ordering by conservative score (`rating - 2*RD`)
+- global Bradley-Terry ratings fit from eligible public `A`, `B`, and `TIE` outcomes
+- unique ordinal ordering by Bradley-Terry point estimate
+- 95% confidence intervals for uncertainty
 - lane-based matchup scheduler (coverage, contender, uncertainty, exploration)
 - `BOTH_BAD` treated as quality-floor signal, not pairwise skill loss
 
@@ -31,18 +32,19 @@ v2 replaces Elo-first ordering with a confidence-aware system:
 - Decisive vote: `A` or `B`
 - Non-decisive vote: `TIE` or `BOTH_BAD`
 - Prompt coverage floor per model-prompt: `>= 2` decisive votes
-- Conservative score: `rating - 2 * RD`
-- Contender band: top `K=8` by conservative score
+- Public score: Bradley-Terry rating on a 1500-centered Elo scale
+- Public uncertainty: Bradley-Terry standard error and 95% confidence interval
+- Contender band: top `K=8` public models
 
 ## 4. Rating Policy
 
 ### 4.1 Primary rating engine
 
-Use Glicko-style updates for `A`, `B`, `TIE` outcomes.
+Fit one global Bradley-Terry model across eligible public `A`, `B`, and `TIE` outcomes. Ties contribute `0.5` to each model. A symmetric `0.5`/`0.5` edge prior prevents separation at observed pair boundaries.
 
 ### 4.2 Public ranking policy
 
-Sort leaderboard by conservative score (not raw rating).
+Sort the leaderboard by Bradley-Terry point estimate and assign unique ordinal ranks. Confidence-interval overlap does not create tied ranks.
 
 ### 4.3 Stability labeling
 
@@ -50,7 +52,15 @@ A model’s public stability label depends on:
 
 - decisive vote volume,
 - prompt coverage,
-- uncertainty (`RD`).
+- Bradley-Terry confidence-interval width.
+
+### 4.4 Private evaluation isolation
+
+Private checkpoints are evaluated against public models as read-only anchors.
+Private matchups and votes never affect public model ratings, rankings, counters,
+coverage, rank snapshots, benchmark metrics, or leaderboard eligibility. A
+private checkpoint that later becomes public starts its public record from fresh
+public votes.
 
 ## 5. Matchmaking Policy
 
@@ -102,11 +112,11 @@ For adjacent contender pairs, target floor is:
 
 ### 7.1 Decisive outcomes
 
-`A`/`B` update skill ratings and W/L counters.
+`A`/`B` contribute `1`/`0` outcomes to the global fit and update W/L counters.
 
 ### 7.2 Ties
 
-`TIE` updates both as 0.5 outcome and increments draw counters.
+`TIE` contributes `0.5` to each model and increments draw counters.
 
 ### 7.3 Both-bad outcomes
 
@@ -121,8 +131,8 @@ Track quality-floor diagnostics instead:
 
 Main leaderboard keeps a compact view but must expose validity context:
 
-- `Rating` column shows conservative rank score (primary) with raw rating (secondary)
-- `Confidence` from RD
+- `Rating` shows the Bradley-Terry point estimate and 95% confidence interval
+- `Confidence` comes from confidence-interval width
 - `Coverage` as covered/eligible prompts
 - `Stability` badge in model cell
 - keep consistency/spread/avg-score/record/votes
@@ -133,7 +143,7 @@ Advanced diagnostics (e.g., pair-coverage detail) may remain on detail pages/too
 
 To claim leaderboard is strongly calibrated, monitor:
 
-- top-band RD health,
+- top-band confidence-interval width,
 - adjacent-pair coverage completion,
 - high prompt coverage across top models.
 

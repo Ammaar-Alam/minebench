@@ -9,6 +9,7 @@ MineBench works well with Vercel and Supabase Postgres.
 - `SUPABASE_URL`: your Supabase project URL
 - `SUPABASE_SERVICE_ROLE_KEY`: server-only key
 - `SUPABASE_STORAGE_BUCKET`: private bucket for build payload objects (default `builds`)
+- `CONTACT_SMTP_PASSWORD`: Google Workspace app password for `support@minebench.ai`
 
 ## Rank Snapshot Scheduling
 
@@ -31,4 +32,5 @@ For leaderboard movement markers:
 
 Notes:
 - `SUPABASE_SERVICE_ROLE_KEY` must stay server-side only.
+- `CONTACT_SMTP_PASSWORD` must stay server-side only and should be configured for both Preview and Production before testing the contact form.
 - Build APIs support records stored as inline JSON or storage pointers.

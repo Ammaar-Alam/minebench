@@ -12,17 +12,31 @@ export const DEFAULT_OG_IMAGE = "/readme/arena-dark.png";
 
 export const SEO_KEYWORDS = [
   "MineBench",
+  "Mine Bench",
   "voxel build benchmark",
   "voxel benchmark",
+  "voxel bench",
+  "voxelbench",
+  "voxelbench alternative",
+  "llm arena",
+  "lm arena",
+  "voxel arena",
+  "ai model arena",
   "llm benchmark",
   "ai benchmark",
   "minecraft ai benchmark",
   "minecraft benchmark",
   "spatial reasoning benchmark",
   "3D reasoning benchmark",
+  "3D spatial reasoning",
+  "AI spatial reasoning",
   "AI model leaderboard",
   "LLM leaderboard",
-  "AI spatial reasoning",
+  "open-source voxel AI benchmark",
+  "private evals",
+  "private model evaluation",
+  "private llm benchmark",
+  "checkpoint evaluation",
 ] as const;
 
 export function absoluteUrl(path = "/") {
@@ -86,6 +100,7 @@ export const softwareApplicationJsonLd = {
   "@type": "SoftwareApplication",
   name: SITE_NAME,
   applicationCategory: "DeveloperApplication",
+  applicationSubCategory: "AI Spatial Reasoning Benchmark",
   operatingSystem: "Web",
   url: SITE_URL,
   description: SITE_DESCRIPTION,
@@ -97,13 +112,67 @@ export const softwareApplicationJsonLd = {
   keywords: SEO_KEYWORDS.join(", "),
   featureList: [
     "Head-to-head AI model comparison for voxel builds",
-    "Prompt-driven sandbox generation",
-    "Leaderboard with live model rankings",
+    "Prompt-driven sandbox generation and 3D spatial evaluation",
+    "Leaderboard with live Elo model rankings",
+    "Blind LLM arena for 3D spatial reasoning",
+    "Confidential private model evaluations and checkpoint benchmarking",
+    "Open-source voxel and Minecraft-style LLM spatial reasoning benchmark",
   ],
 };
 
+export const datasetJsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Dataset",
+  name: "MineBench AI Spatial Reasoning & Voxel Build Dataset",
+  description:
+    "Open-source benchmark evaluation dataset measuring 3D spatial reasoning in large language models through Minecraft-style voxel generation tasks and pairwise human evaluations.",
+  url: SITE_URL,
+  isAccessibleForFree: true,
+  keywords: [
+    "llm spatial reasoning",
+    "spatial reasoning benchmark",
+    "voxel benchmark",
+    "voxel bench",
+    "voxelbench",
+    "llm arena",
+    "minecraft ai benchmark",
+    "3d reasoning evaluation",
+    "llm leaderboard",
+    "private evals",
+  ],
+  creator: {
+    "@type": "Organization",
+    name: SITE_NAME,
+    url: SITE_URL,
+  },
+  publisher: {
+    "@type": "Organization",
+    name: SITE_NAME,
+    url: SITE_URL,
+  },
+  license: "https://opensource.org/licenses/MIT",
+};
+
+export function leaderboardItemListJsonLd(
+  models: Array<{ name: string; rank: number; path: string }>,
+) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    name: "MineBench AI Spatial Reasoning Leaderboard",
+    description: "Live rankings of AI models on 3D voxel spatial reasoning tasks",
+    itemListElement: models.map((model) => ({
+      "@type": "ListItem",
+      position: model.rank,
+      name: model.name,
+      url: absoluteUrl(model.path),
+    })),
+  };
+}
+
 export function modelDetailJsonLd(params: {
   key: string;
+  slug?: string;
   displayName: string;
   provider: string;
   eloRating: number;
@@ -114,12 +183,13 @@ export function modelDetailJsonLd(params: {
 }) {
   const { decisiveVotes, totalVotes } = summarizeArenaVotes(params);
   const winRate = decisiveVotes > 0 ? params.winCount / decisiveVotes : null;
+  const canonicalPath = `/leaderboard/${params.slug ?? params.key}`;
 
   return {
     "@context": "https://schema.org",
     "@type": "WebPage",
     name: `${params.displayName} stats | ${SITE_NAME}`,
-    url: absoluteUrl(`/leaderboard/${params.key}`),
+    url: absoluteUrl(canonicalPath),
     isPartOf: {
       "@type": "WebSite",
       name: SITE_NAME,

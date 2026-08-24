@@ -16,10 +16,12 @@ Nothing is tested against production directly.
 
 The alpha Supabase branch has its own Postgres, storage, and service-role key.
 Point the branch-scoped Vercel variables (`DATABASE_URL`, `DIRECT_URL`,
-`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`,
-`ADMIN_TOKEN`) at it; the app needs no code awareness of which environment it
-is in. Vercel crons only fire on production deployments, which is fine — the
-drains also run inline from request `after()` hooks.
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `STEALTH_CONFIG_ENCRYPTION_KEY`,
+`MINEBENCH_SITE_URL`, `SUPABASE_STORAGE_BUCKET`, `ADMIN_TOKEN`,
+`CONTACT_SMTP_PASSWORD`) at it; the app needs no code awareness
+of which environment it is in. Vercel crons only fire on production deployments,
+which is fine — the drains also run inline from request `after()` hooks.
 
 Local credentials for the tooling live in `.env.staging.local` (git-ignored):
 
@@ -29,6 +31,8 @@ STAGING_DATABASE_URL=          # alpha branch pooled connection (what the deploy
 STAGING_SITE_URL=              # alpha deployment URL, required by every staging: command
 STAGING_SUPABASE_URL=
 STAGING_SUPABASE_SERVICE_ROLE_KEY=
+STAGING_SUPABASE_PUBLISHABLE_KEY=
+STAGING_STEALTH_CONFIG_ENCRYPTION_KEY=
 # STAGING_ADMIN_TOKEN= (only when alpha uses its own branch-scoped ADMIN_TOKEN)
 # STAGING_SUPABASE_STORAGE_BUCKET= (defaults to SUPABASE_STORAGE_BUCKET)
 ```

@@ -23,8 +23,8 @@ MineBench uses a **global Bradley-Terry maximum likelihood estimator** with regu
 
 - Each model checkpoint has a fixed underlying capability (unlike human chess players whose skill evolves over time).
 - Sequential Glicko-2 updates are order-dependent and penalize models artificially through conservative rank scoring (`rating - 2 * RD`).
-- Global Bradley-Terry fits all pairwise outcomes jointly, yielding unbiased point estimates on a standard Elo scale (centered at 1500) alongside 95% Confidence Intervals ($\text{CI}_{95} = 1.95996 \times SE$).
-- Models with overlapping confidence intervals share confidence-aware tied ranks.
+- Global Bradley-Terry fits all eligible public pairwise outcomes jointly, yielding point estimates on a standard Elo scale (centered at 1500) alongside 95% Confidence Intervals ($\text{CI}_{95} = 1.95996 \times SE$).
+- Models are sorted by point estimate into unique ordinal ranks; 95% confidence intervals show uncertainty without collapsing ranks.
 - `BOTH_BAD` is excluded from pairwise skill estimation and tracked separately as a quality floor metric.
 
 ## 2) Rating model and math
@@ -60,13 +60,11 @@ $$R_i = 1500 + (\theta_i - \bar{\theta}) \times \frac{400}{\ln(10)}$$
 $$SE(R_i) = \frac{400}{\ln(10)} \sqrt{\operatorname{Var}(\theta_i)}$$
 $$\text{CI}_{95}(R_i) = 1.95996 \times SE(R_i)$$
 
-### 2.3 Confidence-Aware Tied Ranks
+### 2.3 Ordinal Ranks and Uncertainty
 
-Leaderboard ranks account for statistical uncertainty. A model $M_i$ has rank:
+Models are sorted by Bradley-Terry point estimate, with display name as the deterministic tiebreaker. The model at sorted index $i$ receives rank $i + 1$.
 
-$$\text{Rank}(M_i) = 1 + \sum_{j < i} \mathbf{1}\left( R_j - R_i > 1.95996 \sqrt{SE_j^2 + SE_i^2} \right)$$
-
-Models whose scores cannot be statistically separated at the 95% confidence level share the same rank.
+Confidence intervals remain visible alongside the rating, but interval overlap does not create tied ranks.
 
 ### 2.4 Confidence and Stability Tiers
 
@@ -82,7 +80,7 @@ Stability tier (`lib/arena/rating.ts`):
 
 ## 3) Vote handling and counters
 
-Implementation: `app/api/arena/vote/route.ts`, `lib/arena/voteMath.ts`.
+Implementation: `app/api/arena/vote/route.ts`, `lib/arena/voteJobs.ts`, `lib/arena/voteMath.ts`.
 
 Vote choices:
 
@@ -91,13 +89,14 @@ Vote choices:
 Behavior:
 
 - `A/B/TIE`:
-  - map to `A_WIN/B_WIN/DRAW`
-  - update both models via `updateRatingPair`
-  - recompute `conservativeRating`
+  - enter the global Bradley-Terry fit as `1`, `0`, or `0.5`
   - increment `winCount/lossCount/drawCount`
+  - update the operational per-model state used by matchmaking and private public-anchor evaluation
 - `BOTH_BAD`:
   - increment only `bothBadCount` on both models
-  - do not change rating/RD/volatility
+  - stay out of the Bradley-Terry fit and operational rating update
+
+The public leaderboard is refit from eligible public vote history. Private evaluation votes are excluded from the public fit and counters.
 
 Aggregates:
 
@@ -261,8 +260,8 @@ Implementation: `app/api/leaderboard/route.ts`, `lib/arena/stats.ts`, `component
 ### 8.1 Core columns
 
 - `Model`: display name/provider/stability chip
-- `Rating`: conservative rank score (`rankScore`), with raw rating shown beneath
-- `Confidence`: derived from RD
+- `Rating`: Bradley-Terry point estimate with its 95% confidence interval
+- `Confidence`: derived from confidence-interval width
 - `Coverage`: `coveredPrompts / activePrompts` plus percent
 - `Consistency`: shrunk prompt-strength ES-gap mapped onto a `0-100` score
 - `Spread`: stddev of per-prompt observed scores across covered prompts
@@ -401,8 +400,9 @@ Old behavior (historical):
 
 Current behavior:
 
-- Glicko-style updates with uncertainty
-- conservative public ordering
+- global Bradley-Terry public ratings with 95% confidence intervals
+- unique ordinal ordering by Bradley-Terry point estimate
+- sequential operational state retained for matchmaking and private public anchors
 - lane-driven sampling for coverage/top-pair validity
 - `BOTH_BAD` as quality-floor diagnostic only
 

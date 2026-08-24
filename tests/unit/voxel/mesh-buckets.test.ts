@@ -104,6 +104,40 @@ async function main() {
   }
 
   {
+    const baseTint: [number, number, number] = [0.45, 0.8, 0.2];
+    const ao: [number, number, number, number] = [0.58, 0.72, 0.86, 1];
+    const perVertexTint: [
+      [number, number, number],
+      [number, number, number],
+      [number, number, number],
+      [number, number, number],
+    ] = [
+      [baseTint[0] * ao[0], baseTint[1] * ao[0], baseTint[2] * ao[0]],
+      [baseTint[0] * ao[1], baseTint[1] * ao[1], baseTint[2] * ao[1]],
+      [baseTint[0] * ao[2], baseTint[1] * ao[2], baseTint[2] * ao[2]],
+      [baseTint[0] * ao[3], baseTint[1] * ao[3], baseTint[2] * ao[3]],
+    ];
+
+    const premultiplied = makeBucket();
+    appendQuad(
+      premultiplied,
+      QUAD,
+      { nx: 0, ny: 1, nz: 0 },
+      perVertexTint,
+      UV,
+    );
+
+    const compact = makeBucket();
+    appendQuad(compact, QUAD, { nx: 0, ny: 1, nz: 0 }, baseTint, UV, ao);
+
+    const oldPayload = serializeBucket(premultiplied);
+    const newPayload = serializeBucket(compact);
+    assert.ok(oldPayload);
+    assert.ok(newPayload);
+    assert.deepEqual(newPayload, oldPayload);
+  }
+
+  {
     // growth has to preserve everything already written, and the serialized
     // arrays must carry no slack from the growth steps
     const bucket = makeBucket();

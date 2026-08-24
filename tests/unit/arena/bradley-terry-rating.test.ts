@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   BT_SCALE,
   INITIAL_RATING,
-  computeConfidenceAwareRanks,
   computeOrdinalRanks,
   confidenceFromCi,
   confidenceInterval95,

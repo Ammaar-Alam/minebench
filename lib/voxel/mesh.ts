@@ -28,6 +28,10 @@ import {
   SpatialBlockTable,
   type Direction,
 } from "@/lib/voxel/ambientOcclusion";
+import {
+  copyVoxelMeshFacts,
+  type VoxelMeshFacts,
+} from "@/lib/voxel/meshFacts";
 
 export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
@@ -37,15 +41,28 @@ type BuildProgress = {
   stageLabel?: string;
 };
 
+export type VoxelMeshStrategy = "local" | "worker" | "worker-facts" | "worker-fallback";
+export type VoxelMeshCacheStatus = "hit" | "miss" | "disabled" | "not-used" | "prewarm-hit";
+export type VoxelMeshStageEvent = {
+  stage: "mesh_started" | "mesh_payload_complete" | "three_group_complete";
+  strategy: VoxelMeshStrategy;
+  cacheStatus?: VoxelMeshCacheStatus;
+  blockCount?: number;
+};
+
 type CreateVoxelGroupAsyncOpts = {
   signal?: AbortSignal;
   onProgress?: (progress: BuildProgress) => void;
+  onStage?: (event: VoxelMeshStageEvent) => void;
   // Yield to the main thread when we've spent about this many ms in a tight loop.
   yieldAfterMs?: number;
   // When set, only process the first N input blocks. Useful for progressive streaming without copying arrays.
   blockLimit?: number;
   // Stable checksum-keyed cache identifier for persistent browser-side mesh payload reuse.
   cacheKey?: string | null;
+  // Optional in-flight or resolved worker mesh promise (e.g. from background premeshing).
+  premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
+  onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
 };
 
 const LOCAL_MESH_MAX_BLOCKS = Number.parseInt(
@@ -995,19 +1012,34 @@ export function encodeTransferableVoxelBlocks(
   return packVoxelBlocks(blocks);
 }
 
-type MeshWorkerRequest = {
-  type: "build";
-  blocks: TransferableVoxelBlocks;
-  allowedBlockIds: string[];
-  blockLimit?: number;
-};
+type MeshWorkerRequest =
+  | {
+      type: "build";
+      blocks: TransferableVoxelBlocks;
+      allowedBlockIds: string[];
+      blockLimit?: number;
+    }
+  | {
+      type: "mesh-facts";
+      facts: VoxelMeshFacts;
+      allowedBlockIds: string[];
+    };
 
 type MeshWorkerResponse =
   | { type: "progress"; progress: BuildProgress }
   | { type: "complete"; payload: VoxelMeshPayload }
   | { type: "error"; message: string };
 
-function createVoxelGroupFromMeshPayload(
+function getUsableMeshFacts(
+  build: RenderableVoxelBuild,
+  blockLimit?: number,
+): VoxelMeshFacts | null {
+  const facts = build.meshFacts;
+  if (!facts) return null;
+  return blockLimit == null || blockLimit >= facts.blocks.count ? facts : null;
+}
+
+export function createVoxelGroupFromMeshPayload(
   payload: VoxelMeshPayload,
   atlasTexture: THREE.Texture,
 ): VoxelGroup {
@@ -1071,16 +1103,17 @@ function createVoxelGroupFromMeshPayload(
   };
 }
 
-async function createVoxelMeshPayloadInWorker(
+export async function createVoxelMeshPayloadInWorker(
   build: RenderableVoxelBuild,
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
-): Promise<VoxelMeshPayload> {
+): Promise<{ payload: VoxelMeshPayload; cacheStatus: VoxelMeshCacheStatus }> {
   const cacheKey = opts?.cacheKey?.trim();
   if (cacheKey) {
     const cached = await getCachedMeshPayload(cacheKey);
-    if (cached) return cached;
+    if (cached) return { payload: cached, cacheStatus: "hit" };
   }
+  const cacheStatus: VoxelMeshCacheStatus = cacheKey ? "miss" : "disabled";
 
   if (typeof Worker === "undefined") {
     throw new Error("Web Workers are unavailable in this environment");
@@ -1091,7 +1124,7 @@ async function createVoxelMeshPayloadInWorker(
     worker.terminate();
   };
 
-  return await new Promise<VoxelMeshPayload>((resolve, reject) => {
+  const payload = await new Promise<VoxelMeshPayload>((resolve, reject) => {
     let settled = false;
     let timeout: ReturnType<typeof setTimeout> | null =
       Number.isFinite(MESH_WORKER_TIMEOUT_MS) && MESH_WORKER_TIMEOUT_MS > 0
@@ -1155,6 +1188,23 @@ async function createVoxelMeshPayloadInWorker(
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
+    const usableMeshFacts = getUsableMeshFacts(build, opts?.blockLimit);
+    if (usableMeshFacts) {
+      const facts = copyVoxelMeshFacts(usableMeshFacts);
+      const request: MeshWorkerRequest = {
+        type: "mesh-facts",
+        facts,
+        allowedBlockIds: palette.map((entry) => entry.id),
+      };
+      worker.postMessage(request, [
+        facts.blocks.positions.buffer,
+        facts.blocks.typeIds.buffer,
+        facts.visibilityMasks.buffer,
+        facts.ambientOcclusion.buffer,
+      ]);
+      return;
+    }
+
     // A packed build is still being hydrated in place, so the worker gets a
     // trimmed copy: transferring the live arrays would detach them.
     const blocks = build.packed
@@ -1170,6 +1220,7 @@ async function createVoxelMeshPayloadInWorker(
     };
     worker.postMessage(request, [blocks.positions.buffer, blocks.typeIds.buffer]);
   });
+  return { payload, cacheStatus };
 }
 
 export async function warmVoxelMeshPayload(
@@ -1192,6 +1243,7 @@ async function createVoxelGroupAsyncLocal(
   palette: BlockDefinition[],
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
+  strategy: VoxelMeshStrategy = "local",
 ): Promise<VoxelGroup> {
   // Main-thread meshing walks block objects. This is the small-build path and
   // the worker-failure fallback, so materializing here costs no more than the
@@ -1237,6 +1289,12 @@ async function createVoxelGroupAsyncLocal(
   }
 
   const water = await buildWaterSurfaceBucketAsync(prepared, maybeYield);
+  opts?.onStage?.({
+    stage: "mesh_payload_complete",
+    strategy,
+    cacheStatus: "not-used",
+    blockCount: prepared.filteredBlockCount,
+  });
 
   const geometryStageCount = 5;
   const geometryStageTotal = prepared.filteredBlockCount + geometryStageCount;
@@ -1336,6 +1394,34 @@ export async function createVoxelGroupAsync(
   atlasTexture: THREE.Texture,
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<VoxelGroup> {
+  const premeshedPayloadPromise = opts?.premeshedPayloadPromise;
+  if (premeshedPayloadPromise) {
+    try {
+      opts?.onStage?.({ stage: "mesh_started", strategy: "worker" });
+      const payload = await premeshedPayloadPromise;
+      opts?.onStage?.({
+        stage: "mesh_payload_complete",
+        strategy: "worker",
+        cacheStatus: "prewarm-hit",
+        blockCount: payload.filteredBlockCount,
+      });
+      throwIfAborted(opts?.signal);
+      const group = createVoxelGroupFromMeshPayload(payload, atlasTexture);
+      opts?.onStage?.({
+        stage: "three_group_complete",
+        strategy: "worker",
+        cacheStatus: "prewarm-hit",
+        blockCount: group.stats.blockCount,
+      });
+      return group;
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") throw err;
+      // Background premeshing failed or was aborted; fall back gracefully to normal pipeline.
+    } finally {
+      opts?.onPremeshedPayloadConsumed?.(premeshedPayloadPromise);
+    }
+  }
+
   const blockLimit =
     typeof opts?.blockLimit === "number" && Number.isFinite(opts.blockLimit)
       ? Math.max(0, Math.floor(opts.blockLimit))
@@ -1345,16 +1431,55 @@ export async function createVoxelGroupAsync(
     LOCAL_MESH_MAX_BLOCKS > 0 &&
     blockLimit <= LOCAL_MESH_MAX_BLOCKS
   ) {
-    return createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts);
+    opts?.onStage?.({ stage: "mesh_started", strategy: "local" });
+    const group = await createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts, "local");
+    opts?.onStage?.({
+      stage: "three_group_complete",
+      strategy: "local",
+      cacheStatus: "not-used",
+      blockCount: group.stats.blockCount,
+    });
+    return group;
   }
 
   try {
-    const payload = await createVoxelMeshPayloadInWorker(build, palette, opts);
+    const workerStrategy: VoxelMeshStrategy = getUsableMeshFacts(build, blockLimit)
+      ? "worker-facts"
+      : "worker";
+    opts?.onStage?.({ stage: "mesh_started", strategy: workerStrategy });
+    const { payload, cacheStatus } = await createVoxelMeshPayloadInWorker(build, palette, opts);
+    opts?.onStage?.({
+      stage: "mesh_payload_complete",
+      strategy: workerStrategy,
+      cacheStatus,
+      blockCount: payload.filteredBlockCount,
+    });
     throwIfAborted(opts?.signal);
-    return createVoxelGroupFromMeshPayload(payload, atlasTexture);
+    const group = createVoxelGroupFromMeshPayload(payload, atlasTexture);
+    opts?.onStage?.({
+      stage: "three_group_complete",
+      strategy: workerStrategy,
+      cacheStatus,
+      blockCount: group.stats.blockCount,
+    });
+    return group;
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") throw err;
     console.warn("Voxel mesh worker failed, falling back to main-thread meshing", err);
-    return createVoxelGroupAsyncLocal(build, palette, atlasTexture, opts);
+    opts?.onStage?.({ stage: "mesh_started", strategy: "worker-fallback" });
+    const group = await createVoxelGroupAsyncLocal(
+      build,
+      palette,
+      atlasTexture,
+      opts,
+      "worker-fallback",
+    );
+    opts?.onStage?.({
+      stage: "three_group_complete",
+      strategy: "worker-fallback",
+      cacheStatus: "not-used",
+      blockCount: group.stats.blockCount,
+    });
+    return group;
   }
 }

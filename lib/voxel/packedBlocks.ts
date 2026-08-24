@@ -1,4 +1,5 @@
 import type { VoxelBlock, VoxelBuild } from "./types";
+import type { VoxelMeshFacts } from "./meshFacts";
 
 // Blocks cost roughly 80 bytes each as JS objects and 8 bytes each in typed
 // arrays, plus one shared palette. Stream chunks are written directly into
@@ -16,7 +17,10 @@ export type PackedVoxelBlocks = {
 // A build whose blocks may live in packed form. Server-side builds and anything
 // coming out of validation stay object-backed, so both shapes flow through the
 // same viewer and mesh entry points.
-export type RenderableVoxelBuild = VoxelBuild & { packed?: PackedVoxelBlocks };
+export type RenderableVoxelBuild = VoxelBuild & {
+  packed?: PackedVoxelBlocks;
+  meshFacts?: VoxelMeshFacts;
+};
 
 const MIN_PACKED_CAPACITY = 1024;
 

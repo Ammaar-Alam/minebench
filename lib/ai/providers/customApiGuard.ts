@@ -101,7 +101,7 @@ function extractEmbeddedIpv4FromIpv6(address: string): string | null {
   return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
 }
 
-function isDisallowedIpAddress(address: string): boolean {
+export function isDisallowedIpAddress(address: string): boolean {
   const normalizedAddress = normalizeIpAddress(address);
   const family = net.isIP(normalizedAddress);
   if (family === 4) {

@@ -1,7 +1,9 @@
 import {
+  BINARY_BUILD_HEADER_BYTES,
   decodeBinaryVoxelBuild,
   encodeBinaryVoxelBuild,
   BinaryBuildFormatError,
+  readBinaryVoxelBuildHeader,
 } from "@/lib/voxel/binaryBuild";
 import type { PackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import type { VoxelBlock } from "@/lib/voxel/types";
@@ -31,6 +33,11 @@ export type DecodedBinaryArtifact = {
   blocks: PackedVoxelBlocks;
 };
 
+type ParsedBinaryArtifact = {
+  envelope: BinaryArtifactEnvelope;
+  body: Uint8Array;
+};
+
 export function isBinaryArtifact(bytes: Uint8Array): boolean {
   if (bytes.length < BINARY_ARTIFACT_HEADER_BYTES) return false;
   return bytes[0] === 0x4d && bytes[1] === 0x42 && bytes[2] === 0x41 && bytes[3] === 0x34;
@@ -58,7 +65,7 @@ export function encodeBinaryArtifact(
   return bytes;
 }
 
-export function decodeBinaryArtifact(bytes: Uint8Array): DecodedBinaryArtifact {
+function parseBinaryArtifact(bytes: Uint8Array): ParsedBinaryArtifact {
   if (!isBinaryArtifact(bytes)) {
     throw new BinaryBuildFormatError("Not a binary arena build artifact");
   }
@@ -84,8 +91,43 @@ export function decodeBinaryArtifact(bytes: Uint8Array): DecodedBinaryArtifact {
     throw new BinaryBuildFormatError("Artifact envelope is not an object");
   }
 
-  const blocks = decodeBinaryVoxelBuild(
-    bytes.subarray(BINARY_ARTIFACT_HEADER_BYTES + envelopeBytes),
+  return {
+    envelope: envelope as BinaryArtifactEnvelope,
+    body: bytes.subarray(BINARY_ARTIFACT_HEADER_BYTES + envelopeBytes),
+  };
+}
+
+export function rewriteBlindBinaryArtifactIdentity(
+  bytes: Uint8Array,
+  buildId: string,
+): Uint8Array {
+  if (!buildId.trim()) {
+    throw new BinaryBuildFormatError("Blind build ID is required");
+  }
+  const parsed = parseBinaryArtifact(bytes);
+  readBinaryVoxelBuildHeader(parsed.body);
+
+  const envelopeJson = new TextEncoder().encode(
+    JSON.stringify({ ...parsed.envelope, buildId, checksum: null }),
   );
-  return { envelope: envelope as BinaryArtifactEnvelope, blocks };
+  if (envelopeJson.length > MAX_ENVELOPE_BYTES) {
+    throw new BinaryBuildFormatError(
+      `Artifact envelope of ${envelopeJson.length} bytes exceeds the container limit`,
+    );
+  }
+
+  const bodyAt = BINARY_ARTIFACT_HEADER_BYTES + envelopeJson.length;
+  const rewritten = new Uint8Array(bodyAt + parsed.body.length);
+  const view = new DataView(rewritten.buffer);
+  view.setUint32(0, BINARY_ARTIFACT_MAGIC, false);
+  view.setUint32(4, envelopeJson.length, false);
+  rewritten.set(envelopeJson, BINARY_ARTIFACT_HEADER_BYTES);
+  rewritten.set(parsed.body, bodyAt);
+  view.setUint32(bodyAt + BINARY_BUILD_HEADER_BYTES - 4, 0, false);
+  return rewritten;
+}
+
+export function decodeBinaryArtifact(bytes: Uint8Array): DecodedBinaryArtifact {
+  const parsed = parseBinaryArtifact(bytes);
+  return { envelope: parsed.envelope, blocks: decodeBinaryVoxelBuild(parsed.body) };
 }

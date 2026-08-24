@@ -6,11 +6,11 @@ import {
   getGlobalBradleyTerrySnapshot,
   getLeaderboardDispersionByModelId,
 } from "@/lib/arena/stats";
-import { confidenceFromRd, conservativeScore, stabilityTier } from "@/lib/arena/rating";
+import { confidenceFromRd, stabilityTier } from "@/lib/arena/rating";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
 import { getArenaPairCoverageByKey } from "@/lib/arena/coverage";
-import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
+import { resolveModelDisplayName, resolveModelSlug } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
 import {
   databaseUnavailableBody,
@@ -74,7 +74,7 @@ export async function GET() {
   try {
     [models, dispersionByModelId, btSnapshot, eligiblePromptIds, baselineAnchor] = await Promise.all([
       prisma.model.findMany({
-        where: { isBaseline: false, enabled: true },
+        where: { isBaseline: false, enabled: true, stealthVariant: null },
         select: LEADERBOARD_MODEL_SELECT,
       }),
       getLeaderboardDispersionByModelId(),
@@ -157,14 +157,12 @@ export async function GET() {
         voteSummary.totalVotes > 0
           ? Math.max(0, 1 - m.bothBadCount / voteSummary.totalVotes)
           : null;
-      const stability =
-        bt?.stability ??
-        stabilityTier({
-          decisiveVotes: voteSummary.decisiveVotes,
-          promptCoverage: dispersion.promptCoverage,
-          ci95: bt?.ci95,
-          rd: ratingDeviation,
-        });
+      const stability = stabilityTier({
+        decisiveVotes: voteSummary.decisiveVotes,
+        promptCoverage: dispersion.promptCoverage,
+        ci95: bt?.ci95,
+        rd: ratingDeviation,
+      });
 
       let pairCoverageScore: number | null = null;
       if (index < topBandIds.length) {
@@ -184,6 +182,7 @@ export async function GET() {
 
       return {
         key: m.key,
+        slug: resolveModelSlug(m.key),
         provider: m.provider,
         displayName: resolveModelDisplayName(m.key, m.displayName),
         stability,

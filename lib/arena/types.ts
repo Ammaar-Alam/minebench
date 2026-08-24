@@ -2,6 +2,20 @@ import type { VoxelBlock } from "@/lib/voxel/types";
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 export type VoteChoice = "A" | "B" | "TIE" | "BOTH_BAD";
+export type ArenaAction = VoteChoice | "SKIP";
+
+export type ArenaModelReveal = {
+  provider: string;
+  displayName: string;
+};
+
+export type ArenaVoteResponse = {
+  ok: true;
+  reveal: {
+    a: ArenaModelReveal;
+    b: ArenaModelReveal;
+  };
+};
 
 export type ArenaBuildVariant = "preview" | "full";
 
@@ -80,7 +94,7 @@ export type ArenaMatchup = {
   samplingLane?: "coverage" | "contender" | "uncertainty" | "exploration";
   prompt: { id: string; text: string };
   a: {
-    model: { key: string; provider: string; displayName: string; eloRating: number };
+    model: ArenaModelReveal | null;
     build: RenderableVoxelBuild | null;
     buildRef?: ArenaBuildRef;
     previewRef?: ArenaBuildRef;
@@ -88,7 +102,7 @@ export type ArenaMatchup = {
     buildLoadHints?: ArenaBuildLoadHints;
   };
   b: {
-    model: { key: string; provider: string; displayName: string; eloRating: number };
+    model: ArenaModelReveal | null;
     build: RenderableVoxelBuild | null;
     buildRef?: ArenaBuildRef;
     previewRef?: ArenaBuildRef;
@@ -96,6 +110,8 @@ export type ArenaMatchup = {
     buildLoadHints?: ArenaBuildLoadHints;
   };
 };
+
+export type ArenaMatchupLane = ArenaMatchup["a"];
 
 export type PromptListResponse = {
   prompts: { id: string; text: string }[];
@@ -104,6 +120,7 @@ export type PromptListResponse = {
 export type LeaderboardResponse = {
   models: {
     key: string;
+    slug?: string;
     provider: string;
     displayName: string;
     stability: "Provisional" | "Established" | "Stable";

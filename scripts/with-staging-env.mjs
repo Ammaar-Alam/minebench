@@ -41,11 +41,18 @@ function required(name) {
 }
 
 const directUrl = required("STAGING_DIRECT_URL");
+const stagingSupabaseUrl = required("STAGING_SUPABASE_URL");
+const stagingServiceRoleKey = required("STAGING_SUPABASE_SERVICE_ROLE_KEY");
 const stagingEnv = {
   DATABASE_URL: staging.STAGING_DATABASE_URL?.trim() || directUrl,
   DIRECT_URL: directUrl,
-  SUPABASE_URL: required("STAGING_SUPABASE_URL"),
-  SUPABASE_SERVICE_ROLE_KEY: required("STAGING_SUPABASE_SERVICE_ROLE_KEY"),
+  SUPABASE_URL: stagingSupabaseUrl,
+  SUPABASE_SERVICE_ROLE_KEY: stagingServiceRoleKey,
+  SUPABASE_SECRET_KEY: staging.STAGING_SUPABASE_SECRET_KEY?.trim() || stagingServiceRoleKey,
+  NEXT_PUBLIC_SUPABASE_URL: stagingSupabaseUrl,
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: required("STAGING_SUPABASE_PUBLISHABLE_KEY"),
+  STEALTH_CONFIG_ENCRYPTION_KEY: required("STAGING_STEALTH_CONFIG_ENCRYPTION_KEY"),
+  STEALTH_ARENA_SHARE: staging.STAGING_STEALTH_ARENA_SHARE?.trim() || "0",
   SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || sourceBucket,
   MINEBENCH_SITE_URL: required("STAGING_SITE_URL"),
   // the alpha deployment may carry its own branch-scoped ADMIN_TOKEN; without
@@ -61,9 +68,7 @@ const stagingEnv = {
 
 console.log(`Running against alpha staging: ${stagingEnv.MINEBENCH_SITE_URL}`);
 
-const [rawCommand, ...args] = argv;
-const localBinPath = path.join(repoRoot, "node_modules", ".bin", rawCommand);
-const command = fs.existsSync(localBinPath) ? localBinPath : rawCommand;
+const [command, ...args] = argv;
 const child = spawn(command, args, {
   stdio: "inherit",
   env: {

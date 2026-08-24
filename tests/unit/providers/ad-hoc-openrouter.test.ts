@@ -13,11 +13,13 @@ runProviderConfigTest("ad hoc OpenRouter", {}, async (capture) => {
       displayName: modelId,
       openRouterModelId: modelId,
       forceOpenRouter: true,
+      requireStructuredOutput: true,
     },
     prompt: "small tower",
     gridSize: 64,
     palette: "simple",
     maxAttempts: 1,
+    maxOutputTokens: 4096,
     enableTools: false,
     providerKeys: { openrouter: 'Bearer "test-openrouter-key"' },
     allowServerKeys: false,
@@ -29,7 +31,8 @@ runProviderConfigTest("ad hoc OpenRouter", {}, async (capture) => {
   assert.equal(request.url, "https://openrouter.test/api/v1/chat/completions");
   assert.equal(request.headers.authorization, "Bearer test-openrouter-key");
   assert.equal(request.body.model, modelId);
-  assert.equal(Object.hasOwn(request.body, "provider"), false);
+  assert.equal(request.body.max_tokens, 4096);
+  assert.deepEqual(request.body.provider, { require_parameters: true });
   assert.equal(
     (request.body.response_format as { type?: unknown })?.type,
     "json_schema",
@@ -39,6 +42,31 @@ runProviderConfigTest("ad hoc OpenRouter", {}, async (capture) => {
       ?.json_schema?.strict,
     true,
   );
+
+  const plainTextStart = capture.requests.length;
+  await generateVoxelBuild({
+    model: {
+      key: "openrouter-plain-text",
+      provider: "custom",
+      modelId,
+      displayName: modelId,
+      openRouterModelId: modelId,
+      forceOpenRouter: true,
+      requireStructuredOutput: false,
+    },
+    prompt: "small tower",
+    gridSize: 64,
+    palette: "simple",
+    maxAttempts: 1,
+    maxOutputTokens: 4096,
+    enableTools: false,
+    providerKeys: { openrouter: "test-openrouter-key" },
+    allowServerKeys: false,
+  });
+  const plainTextRequest = capture.requests[plainTextStart];
+  assert.ok(plainTextRequest);
+  assert.equal(Object.hasOwn(plainTextRequest.body, "provider"), false);
+  assert.equal(Object.hasOwn(plainTextRequest.body, "response_format"), false);
 
   const requestCount = capture.requests.length;
   const customResult = await generateVoxelBuild({

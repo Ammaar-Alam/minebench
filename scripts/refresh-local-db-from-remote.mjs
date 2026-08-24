@@ -53,32 +53,17 @@ function normalizePostgresUrlForCli(urlString) {
 }
 
 function main() {
-  const args = process.argv.slice(2);
-  const fromStaging =
-    args.includes("--from-staging") ||
-    args.includes("--staging") ||
-    args.includes("--from-alpha") ||
-    args.includes("--alpha");
-
-  const remoteEnvFile = fromStaging
-    ? path.join(repoRoot, ".env.staging.local")
-    : path.join(repoRoot, ".env");
-  const remoteEnv = parseEnvFile(remoteEnvFile);
+  const remoteEnv = parseEnvFile(path.join(repoRoot, ".env"));
   const localEnv = parseEnvFile(path.join(repoRoot, ".env.localdb.local"));
 
-  const remoteDirectUrl = fromStaging
-    ? remoteEnv.STAGING_DIRECT_URL || remoteEnv.STAGING_DATABASE_URL || remoteEnv.DIRECT_URL || remoteEnv.DATABASE_URL
-    : remoteEnv.DIRECT_URL || remoteEnv.DATABASE_URL;
+  const remoteDirectUrl = remoteEnv.DIRECT_URL || remoteEnv.DATABASE_URL;
   const localDirectUrl = localEnv.DIRECT_URL || localEnv.DATABASE_URL;
 
-  const remoteSourceLabel = fromStaging
-    ? "staging DIRECT_URL / DATABASE_URL from .env.staging.local"
-    : "remote DIRECT_URL / DATABASE_URL from .env";
-  const remoteUrl = assertUrl(remoteSourceLabel, remoteDirectUrl);
+  const remoteUrl = assertUrl("remote DIRECT_URL / DATABASE_URL from .env", remoteDirectUrl);
   const localUrl = assertUrl("local DIRECT_URL / DATABASE_URL from .env.localdb.local", localDirectUrl);
 
   if (["localhost", "127.0.0.1"].includes(remoteUrl.hostname)) {
-    fail(`Refusing to snapshot: ${path.basename(remoteEnvFile)} points at localhost, not the real remote DB`);
+    fail("Refusing to snapshot: .env points at localhost, not the real remote DB");
   }
   if (!isManagedMinebenchLocalUrl(localUrl)) {
     fail(
@@ -86,7 +71,7 @@ function main() {
     );
   }
 
-  console.log(`Source DB (${fromStaging ? "Alpha staging" : "Production"}): ${remoteUrl.hostname}`);
+  console.log(`Remote DB host: ${remoteUrl.hostname}`);
   console.log(`Local DB host: ${localUrl.hostname}:${localUrl.port || "<default>"}`);
   console.log(`Writing temporary snapshot to ${tmpDumpPath}`);
 
@@ -115,7 +100,7 @@ function main() {
     "-v",
     "ON_ERROR_STOP=1",
     "-c",
-    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role; END IF; IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'supabase_admin') THEN CREATE ROLE supabase_admin; END IF; END $$; DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",
+    "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;",
   ]);
 
   run(psqlBin, [

@@ -53,6 +53,7 @@ import {
 import { getErrorMessage } from "@/lib/errorMessage";
 
 const INT_ENV_MAX_OUTPUT_TOKENS = "MINEBENCH_MAX_OUTPUT_TOKENS";
+const MAX_EXPLICIT_OUTPUT_TOKENS = 1_000_000;
 
 function parseOptionalIntEnvVar(name: string): number | undefined {
   const raw = process.env[name];
@@ -62,10 +63,22 @@ function parseOptionalIntEnvVar(name: string): number | undefined {
   return Math.floor(parsed);
 }
 
-function defaultMaxOutputTokens(_gridSize: 64 | 256 | 512, modelId: string): number {
+function boundedExplicitMaxOutputTokens(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return undefined;
+  return Math.min(Math.floor(value), MAX_EXPLICIT_OUTPUT_TOKENS);
+}
+
+function defaultMaxOutputTokens(
+  _gridSize: 64 | 256 | 512,
+  modelId: string,
+  explicitMaxOutputTokens?: number,
+): number {
   const ceiling = modelOutputCeiling(modelId);
   const requested =
-    parseOptionalIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS) ?? ceiling ?? DEFAULT_MAX_OUTPUT_TOKENS;
+    boundedExplicitMaxOutputTokens(explicitMaxOutputTokens) ??
+    parseOptionalIntEnvVar(INT_ENV_MAX_OUTPUT_TOKENS) ??
+    ceiling ??
+    DEFAULT_MAX_OUTPUT_TOKENS;
   return ceiling === undefined ? requested : Math.min(requested, ceiling);
 }
 
@@ -254,6 +267,7 @@ type ResolvedModel = {
   forceOpenRouter?: boolean;
   importOnly?: boolean;
   baseUrl?: string;
+  requireStructuredOutput?: boolean;
 };
 
 function isBilledTimeoutStyleProviderError(message: string): boolean {
@@ -457,11 +471,13 @@ export type GenerateVoxelBuildParams = {
     forceOpenRouter?: boolean;
     importOnly?: boolean;
     baseUrl?: string;
+    requireStructuredOutput?: boolean;
   };
   prompt: string;
   gridSize: 64 | 256 | 512;
   palette: "simple" | "advanced";
   maxAttempts?: number;
+  maxOutputTokens?: number;
   enableTools?: boolean;
   providerKeys?: ProviderApiKeys;
   allowServerKeys?: boolean;
@@ -518,11 +534,13 @@ async function callDirectProvider(args: {
   modelId: string;
   apiKey?: string;
   baseUrl?: string;
+  requireStructuredOutput?: boolean;
   system: string;
   user: string;
   jsonSchema: Record<string, unknown>;
   maxOutputTokens: number;
   reasoningMaxTokens?: number;
+  reasoningEffort?: string;
   reasoningEffortAttempts?: string[];
   adaptiveEffortAttempts?: AnthropicAdaptiveEffort[];
   geminiThinkingConfig?: GeminiThinkingConfig;
@@ -638,6 +656,8 @@ async function callDirectProvider(args: {
       maxOutputTokens: args.maxOutputTokens,
       temperature: DEFAULT_TEMPERATURE,
       jsonSchema: args.jsonSchema,
+      requireStructuredOutput: args.requireStructuredOutput,
+      reasoningEffort: args.reasoningEffort,
       signal: args.signal,
       onDelta: args.onDelta,
       onTrace: args.onTrace,
@@ -873,11 +893,13 @@ async function providerGenerateText(args: {
         modelId: model.modelId,
         apiKey: directKey ?? undefined,
         baseUrl: model.baseUrl,
+        requireStructuredOutput: model.requireStructuredOutput,
         system: args.system,
         user: args.user,
         jsonSchema: args.jsonSchema,
         maxOutputTokens: args.maxOutputTokens,
         reasoningMaxTokens: args.reasoningMaxTokens,
+        reasoningEffort: model.provider === "custom" ? args.reasoning : undefined,
         reasoningEffortAttempts:
           directOpenAiReasoningEffortAttempts ??
           directXaiReasoningEffortAttempts ??
@@ -980,8 +1002,9 @@ async function providerGenerateText(args: {
     enableReasoning: openRouterReasoningEnabled,
     reasoningMaxTokens: args.reasoningMaxTokens,
     temperature: DEFAULT_TEMPERATURE,
-    jsonSchema: args.jsonSchema,
-    requireParameterSupport: model.provider !== "custom",
+    jsonSchema: model.requireStructuredOutput === false ? undefined : args.jsonSchema,
+    requireParameterSupport:
+      model.requireStructuredOutput ?? model.provider !== "custom",
     reasoningEffortAttempts: openRouterReasoningEffortAttempts,
     requireReasoning: modelRequiresReasoning(model.openRouterModelId),
     signal: args.signal,
@@ -1067,7 +1090,11 @@ export async function generateVoxelBuild(
   const allowServerKeys = params.allowServerKeys ?? true;
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
-  const maxOutputTokens = defaultMaxOutputTokens(params.gridSize, model.modelId);
+  const maxOutputTokens = defaultMaxOutputTokens(
+    params.gridSize,
+    model.modelId,
+    params.maxOutputTokens,
+  );
   const reasoningMaxTokens = defaultMaxReasoningTokens(model.modelId, maxOutputTokens);
   const schemaMaxBlocks = approxMaxBlocksForTokenBudget({
     maxOutputTokens,

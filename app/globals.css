@@ -25,6 +25,15 @@
 
     /* The canvas renders with alpha, so this is the sky behind every build. */
     --viewer-bg: 220 20% 97%;
+
+    /* Background effects */
+    --bg-halo-opacity: 0.45;
+    --bg-grid-opacity: 0.26;
+
+    --acc-expand: 250ms;
+    --acc-collapse: 250ms;
+    --acc-chevron: 250ms;
+    --acc-ease: cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   /* Dark has to be correct on the very first paint, before the theme script
@@ -79,7 +88,7 @@
 
   html,
   body {
-    height: 100%;
+    min-height: 100%;
   }
 
   html {
@@ -91,6 +100,19 @@
     background-color: hsl(var(--bg));
     color: hsl(var(--fg));
     -webkit-tap-highlight-color: transparent;
+  }
+
+  body:has(#mb-lab-canvas) .mb-bg-grid,
+  body:has(#mb-lab-canvas) .mb-bg-halo {
+    display: none;
+  }
+
+  body:has(#mb-lab-canvas) #mb-shell {
+    background-color: hsl(var(--bg));
+  }
+
+  body:has(#mb-lab-canvas) #mb-footer {
+    display: none;
   }
 
   button,
@@ -771,9 +793,47 @@
     @apply w-full rounded-md border border-border bg-bg px-3 text-sm text-fg outline-none transition;
   }
 
+  select.mb-field {
+    appearance: none;
+    padding-right: 2.5rem;
+    background-image:
+      linear-gradient(45deg, transparent 42%, hsl(var(--muted)) 43% 57%, transparent 58%),
+      linear-gradient(135deg, transparent 42%, hsl(var(--muted)) 43% 57%, transparent 58%);
+    background-position:
+      calc(100% - 1.5rem) 50%,
+      calc(100% - 1.1875rem) 50%;
+    background-repeat: no-repeat;
+    background-size: 0.3125rem 0.3125rem;
+  }
+
+  select.mb-field.mb-select-trailing-action {
+    padding-right: 5rem;
+    background-position:
+      calc(100% - 4.25rem) 50%,
+      calc(100% - 3.9375rem) 50%;
+  }
+
   .mb-field:focus-visible {
     border-color: hsl(var(--accent) / 0.55);
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.16);
+  }
+
+  @media (forced-colors: active) {
+    select.mb-field {
+      appearance: auto;
+      background-image: none;
+      padding-right: 0.75rem;
+    }
+
+    select.mb-field.mb-select-trailing-action {
+      padding-right: 5rem;
+    }
+  }
+
+  #mb-lab-canvas .mb-field {
+    border-radius: 0.375rem;
+    background-color: hsl(var(--bg));
+    box-shadow: none;
   }
 
   .mb-btn {
@@ -898,6 +958,95 @@
     background-color: hsl(var(--viewer-bg));
   }
 
+  #mb-lab-canvas .mb-btn {
+    border-radius: 0.375rem;
+    box-shadow: none;
+  }
+
+  #mb-lab-canvas .mb-btn-primary {
+    background-color: hsl(var(--accent) / 0.12);
+    background-image: none;
+  }
+
+  #mb-lab-canvas .mb-btn-ghost {
+    background-color: transparent;
+    background-image: none;
+  }
+
+  @keyframes mb-status-change {
+    from {
+      opacity: 0.45;
+      transform: translateY(2px) scale(0.97);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .mb-status-change {
+    transform-origin: left center;
+    animation: mb-status-change 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .mb-status-change {
+      animation: none;
+    }
+  }
+
+  /* grid-template-rows 0fr → 1fr gives a clean height animation
+     with no JS measurement; the inner element clips overflow. */
+  .t-acc-panel {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows var(--acc-collapse) var(--acc-ease);
+  }
+  .t-acc[data-open="true"] .t-acc-panel {
+    grid-template-rows: 1fr;
+    transition: grid-template-rows var(--acc-expand) var(--acc-ease);
+  }
+  .t-acc-panel-inner {
+    overflow: hidden;
+    opacity: 0;
+    filter: blur(2px);
+    transition:
+      opacity var(--acc-collapse) var(--acc-ease),
+      filter var(--acc-collapse) var(--acc-ease);
+  }
+  .t-acc[data-open="true"] .t-acc-panel-inner {
+    opacity: 1;
+    filter: blur(0);
+    transition:
+      opacity var(--acc-expand) var(--acc-ease),
+      filter var(--acc-expand) var(--acc-ease);
+  }
+  /* Flip the chevron vertically to turn the "v" into a "^".
+     scaleY(-1) about the centre passes through a flat line at
+     the midpoint (same look as a `d:` path morph) but animates
+     in every browser, unlike CSS `d:` morphing (Chromium only).
+     The chevron path is symmetric about the 16x16 viewBox
+     centre, so the flip lands exactly on the "^"; non-scaling
+     -stroke keeps the stroke width constant through the flip. */
+  .t-acc-chevron {
+    display: inline-flex;
+    transform: scaleY(1);
+    transform-origin: center;
+    transition:
+      transform var(--acc-chevron) var(--acc-ease),
+      color 140ms ease-out;
+  }
+  .t-acc-chevron path { vector-effect: non-scaling-stroke; }
+  .t-acc[data-open="true"] .t-acc-chevron {
+    transform: scaleY(-1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .t-acc-panel, .t-acc-panel-inner, .t-acc-chevron {
+      transition: none !important;
+    }
+  }
+
   .mb-kbd {
     @apply rounded-md border border-border/80 bg-bg/50 px-1.5 py-0.5 font-mono text-[11px] text-muted;
   }
@@ -980,6 +1129,25 @@
     background: hsl(var(--accent) / 0.55);
     border-radius: 999px;
     border: 1px solid hsl(var(--border) / 0.75);
+  }
+
+  .mb-lab-scroll {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted2) / 0.35) transparent;
+  }
+
+  .mb-lab-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  .mb-lab-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .mb-lab-scroll::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: hsl(var(--muted2) / 0.3);
   }
 
   .mb-x-scroll {

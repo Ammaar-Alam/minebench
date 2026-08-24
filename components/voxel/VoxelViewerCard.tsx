@@ -8,12 +8,14 @@ import {
 } from "@/components/voxel/VoxelLoadingHud";
 import {
   VoxelViewer,
+  type VoxelViewerBuildMetrics,
   type VoxelViewerBuildProgress,
   type VoxelViewerHandle,
 } from "@/components/voxel/VoxelViewer";
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
+import type { VoxelMeshPayload } from "@/lib/voxel/mesh";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import {
   toObjectBackedVoxelBuild,
@@ -29,10 +31,14 @@ export function VoxelViewerCard({
   voxelBuild,
   expectedBlockCount,
   meshCacheKey,
+  getPremeshedPayloadPromise,
+  onPremeshedPayloadConsumed,
   gridSize = 256,
   autoRotate = true,
   animateIn,
   onBuildReadyChange,
+  onFirstRenderReadyChange,
+  onBuildMetrics,
   isLoading,
   loadingMode = "overlay",
   loadingProgress,
@@ -55,23 +61,30 @@ export function VoxelViewerCard({
   actions,
   viewerRef,
   skipValidation = false,
+  embedded = false,
+  useFirstRenderReady = false,
 }: {
   title: string;
   subtitle?: ReactNode;
   voxelBuild: unknown | null;
   expectedBlockCount?: number;
   meshCacheKey?: string | null;
+  getPremeshedPayloadPromise?: () => Promise<VoxelMeshPayload> | null;
+  onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
   gridSize?: 64 | 256 | 512;
   autoRotate?: boolean;
   animateIn?: boolean;
+  useFirstRenderReady?: boolean;
   onBuildReadyChange?: (ready: boolean) => void;
+  onFirstRenderReadyChange?: (ready: boolean) => void;
+  onBuildMetrics?: (metrics: VoxelViewerBuildMetrics) => void;
   isLoading?: boolean;
   loadingMode?: "overlay" | "silent";
   loadingProgress?: { receivedBlocks: number; totalBlocks: number | null };
   attempt?: number;
   retryReason?: string;
   elapsedMs?: number;
-  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number };
+  metrics?: { blockCount: number; warnings: string[]; generationTimeMs?: number; attempts?: number };
   error?: string;
   loadingMessage?: string;
   jsonText?: string;
@@ -87,6 +100,7 @@ export function VoxelViewerCard({
   actions?: ReactNode;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
+  embedded?: boolean;
 }) {
   type PlacementProgressState = VoxelLoadingProgress & { stageLabel?: string | null };
 
@@ -204,7 +218,13 @@ export function VoxelViewerCard({
           ? "Streaming…"
           : "Generating…");
   const showLoadingOverlay = loadingMode !== "silent";
-  const placementLoading = Boolean(showBuildView && build && !combinedError && !viewerReady);
+  const [firstRenderReady, setFirstRenderReady] = useState(false);
+  const placementLoading = Boolean(
+    showBuildView &&
+      build &&
+      !combinedError &&
+      !(useFirstRenderReady ? firstRenderReady : viewerReady),
+  );
   const hudProgress = isLoading
     ? loadingProgress
       ? {
@@ -226,6 +246,7 @@ export function VoxelViewerCard({
 
   useEffect(() => {
     setViewerReady(false);
+    setFirstRenderReady(false);
     setPlacementProgress(null);
     setPlacementError(null);
   }, [buildBlocksRef, palette]);
@@ -240,6 +261,18 @@ export function VoxelViewerCard({
       onBuildReadyChange?.(ready);
     },
     [onBuildReadyChange],
+  );
+
+  const handleFirstRenderReadyChange = useCallback(
+    (ready: boolean) => {
+      setFirstRenderReady(ready);
+      if (ready) {
+        setPlacementProgress(null);
+        setPlacementError(null);
+      }
+      onFirstRenderReadyChange?.(ready);
+    },
+    [onFirstRenderReadyChange],
   );
 
   const handleBuildProgressChange = useCallback(
@@ -262,11 +295,12 @@ export function VoxelViewerCard({
     if (message) {
       setPlacementProgress(null);
       setViewerReady(false);
+      setFirstRenderReady(false);
     }
   }, []);
 
   return (
-    <div className="mb-panel">
+    <div className={embedded ? "overflow-hidden bg-card/25" : "mb-panel"}>
       <div className="mb-panel-inner">
         <div className="border-b border-border/70 bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
           <div className="flex items-center justify-between gap-2 sm:gap-3">
@@ -338,6 +372,11 @@ export function VoxelViewerCard({
                   <div className="items-center gap-2 font-mono sm:flex">
                     <span>{blockCount.toLocaleString()} blocks</span>
                     {timing ? <span>• {timing}</span> : null}
+                    {metrics?.attempts ? (
+                      <span>
+                        • {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
                     {warnings.length ? (
                       <span>
                         • {warnings.length} warning{warnings.length === 1 ? "" : "s"}
@@ -358,10 +397,14 @@ export function VoxelViewerCard({
               palette={palette}
               expectedBlockCount={expectedBlockCount}
               meshCacheKey={meshCacheKey}
+              getPremeshedPayloadPromise={getPremeshedPayloadPromise}
+              onPremeshedPayloadConsumed={onPremeshedPayloadConsumed}
               autoRotate={autoRotate}
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
               animateIn={Boolean(animateIn && !isLoading)}
               onBuildReadyChange={handleBuildReadyChange}
+              onFirstRenderReadyChange={handleFirstRenderReadyChange}
+              onBuildMetrics={onBuildMetrics}
               onBuildProgressChange={handleBuildProgressChange}
               onBuildErrorChange={handleBuildErrorChange}
             />

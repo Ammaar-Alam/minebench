@@ -20,10 +20,10 @@ async function main() {
         },
       },
     );
-    assert.equal(middleware(request).status, 200);
+    assert.equal((await middleware(request)).status, 200);
   }
 
-  const limited = middleware(
+  const limited = await middleware(
     new NextRequest("http://localhost/api/leaderboard/models/global-model-180", {
       headers: {
         cookie: "mb_rls=rotating-session-180",

@@ -54,9 +54,9 @@ Usage:
 
   const db = getDbInfo();
   const [modelTotal, matchupTotal, voteTotal, coverageModelPromptTotal, coveragePairTotal, coveragePairPromptTotal] = await Promise.all([
-    prisma.model.count(),
-    prisma.matchup.count(),
-    prisma.vote.count(),
+    prisma.model.count({ where: { stealthVariant: null } }),
+    prisma.matchup.count({ where: { stealthVariantId: null } }),
+    prisma.vote.count({ where: { matchup: { stealthVariantId: null } } }),
     prisma.arenaCoverageModelPrompt.count(),
     prisma.arenaCoveragePair.count(),
     prisma.arenaCoveragePairPrompt.count(),
@@ -94,14 +94,15 @@ Usage:
       const dcmp = await tx.arenaCoverageModelPrompt.deleteMany();
       deletedCoverageModelPrompts = dcmp.count;
 
-      const dv = await tx.vote.deleteMany();
+      const dv = await tx.vote.deleteMany({ where: { matchup: { stealthVariantId: null } } });
       deletedVotes = dv.count;
 
-      const dm = await tx.matchup.deleteMany();
+      const dm = await tx.matchup.deleteMany({ where: { stealthVariantId: null } });
       deletedMatchups = dm.count;
     }
 
     const updatedModels = await tx.model.updateMany({
+      where: { stealthVariant: null },
       data: {
         eloRating: 1500,
         glickoRd: 350,
@@ -114,7 +115,6 @@ Usage:
         bothBadCount: 0,
       },
     });
-
     return {
       deletedVotes,
       deletedMatchups,

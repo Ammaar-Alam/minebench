@@ -123,6 +123,22 @@ export function buildPersistentMeshCacheKey(rawKey: string): string {
   return `${CACHE_VERSION}:${rawKey}`;
 }
 
+export type PublicMeshCacheKeyParams = {
+  checksum: string | null | undefined;
+  variant: string;
+  palette?: string | null;
+  blockCount: number;
+};
+
+export function createPublicMeshCacheKey(params: PublicMeshCacheKeyParams): string | null {
+  const checksum = params.checksum?.trim();
+  if (!checksum) return null;
+  const palette = params.palette?.trim() || "simple";
+  const variant = params.variant.trim();
+  const count = Math.max(0, Math.floor(params.blockCount));
+  return `public:${checksum}:${variant}:${palette}:${count}`;
+}
+
 export async function getCachedMeshPayload(rawKey: string | null | undefined): Promise<VoxelMeshPayload | null> {
   const trimmed = rawKey?.trim();
   if (!trimmed || !supportsIndexedDb()) return null;

@@ -1,12 +1,14 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { supabaseProjectRefFromApiUrl } from "@/lib/db/identity";
+import { getSupabaseServerConfig } from "@/lib/supabase/config";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 export const DEFAULT_BUILD_STORAGE_BUCKET = "builds";
 export const LOCAL_BUILD_STORAGE_BUCKET = "__local_fs__";
+const STORAGE_DELETE_BATCH_SIZE = 100;
 
 export type BuildStorageRef = {
   bucket: string;
@@ -27,6 +29,7 @@ export type BuildPayloadSource = {
 
 type LoadBuildPayloadOptions = {
   signal?: AbortSignal;
+  maxBytes?: number;
 };
 
 type SupabaseStorageConfig = {
@@ -40,10 +43,6 @@ export type SupabaseStorageReadiness = {
   ready: boolean;
   error: string | null;
 };
-
-function trimTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, "");
-}
 
 function encodePath(path: string): string {
   return path
@@ -80,22 +79,15 @@ function encodingWantsGzip(encoding: string | null | undefined): boolean {
 }
 
 export function getSupabaseStorageConfig(): SupabaseStorageConfig {
-  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
-
-  if (!url) {
-    throw new Error("Missing SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) for storage-backed build payloads");
-  }
-  if (!serviceRoleKey) {
-    throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY for storage-backed build payloads");
-  }
-
-  return { url: trimTrailingSlashes(url), serviceRoleKey };
+  const config = getSupabaseServerConfig();
+  return { url: config.url, serviceRoleKey: config.secretKey };
 }
 
 export function hasSupabaseStorageConfig(): boolean {
   const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  const serviceRoleKey = (
+    process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""
+  ).trim();
   return Boolean(url && serviceRoleKey);
 }
 
@@ -103,6 +95,37 @@ export function getBuildStorageBucketFromEnv(): string {
   // an env var present but blank must fall back, not silently disable artifact
   // delivery for every build
   return process.env.SUPABASE_STORAGE_BUCKET?.trim() || DEFAULT_BUILD_STORAGE_BUCKET;
+}
+
+export async function deleteSupabaseStorageObjects(
+  refs: ReadonlyArray<{ bucket: string; path: string }>,
+): Promise<void> {
+  if (refs.length === 0) return;
+  const config = getSupabaseStorageConfig();
+  const byBucket = new Map<string, Set<string>>();
+  for (const ref of refs) {
+    const paths = byBucket.get(ref.bucket) ?? new Set<string>();
+    paths.add(ref.path);
+    byBucket.set(ref.bucket, paths);
+  }
+  for (const [bucket, pathSet] of byBucket) {
+    const paths = Array.from(pathSet);
+    for (let index = 0; index < paths.length; index += STORAGE_DELETE_BATCH_SIZE) {
+      const response = await fetch(
+        `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${config.serviceRoleKey}`,
+            apikey: config.serviceRoleKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ prefixes: paths.slice(index, index + STORAGE_DELETE_BATCH_SIZE) }),
+        },
+      );
+      if (!response.ok) throw new Error(`Storage deletion failed (${response.status})`);
+    }
+  }
 }
 
 export async function getSupabaseStorageReadiness(): Promise<SupabaseStorageReadiness> {
@@ -177,6 +200,9 @@ export async function fetchStoredBuildBytes(
 
   if ((ref.bucket ?? "").trim() === LOCAL_BUILD_STORAGE_BUCKET) {
     const absolutePath = resolveLocalStorageAbsolutePath(ref.path);
+    if (opts?.maxBytes != null && (await stat(absolutePath)).size > opts.maxBytes) {
+      throw new Error("Storage payload exceeds size limit");
+    }
     return new Uint8Array(await readFile(absolutePath));
   }
 
@@ -202,21 +228,77 @@ export async function fetchStoredBuildBytes(
     const text = await resp.text().catch(() => "");
     throw new Error(`Storage download failed (${resp.status}): ${text || "empty response"}`);
   }
-
-  return new Uint8Array(await resp.arrayBuffer());
+  const maxBytes = opts?.maxBytes;
+  if (maxBytes == null) {
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+  const contentLength = Number.parseInt(resp.headers.get("content-length") ?? "", 10);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    await resp.body?.cancel().catch(() => undefined);
+    throw new Error("Storage payload exceeds size limit");
+  }
+  if (!resp.body) return new Uint8Array();
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      length += next.value.byteLength;
+      if (length > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("Storage payload exceeds size limit");
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
-export function decodeStoredBuildText(bytes: Uint8Array, encoding?: string | null): string {
+export function decodeStoredBuildText(
+  bytes: Uint8Array,
+  encoding?: string | null,
+  opts?: { maxOutputBytes?: number },
+): string {
   const wantsGzip = encodingWantsGzip(encoding);
   const isGzip = hasGzipMagic(bytes);
 
   if (wantsGzip || isGzip) {
-    if (!isGzip) return Buffer.from(bytes).toString("utf-8");
+    if (!isGzip) {
+      if (opts?.maxOutputBytes != null && bytes.byteLength > opts.maxOutputBytes) {
+        throw new Error("Stored build payload exceeds size limit");
+      }
+      return Buffer.from(bytes).toString("utf-8");
+    }
     try {
-      return gunzipSync(bytes).toString("utf-8");
-    } catch {
+      return gunzipSync(
+        bytes,
+        opts?.maxOutputBytes == null ? undefined : { maxOutputLength: opts.maxOutputBytes },
+      ).toString("utf-8");
+    } catch (error) {
+      if (
+        opts?.maxOutputBytes != null &&
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ERR_BUFFER_TOO_LARGE"
+      ) {
+        throw new Error("Stored build payload exceeds size limit");
+      }
       throw new Error("Stored build payload is marked as gzip but failed to decompress");
     }
+  }
+
+  if (opts?.maxOutputBytes != null && bytes.byteLength > opts.maxOutputBytes) {
+    throw new Error("Stored build payload exceeds size limit");
   }
 
   return Buffer.from(bytes).toString("utf-8");

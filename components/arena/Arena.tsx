@@ -2,35 +2,69 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArenaAction,
   ArenaBuildDeliveryClass,
   ArenaBuildRef,
   ArenaBuildVariant,
   ArenaMatchup,
-  ArenaBuildStreamEvent,
+  ArenaMatchupLane,
+  ArenaModelReveal,
+  ArenaVoteResponse,
   VoteChoice,
 } from "@/lib/arena/types";
-import { readBuildVariantArtifact } from "@/lib/arena/clientBuildResponse";
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import {
-  appendPackedVoxelBlocks,
-  createPackedVoxelBlocks,
-  packVoxelBlocks,
-  reservePackedVoxelBlocks,
+  IncompleteBuildStreamError,
+  packDeliveredBuild,
+  readBuildVariantPayload,
+  readBuildVariantStream,
+  type BuildVariantPayloadResult,
+  type BuildStreamProgress,
+  type BuildVariantStreamResponse,
+} from "@/lib/arena/clientBuildResponse";
+import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import { getPalette } from "@/lib/blocks/palettes";
+import {
+  createVoxelMeshPayloadInWorker,
+  type VoxelMeshPayload,
+} from "@/lib/voxel/mesh";
+import { claimArenaPremesh, type ArenaPremeshEntry } from "@/lib/arena/premesh";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import type { VoxelViewerBuildMetrics } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 import { VoteBar, type VoteConfirmTarget } from "@/components/arena/VoteBar";
 import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
 import { ErrorState } from "@/components/ErrorState";
 import { trackEvent } from "@/lib/analytics";
+import {
+  getArenaBlockCountBucket,
+  getArenaLatencyBucket,
+  roundMetricMs,
+} from "@/lib/observability/arenaMetrics";
+import {
+  createBrowserPerformanceTrace,
+  type BrowserPerformanceTrace,
+} from "@/lib/observability/browserPerformance";
+import {
+  enqueueClientMetric,
+  enqueueMatchupStageMetric,
+  enqueueVoxelMetric,
+  normalizeDeliverySource,
+} from "@/lib/observability/clientMetrics";
 
 type ArenaState =
   | { kind: "loading" }
   | { kind: "ready"; matchup: ArenaMatchup }
   | { kind: "error"; message: string };
+
+function modelRevealLabel(model: ArenaModelReveal | null | undefined): string | null {
+  if (!model) return null;
+  return model.provider === "Stealth" ? `Stealth • ${model.displayName}` : model.displayName;
+}
 
 // Reading the binary artifact is opt-in per request, so turning this off is a
 // client deploy and needs no coordination with what storage holds.
@@ -67,52 +101,67 @@ const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
 let snapshotStorageRedirectBlocked = false;
 let streamStorageRedirectBlocked = false;
 
-// Parsing JSON produces one object per block. Packing at the delivery boundary
-// lets that array go instead of keeping it alive for as long as a lane holds
-// the build, which on a matchup means two of them at once.
-function packDeliveredBuild(
-  build: ArenaMatchup["a"]["build"],
-): ArenaMatchup["a"]["build"] {
-  if (!build || build.packed || build.blocks.length === 0) return build;
-  return { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) };
-}
-
-function packBuildVariantResponse(payload: BuildVariantResponse): BuildVariantResponse {
-  const packedBuild = packDeliveredBuild(payload.voxelBuild);
-  return packedBuild === payload.voxelBuild ? payload : { ...payload, voxelBuild: packedBuild };
-}
-
-// The binary artifact already carries its blocks as typed arrays, so it needs
-// no packing step and never becomes a string or per-block objects.
-async function readBuildVariantPayload(res: Response): Promise<BuildVariantResponse> {
-  const artifact = await readBuildVariantArtifact<BuildVariantResponse>(res);
-  if (artifact.kind === "json") return packBuildVariantResponse(artifact.value);
-  const envelope = artifact.envelope as Omit<BuildVariantResponse, "voxelBuild"> & {
-    version?: string;
-  };
-  return {
-    buildId: envelope.buildId,
-    variant: envelope.variant,
-    checksum: envelope.checksum ?? null,
-    serverValidated: Boolean(envelope.serverValidated),
-    buildLoadHints: envelope.buildLoadHints,
-    voxelBuild: { version: "1.0", blocks: [], packed: artifact.blocks },
-  };
+const matchupRequestModes = new Map<string, "random" | "forced">();
+function setMatchupRequestMode(id: string, mode: "random" | "forced") {
+  if (matchupRequestModes.size > 200) {
+    const firstKey = matchupRequestModes.keys().next().value;
+    if (firstKey) matchupRequestModes.delete(firstKey);
+  }
+  matchupRequestModes.set(id, mode);
 }
 
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
-  const url = new URL("/api/arena/matchup", window.location.origin);
-  if (promptId) url.searchParams.set("promptId", promptId);
-  // Adaptive mode keeps small builds instant while deferring large payloads.
-  url.searchParams.set("payload", "adaptive");
-  const res = await fetch(url, { method: "GET", credentials: "include", signal });
-  if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load matchup"));
-  const matchup = (await res.json()) as ArenaMatchup;
-  return {
-    ...matchup,
-    a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
-    b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
-  };
+  const trace = createBrowserPerformanceTrace("matchup");
+  trace.mark("fetch_start");
+  try {
+    const url = new URL("/api/arena/matchup", window.location.origin);
+    if (promptId) url.searchParams.set("promptId", promptId);
+    // Adaptive mode keeps small builds instant while deferring large payloads.
+    url.searchParams.set("payload", "adaptive");
+    const res = await fetch(url, { method: "GET", credentials: "include", signal });
+    trace.mark("headers_received");
+    if (!res.ok) throw new Error(await readClientErrorResponse(res, "Failed to load matchup"));
+    const matchup = (await res.json()) as ArenaMatchup;
+    const packedMatchup = {
+      ...matchup,
+      a: { ...matchup.a, build: packDeliveredBuild(matchup.a.build) },
+      b: { ...matchup.b, build: packDeliveredBuild(matchup.b.build) },
+    };
+    trace.mark("matchup_received");
+    const totalMs = trace.measure("total", "fetch_start", "matchup_received") ?? 0;
+    const headersMs = roundMetricMs(
+      trace.measure("headers", "fetch_start", "headers_received"),
+    );
+    const bodyMs = roundMetricMs(
+      trace.measure("body", "headers_received", "matchup_received"),
+    );
+    const laneABlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build));
+    const laneBBlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build));
+    const mode: "random" | "forced" = promptId ? "forced" : "random";
+    setMatchupRequestMode(packedMatchup.id, mode);
+    trackEvent("arena_matchup_received", {
+      path: `${mode}:adaptive`,
+      samplingLane: matchup.samplingLane ?? "unknown",
+      laneABlocks,
+      laneBBlocks,
+      headersMs,
+      bodyMs,
+      totalMs: roundMetricMs(totalMs),
+      latency: getArenaLatencyBucket(totalMs),
+    });
+    enqueueClientMetric({
+      kind: "matchup",
+      mode,
+      laneABlocks,
+      laneBBlocks,
+      headersMs,
+      bodyMs,
+      totalMs: roundMetricMs(totalMs),
+    });
+    return packedMatchup;
+  } finally {
+    trace.clear();
+  }
 }
 
 async function fetchMatchup(
@@ -159,21 +208,35 @@ const VOTE_REQUEST_TIMEOUT_MS = Number.parseInt(
   10,
 );
 
-async function submitVote(matchupId: string, choice: VoteChoice) {
-  // hard timeout so a stalled /api/arena/vote call can't hang the reveal state
+async function submitArenaAction(matchupId: string, action: ArenaAction): Promise<ArenaVoteResponse> {
+  const failureMessage = action === "SKIP" ? "Couldn't reveal this matchup." : "Couldn't record your vote.";
+  // hard timeout so a stalled arena action can't hang the reveal state
   const timed = makeTimeoutSignal(undefined, VOTE_REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch("/api/arena/vote", {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ matchupId, choice }),
+      body: JSON.stringify({ matchupId, choice: action }),
       signal: timed.signal,
     });
-    if (!res.ok) throw new Error(await readClientErrorResponse(res, "Couldn't record your vote."));
+    if (!res.ok) throw new Error(await readClientErrorResponse(res, failureMessage));
+    const response = (await res.json()) as ArenaVoteResponse;
+    if (!response?.reveal?.a?.displayName || !response.reveal.b?.displayName) {
+      throw new Error(
+        action === "SKIP"
+          ? "The model reveal was unavailable. Refresh to continue."
+          : "The vote saved, but the model reveal was unavailable. Refresh to continue.",
+      );
+    }
+    return response;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("Vote timed out — the site may be under heavy load. Please try again.");
+      throw new Error(
+        action === "SKIP"
+          ? "Reveal timed out — the site may be under heavy load. Please try again."
+          : "Vote timed out — the site may be under heavy load. Please try again.",
+      );
     }
     if (err instanceof TypeError) {
       // Network failure (offline, DNS, CORS, etc.)
@@ -185,27 +248,169 @@ async function submitVote(matchupId: string, choice: VoteChoice) {
   }
 }
 
-type BuildVariantResponse = {
-  buildId: string;
-  variant: ArenaBuildVariant;
-  checksum: string | null;
-  serverValidated: boolean;
-  buildLoadHints?: ArenaMatchup["a"]["buildLoadHints"];
-  voxelBuild: ArenaMatchup["a"]["build"];
+type BuildVariantResponse = BuildVariantStreamResponse;
+type BuildRequestPurpose = "visible" | "prefetch";
+type BuildTransport = "snapshot" | "stream-artifact" | "stream-live";
+
+type BuildDeliveryMetrics = {
+  trace: BrowserPerformanceTrace;
+  startStage: "preview_fetch_start" | "full_fetch_start";
+  purpose: BuildRequestPurpose;
+  transport: BuildTransport;
 };
 
-type BuildStreamProgress = {
-  receivedBlocks: number;
-  totalBlocks: number | null;
-  chunkIndex: number | null;
-  chunkCount: number | null;
-};
+function startBuildDeliveryMetrics(
+  ref: ArenaBuildRef,
+  purpose: BuildRequestPurpose,
+  transport: BuildTransport,
+): BuildDeliveryMetrics {
+  const trace = createBrowserPerformanceTrace("build-delivery");
+  const startStage = ref.variant === "preview" ? "preview_fetch_start" : "full_fetch_start";
+  trace.mark(startStage);
+  return { trace, startStage, purpose, transport };
+}
+
+async function readMeasuredBuildVariantPayload(
+  response: Response,
+  metrics: BuildDeliveryMetrics,
+): Promise<BuildVariantPayloadResult> {
+  const result = await readBuildVariantPayload(response, (event) => {
+    if (event.stage === "body_complete") metrics.trace.mark("body_complete");
+    if (event.stage === "inflate_complete") metrics.trace.mark("inflate_complete");
+    if (
+      event.stage === "binary_decode_complete" ||
+      event.stage === "json_decode_complete"
+    ) {
+      metrics.trace.mark(event.stage);
+      metrics.trace.mark("decode_complete");
+    }
+  });
+  metrics.trace.mark("payload_ready");
+  return result;
+}
+
+function normalizeBuildDeliveryClass(response: Response): ArenaBuildDeliveryClass | "unknown" {
+  const value = response.headers.get("x-build-delivery-class");
+  return value === "inline" ||
+    value === "snapshot" ||
+    value === "stream-live" ||
+    value === "stream-artifact"
+    ? value
+    : "unknown";
+}
+
+function reportBuildDeliveryMetrics(opts: {
+  metrics: BuildDeliveryMetrics;
+  ref: ArenaBuildRef;
+  response: Response;
+  requestedFormat: "v4" | "json" | "ndjson";
+  servedFormat: "binary" | "json" | "ndjson";
+  payload: BuildVariantResponse;
+  bodyBytes: number | null;
+  compressed: boolean;
+}) {
+  const { metrics } = opts;
+  const source = normalizeDeliverySource(opts.response);
+  const deliveryClass = normalizeBuildDeliveryClass(opts.response);
+  const blockCountBucket = getArenaBlockCountBucket(
+    voxelBuildBlockCount(opts.payload.voxelBuild),
+  );
+  const path = `${metrics.purpose}:${opts.ref.variant}:${metrics.transport}`;
+  const totalMs =
+    metrics.trace.measure("total", metrics.startStage, "payload_ready") ?? 0;
+  const optimized =
+    opts.requestedFormat === "v4" &&
+    opts.servedFormat === "binary" &&
+    (source === "artifact" || source === "artifact-redirect");
+  const headersMs = roundMetricMs(
+    metrics.trace.measure("headers", metrics.startStage, "headers_received"),
+  );
+  const bodyMs = roundMetricMs(
+    metrics.trace.measure("body", "headers_received", "body_complete"),
+  );
+  const inflateMs = roundMetricMs(
+    metrics.trace.measure("inflate", "body_complete", "inflate_complete"),
+  );
+  const decodeMs = roundMetricMs(
+    metrics.trace.measure("decode", "inflate_complete", "decode_complete"),
+  );
+
+  // Web Analytics Plus accepts at most eight properties per custom event
+  trackEvent("arena_build_delivery", {
+    path,
+    requestedFormat: opts.requestedFormat,
+    servedFormat: opts.servedFormat,
+    source,
+    deliveryClass,
+    optimized,
+    blockCountBucket,
+    gzip: opts.compressed,
+  });
+  trackEvent("arena_build_delivery_timing", {
+    path: `${path}:${opts.servedFormat}`,
+    blockCountBucket,
+    headersMs,
+    bodyMs,
+    inflateMs,
+    decodeMs,
+    totalMs: roundMetricMs(totalMs),
+    bodyBytes: opts.bodyBytes,
+  });
+  enqueueClientMetric({
+    kind: "delivery",
+    surface: "arena",
+    purpose: metrics.purpose,
+    variant: opts.ref.variant,
+    transport: metrics.transport,
+    requestedFormat: opts.requestedFormat,
+    servedFormat: opts.servedFormat,
+    delivery_source: source,
+    blockCountBucket,
+    compressed: opts.compressed,
+    optimized,
+    headersMs,
+    bodyMs,
+    inflateMs,
+    decodeMs,
+    totalMs: roundMetricMs(totalMs),
+    bodyBytes: opts.bodyBytes,
+  });
+}
+
+function reportBuildRenderMetrics(
+  variant: ArenaBuildVariant,
+  metrics: VoxelViewerBuildMetrics,
+) {
+  const path = `${variant}:${metrics.strategy}:${metrics.cacheStatus}`;
+  const blockCountBucket = getArenaBlockCountBucket(metrics.inputBlockCount);
+  trackEvent("arena_build_mesh_timing", {
+    path,
+    blockCountBucket,
+    queueMs: roundMetricMs(metrics.queueMs),
+    atlasMs: roundMetricMs(metrics.atlasMs),
+    payloadMs: roundMetricMs(metrics.payloadMs),
+    groupMs: roundMetricMs(metrics.groupMs),
+    meshMs: roundMetricMs(metrics.meshMs),
+    totalMs: roundMetricMs(metrics.totalMs),
+  });
+  trackEvent("arena_build_render_timing", {
+    path,
+    blockCountBucket,
+    renderedBlockCountBucket: getArenaBlockCountBucket(metrics.renderedBlockCount),
+    firstRenderMs: roundMetricMs(metrics.firstRenderMs),
+    revealMs: roundMetricMs(metrics.revealMs),
+    totalMs: roundMetricMs(metrics.totalMs),
+    animated: metrics.animated,
+  });
+  enqueueVoxelMetric("arena", variant, metrics);
+}
 
 type FetchBuildVariantStreamOptions = {
   signal?: AbortSignal;
   onProgress?: (build: ArenaMatchup["a"]["build"], progress: BuildStreamProgress) => void;
   allowSnapshotFallback?: boolean;
   allowLiveFallback?: boolean;
+  purpose?: BuildRequestPurpose;
 };
 
 const SNAPSHOT_FETCH_TIMEOUT_MS = Number.parseInt(
@@ -216,20 +421,6 @@ const STREAM_REQUEST_TIMEOUT_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_STREAM_REQUEST_TIMEOUT_MS ?? "12000",
   10,
 );
-const STREAM_FIRST_EVENT_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_FIRST_EVENT_TIMEOUT_MS ?? "6000",
-  10,
-);
-const STREAM_STALL_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_STALL_TIMEOUT_MS ?? "10000",
-  10,
-);
-const STREAM_HARD_TIMEOUT_MS = Number.parseInt(
-  process.env.NEXT_PUBLIC_ARENA_STREAM_HARD_TIMEOUT_MS ?? "35000",
-  10,
-);
-const GZIP_MAGIC_0 = 0x1f;
-const GZIP_MAGIC_1 = 0x8b;
 const INITIAL_RETRIEVAL_OVERLAY_DELAY_MS = Number.parseInt(
   process.env.NEXT_PUBLIC_ARENA_INITIAL_RETRIEVAL_OVERLAY_DELAY_MS ?? "420",
   10,
@@ -339,91 +530,6 @@ function makeTimeoutSignal(
   };
 }
 
-async function readWithTimeout<T>(
-  read: () => Promise<T>,
-  timeoutMs: number,
-  signal?: AbortSignal,
-  onTimeout?: () => void,
-): Promise<T> {
-  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-  return await new Promise<T>((resolve, reject) => {
-    const timer =
-      Number.isFinite(timeoutMs) && timeoutMs > 0
-        ? window.setTimeout(() => {
-            onTimeout?.();
-            cleanup();
-            reject(new Error("Build stream stalled"));
-          }, timeoutMs)
-        : null;
-
-    const onAbort = () => {
-      cleanup();
-      reject(new DOMException("Aborted", "AbortError"));
-    };
-
-    const cleanup = () => {
-      if (timer != null) window.clearTimeout(timer);
-      if (signal) signal.removeEventListener("abort", onAbort);
-    };
-
-    if (signal) signal.addEventListener("abort", onAbort, { once: true });
-    read().then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (err) => {
-        cleanup();
-        reject(err);
-      },
-    );
-  });
-}
-
-function isGzipChunk(chunk: Uint8Array): boolean {
-  return chunk.length >= 2 && chunk[0] === GZIP_MAGIC_0 && chunk[1] === GZIP_MAGIC_1;
-}
-
-async function gunzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
-  if (typeof DecompressionStream !== "function") {
-    throw new Error("Compressed build artifact is not supported by this browser.");
-  }
-  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-  const decompressor = new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>;
-  const stream = new Blob([body]).stream().pipeThrough(decompressor);
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
-
-async function readBuildVariantJson(res: Response): Promise<BuildVariantResponse> {
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  const body = isGzipChunk(bytes) ? await gunzipBytes(bytes) : bytes;
-  return JSON.parse(new TextDecoder().decode(body)) as BuildVariantResponse;
-}
-
-function streamFromFirstChunk(
-  firstChunk: Uint8Array,
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      controller.enqueue(firstChunk);
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) controller.enqueue(value);
-        }
-        controller.close();
-      } catch (err) {
-        controller.error(err);
-      }
-    },
-    cancel(reason) {
-      return reader.cancel(reason);
-    },
-  });
-}
-
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
@@ -493,7 +599,11 @@ async function fetchBuildVariantSnapshot(
   ref: ArenaBuildRef,
   signal?: AbortSignal,
   timeoutMs = SNAPSHOT_FETCH_TIMEOUT_MS,
-  opts?: { redirect?: boolean },
+  opts?: {
+    redirect?: boolean;
+    purpose?: BuildRequestPurpose;
+    metrics?: BuildDeliveryMetrics;
+  },
 ): Promise<BuildVariantResponse> {
   const url = new URL(`/api/arena/builds/${encodeURIComponent(ref.buildId)}`, window.location.origin);
   url.searchParams.set("variant", ref.variant);
@@ -501,6 +611,10 @@ async function fetchBuildVariantSnapshot(
   const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
   if (BINARY_ARTIFACT_READS_ENABLED) url.searchParams.set("format", "v4");
+  const ownsMetrics = opts?.metrics == null;
+  const metrics =
+    opts?.metrics ??
+    startBuildDeliveryMetrics(ref, opts?.purpose ?? "visible", "snapshot");
   const timed = makeTimeoutSignal(signal, timeoutMs);
   try {
     let res: Response;
@@ -511,38 +625,69 @@ async function fetchBuildVariantSnapshot(
         signal: timed.signal,
         redirect: "follow",
       });
+      metrics.trace.mark("headers_received");
     } catch (err: unknown) {
       if (allowRedirect && !isAbortError(err)) {
         markStorageRedirectBlocked("snapshot");
-        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+        return await fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
+          redirect: false,
+          purpose: opts?.purpose,
+          metrics,
+        });
       }
       throw err;
     }
     if (!res.ok) {
       if (allowRedirect && shouldRetrySnapshotWithoutRedirect(res.status)) {
-        return fetchBuildVariantSnapshot(ref, signal, timeoutMs, { redirect: false });
+        return await fetchBuildVariantSnapshot(ref, signal, timeoutMs, {
+          redirect: false,
+          purpose: opts?.purpose,
+          metrics,
+        });
       }
       const message = await readClientErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
-    return await readBuildVariantPayload(res);
+    const result = await readMeasuredBuildVariantPayload(res, metrics);
+    reportBuildDeliveryMetrics({
+      metrics,
+      ref,
+      response: res,
+      requestedFormat: BINARY_ARTIFACT_READS_ENABLED ? "v4" : "json",
+      servedFormat: result.servedFormat,
+      payload: result.payload,
+      bodyBytes: result.bodyBytes,
+      compressed:
+        result.compressed || /\bgzip\b/i.test(res.headers.get("content-encoding") ?? ""),
+    });
+    return result.payload;
   } finally {
     timed.cleanup();
-  }
-}
-
-function parseArenaBuildStreamLine(line: string): ArenaBuildStreamEvent | null {
-  if (!line.trim()) return null;
-  try {
-    return JSON.parse(line) as ArenaBuildStreamEvent;
-  } catch {
-    return null;
+    if (ownsMetrics) metrics.trace.clear();
   }
 }
 
 async function fetchBuildVariantStreamOnce(
   ref: ArenaBuildRef,
   useArtifact: boolean,
+  opts?: FetchBuildVariantStreamOptions,
+): Promise<BuildVariantResponse> {
+  const metrics = startBuildDeliveryMetrics(
+    ref,
+    opts?.purpose ?? "visible",
+    useArtifact ? "stream-artifact" : "stream-live",
+  );
+  try {
+    return await fetchBuildVariantStreamOnceWithMetrics(ref, useArtifact, metrics, opts);
+  } finally {
+    metrics.trace.clear();
+  }
+}
+
+async function fetchBuildVariantStreamOnceWithMetrics(
+  ref: ArenaBuildRef,
+  useArtifact: boolean,
+  metrics: BuildDeliveryMetrics,
   opts?: FetchBuildVariantStreamOptions,
 ): Promise<BuildVariantResponse> {
   const url = new URL(
@@ -561,11 +706,10 @@ async function fetchBuildVariantStreamOnce(
       credentials: "same-origin",
       signal: requestTimed.signal,
     });
-  } catch (err: unknown) {
-    if (useArtifact && !isAbortError(err)) {
-      markStorageRedirectBlocked("stream");
-    }
-    throw err;
+    metrics.trace.mark("headers_received");
+  } catch (error) {
+    if (useArtifact && !isAbortError(error)) markStorageRedirectBlocked("stream");
+    throw error;
   } finally {
     requestTimed.cleanup();
   }
@@ -580,163 +724,58 @@ async function fetchBuildVariantStreamOnce(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    return packBuildVariantResponse(await readBuildVariantJson(res));
+    const result = await readMeasuredBuildVariantPayload(res, metrics);
+    reportBuildDeliveryMetrics({
+      metrics,
+      ref,
+      response: res,
+      requestedFormat: "ndjson",
+      servedFormat: result.servedFormat,
+      payload: result.payload,
+      bodyBytes: result.bodyBytes,
+      compressed:
+        result.compressed || /\bgzip\b/i.test(res.headers.get("content-encoding") ?? ""),
+    });
+    return result.payload;
   }
 
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-  let cancelled = false;
-  const cancelReader = () => {
-    if (cancelled) return;
-    cancelled = true;
-    void reader?.cancel().catch(() => undefined);
-  };
-
   try {
-    reader = res.body.getReader();
-    const firstRead = await readWithTimeout(
-      () => reader!.read(),
-      STREAM_FIRST_EVENT_TIMEOUT_MS,
-      opts?.signal,
-      cancelReader,
-    );
-    if (firstRead.done || !firstRead.value) {
-      throw new Error("Build stream ended before any data loaded");
-    }
-    const firstChunk = firstRead.value;
-    const stream = streamFromFirstChunk(firstChunk, reader);
-    reader = isGzipChunk(firstChunk)
-      ? stream
-          .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>)
-          .getReader()
-      : stream.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const startedAt = performance.now();
-
-    let resolvedVariant: ArenaBuildVariant = ref.variant;
-    let checksum: string | null = ref.checksum ?? null;
-    let serverValidated = false;
-    let buildLoadHints: ArenaMatchup["a"]["buildLoadHints"] | undefined;
-    let totalBlocks: number | null = null;
-    let hasComplete = false;
-    let sawFirstEvent = false;
-
-    // Blocks land in typed arrays as they arrive: the parsed objects from each
-    // chunk are released instead of being retained for the life of the lane,
-    // which is what a large build costs on a phone.
-    const packed = createPackedVoxelBlocks(0);
-    const streamedBuild: RenderableVoxelBuild = {
-      version: "1.0",
-      blocks: [],
-      packed,
-    };
-
-    const emitProgress = (progress: BuildStreamProgress) => {
-      if (!opts?.onProgress) return;
-      opts.onProgress(streamedBuild, progress);
-    };
-
-    const processLine = (line: string) => {
-      const event = parseArenaBuildStreamLine(line);
-      if (!event) return;
-
-      if (event.type === "ping") {
-        sawFirstEvent = true;
-        return;
-      }
-      if (event.type === "error") {
-        throw new Error(event.message || "Build stream failed");
-      }
-      if (event.type === "hello") {
-        sawFirstEvent = true;
-        resolvedVariant = event.variant;
-        checksum = event.checksum ?? checksum;
-        serverValidated = serverValidated || event.serverValidated;
-        totalBlocks = event.totalBlocks || totalBlocks;
-        buildLoadHints = event.buildLoadHints ?? buildLoadHints;
-        if (totalBlocks != null) reservePackedVoxelBlocks(packed, totalBlocks);
-        if (packed.count === 0) {
-          emitProgress({
-            receivedBlocks: 0,
-            totalBlocks,
-            chunkIndex: null,
-            chunkCount: event.chunkCount ?? null,
-          });
+    const payload = await readBuildVariantStream(res, {
+      signal: opts?.signal,
+      onProgress: opts?.onProgress,
+      onStage(stage) {
+        if (stage === "body_complete") {
+          metrics.trace.mark("body_complete");
+          // Stream decompression and decoding happen incrementally while the body arrives.
+          metrics.trace.mark("inflate_complete");
+        } else {
+          metrics.trace.mark("decode_complete");
         }
-        return;
-      }
-      if (event.type === "chunk") {
-        sawFirstEvent = true;
-        if (Array.isArray(event.blocks) && event.blocks.length > 0) {
-          appendPackedVoxelBlocks(packed, event.blocks);
-        }
-        totalBlocks = event.totalBlocks || totalBlocks;
-        emitProgress({
-          receivedBlocks: event.receivedBlocks,
-          totalBlocks,
-          chunkIndex: event.index,
-          chunkCount: event.chunkCount,
-        });
-        return;
-      }
-      if (event.type === "complete") {
-        hasComplete = true;
-        totalBlocks = event.totalBlocks || totalBlocks;
-      }
-    };
-
-    while (true) {
-      if (performance.now() - startedAt > STREAM_HARD_TIMEOUT_MS) {
-        cancelReader();
-        throw new Error("Build stream hard timeout");
-      }
-
-      const { done, value } = await readWithTimeout(
-        () => reader!.read(),
-        sawFirstEvent ? STREAM_STALL_TIMEOUT_MS : STREAM_FIRST_EVENT_TIMEOUT_MS,
-        opts?.signal,
-        cancelReader,
-      );
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-
-      for (const line of lines) {
-        processLine(line);
-      }
+      },
+    });
+    metrics.trace.mark("payload_ready");
+    const contentLength = Number.parseInt(res.headers.get("content-length") ?? "", 10);
+    reportBuildDeliveryMetrics({
+      metrics,
+      ref,
+      response: res,
+      requestedFormat: "ndjson",
+      servedFormat: "ndjson",
+      payload,
+      bodyBytes: Number.isFinite(contentLength) && contentLength >= 0 ? contentLength : null,
+      compressed: /\bgzip\b/i.test(res.headers.get("content-encoding") ?? ""),
+    });
+    return payload;
+  } catch (error) {
+    if (
+      error instanceof IncompleteBuildStreamError &&
+      opts?.allowSnapshotFallback !== false
+    ) {
+      return fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS, {
+        purpose: opts?.purpose,
+      });
     }
-
-    buffer += decoder.decode();
-    if (buffer.trim()) processLine(buffer);
-
-    const announcedTotal =
-      typeof totalBlocks === "number" && Number.isFinite(totalBlocks) && totalBlocks >= 0
-        ? totalBlocks
-        : null;
-    const streamLooksComplete =
-      hasComplete && (announcedTotal == null || packed.count >= announcedTotal);
-
-    if (!streamLooksComplete) {
-      cancelReader();
-      if (opts?.allowSnapshotFallback === false) {
-        throw new Error("Build stream ended before all blocks loaded");
-      }
-      return fetchBuildVariantSnapshot(ref, opts?.signal);
-    }
-
-    return {
-      buildId: ref.buildId,
-      variant: resolvedVariant,
-      checksum,
-      serverValidated,
-      buildLoadHints,
-      voxelBuild: streamedBuild,
-    };
-  } catch (err: unknown) {
-    cancelReader();
-    if (err instanceof Error && err.name === "AbortError") throw err;
-    throw err;
+    throw error;
   }
 }
 
@@ -753,7 +792,11 @@ async function fetchBuildVariantStream(
     attempts.push(() => fetchBuildVariantStreamOnce(ref, false, opts));
   }
   if (opts?.allowSnapshotFallback !== false) {
-    attempts.push(() => fetchBuildVariantSnapshot(ref, opts?.signal));
+    attempts.push(() =>
+      fetchBuildVariantSnapshot(ref, opts?.signal, SNAPSHOT_FETCH_TIMEOUT_MS, {
+        purpose: opts?.purpose,
+      }),
+    );
   }
 
   for (const attempt of attempts) {
@@ -1043,7 +1086,7 @@ function formatBuildLoadingMessage(
   return formatVoxelLoadingMessage(fullLoading ? "Retrieving full build" : "Retrieving build", progress);
 }
 
-type RevealAction = VoteChoice | "SKIP";
+type RevealAction = ArenaAction;
 
 type RevealState =
   | { kind: "none" }
@@ -1051,8 +1094,8 @@ type RevealState =
       kind: "reveal";
       matchupId: string;
       action: RevealAction;
-      startedAt: number;
-      advanceAt: number;
+      startedAt: number | null;
+      advanceAt: number | null;
       next: ArenaMatchup | null;
     };
 
@@ -1133,6 +1176,16 @@ function isInteractiveTarget(target: EventTarget | null) {
   return Boolean(target.closest("button,a,[role='button'],[role='link'],summary"));
 }
 
+const ARENA_PREMESH_MAX_BLOCK_COUNT = 150_000;
+
+function getArenaPremeshedMeshKey(
+  matchupId: string,
+  side: "a" | "b",
+  variant: ArenaBuildVariant,
+): string {
+  return `${matchupId}:${side}:${variant}`;
+}
+
 export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState(0);
@@ -1168,6 +1221,15 @@ export function Arena() {
   const hydratedBuildCacheWeightsRef = useRef(new Map<string, number>());
   const hydratedBuildCacheBytesRef = useRef(0);
   const fullBuildPrefetchRef = useRef(new Map<string, FullBuildPrefetch>());
+  const premeshedFullMeshRef = useRef<Map<string, ArenaPremeshEntry>>(new Map());
+  const inFlightWarmPromiseRef = useRef<Promise<void>>(Promise.resolve());
+  const matchupStagesRef = useRef<{
+    matchupId: string;
+    startAt: number;
+    mode: "random" | "forced";
+    previewReadyReported: boolean;
+    voteReadyReported: boolean;
+  } | null>(null);
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
   const viewerReadyRef = useRef<{ matchupId: string; a: boolean; b: boolean } | null>(null);
   const autoFullHydrationRetriesRef = useRef(new Map<string, AutoFullHydrationRetry>());
@@ -1175,12 +1237,16 @@ export function Arena() {
   const autoAdvanceTimeoutRef = useRef<number | null>(null);
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
   const advanceNowRequestedAtRef = useRef<number | null>(null);
+  const nextMatchupLoadingRef = useRef(false);
   const handleVoteRef = useRef<(choice: VoteChoice) => Promise<void>>(
     async () => undefined
   );
   const handleSkipRef = useRef<() => Promise<void>>(async () => undefined);
   const advanceToNextRef = useRef<(matchupId: string, next: ArenaMatchup) => Promise<void>>(
     async () => undefined
+  );
+  const loadNextMatchupRef = useRef<(matchupId: string, advanceAt: number) => Promise<void>>(
+    async () => undefined,
   );
 
   const setLaneLoadPhase = useCallback((matchupId: string, side: "a" | "b", phase: SideLoadPhase) => {
@@ -1328,7 +1394,14 @@ export function Arena() {
   );
 
   const matchup = state.kind === "ready" ? state.matchup : null;
-  const revealModels = Boolean(matchup && reveal.kind === "reveal" && reveal.matchupId === matchup.id);
+  const revealModels = Boolean(
+    matchup &&
+      matchup.a.model &&
+      matchup.b.model &&
+      reveal.kind === "reveal" &&
+      reveal.matchupId === matchup.id &&
+      reveal.startedAt != null,
+  );
   const revealAction: RevealAction | null = reveal.kind === "reveal" ? reveal.action : null;
   const matchupHasBuildA = Boolean(matchup?.a.build);
   const matchupHasBuildB = Boolean(matchup?.b.build);
@@ -1639,6 +1712,33 @@ export function Arena() {
       fullBuildPrefetchRef.current.delete(key);
     }
   }, []);
+
+  const abortFullPremeshedMeshes = useCallback((matchupId?: string) => {
+    for (const [key, entry] of premeshedFullMeshRef.current) {
+      if (matchupId && entry.matchupId !== matchupId) continue;
+      entry.controller.abort();
+      premeshedFullMeshRef.current.delete(key);
+    }
+  }, []);
+
+  const getLanePremeshedPayloadPromise = useCallback(
+    (matchupId: string, side: "a" | "b", lane: ArenaMatchupLane): Promise<VoxelMeshPayload> | null => {
+      if (!lane.build || getLaneHydratedVariant(lane) !== "full") return null;
+      const key = getArenaPremeshedMeshKey(matchupId, side, "full");
+      return claimArenaPremesh(premeshedFullMeshRef.current, key);
+    },
+    [],
+  );
+
+  const consumeLanePremeshedPayload = useCallback(
+    (matchupId: string, side: "a" | "b", promise: Promise<VoxelMeshPayload>) => {
+      const key = getArenaPremeshedMeshKey(matchupId, side, "full");
+      if (premeshedFullMeshRef.current.get(key)?.promise === promise) {
+        premeshedFullMeshRef.current.delete(key);
+      }
+    },
+    [],
+  );
 
   const hydrateMatchupSide = useCallback(async (
     matchupValue: ArenaMatchup,
@@ -1955,11 +2055,14 @@ export function Arena() {
         const allowSnapshotFallback = shouldHydrateViaSnapshot(deliveryClass);
         const allowLiveFallback = deliveryClass !== "stream-artifact";
         const payload = shouldHydrateViaSnapshot(deliveryClass)
-          ? await fetchBuildVariantSnapshot(ref, controller.signal).catch(() =>
+          ? await fetchBuildVariantSnapshot(ref, controller.signal, SNAPSHOT_FETCH_TIMEOUT_MS, {
+              purpose: "prefetch",
+            }).catch(() =>
               fetchBuildVariantStream(ref, {
                 signal: controller.signal,
                 allowSnapshotFallback,
                 allowLiveFallback,
+                purpose: "prefetch",
                 onProgress: (_build, progress) => emitPrefetchProgress(progress),
               }),
             )
@@ -1967,6 +2070,7 @@ export function Arena() {
               signal: controller.signal,
               allowSnapshotFallback,
               allowLiveFallback,
+              purpose: "prefetch",
               onProgress: (_build, progress) => emitPrefetchProgress(progress),
             });
         const resolvedRef: ArenaBuildRef = {
@@ -1984,6 +2088,40 @@ export function Arena() {
           buildLoadHints: payload.buildLoadHints,
         };
         cacheHydratedBuild(resolvedRef, entry);
+
+        const blockCount = voxelBuildBlockCount(payload.voxelBuild);
+        if (blockCount > 0 && blockCount <= ARENA_PREMESH_MAX_BLOCK_COUNT) {
+          const warmKey = getArenaPremeshedMeshKey(matchupValue.id, side, "full");
+          if (!premeshedFullMeshRef.current.has(warmKey)) {
+            const warmController = new AbortController();
+            const startWarm = async (): Promise<VoxelMeshPayload> => {
+              const warmEntry = premeshedFullMeshRef.current.get(warmKey);
+              if (!warmEntry || warmController.signal.aborted) {
+                throw new DOMException("Aborted", "AbortError");
+              }
+              warmEntry.started = true;
+              const { payload: meshPayload } = await createVoxelMeshPayloadInWorker(
+                payload.voxelBuild!,
+                getPalette("simple"),
+                { signal: warmController.signal, blockLimit: blockCount },
+              );
+              return meshPayload;
+            };
+
+            const sequencedPromise = inFlightWarmPromiseRef.current.then(startWarm, startWarm);
+            inFlightWarmPromiseRef.current = sequencedPromise.then(
+              () => undefined,
+              () => undefined,
+            );
+            premeshedFullMeshRef.current.set(warmKey, {
+              matchupId: matchupValue.id,
+              promise: sequencedPromise,
+              controller: warmController,
+              started: false,
+            });
+          }
+        }
+
         return payload;
       })();
 
@@ -2019,8 +2157,15 @@ export function Arena() {
       if (matchup?.id) abortFullHydrations(matchup.id);
       if (matchup?.id) abortInitialHydrations(matchup.id);
       if (matchup?.id) abortFullPrefetches(matchup.id);
+      if (matchup?.id) abortFullPremeshedMeshes(matchup.id);
     };
-  }, [abortFullHydrations, abortFullPrefetches, abortInitialHydrations, matchup?.id]);
+  }, [abortFullHydrations, abortFullPrefetches, abortFullPremeshedMeshes, abortInitialHydrations, matchup?.id]);
+
+  useEffect(() => {
+    return () => {
+      abortFullPremeshedMeshes();
+    };
+  }, [abortFullPremeshedMeshes]);
 
   useEffect(() => {
     if (reveal.kind !== "reveal") return;
@@ -2193,6 +2338,17 @@ export function Arena() {
     if (!matchup || reveal.kind !== "reveal" || reveal.matchupId !== matchup.id) {
       return {
         visible: false,
+        pending: false,
+        secondsLeft: 0,
+        progress: 0,
+        nextReady: false,
+        waitingForNext: false,
+      };
+    }
+    if (reveal.startedAt == null || reveal.advanceAt == null) {
+      return {
+        visible: true,
+        pending: true,
         secondsLeft: 0,
         progress: 0,
         nextReady: false,
@@ -2207,7 +2363,7 @@ export function Arena() {
     const nextReady = Boolean(reveal.next);
     const waitingForNext = !nextReady && remainingMs <= 0;
     const progress = nextReady ? timedProgress : Math.min(0.94, timedProgress);
-    return { visible: true, secondsLeft, progress, nextReady, waitingForNext };
+    return { visible: true, pending: false, secondsLeft, progress, nextReady, waitingForNext };
   })();
 
   async function advanceToNext(matchupId: string, next: ArenaMatchup) {
@@ -2232,6 +2388,8 @@ export function Arena() {
     setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(next) });
     abortFullHydrations(matchupId);
     abortInitialHydrations(matchupId);
+    abortFullPrefetches(matchupId);
+    abortFullPremeshedMeshes(matchupId);
     setReveal({ kind: "none" });
     setSubmitting(false);
 
@@ -2244,16 +2402,18 @@ export function Arena() {
 
   const requestAdvanceNow = useCallback((matchupId: string) => {
     const current = revealRef.current;
-    if (current.kind !== "reveal" || current.matchupId !== matchupId) return;
+    if (current.kind !== "reveal" || current.matchupId !== matchupId || current.advanceAt == null) return;
     const now = Date.now();
     advanceNowRequestedAtRef.current = now;
     setReveal((prev) => {
-      if (prev.kind !== "reveal" || prev.matchupId !== matchupId) return prev;
+      if (prev.kind !== "reveal" || prev.matchupId !== matchupId || prev.advanceAt == null) return prev;
       // Clamp so the timer UI switches to "Loading next…" immediately.
       return { ...prev, advanceAt: Math.min(prev.advanceAt, now) };
     });
     if (current.next) {
       void advanceToNextRef.current(matchupId, current.next);
+    } else {
+      void loadNextMatchupRef.current(matchupId, Math.min(current.advanceAt, now));
     }
   }, []);
 
@@ -2288,6 +2448,80 @@ export function Arena() {
     }, 6000);
   }
 
+  function beginReveal(matchupId: string, action: RevealAction) {
+    setReveal({
+      kind: "reveal",
+      matchupId,
+      action,
+      startedAt: null,
+      advanceAt: null,
+      next: null,
+    });
+  }
+
+  function completeReveal(matchupId: string, response: ArenaVoteResponse, durationMs: number): number {
+    setState((prev) =>
+      prev.kind === "ready" && prev.matchup.id === matchupId
+        ? {
+            kind: "ready",
+            matchup: {
+              ...prev.matchup,
+              a: { ...prev.matchup.a, model: response.reveal.a },
+              b: { ...prev.matchup.b, model: response.reveal.b },
+            },
+          }
+        : prev,
+    );
+    const startedAt = Date.now();
+    const advanceAt = startedAt + durationMs;
+    setReveal((prev) =>
+      prev.kind === "reveal" && prev.matchupId === matchupId
+        ? { ...prev, startedAt, advanceAt }
+        : prev,
+    );
+    return advanceAt;
+  }
+
+  function queueNextMatchup(matchupId: string, advanceAt: number, fetchedNext: ArenaMatchup) {
+    const next = applyCachedBuildsToMatchup(fetchedNext);
+    prefetchMatchupBuilds(next);
+    const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchupId;
+    if (stillRevealing) {
+      const requestedAt = advanceNowRequestedAtRef.current;
+      const effectiveAdvanceAt =
+        typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
+      setReveal((prev) =>
+        prev.kind === "reveal" && prev.matchupId === matchupId
+          ? { ...prev, next, advanceAt: effectiveAdvanceAt }
+          : prev,
+      );
+      scheduleAutoAdvance(matchupId, effectiveAdvanceAt, next);
+      return;
+    }
+
+    setState((prev) => {
+      if (prev.kind === "ready" && prev.matchup.id !== matchupId) return prev;
+      if (prev.kind === "error") return prev;
+      return { kind: "ready", matchup: next };
+    });
+    setSubmitting(false);
+  }
+
+  async function loadNextMatchup(matchupId: string, advanceAt: number) {
+    if (nextMatchupLoadingRef.current) return;
+    nextMatchupLoadingRef.current = true;
+    try {
+      queueNextMatchup(matchupId, advanceAt, await fetchMatchup(undefined));
+    } catch (err) {
+      clearAutoAdvance();
+      flashVoteWarning(
+        err instanceof Error ? err.message : "Couldn't load the next matchup",
+      );
+    } finally {
+      nextMatchupLoadingRef.current = false;
+    }
+  }
+
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     if (isMatchupVoteBlocked(matchup, sideLoadStateRef.current)) return;
@@ -2297,17 +2531,12 @@ export function Arena() {
     setSubmitting(true);
     clearAutoAdvance();
     advanceNowRequestedAtRef.current = null;
-    const startedAt = Date.now();
-    const advanceAt = startedAt + REVEAL_MS_AFTER_VOTE;
-    setReveal({ kind: "reveal", matchupId: matchup.id, action: choice, startedAt, advanceAt, next: null });
+    beginReveal(matchup.id, choice);
 
-    // Submit the vote first. If it fails, stay on the current matchup so
-    // the user can retry — advancing anyway would silently convert a
-    // dropped vote into a skip and bias rankings + prompt coverage. We
-    // also don't fetch the next matchup because matchup creation is still
-    // a server-side side effect.
+    let advanceAt: number;
     try {
-      await submitVote(matchup.id, choice);
+      const response = await submitArenaAction(matchup.id, choice);
+      advanceAt = completeReveal(matchup.id, response, REVEAL_MS_AFTER_VOTE);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Couldn't record your vote.";
       flashVoteWarning(msg);
@@ -2316,76 +2545,27 @@ export function Arena() {
       return;
     }
 
-    try {
-      const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
-      prefetchMatchupBuilds(next);
-      const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
-      if (stillRevealing) {
-        const requestedAt = advanceNowRequestedAtRef.current;
-        const effectiveAdvanceAt =
-          typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
-        setReveal((prev) =>
-          prev.kind === "reveal" && prev.matchupId === matchup.id
-            ? { ...prev, next, advanceAt: effectiveAdvanceAt }
-            : prev,
-        );
-        scheduleAutoAdvance(matchup.id, effectiveAdvanceAt, next);
-      } else {
-        setState((prev) => {
-          if (prev.kind === "ready" && prev.matchup.id !== matchup.id) return prev;
-          if (prev.kind === "error") return prev;
-          return { kind: "ready", matchup: next };
-        });
-        setSubmitting(false);
-      }
-    } catch (err) {
-      // Vote already persisted; this is a pure next-matchup load failure,
-      // so show the full error state (nothing to present next).
-      clearAutoAdvance();
-      setState({
-        kind: "error",
-        message: err instanceof Error ? err.message : "Couldn't load the next matchup",
-      });
-      setReveal({ kind: "none" });
-      setSubmitting(false);
-    }
+    // Do not create the next matchup until the vote is durable.
+    await loadNextMatchup(matchup.id, advanceAt);
   }
 
   async function handleSkip() {
     if (!matchup || submitting) return;
     flashVoteConfirm("SKIP");
     setSubmitting(true);
+    clearAutoAdvance();
+    advanceNowRequestedAtRef.current = null;
+    beginReveal(matchup.id, "SKIP");
+    // old hydration should not overlap the next matchup
+    abortInitialHydrations(matchup.id);
+    abortFullHydrations(matchup.id);
+    abortFullPrefetches(matchup.id);
+    abortFullPremeshedMeshes(matchup.id);
+
+    let advanceAt: number;
     try {
-      clearAutoAdvance();
-      // old hydration should not overlap the next matchup
-      abortInitialHydrations(matchup.id);
-      abortFullHydrations(matchup.id);
-      abortFullPrefetches(matchup.id);
-      advanceNowRequestedAtRef.current = null;
-      const startedAt = Date.now();
-      const advanceAt = startedAt + REVEAL_MS_AFTER_SKIP;
-      setReveal({ kind: "reveal", matchupId: matchup.id, action: "SKIP", startedAt, advanceAt, next: null });
-      const next = applyCachedBuildsToMatchup(await fetchMatchup(undefined));
-      prefetchMatchupBuilds(next);
-      const stillRevealing = revealRef.current.kind === "reveal" && revealRef.current.matchupId === matchup.id;
-      if (stillRevealing) {
-        const requestedAt = advanceNowRequestedAtRef.current;
-        const effectiveAdvanceAt =
-          typeof requestedAt === "number" && Number.isFinite(requestedAt) ? Math.min(advanceAt, requestedAt) : advanceAt;
-        setReveal((prev) =>
-          prev.kind === "reveal" && prev.matchupId === matchup.id
-            ? { ...prev, next, advanceAt: effectiveAdvanceAt }
-            : prev,
-        );
-        scheduleAutoAdvance(matchup.id, effectiveAdvanceAt, next);
-      } else {
-        setState((prev) => {
-          if (prev.kind === "ready" && prev.matchup.id !== matchup.id) return prev;
-          if (prev.kind === "error") return prev;
-          return { kind: "ready", matchup: next };
-        });
-        setSubmitting(false);
-      }
+      const response = await submitArenaAction(matchup.id, "SKIP");
+      advanceAt = completeReveal(matchup.id, response, REVEAL_MS_AFTER_SKIP);
     } catch (err) {
       clearAutoAdvance();
       setState({
@@ -2394,14 +2574,15 @@ export function Arena() {
       });
       setReveal({ kind: "none" });
       setSubmitting(false);
-    } finally {
-      // `submitting` stays true through the reveal so users can see the model names.
+      return;
     }
+    await loadNextMatchup(matchup.id, advanceAt);
   }
 
   handleVoteRef.current = handleVote;
   handleSkipRef.current = handleSkip;
   advanceToNextRef.current = advanceToNext;
+  loadNextMatchupRef.current = loadNextMatchup;
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -2503,6 +2684,68 @@ export function Arena() {
   const matchupBuildLoading = Boolean(
     matchup && (isMatchupVoteBlocked(matchup, sideLoadState) || !viewerReadyA || !viewerReadyB),
   );
+
+  useEffect(() => {
+    if (!matchup) {
+      matchupStagesRef.current = null;
+      return;
+    }
+    if (!matchupStagesRef.current || matchupStagesRef.current.matchupId !== matchup.id) {
+      const mode = matchupRequestModes.get(matchup.id) ?? "random";
+      matchupStagesRef.current = {
+        matchupId: matchup.id,
+        startAt: performance.now(),
+        mode,
+        previewReadyReported: false,
+        voteReadyReported: false,
+      };
+    }
+  }, [matchup]);
+
+  useEffect(() => {
+    const stages = matchupStagesRef.current;
+    if (!stages || !matchup || stages.matchupId !== matchup.id) return;
+    const now = performance.now();
+    const elapsedMs = Math.max(0, Math.round(now - stages.startAt));
+    const mode = stages.mode;
+
+    if (viewerReadyA && viewerReadyB && !stages.previewReadyReported) {
+      stages.previewReadyReported = true;
+      enqueueMatchupStageMetric({
+        stage: "preview_ready",
+        mode,
+        laneABlocks: voxelBuildBlockCount(matchup.a.build),
+        laneBBlocks: voxelBuildBlockCount(matchup.b.build),
+        durationMs: elapsedMs,
+      });
+      trackEvent("arena_matchup_stage", {
+        stage: "preview_ready",
+        mode,
+        durationMs: elapsedMs,
+      });
+    }
+
+    if (!matchupBuildLoading && !stages.voteReadyReported) {
+      stages.voteReadyReported = true;
+      enqueueMatchupStageMetric({
+        stage: "vote_ready",
+        mode,
+        laneABlocks: voxelBuildBlockCount(matchup.a.build),
+        laneBBlocks: voxelBuildBlockCount(matchup.b.build),
+        durationMs: elapsedMs,
+      });
+      trackEvent("arena_matchup_stage", {
+        stage: "vote_ready",
+        mode,
+        durationMs: elapsedMs,
+      });
+    }
+  }, [
+    matchup,
+    matchupBuildLoading,
+    viewerReadyA,
+    viewerReadyB,
+  ]);
 
   const buildARetrieving =
     state.kind === "loading" ||
@@ -2686,7 +2929,7 @@ export function Arena() {
             className={`mb-x-scroll -mx-0.5 flex w-[calc(100%+0.25rem)] snap-x snap-mandatory gap-2 overflow-x-auto overscroll-x-contain px-0.5 pb-1 scroll-smooth transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none md:mx-0 md:w-full md:grid md:snap-none md:grid-cols-2 md:gap-3 md:overflow-visible md:px-0 md:pb-0 ${transitioning ? "opacity-0 translate-y-1" : "opacity-100 translate-y-0"}`}
           >
             <div
-              className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "border-accent/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""}`}
+              className={`relative mb-card-enter min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "a" ? "border-accent/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "A" ? "mb-reveal-highlight-a" : ""} ${revealModels && revealAction === "B" ? "mb-reveal-dim" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:a` : "arena-build-a"}
@@ -2694,13 +2937,23 @@ export function Arena() {
                 subtitle={
                   <ModelReveal
                     revealed={revealModels}
-                    provider={matchup?.a.model.provider}
-                    modelName={matchup?.a.model.displayName}
+                    provider={matchup?.a.model?.provider}
+                    modelName={matchup?.a.model?.displayName}
                   />
                 }
                 voxelBuild={matchup?.a.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.a) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.a) : null}
+                getPremeshedPayloadPromise={
+                  matchup
+                    ? () => getLanePremeshedPayloadPromise(matchup.id, "a", matchup.a)
+                    : undefined
+                }
+                onPremeshedPayloadConsumed={
+                  matchup
+                    ? (promise) => consumeLanePremeshedPayload(matchup.id, "a", promise)
+                    : undefined
+                }
                 skipValidation={Boolean(matchup?.a.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
@@ -2715,6 +2968,10 @@ export function Arena() {
                     return { ...prev, a: ready };
                   });
                 }}
+                onBuildMetrics={(metrics) => {
+                  if (!matchup) return;
+                  reportBuildRenderMetrics(getLaneHydratedVariant(matchup.a), metrics);
+                }}
                 isLoading={buildALoading}
                 loadingMode={buildALoadingMode}
                 loadingMessage={buildALoadingMessage}
@@ -2722,7 +2979,7 @@ export function Arena() {
                 autoRotate={!isCoarsePointer || mobileBuildView === "a"}
                 viewerSize="arena"
                 enableBuildExport={Boolean(matchup?.a.build && !laneNeedsFullA)}
-                exportLabel={matchup?.a.model.displayName ?? "build-a"}
+                exportLabel={matchup?.a.model?.displayName ?? "build-a"}
                 exportPrompt={promptText}
                 actions={
                   laneNeedsFullA ? (
@@ -2739,7 +2996,7 @@ export function Arena() {
               />
             </div>
             <div
-              className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "border-accent2/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""}`}
+              className={`relative mb-card-enter mb-card-enter-delay min-w-full shrink-0 snap-center [scroll-snap-stop:always] rounded-md border transition-all duration-200 ease-out motion-reduce:transition-none md:min-w-0 md:shrink md:snap-none ${mobileBuildView === "b" ? "border-accent2/40 md:border-border/70" : "border-border/70"} ${revealModels && revealAction === "B" ? "mb-reveal-highlight-b" : ""} ${revealModels && revealAction === "A" ? "mb-reveal-dim" : ""}`}
             >
               <VoxelViewerCard
                 key={matchup ? `${matchup.id}:b` : "arena-build-b"}
@@ -2747,13 +3004,23 @@ export function Arena() {
                 subtitle={
                   <ModelReveal
                     revealed={revealModels}
-                    provider={matchup?.b.model.provider}
-                    modelName={matchup?.b.model.displayName}
+                    provider={matchup?.b.model?.provider}
+                    modelName={matchup?.b.model?.displayName}
                   />
                 }
                 voxelBuild={matchup?.b.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.b) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.b) : null}
+                getPremeshedPayloadPromise={
+                  matchup
+                    ? () => getLanePremeshedPayloadPromise(matchup.id, "b", matchup.b)
+                    : undefined
+                }
+                onPremeshedPayloadConsumed={
+                  matchup
+                    ? (promise) => consumeLanePremeshedPayload(matchup.id, "b", promise)
+                    : undefined
+                }
                 skipValidation={Boolean(matchup?.b.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
@@ -2768,6 +3035,10 @@ export function Arena() {
                     return { ...prev, b: ready };
                   });
                 }}
+                onBuildMetrics={(metrics) => {
+                  if (!matchup) return;
+                  reportBuildRenderMetrics(getLaneHydratedVariant(matchup.b), metrics);
+                }}
                 isLoading={buildBLoading}
                 loadingMode={buildBLoadingMode}
                 loadingMessage={buildBLoadingMessage}
@@ -2775,7 +3046,7 @@ export function Arena() {
                 autoRotate={!isCoarsePointer || mobileBuildView === "b"}
                 viewerSize="arena"
                 enableBuildExport={Boolean(matchup?.b.build && !laneNeedsFullB)}
-                exportLabel={matchup?.b.model.displayName ?? "build-b"}
+                exportLabel={matchup?.b.model?.displayName ?? "build-b"}
                 exportPrompt={promptText}
                 actions={
                   laneNeedsFullB ? (

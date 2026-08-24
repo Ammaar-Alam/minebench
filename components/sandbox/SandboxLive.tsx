@@ -14,6 +14,7 @@ import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
+import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -87,25 +88,6 @@ const DEFAULT_MODEL_B: ModelKey =
   )?.key ??
   ENABLED_MODELS.find((model) => model.key !== DEFAULT_MODEL_A)?.key ??
   DEFAULT_MODEL_A;
-
-function SelectChevron() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
-      viewBox="0 0 24 24"
-      fill="none"
-    >
-      <path
-        d="m7 10 5 5 5-5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
-    </svg>
-  );
-}
 
 function safeJsonParseObject(text: string): Record<string, unknown> | null {
   try {
@@ -893,6 +875,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
         jsonText={r?.rawText}
         palette={palette}
         viewerRef={viewerRef}
+        onBuildMetrics={
+          r?.status === "success"
+            ? (metrics) => enqueueVoxelMetric("sandbox", "full", metrics)
+            : undefined
+        }
         enableBuildJsonToggle
         enableBuildExport={r?.status === "success"}
         exportLabel={modelName}
@@ -970,7 +957,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                     <div className="text-xs font-medium text-muted">Size</div>
                     <div className="relative">
                       <select
-                        className="mb-field h-10 w-full appearance-none pr-10"
+                        className="mb-field h-10 w-full"
                         value={gridSize}
                         onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
                       >
@@ -978,7 +965,6 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                         <option value={256}>256</option>
                         <option value={512}>512</option>
                       </select>
-                      <SelectChevron />
                     </div>
                   </label>
 
@@ -986,14 +972,13 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                     <div className="text-xs font-medium text-muted">Palette</div>
                     <div className="relative">
                       <select
-                        className="mb-field h-10 w-full appearance-none pr-10"
+                        className="mb-field h-10 w-full"
                         value={palette}
                         onChange={(e) => setPalette(e.target.value as Palette)}
                       >
                         <option value="simple">Simple</option>
                         <option value="advanced">Advanced</option>
                       </select>
-                      <SelectChevron />
                     </div>
                   </label>
                 </div>
@@ -1018,7 +1003,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                     <div className="text-xs font-medium text-muted">{compareEnabled ? "Model A" : "Model"}</div>
                     <div className="relative">
                       <select
-                        className="mb-field h-11 w-full appearance-none pr-10"
+                        className="mb-field h-11 w-full"
                         value={modelPair.a}
                         onChange={(e) => handleModelChange("a", e.target.value)}
                         disabled={running}
@@ -1058,7 +1043,6 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                           </option>
                         </optgroup>
                       </select>
-                      <SelectChevron />
                     </div>
                   </label>
 
@@ -1067,7 +1051,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                       <div className="text-xs font-medium text-muted">Model B</div>
                       <div className="relative">
                         <select
-                          className="mb-field h-11 w-full appearance-none pr-10"
+                          className="mb-field h-11 w-full"
                           value={modelPair.b ?? ""}
                           onChange={(e) => handleModelChange("b", e.target.value)}
                           disabled={running || !canCompare}
@@ -1099,7 +1083,6 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                             </option>
                           </optgroup>
                         </select>
-                        <SelectChevron />
                       </div>
                     </label>
                   ) : null}
