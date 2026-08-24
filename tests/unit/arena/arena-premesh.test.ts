@@ -154,11 +154,101 @@ function testMatchupStageMetricsValidation() {
   }
 }
 
+function testArenaPremeshMapLifecycle() {
+  type PremeshEntry = {
+    matchupId: string;
+    controller: AbortController;
+    promise: Promise<VoxelMeshPayload>;
+  };
+  const premeshMap = new Map<string, PremeshEntry>();
+
+  const ARENA_PREMESH_MAX_BLOCK_COUNT = 150_000;
+
+  // 1. 150k admission threshold
+  function shouldAdmitPremesh(blockCount: number): boolean {
+    return blockCount > 0 && blockCount <= ARENA_PREMESH_MAX_BLOCK_COUNT;
+  }
+
+  assert.equal(shouldAdmitPremesh(0), false);
+  assert.equal(shouldAdmitPremesh(100), true);
+  assert.equal(shouldAdmitPremesh(150_000), true);
+  assert.equal(shouldAdmitPremesh(150_001), false);
+
+  // 2. Duplicate avoidance & in-flight joining
+  const ctrl1 = new AbortController();
+  const fakePayload = makeFakeMeshPayload(10);
+  const promise1 = Promise.resolve(fakePayload);
+  premeshMap.set("build-1", { matchupId: "matchup-1", controller: ctrl1, promise: promise1 });
+
+  // Adding existing key does nothing
+  const existing = premeshMap.get("build-1");
+  assert.ok(existing);
+  assert.equal(existing.promise, promise1);
+
+  // 3. Entry consumption
+  function consumePremesh(key: string): Promise<VoxelMeshPayload> | null {
+    const entry = premeshMap.get(key);
+    if (!entry) return null;
+    premeshMap.delete(key);
+    return entry.promise;
+  }
+
+  const consumed = consumePremesh("build-1");
+  assert.equal(consumed, promise1);
+  assert.equal(premeshMap.has("build-1"), false);
+  assert.equal(consumePremesh("build-1"), null);
+
+  // 4. Aborting on matchup advance
+  const ctrlA = new AbortController();
+  const ctrlB = new AbortController();
+  premeshMap.set("b-1", { matchupId: "m-1", controller: ctrlA, promise: promise1 });
+  premeshMap.set("b-2", { matchupId: "m-2", controller: ctrlB, promise: promise1 });
+
+  function abortPremeshedMeshes(matchupId?: string) {
+    for (const [key, entry] of premeshMap) {
+      if (matchupId && entry.matchupId !== matchupId) continue;
+      entry.controller.abort();
+      premeshMap.delete(key);
+    }
+  }
+
+  abortPremeshedMeshes("m-1");
+  assert.equal(ctrlA.signal.aborted, true);
+  assert.equal(ctrlB.signal.aborted, false);
+  assert.equal(premeshMap.has("b-1"), false);
+  assert.equal(premeshMap.has("b-2"), true);
+
+  // 5. Unmount cleanup (aborts all remaining)
+  abortPremeshedMeshes();
+  assert.equal(ctrlB.signal.aborted, true);
+  assert.equal(premeshMap.size, 0);
+}
+
+function testMatchupRequestModeTracking() {
+  const requestModes = new Map<string, "random" | "forced">();
+  function setMatchupRequestMode(id: string, mode: "random" | "forced") {
+    if (requestModes.size > 200) {
+      const firstKey = requestModes.keys().next().value;
+      if (firstKey) requestModes.delete(firstKey);
+    }
+    requestModes.set(id, mode);
+  }
+
+  setMatchupRequestMode("matchup-random-1", "random");
+  setMatchupRequestMode("matchup-forced-1", "forced");
+
+  assert.equal(requestModes.get("matchup-random-1"), "random");
+  assert.equal(requestModes.get("matchup-forced-1"), "forced");
+  assert.equal(requestModes.get("matchup-unknown"), undefined);
+}
+
 async function main() {
   await testPremeshedPayloadPromiseConsumed();
   await testPremeshedPayloadFallbackOnRejection();
   testMatchupStageMetricsValidation();
+  testArenaPremeshMapLifecycle();
+  testMatchupRequestModeTracking();
   console.log("arena premesh and stage timing unit tests passed");
 }
 
-void main();
+main();

@@ -100,6 +100,15 @@ const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
 let snapshotStorageRedirectBlocked = false;
 let streamStorageRedirectBlocked = false;
 
+const matchupRequestModes = new Map<string, "random" | "forced">();
+function setMatchupRequestMode(id: string, mode: "random" | "forced") {
+  if (matchupRequestModes.size > 200) {
+    const firstKey = matchupRequestModes.keys().next().value;
+    if (firstKey) matchupRequestModes.delete(firstKey);
+  }
+  matchupRequestModes.set(id, mode);
+}
+
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const trace = createBrowserPerformanceTrace("matchup");
   trace.mark("fetch_start");
@@ -127,8 +136,10 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
     );
     const laneABlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build));
     const laneBBlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build));
+    const mode: "random" | "forced" = promptId ? "forced" : "random";
+    setMatchupRequestMode(packedMatchup.id, mode);
     trackEvent("arena_matchup_received", {
-      path: `${promptId ? "forced" : "random"}:adaptive`,
+      path: `${mode}:adaptive`,
       samplingLane: matchup.samplingLane ?? "unknown",
       laneABlocks,
       laneBBlocks,
@@ -139,7 +150,7 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
     });
     enqueueClientMetric({
       kind: "matchup",
-      mode: promptId ? "forced" : "random",
+      mode,
       laneABlocks,
       laneBBlocks,
       headersMs,
@@ -1220,6 +1231,7 @@ export function Arena() {
   const matchupStagesRef = useRef<{
     matchupId: string;
     startAt: number;
+    mode: "random" | "forced";
     previewReadyReported: boolean;
     voteReadyReported: boolean;
   } | null>(null);
@@ -2678,9 +2690,11 @@ export function Arena() {
       return;
     }
     if (!matchupStagesRef.current || matchupStagesRef.current.matchupId !== matchup.id) {
+      const mode = matchupRequestModes.get(matchup.id) ?? "random";
       matchupStagesRef.current = {
         matchupId: matchup.id,
         startAt: performance.now(),
+        mode,
         previewReadyReported: false,
         voteReadyReported: false,
       };
@@ -2692,11 +2706,7 @@ export function Arena() {
     if (!stages || !matchup || stages.matchupId !== matchup.id) return;
     const now = performance.now();
     const elapsedMs = Math.max(0, Math.round(now - stages.startAt));
-    const mode =
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).has("promptId")
-        ? "forced"
-        : "random";
+    const mode = stages.mode;
 
     if (viewerReadyA && viewerReadyB && !stages.previewReadyReported) {
       stages.previewReadyReported = true;
