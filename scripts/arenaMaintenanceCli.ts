@@ -1,5 +1,5 @@
 import { findCatalogEntryBySlugOrKey } from "../lib/ai/modelCatalog";
-import { arenaCohortBuildWhere } from "../lib/arena/eligibility";
+import { arenaArtifactBuildWhere } from "../lib/arena/eligibility";
 
 // Shared CLI surface for the arena maintenance scripts: cohort scoping by
 // model, explicit build IDs for nonstandard rows, and missing-only discovery
@@ -55,7 +55,7 @@ export function arenaMaintenanceWhere(opts: {
 }) {
   return opts.buildIds.length > 0
     ? { id: { in: opts.buildIds } }
-    : arenaCohortBuildWhere(opts.modelKeys);
+    : arenaArtifactBuildWhere(opts.modelKeys);
 }
 
 export function describeScope(opts: ArenaMaintenanceArgs): string[] {

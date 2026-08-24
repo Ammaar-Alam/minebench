@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 
 async function main() {
   process.env.ARENA_SNAPSHOT_ARTIFACTS_ENABLED = "0";
-  process.env.ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = "0";
   process.env.ARENA_STREAM_ARTIFACTS_ENABLED = "0";
 
   const artifactOwnership = readFileSync("lib/arena/artifactOwnership.ts", "utf8");

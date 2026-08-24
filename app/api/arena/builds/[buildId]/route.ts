@@ -13,7 +13,6 @@ import {
 } from "@/lib/arena/buildArtifacts";
 import {
   createArenaBuildSnapshotArtifactSignedUrl,
-  isBinarySnapshotArtifactEnabled,
   healArenaBuildSnapshotArtifactsOnce,
   fetchArenaBuildSnapshotArtifact,
   type ArenaSnapshotArtifactFetchMetrics,
@@ -507,8 +506,7 @@ export async function GET(
   observation.deliveryClass = deliveryClass;
   observation.blockCount =
     variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount;
-  const binaryArtifactRequested =
-    binaryFormatRequested && isBinarySnapshotArtifactEnabled();
+  const binaryArtifactRequested = binaryFormatRequested;
   const meshFactsArtifactRequested =
     meshFactsFormatRequested &&
     binaryArtifactRequested &&

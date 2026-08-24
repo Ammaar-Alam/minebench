@@ -23,10 +23,6 @@ import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
 
-export function isBinarySnapshotArtifactEnabled(): boolean {
-  return ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED;
-}
-
 export type ArenaSnapshotArtifactTarget = {
   variant: ArenaBuildVariant;
   format: ArenaSnapshotArtifactFormat;
@@ -47,13 +43,6 @@ export type ArenaSnapshotArtifactFetchMetrics = {
 };
 
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
-// Binary artifacts are written alongside the JSON ones and read only when a
-// client asks for them, so this can be turned on to backfill before anything
-// reads it, and turned off without stranding a client on a format it cannot get.
-const ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv(
-  "ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED",
-  false,
-);
 const ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS",
   1_000,
@@ -253,7 +242,6 @@ export function getSnapshotArtifactRef(
   format: ArenaSnapshotArtifactFormat = "json",
 ): ArenaBuildSnapshotArtifactRef | null {
   if (!isSnapshotArtifactEnabled()) return null;
-  if (format !== "json" && !ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) return null;
   return getArenaSnapshotArtifactRef(buildId, variant, checksum, format);
 }
 
@@ -306,13 +294,11 @@ export function expectedSnapshotArtifactTargets(
   if (previewNeeded) targets.push({ variant: "preview", format: "json" });
   if (isSnapshotClass) targets.push({ variant: "full", format: "json" });
 
-  if (ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) {
-    if (previewNeeded) targets.push({ variant: "preview", format: "binary" });
-    // Binary full builds are small enough to serve whole for every class.
-    targets.push({ variant: "full", format: "binary" });
-    if (prepared.fullBuild.blocks.length >= ARENA_MESH_FACTS_MIN_BLOCKS) {
-      targets.push({ variant: "full", format: "mesh-facts" });
-    }
+  if (previewNeeded) targets.push({ variant: "preview", format: "binary" });
+  // Binary full builds are small enough to serve whole for every class
+  targets.push({ variant: "full", format: "binary" });
+  if (prepared.fullBuild.blocks.length >= ARENA_MESH_FACTS_MIN_BLOCKS) {
+    targets.push({ variant: "full", format: "mesh-facts" });
   }
 
   return targets;

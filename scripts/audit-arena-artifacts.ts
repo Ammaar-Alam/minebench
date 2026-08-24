@@ -14,7 +14,7 @@ import {
 } from "../lib/arena/artifactCoverage";
 import { createArenaBuildSnapshotArtifactSignedUrl } from "../lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "../lib/arena/buildStream";
-import { arenaCohortBuildWhere } from "../lib/arena/eligibility";
+import { arenaArtifactBuildWhere } from "../lib/arena/eligibility";
 import { getSupabaseStorageConfig } from "../lib/storage/buildPayload";
 import { prisma } from "../lib/prisma";
 
@@ -363,7 +363,7 @@ function requirementChecksum(requirement: ArtifactRequirement): string | null {
 
 async function runDeepAudit(args: Args): Promise<number> {
   const rows = await prisma.build.findMany({
-    where: arenaCohortBuildWhere(args.modelKeys),
+    where: arenaArtifactBuildWhere(args.modelKeys),
     select: ARTIFACT_STATUS_BUILD_SELECT,
     orderBy: { id: "asc" },
     ...(args.limit ? { take: args.limit } : {}),

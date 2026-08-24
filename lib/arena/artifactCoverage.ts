@@ -6,13 +6,10 @@ import {
   getArenaArtifactMinBytes,
 } from "@/lib/arena/buildDeliveryPolicy";
 import { parsePersistedArenaBuildMetadata } from "@/lib/arena/buildArtifacts";
-import {
-  getSnapshotArtifactRef,
-  isBinarySnapshotArtifactEnabled,
-} from "@/lib/arena/buildSnapshotArtifacts";
+import { getSnapshotArtifactRef } from "@/lib/arena/buildSnapshotArtifacts";
 import { ARENA_MESH_FACTS_MIN_BLOCKS } from "@/lib/arena/types";
 import { getArenaBuildStreamArtifactFetchRefs } from "@/lib/arena/buildStream";
-import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
+import { arenaArtifactBuildWhere } from "@/lib/arena/eligibility";
 
 // Policy-derived artifact expectations per build, shared by the precompute
 // scripts (--missing-only), the admin status route, and publish verification.
@@ -154,7 +151,7 @@ export function expectedArtifactRequirements(
   // coverage that ignored it would report a build as complete while the faster
   // path silently never fired. Every class gets one, including stream-class
   // builds, which the binary encoding makes small enough to serve whole.
-  if (isBinarySnapshotArtifactEnabled() && checksum) {
+  if (checksum) {
     const binaryFullRef = getSnapshotArtifactRef(row.id, "full", checksum, "binary");
     required.push({
       kind: "snapshot-binary",
@@ -237,7 +234,7 @@ export async function getArenaArtifactCoverage(
   modelKeys?: readonly string[],
 ): Promise<ArenaArtifactCoverage> {
   const rows = await prisma.build.findMany({
-    where: arenaCohortBuildWhere(modelKeys),
+    where: arenaArtifactBuildWhere(modelKeys),
     select: ARTIFACT_STATUS_BUILD_SELECT,
   });
 

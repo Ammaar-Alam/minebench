@@ -3,12 +3,14 @@ import { Prisma } from "@prisma/client";
 
 async function main() {
   process.env.ARENA_STREAM_ARTIFACTS_ENABLED = "false";
-  process.env.ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = "true";
   process.env.SUPABASE_URL = "https://abcdefghijklmnop.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
 
   const { expectedArtifactRequirements } = await import(
     "../../../lib/arena/artifactCoverage"
+  );
+  const { arenaArtifactBuildWhere, arenaCohortBuildWhere } = await import(
+    "../../../lib/arena/eligibility"
   );
   const {
     ARENA_BUILD_DERIVED_METADATA_RESET,
@@ -18,6 +20,14 @@ async function main() {
     prepareArenaBuildFromBuild,
   } = await import("../../../lib/arena/buildArtifacts");
   const checksum = "a".repeat(64);
+  const publicScope = arenaCohortBuildWhere();
+  const artifactScope = arenaArtifactBuildWhere();
+  assert.equal(publicScope.model.stealthVariant, null);
+  assert.equal(
+    "stealthVariant" in artifactScope.model,
+    false,
+    "artifact maintenance must include enabled private checkpoints",
+  );
   const expectations = expectedArtifactRequirements({
     id: "build-1",
     blockCount: 10_000,
