@@ -63,6 +63,19 @@ function testWorkerMeshingOcclusionCulling() {
   assert.ok(payload.opaque != null);
 }
 
+function testMeshFactsFallbackWhenPaletteFiltersBlocks() {
+  const allowed = ["stone"];
+  const build = packVoxelBlocks([
+    { x: 0, y: 0, z: 0, type: "stone" },
+    { x: 1, y: 0, z: 0, type: "bricks" },
+  ]);
+
+  assert.deepEqual(
+    buildMeshPayloadFromFacts(createVoxelMeshFacts(build), allowed),
+    buildMeshPayload(build, allowed),
+  );
+}
+
 function testWorkerMeshingEmptyBuild() {
   const palette = getPalette("simple");
   const allowed = palette.map((p) => p.id);
@@ -139,6 +152,7 @@ function testGoldenFixtureParity() {
 function main() {
   testWorkerMeshingVariousMaterials();
   testWorkerMeshingOcclusionCulling();
+  testMeshFactsFallbackWhenPaletteFiltersBlocks();
   testWorkerMeshingEmptyBuild();
   testGoldenFixtureParity();
   console.log("worker hot loop optimization unit tests passed");

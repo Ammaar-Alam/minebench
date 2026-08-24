@@ -816,6 +816,10 @@ export function buildMeshPayloadFromFacts(
   facts: VoxelMeshFacts,
   allowedBlockIds: string[],
 ): VoxelMeshPayload {
+  const allowed = new Set(allowedBlockIds);
+  if (facts.blocks.typeNames.some((type) => !allowed.has(type))) {
+    return buildMeshPayload(facts.blocks, allowedBlockIds);
+  }
   const prepared = prepareMeshDataFromFacts(facts, allowedBlockIds);
   const faceTable = buildFaceTable(prepared.typeNames, prepared.allowed);
   const opaque = makeBucket();
