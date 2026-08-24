@@ -26,6 +26,7 @@ const ADJ_PAIR_VOTES_FLOOR = 12;
 const ADJ_PAIR_PROMPTS_FLOOR = 6;
 const MOVEMENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const MOVEMENT_CONFIDENCE_FLOOR = 50;
+const BRADLEY_TERRY_SNAPSHOT_EPOCH = new Date("2026-08-25T00:00:00.000Z");
 
 type PairCoverage = {
   decisiveVotes: number;
@@ -81,7 +82,12 @@ export async function GET() {
       getGlobalBradleyTerrySnapshot(),
       getArenaEligiblePromptIds(),
       prisma.modelRankSnapshot.findFirst({
-        where: { capturedAt: { lte: movementAnchorTime } },
+        where: {
+          capturedAt: {
+            gte: BRADLEY_TERRY_SNAPSHOT_EPOCH,
+            lte: movementAnchorTime,
+          },
+        },
         orderBy: { capturedAt: "desc" },
         select: { capturedAt: true },
       }),

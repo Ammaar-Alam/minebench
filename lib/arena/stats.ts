@@ -1436,17 +1436,13 @@ export type LeaderboardRankingItem = {
 export async function getLeaderboardItemListRankings(): Promise<LeaderboardRankingItem[]> {
   if (!process.env.DATABASE_URL) return [];
   try {
-    const models = await prisma.model.findMany({
-      where: { isBaseline: false, enabled: true, stealthVariant: null },
-      orderBy: [{ conservativeRating: "desc" }, { displayName: "asc" }],
-      select: { key: true, displayName: true },
-    });
-    return models.map((model, index) => {
+    const snapshot = await getGlobalBradleyTerrySnapshot();
+    return snapshot.globalModels.map((model) => {
       const slug = resolveModelSlug(model.key);
       const displayName = resolveModelDisplayName(model.key, model.displayName);
       return {
         name: displayName,
-        rank: index + 1,
+        rank: model.rank,
         path: `/leaderboard/${encodeURIComponent(slug)}`,
       };
     });

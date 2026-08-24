@@ -319,52 +319,61 @@ Usage:
     return;
   }
 
+  const updates = [];
   for (const model of rankedModels) {
     const rating = Math.round(model.rating);
     const standardError = Math.round(model.standardError);
-    await prisma.model.update({
-      where: { id: model.id },
-      data: {
-        eloRating: rating,
-        glickoRd: standardError,
-        conservativeRating: conservativeScore(rating, standardError),
-        winCount: model.counters.winCount,
-        lossCount: model.counters.lossCount,
-        drawCount: model.counters.drawCount,
-        bothBadCount: model.counters.bothBadCount,
-      },
-    });
+    updates.push(
+      prisma.model.update({
+        where: { id: model.id },
+        data: {
+          eloRating: rating,
+          glickoRd: standardError,
+          conservativeRating: conservativeScore(rating, standardError),
+          winCount: model.counters.winCount,
+          lossCount: model.counters.lossCount,
+          drawCount: model.counters.drawCount,
+          bothBadCount: model.counters.bothBadCount,
+        },
+      }),
+    );
   }
 
   for (const model of models) {
     if (activeModelIdSet.has(model.id)) continue;
     const counters = stateByModelId.get(model.id) as ModelState;
-    await prisma.model.update({
-      where: { id: model.id },
-      data: {
-        winCount: counters.winCount,
-        lossCount: counters.lossCount,
-        drawCount: counters.drawCount,
-        bothBadCount: counters.bothBadCount,
-      },
-    });
+    updates.push(
+      prisma.model.update({
+        where: { id: model.id },
+        data: {
+          winCount: counters.winCount,
+          lossCount: counters.lossCount,
+          drawCount: counters.drawCount,
+          bothBadCount: counters.bothBadCount,
+        },
+      }),
+    );
   }
 
   for (const variant of variantDiffs) {
-    await prisma.stealthVariant.update({
-      where: { id: variant.id },
-      data: {
-        eloRating: variant.newRating,
-        glickoRd: variant.newRd,
-        glickoVolatility: variant.newVolatility,
-        conservativeRating: variant.newConservative,
-        winCount: variant.winCount,
-        lossCount: variant.lossCount,
-        drawCount: variant.drawCount,
-        bothBadCount: variant.bothBadCount,
-      },
-    });
+    updates.push(
+      prisma.stealthVariant.update({
+        where: { id: variant.id },
+        data: {
+          eloRating: variant.newRating,
+          glickoRd: variant.newRd,
+          glickoVolatility: variant.newVolatility,
+          conservativeRating: variant.newConservative,
+          winCount: variant.winCount,
+          lossCount: variant.lossCount,
+          drawCount: variant.drawCount,
+          bothBadCount: variant.bothBadCount,
+        },
+      }),
+    );
   }
+
+  await prisma.$transaction(updates);
 
   console.log(
     `\nApplied public ratings and counters to ${models.length} models and ${variants.length} private variants.`,
