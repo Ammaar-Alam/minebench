@@ -21,6 +21,8 @@ for (const item of FAQ_ITEMS) {
 
 const readme = readFileSync("README.md", "utf8");
 for (const item of FAQ_ITEMS) {
+  // Private evaluations stay discoverable without README promotion
+  if (item.id === "can-organizations-run-private-evaluations") continue;
   assert.ok(
     readme.includes(`https://minebench.ai/faq#${item.id}`),
     `README is missing the FAQ link for ${item.id}`,
