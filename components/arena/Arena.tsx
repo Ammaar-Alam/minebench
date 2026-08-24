@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ARENA_MESH_FACTS_MIN_BLOCKS,
   ArenaAction,
   ArenaBuildDeliveryClass,
   ArenaBuildRef,
@@ -273,17 +274,22 @@ function startBuildDeliveryMetrics(
 async function readMeasuredBuildVariantPayload(
   response: Response,
   metrics: BuildDeliveryMetrics,
+  ref: ArenaBuildRef,
 ): Promise<BuildVariantPayloadResult> {
-  const result = await readBuildVariantPayload(response, (event) => {
-    if (event.stage === "body_complete") metrics.trace.mark("body_complete");
-    if (event.stage === "inflate_complete") metrics.trace.mark("inflate_complete");
-    if (
-      event.stage === "binary_decode_complete" ||
-      event.stage === "json_decode_complete"
-    ) {
-      metrics.trace.mark(event.stage);
-      metrics.trace.mark("decode_complete");
-    }
+  const result = await readBuildVariantPayload(response, {
+    fallbackIdentity: ref,
+    onStage(event) {
+      if (event.stage === "body_complete") metrics.trace.mark("body_complete");
+      if (event.stage === "inflate_complete") metrics.trace.mark("inflate_complete");
+      if (
+        event.stage === "binary_decode_complete" ||
+        event.stage === "mesh_facts_decode_complete" ||
+        event.stage === "json_decode_complete"
+      ) {
+        metrics.trace.mark(event.stage);
+        metrics.trace.mark("decode_complete");
+      }
+    },
   });
   metrics.trace.mark("payload_ready");
   return result;
@@ -303,8 +309,8 @@ function reportBuildDeliveryMetrics(opts: {
   metrics: BuildDeliveryMetrics;
   ref: ArenaBuildRef;
   response: Response;
-  requestedFormat: "v4" | "json" | "ndjson";
-  servedFormat: "binary" | "json" | "ndjson";
+  requestedFormat: "mbf1" | "v4" | "json" | "ndjson";
+  servedFormat: "mesh-facts" | "binary" | "json" | "ndjson";
   payload: BuildVariantResponse;
   bodyBytes: number | null;
   compressed: boolean;
@@ -312,15 +318,18 @@ function reportBuildDeliveryMetrics(opts: {
   const { metrics } = opts;
   const source = normalizeDeliverySource(opts.response);
   const deliveryClass = normalizeBuildDeliveryClass(opts.response);
-  const blockCountBucket = getArenaBlockCountBucket(
-    voxelBuildBlockCount(opts.payload.voxelBuild),
-  );
+  const blockCount = voxelBuildBlockCount(opts.payload.voxelBuild);
+  const blockCountBucket = getArenaBlockCountBucket(blockCount);
   const path = `${metrics.purpose}:${opts.ref.variant}:${metrics.transport}`;
   const totalMs =
     metrics.trace.measure("total", metrics.startStage, "payload_ready") ?? 0;
   const optimized =
-    opts.requestedFormat === "v4" &&
-    opts.servedFormat === "binary" &&
+    ((opts.requestedFormat === "mbf1" &&
+      opts.servedFormat ===
+        (blockCount >= ARENA_MESH_FACTS_MIN_BLOCKS
+          ? "mesh-facts"
+          : "binary")) ||
+      (opts.requestedFormat === "v4" && opts.servedFormat === "binary")) &&
     (source === "artifact" || source === "artifact-redirect");
   const headersMs = roundMetricMs(
     metrics.trace.measure("headers", metrics.startStage, "headers_received"),
@@ -610,7 +619,12 @@ async function fetchBuildVariantSnapshot(
   if (ref.checksum) url.searchParams.set("checksum", ref.checksum);
   const allowRedirect = opts?.redirect !== false && !snapshotStorageRedirectBlocked;
   if (!allowRedirect) url.searchParams.set("redirect", "0");
-  if (BINARY_ARTIFACT_READS_ENABLED) url.searchParams.set("format", "v4");
+  const requestedFormat = BINARY_ARTIFACT_READS_ENABLED
+    ? ref.variant === "full"
+      ? "mbf1"
+      : "v4"
+    : "json";
+  if (requestedFormat !== "json") url.searchParams.set("format", requestedFormat);
   const ownsMetrics = opts?.metrics == null;
   const metrics =
     opts?.metrics ??
@@ -648,12 +662,12 @@ async function fetchBuildVariantSnapshot(
       const message = await readClientErrorResponse(res, "Couldn't load build");
       throw new Error(message);
     }
-    const result = await readMeasuredBuildVariantPayload(res, metrics);
+    const result = await readMeasuredBuildVariantPayload(res, metrics, ref);
     reportBuildDeliveryMetrics({
       metrics,
       ref,
       response: res,
-      requestedFormat: BINARY_ARTIFACT_READS_ENABLED ? "v4" : "json",
+      requestedFormat,
       servedFormat: result.servedFormat,
       payload: result.payload,
       bodyBytes: result.bodyBytes,
@@ -724,7 +738,7 @@ async function fetchBuildVariantStreamOnceWithMetrics(
 
   const contentType = res.headers.get("content-type") ?? "";
   if (!res.body || !contentType.includes("application/x-ndjson")) {
-    const result = await readMeasuredBuildVariantPayload(res, metrics);
+    const result = await readMeasuredBuildVariantPayload(res, metrics, ref);
     reportBuildDeliveryMetrics({
       metrics,
       ref,

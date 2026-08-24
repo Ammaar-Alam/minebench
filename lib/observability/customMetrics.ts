@@ -48,8 +48,8 @@ const deliveryMetricSchema = z
     purpose: z.enum(["visible", "prefetch"]),
     variant: z.enum(["preview", "full"]),
     transport: z.enum(["snapshot", "stream-artifact", "stream-live"]),
-    requestedFormat: z.enum(["v4", "json", "ndjson"]),
-    servedFormat: z.enum(["binary", "json", "ndjson"]),
+    requestedFormat: z.enum(["mbf1", "v4", "json", "ndjson"]),
+    servedFormat: z.enum(["mesh-facts", "binary", "json", "ndjson"]),
     delivery_source: z.enum([
       "artifact",
       "live",
@@ -124,8 +124,8 @@ export type ArenaBuildMetricStage =
 export type ArenaBuildMetricObservation = {
   access: "blind" | "public";
   variant: ArenaBuildVariant;
-  requestedFormat: "v4" | "legacy";
-  servedFormat: "binary" | "json" | "ndjson" | "none";
+  requestedFormat: "mbf1" | "v4" | "legacy";
+  servedFormat: "mesh-facts" | "binary" | "json" | "ndjson" | "none";
   deliveryClass: string;
   source: string;
   artifactOutcome: string;

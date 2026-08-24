@@ -9,6 +9,9 @@ async function main() {
   const { expectedArtifactRequirements } = await import(
     "../../../lib/arena/artifactCoverage"
   );
+  const { arenaArtifactBuildWhere, arenaCohortBuildWhere } = await import(
+    "../../../lib/arena/eligibility"
+  );
   const {
     ARENA_BUILD_DERIVED_METADATA_RESET,
     getArenaBuildPayloadIdentity,
@@ -17,6 +20,14 @@ async function main() {
     prepareArenaBuildFromBuild,
   } = await import("../../../lib/arena/buildArtifacts");
   const checksum = "a".repeat(64);
+  const publicScope = arenaCohortBuildWhere();
+  const artifactScope = arenaArtifactBuildWhere();
+  assert.equal(publicScope.model.stealthVariant, null);
+  assert.equal(
+    "stealthVariant" in artifactScope.model,
+    false,
+    "artifact maintenance must include enabled private checkpoints",
+  );
   const expectations = expectedArtifactRequirements({
     id: "build-1",
     blockCount: 10_000,
@@ -58,6 +69,11 @@ async function main() {
   );
   assert.equal(previewRequirements[0]?.refs.length, 1);
   assert.ok(previewRequirements[0]?.refs[0]?.path.endsWith(`/preview-${checksum}.json`));
+  const meshFactsRequirements = expectations.required.filter(
+    (requirement) => requirement.kind === "snapshot-mesh-facts",
+  );
+  assert.equal(meshFactsRequirements.length, 1);
+  assert.ok(meshFactsRequirements[0]?.refs[0]?.path.endsWith(`/full-${checksum}.mbf1`));
 
   const persistedSnapshotClass = expectedArtifactRequirements({
     id: "build-2",

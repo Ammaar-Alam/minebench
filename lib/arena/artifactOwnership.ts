@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getBuildStorageBucketFromEnv } from "@/lib/storage/buildPayload";
 
 export type ArenaArtifactStorageRef = { bucket: string; path: string };
-export type ArenaSnapshotArtifactFormat = "json" | "binary";
+export type ArenaSnapshotArtifactFormat = "json" | "binary" | "mesh-facts";
 
 const SNAPSHOT_PREFIX = normalizePrefix(
   process.env.ARENA_SNAPSHOT_ARTIFACT_PREFIX ?? "arena-snapshot/v2-gzip",
@@ -55,7 +55,9 @@ export function getArenaSnapshotArtifactRef(
     bucket: SNAPSHOT_BUCKET,
     path:
       `${SNAPSHOT_PREFIX}/${SNAPSHOT_POLICY_KEY}/${buildId}/` +
-      `${variant}-${normalizedChecksum}${format === "binary" ? ".mbv4" : ".json"}`,
+      `${variant}-${normalizedChecksum}${
+        format === "binary" ? ".mbv4" : format === "mesh-facts" ? ".mbf1" : ".json"
+      }`,
   };
 }
 
@@ -257,6 +259,7 @@ export async function deleteArenaBuildArtifacts(params: {
     for (const variant of ["full", "preview"] as const) {
       addDeleting(getArenaSnapshotArtifactRef(build.id, variant, checksum, "json"));
       addDeleting(getArenaSnapshotArtifactRef(build.id, variant, checksum, "binary"));
+      addDeleting(getArenaSnapshotArtifactRef(build.id, variant, checksum, "mesh-facts"));
       addDeleting(getArenaLegacyStreamArtifactRef(build.id, variant, checksum));
       const shared = getArenaCanonicalStreamArtifactRef(variant, checksum);
       if (!shared) continue;

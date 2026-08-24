@@ -173,7 +173,7 @@ async function main() {
         kind: "voxel",
         surface: "sandbox",
         variant: "full",
-        strategy: "worker",
+        strategy: "worker-facts",
         cacheStatus: "miss",
         blockCountBucket: "150k-300k",
         renderedBlockCountBucket: "150k-300k",

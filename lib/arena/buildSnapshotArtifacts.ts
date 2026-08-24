@@ -1,6 +1,9 @@
 import type { PreparedArenaBuild } from "@/lib/arena/buildArtifacts";
 import { pickBuildVariant } from "@/lib/arena/buildArtifacts";
-import type { ArenaBuildVariant } from "@/lib/arena/types";
+import {
+  ARENA_MESH_FACTS_MIN_BLOCKS,
+  type ArenaBuildVariant,
+} from "@/lib/arena/types";
 import {
   deleteSupabaseStorageObjects,
   getSupabaseStorageConfig,
@@ -14,13 +17,11 @@ import {
   uploadArenaBuildArtifact,
 } from "@/lib/arena/artifactOwnership";
 import { withServerSpanSync } from "@/lib/observability/serverTracing";
+import { packVoxelBlocks } from "@/lib/voxel/packedBlocks";
+import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "@/lib/voxel/meshFacts";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 const ENCODER = new TextEncoder();
-
-export function isBinarySnapshotArtifactEnabled(): boolean {
-  return ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED;
-}
 
 export type ArenaSnapshotArtifactTarget = {
   variant: ArenaBuildVariant;
@@ -38,16 +39,10 @@ export type ArenaSnapshotArtifactFetchMetrics = {
   transferBytes?: number;
   decodedBytes?: number;
   inflateMs?: number;
+  contentEncoding?: "gzip" | "identity";
 };
 
 const ARENA_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv("ARENA_SNAPSHOT_ARTIFACTS_ENABLED", true);
-// Binary artifacts are written alongside the JSON ones and read only when a
-// client asks for them, so this can be turned on to backfill before anything
-// reads it, and turned off without stranding a client on a format it cannot get.
-const ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = readBoolEnv(
-  "ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED",
-  false,
-);
 const ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS = readIntEnv(
   "ARENA_SNAPSHOT_ARTIFACT_MISS_TTL_MS",
   1_000,
@@ -247,7 +242,6 @@ export function getSnapshotArtifactRef(
   format: ArenaSnapshotArtifactFormat = "json",
 ): ArenaBuildSnapshotArtifactRef | null {
   if (!isSnapshotArtifactEnabled()) return null;
-  if (format === "binary" && !ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) return null;
   return getArenaSnapshotArtifactRef(buildId, variant, checksum, format);
 }
 
@@ -281,6 +275,11 @@ function encodeBinarySnapshotArtifactPayload(payload: SnapshotArtifactPayload): 
   );
 }
 
+function encodeMeshFactsSnapshotArtifactPayload(payload: SnapshotArtifactPayload): Uint8Array {
+  const packed = packVoxelBlocks(payload.voxelBuild.blocks);
+  return gzipSync(encodeVoxelMeshFacts(createVoxelMeshFacts(packed)));
+}
+
 export function expectedSnapshotArtifactTargets(
   prepared: PreparedArenaBuild,
 ): ArenaSnapshotArtifactTarget[] {
@@ -295,10 +294,11 @@ export function expectedSnapshotArtifactTargets(
   if (previewNeeded) targets.push({ variant: "preview", format: "json" });
   if (isSnapshotClass) targets.push({ variant: "full", format: "json" });
 
-  if (ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED) {
-    if (previewNeeded) targets.push({ variant: "preview", format: "binary" });
-    // Binary full builds are small enough to serve whole for every class.
-    targets.push({ variant: "full", format: "binary" });
+  if (previewNeeded) targets.push({ variant: "preview", format: "binary" });
+  // Binary full builds are small enough to serve whole for every class
+  targets.push({ variant: "full", format: "binary" });
+  if (prepared.fullBuild.blocks.length >= ARENA_MESH_FACTS_MIN_BLOCKS) {
+    targets.push({ variant: "full", format: "mesh-facts" });
   }
 
   return targets;
@@ -360,7 +360,9 @@ async function uploadSnapshotArtifactVariant(
     const url = `${config.url}/storage/v1/object/${encodeURIComponent(ref.bucket)}/${encodedPath}`;
     const artifact = createSnapshotArtifactPayload(prepared, variant);
     const payload =
-      format === "binary"
+      format === "mesh-facts"
+        ? encodeMeshFactsSnapshotArtifactPayload(artifact)
+        : format === "binary"
         ? encodeBinarySnapshotArtifactPayload(artifact)
         : encodeSnapshotArtifactPayload(artifact);
     const accepted = await uploadArenaBuildArtifact(
@@ -376,7 +378,7 @@ async function uploadSnapshotArtifactVariant(
             "cache-control": ARENA_SNAPSHOT_ARTIFACT_CACHE_CONTROL,
             "Content-Encoding": "gzip",
             "Content-Type":
-              format === "binary"
+              format !== "json"
                 ? "application/octet-stream"
                 : "application/json; charset=utf-8",
           },
@@ -437,6 +439,7 @@ export async function fetchArenaBuildSnapshotArtifact(
     signal?: AbortSignal;
     format?: ArenaSnapshotArtifactFormat;
     cache?: "default" | "no-store";
+    preserveCompression?: boolean;
     metrics?: ArenaSnapshotArtifactFetchMetrics;
   },
 ): Promise<Uint8Array | null> {
@@ -448,10 +451,11 @@ export async function fetchArenaBuildSnapshotArtifact(
   }
 
   const useCache = opts?.cache !== "no-store";
-  const cacheKey = getArtifactCacheKey(buildId, variant, checksum, format);
+  const artifactCacheKey = getArtifactCacheKey(buildId, variant, checksum, format);
+  const cacheKey = `${artifactCacheKey}:${opts?.preserveCompression ? "raw" : "decoded"}`;
   const now = Date.now();
   if (useCache) maybePruneArtifactCaches(now);
-  if (useCache && hasFreshArtifactMiss(cacheKey)) {
+  if (useCache && hasFreshArtifactMiss(artifactCacheKey)) {
     // recent miss means the db snapshot path should win immediately
     if (opts?.metrics) opts.metrics.cacheStatus = "negative-cache";
     return null;
@@ -461,7 +465,11 @@ export async function fetchArenaBuildSnapshotArtifact(
   if (cached) {
     if (opts?.metrics) {
       opts.metrics.cacheStatus = "body-cache";
-      opts.metrics.decodedBytes = cached.byteLength;
+      opts.metrics.contentEncoding =
+        cached.length >= 2 && cached[0] === 0x1f && cached[1] === 0x8b ? "gzip" : "identity";
+      if (opts.metrics.contentEncoding === "identity") {
+        opts.metrics.decodedBytes = cached.byteLength;
+      }
     }
     return cached;
   }
@@ -471,7 +479,13 @@ export async function fetchArenaBuildSnapshotArtifact(
     // share supabase reads across concurrent requests
     if (opts?.metrics) opts.metrics.cacheStatus = "inflight";
     const bytes = await inflight;
-    if (opts?.metrics && bytes) opts.metrics.decodedBytes = bytes.byteLength;
+    if (opts?.metrics && bytes) {
+      opts.metrics.contentEncoding =
+        bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b ? "gzip" : "identity";
+      if (opts.metrics.contentEncoding === "identity") {
+        opts.metrics.decodedBytes = bytes.byteLength;
+      }
+    }
     return bytes;
   }
 
@@ -499,8 +513,17 @@ export async function fetchArenaBuildSnapshotArtifact(
 
     if (resp.ok) {
       const transferred = new Uint8Array(await resp.arrayBuffer());
-      if (opts?.metrics) opts.metrics.transferBytes = transferred.byteLength;
-      const bytes = maybeGunzipArtifactBytes(transferred, variant, format, opts?.metrics);
+      const compressed = transferred.length >= 2 && transferred[0] === 0x1f && transferred[1] === 0x8b;
+      if (opts?.metrics) {
+        opts.metrics.transferBytes = transferred.byteLength;
+        opts.metrics.contentEncoding = compressed ? "gzip" : "identity";
+      }
+      const bytes = opts?.preserveCompression
+        ? transferred
+        : maybeGunzipArtifactBytes(transferred, variant, format, opts?.metrics);
+      if (opts?.preserveCompression && !compressed && opts.metrics) {
+        opts.metrics.decodedBytes = transferred.byteLength;
+      }
       if (useCache) {
         clearSnapshotArtifactMiss(buildId, variant, checksum, format);
         setCachedSnapshotArtifactBody(cacheKey, bytes);

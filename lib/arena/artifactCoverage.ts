@@ -6,12 +6,10 @@ import {
   getArenaArtifactMinBytes,
 } from "@/lib/arena/buildDeliveryPolicy";
 import { parsePersistedArenaBuildMetadata } from "@/lib/arena/buildArtifacts";
-import {
-  getSnapshotArtifactRef,
-  isBinarySnapshotArtifactEnabled,
-} from "@/lib/arena/buildSnapshotArtifacts";
+import { getSnapshotArtifactRef } from "@/lib/arena/buildSnapshotArtifacts";
+import { ARENA_MESH_FACTS_MIN_BLOCKS } from "@/lib/arena/types";
 import { getArenaBuildStreamArtifactFetchRefs } from "@/lib/arena/buildStream";
-import { arenaCohortBuildWhere } from "@/lib/arena/eligibility";
+import { arenaArtifactBuildWhere } from "@/lib/arena/eligibility";
 
 // Policy-derived artifact expectations per build, shared by the precompute
 // scripts (--missing-only), the admin status route, and publish verification.
@@ -25,7 +23,7 @@ export type ArtifactRef = { bucket: string; path: string };
 // A requirement is satisfied when any one of its refs exists, since stream
 // artifacts have preferred and legacy storage locations
 export type ArtifactRequirement = {
-  kind: "snapshot" | "snapshot-binary" | "stream";
+  kind: "snapshot" | "snapshot-binary" | "snapshot-mesh-facts" | "stream";
   variant: "full" | "preview";
   refs: ArtifactRef[];
 };
@@ -153,7 +151,7 @@ export function expectedArtifactRequirements(
   // coverage that ignored it would report a build as complete while the faster
   // path silently never fired. Every class gets one, including stream-class
   // builds, which the binary encoding makes small enough to serve whole.
-  if (isBinarySnapshotArtifactEnabled() && checksum) {
+  if (checksum) {
     const binaryFullRef = getSnapshotArtifactRef(row.id, "full", checksum, "binary");
     required.push({
       kind: "snapshot-binary",
@@ -166,6 +164,14 @@ export function expectedArtifactRequirements(
         kind: "snapshot-binary",
         variant: "preview",
         refs: binaryPreviewRef ? [binaryPreviewRef] : [],
+      });
+    }
+    if ((loadHints?.fullBlockCount ?? 0) >= ARENA_MESH_FACTS_MIN_BLOCKS) {
+      const meshFactsRef = getSnapshotArtifactRef(row.id, "full", checksum, "mesh-facts");
+      required.push({
+        kind: "snapshot-mesh-facts",
+        variant: "full",
+        refs: meshFactsRef ? [meshFactsRef] : [],
       });
     }
   }
@@ -216,6 +222,8 @@ export type ArenaArtifactCoverage = {
   snapshotMissing: number | null;
   binaryRequirements: number | null;
   binaryMissing: number | null;
+  meshFactsRequirements: number | null;
+  meshFactsMissing: number | null;
   buildsMissingCoreMetadata: number | null;
   buildsNeedingSnapshotCompute: number | null;
   missingBuildIds: string[] | null;
@@ -226,7 +234,7 @@ export async function getArenaArtifactCoverage(
   modelKeys?: readonly string[],
 ): Promise<ArenaArtifactCoverage> {
   const rows = await prisma.build.findMany({
-    where: arenaCohortBuildWhere(modelKeys),
+    where: arenaArtifactBuildWhere(modelKeys),
     select: ARTIFACT_STATUS_BUILD_SELECT,
   });
 
@@ -260,15 +268,27 @@ export async function getArenaArtifactCoverage(
       artifactObjectsPresent:
         count(statuses, (status) => status.required, "stream") +
         count(statuses, (status) => status.required, "snapshot") +
-        count(statuses, (status) => status.required, "snapshot-binary") -
+        count(statuses, (status) => status.required, "snapshot-binary") +
+        count(statuses, (status) => status.required, "snapshot-mesh-facts") -
         count(statuses, (status) => status.missing, "stream") -
         count(statuses, (status) => status.missing, "snapshot") -
-        count(statuses, (status) => status.missing, "snapshot-binary"),
+        count(statuses, (status) => status.missing, "snapshot-binary") -
+        count(statuses, (status) => status.missing, "snapshot-mesh-facts"),
       thresholdBytes,
       snapshotRequirements: count(statuses, (status) => status.required, "snapshot"),
       snapshotMissing: count(statuses, (status) => status.missing, "snapshot"),
       binaryRequirements: count(statuses, (status) => status.required, "snapshot-binary"),
       binaryMissing: count(statuses, (status) => status.missing, "snapshot-binary"),
+      meshFactsRequirements: count(
+        statuses,
+        (status) => status.required,
+        "snapshot-mesh-facts",
+      ),
+      meshFactsMissing: count(
+        statuses,
+        (status) => status.missing,
+        "snapshot-mesh-facts",
+      ),
       buildsMissingCoreMetadata: statuses.filter((status) => status.missingCoreMetadata).length,
       buildsNeedingSnapshotCompute: statuses.filter((status) => status.needsSnapshotCompute)
         .length,
@@ -286,6 +306,8 @@ export async function getArenaArtifactCoverage(
       snapshotMissing: null,
       binaryRequirements: null,
       binaryMissing: null,
+      meshFactsRequirements: null,
+      meshFactsMissing: null,
       buildsMissingCoreMetadata: null,
       buildsNeedingSnapshotCompute: null,
       missingBuildIds: null,

@@ -3,6 +3,7 @@
 import "dotenv/config";
 import { gunzipSync } from "node:zlib";
 import { decodeBinaryArtifact } from "../lib/arena/binaryArtifact";
+import { decodeVoxelMeshFacts } from "../lib/voxel/meshFacts";
 import { findCatalogEntryBySlugOrKey } from "../lib/ai/modelCatalog";
 import {
   ARTIFACT_STATUS_BUILD_SELECT,
@@ -13,7 +14,7 @@ import {
 } from "../lib/arena/artifactCoverage";
 import { createArenaBuildSnapshotArtifactSignedUrl } from "../lib/arena/buildSnapshotArtifacts";
 import { createArenaBuildStreamArtifactSignedUrl } from "../lib/arena/buildStream";
-import { arenaCohortBuildWhere } from "../lib/arena/eligibility";
+import { arenaArtifactBuildWhere } from "../lib/arena/eligibility";
 import { getSupabaseStorageConfig } from "../lib/storage/buildPayload";
 import { prisma } from "../lib/prisma";
 
@@ -194,6 +195,16 @@ function verifyBinarySnapshotPayload(
   return null;
 }
 
+function verifyMeshFactsSnapshotPayload(bytes: Uint8Array): string | null {
+  try {
+    decodeVoxelMeshFacts(bytes);
+    return null;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `mesh facts snapshot payload is invalid: ${message}`;
+  }
+}
+
 function verifyStreamPayload(
   bytes: Uint8Array,
   buildId: string,
@@ -308,7 +319,12 @@ async function checkSignedUrlDelivery(
     kind === "stream"
       ? await createArenaBuildStreamArtifactSignedUrl(buildId, variant, checksum)
       : await createArenaBuildSnapshotArtifactSignedUrl(buildId, variant, checksum, {
-          format: kind === "snapshot-binary" ? "binary" : "json",
+          format:
+            kind === "snapshot-mesh-facts"
+              ? "mesh-facts"
+              : kind === "snapshot-binary"
+                ? "binary"
+                : "json",
         });
   if (!signedUrl) return "signed url unavailable (signing disabled or object missing)";
   // a ranged read proves anonymous delivery without re-downloading the body
@@ -335,6 +351,10 @@ function requirementChecksum(requirement: ArtifactRequirement): string | null {
     const match = path.match(/-([0-9a-f]{64})\.mbv4$/);
     return match?.[1] ?? null;
   }
+  if (requirement.kind === "snapshot-mesh-facts") {
+    const match = path.match(/-([0-9a-f]{64})\.mbf1$/);
+    return match?.[1] ?? null;
+  }
   const match =
     path.match(/\/checksum\/([0-9a-f]{64})\//) ??
     path.match(/-([0-9a-f]{64})\.ndjson$/);
@@ -343,7 +363,7 @@ function requirementChecksum(requirement: ArtifactRequirement): string | null {
 
 async function runDeepAudit(args: Args): Promise<number> {
   const rows = await prisma.build.findMany({
-    where: arenaCohortBuildWhere(args.modelKeys),
+    where: arenaArtifactBuildWhere(args.modelKeys),
     select: ARTIFACT_STATUS_BUILD_SELECT,
     orderBy: { id: "asc" },
     ...(args.limit ? { take: args.limit } : {}),
@@ -389,6 +409,8 @@ async function runDeepAudit(args: Args): Promise<number> {
           ? verifyStreamPayload(bytes, row.id, requirement.variant, checksum)
           : requirement.kind === "snapshot-binary"
             ? verifyBinarySnapshotPayload(bytes, row.id, requirement.variant, checksum)
+            : requirement.kind === "snapshot-mesh-facts"
+              ? verifyMeshFactsSnapshotPayload(bytes)
             : verifySnapshotPayload(bytes, row.id, requirement.variant, checksum);
       if (contentError) {
         failures.push({ buildId: row.id, requirement: label, reason: contentError });
@@ -436,6 +458,11 @@ async function runFastAudit(args: Args): Promise<number> {
   if (coverage.binaryRequirements) {
     console.log(
       `- binary requirements: ${coverage.binaryRequirements} (missing ${coverage.binaryMissing})`,
+    );
+  }
+  if (coverage.meshFactsRequirements) {
+    console.log(
+      `- mesh facts requirements: ${coverage.meshFactsRequirements} (missing ${coverage.meshFactsMissing})`,
     );
   }
   console.log(`- builds missing core metadata: ${coverage.buildsMissingCoreMetadata}`);
