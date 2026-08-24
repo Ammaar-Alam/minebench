@@ -111,6 +111,8 @@ export type ArenaMatchup = {
   };
 };
 
+export type ArenaMatchupLane = ArenaMatchup["a"];
+
 export type PromptListResponse = {
   prompts: { id: string; text: string }[];
 };

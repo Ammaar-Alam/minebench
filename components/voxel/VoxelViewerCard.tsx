@@ -15,6 +15,7 @@ import {
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
+import type { VoxelMeshPayload } from "@/lib/voxel/mesh";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import {
   toObjectBackedVoxelBuild,
@@ -30,6 +31,8 @@ export function VoxelViewerCard({
   voxelBuild,
   expectedBlockCount,
   meshCacheKey,
+  premeshedPayloadPromise,
+  onPremeshedPayloadConsumed,
   gridSize = 256,
   autoRotate = true,
   animateIn,
@@ -66,6 +69,8 @@ export function VoxelViewerCard({
   voxelBuild: unknown | null;
   expectedBlockCount?: number;
   meshCacheKey?: string | null;
+  premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
+  onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
   gridSize?: 64 | 256 | 512;
   autoRotate?: boolean;
   animateIn?: boolean;
@@ -392,6 +397,8 @@ export function VoxelViewerCard({
               palette={palette}
               expectedBlockCount={expectedBlockCount}
               meshCacheKey={meshCacheKey}
+              premeshedPayloadPromise={premeshedPayloadPromise}
+              onPremeshedPayloadConsumed={onPremeshedPayloadConsumed}
               autoRotate={autoRotate}
               // During progressive hydration, avoid restarting reveal animation on each chunk update.
               animateIn={Boolean(animateIn && !isLoading)}

@@ -9,6 +9,7 @@ import {
   createVoxelGroupAsync,
   VoxelGroup,
   type VoxelMeshCacheStatus,
+  type VoxelMeshPayload,
   type VoxelMeshStrategy,
 } from "@/lib/voxel/mesh";
 import {
@@ -51,6 +52,8 @@ type ViewerProps = {
   palette: "simple" | "advanced";
   expectedBlockCount?: number;
   meshCacheKey?: string | null;
+  premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
+  onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
   autoRotate?: boolean;
   animateIn?: boolean;
   showControls?: boolean;
@@ -408,6 +411,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     palette,
     expectedBlockCount,
     meshCacheKey,
+    premeshedPayloadPromise,
+    onPremeshedPayloadConsumed,
     autoRotate,
     animateIn,
     showControls = true,
@@ -469,6 +474,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     animateIn: boolean;
     expectedBlockCount: number | null;
     meshCacheKey: string | null;
+    premeshedPayloadPromise: Promise<VoxelMeshPayload> | null;
+    onPremeshedPayloadConsumed: ((promise: Promise<VoxelMeshPayload>) => void) | null;
   }>({
     voxelBuild: null,
     palette,
@@ -476,6 +483,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     animateIn: Boolean(animateIn),
     expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
     meshCacheKey: meshCacheKey?.trim() || null,
+    premeshedPayloadPromise: premeshedPayloadPromise ?? null,
+    onPremeshedPayloadConsumed: onPremeshedPayloadConsumed ?? null,
   });
   latestRef.current = {
     voxelBuild,
@@ -484,6 +493,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     animateIn: Boolean(animateIn),
     expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
     meshCacheKey: meshCacheKey?.trim() || null,
+    premeshedPayloadPromise: premeshedPayloadPromise ?? null,
+    onPremeshedPayloadConsumed: onPremeshedPayloadConsumed ?? null,
   };
 
   const identityRef = useRef<BuildIdentity | null>(null);
@@ -711,6 +722,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         signal: controller.signal,
         blockLimit,
         cacheKey: meshCacheKeySnapshot,
+        premeshedPayloadPromise: latest.premeshedPayloadPromise,
+        onPremeshedPayloadConsumed: latest.onPremeshedPayloadConsumed ?? undefined,
         yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
         onStage(event) {
           meshStrategy = event.strategy;

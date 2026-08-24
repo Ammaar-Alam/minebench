@@ -7,6 +7,7 @@ import {
   ArenaBuildRef,
   ArenaBuildVariant,
   ArenaMatchup,
+  ArenaMatchupLane,
   ArenaModelReveal,
   ArenaVoteResponse,
   VoteChoice,
@@ -25,6 +26,11 @@ import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import { getPalette } from "@/lib/blocks/palettes";
+import {
+  createVoxelMeshPayloadInWorker,
+  type VoxelMeshPayload,
+} from "@/lib/voxel/mesh";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import type { VoxelViewerBuildMetrics } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
@@ -44,6 +50,7 @@ import {
 } from "@/lib/observability/browserPerformance";
 import {
   enqueueClientMetric,
+  enqueueMatchupStageMetric,
   enqueueVoxelMetric,
   normalizeDeliverySource,
 } from "@/lib/observability/clientMetrics";
@@ -93,6 +100,15 @@ const PREFETCH_INITIAL_MAX_BYTES = Number.parseInt(
 let snapshotStorageRedirectBlocked = false;
 let streamStorageRedirectBlocked = false;
 
+const matchupRequestModes = new Map<string, "random" | "forced">();
+function setMatchupRequestMode(id: string, mode: "random" | "forced") {
+  if (matchupRequestModes.size > 200) {
+    const firstKey = matchupRequestModes.keys().next().value;
+    if (firstKey) matchupRequestModes.delete(firstKey);
+  }
+  matchupRequestModes.set(id, mode);
+}
+
 async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promise<ArenaMatchup> {
   const trace = createBrowserPerformanceTrace("matchup");
   trace.mark("fetch_start");
@@ -120,8 +136,10 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
     );
     const laneABlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.a.build));
     const laneBBlocks = getArenaBlockCountBucket(voxelBuildBlockCount(packedMatchup.b.build));
+    const mode: "random" | "forced" = promptId ? "forced" : "random";
+    setMatchupRequestMode(packedMatchup.id, mode);
     trackEvent("arena_matchup_received", {
-      path: `${promptId ? "forced" : "random"}:adaptive`,
+      path: `${mode}:adaptive`,
       samplingLane: matchup.samplingLane ?? "unknown",
       laneABlocks,
       laneBBlocks,
@@ -132,7 +150,7 @@ async function fetchMatchupOnce(promptId?: string, signal?: AbortSignal): Promis
     });
     enqueueClientMetric({
       kind: "matchup",
-      mode: promptId ? "forced" : "random",
+      mode,
       laneABlocks,
       laneBBlocks,
       headersMs,
@@ -1157,6 +1175,22 @@ function isInteractiveTarget(target: EventTarget | null) {
   return Boolean(target.closest("button,a,[role='button'],[role='link'],summary"));
 }
 
+const ARENA_PREMESH_MAX_BLOCK_COUNT = 150_000;
+
+function getArenaPremeshedMeshKey(
+  matchupId: string,
+  side: "a" | "b",
+  variant: ArenaBuildVariant,
+): string {
+  return `${matchupId}:${side}:${variant}`;
+}
+
+type PremeshedMeshEntry = {
+  matchupId: string;
+  promise: Promise<VoxelMeshPayload>;
+  controller: AbortController;
+};
+
 export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState(0);
@@ -1192,6 +1226,15 @@ export function Arena() {
   const hydratedBuildCacheWeightsRef = useRef(new Map<string, number>());
   const hydratedBuildCacheBytesRef = useRef(0);
   const fullBuildPrefetchRef = useRef(new Map<string, FullBuildPrefetch>());
+  const premeshedFullMeshRef = useRef<Map<string, PremeshedMeshEntry>>(new Map());
+  const inFlightWarmPromiseRef = useRef<Promise<void>>(Promise.resolve());
+  const matchupStagesRef = useRef<{
+    matchupId: string;
+    startAt: number;
+    mode: "random" | "forced";
+    previewReadyReported: boolean;
+    voteReadyReported: boolean;
+  } | null>(null);
   const sideLoadStateRef = useRef<SideLoadState | null>(null);
   const viewerReadyRef = useRef<{ matchupId: string; a: boolean; b: boolean } | null>(null);
   const autoFullHydrationRetriesRef = useRef(new Map<string, AutoFullHydrationRetry>());
@@ -1675,6 +1718,33 @@ export function Arena() {
     }
   }, []);
 
+  const abortFullPremeshedMeshes = useCallback((matchupId?: string) => {
+    for (const [key, entry] of premeshedFullMeshRef.current) {
+      if (matchupId && entry.matchupId !== matchupId) continue;
+      entry.controller.abort();
+      premeshedFullMeshRef.current.delete(key);
+    }
+  }, []);
+
+  const getLanePremeshedPayloadPromise = useCallback(
+    (matchupId: string, side: "a" | "b", lane: ArenaMatchupLane): Promise<VoxelMeshPayload> | null => {
+      if (!lane.build || getLaneHydratedVariant(lane) !== "full") return null;
+      const key = getArenaPremeshedMeshKey(matchupId, side, "full");
+      return premeshedFullMeshRef.current.get(key)?.promise ?? null;
+    },
+    [],
+  );
+
+  const consumeLanePremeshedPayload = useCallback(
+    (matchupId: string, side: "a" | "b", promise: Promise<VoxelMeshPayload>) => {
+      const key = getArenaPremeshedMeshKey(matchupId, side, "full");
+      if (premeshedFullMeshRef.current.get(key)?.promise === promise) {
+        premeshedFullMeshRef.current.delete(key);
+      }
+    },
+    [],
+  );
+
   const hydrateMatchupSide = useCallback(async (
     matchupValue: ArenaMatchup,
     side: "a" | "b",
@@ -2023,6 +2093,34 @@ export function Arena() {
           buildLoadHints: payload.buildLoadHints,
         };
         cacheHydratedBuild(resolvedRef, entry);
+
+        const blockCount = voxelBuildBlockCount(payload.voxelBuild);
+        if (blockCount > 0 && blockCount <= ARENA_PREMESH_MAX_BLOCK_COUNT) {
+          const warmKey = getArenaPremeshedMeshKey(matchupValue.id, side, "full");
+          if (!premeshedFullMeshRef.current.has(warmKey)) {
+            const warmController = new AbortController();
+            const startWarm = async (): Promise<VoxelMeshPayload> => {
+              const { payload: meshPayload } = await createVoxelMeshPayloadInWorker(
+                payload.voxelBuild!,
+                getPalette("simple"),
+                { signal: warmController.signal, blockLimit: blockCount },
+              );
+              return meshPayload;
+            };
+
+            const sequencedPromise = inFlightWarmPromiseRef.current.then(startWarm, startWarm);
+            inFlightWarmPromiseRef.current = sequencedPromise.then(
+              () => undefined,
+              () => undefined,
+            );
+            premeshedFullMeshRef.current.set(warmKey, {
+              matchupId: matchupValue.id,
+              promise: sequencedPromise,
+              controller: warmController,
+            });
+          }
+        }
+
         return payload;
       })();
 
@@ -2058,8 +2156,15 @@ export function Arena() {
       if (matchup?.id) abortFullHydrations(matchup.id);
       if (matchup?.id) abortInitialHydrations(matchup.id);
       if (matchup?.id) abortFullPrefetches(matchup.id);
+      if (matchup?.id) abortFullPremeshedMeshes(matchup.id);
     };
-  }, [abortFullHydrations, abortFullPrefetches, abortInitialHydrations, matchup?.id]);
+  }, [abortFullHydrations, abortFullPrefetches, abortFullPremeshedMeshes, abortInitialHydrations, matchup?.id]);
+
+  useEffect(() => {
+    return () => {
+      abortFullPremeshedMeshes();
+    };
+  }, [abortFullPremeshedMeshes]);
 
   useEffect(() => {
     if (reveal.kind !== "reveal") return;
@@ -2282,6 +2387,8 @@ export function Arena() {
     setState({ kind: "ready", matchup: applyCachedBuildsToMatchup(next) });
     abortFullHydrations(matchupId);
     abortInitialHydrations(matchupId);
+    abortFullPrefetches(matchupId);
+    abortFullPremeshedMeshes(matchupId);
     setReveal({ kind: "none" });
     setSubmitting(false);
 
@@ -2452,6 +2559,7 @@ export function Arena() {
     abortInitialHydrations(matchup.id);
     abortFullHydrations(matchup.id);
     abortFullPrefetches(matchup.id);
+    abortFullPremeshedMeshes(matchup.id);
 
     let advanceAt: number;
     try {
@@ -2575,6 +2683,68 @@ export function Arena() {
   const matchupBuildLoading = Boolean(
     matchup && (isMatchupVoteBlocked(matchup, sideLoadState) || !viewerReadyA || !viewerReadyB),
   );
+
+  useEffect(() => {
+    if (!matchup) {
+      matchupStagesRef.current = null;
+      return;
+    }
+    if (!matchupStagesRef.current || matchupStagesRef.current.matchupId !== matchup.id) {
+      const mode = matchupRequestModes.get(matchup.id) ?? "random";
+      matchupStagesRef.current = {
+        matchupId: matchup.id,
+        startAt: performance.now(),
+        mode,
+        previewReadyReported: false,
+        voteReadyReported: false,
+      };
+    }
+  }, [matchup]);
+
+  useEffect(() => {
+    const stages = matchupStagesRef.current;
+    if (!stages || !matchup || stages.matchupId !== matchup.id) return;
+    const now = performance.now();
+    const elapsedMs = Math.max(0, Math.round(now - stages.startAt));
+    const mode = stages.mode;
+
+    if (viewerReadyA && viewerReadyB && !stages.previewReadyReported) {
+      stages.previewReadyReported = true;
+      enqueueMatchupStageMetric({
+        stage: "preview_ready",
+        mode,
+        laneABlocks: voxelBuildBlockCount(matchup.a.build),
+        laneBBlocks: voxelBuildBlockCount(matchup.b.build),
+        durationMs: elapsedMs,
+      });
+      trackEvent("arena_matchup_stage", {
+        stage: "preview_ready",
+        mode,
+        durationMs: elapsedMs,
+      });
+    }
+
+    if (!matchupBuildLoading && !stages.voteReadyReported) {
+      stages.voteReadyReported = true;
+      enqueueMatchupStageMetric({
+        stage: "vote_ready",
+        mode,
+        laneABlocks: voxelBuildBlockCount(matchup.a.build),
+        laneBBlocks: voxelBuildBlockCount(matchup.b.build),
+        durationMs: elapsedMs,
+      });
+      trackEvent("arena_matchup_stage", {
+        stage: "vote_ready",
+        mode,
+        durationMs: elapsedMs,
+      });
+    }
+  }, [
+    matchup,
+    matchupBuildLoading,
+    viewerReadyA,
+    viewerReadyB,
+  ]);
 
   const buildARetrieving =
     state.kind === "loading" ||
@@ -2773,6 +2943,14 @@ export function Arena() {
                 voxelBuild={matchup?.a.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.a) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.a) : null}
+                premeshedPayloadPromise={
+                  matchup ? getLanePremeshedPayloadPromise(matchup.id, "a", matchup.a) : null
+                }
+                onPremeshedPayloadConsumed={
+                  matchup
+                    ? (promise) => consumeLanePremeshedPayload(matchup.id, "a", promise)
+                    : undefined
+                }
                 skipValidation={Boolean(matchup?.a.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
@@ -2830,6 +3008,14 @@ export function Arena() {
                 voxelBuild={matchup?.b.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.b) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.b) : null}
+                premeshedPayloadPromise={
+                  matchup ? getLanePremeshedPayloadPromise(matchup.id, "b", matchup.b) : null
+                }
+                onPremeshedPayloadConsumed={
+                  matchup
+                    ? (promise) => consumeLanePremeshedPayload(matchup.id, "b", promise)
+                    : undefined
+                }
                 skipValidation={Boolean(matchup?.b.serverValidated)}
                 onBuildReadyChange={(ready) => {
                   const id = matchup?.id;
