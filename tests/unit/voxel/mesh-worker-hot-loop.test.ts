@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { buildMeshPayload } from "../../../lib/voxel/mesh.worker";
+import {
+  buildMeshPayload,
+  buildMeshPayloadFromFacts,
+} from "../../../lib/voxel/mesh.worker";
 import { packVoxelBlocks } from "../../../lib/voxel/packedBlocks";
+import { createVoxelMeshFacts } from "../../../lib/voxel/meshFacts";
 import { getPalette } from "../../../lib/blocks/palettes";
 import type { SerializedMeshBucket } from "../../../lib/voxel/mesh";
 
@@ -20,6 +24,7 @@ function testWorkerMeshingVariousMaterials() {
   ]);
 
   const payload = buildMeshPayload(build, allowed);
+  assert.deepEqual(buildMeshPayloadFromFacts(createVoxelMeshFacts(build), allowed), payload);
 
   assert.equal(payload.filteredBlockCount, 7);
   assert.ok(payload.opaque != null, "should have opaque geometry");
@@ -51,10 +56,24 @@ function testWorkerMeshingOcclusionCulling() {
 
   const build = packVoxelBlocks(blocks);
   const payload = buildMeshPayload(build, allowed);
+  assert.deepEqual(buildMeshPayloadFromFacts(createVoxelMeshFacts(build), allowed), payload);
 
   // 26 outer blocks remain visible, 1 center block culled
   assert.equal(payload.filteredBlockCount, 26);
   assert.ok(payload.opaque != null);
+}
+
+function testMeshFactsFallbackWhenPaletteFiltersBlocks() {
+  const allowed = ["stone"];
+  const build = packVoxelBlocks([
+    { x: 0, y: 0, z: 0, type: "stone" },
+    { x: 1, y: 0, z: 0, type: "bricks" },
+  ]);
+
+  assert.deepEqual(
+    buildMeshPayloadFromFacts(createVoxelMeshFacts(build), allowed),
+    buildMeshPayload(build, allowed),
+  );
 }
 
 function testWorkerMeshingEmptyBuild() {
@@ -63,6 +82,7 @@ function testWorkerMeshingEmptyBuild() {
 
   const build = packVoxelBlocks([]);
   const payload = buildMeshPayload(build, allowed);
+  assert.deepEqual(buildMeshPayloadFromFacts(createVoxelMeshFacts(build), allowed), payload);
 
   assert.equal(payload.filteredBlockCount, 0);
   assert.equal(payload.opaque, null);
@@ -97,6 +117,7 @@ function testGoldenFixtureParity() {
     { x: 5, y: 0, z: 0, type: "glowstone" },
   ]);
   const payload = buildMeshPayload(packed, allowed);
+  assert.deepEqual(buildMeshPayloadFromFacts(createVoxelMeshFacts(packed), allowed), payload);
 
   // frozen from the preoptimization mesher so byte changes require deliberate review
   assert.deepEqual(
@@ -131,6 +152,7 @@ function testGoldenFixtureParity() {
 function main() {
   testWorkerMeshingVariousMaterials();
   testWorkerMeshingOcclusionCulling();
+  testMeshFactsFallbackWhenPaletteFiltersBlocks();
   testWorkerMeshingEmptyBuild();
   testGoldenFixtureParity();
   console.log("worker hot loop optimization unit tests passed");

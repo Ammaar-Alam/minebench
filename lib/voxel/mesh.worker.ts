@@ -9,11 +9,13 @@ import type {
 } from "@/lib/voxel/mesh";
 import { appendQuad, makeBucket, serializeBucket, type MeshBucket } from "@/lib/voxel/meshBuckets";
 import {
+  computeVisibleFaceMask,
   DIRS,
   SpatialBlockTable,
   type CornerOffset,
   type Direction,
 } from "@/lib/voxel/ambientOcclusion";
+import type { VoxelMeshFacts } from "@/lib/voxel/meshFacts";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -21,12 +23,18 @@ type BuildProgress = {
   stageLabel?: string;
 };
 
-type WorkerRequest = {
-  type: "build";
-  blocks: TransferableVoxelBlocks;
-  allowedBlockIds: string[];
-  blockLimit?: number;
-};
+type WorkerRequest =
+  | {
+      type: "build";
+      blocks: TransferableVoxelBlocks;
+      allowedBlockIds: string[];
+      blockLimit?: number;
+    }
+  | {
+      type: "mesh-facts";
+      facts: VoxelMeshFacts;
+      allowedBlockIds: string[];
+    };
 
 type WorkerResponse =
   | { type: "progress"; progress: BuildProgress }
@@ -86,6 +94,13 @@ const POSITION_BITS = 10;
 const POSITION_MASK = (1 << POSITION_BITS) - 1;
 const WATER_BLOCK_ID = "water";
 const PROGRESS_EVERY = 4096;
+const AO_FACTORS = [0.58, 0.72, 0.86, 1] as const;
+const AMBIENT_OCCLUSION_BY_BYTE = Array.from({ length: 256 }, (_, packed) => [
+  AO_FACTORS[packed & 0x03],
+  AO_FACTORS[(packed >> 2) & 0x03],
+  AO_FACTORS[(packed >> 4) & 0x03],
+  AO_FACTORS[(packed >> 6) & 0x03],
+] as const);
 
 function packPlaneCell(u: number, v: number): number {
   return u | (v << POSITION_BITS);
@@ -148,15 +163,15 @@ function buildFaceTable(
     for (let dIdx = 0; dIdx < 6; dIdx += 1) {
       const d = DIRS[dIdx];
       const texKey = getTextureKey(typeName, d.face);
+      const faceIdx = typeId * 6 + dIdx;
+      isEmissive[faceIdx] = emissive;
       if (!hasAtlasKey(texKey)) continue;
 
       const uv = getAtlasUv(texKey);
       const tint = faceTint(typeName, d.face);
-      const faceIdx = typeId * 6 + dIdx;
 
       valid[faceIdx] = 1;
       bucketIndex[faceIdx] = bIndex;
-      isEmissive[faceIdx] = emissive;
       tints[faceIdx] = tint;
       uvs[faceIdx] = [uv.u0, uv.v0, uv.u0, uv.v1, uv.u1, uv.v1, uv.u1, uv.v0];
     }
@@ -199,28 +214,6 @@ function postProgress(processedBlocks: number, totalBlocks: number, stageLabel: 
     },
   };
   workerScope.postMessage(message);
-}
-
-function computeVisibleFaceMask(
-  x: number,
-  y: number,
-  z: number,
-  typeId: number,
-  table: SpatialBlockTable,
-  materialOccluding: Uint8Array,
-): number {
-  let mask = 0;
-  for (let dIdx = 0; dIdx < 6; dIdx += 1) {
-    const d = DIRS[dIdx];
-    const neighborTypeId = table.get(x + d.dx, y + d.dy, z + d.dz);
-    if (
-      neighborTypeId === -1 ||
-      (neighborTypeId !== typeId && materialOccluding[neighborTypeId] !== 1)
-    ) {
-      mask |= 1 << dIdx;
-    }
-  }
-  return mask;
 }
 
 function isOccludingInNeighborhood(
@@ -390,6 +383,83 @@ function prepareMeshData(
   };
 }
 
+function prepareMeshDataFromFacts(
+  facts: VoxelMeshFacts,
+  allowedBlockIds: string[],
+): PreparedMeshData {
+  const allowed = new Set(allowedBlockIds);
+  const blocks = facts.blocks;
+  if (facts.visibilityMasks.length !== blocks.count) {
+    throw new Error("Mesh facts visibility masks do not match block count");
+  }
+
+  const nonWaterBlockIndices = new Int32Array(blocks.count);
+  const waterBlockIndices = new Int32Array(blocks.count);
+  let nonWaterCount = 0;
+  let waterCount = 0;
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let maxZ = -Infinity;
+
+  for (let i = 0; i < blocks.count; i += 1) {
+    const type = blocks.typeNames[blocks.typeIds[i]];
+    if (!type || !allowed.has(type)) continue;
+    const x = blocks.positions[i * 3];
+    const y = blocks.positions[i * 3 + 1];
+    const z = blocks.positions[i * 3 + 2];
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    maxZ = Math.max(maxZ, z);
+    if (facts.visibilityMasks[i] !== 0) {
+      if (type === WATER_BLOCK_ID) {
+        waterBlockIndices[waterCount] = i;
+        waterCount += 1;
+      } else {
+        nonWaterBlockIndices[nonWaterCount] = i;
+        nonWaterCount += 1;
+      }
+    }
+    if ((i & (PROGRESS_EVERY - 1)) === 0) {
+      postProgress(i, Math.max(1, blocks.count), "Loading mesh facts");
+    }
+  }
+
+  if (!Number.isFinite(minX)) {
+    minX = minY = minZ = 0;
+    maxX = maxY = maxZ = 0;
+  }
+
+  return {
+    allowed,
+    table: new SpatialBlockTable(0),
+    materialOccluding: new Uint8Array(0),
+    typeNames: blocks.typeNames,
+    blocks,
+    visibleFaceMasks: facts.visibilityMasks,
+    nonWaterBlockIndices,
+    nonWaterCount,
+    waterBlockIndices,
+    waterCount,
+    filteredBlockCount: nonWaterCount + waterCount,
+    maxInputBlocks: blocks.count,
+    minX,
+    minY,
+    minZ,
+    maxX,
+    maxY,
+    maxZ,
+    cx: (minX + maxX + 1) / 2,
+    cy: minY,
+    cz: (minZ + maxZ + 1) / 2,
+  };
+}
+
 function appendStandardFaces(
   blockIdx: number,
   prepared: PreparedMeshData,
@@ -433,6 +503,49 @@ function appendStandardFaces(
       d,
       tint,
       uv,
+      ao,
+    );
+  }
+}
+
+function appendStandardFacesFromFacts(
+  blockIdx: number,
+  prepared: PreparedMeshData,
+  faceTable: PreResolvedFaceTable,
+  bucketList: [MeshBucket, MeshBucket, MeshBucket, MeshBucket],
+  ambientOcclusion: Uint8Array,
+  ambientOcclusionCursor: { value: number },
+) {
+  const { positions, typeIds } = prepared.blocks;
+  const typeId = typeIds[blockIdx];
+  const x = positions[blockIdx * 3];
+  const y = positions[blockIdx * 3 + 1];
+  const z = positions[blockIdx * 3 + 2];
+  const bx = x - prepared.cx;
+  const by = y - prepared.cy;
+  const bz = z - prepared.cz;
+  const visibleFaceMask = prepared.visibleFaceMasks[blockIdx];
+  const baseFaceIdx = typeId * 6;
+
+  for (let dIdx = 0; dIdx < 6; dIdx += 1) {
+    if ((visibleFaceMask & (1 << dIdx)) === 0) continue;
+    const faceIdx = baseFaceIdx + dIdx;
+    let ao: readonly [number, number, number, number] | undefined;
+    if (faceTable.isEmissive[faceIdx] === 0) {
+      if (ambientOcclusionCursor.value >= ambientOcclusion.length) {
+        throw new Error("Mesh facts ambient occlusion data is truncated");
+      }
+      ao = AMBIENT_OCCLUSION_BY_BYTE[ambientOcclusion[ambientOcclusionCursor.value]];
+      ambientOcclusionCursor.value += 1;
+    }
+    if (faceTable.valid[faceIdx] === 0) continue;
+
+    appendQuad(
+      bucketList[faceTable.bucketIndex[faceIdx]],
+      DIRS[dIdx].quad(bx, by, bz),
+      DIRS[dIdx],
+      faceTable.tints[faceIdx]!,
+      faceTable.uvs[faceIdx]!,
       ao,
     );
   }
@@ -699,6 +812,58 @@ export function buildMeshPayload(
   };
 }
 
+export function buildMeshPayloadFromFacts(
+  facts: VoxelMeshFacts,
+  allowedBlockIds: string[],
+): VoxelMeshPayload {
+  const allowed = new Set(allowedBlockIds);
+  if (facts.blocks.typeNames.some((type) => !allowed.has(type))) {
+    return buildMeshPayload(facts.blocks, allowedBlockIds);
+  }
+  const prepared = prepareMeshDataFromFacts(facts, allowedBlockIds);
+  const faceTable = buildFaceTable(prepared.typeNames, prepared.allowed);
+  const opaque = makeBucket();
+  const cutout = makeBucket();
+  const transparent = makeBucket();
+  const emissive = makeBucket();
+  const bucketList: [MeshBucket, MeshBucket, MeshBucket, MeshBucket] = [
+    opaque,
+    cutout,
+    transparent,
+    emissive,
+  ];
+  const ambientOcclusionCursor = { value: 0 };
+
+  for (let i = 0; i < prepared.nonWaterCount; i += 1) {
+    appendStandardFacesFromFacts(
+      prepared.nonWaterBlockIndices[i],
+      prepared,
+      faceTable,
+      bucketList,
+      facts.ambientOcclusion,
+      ambientOcclusionCursor,
+    );
+    if ((i & (PROGRESS_EVERY - 1)) === 0) {
+      postProgress(i, Math.max(1, prepared.nonWaterCount), "Expanding mesh facts");
+    }
+  }
+  if (ambientOcclusionCursor.value !== facts.ambientOcclusion.length) {
+    throw new Error("Mesh facts ambient occlusion data has trailing bytes");
+  }
+
+  const water = buildWaterSurfaceBucket(prepared);
+  postProgress(prepared.filteredBlockCount, Math.max(1, prepared.filteredBlockCount), "Finalizing geometry");
+  return {
+    opaque: serializeBucket(opaque),
+    cutout: serializeBucket(cutout),
+    transparent: serializeBucket(transparent),
+    water: serializeBucket(water),
+    emissive: serializeBucket(emissive),
+    bounds: serializeBounds(prepared),
+    filteredBlockCount: prepared.filteredBlockCount,
+  };
+}
+
 function collectTransferables(payload: VoxelMeshPayload): Transferable[] {
   const transferables: Transferable[] = [];
   for (const bucket of [
@@ -723,10 +888,12 @@ function collectTransferables(payload: VoxelMeshPayload): Transferable[] {
 if (typeof self !== "undefined") {
   workerScope.onmessage = (event: MessageEvent<WorkerRequest>) => {
     const message = event.data;
-    if (!message || message.type !== "build") return;
+    if (!message) return;
 
     try {
-      const payload = buildMeshPayload(message.blocks, message.allowedBlockIds, message.blockLimit);
+      const payload = message.type === "mesh-facts"
+        ? buildMeshPayloadFromFacts(message.facts, message.allowedBlockIds)
+        : buildMeshPayload(message.blocks, message.allowedBlockIds, message.blockLimit);
       const response: WorkerResponse = { type: "complete", payload };
       workerScope.postMessage?.(response, collectTransferables(payload));
     } catch (err) {

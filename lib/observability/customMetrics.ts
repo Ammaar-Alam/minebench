@@ -75,7 +75,7 @@ const voxelMetricSchema = z
     kind: z.literal("voxel"),
     surface: z.enum(["arena", "sandbox", "leaderboard"]),
     variant: z.enum(["preview", "full"]),
-    strategy: z.enum(["local", "worker", "worker-fallback"]),
+    strategy: z.enum(["local", "worker", "worker-facts", "worker-fallback"]),
     cacheStatus: z.enum(["hit", "miss", "disabled", "not-used", "prewarm-hit"]),
     blockCountBucket: blockCountBucketSchema,
     renderedBlockCountBucket: blockCountBucketSchema,
