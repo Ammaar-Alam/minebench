@@ -22,11 +22,12 @@ async function main() {
     },
   });
 
-  assert.deepEqual(deletion, { deleted: 8, preserved: 0 });
+  assert.deepEqual(deletion, { deleted: 10, preserved: 0 });
   assert.equal(deleted.length, 1);
-  assert.equal(new Set(deleted[0].map((ref) => `${ref.bucket}:${ref.path}`)).size, 8);
+  assert.equal(new Set(deleted[0].map((ref) => `${ref.bucket}:${ref.path}`)).size, 10);
   assert.equal(deleted[0].filter((ref) => ref.path.endsWith(".json")).length, 2);
   assert.equal(deleted[0].filter((ref) => ref.path.endsWith(".mbv4")).length, 2);
+  assert.equal(deleted[0].filter((ref) => ref.path.endsWith(".mbf1")).length, 2);
   assert.equal(
     deleted[0].filter((ref) => ref.path.includes("/build-a/") && ref.path.endsWith(".ndjson"))
       .length,
@@ -52,8 +53,8 @@ async function main() {
     },
   });
 
-  assert.deepEqual(preserved, { deleted: 6, preserved: 2 });
-  assert.equal(new Set(preservedRefs.map((ref) => `${ref.bucket}:${ref.path}`)).size, 6);
+  assert.deepEqual(preserved, { deleted: 8, preserved: 2 });
+  assert.equal(new Set(preservedRefs.map((ref) => `${ref.bucket}:${ref.path}`)).size, 8);
   assert.equal(preservedRefs.some((ref) => ref.path.includes("/checksum/checksum-shared/")), false);
 
   await assert.rejects(
@@ -85,7 +86,7 @@ async function main() {
       previousNamespaceRefs.push(...refs);
     },
   });
-  assert.equal(previousNamespace.deleted, 9);
+  assert.equal(previousNamespace.deleted, 11);
   assert.equal(previousNamespace.preserved, 1);
   assert.equal(
     previousNamespaceRefs.some(

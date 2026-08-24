@@ -426,6 +426,40 @@ async function main() {
     "binary_decode_complete",
   ]);
 
+  const { packVoxelBlocks } = await import("../../../lib/voxel/packedBlocks");
+  const { createVoxelMeshFacts, encodeVoxelMeshFacts } = await import(
+    "../../../lib/voxel/meshFacts"
+  );
+  const meshFactsBytes = encodeVoxelMeshFacts(
+    createVoxelMeshFacts(packVoxelBlocks(testBlocks)),
+  );
+  const meshFactsStages: string[] = [];
+  const payloadFromMeshFacts = await readBuildVariantPayload(
+    new Response(gzipSync(Buffer.from(meshFactsBytes))),
+    {
+      fallbackIdentity: {
+        buildId: "blind-token",
+        variant: "full",
+        checksum: null,
+      },
+      onStage: (event) => meshFactsStages.push(event.stage),
+    },
+  );
+  assert.equal(payloadFromMeshFacts.servedFormat, "mesh-facts");
+  assert.equal(payloadFromMeshFacts.payload.buildId, "blind-token");
+  assert.equal(payloadFromMeshFacts.payload.serverValidated, true);
+  assert.equal(payloadFromMeshFacts.payload.voxelBuild.packed?.count, 3);
+  assert.ok(payloadFromMeshFacts.payload.voxelBuild.meshFacts);
+  assert.deepEqual(meshFactsStages, [
+    "body_complete",
+    "inflate_complete",
+    "mesh_facts_decode_complete",
+  ]);
+  await assert.rejects(
+    readBuildVariantPayload(new Response(Buffer.from(meshFactsBytes))),
+    /requires request identity/,
+  );
+
   // Equivalence between binary and JSON delivery
   assert.equal(
     payloadFromBinary.payload.voxelBuild.packed?.count,

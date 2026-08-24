@@ -1,6 +1,9 @@
 import { after, NextResponse } from "next/server";
 import { gzipSync } from "node:zlib";
-import type { ArenaBuildVariant } from "@/lib/arena/types";
+import {
+  ARENA_MESH_FACTS_MIN_BLOCKS,
+  type ArenaBuildVariant,
+} from "@/lib/arena/types";
 import {
   deriveArenaBuildLoadHints,
   getCachedPreparedArenaBuild,
@@ -158,6 +161,24 @@ function parseVariant(value: string | null): ArenaBuildVariant {
   return value === "preview" ? "preview" : "full";
 }
 
+function servedFormatForArtifact(
+  format: ArenaSnapshotArtifactFormat,
+): ArenaBuildMetricObservation["servedFormat"] {
+  if (format === "mesh-facts") return "mesh-facts";
+  return format === "binary" ? "binary" : "json";
+}
+
+function isOptimizedFormatDelivered(
+  requested: ArenaBuildMetricObservation["requestedFormat"],
+  served: ArenaBuildMetricObservation["servedFormat"],
+  meshFactsExpected: boolean,
+): boolean {
+  if (requested === "mbf1") {
+    return served === (meshFactsExpected ? "mesh-facts" : "binary");
+  }
+  return requested === "v4" && served === "binary";
+}
+
 function acceptsGzip(request: Request): boolean {
   return /\bgzip\b/i.test(request.headers.get("accept-encoding") ?? "");
 }
@@ -313,12 +334,18 @@ export async function GET(
   const stages: Partial<Record<ArenaBuildMetricStage, number>> = {};
   const url = new URL(request.url);
   const variant = parseVariant(url.searchParams.get("variant"));
-  const binaryFormatRequested = url.searchParams.get("format") === "v4";
+  const meshFactsFormatRequested = url.searchParams.get("format") === "mbf1";
+  const binaryFormatRequested =
+    meshFactsFormatRequested || url.searchParams.get("format") === "v4";
   const shouldGzip = acceptsGzip(request);
   let observation: ArenaBuildDeliveryObservation = {
     access: "public",
     variant,
-    requestedFormat: binaryFormatRequested ? "v4" : "legacy",
+    requestedFormat: meshFactsFormatRequested
+      ? "mbf1"
+      : binaryFormatRequested
+        ? "v4"
+        : "legacy",
     servedFormat: "none",
     deliveryClass: "unknown",
     source: "unknown",
@@ -330,7 +357,7 @@ export async function GET(
     transferBytes: null,
     decodedBytes: null,
     gzip: shouldGzip,
-    optimizedExpected: binaryFormatRequested,
+    optimizedExpected: false,
     optimizedDelivered: false,
   };
 
@@ -482,6 +509,12 @@ export async function GET(
     variant === "preview" ? shellHints.previewBlockCount : shellHints.fullBlockCount;
   const binaryArtifactRequested =
     binaryFormatRequested && isBinarySnapshotArtifactEnabled();
+  const meshFactsArtifactRequested =
+    meshFactsFormatRequested &&
+    binaryArtifactRequested &&
+    variant === "full" &&
+    shellHints.fullBlockCount >= ARENA_MESH_FACTS_MIN_BLOCKS;
+  observation.optimizedExpected = binaryArtifactRequested;
   const fullUsesStreamDelivery =
     variant === "full" &&
     (shellHints.deliveryClass === "stream-live" ||
@@ -526,8 +559,12 @@ export async function GET(
   const artifactFormats: ArenaSnapshotArtifactFormat[] =
     binaryArtifactRequested
       ? fullUsesStreamDelivery
-        ? ["binary"]
-        : ["binary", "json"]
+        ? meshFactsArtifactRequested
+          ? ["mesh-facts", "binary"]
+          : ["binary"]
+        : meshFactsArtifactRequested
+          ? ["mesh-facts", "binary", "json"]
+          : ["binary", "json"]
       : ["json"];
   let servedArtifactFormat: ArenaSnapshotArtifactFormat = "json";
 
@@ -564,8 +601,8 @@ export async function GET(
           );
         } catch (error) {
           if (format === "json") throw error;
-          observation.fallbackReason = "binary-sign-error";
-          console.warn("arena binary snapshot artifact sign failed; falling back", error);
+          observation.fallbackReason = `${format}-sign-error`;
+          console.warn(`arena ${format} snapshot artifact sign failed; falling back`, error);
           continue;
         }
         if (signedUrl) {
@@ -579,12 +616,18 @@ export async function GET(
           Location: signedUrl,
           "x-build-delivery-class": deliveryClass,
           "x-build-source": "artifact-redirect",
+          "x-build-format": servedArtifactFormat,
         });
+        const servedFormat = servedFormatForArtifact(servedArtifactFormat);
         return finishResponse(new Response(null, { status: 307, headers }), {
           source: "artifact-redirect",
           artifactOutcome: "redirect",
-          servedFormat: servedArtifactFormat === "binary" ? "binary" : "json",
-          optimizedDelivered: servedArtifactFormat === "binary",
+          servedFormat,
+          optimizedDelivered: isOptimizedFormatDelivered(
+            observation.requestedFormat,
+            servedFormat,
+            meshFactsArtifactRequested,
+          ),
         });
       }
     } catch {
@@ -612,6 +655,7 @@ export async function GET(
     if (artifactAllowed && canServeSnapshotArtifact) {
       artifactFetchStartedAt = performance.now();
       let artifactBytes: Uint8Array | null = null;
+      let artifactContentEncoding: "gzip" | "identity" = "identity";
       for (const format of artifactFormats) {
         const fetchMetrics: ArenaSnapshotArtifactFetchMetrics = { cacheStatus: "miss" };
         try {
@@ -629,6 +673,7 @@ export async function GET(
                     signal,
                     format,
                     cache: buildAccess ? "no-store" : "default",
+                    preserveCompression: format === "mesh-facts" && shouldGzip,
                     metrics: fetchMetrics,
                   }),
                 SNAPSHOT_ARTIFACT_FETCH_TIMEOUT_MS,
@@ -649,8 +694,8 @@ export async function GET(
           );
         } catch (error) {
           if (format === "json") throw error;
-          observation.fallbackReason = "binary-artifact-error";
-          console.warn("arena binary snapshot artifact fetch failed; falling back", error);
+          observation.fallbackReason = `${format}-artifact-error`;
+          console.warn(`arena ${format} snapshot artifact fetch failed; falling back`, error);
           continue;
         } finally {
           observation.artifactCacheStatus = fetchMetrics.cacheStatus;
@@ -662,6 +707,7 @@ export async function GET(
         }
         if (artifactBytes) {
           servedArtifactFormat = format;
+          artifactContentEncoding = fetchMetrics.contentEncoding ?? "identity";
           break;
         }
       }
@@ -671,7 +717,7 @@ export async function GET(
       if (artifactBytes) {
         timing.add("artifact_hit", artifactFetchMs);
         observation.artifactOutcome = "hit";
-        const responseArtifactBytes = buildAccess
+        const responseArtifactBytes = buildAccess && servedArtifactFormat !== "mesh-facts"
           ? measureStageSync(
               "identity_rewrite",
               "arena.artifact.identity_rewrite",
@@ -687,7 +733,9 @@ export async function GET(
           : artifactBytes;
         // the stored object is gzip; proxying it verbatim to a gzip-capable
         // client keeps snapshot-class fallbacks off the uncompressed path
-        const body = shouldGzip
+        const alreadyCompressed =
+          servedArtifactFormat === "mesh-facts" && artifactContentEncoding === "gzip";
+        const body = shouldGzip && !alreadyCompressed
           ? measureStageSync(
               "deflate",
               "arena.response.deflate",
@@ -703,24 +751,31 @@ export async function GET(
             ? "private, no-store"
             : "public, max-age=0, s-maxage=300, stale-while-revalidate=86400, no-transform",
           "Content-Type":
-            servedArtifactFormat === "binary"
+            servedArtifactFormat !== "json"
               ? "application/octet-stream"
               : "application/json; charset=utf-8",
           "Content-Length": String(body.byteLength),
           "x-build-delivery-class": deliveryClass,
           "x-build-source": "artifact",
+          "x-build-format": servedArtifactFormat,
         });
         if (shouldGzip) {
           headers.set("Content-Encoding", "gzip");
           headers.set("Vary", "Accept-Encoding");
         }
+        const servedFormat = servedFormatForArtifact(servedArtifactFormat);
+        const optimizedDelivered = isOptimizedFormatDelivered(
+          observation.requestedFormat,
+          servedFormat,
+          meshFactsArtifactRequested,
+        );
         return finishResponse(new Response(Buffer.from(body), { headers }), {
           source: "artifact",
-          servedFormat: servedArtifactFormat === "binary" ? "binary" : "json",
-          optimizedDelivered: servedArtifactFormat === "binary",
+          servedFormat,
+          optimizedDelivered,
           fallbackReason:
-            binaryFormatRequested && servedArtifactFormat !== "binary"
-              ? observation.fallbackReason ?? "binary-artifact-miss"
+            observation.optimizedExpected && !optimizedDelivered
+              ? observation.fallbackReason ?? `${observation.requestedFormat}-artifact-miss`
               : observation.fallbackReason,
           responseBytes: body.byteLength,
         });
@@ -776,7 +831,7 @@ export async function GET(
       servedFormat: "json",
       optimizedDelivered: false,
       fallbackReason: binaryFormatRequested
-        ? observation.fallbackReason ?? "binary-artifact-unavailable"
+        ? observation.fallbackReason ?? `${observation.requestedFormat}-artifact-unavailable`
         : observation.fallbackReason,
       responseBytes: cachedJsonResponse.bytes.byteLength,
     });
@@ -978,7 +1033,7 @@ export async function GET(
     servedFormat: "json",
     optimizedDelivered: false,
     fallbackReason: binaryFormatRequested
-      ? observation.fallbackReason ?? "binary-artifact-unavailable"
+      ? observation.fallbackReason ?? `${observation.requestedFormat}-artifact-unavailable`
       : observation.fallbackReason,
     responseBytes: responseBytes.byteLength,
   });

@@ -28,6 +28,9 @@ async function main() {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = String(input);
     requests.push(url);
+    if (url.endsWith(".mbf1")) {
+      return new Response(new Uint8Array(gzipSync(Buffer.from("MBF1payload"))), { status: 200 });
+    }
     if (url.endsWith(".mbv4")) {
       return new Response("missing", { status: 404 });
     }
@@ -70,6 +73,33 @@ async function main() {
   assert.equal(cachedMetrics.decodedBytes, cachedJson.byteLength);
   assert.equal(requests.length, 2, "a body cache hit must not fetch storage again");
 
+  const compressedMetrics: {
+    cacheStatus: "miss";
+    contentEncoding?: "gzip" | "identity";
+    inflateMs?: number;
+  } = { cacheStatus: "miss" };
+  const compressedMeshFacts = await fetchArenaBuildSnapshotArtifact(
+    buildId,
+    "full",
+    checksum,
+    {
+      format: "mesh-facts",
+      preserveCompression: true,
+      metrics: compressedMetrics,
+    },
+  );
+  assert.ok(compressedMeshFacts);
+  assert.equal(compressedMeshFacts[0], 0x1f);
+  assert.equal(compressedMetrics.contentEncoding, "gzip");
+  assert.equal(compressedMetrics.inflateMs, undefined);
+
+  const decodedMeshFacts = await fetchArenaBuildSnapshotArtifact(buildId, "full", checksum, {
+    format: "mesh-facts",
+  });
+  assert.ok(decodedMeshFacts);
+  assert.equal(new TextDecoder().decode(decodedMeshFacts), "MBF1payload");
+  assert.equal(requests.length, 4, "compressed and decoded artifact bodies need separate caches");
+
   const privateBuildId = "private-format-cache-build";
   await fetchArenaBuildSnapshotArtifact(privateBuildId, "full", checksum, {
     format: "json",
@@ -79,7 +109,7 @@ async function main() {
     format: "json",
     cache: "no-store",
   });
-  assert.equal(requests.length, 4, "private artifact bodies must never enter the process cache");
+  assert.equal(requests.length, 6, "private artifact bodies must never enter the process cache");
 
   console.log("snapshot artifact format cache checks passed");
 }

@@ -30,8 +30,10 @@ for (const path of [
 }
 const arenaBuildRoute = read("app/api/arena/builds/[buildId]/route.ts");
 assert.match(arenaBuildRoute, /cache: buildAccess \? "no-store"/);
-assert.match(arenaBuildRoute, /const binaryFormatRequested = url\.searchParams\.get\("format"\) === "v4"/);
+assert.match(arenaBuildRoute, /const meshFactsFormatRequested = url\.searchParams\.get\("format"\) === "mbf1"/);
+assert.match(arenaBuildRoute, /meshFactsFormatRequested \|\| url\.searchParams\.get\("format"\) === "v4"/);
 assert.match(arenaBuildRoute, /rewriteBlindBinaryArtifactIdentity\(artifactBytes, clientBuildId\)/);
+assert.match(arenaBuildRoute, /buildAccess && servedArtifactFormat !== "mesh-facts"/);
 const serverDeliveryTelemetry = arenaBuildRoute.slice(
   arenaBuildRoute.indexOf("function logArenaBuildDelivery"),
   arenaBuildRoute.indexOf("// short process cache"),

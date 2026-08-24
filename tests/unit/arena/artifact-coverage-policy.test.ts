@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 
 async function main() {
   process.env.ARENA_STREAM_ARTIFACTS_ENABLED = "false";
+  process.env.ARENA_BINARY_SNAPSHOT_ARTIFACTS_ENABLED = "true";
   process.env.SUPABASE_URL = "https://abcdefghijklmnop.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
 
@@ -58,6 +59,11 @@ async function main() {
   );
   assert.equal(previewRequirements[0]?.refs.length, 1);
   assert.ok(previewRequirements[0]?.refs[0]?.path.endsWith(`/preview-${checksum}.json`));
+  const meshFactsRequirements = expectations.required.filter(
+    (requirement) => requirement.kind === "snapshot-mesh-facts",
+  );
+  assert.equal(meshFactsRequirements.length, 1);
+  assert.ok(meshFactsRequirements[0]?.refs[0]?.path.endsWith(`/full-${checksum}.mbf1`));
 
   const persistedSnapshotClass = expectedArtifactRequirements({
     id: "build-2",

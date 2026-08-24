@@ -1,4 +1,7 @@
-import type { ArenaBuildVariant } from "@/lib/arena/types";
+import {
+  ARENA_MESH_FACTS_MIN_BLOCKS,
+  type ArenaBuildVariant,
+} from "@/lib/arena/types";
 import type { VoxelViewerBuildMetrics } from "@/components/voxel/VoxelViewer";
 import type { ClientMetricSample } from "@/lib/observability/customMetrics";
 import {
@@ -100,8 +103,8 @@ export function enqueueDeliveryMetric(params: {
   purpose?: "visible" | "prefetch";
   variant: ArenaBuildVariant;
   transport: "snapshot" | "stream-artifact" | "stream-live";
-  requestedFormat: "v4" | "json" | "ndjson";
-  servedFormat: "binary" | "json" | "ndjson";
+  requestedFormat: "mbf1" | "v4" | "json" | "ndjson";
+  servedFormat: "mesh-facts" | "binary" | "json" | "ndjson";
   response: Response;
   blockCount: number;
   totalMs: number | null;
@@ -121,8 +124,10 @@ export function enqueueDeliveryMetric(params: {
   const isGzip = encoding.includes("gzip");
   const compressed = Boolean(params.compressed || isGzip);
   const optimized =
-    params.requestedFormat === "v4" &&
-    params.servedFormat === "binary" &&
+    ((params.requestedFormat === "mbf1" &&
+      params.servedFormat ===
+        (params.blockCount >= ARENA_MESH_FACTS_MIN_BLOCKS ? "mesh-facts" : "binary")) ||
+      (params.requestedFormat === "v4" && params.servedFormat === "binary")) &&
     (source === "artifact" || source === "artifact-redirect");
   enqueueClientMetric({
     kind: "delivery",
