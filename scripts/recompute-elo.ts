@@ -21,7 +21,7 @@ import {
   updateRatingPair,
   varianceToStandardError,
 } from "../lib/arena/rating";
-import { type PairwiseRow, fitBradleyTerry } from "../lib/arena/stats";
+import { aggregatePairRow, type PairwiseRow, fitBradleyTerry } from "../lib/arena/stats";
 import { getArenaEligiblePromptIds } from "../lib/arena/eligibility";
 import { applyStealthRatingVote } from "../lib/stealth/rating";
 
@@ -50,10 +50,6 @@ function isChoice(value: string): value is Choice {
 
 function formatDelta(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
-}
-
-function pairKey(modelAId: string, modelBId: string): string {
-  return modelAId < modelBId ? `${modelAId}|${modelBId}` : `${modelBId}|${modelAId}`;
 }
 
 function initialState(): ModelState {
@@ -232,22 +228,8 @@ Usage:
       continue;
     }
 
-    const canonicalA = modelAId < modelBId ? modelAId : modelBId;
-    const canonicalB = canonicalA === modelAId ? modelBId : modelAId;
     const pointsA = vote.choice === "A" ? 1 : vote.choice === "B" ? 0 : 0.5;
-    const pointsB = 1 - pointsA;
-    const key = pairKey(canonicalA, canonicalB);
-    const row = pairRows.get(key) ?? {
-      modelAId: canonicalA,
-      modelBId: canonicalB,
-      pointsA: 0,
-      pointsB: 0,
-      total: 0,
-    };
-    row.pointsA += canonicalA === modelAId ? pointsA : pointsB;
-    row.pointsB += canonicalA === modelAId ? pointsB : pointsA;
-    row.total += 1;
-    pairRows.set(key, row);
+    aggregatePairRow(pairRows, modelAId, modelBId, pointsA, 1 - pointsA);
     fittedPublicVotes += 1;
   }
 

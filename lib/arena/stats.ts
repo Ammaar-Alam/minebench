@@ -422,7 +422,7 @@ function computeBradleyTerryVariances(totals: number[][], pi: number[]): number[
   );
 }
 
-function aggregatePairRow(
+export function aggregatePairRow(
   pairRows: Map<string, PairwiseRow>,
   modelAId: string,
   modelBId: string,
