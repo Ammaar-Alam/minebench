@@ -7,6 +7,10 @@ import {
 import type { VoxelBuild } from "../../../lib/voxel/types";
 import { getPalette } from "../../../lib/blocks/palettes";
 import { clientMetricBatchSchema } from "../../../lib/observability/customMetrics";
+import {
+  claimArenaPremesh,
+  type ArenaPremeshEntry,
+} from "../../../lib/arena/premesh";
 
 function makeFakeTexture(): THREE.Texture {
   const texture = new THREE.Texture();
@@ -155,12 +159,7 @@ function testMatchupStageMetricsValidation() {
 }
 
 function testArenaPremeshMapLifecycle() {
-  type PremeshEntry = {
-    matchupId: string;
-    controller: AbortController;
-    promise: Promise<VoxelMeshPayload>;
-  };
-  const premeshMap = new Map<string, PremeshEntry>();
+  const premeshMap = new Map<string, ArenaPremeshEntry>();
 
   const ARENA_PREMESH_MAX_BLOCK_COUNT = 150_000;
 
@@ -174,18 +173,34 @@ function testArenaPremeshMapLifecycle() {
   assert.equal(shouldAdmitPremesh(150_000), true);
   assert.equal(shouldAdmitPremesh(150_001), false);
 
-  // 2. Duplicate avoidance & in-flight joining
-  const ctrl1 = new AbortController();
+  // 2. Queued work yields to the visible lane instead of delaying it
   const fakePayload = makeFakeMeshPayload(10);
   const promise1 = Promise.resolve(fakePayload);
-  premeshMap.set("build-1", { matchupId: "matchup-1", controller: ctrl1, promise: promise1 });
+  const queuedController = new AbortController();
+  premeshMap.set("queued", {
+    matchupId: "matchup-1",
+    controller: queuedController,
+    promise: promise1,
+    started: false,
+  });
 
-  // Adding existing key does nothing
-  const existing = premeshMap.get("build-1");
-  assert.ok(existing);
-  assert.equal(existing.promise, promise1);
+  assert.equal(claimArenaPremesh(premeshMap, "queued"), null);
+  assert.equal(queuedController.signal.aborted, true);
+  assert.equal(premeshMap.has("queued"), false);
 
-  // 3. Entry consumption
+  // 3. Started work is reused rather than duplicated
+  const startedController = new AbortController();
+  premeshMap.set("started", {
+    matchupId: "matchup-1",
+    controller: startedController,
+    promise: promise1,
+    started: true,
+  });
+  assert.equal(claimArenaPremesh(premeshMap, "started"), promise1);
+  assert.equal(startedController.signal.aborted, false);
+  assert.equal(premeshMap.has("started"), true);
+
+  // 4. Entry consumption
   function consumePremesh(key: string): Promise<VoxelMeshPayload> | null {
     const entry = premeshMap.get(key);
     if (!entry) return null;
@@ -193,16 +208,26 @@ function testArenaPremeshMapLifecycle() {
     return entry.promise;
   }
 
-  const consumed = consumePremesh("build-1");
+  const consumed = consumePremesh("started");
   assert.equal(consumed, promise1);
-  assert.equal(premeshMap.has("build-1"), false);
-  assert.equal(consumePremesh("build-1"), null);
+  assert.equal(premeshMap.has("started"), false);
+  assert.equal(consumePremesh("started"), null);
 
-  // 4. Aborting on matchup advance
+  // 5. Aborting on matchup advance
   const ctrlA = new AbortController();
   const ctrlB = new AbortController();
-  premeshMap.set("b-1", { matchupId: "m-1", controller: ctrlA, promise: promise1 });
-  premeshMap.set("b-2", { matchupId: "m-2", controller: ctrlB, promise: promise1 });
+  premeshMap.set("b-1", {
+    matchupId: "m-1",
+    controller: ctrlA,
+    promise: promise1,
+    started: true,
+  });
+  premeshMap.set("b-2", {
+    matchupId: "m-2",
+    controller: ctrlB,
+    promise: promise1,
+    started: false,
+  });
 
   function abortPremeshedMeshes(matchupId?: string) {
     for (const [key, entry] of premeshMap) {
@@ -218,7 +243,7 @@ function testArenaPremeshMapLifecycle() {
   assert.equal(premeshMap.has("b-1"), false);
   assert.equal(premeshMap.has("b-2"), true);
 
-  // 5. Unmount cleanup (aborts all remaining)
+  // 6. Unmount cleanup (aborts all remaining)
   abortPremeshedMeshes();
   assert.equal(ctrlB.signal.aborted, true);
   assert.equal(premeshMap.size, 0);

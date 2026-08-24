@@ -52,7 +52,7 @@ type ViewerProps = {
   palette: "simple" | "advanced";
   expectedBlockCount?: number;
   meshCacheKey?: string | null;
-  premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
+  getPremeshedPayloadPromise?: () => Promise<VoxelMeshPayload> | null;
   onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
   autoRotate?: boolean;
   animateIn?: boolean;
@@ -411,7 +411,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     palette,
     expectedBlockCount,
     meshCacheKey,
-    premeshedPayloadPromise,
+    getPremeshedPayloadPromise,
     onPremeshedPayloadConsumed,
     autoRotate,
     animateIn,
@@ -474,7 +474,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     animateIn: boolean;
     expectedBlockCount: number | null;
     meshCacheKey: string | null;
-    premeshedPayloadPromise: Promise<VoxelMeshPayload> | null;
+    getPremeshedPayloadPromise: (() => Promise<VoxelMeshPayload> | null) | null;
     onPremeshedPayloadConsumed: ((promise: Promise<VoxelMeshPayload>) => void) | null;
   }>({
     voxelBuild: null,
@@ -483,7 +483,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     animateIn: Boolean(animateIn),
     expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
     meshCacheKey: meshCacheKey?.trim() || null,
-    premeshedPayloadPromise: premeshedPayloadPromise ?? null,
+    getPremeshedPayloadPromise: getPremeshedPayloadPromise ?? null,
     onPremeshedPayloadConsumed: onPremeshedPayloadConsumed ?? null,
   });
   latestRef.current = {
@@ -493,7 +493,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     animateIn: Boolean(animateIn),
     expectedBlockCount: normalizeExpectedBlockCount(expectedBlockCount),
     meshCacheKey: meshCacheKey?.trim() || null,
-    premeshedPayloadPromise: premeshedPayloadPromise ?? null,
+    getPremeshedPayloadPromise: getPremeshedPayloadPromise ?? null,
     onPremeshedPayloadConsumed: onPremeshedPayloadConsumed ?? null,
   };
 
@@ -710,6 +710,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     let meshCacheStatus: VoxelMeshCacheStatus = "not-used";
     let traceRetainedForFirstRender = false;
     let traceAbandoned = false;
+    const premeshedPayloadPromise = latest.getPremeshedPayloadPromise?.() ?? null;
 
     try {
       const tex = await loadAtlasTexture();
@@ -722,7 +723,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         signal: controller.signal,
         blockLimit,
         cacheKey: meshCacheKeySnapshot,
-        premeshedPayloadPromise: latest.premeshedPayloadPromise,
+        premeshedPayloadPromise,
         onPremeshedPayloadConsumed: latest.onPremeshedPayloadConsumed ?? undefined,
         yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
         onStage(event) {

@@ -31,6 +31,7 @@ import {
   createVoxelMeshPayloadInWorker,
   type VoxelMeshPayload,
 } from "@/lib/voxel/mesh";
+import { claimArenaPremesh, type ArenaPremeshEntry } from "@/lib/arena/premesh";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import type { VoxelViewerBuildMetrics } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
@@ -1185,12 +1186,6 @@ function getArenaPremeshedMeshKey(
   return `${matchupId}:${side}:${variant}`;
 }
 
-type PremeshedMeshEntry = {
-  matchupId: string;
-  promise: Promise<VoxelMeshPayload>;
-  controller: AbortController;
-};
-
 export function Arena() {
   const [state, setState] = useState<ArenaState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState(0);
@@ -1226,7 +1221,7 @@ export function Arena() {
   const hydratedBuildCacheWeightsRef = useRef(new Map<string, number>());
   const hydratedBuildCacheBytesRef = useRef(0);
   const fullBuildPrefetchRef = useRef(new Map<string, FullBuildPrefetch>());
-  const premeshedFullMeshRef = useRef<Map<string, PremeshedMeshEntry>>(new Map());
+  const premeshedFullMeshRef = useRef<Map<string, ArenaPremeshEntry>>(new Map());
   const inFlightWarmPromiseRef = useRef<Promise<void>>(Promise.resolve());
   const matchupStagesRef = useRef<{
     matchupId: string;
@@ -1730,7 +1725,7 @@ export function Arena() {
     (matchupId: string, side: "a" | "b", lane: ArenaMatchupLane): Promise<VoxelMeshPayload> | null => {
       if (!lane.build || getLaneHydratedVariant(lane) !== "full") return null;
       const key = getArenaPremeshedMeshKey(matchupId, side, "full");
-      return premeshedFullMeshRef.current.get(key)?.promise ?? null;
+      return claimArenaPremesh(premeshedFullMeshRef.current, key);
     },
     [],
   );
@@ -2100,6 +2095,11 @@ export function Arena() {
           if (!premeshedFullMeshRef.current.has(warmKey)) {
             const warmController = new AbortController();
             const startWarm = async (): Promise<VoxelMeshPayload> => {
+              const warmEntry = premeshedFullMeshRef.current.get(warmKey);
+              if (!warmEntry || warmController.signal.aborted) {
+                throw new DOMException("Aborted", "AbortError");
+              }
+              warmEntry.started = true;
               const { payload: meshPayload } = await createVoxelMeshPayloadInWorker(
                 payload.voxelBuild!,
                 getPalette("simple"),
@@ -2117,6 +2117,7 @@ export function Arena() {
               matchupId: matchupValue.id,
               promise: sequencedPromise,
               controller: warmController,
+              started: false,
             });
           }
         }
@@ -2943,8 +2944,10 @@ export function Arena() {
                 voxelBuild={matchup?.a.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.a) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.a) : null}
-                premeshedPayloadPromise={
-                  matchup ? getLanePremeshedPayloadPromise(matchup.id, "a", matchup.a) : null
+                getPremeshedPayloadPromise={
+                  matchup
+                    ? () => getLanePremeshedPayloadPromise(matchup.id, "a", matchup.a)
+                    : undefined
                 }
                 onPremeshedPayloadConsumed={
                   matchup
@@ -3008,8 +3011,10 @@ export function Arena() {
                 voxelBuild={matchup?.b.build ?? null}
                 expectedBlockCount={matchup ? getExpectedBlocksForLane(matchup.b) : undefined}
                 meshCacheKey={matchup ? getLaneMeshCacheKey(matchup.b) : null}
-                premeshedPayloadPromise={
-                  matchup ? getLanePremeshedPayloadPromise(matchup.id, "b", matchup.b) : null
+                getPremeshedPayloadPromise={
+                  matchup
+                    ? () => getLanePremeshedPayloadPromise(matchup.id, "b", matchup.b)
+                    : undefined
                 }
                 onPremeshedPayloadConsumed={
                   matchup
