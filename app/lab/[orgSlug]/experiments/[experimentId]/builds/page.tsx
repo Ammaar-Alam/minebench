@@ -146,12 +146,14 @@ export default async function EvaluationBuildsPage({
                           <span className="min-w-0 break-words">
                             <span className="font-medium">Error:</span> {checkpoint.lastGenerationError}
                           </span>
-                          <Link
-                            href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
-                            className="shrink-0 font-medium text-fg underline hover:text-accent"
-                          >
-                            Edit endpoint settings
-                          </Link>
+                          {checkpoint.status === "DRAFT" && checkpoint.source === "ENDPOINT" ? (
+                            <Link
+                              href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                              className="shrink-0 font-medium text-fg underline hover:text-accent"
+                            >
+                              Edit endpoint settings
+                            </Link>
+                          ) : null}
                         </div>
                       ) : null}
                     </article>
