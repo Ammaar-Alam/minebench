@@ -38,14 +38,22 @@ export default async function EvaluationSettingsPage({
   const { orgSlug, experimentId } = await params;
   const { checkpoint: refreshCheckpointId } = await searchParams;
   const { workspace } = await loadEvaluationWorkspace(orgSlug, experimentId);
-  const refreshCheckpoint = workspace.checkpoints.find(
-    (checkpoint) =>
-      checkpoint.id === refreshCheckpointId &&
-      checkpoint.status === "READY" &&
-      !checkpoint.promptCohortCurrent,
+  const selectedCheckpoint = workspace.checkpoints.find(
+    (checkpoint) => checkpoint.id === refreshCheckpointId,
   );
-  const refreshEndpoint = refreshCheckpoint?.source === "ENDPOINT" ? refreshCheckpoint : null;
-  const refreshUpload = refreshCheckpoint?.source === "UPLOAD" ? refreshCheckpoint : null;
+  const refreshEndpoint =
+    selectedCheckpoint?.source === "ENDPOINT" &&
+    (selectedCheckpoint.status === "DRAFT" ||
+      selectedCheckpoint.status === "GENERATING" ||
+      (selectedCheckpoint.status === "READY" && !selectedCheckpoint.promptCohortCurrent))
+      ? selectedCheckpoint
+      : null;
+  const refreshUpload =
+    selectedCheckpoint?.source === "UPLOAD" &&
+    selectedCheckpoint.status === "READY" &&
+    !selectedCheckpoint.promptCohortCurrent
+      ? selectedCheckpoint
+      : null;
   const configureAction = configureEndpointAction.bind(null, orgSlug, experimentId);
   const uploadAction = uploadCohortAction.bind(null, orgSlug, experimentId);
   const updateAction = updateEvaluationAction.bind(null, orgSlug, experimentId);
