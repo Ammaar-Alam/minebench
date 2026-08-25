@@ -3,6 +3,7 @@ import { EvaluationStatus } from "@/components/lab/EvaluationStatus";
 import { CohortUploadForm } from "@/components/lab/CohortUploadForm";
 import { formatDate, titleCase } from "@/components/lab/format";
 import { LabDisclosure } from "@/components/lab/LabDisclosure";
+import { LifecycleActionButton } from "@/components/lab/LifecycleActionButton";
 import {
   closeEvaluationAction,
   configureEndpointAction,
@@ -36,6 +37,7 @@ export default async function EvaluationSettingsPage({
   searchParams: Promise<{ checkpoint?: string }>;
 }) {
   const { orgSlug, experimentId } = await params;
+  const basePath = `/lab/${orgSlug}/experiments/${experimentId}`;
   const { checkpoint: refreshCheckpointId } = await searchParams;
   const { workspace } = await loadEvaluationWorkspace(orgSlug, experimentId);
   const selectedCheckpoint = workspace.checkpoints.find(
@@ -178,7 +180,7 @@ export default async function EvaluationSettingsPage({
                     : ""}
                 </div>
               </div>
-              <div className="flex flex-wrap items-center justify-end gap-3">
+              <div className="flex items-center justify-end gap-3 shrink-0">
                 <EvaluationStatus
                   status={
                     checkpoint.lastGenerationError && checkpoint.status === "DRAFT"
@@ -186,13 +188,21 @@ export default async function EvaluationSettingsPage({
                       : checkpoint.status
                   }
                 />
+                {checkpoint.status === "DRAFT" && checkpoint.credentialConfigured ? (
+                  <Link
+                    href={`${basePath}/builds`}
+                    className="inline-flex items-center text-xs font-medium text-accent hover:underline"
+                  >
+                    Generate builds &rarr;
+                  </Link>
+                ) : null}
                 {mutable &&
                 checkpoint.source === "ENDPOINT" &&
                 (checkpoint.status === "DRAFT" ||
                   (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent)) ? (
                   <Link
                     href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}
-                    className="min-h-11 px-2 py-3 text-xs text-muted hover:text-fg"
+                    className="inline-flex items-center text-xs font-medium text-muted transition hover:text-fg"
                   >
                     {checkpoint.status === "READY" ? "Refresh" : "Edit"}
                   </Link>
@@ -205,8 +215,12 @@ export default async function EvaluationSettingsPage({
                       experimentId,
                       checkpoint.id,
                     )}
+                    className="inline-flex items-center"
                   >
-                    <button type="submit" className="min-h-11 px-2 text-xs text-muted hover:text-danger">
+                    <button
+                      type="submit"
+                      className="inline-flex items-center text-xs font-medium text-muted transition hover:text-danger"
+                    >
                       Disable
                     </button>
                   </form>
@@ -325,10 +339,26 @@ export default async function EvaluationSettingsPage({
                 </label>
               </fieldset>
             </div>
-            <div className="flex justify-end">
-              <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-5 text-sm">
-                {refreshEndpoint ? "Save & refresh" : "Add checkpoint"}
-              </button>
+            <div className="flex items-center justify-end gap-3">
+              {refreshEndpoint ? (
+                <Link
+                  href={`${basePath}/settings`}
+                  className="mb-btn mb-btn-ghost min-h-11 px-4 text-sm"
+                >
+                  Cancel
+                </Link>
+              ) : null}
+              <LifecycleActionButton
+                label={
+                  refreshEndpoint
+                    ? refreshEndpoint.status === "READY"
+                      ? "Save & refresh"
+                      : "Save changes"
+                    : "Add checkpoint"
+                }
+                pendingLabel="Saving…"
+                tone="primary"
+              />
             </div>
           </form>
             </LabDisclosure>

@@ -152,6 +152,7 @@ export async function configureEndpointAction(
     },
   });
   revalidateEvaluation(orgSlug, experimentId);
+  redirect(`/lab/${orgSlug}/experiments/${experimentId}/settings`);
 }
 
 export async function uploadCohortAction(

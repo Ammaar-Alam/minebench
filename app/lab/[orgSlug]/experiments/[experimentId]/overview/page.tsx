@@ -161,9 +161,20 @@ export default async function EvaluationOverviewPage({
                   ) : null}
                 </div>
                 {checkpoint.lastGenerationError ? (
-                  <p role="alert" className="text-xs text-danger md:col-span-3">
-                    {checkpoint.lastGenerationError}
-                  </p>
+                  <div
+                    role="alert"
+                    className="flex flex-wrap items-center justify-between gap-2 text-xs text-danger md:col-span-3"
+                  >
+                    <span className="min-w-0 break-words">{checkpoint.lastGenerationError}</span>
+                    {checkpoint.status === "DRAFT" && checkpoint.source === "ENDPOINT" ? (
+                      <Link
+                        href={`${basePath}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                        className="shrink-0 font-medium text-fg underline hover:text-accent"
+                      >
+                        Edit endpoint settings
+                      </Link>
+                    ) : null}
+                  </div>
                 ) : null}
               </article>
             ))}
