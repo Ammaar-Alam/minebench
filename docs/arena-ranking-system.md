@@ -77,6 +77,18 @@ The operational state is not the published score. The leaderboard and model deta
 
 For private matchups, the public model is a read-only anchor. Only the private `StealthVariant` rating and counters change.
 
+## Personal rankings
+
+Personal rankings are a per-account view of public Arena evidence. The fit uses
+only that account's eligible `A`, `B`, and `TIE` votes, follows the public model
+and prompt eligibility rules, and uses global Bradley-Terry abilities to anchor
+disconnected personal comparison components.
+
+This calculation is read-only: it does not update public ratings, counters,
+coverage, snapshots, or matchmaking state. Anonymous public votes from the same
+browser session are linked when sign-in completes. Private-evaluation votes are
+excluded and are never linked to public accounts.
+
 ## Matchmaking
 
 Each matchup request samples a lane and falls back to the others if the selected lane cannot produce a valid pair.
@@ -128,5 +140,6 @@ The consistency estimator is documented separately in [Consistency Metric](./con
 - Vote processing: `lib/arena/voteJobs.ts`
 - Eligible prompt universe: `lib/arena/eligibility.ts`
 - Leaderboard API: `app/api/leaderboard/route.ts`
+- Personal ranking: `lib/account/personalRanking.ts`
 - Rank snapshots: `app/api/admin/rank-snapshots/capture/route.ts`
 - Rating replay: `scripts/recompute-elo.ts`

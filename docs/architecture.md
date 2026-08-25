@@ -122,6 +122,7 @@ erDiagram
     Model ||--o{ Matchup : competes
     Build ||--o{ Matchup : renders
     Matchup ||--o{ Vote : receives
+    User o|--o{ Vote : owns
     Vote ||--o{ ArenaVoteJob : queues
     Model ||--o{ ModelRankSnapshot : records
 
@@ -148,8 +149,12 @@ erDiagram
         string buildBId FK
         string samplingLane
     }
+    User {
+        string id PK
+    }
     Vote {
         string matchupId FK
+        string userId FK
         string sessionId
         string choice
     }
@@ -160,3 +165,9 @@ artifacts. Supabase Storage contains the source JSON and derived binary objects.
 Vercel route handlers own sampling, blind-token validation, artifact resolution,
 and response observability; the browser owns decoding, geometry construction,
 and rendering.
+
+Public votes remain valid without an account and use the browser session as their
+duplicate-vote boundary. A signed-in vote can also have an optional `User` owner;
+sign-in claims unowned public votes from the same session. Private-evaluation
+votes are never assigned to public accounts. Deleting an account clears vote
+ownership while retaining the aggregate vote history.
