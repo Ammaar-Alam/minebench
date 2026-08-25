@@ -148,7 +148,7 @@ function endpointApiKey(): string {
   return apiKey;
 }
 
-async function findSupabaseAuthUserIdByEmail(email: string): Promise<string | null> {
+async function findOrInviteSupabaseAuthUserIdByEmail(email: string): Promise<string | null> {
   const { createSupabaseAdminClient } = await import("../lib/supabase/admin");
   const supabase = createSupabaseAdminClient();
   let page = 1;
@@ -160,7 +160,16 @@ async function findSupabaseAuthUserIdByEmail(email: string): Promise<string | nu
     if (!data.nextPage) break;
     page = data.nextPage;
   }
-  return null;
+  const siteUrl = (
+    process.env.MINEBENCH_SITE_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "") ||
+    "https://minebench.ai"
+  ).replace(/\/+$/, "");
+  const { data, error } = await supabase.auth.admin.inviteUserByEmail(email, {
+    redirectTo: `${siteUrl}/lab/auth/confirm?next=/lab`,
+  });
+  if (error) throw error;
+  return data.user?.id ?? null;
 }
 
 async function organizationBySlug(slug: string): Promise<{ id: string; slug: string; name: string }> {
@@ -274,9 +283,9 @@ async function bootstrapAdmin(args: CliArgs): Promise<void> {
     where: { email },
     select: { id: true },
   });
-  const userId = existing?.id ?? await findSupabaseAuthUserIdByEmail(email);
+  const userId = existing?.id ?? await findOrInviteSupabaseAuthUserIdByEmail(email);
   if (!userId) {
-    throw new Error(`No MineBench auth user found for ${email}`);
+    throw new Error(`No MineBench auth user found or created for ${email}`);
   }
   await prisma.user.upsert({
     where: { id: userId },
@@ -410,7 +419,7 @@ async function startGeneration(args: CliArgs): Promise<void> {
     checkpointId,
     {
       maxAttempts: positiveInt(args, ["--attempts"], 3, 10) ?? 3,
-      concurrency: positiveInt(args, ["--concurrency"], 1, 4) ?? 1,
+      concurrency: positiveInt(args, ["--concurrency"], 1, 15) ?? 1,
     },
     async (applicationRunId) => {
       const { start } = await workflow();

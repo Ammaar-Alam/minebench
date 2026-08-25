@@ -192,7 +192,7 @@ export async function startGenerationAction(
     variantId,
     {
       maxAttempts: requiredPositiveInt(formData, "maxAttempts", 3, 10),
-      concurrency: 1,
+      concurrency: requiredPositiveInt(formData, "concurrency", 1, 15),
     },
     async (runId) => (await startWorkflow(generateStealthCohortWorkflow, [runId])).runId,
   );

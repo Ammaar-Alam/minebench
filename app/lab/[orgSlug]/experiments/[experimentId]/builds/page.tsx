@@ -101,9 +101,21 @@ export default async function EvaluationBuildsPage({
                         </div>
                       </div>
                       {canStart ? (
-                        <form action={startAction}>
+                        <form action={startAction} className="flex flex-wrap items-center justify-end gap-2.5">
                           <input type="hidden" name="maxAttempts" value="3" />
-                          <button type="submit" className="mb-btn mb-btn-primary min-h-11 px-4 text-xs">
+                          <label className="flex items-center gap-1.5 text-xs text-muted">
+                            <span>Parallel</span>
+                            <input
+                              name="concurrency"
+                              type="number"
+                              min={1}
+                              max={15}
+                              defaultValue={1}
+                              className="mb-field h-10 w-16 px-2 text-center text-xs"
+                              aria-label="Generation concurrency"
+                            />
+                          </label>
+                          <button type="submit" className="mb-btn mb-btn-primary min-h-10 px-4 text-xs">
                             Generate
                           </button>
                         </form>

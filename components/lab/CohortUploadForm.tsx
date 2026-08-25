@@ -112,7 +112,7 @@ export function CohortUploadForm({
           type="file"
           required
           accept="application/json,.json"
-          className="mb-field h-11 file:mr-3 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-fg"
+          className="mb-field flex h-11 cursor-pointer items-center py-2 text-sm text-muted file:mr-4 file:cursor-pointer file:rounded file:border file:border-border/80 file:bg-card2 file:px-3 file:py-1 file:text-xs file:font-medium file:text-fg file:transition-colors hover:file:bg-bg2"
         />
       </label>
       {error ? <p className="text-sm text-danger">{error}</p> : null}
