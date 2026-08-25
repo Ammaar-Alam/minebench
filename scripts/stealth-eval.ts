@@ -419,7 +419,7 @@ async function startGeneration(args: CliArgs): Promise<void> {
     checkpointId,
     {
       maxAttempts: positiveInt(args, ["--attempts"], 3, 10) ?? 3,
-      concurrency: positiveInt(args, ["--concurrency"], 1, 4) ?? 1,
+      concurrency: positiveInt(args, ["--concurrency"], 1, 15) ?? 1,
     },
     async (applicationRunId) => {
       const { start } = await workflow();
