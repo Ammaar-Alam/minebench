@@ -142,8 +142,16 @@ export default async function EvaluationBuildsPage({
                         <span className="hidden w-24 sm:block" />
                       )}
                       {checkpoint.lastGenerationError ? (
-                        <div className="col-span-full border-t border-border/40 pt-2 text-xs text-danger break-words">
-                          <span className="font-medium">Error:</span> {checkpoint.lastGenerationError}
+                        <div className="col-span-full flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-2 text-xs text-danger">
+                          <span className="min-w-0 break-words">
+                            <span className="font-medium">Error:</span> {checkpoint.lastGenerationError}
+                          </span>
+                          <Link
+                            href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                            className="shrink-0 font-medium text-fg underline hover:text-accent"
+                          >
+                            Edit endpoint settings
+                          </Link>
                         </div>
                       ) : null}
                     </article>
