@@ -35,7 +35,7 @@ export function getSupabasePublicConfig(): SupabasePublicConfig {
   const publishableKey = (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "").trim();
   if (!url || !publishableKey) {
     throw new Error(
-      "Lab authentication requires NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+      "Authentication requires NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
     );
   }
   return { url, publishableKey };

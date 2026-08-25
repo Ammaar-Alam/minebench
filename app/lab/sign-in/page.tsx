@@ -28,12 +28,12 @@ export default async function LabSignInPage({
         </header>
 
         {params.sent === "1" ? (
-          <p role="status" className="border-y border-accent/30 py-3 text-sm text-fg">
+          <p role="status" className="mb-feedback mb-feedback-status">
             Check your email for a sign-in link.
           </p>
         ) : null}
         {params.error ? (
-          <p role="alert" className="border-y border-danger/30 py-3 text-sm text-fg">
+          <p role="alert" className="mb-feedback mb-feedback-error">
             That link has expired. Request another.
           </p>
         ) : null}

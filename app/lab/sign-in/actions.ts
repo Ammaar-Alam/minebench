@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { rotateArenaSession } from "@/lib/auth/account";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const emailSchema = z.string().trim().email().max(320);
@@ -44,7 +45,11 @@ export async function requestLabMagicLink(formData: FormData) {
 }
 
 export async function signOutLab() {
-  const supabase = await createSupabaseServerClient();
-  await supabase.auth.signOut();
+  try {
+    const supabase = await createSupabaseServerClient();
+    await supabase.auth.signOut();
+  } finally {
+    await rotateArenaSession();
+  }
   redirect("/lab/sign-in");
 }

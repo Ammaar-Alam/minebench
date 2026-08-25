@@ -1,5 +1,6 @@
 import type { OrganizationRole } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { syncAuthUser } from "@/lib/auth/account";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { acceptExactEmailInvitations } from "@/lib/stealth/service";
 
@@ -26,31 +27,9 @@ export async function getLabIdentity(): Promise<LabIdentity | null> {
     data: { user: authUser },
     error,
   } = await supabase.auth.getUser();
-  const email = authUser?.email?.trim().toLowerCase();
-  if (error || !authUser || !email) return null;
-
-  const savedUser = await prisma.user.upsert({
-    where: { id: authUser.id },
-    create: {
-      id: authUser.id,
-      email,
-      displayName:
-        typeof authUser.user_metadata?.name === "string"
-          ? authUser.user_metadata.name.trim().slice(0, 120) || null
-          : null,
-      lastSeenAt: new Date(),
-    },
-    update: {
-      email,
-      lastSeenAt: new Date(),
-    },
-    select: {
-      id: true,
-      email: true,
-      displayName: true,
-      isMineBenchAdmin: true,
-    },
-  });
+  if (error || !authUser) return null;
+  const savedUser = await syncAuthUser(authUser);
+  if (!savedUser) return null;
 
   await acceptExactEmailInvitations(savedUser);
 

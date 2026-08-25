@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import faviconIcon from "@/app/icon.png";
+import { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
 
 type Theme = "light" | "dark";
 
@@ -125,6 +126,50 @@ function ThemeToggle({ quiet = false }: { quiet?: boolean }) {
   );
 }
 
+function AccountLink({ quiet = false }: { quiet?: boolean }) {
+  const pathname = usePathname();
+  const active = pathname === "/account";
+  const [signedIn, setSignedIn] = useState(active);
+
+  useEffect(() => {
+    setSignedIn(active || hasSupabaseAuthCookie(document.cookie));
+  }, [active]);
+
+  const label = signedIn ? "Account" : "Sign in";
+  return (
+    <Link
+      href={signedIn ? "/account" : "/sign-in?next=/account"}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      title={label}
+      className={`inline-flex items-center justify-center gap-2 rounded-md border transition-[background-color,border-color,color,opacity,transform] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none ${
+        quiet
+          ? `${active ? "border-border bg-card/35 text-fg" : "border-border/70 text-muted hover:bg-card/30 hover:text-fg"} h-11 w-11`
+          : `${active ? "border-border bg-card/35 text-fg" : "border-transparent text-muted hover:border-border/70 hover:text-fg"} h-10 ${signedIn ? "w-10" : "w-10 sm:w-auto sm:px-3"}`
+      }`}
+    >
+      <span
+        className={`transition-[opacity,transform] duration-150 motion-reduce:transition-none ${active ? "scale-100 opacity-100" : "scale-[0.96] opacity-90"}`}
+      >
+        <svg aria-hidden="true" className="h-[18px] w-[18px] shrink-0" viewBox="0 0 24 24">
+          {signedIn ? (
+            <path
+              d="M12 11.75a3.75 3.75 0 1 0 0-7.5 3.75 3.75 0 0 0 0 7.5ZM5 20a7 7 0 0 1 14 0H5Z"
+              fill="currentColor"
+            />
+          ) : (
+            <g fill="none" stroke="currentColor">
+              <circle cx="12" cy="8" r="3.25" strokeWidth="1.6" />
+              <path d="M5.75 20a6.25 6.25 0 0 1 12.5 0" strokeLinecap="round" strokeWidth="1.6" />
+            </g>
+          )}
+        </svg>
+      </span>
+      {!quiet && !signedIn ? <span className="hidden text-sm font-medium sm:inline">Sign in</span> : null}
+    </Link>
+  );
+}
+
 function LabHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-border/70 bg-bg">
@@ -145,6 +190,7 @@ function LabHeader() {
           <Link href="/" className="inline-flex min-h-11 items-center px-3 text-sm text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             Arena
           </Link>
+          <AccountLink quiet />
           <ThemeToggle quiet />
         </div>
       </div>
@@ -302,8 +348,11 @@ export function SiteHeader() {
             {/* fade mask so partially-visible Support fades out cleanly on mobile */}
             <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-bg to-transparent sm:hidden" aria-hidden="true" />
           </div>
-          <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
-          <ThemeToggle />
+          <div className="flex items-center gap-0.5">
+            <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
+            <AccountLink />
+            <ThemeToggle />
+          </div>
         </nav>
       </div>
     </header>

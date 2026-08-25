@@ -247,7 +247,13 @@ export async function middleware(req: NextRequest) {
   const refreshesSupabase =
     pathname.startsWith("/lab") ||
     isLabApi ||
-    pathname.startsWith("/admin/private-evaluations");
+    pathname.startsWith("/admin/private-evaluations") ||
+    pathname === "/account" ||
+    pathname === "/sign-in" ||
+    pathname === "/sign-up" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password" ||
+    pathname.startsWith("/auth/");
   if (refreshesSupabase && !isLabApi) {
     const { refreshSupabaseSession } = await import("@/lib/supabase/middleware");
     return refreshSupabaseSession(req);
