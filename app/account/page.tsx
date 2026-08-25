@@ -53,9 +53,14 @@ export default async function AccountPage({
         </p>
       ) : null}
 
-      <Suspense fallback={<PersonalRankingSkeleton />}>
-        <PersonalRanking userId={account.id} />
-      </Suspense>
+      <section className="space-y-4" aria-labelledby="ranking-title">
+        <h2 id="ranking-title" className="text-xl font-semibold tracking-tight text-fg">
+          Your ranking
+        </h2>
+        <Suspense fallback={<PersonalRankingSkeleton />}>
+          <PersonalRanking userId={account.id} />
+        </Suspense>
+      </section>
 
       <section
         className="grid gap-7 border-t border-border pt-8 lg:grid-cols-[minmax(0,1fr)_18rem]"

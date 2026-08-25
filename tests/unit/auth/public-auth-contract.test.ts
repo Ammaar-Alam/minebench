@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   hasAuthenticationMethod,
   hasSupabaseAuthCookie,
@@ -85,6 +85,14 @@ assert.match(resetPasswordPage, /Verify your email first/);
 
 const accountPage = readFileSync("app/account/page.tsx", "utf8");
 assert.match(accountPage, /<Suspense fallback={<PersonalRankingSkeleton \/>}>/);
+assert.match(accountPage, /id="ranking-title"/);
+assert.equal(existsSync("app/account/loading.tsx"), false);
+
+const personalRankingView = readFileSync("app/account/PersonalRanking.tsx", "utf8");
+assert.match(personalRankingView, /max-h-\[min\(32rem,55dvh\)\]/);
+assert.match(personalRankingView, /sticky top-0/);
+assert.match(personalRankingView, /overflow-y-auto/);
+assert.doesNotMatch(personalRankingView, /Ties count|Early signal/);
 
 const oauthRoute = readFileSync("app/auth/oauth/route.ts", "utf8");
 const callbackRoute = readFileSync("app/auth/callback/route.ts", "utf8");
@@ -101,6 +109,7 @@ assert.match(voteRoute, /logArenaVoteRequest/);
 const personalRanking = readFileSync("lib/account/personalRanking.ts", "utf8");
 assert.match(personalRanking, /matchup\."stealthVariantId" IS NULL/);
 assert.match(personalRanking, /vote\.choice IN \('A', 'B', 'TIE'\)/);
+assert.doesNotMatch(personalRanking, /prisma\.vote\.count/);
 assert.doesNotMatch(personalRanking, /prisma\.model\.update|prisma\.vote\.update/);
 
 console.log("public authentication contract checks passed");

@@ -181,9 +181,7 @@ async function main() {
     assert.equal((await db.vote.findUniqueOrThrow({ where: { id: privateVote.id } })).userId, null);
 
     const ranking = await getPersonalRanking(user.id);
-    assert.equal(ranking.totalVotes, 2);
-    assert.equal(ranking.ratedVotes, 2);
-    assert.equal(ranking.modelsCompared, 2);
+    assert.equal(ranking.models.length, 2);
     assert.equal(ranking.models[0]?.key, modelB.key);
 
     await db.user.delete({ where: { id: user.id } });

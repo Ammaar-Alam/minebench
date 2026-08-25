@@ -37,9 +37,6 @@ export type PersonalModelRanking = PersonalOutcomeAggregate & {
 };
 
 export type PersonalRanking = {
-  totalVotes: number;
-  ratedVotes: number;
-  modelsCompared: number;
   models: PersonalModelRanking[];
 };
 
@@ -100,15 +97,10 @@ export function rankPersonalModels(input: {
 }
 
 export async function getPersonalRanking(userId: string): Promise<PersonalRanking> {
-  const [global, totalVotes] = await Promise.all([
-    getGlobalBradleyTerrySnapshot(),
-    prisma.vote.count({
-      where: { userId, matchup: { stealthVariantId: null } },
-    }),
-  ]);
+  const global = await getGlobalBradleyTerrySnapshot();
   const { eligiblePromptIds, activeModelIds } = global;
   if (eligiblePromptIds.length === 0 || activeModelIds.length < 2) {
-    return { totalVotes, ratedVotes: 0, modelsCompared: 0, models: [] };
+    return { models: [] };
   }
 
   const [pairRows, outcomeRows] = await Promise.all([
@@ -202,10 +194,5 @@ export async function getPersonalRanking(userId: string): Promise<PersonalRankin
     alphaByModelId: global.alphaByModelId,
   });
 
-  return {
-    totalVotes,
-    ratedVotes: pairs.reduce((sum, row) => sum + row.total, 0),
-    modelsCompared: models.length,
-    models,
-  };
+  return { models };
 }

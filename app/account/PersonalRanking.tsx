@@ -7,32 +7,27 @@ function formatCount(value: number): string {
 
 export function PersonalRankingSkeleton() {
   return (
-    <section aria-label="Loading your ranking" aria-busy="true" className="animate-pulse space-y-4 motion-reduce:animate-none">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-2">
-          <div className="h-6 w-32 rounded-sm bg-border/50" />
-          <div className="h-4 w-52 rounded-sm bg-border/35" />
-        </div>
-        <div className="h-4 w-40 rounded-sm bg-border/35" />
-      </div>
-      <div className="overflow-hidden rounded-md border border-border">
-        <div className="hidden h-11 border-b border-border bg-card/30 sm:block" />
-        {[0, 1, 2, 3].map((row) => (
-          <div
-            key={row}
-            className="grid min-h-20 grid-cols-[2.5rem_minmax(0,1fr)_4rem] items-center gap-3 border-b border-border/65 px-4 py-3 last:border-b-0 sm:grid-cols-[3rem_minmax(0,1fr)_10rem_6rem]"
-          >
-            <div className="h-6 w-6 rounded-full bg-border/45" />
-            <div className="space-y-2">
-              <div className="h-4 w-36 max-w-full rounded-sm bg-border/50" />
-              <div className="h-3 w-20 rounded-sm bg-border/35" />
-            </div>
-            <div className="hidden h-6 rounded-md bg-border/35 sm:block" />
-            <div className="h-8 rounded-sm bg-border/35" />
+    <div
+      aria-label="Loading your ranking"
+      aria-busy="true"
+      className="animate-pulse overflow-hidden rounded-md border border-border motion-reduce:animate-none"
+    >
+      <div className="hidden h-11 border-b border-border bg-card/30 sm:block" />
+      {[0, 1, 2, 3].map((row) => (
+        <div
+          key={row}
+          className="grid min-h-20 grid-cols-[2.5rem_minmax(0,1fr)_4rem] items-center gap-3 border-b border-border/65 px-4 py-3 last:border-b-0 sm:grid-cols-[3rem_minmax(0,1fr)_10rem_6rem]"
+        >
+          <div className="h-6 w-6 rounded-full bg-border/45" />
+          <div className="space-y-2">
+            <div className="h-4 w-36 max-w-full rounded-sm bg-border/50" />
+            <div className="h-3 w-20 rounded-sm bg-border/35" />
           </div>
-        ))}
-      </div>
-    </section>
+          <div className="hidden h-6 rounded-md bg-border/35 sm:block" />
+          <div className="h-8 rounded-sm bg-border/35" />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -40,31 +35,15 @@ export async function PersonalRanking({ userId }: { userId: string }) {
   const ranking = await getPersonalRanking(userId);
 
   return (
-    <section className="space-y-4" aria-labelledby="ranking-title">
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-            <h2 id="ranking-title" className="text-xl font-semibold tracking-tight text-fg">
-              Your ranking
-            </h2>
-            {ranking.ratedVotes > 0 && ranking.ratedVotes < 5 ? (
-              <span className="mb-eyebrow text-warn">Early signal</span>
-            ) : null}
-          </div>
-          <p className="text-sm text-muted">Ties count. Both bad does not.</p>
-        </div>
-        <p className="font-mono text-xs tabular-nums text-muted">
-          {formatCount(ranking.totalVotes)} votes
-          <span aria-hidden="true"> · </span>
-          {formatCount(ranking.ratedVotes)} ranked
-          <span aria-hidden="true"> · </span>
-          {formatCount(ranking.modelsCompared)} models
-        </p>
-      </div>
-
+    <>
       {ranking.models.length > 0 ? (
-        <div className="overflow-hidden rounded-md border border-border">
-          <div className="hidden grid-cols-[3rem_minmax(0,1fr)_10rem_6rem] gap-3 border-b border-border bg-card/30 px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted sm:grid">
+        <div
+          role="region"
+          aria-label="Ranked models"
+          tabIndex={0}
+          className="max-h-[min(32rem,55dvh)] scroll-pt-11 overflow-x-hidden overflow-y-auto rounded-md border border-border [scrollbar-gutter:stable] [-webkit-overflow-scrolling:touch] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+        >
+          <div className="sticky top-0 z-10 hidden grid-cols-[3rem_minmax(0,1fr)_10rem_6rem] gap-3 border-b border-border bg-bg/95 px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted backdrop-blur-sm sm:grid">
             <span>Rank</span>
             <span>Model</span>
             <span className="text-center">Record</span>
@@ -134,6 +113,6 @@ export async function PersonalRanking({ userId }: { userId: string }) {
           </Link>
         </div>
       )}
-    </section>
+    </>
   );
 }
