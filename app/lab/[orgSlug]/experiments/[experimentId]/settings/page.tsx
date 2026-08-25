@@ -38,14 +38,21 @@ export default async function EvaluationSettingsPage({
   const { orgSlug, experimentId } = await params;
   const { checkpoint: refreshCheckpointId } = await searchParams;
   const { workspace } = await loadEvaluationWorkspace(orgSlug, experimentId);
-  const refreshCheckpoint = workspace.checkpoints.find(
-    (checkpoint) =>
-      checkpoint.id === refreshCheckpointId &&
-      checkpoint.status === "READY" &&
-      !checkpoint.promptCohortCurrent,
+  const selectedCheckpoint = workspace.checkpoints.find(
+    (checkpoint) => checkpoint.id === refreshCheckpointId,
   );
-  const refreshEndpoint = refreshCheckpoint?.source === "ENDPOINT" ? refreshCheckpoint : null;
-  const refreshUpload = refreshCheckpoint?.source === "UPLOAD" ? refreshCheckpoint : null;
+  const refreshEndpoint =
+    selectedCheckpoint?.source === "ENDPOINT" &&
+    (selectedCheckpoint.status === "DRAFT" ||
+      (selectedCheckpoint.status === "READY" && !selectedCheckpoint.promptCohortCurrent))
+      ? selectedCheckpoint
+      : null;
+  const refreshUpload =
+    selectedCheckpoint?.source === "UPLOAD" &&
+    selectedCheckpoint.status === "READY" &&
+    !selectedCheckpoint.promptCohortCurrent
+      ? selectedCheckpoint
+      : null;
   const configureAction = configureEndpointAction.bind(null, orgSlug, experimentId);
   const uploadAction = uploadCohortAction.bind(null, orgSlug, experimentId);
   const updateAction = updateEvaluationAction.bind(null, orgSlug, experimentId);
@@ -172,13 +179,22 @@ export default async function EvaluationSettingsPage({
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-3">
-                <EvaluationStatus status={checkpoint.status} />
-                {mutable && checkpoint.status === "READY" && !checkpoint.promptCohortCurrent ? (
+                <EvaluationStatus
+                  status={
+                    checkpoint.lastGenerationError && checkpoint.status === "DRAFT"
+                      ? "FAILED"
+                      : checkpoint.status
+                  }
+                />
+                {mutable &&
+                checkpoint.source === "ENDPOINT" &&
+                (checkpoint.status === "DRAFT" ||
+                  (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent)) ? (
                   <Link
                     href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}
                     className="min-h-11 px-2 py-3 text-xs text-muted hover:text-fg"
                   >
-                    Refresh
+                    {checkpoint.status === "READY" ? "Refresh" : "Edit"}
                   </Link>
                 ) : null}
                 {mutable && checkpoint.credentialConfigured ? (
@@ -208,7 +224,11 @@ export default async function EvaluationSettingsPage({
             <LabDisclosure
               title={
                 <span className="text-sm font-medium text-fg">
-                  {refreshEndpoint ? "Refresh checkpoint" : "Add checkpoint"}
+                  {refreshEndpoint
+                    ? refreshEndpoint.status === "READY"
+                      ? `Refresh ${refreshEndpoint.codename}`
+                      : `Edit ${refreshEndpoint.codename}`
+                    : "Add checkpoint"}
                 </span>
               }
               className="border-b border-border/55"

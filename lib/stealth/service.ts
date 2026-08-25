@@ -323,7 +323,27 @@ export function sanitizeOperationalError(
   error: unknown,
   exactSecrets: readonly string[] = [],
 ): string {
-  const raw = error instanceof Error ? error.message : String(error || "Operation failed");
+  let raw = error instanceof Error ? error.message : String(error || "Operation failed");
+  try {
+    const jsonMatch = raw.match(/\{[\s\S]*"error"[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]) as { error?: { message?: string } | string };
+      const innerMsg =
+        typeof parsed.error === "object" && parsed.error?.message
+          ? parsed.error.message
+          : typeof parsed.error === "string"
+            ? parsed.error
+            : null;
+      if (innerMsg) {
+        raw = raw.replace(jsonMatch[0], innerMsg);
+      }
+    }
+  } catch {
+    // keep raw if not parseable
+  }
+
+  raw = raw.replace(/^OpenRouter request failed:\s*(OpenRouter (?:error|HTTP) \d+:)/i, "$1");
+
   const exactRedacted = exactSecrets.reduce(
     (message, secret) => (secret ? message.split(secret).join("[redacted]") : message),
     raw,
@@ -334,7 +354,10 @@ export function sanitizeOperationalError(
       /(api[_-]?key|authorization|x-api-key|key)["'\s:=]+[A-Za-z0-9._~+/-]+=*/gi,
       "$1=[redacted]",
     )
-    .replace(/https?:\/\/[^\s"'`]+/gi, "[endpoint]")
+    .replace(
+      /https?:\/\/(?!(?:openrouter\.ai|platform\.openai\.com|docs\.anthropic\.com|ai\.google\.dev)\/)[^\s"'`]+/gi,
+      "[endpoint]",
+    )
     .replace(/stealth-builds\/v\d+\/[^\s"'`]+/gi, "[private storage object]")
     .replace(/arena-(snapshot|stream)\/[^\s"'`]+/gi, "[private artifact]")
     .replace(/v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "[encrypted value]")
@@ -574,8 +597,18 @@ export async function reclaimStaleStealthGenerationRuns(
         },
       });
       await db.stealthEndpointCredential.deleteMany({ where: { variantId: run.variantId } });
-      completedExperimentIds.add(run.variant.experimentId);
+    } else {
+      await db.stealthVariant.updateMany({
+        where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+        data: {
+          status: completedBuildCount > 0 ? "GENERATING" : "DRAFT",
+          generatedBuildCount: completedBuildCount,
+          generationFailureCount: run.expectedBuildCount - completedBuildCount,
+          lastGenerationError: "Generation reservation expired",
+        },
+      });
     }
+    completedExperimentIds.add(run.variant.experimentId);
   }
   for (const experimentId of completedExperimentIds) {
     await syncExperimentReadiness(db, experimentId);

@@ -788,7 +788,7 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       where: { id: run.variantId, status: { not: "WITHDRAWN" } },
       data: {
         ...variantProgress,
-        status: complete ? "READY" : "GENERATING",
+        status: complete ? "READY" : progress.completedBuildCount > 0 ? "GENERATING" : "DRAFT",
         endpointEnabled: !complete,
         cohortGeneratedAt: complete ? new Date() : null,
       },

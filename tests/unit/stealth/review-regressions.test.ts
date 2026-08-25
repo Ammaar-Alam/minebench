@@ -215,7 +215,7 @@ for (const path of ["lib/arena/buildSnapshotArtifacts.ts", "lib/arena/buildStrea
 }
 
 const cli = read("scripts/stealth-eval.ts");
-assert.match(cli, /positiveInt\(args, \["--concurrency"\], 1, 4\)/);
+assert.match(cli, /positiveInt\(args, \["--concurrency"\], 1, 15\)/);
 assert.doesNotMatch(cli, /for \(let page = 1; page <= 10/);
 assert.match(cli, /if \(!data\.nextPage\) break/);
 
@@ -236,7 +236,7 @@ assert.match(exportRoute, /getDeidentifiedStealthVotePage/);
 const evaluationLayout = read("app/lab/[orgSlug]/experiments/[experimentId]/layout.tsx");
 assert.match(evaluationLayout, /workspace\.status === "CLOSED"\s*\? workspace\.checkpoints/);
 assert.match(settings, /checkpoint\.source === "ENDPOINT"/);
-assert.match(settings, /checkpoint\.status === "DRAFT" \|\| checkpoint\.status === "GENERATING"/);
+assert.match(settings, /checkpoint\.status === "DRAFT"/);
 
 const generation = read("lib/stealth/generation.ts");
 assert.match(generation, /isExistingObjectUploadError/);
