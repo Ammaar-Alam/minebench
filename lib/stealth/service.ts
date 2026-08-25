@@ -666,6 +666,60 @@ async function assertNoCheckpointData(
   }
 }
 
+async function purgeDraftCheckpointBuilds(
+  db: Prisma.TransactionClient,
+  variantId: string,
+  modelId: string,
+): Promise<void> {
+  const staleBuilds = await db.build.findMany({
+    where: { modelId },
+    select: {
+      id: true,
+      voxelSha256: true,
+      voxelStorageBucket: true,
+      voxelStoragePath: true,
+    },
+  });
+  if (staleBuilds.length === 0) return;
+
+  await db.stealthGenerationResult.deleteMany({
+    where: { run: { variantId } },
+  });
+  await db.stealthGenerationRun.deleteMany({
+    where: { variantId },
+  });
+  await db.build.deleteMany({
+    where: { modelId },
+  });
+
+  if (hasSupabaseStorageConfig()) {
+    const checksums = staleBuilds
+      .map((b) => b.voxelSha256)
+      .filter((v): v is string => Boolean(v));
+    const surviving =
+      checksums.length > 0
+        ? await db.build.findMany({
+            where: { voxelSha256: { in: checksums } },
+            select: { voxelSha256: true },
+          })
+        : [];
+    const survivingChecksums = new Set(
+      surviving.map((s) => s.voxelSha256).filter((v): v is string => Boolean(v)),
+    );
+    await deleteArenaBuildArtifacts({
+      retiringBuilds: staleBuilds,
+      survivingChecksums,
+      deleteStorage: deleteSupabaseStorageObjects,
+    });
+    const storageRefs = staleBuilds
+      .filter((b) => b.voxelStorageBucket && b.voxelStoragePath)
+      .map((b) => ({ bucket: b.voxelStorageBucket!, path: b.voxelStoragePath! }));
+    if (storageRefs.length > 0) {
+      await deleteSupabaseStorageObjects(storageRefs).catch(() => undefined);
+    }
+  }
+}
+
 async function assertUploadCheckpointRetryable(
   db: Prisma.TransactionClient,
   variant: Pick<LockedVariant, "id" | "modelId" | "source">,
@@ -1381,6 +1435,9 @@ export async function configureStealthEndpoint(
       }
       if (refreshingOutdatedCheckpoint || existing.status === "DRAFT") {
         await assertCheckpointRetryable(tx, existing.id);
+      } else if (existing.status === "DRAFT") {
+        await assertCheckpointRetryable(tx, existing.id);
+        await purgeDraftCheckpointBuilds(tx, existing.id, existing.modelId);
       } else {
         await assertNoCheckpointData(tx, existing.id, existing.modelId);
       }
