@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { hasSupabaseAuthCookie } from "../../../lib/auth/account";
+import { parsePublicOAuthProvider } from "../../../lib/auth/providers";
+import { resolveRequestOrigin, safeNextPath } from "../../../lib/auth/redirects";
+import { readArenaSessionId } from "../../../lib/arena/session";
+
+assert.equal(safeNextPath("/account?tab=rankings"), "/account?tab=rankings");
+assert.equal(safeNextPath("https://attacker.test/account"), "/account");
+assert.equal(safeNextPath("//attacker.test/account"), "/account");
+assert.equal(safeNextPath("/\\attacker.test/account"), "/account");
+assert.equal(safeNextPath(null, "/"), "/");
+
+assert.equal(parsePublicOAuthProvider("google"), "google");
+assert.equal(parsePublicOAuthProvider("discord"), "discord");
+assert.equal(parsePublicOAuthProvider("x"), "x");
+assert.equal(parsePublicOAuthProvider("twitter"), null, "legacy OAuth 1.0a must stay disabled");
+assert.equal(parsePublicOAuthProvider("github"), null);
+
+assert.equal(
+  resolveRequestOrigin({ configuredOrigin: "https://minebench.ai/path" }),
+  "https://minebench.ai",
+);
+assert.equal(
+  resolveRequestOrigin({ vercelUrl: "minebench-alpha.vercel.app" }),
+  "https://minebench-alpha.vercel.app",
+);
+assert.equal(
+  resolveRequestOrigin({ nodeEnv: "development", host: "localhost:3000" }),
+  "http://localhost:3000",
+);
+assert.throws(
+  () => resolveRequestOrigin({ nodeEnv: "production", host: "untrusted.test" }),
+  /Missing MINEBENCH_SITE_URL/,
+);
+
+assert.equal(hasSupabaseAuthCookie("theme=dark; sb-project-auth-token=value"), true);
+assert.equal(hasSupabaseAuthCookie("sb-project-auth-token.0=value"), true);
+assert.equal(hasSupabaseAuthCookie("mb_session=value"), false);
+assert.equal(readArenaSessionId("a=1; mb_session=session-123; b=2"), "session-123");
+assert.equal(readArenaSessionId("a=1"), null);
+
+const schema = readFileSync("prisma/schema.prisma", "utf8");
+const migration = readFileSync(
+  "prisma/migrations/20260825120000_public_vote_ownership/migration.sql",
+  "utf8",
+);
+assert.match(schema, /userId String\? @db\.Uuid/);
+assert.match(schema, /@@index\(\[userId, createdAt\]\)/);
+assert.match(migration, /ON DELETE SET NULL/);
+
+const actions = readFileSync("app/(auth)/actions.ts", "utf8");
+for (const method of [
+  "signUp",
+  "signInWithPassword",
+  "resetPasswordForEmail",
+  "updateUser",
+  "signOut",
+]) {
+  assert.match(actions, new RegExp(`auth\\.${method}`));
+}
+assert.match(actions, /finishPublicSignIn/);
+
+const oauthRoute = readFileSync("app/auth/oauth/route.ts", "utf8");
+const callbackRoute = readFileSync("app/auth/callback/route.ts", "utf8");
+const confirmRoute = readFileSync("app/auth/confirm/route.ts", "utf8");
+assert.match(oauthRoute, /signInWithOAuth/);
+assert.match(callbackRoute, /exchangeCodeForSession/);
+assert.match(confirmRoute, /verifyOtp/);
+
+const voteRoute = readFileSync("app/api/arena/vote/route.ts", "utf8");
+assert.match(voteRoute, /!matchup\.stealthVariantId && authUserId/);
+assert.match(voteRoute, /getAuthenticatedUserId/);
+assert.match(voteRoute, /logArenaVoteRequest/);
+
+const personalRanking = readFileSync("lib/account/personalRanking.ts", "utf8");
+assert.match(personalRanking, /matchup\."stealthVariantId" IS NULL/);
+assert.match(personalRanking, /vote\.choice IN \('A', 'B', 'TIE'\)/);
+assert.doesNotMatch(personalRanking, /prisma\.model\.update|prisma\.vote\.update/);
+
+console.log("public authentication contract checks passed");

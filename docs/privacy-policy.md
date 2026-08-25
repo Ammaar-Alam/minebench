@@ -1,6 +1,6 @@
 # MineBench Privacy Policy
 
-Effective and last updated: August 23, 2026
+Effective and last updated: August 25, 2026
 
 MineBench is an independent service operated by Ammaar Alam in the United States. This Privacy Policy explains how MineBench handles information when you use [minebench.ai](https://minebench.ai), participate in model evaluations, use MineBench's generation tools, or communicate with MineBench.
 
@@ -10,13 +10,15 @@ MineBench does not sell personal information or use it for targeted advertising.
 
 MineBench may collect:
 
-- **Evaluation activity:** a pseudonymous session identifier, matchups shown, votes, timestamps, and related evaluation data.
+- **Evaluation activity:** a pseudonymous session identifier, matchups shown, votes, timestamps, account association when you are signed in, and related evaluation data.
 - **Content:** prompts, model selections, settings, imported files, model outputs, uploaded cohorts, builds, exports, and feedback you submit or generate.
-- **Technical data:** IP address, request headers, browser and device information, general location, pages viewed, referrers, performance data, errors, and security events.
-- **Account and organization data:** name, email address, organization, invitations, role, permissions, authentication data, and evaluation requests if you create an account or work with MineBench.
+- **Technical data:** IP address, request headers, browser and device information, IP-derived country, region, city, postal code, approximate coordinates, pages viewed, referrers, performance data, errors, and security events.
+- **Account and organization data:** name, email address, sign-in provider, organization, invitations, role, permissions, authentication data, and evaluation requests if you create an account or work with MineBench.
 - **Communications:** the category, title, message, optional reply email, and other information you provide through the contact form, support requests, emails, security reports, meetings, or other correspondence.
 
-Public Arena voting does not require an account. Its session identifier distinguishes browser sessions but is not intended to identify you by name.
+Public Arena voting does not require an account. Its session identifier distinguishes browser sessions but is not intended to identify you by name. If you sign in, MineBench associates unclaimed public votes from the current browser session with your account and associates later public votes while you remain signed in.
+
+Supabase processes passwords and session credentials for MineBench. MineBench does not receive your Google, Discord, or X password. If you choose social sign-in, that provider shares the identity and profile information covered by the permissions shown during sign-in.
 
 Do not submit personal, confidential, or sensitive information in prompts or files unless the applicable interface and agreement expressly permit it.
 
@@ -32,10 +34,13 @@ MineBench uses:
 
 - `mb_session` to identify an Arena voting session and prevent duplicate votes;
 - `mb_rls` for rate limiting and abuse prevention;
-- `mb-theme` to remember your display preference; and
+- `mb-theme` to remember your display preference;
+- Supabase authentication cookies to keep signed-in users authenticated; and
 - browser local storage to remember Sandbox credentials you choose to save.
 
 The Arena cookies may remain for up to one year. They are not used for advertising.
+
+Arena vote requests create restricted operational logs that may contain the vote's opaque identifier, choice, IP address, user agent, authentication status, and IP-derived location. MineBench uses these records to investigate manipulation and enforce rate limits or temporary blocks. IP-derived location is approximate and is not device GPS data.
 
 MineBench uses Vercel Web Analytics for aggregate usage and performance measurement. Vercel Web Analytics does not use third-party analytics cookies or provide MineBench with a persistent cross-site identity. Its visitor-identification hash expires after 24 hours. MineBench's custom analytics events are limited to reliability and performance information and are not intended to contain prompts, API credentials, or direct identifiers.
 
@@ -45,6 +50,7 @@ MineBench uses information to:
 
 - provide Arena voting, rankings, Sandbox generation, exports, and evaluations;
 - calculate ratings and evaluation metrics;
+- provide personal rankings based on votes associated with an account;
 - authenticate users and manage organization access;
 - prevent duplicate voting, abuse, fraud, and security incidents;
 - maintain and improve reliability and performance;
@@ -88,6 +94,7 @@ Evaluation agreements and data processing addenda set additional protections, re
 MineBench may share information with:
 
 - service providers for hosting, database, storage, analytics, authentication, security, communications, or support;
+- Google, Discord, or X when you choose that provider to sign in;
 - AI providers and custom endpoints selected by you or required for an evaluation;
 - evaluation sponsors receiving results and feedback from an evaluation they commissioned;
 - professional advisers such as attorneys, accountants, auditors, and insurers;
@@ -103,6 +110,8 @@ MineBench retains information only as long as reasonably necessary to provide th
 Contact-form submissions and optional reply addresses remain in MineBench's support mailbox only as long as reasonably necessary to respond, keep an appropriate support record, and protect the service from abuse.
 
 Sandbox credentials remain in your browser until you remove them or clear site data. Arena vote and session records may be retained to reproduce rankings and investigate manipulation. Unless an evaluation agreement states otherwise, private evaluation data is deleted from active systems within 30 days after closure, final delivery, or termination and may remain in backups for up to 90 additional days. Private endpoint credentials are deleted or disabled when revoked, when a cohort completes, or when the evaluation ends.
+
+Account records are retained while the account is active and as reasonably necessary afterward for security, legal, and benchmark-integrity purposes. If an account is deleted, MineBench may retain its public votes without the account association so historical aggregate rankings remain reproducible. IP-linked operational logs follow the retention available in MineBench's restricted logging systems and are not intended as permanent research records.
 
 MineBench uses reasonable technical and organizational safeguards designed to protect information from unauthorized access, loss, misuse, alteration, or disclosure. No internet service can guarantee absolute security.
 

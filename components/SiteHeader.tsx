@@ -125,6 +125,29 @@ function ThemeToggle({ quiet = false }: { quiet?: boolean }) {
   );
 }
 
+function AccountLink({ quiet = false }: { quiet?: boolean }) {
+  const pathname = usePathname();
+  const active = pathname === "/account";
+  return (
+    <Link
+      href="/account"
+      aria-label="Account"
+      aria-current={active ? "page" : undefined}
+      title="Account"
+      className={`grid place-items-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
+        quiet
+          ? "h-11 w-11 border border-border/70 text-muted hover:bg-card/30 hover:text-fg"
+          : `h-10 w-10 ${active ? "text-accent" : "text-muted hover:text-fg"}`
+      }`}
+    >
+      <svg aria-hidden="true" className="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M5.75 20a6.25 6.25 0 0 1 12.5 0" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+      </svg>
+    </Link>
+  );
+}
+
 function LabHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-border/70 bg-bg">
@@ -145,6 +168,7 @@ function LabHeader() {
           <Link href="/" className="inline-flex min-h-11 items-center px-3 text-sm text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             Arena
           </Link>
+          <AccountLink quiet />
           <ThemeToggle quiet />
         </div>
       </div>
@@ -302,8 +326,11 @@ export function SiteHeader() {
             {/* fade mask so partially-visible Support fades out cleanly on mobile */}
             <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-bg to-transparent sm:hidden" aria-hidden="true" />
           </div>
-          <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
-          <ThemeToggle />
+          <div className="flex items-center gap-0.5">
+            <div className="mx-1 hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
+            <AccountLink />
+            <ThemeToggle />
+          </div>
         </nav>
       </div>
     </header>

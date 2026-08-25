@@ -46,10 +46,13 @@ import { ServerTiming } from "@/lib/serverTiming";
 import { trackServerEventInBackground } from "@/lib/analytics.server";
 import { readStealthArenaShare } from "@/lib/stealth/policy";
 import { pickStealthMatchup } from "@/lib/stealth/sampling";
+import {
+  ARENA_SESSION_COOKIE,
+  ARENA_SESSION_COOKIE_OPTIONS,
+  readArenaSessionId,
+} from "@/lib/arena/session";
 
 export const runtime = "nodejs";
-
-const SESSION_COOKIE = "mb_session";
 
 const CONTENDER_BAND_SIZE = 8;
 const ADJ_PAIR_VOTES_FLOOR = 12;
@@ -86,17 +89,10 @@ type MatchupChoice = {
 };
 
 function getOrSetSessionId(res: NextResponse, req: Request) {
-  const cookieHeader = req.headers.get("cookie") ?? "";
-  const match = cookieHeader.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`));
-  const existing = match?.[1];
+  const existing = readArenaSessionId(req.headers.get("cookie"));
   if (existing) return existing;
   const id = crypto.randomUUID();
-  res.cookies.set(SESSION_COOKIE, id, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 365,
-  });
+  res.cookies.set(ARENA_SESSION_COOKIE, id, ARENA_SESSION_COOKIE_OPTIONS);
   return id;
 }
 
