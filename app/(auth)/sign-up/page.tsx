@@ -9,6 +9,7 @@ import {
   PrivacyNote,
 } from "@/components/auth/AuthShell";
 import { AuthSubmitButton } from "@/components/auth/AuthSubmitButton";
+import { PasswordInput } from "@/components/auth/PasswordInput";
 import { getCurrentAccount } from "@/lib/auth/account";
 import { createAccount } from "../actions";
 
@@ -42,15 +43,13 @@ export default async function SignUpPage({
           <span>Email</span>
           <input className="mb-field h-12 text-base" name="email" type="email" autoComplete="email" required />
         </label>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="block space-y-2 text-sm font-medium text-fg">
-            <span>Password</span>
-            <input className="mb-field h-12 text-base" name="password" type="password" autoComplete="new-password" minLength={8} maxLength={128} required />
-          </label>
-          <label className="block space-y-2 text-sm font-medium text-fg">
-            <span>Confirm</span>
-            <input className="mb-field h-12 text-base" name="passwordConfirm" type="password" autoComplete="new-password" minLength={8} maxLength={128} required />
-          </label>
+        <div className="space-y-2 text-sm font-medium text-fg">
+          <label htmlFor="password">Password</label>
+          <PasswordInput id="password" name="password" autoComplete="new-password" />
+        </div>
+        <div className="space-y-2 text-sm font-medium text-fg">
+          <label htmlFor="password-confirm">Confirm password</label>
+          <PasswordInput id="password-confirm" name="passwordConfirm" autoComplete="new-password" />
         </div>
         <AuthSubmitButton pendingLabel="Creating…">Create account</AuthSubmitButton>
       </form>

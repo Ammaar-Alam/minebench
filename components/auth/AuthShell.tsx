@@ -12,7 +12,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   link: "This confirmation link has expired.",
   oauth: "Couldn't sign in with that provider.",
   password: "Passwords must match and use at least 8 characters.",
-  unavailable: "Sign-in is unavailable right now. Try again shortly.",
+  unavailable: "Couldn't complete that request. Try again shortly.",
 };
 
 const NOTICE_MESSAGES: Record<string, string> = {
@@ -28,8 +28,8 @@ export function AuthMessage({ error, notice }: { error?: string; notice?: string
   return (
     <p
       role={errorMessage ? "alert" : "status"}
-      className={`border-y py-3 text-sm text-fg ${
-        errorMessage ? "border-danger/35" : "border-accent/35"
+      className={`mb-feedback ${
+        errorMessage ? "mb-feedback-error" : "mb-feedback-status"
       }`}
     >
       {errorMessage ?? noticeMessage}
@@ -72,7 +72,7 @@ const OAUTH_PROVIDERS = [
 
 export function OAuthButtons({ next = "/account" }: { next?: string }) {
   return (
-    <div className="grid grid-cols-3 gap-2" aria-label="Social sign-in">
+    <div className="grid grid-cols-3 gap-2" role="group" aria-label="Social sign-in">
       {OAUTH_PROVIDERS.map(({ provider, label, mark }) => (
         <a
           key={provider}
@@ -100,7 +100,7 @@ export function AuthShell({
   return (
     <div className="mx-auto flex min-h-[68vh] w-full max-w-lg items-center py-8 sm:py-12">
       <section className="w-full border-y border-border px-1 py-8 sm:px-8 sm:py-10">
-        <div className="mx-auto w-full max-w-sm space-y-7">
+        <div className="mx-auto w-full max-w-sm space-y-6">
           <header className="space-y-2">
             <h1 className="font-display text-3xl font-semibold tracking-tight text-fg">{title}</h1>
             {subtitle ? <p className="text-sm text-muted">{subtitle}</p> : null}

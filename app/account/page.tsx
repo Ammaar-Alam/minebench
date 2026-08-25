@@ -45,12 +45,12 @@ export default async function AccountPage({
       </header>
 
       {params.notice === "password" ? (
-        <p role="status" className="border-y border-accent/35 py-3 text-sm text-fg">
+        <p role="status" className="mb-feedback mb-feedback-status">
           Password updated.
         </p>
       ) : null}
       {params.notice === "created" ? (
-        <p role="status" className="border-y border-accent/35 py-3 text-sm text-fg">
+        <p role="status" className="mb-feedback mb-feedback-status">
           Account created.
         </p>
       ) : null}

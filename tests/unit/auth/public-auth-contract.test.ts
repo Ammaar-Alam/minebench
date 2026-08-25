@@ -60,6 +60,13 @@ for (const method of [
   assert.match(actions, new RegExp(`auth\\.${method}`));
 }
 assert.match(actions, /finishPublicSignIn/);
+const signUpPage = readFileSync("app/(auth)/sign-up/page.tsx", "utf8");
+assert.match(signUpPage, /Confirm password/);
+assert.doesNotMatch(signUpPage, /sm:grid-cols-2/);
+
+const passwordInput = readFileSync("components/auth/PasswordInput.tsx", "utf8");
+assert.match(passwordInput, /Show password/);
+assert.match(passwordInput, /Hide password/);
 
 const oauthRoute = readFileSync("app/auth/oauth/route.ts", "utf8");
 const callbackRoute = readFileSync("app/auth/callback/route.ts", "utf8");

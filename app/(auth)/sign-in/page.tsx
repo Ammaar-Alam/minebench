@@ -8,6 +8,7 @@ import {
   OAuthButtons,
 } from "@/components/auth/AuthShell";
 import { AuthSubmitButton } from "@/components/auth/AuthSubmitButton";
+import { PasswordInput } from "@/components/auth/PasswordInput";
 import { getCurrentAccount } from "@/lib/auth/account";
 import { safeNextPath } from "@/lib/auth/redirects";
 import { signInWithPassword } from "../actions";
@@ -46,23 +47,15 @@ export default async function SignInPage({
             required
           />
         </label>
-        <label className="block space-y-2 text-sm font-medium text-fg">
+        <div className="space-y-2 text-sm font-medium text-fg">
           <span className="flex items-center justify-between gap-3">
-            <span>Password</span>
+            <label htmlFor="password">Password</label>
             <Link href="/forgot-password" className="font-normal text-muted hover:text-fg">
               Forgot password?
             </Link>
           </span>
-          <input
-            className="mb-field h-12 text-base"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            minLength={8}
-            maxLength={128}
-            required
-          />
-        </label>
+          <PasswordInput id="password" name="password" autoComplete="current-password" />
+        </div>
         <AuthSubmitButton pendingLabel="Signing in…">Sign in</AuthSubmitButton>
       </form>
       <p className="text-sm text-muted">
