@@ -178,6 +178,7 @@ async function main() {
     });
 
     assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 1);
+    assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 0);
     assert.equal((await db.vote.findUniqueOrThrow({ where: { id: privateVote.id } })).userId, null);
 
     const ranking = await getPersonalRanking(user.id);

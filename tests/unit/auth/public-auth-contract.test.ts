@@ -68,6 +68,8 @@ for (const method of [
 assert.match(actions, /finishPublicSignIn/);
 assert.match(actions, /current_password: currentPassword/);
 assert.match(actions, /resetPasswordForEmail\(user\.email/);
+const account = readFileSync("lib/auth/account.ts", "utf8");
+assert.match(account, /auth\.signOut\(\{ scope: "local" \}\)/);
 const signUpPage = readFileSync("app/(auth)/sign-up/page.tsx", "utf8");
 assert.match(signUpPage, /Confirm password/);
 assert.doesNotMatch(signUpPage, /sm:grid-cols-2/);
@@ -100,6 +102,10 @@ const confirmRoute = readFileSync("app/auth/confirm/route.ts", "utf8");
 assert.match(oauthRoute, /signInWithOAuth/);
 assert.match(callbackRoute, /exchangeCodeForSession/);
 assert.match(confirmRoute, /verifyOtp/);
+
+const privacyPolicy = readFileSync("docs/privacy-policy.md", "utf8");
+assert.match(privacyPolicy, /does not receive your Google, GitHub, Discord, or X password/);
+assert.match(privacyPolicy, /- Google, GitHub, Discord, or X when you choose that provider/);
 
 const voteRoute = readFileSync("app/api/arena/vote/route.ts", "utf8");
 assert.match(voteRoute, /!matchup\.stealthVariantId && authUserId/);

@@ -126,19 +126,34 @@ export async function claimAnonymousPublicVotes(
   return result.count;
 }
 
+async function clearLocalAuthSession(): Promise<void> {
+  try {
+    const supabase = await createSupabaseServerClient();
+    await supabase.auth.signOut({ scope: "local" });
+  } catch {}
+}
+
 export async function finishPublicSignIn(
   authUser: SupabaseAuthUser,
 ): Promise<{ account: PublicAccount; claimedVotes: number } | null> {
-  const account = await syncAuthUser(authUser);
-  if (!account) return null;
+  try {
+    const account = await syncAuthUser(authUser);
+    if (!account) {
+      await clearLocalAuthSession();
+      return null;
+    }
 
-  const cookieStore = await cookies();
-  const claimedVotes = await claimAnonymousPublicVotes(
-    account.id,
-    cookieStore.get(ARENA_SESSION_COOKIE)?.value ?? null,
-  );
-  cookieStore.set(ARENA_SESSION_COOKIE, crypto.randomUUID(), ARENA_SESSION_COOKIE_OPTIONS);
-  return { account, claimedVotes };
+    const cookieStore = await cookies();
+    const claimedVotes = await claimAnonymousPublicVotes(
+      account.id,
+      cookieStore.get(ARENA_SESSION_COOKIE)?.value ?? null,
+    );
+    cookieStore.set(ARENA_SESSION_COOKIE, crypto.randomUUID(), ARENA_SESSION_COOKIE_OPTIONS);
+    return { account, claimedVotes };
+  } catch (error) {
+    await clearLocalAuthSession();
+    throw error;
+  }
 }
 
 export async function rotateArenaSession(): Promise<void> {

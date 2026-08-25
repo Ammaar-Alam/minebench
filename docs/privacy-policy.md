@@ -18,7 +18,7 @@ MineBench may collect:
 
 Public Arena voting does not require an account. Its session identifier distinguishes browser sessions but is not intended to identify you by name. If you sign in, MineBench associates unclaimed public votes from the current browser session with your account and associates later public votes while you remain signed in.
 
-Supabase processes passwords and session credentials for MineBench. MineBench does not receive your Google, Discord, or X password. If you choose social sign-in, that provider shares the identity and profile information covered by the permissions shown during sign-in.
+Supabase processes passwords and session credentials for MineBench. MineBench does not receive your Google, GitHub, Discord, or X password. If you choose social sign-in, that provider shares the identity and profile information covered by the permissions shown during sign-in.
 
 Do not submit personal, confidential, or sensitive information in prompts or files unless the applicable interface and agreement expressly permit it.
 
@@ -94,7 +94,7 @@ Evaluation agreements and data processing addenda set additional protections, re
 MineBench may share information with:
 
 - service providers for hosting, database, storage, analytics, authentication, security, communications, or support;
-- Google, Discord, or X when you choose that provider to sign in;
+- Google, GitHub, Discord, or X when you choose that provider to sign in;
 - AI providers and custom endpoints selected by you or required for an evaluation;
 - evaluation sponsors receiving results and feedback from an evaluation they commissioned;
 - professional advisers such as attorneys, accountants, auditors, and insurers;
