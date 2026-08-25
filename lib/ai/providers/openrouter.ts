@@ -240,6 +240,7 @@ export async function openrouterGenerateText(params: {
     let selectedReasoningMaxTokens: number | undefined;
     let selectedReasoningTokenBudget: number | null = null;
     const tokenBudgets = tokenBudgetCandidates(maxTokens);
+    let requireParameters = params.requireParameterSupport !== false;
     for (const [tokIdx, tok] of tokenBudgets.entries()) {
       let tryLowerTokenBudget = false;
       for (const [cfgIdx, cfg] of reasoningAttempts.entries()) {
@@ -274,7 +275,7 @@ export async function openrouterGenerateText(params: {
                   { role: "system", content: params.system },
                   { role: "user", content: params.user },
                 ],
-                ...(params.jsonSchema && params.requireParameterSupport !== false
+                ...(params.jsonSchema && requireParameters
                   ? {
                       provider: {
                         require_parameters: true,
@@ -310,6 +311,13 @@ export async function openrouterGenerateText(params: {
             break;
           }
           lastBody = await res.text().catch(() => "");
+          if (res.status === 404 && requireParameters && lastBody.toLowerCase().includes("no endpoints found")) {
+            requireParameters = false;
+            params.onTrace?.(
+              `OpenRouter rejected parameter requirements (HTTP 404); retrying without require_parameters.`,
+            );
+            continue;
+          }
           if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
             tryLowerTokenBudget = true;
             const nextBudget = tokenBudgets[tokIdx + 1];
