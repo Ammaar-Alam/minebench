@@ -811,10 +811,10 @@ async function main() {
       memberActor,
       organization.id,
       generationCheckpoint.variantId,
-      { maxAttempts: 3, concurrency: 5 },
+      { maxAttempts: 3, concurrency: 16 },
       async () => "invalid-concurrency-workflow",
     ),
-    /Concurrency must be from 1 to 4/,
+    /Concurrency must be from 1 to 15/,
   );
   let launchCount = 0;
   const concurrentStarts = await Promise.allSettled([

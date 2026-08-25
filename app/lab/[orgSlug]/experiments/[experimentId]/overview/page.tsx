@@ -129,7 +129,13 @@ export default async function EvaluationOverviewPage({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2.5">
                     <h3 className="truncate text-sm font-medium text-fg">{checkpoint.codename}</h3>
-                    <EvaluationStatus status={checkpoint.status} />
+                    <EvaluationStatus
+                      status={
+                        checkpoint.lastGenerationError && checkpoint.status === "DRAFT"
+                          ? "FAILED"
+                          : checkpoint.status
+                      }
+                    />
                   </div>
                   <p className="mt-1.5 text-xs text-muted">
                     {titleCase(checkpoint.source)}

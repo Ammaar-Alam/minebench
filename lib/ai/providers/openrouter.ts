@@ -349,8 +349,19 @@ export async function openrouterGenerateText(params: {
     if (!res) throw new Error("OpenRouter request failed");
 
     if (!res.ok) {
-      const body = lastBody || (await res.text().catch(() => ""));
-      throw new Error(`OpenRouter error ${res.status}: ${body}`);
+      const rawBody = lastBody || (await res.text().catch(() => ""));
+      let cleanMessage = rawBody;
+      try {
+        const parsed = JSON.parse(rawBody) as { error?: { message?: string } | string };
+        if (parsed.error && typeof parsed.error === "object" && parsed.error.message) {
+          cleanMessage = parsed.error.message;
+        } else if (typeof parsed.error === "string") {
+          cleanMessage = parsed.error;
+        }
+      } catch {
+        // keep raw body
+      }
+      throw new Error(`OpenRouter error ${res.status}: ${cleanMessage}`);
     }
 
     if (res.ok && selectedReasoningLabel) {
@@ -417,6 +428,9 @@ export async function openrouterGenerateText(params: {
         ? ` (cause: ${redactApiKey(String(err.cause))})`
         : "";
     console.error("OpenRouter network error:", message);
+    if (message.startsWith("OpenRouter HTTP ") || message.startsWith("OpenRouter error ")) {
+      throw new Error(`${message}${cause}`);
+    }
     throw new Error(`OpenRouter request failed: ${message}${cause}`);
   } finally {
     detachAbort();

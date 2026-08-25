@@ -172,13 +172,23 @@ export default async function EvaluationSettingsPage({
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-3">
-                <EvaluationStatus status={checkpoint.status} />
-                {mutable && checkpoint.status === "READY" && !checkpoint.promptCohortCurrent ? (
+                <EvaluationStatus
+                  status={
+                    checkpoint.lastGenerationError && checkpoint.status === "DRAFT"
+                      ? "FAILED"
+                      : checkpoint.status
+                  }
+                />
+                {mutable &&
+                checkpoint.source === "ENDPOINT" &&
+                (checkpoint.status === "DRAFT" ||
+                  checkpoint.status === "GENERATING" ||
+                  (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent)) ? (
                   <Link
                     href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}
                     className="min-h-11 px-2 py-3 text-xs text-muted hover:text-fg"
                   >
-                    Refresh
+                    {checkpoint.status === "READY" ? "Refresh" : "Edit"}
                   </Link>
                 ) : null}
                 {mutable && checkpoint.credentialConfigured ? (
@@ -208,7 +218,11 @@ export default async function EvaluationSettingsPage({
             <LabDisclosure
               title={
                 <span className="text-sm font-medium text-fg">
-                  {refreshEndpoint ? "Refresh checkpoint" : "Add checkpoint"}
+                  {refreshEndpoint
+                    ? refreshEndpoint.status === "READY"
+                      ? `Refresh ${refreshEndpoint.codename}`
+                      : `Edit ${refreshEndpoint.codename}`
+                    : "Add checkpoint"}
                 </span>
               }
               className="border-b border-border/55"

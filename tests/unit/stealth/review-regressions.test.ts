@@ -215,7 +215,7 @@ for (const path of ["lib/arena/buildSnapshotArtifacts.ts", "lib/arena/buildStrea
 }
 
 const cli = read("scripts/stealth-eval.ts");
-assert.match(cli, /positiveInt\(args, \["--concurrency"\], 1, 4\)/);
+assert.match(cli, /positiveInt\(args, \["--concurrency"\], 1, 15\)/);
 assert.doesNotMatch(cli, /for \(let page = 1; page <= 10/);
 assert.match(cli, /if \(!data\.nextPage\) break/);
 

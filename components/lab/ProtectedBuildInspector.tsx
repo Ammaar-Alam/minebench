@@ -350,13 +350,17 @@ export function ProtectedBuildInspector({
               />
             ) : (
               <div className="grid min-h-[24rem] place-items-center p-7 text-center sm:min-h-[32rem]">
-                <div className="max-w-sm">
+                <div className="max-w-md space-y-3">
                   <span className={`inline-flex items-center gap-2 text-xs font-medium ${statusTone(selected.status)}`}>
                     <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-current" />
                     {titleCase(selected.status)}
                   </span>
-                  <h3 className="mt-3 text-xl font-semibold tracking-tight text-fg">Preview unavailable</h3>
-                  {selected.error ? <p className="mt-2 text-sm text-danger">{selected.error}</p> : null}
+                  <h3 className="text-xl font-semibold tracking-tight text-fg">Preview unavailable</h3>
+                  {selected.error ? (
+                    <div className="rounded-md border border-danger/30 bg-danger/5 p-3.5 text-left font-mono text-xs text-danger break-words">
+                      {selected.error}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             )

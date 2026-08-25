@@ -86,7 +86,15 @@ export default async function EvaluationBuildsPage({
                     >
                       <div className="min-w-0">
                         <h3 className="truncate text-sm font-medium text-fg">{checkpoint.codename}</h3>
-                        <div className="mt-1.5"><EvaluationStatus status={checkpoint.status} /></div>
+                        <div className="mt-1.5">
+                          <EvaluationStatus
+                            status={
+                              checkpoint.lastGenerationError && checkpoint.status === "DRAFT"
+                                ? "FAILED"
+                                : checkpoint.status
+                            }
+                          />
+                        </div>
                       </div>
                       <div>
                         <div className="flex items-center justify-between gap-3 font-mono text-xs tabular-nums text-muted">
@@ -116,7 +124,11 @@ export default async function EvaluationBuildsPage({
                             />
                           </label>
                           <button type="submit" className="mb-btn mb-btn-primary min-h-10 px-4 text-xs">
-                            Generate
+                            {checkpoint.lastGenerationError || checkpoint.generationFailureCount > 0
+                              ? "Retry generation"
+                              : checkpoint.currentGeneratedBuildCount > 0
+                                ? "Resume generation"
+                                : "Generate"}
                           </button>
                         </form>
                       ) : !checkpoint.promptCohortCurrent && !running ? (
@@ -129,6 +141,11 @@ export default async function EvaluationBuildsPage({
                       ) : (
                         <span className="hidden w-24 sm:block" />
                       )}
+                      {checkpoint.lastGenerationError ? (
+                        <div className="col-span-full border-t border-border/40 pt-2 text-xs text-danger break-words">
+                          <span className="font-medium">Error:</span> {checkpoint.lastGenerationError}
+                        </div>
+                      ) : null}
                     </article>
                   );
                 })}
