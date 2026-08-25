@@ -11,10 +11,15 @@ import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetr
 import { ServerTiming } from "@/lib/serverTiming";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 import { invalidateStealthSamplingCache } from "@/lib/stealth/sampling";
+import { getAuthenticatedUserId } from "@/lib/auth/account";
+import {
+  ARENA_SESSION_COOKIE,
+  ARENA_SESSION_COOKIE_OPTIONS,
+  readArenaSessionId,
+} from "@/lib/arena/session";
+import { logArenaVoteRequest } from "@/lib/observability/arenaVoteLog";
 
 export const runtime = "nodejs";
-
-const SESSION_COOKIE = "mb_session";
 
 const reqSchema = z.object({
   matchupId: z.string().min(1).max(2048),
@@ -28,9 +33,7 @@ const reqSchema = z.object({
 });
 
 function getOrCreateSessionId(req: Request): { id: string; cookieValue: string | null } {
-  const cookieHeader = req.headers.get("cookie") ?? "";
-  const match = cookieHeader.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`));
-  const existing = match?.[1];
+  const existing = readArenaSessionId(req.headers.get("cookie"));
   if (existing) return { id: existing, cookieValue: null };
 
   const id = crypto.randomUUID();
@@ -153,6 +156,10 @@ export async function POST(req: Request) {
     }
     const session = getOrCreateSessionId(req);
     const sessionId = session.id;
+    const authUserId = await getAuthenticatedUserId(req.headers.get("cookie"));
+    const voteOwnerSql = !matchup.stealthVariantId && authUserId
+      ? Prisma.sql`(SELECT id FROM "User" WHERE id = CAST(${authUserId} AS UUID))`
+      : Prisma.sql`NULL`;
     const txStartedAt = timing.start();
     const voteId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
@@ -202,7 +209,11 @@ export async function POST(req: Request) {
       FOR SHARE OF build_a, build_b, model_a, model_b
     `;
     const [voteWrite] = await withArenaWriteRetry(async () => {
-      return prisma.$queryRaw<Array<{ validMatchup: boolean; voteId: string | null }>>(Prisma.sql`
+      return prisma.$queryRaw<Array<{
+        validMatchup: boolean;
+        voteId: string | null;
+        userId: string | null;
+      }>>(Prisma.sql`
         WITH valid_matchup AS (
           ${validMatchupSql}
         ),
@@ -236,12 +247,13 @@ export async function POST(req: Request) {
             "id",
             "matchupId",
             "sessionId",
-            "choice"
+            "choice",
+            "userId"
           )
-          SELECT ${voteId}, ${dbMatchupId}, ${sessionId}, ${choice}
+          SELECT ${voteId}, ${dbMatchupId}, ${sessionId}, ${choice}, ${voteOwnerSql}
           FROM valid_matchup
           ON CONFLICT ("matchupId", "sessionId") DO NOTHING
-          RETURNING "id"
+          RETURNING "id", "userId"
         ),
         inserted_job AS (
           INSERT INTO "ArenaVoteJob" (
@@ -268,7 +280,8 @@ export async function POST(req: Request) {
         )
         SELECT
           EXISTS (SELECT 1 FROM valid_matchup) AS "validMatchup",
-          (SELECT "voteId" FROM inserted_job LIMIT 1) AS "voteId"
+          (SELECT "voteId" FROM inserted_job LIMIT 1) AS "voteId",
+          (SELECT "userId" FROM inserted_vote LIMIT 1) AS "userId"
       `);
     });
     timing.end("tx", txStartedAt);
@@ -277,6 +290,14 @@ export async function POST(req: Request) {
     }
 
     queuedVoteJobs = voteWrite.voteId ? 1 : 0;
+    logArenaVoteRequest(req, {
+      outcome: voteWrite.voteId ? "accepted" : "duplicate",
+      voteId: voteWrite.voteId,
+      choice,
+      authenticated: Boolean(authUserId),
+      owned: Boolean(voteWrite.userId),
+      scope: matchup.stealthVariantId ? "private" : "public",
+    });
     if (queuedVoteJobs > 0) {
       queuedVoteJobInput = {
         voteJobId: jobId,
@@ -294,12 +315,11 @@ export async function POST(req: Request) {
     };
     res = NextResponse.json(responseBody, { headers: { "Cache-Control": "no-store" } });
     if (session.cookieValue) {
-      res.cookies.set(SESSION_COOKIE, session.cookieValue, {
-        httpOnly: true,
-        sameSite: "lax",
-        path: "/",
-        maxAge: 60 * 60 * 24 * 365,
-      });
+      res.cookies.set(
+        ARENA_SESSION_COOKIE,
+        session.cookieValue,
+        ARENA_SESSION_COOKIE_OPTIONS,
+      );
     }
   } catch (err) {
     const capacityError = isCapacityVoteError(err);

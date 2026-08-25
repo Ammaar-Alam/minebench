@@ -66,6 +66,7 @@ model User {
 
   memberships     OrganizationMembership[]
   acceptedInvites OrganizationInvitation[] @relation("AcceptedOrganizationInvites")
+  votes           Vote[]
 }
 
 model Organization {
@@ -414,10 +415,14 @@ model Vote {
   matchup   Matchup @relation(fields: [matchupId], references: [id], onDelete: Cascade)
   jobs      ArenaVoteJob[]
 
+  userId String? @db.Uuid
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   sessionId String
   choice    String
 
   @@unique([matchupId, sessionId])
+  @@index([userId, createdAt])
   @@index([sessionId])
   @@index([createdAt])
   @@index([createdAt, id])

@@ -856,6 +856,18 @@
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.16);
   }
 
+  .mb-feedback {
+    @apply rounded-md border px-3 py-3 text-sm text-fg;
+  }
+
+  .mb-feedback-error {
+    @apply border-danger/30 bg-danger/[0.08];
+  }
+
+  .mb-feedback-status {
+    @apply border-accent/30 bg-accent/[0.08];
+  }
+
   @media (forced-colors: active) {
     select.mb-field {
       appearance: auto;
