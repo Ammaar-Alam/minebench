@@ -1433,7 +1433,7 @@ export async function configureStealthEndpoint(
       ) {
         throw new Error("This checkpoint cannot be changed");
       }
-      if (refreshingOutdatedCheckpoint || existing.status === "DRAFT") {
+      if (refreshingOutdatedCheckpoint) {
         await assertCheckpointRetryable(tx, existing.id);
       } else if (existing.status === "DRAFT") {
         await assertCheckpointRetryable(tx, existing.id);
