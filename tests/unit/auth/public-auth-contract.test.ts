@@ -15,10 +15,10 @@ assert.equal(safeNextPath("/\\attacker.test/account"), "/account");
 assert.equal(safeNextPath(null, "/"), "/");
 
 assert.equal(parsePublicOAuthProvider("google"), "google");
+assert.equal(parsePublicOAuthProvider("github"), "github");
 assert.equal(parsePublicOAuthProvider("discord"), "discord");
 assert.equal(parsePublicOAuthProvider("x"), "x");
 assert.equal(parsePublicOAuthProvider("twitter"), null, "legacy OAuth 1.0a must stay disabled");
-assert.equal(parsePublicOAuthProvider("github"), null);
 
 assert.equal(
   resolveRequestOrigin({ configuredOrigin: "https://minebench.ai/path" }),
@@ -75,6 +75,9 @@ assert.doesNotMatch(signUpPage, /sm:grid-cols-2/);
 const passwordInput = readFileSync("components/auth/PasswordInput.tsx", "utf8");
 assert.match(passwordInput, /Show password/);
 assert.match(passwordInput, /Hide password/);
+
+const authShell = readFileSync("components/auth/AuthShell.tsx", "utf8");
+assert.match(authShell, /provider: "github", label: "GitHub"/);
 
 const resetPasswordPage = readFileSync("app/(auth)/reset-password/page.tsx", "utf8");
 assert.match(resetPasswordPage, /Current password/);
