@@ -6,6 +6,9 @@ import {
   ARENA_SESSION_COOKIE,
   ARENA_SESSION_COOKIE_OPTIONS,
 } from "@/lib/arena/session";
+import { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
+
+export { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
 
 export type PublicAccount = {
   id: string;
@@ -13,6 +16,12 @@ export type PublicAccount = {
   displayName: string | null;
   isMineBenchAdmin: boolean;
   createdAt: Date;
+};
+
+type AccountSecurity = {
+  account: PublicAccount;
+  isPasswordRecovery: boolean;
+  signedInWithPassword: boolean;
 };
 
 function authDisplayName(authUser: SupabaseAuthUser): string | null {
@@ -23,8 +32,12 @@ function authDisplayName(authUser: SupabaseAuthUser): string | null {
   return null;
 }
 
-export function hasSupabaseAuthCookie(cookieHeader: string | null): boolean {
-  return /(?:^|;\s*)sb-[^=;]+-auth-token(?:\.\d+)?=/.test(cookieHeader ?? "");
+export function hasAuthenticationMethod(amr: unknown, method: string): boolean {
+  return Array.isArray(amr) && amr.some((entry) => {
+    if (typeof entry === "string") return entry === method;
+    if (!entry || typeof entry !== "object") return false;
+    return "method" in entry && entry.method === method;
+  });
 }
 
 export async function syncAuthUser(authUser: SupabaseAuthUser): Promise<PublicAccount | null> {
@@ -63,6 +76,24 @@ export async function getCurrentAccount(): Promise<PublicAccount | null> {
   } = await supabase.auth.getUser();
   if (error || !user) return null;
   return syncAuthUser(user);
+}
+
+export async function getCurrentAccountSecurity(): Promise<AccountSecurity | null> {
+  const supabase = await createSupabaseServerClient();
+  const [userResult, claimsResult] = await Promise.all([
+    supabase.auth.getUser(),
+    supabase.auth.getClaims(),
+  ]);
+  const user = userResult.data.user;
+  if (userResult.error || !user) return null;
+  const account = await syncAuthUser(user);
+  if (!account) return null;
+  const amr = claimsResult.error ? null : claimsResult.data?.claims.amr;
+  return {
+    account,
+    isPasswordRecovery: hasAuthenticationMethod(amr, "recovery"),
+    signedInWithPassword: hasAuthenticationMethod(amr, "password"),
+  };
 }
 
 export async function getAuthenticatedUserId(cookieHeader: string | null): Promise<string | null> {

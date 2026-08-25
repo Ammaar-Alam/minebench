@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { hasSupabaseAuthCookie } from "../../../lib/auth/account";
+import {
+  hasAuthenticationMethod,
+  hasSupabaseAuthCookie,
+} from "../../../lib/auth/account";
 import { parsePublicOAuthProvider } from "../../../lib/auth/providers";
 import { resolveRequestOrigin, safeNextPath } from "../../../lib/auth/redirects";
 import { readArenaSessionId } from "../../../lib/arena/session";
@@ -37,6 +40,9 @@ assert.throws(
 assert.equal(hasSupabaseAuthCookie("theme=dark; sb-project-auth-token=value"), true);
 assert.equal(hasSupabaseAuthCookie("sb-project-auth-token.0=value"), true);
 assert.equal(hasSupabaseAuthCookie("mb_session=value"), false);
+assert.equal(hasAuthenticationMethod([{ method: "password", timestamp: 1 }], "password"), true);
+assert.equal(hasAuthenticationMethod(["recovery"], "recovery"), true);
+assert.equal(hasAuthenticationMethod([{ method: "oauth", timestamp: 1 }], "password"), false);
 assert.equal(readArenaSessionId("a=1; mb_session=session-123; b=2"), "session-123");
 assert.equal(readArenaSessionId("a=1"), null);
 
@@ -60,6 +66,8 @@ for (const method of [
   assert.match(actions, new RegExp(`auth\\.${method}`));
 }
 assert.match(actions, /finishPublicSignIn/);
+assert.match(actions, /current_password: currentPassword/);
+assert.match(actions, /resetPasswordForEmail\(user\.email/);
 const signUpPage = readFileSync("app/(auth)/sign-up/page.tsx", "utf8");
 assert.match(signUpPage, /Confirm password/);
 assert.doesNotMatch(signUpPage, /sm:grid-cols-2/);
@@ -67,6 +75,13 @@ assert.doesNotMatch(signUpPage, /sm:grid-cols-2/);
 const passwordInput = readFileSync("components/auth/PasswordInput.tsx", "utf8");
 assert.match(passwordInput, /Show password/);
 assert.match(passwordInput, /Hide password/);
+
+const resetPasswordPage = readFileSync("app/(auth)/reset-password/page.tsx", "utf8");
+assert.match(resetPasswordPage, /Current password/);
+assert.match(resetPasswordPage, /Verify your email first/);
+
+const accountPage = readFileSync("app/account/page.tsx", "utf8");
+assert.match(accountPage, /<Suspense fallback={<PersonalRankingSkeleton \/>}>/);
 
 const oauthRoute = readFileSync("app/auth/oauth/route.ts", "utf8");
 const callbackRoute = readFileSync("app/auth/callback/route.ts", "utf8");

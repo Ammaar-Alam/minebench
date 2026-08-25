@@ -12,7 +12,10 @@ const ERROR_MESSAGES: Record<string, string> = {
   link: "This confirmation link has expired.",
   oauth: "Couldn't sign in with that provider.",
   password: "Passwords must match and use at least 8 characters.",
+  "current-password": "Enter your current password.",
+  "same-password": "Choose a different password.",
   unavailable: "Couldn't complete that request. Try again shortly.",
+  verify: "Verify your email before setting a password.",
 };
 
 const NOTICE_MESSAGES: Record<string, string> = {

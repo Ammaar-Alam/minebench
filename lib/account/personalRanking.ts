@@ -100,11 +100,13 @@ export function rankPersonalModels(input: {
 }
 
 export async function getPersonalRanking(userId: string): Promise<PersonalRanking> {
-  const global = await getGlobalBradleyTerrySnapshot();
+  const [global, totalVotes] = await Promise.all([
+    getGlobalBradleyTerrySnapshot(),
+    prisma.vote.count({
+      where: { userId, matchup: { stealthVariantId: null } },
+    }),
+  ]);
   const { eligiblePromptIds, activeModelIds } = global;
-  const totalVotes = await prisma.vote.count({
-    where: { userId, matchup: { stealthVariantId: null } },
-  });
   if (eligiblePromptIds.length === 0 || activeModelIds.length < 2) {
     return { totalVotes, ratedVotes: 0, modelsCompared: 0, models: [] };
   }

@@ -3,13 +3,13 @@ import { redirect } from "next/navigation";
 import { AuthMessage, AuthShell } from "@/components/auth/AuthShell";
 import { AuthSubmitButton } from "@/components/auth/AuthSubmitButton";
 import { PasswordInput } from "@/components/auth/PasswordInput";
-import { getCurrentAccount } from "@/lib/auth/account";
-import { updatePassword } from "../actions";
+import { getCurrentAccountSecurity } from "@/lib/auth/account";
+import { requestPasswordSetup, updatePassword } from "../actions";
 
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Choose password",
+  title: "Change password",
   robots: { index: false, follow: false },
 };
 
@@ -18,14 +18,43 @@ export default async function ResetPasswordPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
-  const account = await getCurrentAccount();
-  if (!account) redirect("/forgot-password?error=expired");
+  const security = await getCurrentAccountSecurity();
+  if (!security) redirect("/forgot-password?error=expired");
   const params = await searchParams;
+  const canSetPassword = security.isPasswordRecovery || security.signedInWithPassword;
+
+  if (!canSetPassword) {
+    return (
+      <AuthShell title="Set password" subtitle="Verify your email first.">
+        <AuthMessage error={params.error} />
+        <form action={requestPasswordSetup}>
+          <AuthSubmitButton pendingLabel="Sending…">Email link</AuthSubmitButton>
+        </form>
+      </AuthShell>
+    );
+  }
 
   return (
-    <AuthShell title="Choose password" subtitle="Use at least 8 characters.">
+    <AuthShell
+      title="Change password"
+      subtitle={
+        security.isPasswordRecovery
+          ? "Use at least 8 characters."
+          : "Confirm your current password."
+      }
+    >
       <AuthMessage error={params.error} />
       <form action={updatePassword} className="space-y-4">
+        {security.signedInWithPassword ? (
+          <div className="space-y-2 text-sm font-medium text-fg">
+            <label htmlFor="current-password">Current password</label>
+            <PasswordInput
+              id="current-password"
+              name="currentPassword"
+              autoComplete="current-password"
+            />
+          </div>
+        ) : null}
         <div className="space-y-2 text-sm font-medium text-fg">
           <label htmlFor="new-password">New password</label>
           <PasswordInput id="new-password" name="password" autoComplete="new-password" />
