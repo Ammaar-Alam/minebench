@@ -44,7 +44,6 @@ export default async function EvaluationSettingsPage({
   const refreshEndpoint =
     selectedCheckpoint?.source === "ENDPOINT" &&
     (selectedCheckpoint.status === "DRAFT" ||
-      selectedCheckpoint.status === "GENERATING" ||
       (selectedCheckpoint.status === "READY" && !selectedCheckpoint.promptCohortCurrent))
       ? selectedCheckpoint
       : null;
@@ -190,7 +189,6 @@ export default async function EvaluationSettingsPage({
                 {mutable &&
                 checkpoint.source === "ENDPOINT" &&
                 (checkpoint.status === "DRAFT" ||
-                  checkpoint.status === "GENERATING" ||
                   (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent)) ? (
                   <Link
                     href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}

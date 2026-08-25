@@ -236,7 +236,7 @@ assert.match(exportRoute, /getDeidentifiedStealthVotePage/);
 const evaluationLayout = read("app/lab/[orgSlug]/experiments/[experimentId]/layout.tsx");
 assert.match(evaluationLayout, /workspace\.status === "CLOSED"\s*\? workspace\.checkpoints/);
 assert.match(settings, /checkpoint\.source === "ENDPOINT"/);
-assert.match(settings, /checkpoint\.status === "DRAFT" \|\| checkpoint\.status === "GENERATING"/);
+assert.match(settings, /checkpoint\.status === "DRAFT"/);
 
 const generation = read("lib/stealth/generation.ts");
 assert.match(generation, /isExistingObjectUploadError/);
