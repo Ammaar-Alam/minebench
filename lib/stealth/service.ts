@@ -666,6 +666,76 @@ async function assertNoCheckpointData(
   }
 }
 
+async function purgeDraftCheckpointBuilds(
+  db: Prisma.TransactionClient,
+  variantId: string,
+  modelId: string,
+): Promise<void> {
+  const staleBuilds = await db.build.findMany({
+    where: { modelId },
+    select: {
+      id: true,
+      voxelSha256: true,
+      voxelStorageBucket: true,
+      voxelStoragePath: true,
+    },
+  });
+  if (staleBuilds.length === 0) return;
+
+  if (hasSupabaseStorageConfig()) {
+    const staleBuildIds = staleBuilds.map((build) => build.id);
+    const checksums = staleBuilds
+      .map((b) => b.voxelSha256)
+      .filter((v): v is string => Boolean(v));
+    const storageFilters = staleBuilds
+      .filter((b) => b.voxelStorageBucket && b.voxelStoragePath)
+      .map((b) => ({
+        voxelStorageBucket: b.voxelStorageBucket,
+        voxelStoragePath: b.voxelStoragePath,
+      }));
+    const surviving = await db.build.findMany({
+      where: {
+        id: { notIn: staleBuildIds },
+        OR: [
+          ...(checksums.length > 0 ? [{ voxelSha256: { in: checksums } }] : []),
+          ...storageFilters,
+        ],
+      },
+      select: { voxelSha256: true, voxelStorageBucket: true, voxelStoragePath: true },
+    });
+    const survivingChecksums = new Set(
+      surviving.map((s) => s.voxelSha256).filter((v): v is string => Boolean(v)),
+    );
+    const survivingStorageRefs = new Set(
+      surviving
+        .filter((s) => s.voxelStorageBucket && s.voxelStoragePath)
+        .map((s) => `${s.voxelStorageBucket}:${s.voxelStoragePath}`),
+    );
+    await deleteArenaBuildArtifacts({
+      retiringBuilds: staleBuilds,
+      survivingChecksums,
+      deleteStorage: deleteSupabaseStorageObjects,
+    });
+    const storageRefs = staleBuilds
+      .filter((b) => b.voxelStorageBucket && b.voxelStoragePath)
+      .filter((b) => !survivingStorageRefs.has(`${b.voxelStorageBucket}:${b.voxelStoragePath}`))
+      .map((b) => ({ bucket: b.voxelStorageBucket!, path: b.voxelStoragePath! }));
+    if (storageRefs.length > 0) {
+      await deleteSupabaseStorageObjects(storageRefs);
+    }
+  }
+
+  await db.stealthGenerationResult.deleteMany({
+    where: { run: { variantId } },
+  });
+  await db.stealthGenerationRun.deleteMany({
+    where: { variantId },
+  });
+  await db.build.deleteMany({
+    where: { modelId },
+  });
+}
+
 async function assertUploadCheckpointRetryable(
   db: Prisma.TransactionClient,
   variant: Pick<LockedVariant, "id" | "modelId" | "source">,
@@ -1381,6 +1451,9 @@ export async function configureStealthEndpoint(
       }
       if (refreshingOutdatedCheckpoint) {
         await assertCheckpointRetryable(tx, existing.id);
+      } else if (existing.status === "DRAFT") {
+        await assertCheckpointRetryable(tx, existing.id);
+        await purgeDraftCheckpointBuilds(tx, existing.id, existing.modelId);
       } else {
         await assertNoCheckpointData(tx, existing.id, existing.modelId);
       }

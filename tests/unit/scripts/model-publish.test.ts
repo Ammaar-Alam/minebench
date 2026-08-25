@@ -248,9 +248,11 @@ try {
 
 const envKeys = [
   "DATABASE_URL",
+  "DIRECT_URL",
   "ADMIN_TOKEN",
   "SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_URL",
+  "SUPABASE_SECRET_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
   "SUPABASE_STORAGE_BUCKET",
   "VERCEL_AUTOMATION_BYPASS_SECRET",
@@ -262,9 +264,11 @@ async function main() {
   try {
     process.env.DATABASE_URL =
       `postgresql://postgres:pass@db.${projectRef}.supabase.co:5432/postgres`;
+    delete process.env.DIRECT_URL;
     process.env.ADMIN_TOKEN = "test-admin-token";
     delete process.env.SUPABASE_URL;
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.SUPABASE_SECRET_KEY;
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     delete process.env.SUPABASE_STORAGE_BUCKET;
 
