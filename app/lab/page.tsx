@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 export default async function LabHomePage() {
   const identity = await getLabIdentity().catch(() => null);
   if (!identity) redirect("/lab/sign-in");
-  if (identity.memberships.length === 1) {
+  if (identity.memberships.length === 1 && !identity.user.isMineBenchAdmin) {
     redirect(`/lab/${identity.memberships[0].organization.slug}`);
   }
 
@@ -22,9 +22,19 @@ export default async function LabHomePage() {
     <div className="mx-auto w-full max-w-3xl space-y-8 py-6 sm:py-12">
       <header className="flex items-center justify-between gap-4 border-b border-border/70 pb-5">
         <h1 className="text-3xl font-semibold tracking-tight text-fg">Organizations</h1>
-        <form action={signOutLab}>
-          <button type="submit" className="mb-btn mb-btn-ghost min-h-11 px-4 text-xs">Sign out</button>
-        </form>
+        <div className="flex items-center gap-3">
+          {identity.user.isMineBenchAdmin ? (
+            <Link
+              href="/admin/private-evaluations"
+              className="mb-btn mb-btn-primary min-h-11 px-4 text-xs"
+            >
+              Admin workspace
+            </Link>
+          ) : null}
+          <form action={signOutLab}>
+            <button type="submit" className="mb-btn mb-btn-ghost min-h-11 px-4 text-xs">Sign out</button>
+          </form>
+        </div>
       </header>
 
       {identity.memberships.length > 0 ? (
@@ -45,9 +55,21 @@ export default async function LabHomePage() {
           ))}
         </div>
       ) : (
-        <section className="border-y border-border/70 py-8">
+        <section className="border-y border-border/70 py-8 space-y-4">
           <h2 className="text-lg font-medium tracking-tight text-fg">No organizations</h2>
-          <p className="mt-2 text-sm text-muted">This account has no active invitation.</p>
+          <p className="text-sm text-muted">
+            {identity.user.isMineBenchAdmin
+              ? "You are logged in as a MineBench administrator. Go to the admin workspace to approve organizations."
+              : "This account has no active invitation."}
+          </p>
+          {identity.user.isMineBenchAdmin ? (
+            <Link
+              href="/admin/private-evaluations"
+              className="mb-btn mb-btn-primary inline-flex text-sm"
+            >
+              Go to Admin workspace
+            </Link>
+          ) : null}
         </section>
       )}
     </div>
