@@ -860,6 +860,8 @@ export function LocalLab() {
                 promptText={taskPrompt}
                 label="Export GIF"
                 iconOnly
+                embedded
+                className="h-8 w-8"
               />
             }
             metrics={

@@ -995,10 +995,10 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
     <button
       type="button"
       aria-label={buttonTitle}
-      aria-describedby={iconOnly ? tooltipId : undefined}
+      aria-describedby={iconOnly && !embedded ? tooltipId : undefined}
       aria-busy={busy || undefined}
       aria-disabled={isUnavailable || busy}
-      title={iconOnly ? undefined : buttonTitle}
+      title={iconOnly && !embedded ? undefined : buttonTitle}
       onClick={() => void handleExport()}
       disabled={isUnavailable}
       className={`inline-flex select-none items-center justify-center font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${

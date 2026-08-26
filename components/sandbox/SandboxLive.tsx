@@ -1298,7 +1298,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         exportLabel={modelName}
         exportPrompt={prompt}
         actions={
-          <div className="flex items-center gap-1">
+          <>
             {r?.customBuildPageUrl ? (
               <Link
                 className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
@@ -1325,7 +1325,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                   />
                 </svg>
               </a>
-            ) : !isDurableResult ? (
+            ) : (
               <button
                 type="button"
                 aria-label="Export JSON"
@@ -1351,17 +1351,17 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                   />
                 </svg>
               </button>
-            ) : null}
-            {!isDurableResult ? (
-              <SandboxGifExportButton
-                targets={gifTargets}
-                promptText={prompt}
-                cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
-                iconOnly
-                label="Export GIF"
-              />
-            ) : null}
-          </div>
+            )}
+            <SandboxGifExportButton
+              targets={gifTargets}
+              promptText={prompt}
+              cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
+              iconOnly
+              embedded
+              className="h-8 w-8"
+              label="Export GIF"
+            />
+          </>
         }
       />
     );
@@ -1772,36 +1772,23 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
           </div>
 
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
-            <SandboxGifExportButton
-              targets={compareTargets}
-              promptText={prompt}
-              cancelKey={`${inputSignature}:${compareTargets
-                .map((target) => `${target.modelName}:${target.blockCount}`)
-                .join("|")}`}
-              label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
-            />
-            {signedIn ? (
-              <Link href="/account#builds" className="text-xs text-muted hover:text-fg">
-                View saved builds
-              </Link>
+            {selectedModels.length > 1 && compareTargets.length === selectedModels.length ? (
+              <SandboxGifExportButton
+                targets={compareTargets}
+                promptText={prompt}
+                cancelKey={`${inputSignature}:${compareTargets
+                  .map((target) => `${target.modelName}:${target.blockCount}`)
+                  .join("|")}`}
+                label="Export comparison GIF"
+              />
             ) : null}
-            <div className="flex items-center gap-2">
-              {running ? (
-                <button
-                  className="mb-btn h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={stopGenerate}
-                >
-                  Stop
-                </button>
-              ) : null}
-              <button
-                className="mb-btn mb-btn-primary h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={running || selectedModels.length === 0 || !prompt.trim()}
-                onClick={() => void runGenerate()}
-              >
-                {running ? "Generating…" : "Generate"}
-              </button>
-            </div>
+            <button
+              className={`mb-btn ml-auto h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50 ${running ? "" : "mb-btn-primary"}`}
+              disabled={!running && (selectedModels.length === 0 || !prompt.trim())}
+              onClick={running ? stopGenerate : () => void runGenerate()}
+            >
+              {running ? "Stop" : "Generate"}
+            </button>
           </div>
       </div>
 

@@ -2013,6 +2013,8 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                             promptText={activePrompt.promptText}
                             cancelKey={`${activePrompt.promptId}:${activeBuildId ?? "none"}:${activeLoadedBuild.variant}`}
                             iconOnly
+                            embedded
+                            className="h-8 w-8"
                             label="Export GIF"
                           />
                         ) : null}

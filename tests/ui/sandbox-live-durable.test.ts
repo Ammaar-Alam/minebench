@@ -150,9 +150,13 @@ assert.ok(
 assert.ok(
   sourceText.includes("<GenerationPreflightDialog") &&
     sourceText.includes("void runGenerate(true)") &&
-    sourceText.includes("View saved builds") &&
+    sourceText.includes("customBuildPageUrl") &&
+    sourceText.includes('label="Export GIF"') &&
+    sourceText.includes("embedded") &&
+    !sourceText.includes("View saved builds") &&
+    !sourceText.includes('"Generating…"') &&
     !sourceText.includes("DURABLE_CUSTOM_BUILDS_ENABLED"),
-  "preflight continuation and signed-in saved-state navigation should remain visible without a feature flag",
+  "preflight continuation and renderer-owned saved build actions should remain visible without duplicate page controls",
 );
 
 console.log("sandbox saved-generation contract checks passed");

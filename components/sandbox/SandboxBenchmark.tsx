@@ -1075,6 +1075,8 @@ export function SandboxBenchmark() {
                   promptText={selectedPromptText}
                   cancelKey={`${promptId}:${slot}:${build.buildId}:${model.key}`}
                   iconOnly
+                  embedded
+                  className="h-8 w-8"
                   label="Export GIF"
                 />
               ) : null
