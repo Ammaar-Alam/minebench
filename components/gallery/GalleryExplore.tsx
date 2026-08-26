@@ -195,7 +195,12 @@ export function GalleryExplore({
   return (
     <div className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-        <h1 className="font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Gallery</h1>
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Gallery</h1>
+          <p className="mt-2 max-w-md text-sm text-muted">
+            Use a prompt, build it, share the result.
+          </p>
+        </div>
         <div className="flex flex-wrap items-center gap-3">
           <Link href={signedIn ? "/account#builds" : "/sign-in?next=/account"} className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-muted transition-colors hover:text-fg motion-reduce:transition-none">Builds</Link>
           {signedIn && !suspended ? (

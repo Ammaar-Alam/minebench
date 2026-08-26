@@ -85,6 +85,17 @@ const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
 const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
+const DIRECT_PROVIDER_KEYS = [
+  ["openai", "OpenAI"],
+  ["anthropic", "Anthropic"],
+  ["gemini", "Gemini"],
+  ["moonshot", "Moonshot"],
+  ["deepseek", "DeepSeek"],
+  ["minimax", "MiniMax"],
+  ["xai", "xAI"],
+  ["meta", "Meta Model API"],
+  ["zai", "Z.AI"],
+] as const satisfies ReadonlyArray<readonly [keyof ProviderApiKeys, string]>;
 const OPENROUTER_MODEL_VALUE = "__openrouter__";
 const CUSTOM_MODEL_VALUE = "__custom_api__";
 const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
@@ -95,7 +106,7 @@ const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
 const DEFAULT_MODEL_A: ModelKey =
-  ENABLED_MODELS.find((model) => model.key === "openai_gpt_5_6_luna")?.key ?? FALLBACK_MODEL_A;
+  ENABLED_MODELS.find((model) => model.key === "gemini_3_7_flash")?.key ?? FALLBACK_MODEL_A;
 const DEFAULT_MODEL_B: ModelKey =
   ENABLED_MODELS.find(
     (model) => model.key === "openai_gpt_5_4_nano" && model.key !== DEFAULT_MODEL_A
@@ -461,7 +472,7 @@ function customBuildPalette(value: string, fallback: Palette): Palette {
 }
 
 export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: string; signedIn: boolean }) {
-  const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
+  const [prompt, setPrompt] = useState(() => initialPrompt ?? "");
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
@@ -484,6 +495,9 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
   const [running, setRunning] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [showGenerationPreflight, setShowGenerationPreflight] = useState(false);
+  const savedKeyCount = Object.values(providerKeys).filter((value) => Boolean(value?.trim())).length;
+  const [apiKeysOpen, setApiKeysOpen] = useState(false);
+  const [providerKeysOpen, setProviderKeysOpen] = useState(false);
   const [, forceRender] = useState(0);
   const generateAbortRef = useRef<AbortController | null>(null);
   const customBuildAbortRef = useRef<AbortController | null>(null);
@@ -1368,433 +1382,369 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
   });
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="mb-panel p-4 sm:p-5">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(21rem,0.56fr)_minmax(0,1fr)]">
+      <div className="mb-panel flex h-fit flex-col gap-5 p-4 sm:p-5">
         <div className="flex flex-col gap-1.5">
-          <div className="font-display text-2xl font-semibold tracking-tight">
-            Live generate
-          </div>
-          <div className="text-sm text-muted">
-            Generate a build from your own prompt, or compare two models side by side.
-          </div>
+          <div className="font-display text-2xl font-semibold tracking-tight">Generate</div>
+          <div className="text-sm text-muted">Build from your own prompt.</div>
         </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <section className="flex flex-col">
-              <label className="flex flex-col gap-2">
-                <span className="mb-eyebrow">Prompt</span>
-                <textarea
-                  className="mb-field min-h-44 resize-none py-3"
-                  placeholder="Describe the build — shape, materials, scale, mood…"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                />
-              </label>
-            </section>
+        <label className="flex flex-col gap-2">
+          <span className="mb-eyebrow">Prompt</span>
+          <textarea
+            className="mb-field min-h-36 resize-none py-3"
+            placeholder="Describe the build..."
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </label>
 
-            <div className="flex flex-col gap-5">
-              <section>
-                <div className="mb-eyebrow">Build settings</div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Size</div>
-                    <div className="relative">
-                      <select
-                        className="mb-field h-10 w-full"
-                        value={gridSize}
-                        onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
-                      >
-                        <option value={64}>64</option>
-                        <option value={256}>256</option>
-                        <option value={512}>512</option>
-                      </select>
-                    </div>
-                  </label>
+        <section>
+          <div className="mb-eyebrow">Build</div>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <label className="flex min-w-0 flex-col gap-1">
+              <div className="text-xs font-medium text-muted">Size</div>
+              <select
+                className="mb-field h-10 w-full"
+                value={gridSize}
+                onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
+              >
+                <option value={64}>64</option>
+                <option value={256}>256</option>
+                <option value={512}>512</option>
+              </select>
+            </label>
 
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Palette</div>
-                    <div className="relative">
-                      <select
-                        className="mb-field h-10 w-full"
-                        value={palette}
-                        onChange={(e) => setPalette(e.target.value as Palette)}
-                      >
-                        <option value="simple">Simple</option>
-                        <option value="advanced">Advanced</option>
-                      </select>
-                    </div>
-                  </label>
-                </div>
-              </section>
+            <label className="flex min-w-0 flex-col gap-1">
+              <div className="text-xs font-medium text-muted">Palette</div>
+              <select
+                className="mb-field h-10 w-full"
+                value={palette}
+                onChange={(e) => setPalette(e.target.value as Palette)}
+              >
+                <option value="simple">Simple</option>
+                <option value="advanced">Advanced</option>
+              </select>
+            </label>
+          </div>
+        </section>
 
-              <section>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="mb-eyebrow">Models</div>
-                  <button
-                    type="button"
-                    aria-pressed={compareEnabled}
-                    onClick={() => setCompareEnabled((v) => !v)}
-                    disabled={running || !canCompare}
-                    className={`mb-btn h-7 px-2.5 text-[11px] ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
-                    {compareEnabled ? "Stop comparing" : "Compare models"}
-                  </button>
-                </div>
-
-                <div className={`mt-3 grid grid-cols-1 gap-3 ${compareEnabled ? "sm:grid-cols-2" : ""}`}>
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">{compareEnabled ? "Model A" : "Model"}</div>
-                    <div className="relative">
-                      <select
-                        className="mb-field h-11 w-full"
-                        value={modelPair.a}
-                        onChange={(e) => handleModelChange("a", e.target.value)}
-                        disabled={running}
-                      >
-                        {modelGroups.map((group) => (
-                          <optgroup key={group.label} label={group.label}>
-                            {group.models.map((model) => (
-                              <option
-                                key={model.key}
-                                value={model.key}
-                                disabled={
-                                  compareEnabled &&
-                                  modelPair.b != null &&
-                                  !isAdHocModelValue(modelPair.b) &&
-                                  model.key === modelPair.b
-                                }
-                              >
-                                {model.displayName}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                        <optgroup label="OpenRouter">
-                          <option
-                            value={OPENROUTER_MODEL_VALUE}
-                            disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
-                          >
-                            Other OpenRouter model
-                          </option>
-                        </optgroup>
-                        <optgroup label="Custom">
-                          <option
-                            value={CUSTOM_MODEL_VALUE}
-                            disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
-                          >
-                            OpenAI-compatible model
-                          </option>
-                        </optgroup>
-                      </select>
-                    </div>
-                  </label>
-
-                  {compareEnabled ? (
-                    <label className="flex flex-col gap-1">
-                      <div className="text-xs font-medium text-muted">Model B</div>
-                      <div className="relative">
-                        <select
-                          className="mb-field h-11 w-full"
-                          value={modelPair.b ?? ""}
-                          onChange={(e) => handleModelChange("b", e.target.value)}
-                          disabled={running || !canCompare}
-                        >
-                          <option value="" disabled>
-                            Select model
-                          </option>
-                          {modelGroups.map((group) => (
-                            <optgroup key={group.label} label={group.label}>
-                              {group.models.map((model) => (
-                                <option
-                                  key={model.key}
-                                  value={model.key}
-                                  disabled={!isAdHocModelValue(modelPair.a) && model.key === modelPair.a}
-                                >
-                                  {model.displayName}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                          <optgroup label="OpenRouter">
-                            <option value={OPENROUTER_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
-                              Other OpenRouter model
-                            </option>
-                          </optgroup>
-                          <optgroup label="Custom">
-                            <option value={CUSTOM_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
-                              OpenAI-compatible model
-                            </option>
-                          </optgroup>
-                        </select>
-                      </div>
-                    </label>
-                  ) : null}
-                </div>
-
-                {usesAdHocModel ? (
-                  <div className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3">
-                    <div className="text-xs font-medium text-muted">
-                      {usesOpenRouterModel ? "OpenRouter model" : "OpenAI-compatible model"}
-                    </div>
-                    <div className="mt-3 grid grid-cols-1 gap-3">
-                      {usesOpenAiCompatibleModel ? (
-                        <label className="flex flex-col gap-1">
-                          <div className="text-xs font-medium text-muted">Display name</div>
-                          <input
-                            className="mb-field h-10 w-full"
-                            value={customModel.displayName}
-                            onChange={(e) => updateCustomModel({ displayName: e.target.value })}
-                            disabled={running}
-                            placeholder="My model"
-                          />
-                        </label>
-                      ) : null}
-                      <label className="flex flex-col gap-1">
-                        <div className="text-xs font-medium text-muted">Model ID</div>
-                        <input
-                          className="mb-field h-10 w-full"
-                          value={customModel.modelId}
-                          onChange={(e) => updateCustomModel({ modelId: e.target.value })}
-                          disabled={running}
-                          placeholder={usesOpenRouterModel ? "stealth/ox-alpha" : undefined}
-                        />
-                      </label>
-                      {usesOpenAiCompatibleModel ? (
-                        <label className="flex flex-col gap-1">
-                          <div className="text-xs font-medium text-muted">Chat completions URL</div>
-                          <input
-                            className="mb-field h-10 w-full"
-                            value={customModel.baseUrl}
-                            onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
-                            disabled={running}
-                            type="url"
-                          />
-                        </label>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </section>
-            </div>
+        <section>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="mb-eyebrow">Model</div>
+            <button
+              type="button"
+              aria-pressed={compareEnabled}
+              onClick={() => setCompareEnabled((v) => !v)}
+              disabled={running || !canCompare}
+              className={`mb-btn h-7 px-2.5 text-[11px] ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
+            >
+              {compareEnabled ? "Single" : "Compare"}
+            </button>
           </div>
 
-          <div className="mt-5 border-t border-border/70 pt-4 sm:pt-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="mb-eyebrow">API keys</div>
-                <div className="mt-1 text-xs text-muted">Saved in this browser.</div>
+          <div className="mt-3 grid grid-cols-1 gap-3">
+            <label className="flex flex-col gap-1">
+              <div className="text-xs font-medium text-muted">{compareEnabled ? "Model A" : "Model"}</div>
+              <select
+                className="mb-field h-11 w-full"
+                value={modelPair.a}
+                onChange={(e) => handleModelChange("a", e.target.value)}
+                disabled={running}
+              >
+                {modelGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.models.map((model) => (
+                      <option
+                        key={model.key}
+                        value={model.key}
+                        disabled={
+                          compareEnabled &&
+                          modelPair.b != null &&
+                          !isAdHocModelValue(modelPair.b) &&
+                          model.key === modelPair.b
+                        }
+                      >
+                        {model.displayName}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+                <optgroup label="OpenRouter">
+                  <option
+                    value={OPENROUTER_MODEL_VALUE}
+                    disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
+                  >
+                    Other OpenRouter model
+                  </option>
+                </optgroup>
+                <optgroup label="Custom">
+                  <option
+                    value={CUSTOM_MODEL_VALUE}
+                    disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
+                  >
+                    OpenAI-compatible model
+                  </option>
+                </optgroup>
+              </select>
+            </label>
+
+            {compareEnabled ? (
+              <label className="flex flex-col gap-1">
+                <div className="text-xs font-medium text-muted">Model B</div>
+                <select
+                  className="mb-field h-11 w-full"
+                  value={modelPair.b ?? ""}
+                  onChange={(e) => handleModelChange("b", e.target.value)}
+                  disabled={running || !canCompare}
+                >
+                  <option value="" disabled>
+                    Select model
+                  </option>
+                  {modelGroups.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.models.map((model) => (
+                        <option
+                          key={model.key}
+                          value={model.key}
+                          disabled={!isAdHocModelValue(modelPair.a) && model.key === modelPair.a}
+                        >
+                          {model.displayName}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                  <optgroup label="OpenRouter">
+                    <option value={OPENROUTER_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
+                      Other OpenRouter model
+                    </option>
+                  </optgroup>
+                  <optgroup label="Custom">
+                    <option value={CUSTOM_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
+                      OpenAI-compatible model
+                    </option>
+                  </optgroup>
+                </select>
+              </label>
+            ) : null}
+          </div>
+
+          {usesAdHocModel ? (
+            <div className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3">
+              <div className="text-xs font-medium text-muted">
+                {usesOpenRouterModel ? "OpenRouter model" : "OpenAI-compatible model"}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="mt-3 grid grid-cols-1 gap-3">
+                {usesOpenAiCompatibleModel ? (
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Display name</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      value={customModel.displayName}
+                      onChange={(e) => updateCustomModel({ displayName: e.target.value })}
+                      disabled={running}
+                      placeholder="My model"
+                    />
+                  </label>
+                ) : null}
+                <label className="flex flex-col gap-1">
+                  <div className="text-xs font-medium text-muted">Model ID</div>
+                  <input
+                    className="mb-field h-10 w-full"
+                    value={customModel.modelId}
+                    onChange={(e) => updateCustomModel({ modelId: e.target.value })}
+                    disabled={running}
+                    placeholder={usesOpenRouterModel ? "stealth/ox-alpha" : undefined}
+                  />
+                </label>
+                {usesOpenAiCompatibleModel ? (
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Chat completions URL</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      value={customModel.baseUrl}
+                      onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
+                      disabled={running}
+                      type="url"
+                    />
+                  </label>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        {requestError ? (
+          <div className="rounded-md border border-danger/30 bg-danger/[0.08] px-3 py-2 text-xs text-danger">
+            {requestError}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
+          {selectedModels.length > 1 && compareTargets.length === selectedModels.length ? (
+            <SandboxGifExportButton
+              targets={compareTargets}
+              promptText={comparePrompt}
+              cancelKey={`${inputSignature}:${compareTargets
+                .map((target) => `${target.modelName}:${target.blockCount}`)
+                .join("|")}`}
+              label="Export comparison GIF"
+            />
+          ) : null}
+          <button
+            className={`mb-btn ml-auto h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50 ${running ? "" : "mb-btn-primary"}`}
+            disabled={!running && (selectedModels.length === 0 || !prompt.trim())}
+            onClick={running ? stopGenerate : () => void runGenerate()}
+          >
+            {running ? "Stop" : "Generate"}
+          </button>
+        </div>
+      </div>
+
+      <div className={`grid min-w-0 grid-cols-1 gap-4 ${selectedModels.length > 1 ? "2xl:grid-cols-2" : ""}`}>
+        {resultCards}
+      </div>
+
+      <section className="border-t border-border/70 xl:col-span-2">
+        <button
+          type="button"
+          aria-expanded={apiKeysOpen}
+          aria-controls="sandbox-api-keys"
+          className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          onClick={() => setApiKeysOpen((open) => !open)}
+        >
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="text-sm font-semibold text-fg">API keys</span>
+            <span className="truncate text-xs text-muted">
+              {savedKeyCount ? `${savedKeyCount} saved in this browser` : "None saved"}
+            </span>
+          </span>
+          <svg
+            aria-hidden="true"
+            className={`mb-disclosure-chevron h-3 w-3 shrink-0 text-muted ${apiKeysOpen ? "is-open" : ""}`}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 6.5L8 10.5L12 6.5" />
+          </svg>
+        </button>
+
+        {apiKeysOpen ? (
+          <div id="sandbox-api-keys" className="mb-fade-in pb-4 pt-2">
+            <div className="flex min-h-11 items-center justify-end gap-4">
+              {savedKeyCount ? (
                 <button
                   type="button"
-                  className="mb-btn mb-btn-ghost h-7 px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex min-h-11 items-center rounded-sm px-1 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
                   onClick={() => {
                     setProviderKeys({});
                     setRequestError(null);
                   }}
                   disabled={running}
                 >
-                  Clear keys
+                  Clear
                 </button>
-                <button
-                  type="button"
-                  aria-pressed={showKeys}
-                  className={`mb-btn h-7 px-2.5 text-[11px] ${showKeys ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
-                  onClick={() => setShowKeys((v) => !v)}
-                  disabled={running}
-                >
-                  {showKeys ? "Hide" : "Show"}
-                </button>
-              </div>
+              ) : null}
+              <button
+                type="button"
+                aria-pressed={showKeys}
+                className="inline-flex min-h-11 items-center rounded-sm px-1 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+                onClick={() => setShowKeys((visible) => !visible)}
+                disabled={running}
+              >
+                {showKeys ? "Hide" : "Show"}
+              </button>
             </div>
 
-            {requestError ? (
-              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-                {requestError}
-              </div>
-            ) : null}
-
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="flex flex-col gap-1 md:col-span-2">
-                <div className="text-xs font-medium text-muted">OpenRouter API key</div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <div className="text-xs font-medium text-muted">OpenRouter</div>
                 <input
                   className="mb-field h-10 w-full"
                   type={showKeys ? "text" : "password"}
                   value={providerKeys.openrouter ?? ""}
-                  onChange={(e) => setProviderKeys((prev) => ({ ...prev, openrouter: e.target.value }))}
+                  onChange={(event) =>
+                    setProviderKeys((current) => ({ ...current, openrouter: event.target.value }))
+                  }
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="Paste your OpenRouter key"
+                  placeholder="Paste key"
                 />
               </label>
 
               {usesOpenAiCompatibleModel ? (
-                <label className="flex flex-col gap-1 md:col-span-2">
-                  <div className="text-xs font-medium text-muted">OpenAI-compatible API key</div>
+                <label className="flex flex-col gap-1">
+                  <div className="text-xs font-medium text-muted">OpenAI-compatible</div>
                   <input
                     className="mb-field h-10 w-full"
                     type={showKeys ? "text" : "password"}
                     value={providerKeys.custom ?? ""}
-                    onChange={(e) =>
-                      setProviderKeys((prev) => ({ ...prev, custom: e.target.value }))
+                    onChange={(event) =>
+                      setProviderKeys((current) => ({ ...current, custom: event.target.value }))
                     }
                     autoComplete="off"
                     spellCheck={false}
-                    placeholder="Paste the key for this server"
+                    placeholder="Paste key"
                   />
                 </label>
               ) : null}
+            </div>
 
-              <details className="md:col-span-2 rounded-md border border-border/70 bg-bg/35 px-3 py-2">
-                <summary className="cursor-pointer select-none text-xs font-medium text-muted">
-                  Use a provider-specific key instead (optional)
-                </summary>
-                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">OpenAI</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.openai ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, openai: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your OpenAI key"
-                    />
-                  </label>
+            <div className="mt-5 border-t border-border/70 pt-2">
+              <button
+                type="button"
+                aria-expanded={providerKeysOpen}
+                aria-controls="sandbox-provider-keys"
+                className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 text-left text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"
+                onClick={() => setProviderKeysOpen((open) => !open)}
+              >
+                Provider keys
+                <svg
+                  aria-hidden="true"
+                  className={`mb-disclosure-chevron h-3 w-3 shrink-0 ${providerKeysOpen ? "is-open" : ""}`}
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M4 6.5L8 10.5L12 6.5" />
+                </svg>
+              </button>
 
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Anthropic</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.anthropic ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, anthropic: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Anthropic key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Gemini</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.gemini ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, gemini: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Google AI key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Moonshot</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.moonshot ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, moonshot: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Moonshot key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">DeepSeek</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.deepseek ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, deepseek: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your DeepSeek key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">MiniMax</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.minimax ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, minimax: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your MiniMax key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">xAI</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.xai ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, xai: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your xAI key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Meta Model API</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.meta ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, meta: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Meta Model API key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Z.AI</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.zai ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, zai: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Z.AI key"
-                    />
-                  </label>
+              {providerKeysOpen ? (
+                <div
+                  id="sandbox-provider-keys"
+                  className="mb-fade-in grid grid-cols-1 gap-3 pt-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {DIRECT_PROVIDER_KEYS.map(([provider, label]) => (
+                    <label key={provider} className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">{label}</div>
+                      <input
+                        className="mb-field h-10 w-full"
+                        type={showKeys ? "text" : "password"}
+                        value={providerKeys[provider] ?? ""}
+                        onChange={(event) =>
+                          setProviderKeys((current) => ({ ...current, [provider]: event.target.value }))
+                        }
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste key"
+                      />
+                    </label>
+                  ))}
                 </div>
-              </details>
+              ) : null}
             </div>
           </div>
+        ) : null}
+      </section>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
-            {selectedModels.length > 1 && compareTargets.length === selectedModels.length ? (
-              <SandboxGifExportButton
-                targets={compareTargets}
-                promptText={comparePrompt}
-                cancelKey={`${inputSignature}:${compareTargets
-                  .map((target) => `${target.modelName}:${target.blockCount}`)
-                  .join("|")}`}
-                label="Export comparison GIF"
-              />
-            ) : null}
-            <button
-              className={`mb-btn ml-auto h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50 ${running ? "" : "mb-btn-primary"}`}
-              disabled={!running && (selectedModels.length === 0 || !prompt.trim())}
-              onClick={running ? stopGenerate : () => void runGenerate()}
-            >
-              {running ? "Stop" : "Generate"}
-            </button>
-          </div>
-      </div>
-
-      <div className={`grid grid-cols-1 gap-4 ${selectedModels.length > 1 ? "md:grid-cols-2" : ""}`}>
-        {resultCards}
-      </div>
       <GenerationPreflightDialog
         open={showGenerationPreflight}
         signInHref={`/sign-in?next=${encodeURIComponent(`/sandbox?mode=live&prompt=${encodeURIComponent(prompt)}`)}`}

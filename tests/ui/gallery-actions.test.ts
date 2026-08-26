@@ -35,7 +35,6 @@ assert.ok(
     yours.includes("downloadSavedGenerationJson") &&
     yours.includes("SavedBuildDialog") &&
     yours.includes("generation.expandedBytes") &&
-    yours.includes("generation.storedBytes") &&
     yours.includes("headerMeta=") &&
     yours.includes("SHA-256 ") &&
     yours.includes("hover:after:scale-x-100") &&
@@ -43,6 +42,17 @@ assert.ok(
     !yours.includes("<VoxelEmptyState") &&
     yours.includes("embedded"),
   "saved builds should open privately, preserve lifecycle placeholders, and expose owner verification details",
+);
+assert.ok(
+  yours.includes('fetch("/api/generations", { cache: "no-store", signal: controller.signal })') &&
+    yours.includes("setItems(page.items)") &&
+    yours.includes("setCursor(page.nextCursor)"),
+  "saved builds should refresh their first page on mount instead of trusting stale route props",
+);
+assert.equal(
+  yours.includes("generation.storedBytes"),
+  false,
+  "saved builds should not expose internal compressed-storage accounting",
 );
 assert.ok(
   [page, galleryDetailPage, sandboxPage].every((source) => source.includes("getCurrentAccount().catch(() => null)")),

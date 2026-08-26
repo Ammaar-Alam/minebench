@@ -172,5 +172,20 @@ assert.ok(
     sourceText.includes("exportPrompt={resultPrompt}"),
   "durable exports should expand stored JSON and retain the submitted prompt snapshot",
 );
+assert.ok(
+  sourceText.includes('aria-controls="sandbox-api-keys"') &&
+    sourceText.includes("xl:col-span-2") &&
+    sourceText.includes("mb-disclosure-chevron") &&
+    !sourceText.includes(">Connection</span>") &&
+    !sourceText.includes(">Manage</span>"),
+  "API keys should use a flat full-width disclosure with literal labels and shared motion",
+);
+assert.ok(
+  sourceText.includes('model.key === "gemini_3_7_flash"') &&
+    !sourceText.includes('model.key === "openai_gpt_5_6_luna"') &&
+    sourceText.includes('useState(() => initialPrompt ?? "")') &&
+    !sourceText.includes("a pirate ship with sails"),
+  "Generate should start blank with Gemini 3.7 Flash selected",
+);
 
 console.log("sandbox saved-generation contract checks passed");
