@@ -296,7 +296,12 @@ function SavedBuildDialog({
             ) : undefined}
           />
           {downloadError ? <p role="status" className="mt-2 px-1 text-sm text-danger">{downloadError}</p> : null}
-          {generation.sha256 ? <p className="mt-3 break-all px-1 font-mono text-xs text-muted">SHA-256 {generation.sha256}</p> : null}
+          {generation.sha256 ? (
+            <details className="mt-3 w-fit px-1 text-xs text-muted">
+              <summary className="cursor-pointer list-none py-1 hover:text-fg">Build details</summary>
+              <p className="mt-1 break-all font-mono">SHA-256 {generation.sha256}</p>
+            </details>
+          ) : null}
         </div>
       </div>
     </dialog>

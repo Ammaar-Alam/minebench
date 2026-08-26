@@ -315,7 +315,7 @@ export function VoxelViewerCard({
                 ) : null}
               </div>
               {build ? (
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs">
+                <div className="mt-1.5 flex flex-wrap items-center gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs [&>span+span]:before:mx-2 [&>span+span]:before:text-border [&>span+span]:before:content-['·']">
                   <span className="whitespace-nowrap">{blockCount.toLocaleString()} blocks</span>
                   {jsonSize ? <span className="whitespace-nowrap">{jsonSize} JSON</span> : null}
                   {timing ? <span className="whitespace-nowrap">{timing}</span> : null}
