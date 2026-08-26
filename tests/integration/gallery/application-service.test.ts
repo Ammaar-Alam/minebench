@@ -20,6 +20,7 @@ async function main() {
     getSavedGeneration,
     listSavedGenerations,
     removeSavedGeneration,
+    retrySavedGeneration,
   } = await import("../../../lib/generations/service");
 
   try {
@@ -51,12 +52,40 @@ async function main() {
     });
     assert.equal(rows.length, 2);
     assert.equal(rows.every((row) => row.jobs.length === 1), true);
+    assert.equal(rows.every((row) => row.jobs[0]?.maxAttempts === 1), true);
     assert.equal(rows.every((row) => row.secret?.keyCiphertext !== "request-only-secret"), true);
     assert.notEqual(rows[0]?.secret?.keyCiphertext, rows[1]?.secret?.keyCiphertext);
 
     assert.equal(await getSavedGeneration(otherId, created[0]!.id), null);
     assert.equal((await getSavedGeneration(ownerId, created[0]!.id))?.prompt, "A tiny observatory");
     assert.equal((await listSavedGenerations(ownerId, { limit: 10 })).items.length, 2);
+
+    await db.customBuild.update({
+      where: { id: rows[0]!.id },
+      data: {
+        status: "failed",
+        currentStage: "failed",
+        completedAt: new Date(),
+        errorCode: "generation_failed",
+        errorMessage: "No valid build was returned.",
+        errorRetryable: true,
+        progress: { attempt: 2, reason: "Build footprint too small." },
+      },
+    });
+    await db.customBuildJob.updateMany({
+      where: { customBuildId: rows[0]!.id },
+      data: { status: "failed", completedAt: new Date() },
+    });
+    const retried = await retrySavedGeneration(ownerId, created[0]!.id);
+    assert.equal(retried.status, "queued");
+    assert.equal(retried.retryReason, null);
+    const retriedJobs = await db.customBuildJob.findMany({ where: { customBuildId: rows[0]!.id } });
+    assert.equal(retriedJobs.length, 2);
+    assert.equal(retriedJobs.at(-1)?.maxAttempts, 1);
+    await assert.rejects(
+      () => retrySavedGeneration(ownerId, created[0]!.id),
+      (error: unknown) => error instanceof GenerationServiceError && error.code === "not_retryable",
+    );
 
     await db.customBuildArtifact.create({
       data: {

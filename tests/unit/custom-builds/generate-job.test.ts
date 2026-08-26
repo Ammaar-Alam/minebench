@@ -207,6 +207,11 @@ async function main() {
       !generateJobSource.includes("gzipBytes(fullBytes)"),
     "canonical artifacts should be serialized and compressed without whole-build buffers",
   );
+  assert.ok(
+    generateJobSource.includes("const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2") &&
+      generateJobSource.includes("maxAttempts: CUSTOM_BUILD_MODEL_MAX_ATTEMPTS"),
+    "durable generations should make at most one automatic repair request",
+  );
 
   assert.equal(
     isTerminalCustomBuildGenerateError("OpenAI error 401: invalid_api_key"),

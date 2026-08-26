@@ -43,15 +43,18 @@ assert.ok(
     yours.includes("SHA-256 ") &&
     yours.includes("hover:after:scale-x-100") &&
     yours.includes('generation.status === "queued" || generation.status === "running"') &&
-    !yours.includes("<VoxelEmptyState") &&
+    yours.includes("<VoxelEmptyState") &&
+    yours.includes('generation.error?.retryable') &&
+    yours.includes('/retry`') &&
     yours.includes("embedded"),
-  "saved builds should open privately, preserve lifecycle placeholders, and expose owner verification details",
+  "saved builds should open privately, reuse lifecycle placeholders, support retry, and expose owner verification details",
 );
 assert.ok(
   yours.includes("publishGenerationToGallery") &&
     sandboxLive.includes("<GenerationGalleryButton") &&
     sandboxLive.includes("singleGalleryResult") &&
     sandboxLive.includes('r?.status === "success"') &&
+    sandboxLive.includes("retryCustomBuild") &&
     galleryButton.includes("Add to Gallery") &&
     galleryButton.includes("postAnonymously"),
   "successful Generate results should reuse the Gallery submission path beside Generate",

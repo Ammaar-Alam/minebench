@@ -3,7 +3,6 @@ import { Prisma, type CustomBuildArtifactKind } from "@prisma/client";
 import type { GenerateModelRequest, PaletteMode, ProviderApiKeys } from "@/lib/ai/types";
 import { sha256Hex } from "@/lib/custom-builds/hash";
 import { generateCustomBuildPublicId } from "@/lib/custom-builds/ids";
-import { getCustomBuildJobMaxAttempts } from "@/lib/custom-builds/jobs";
 import { encryptProviderKey, encryptSecretValue } from "@/lib/custom-builds/secrets";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
@@ -12,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
+const GENERATE_JOB_MAX_ATTEMPTS = 1;
 
 export class GenerationServiceError extends Error {
   constructor(
@@ -45,6 +45,7 @@ const generationSelect = {
   completedAt: true,
   status: true,
   currentStage: true,
+  progress: true,
   promptText: true,
   gridSize: true,
   palette: true,
@@ -77,9 +78,26 @@ const generationSelect = {
 
 type GenerationRow = Prisma.CustomBuildGetPayload<{ select: typeof generationSelect }>;
 
+function readGenerationProgress(value: Prisma.JsonValue | null): {
+  attempt: number | null;
+  reason: string | null;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { attempt: null, reason: null };
+  }
+  const attempt = typeof value.attempt === "number" && Number.isFinite(value.attempt)
+    ? Math.max(1, Math.floor(value.attempt))
+    : null;
+  const reason = typeof value.reason === "string" && value.reason.trim()
+    ? value.reason.trim()
+    : null;
+  return { attempt, reason };
+}
+
 function serializeGeneration(row: GenerationRow) {
   const artifactKinds = new Set(row.artifacts.map((artifact) => artifact.kind));
   const artifactsAvailable = row.status === "succeeded";
+  const progress = readGenerationProgress(row.progress);
   const viewerKind = artifactKinds.has("viewer_mbf1")
     ? "viewer_mbf1"
     : artifactKinds.has("viewer_mbv4")
@@ -93,6 +111,8 @@ function serializeGeneration(row: GenerationRow) {
     completedAt: row.completedAt?.toISOString() ?? null,
     status: row.status,
     stage: row.currentStage,
+    attempt: progress.attempt,
+    retryReason: progress.reason,
     prompt: row.promptText,
     gridSize: row.gridSize,
     palette: row.palette,
@@ -175,7 +195,6 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
   }
 
   const now = new Date();
-  const maxAttempts = getCustomBuildJobMaxAttempts();
   const prepared = resolved.map((model) => {
     const id = randomUUID();
     const publicId = generateCustomBuildPublicId();
@@ -229,7 +248,7 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
             create: {
               type: "generate",
               status: "queued",
-              maxAttempts,
+              maxAttempts: GENERATE_JOB_MAX_ATTEMPTS,
             },
           },
           events: {
@@ -308,6 +327,90 @@ export async function getSavedGeneration(ownerId: string, publicId: string) {
     select: generationSelect,
   });
   return row ? serializeGeneration(row) : null;
+}
+
+export async function retrySavedGeneration(ownerId: string, publicId: string) {
+  const now = new Date();
+  const outcome = await prisma.$transaction(async (tx) => {
+    const build = await tx.customBuild.findFirst({
+      where: { publicId, ownerId, removedAt: null },
+      select: {
+        id: true,
+        status: true,
+        errorRetryable: true,
+        secret: { select: { expiresAt: true, deletedAt: true } },
+      },
+    });
+    if (!build) throw new GenerationServiceError("not_found", "Saved generation not found.");
+    if (build.status !== "failed" || build.errorRetryable !== true) {
+      throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
+    }
+    if (!build.secret || build.secret.deletedAt || build.secret.expiresAt <= now) {
+      await tx.customBuild.update({
+        where: { id: build.id },
+        data: {
+          errorCode: "provider_key_expired",
+          errorMessage: "Reconnect this model in Generate.",
+          errorRetryable: false,
+          progress: Prisma.DbNull,
+        },
+      });
+      await tx.customBuildSecret.deleteMany({ where: { customBuildId: build.id } });
+      return "expired" as const;
+    }
+
+    const queued = await tx.customBuild.updateMany({
+      where: {
+        id: build.id,
+        ownerId,
+        removedAt: null,
+        status: "failed",
+        errorRetryable: true,
+      },
+      data: {
+        status: "queued",
+        currentStage: "queued",
+        startedAt: null,
+        completedAt: null,
+        progress: Prisma.DbNull,
+        errorCode: null,
+        errorMessage: null,
+        errorRetryable: null,
+        deletionPendingAt: null,
+        deletionError: null,
+      },
+    });
+    if (queued.count !== 1) {
+      throw new GenerationServiceError("already_retried", "This generation is already retrying.");
+    }
+    await tx.customBuildJob.create({
+      data: {
+        customBuildId: build.id,
+        type: "generate",
+        status: "queued",
+        maxAttempts: GENERATE_JOB_MAX_ATTEMPTS,
+      },
+    });
+    const latest = await tx.customBuildEvent.aggregate({
+      where: { customBuildId: build.id },
+      _max: { seq: true },
+    });
+    await tx.customBuildEvent.create({
+      data: {
+        customBuildId: build.id,
+        seq: (latest._max.seq ?? 0) + 1,
+        type: "queued",
+        data: { retry: true },
+      },
+    });
+    return "queued" as const;
+  });
+  if (outcome === "expired") {
+    throw new GenerationServiceError("provider_key_expired", "Reconnect this model in Generate.");
+  }
+  const generation = await getSavedGeneration(ownerId, publicId);
+  if (!generation) throw new GenerationServiceError("not_found", "Saved generation not found.");
+  return generation;
 }
 
 export async function cancelSavedGeneration(ownerId: string, publicId: string) {

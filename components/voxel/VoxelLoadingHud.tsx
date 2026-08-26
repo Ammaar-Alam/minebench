@@ -69,10 +69,24 @@ export function VoxelLoadingHud({
 
         {(total || elapsed || (attempt && attempt > 1) || retryReason) ? (
           <div className="flex items-baseline justify-between gap-3 font-mono text-[10px] leading-none tabular-nums text-muted/45">
-            <span className="truncate">
-              {retryReason || (attempt && attempt > 1 ? `retry ${attempt}` : elapsed) || ""}
-            </span>
-            {total ? <span className="shrink-0">{total.toLocaleString()}</span> : null}
+            <span>{elapsed ?? ""}</span>
+            <div className="flex items-center gap-2">
+              {retryReason ? (
+                <details className="group pointer-events-auto relative">
+                  <summary
+                    aria-label="Why MineBench is trying again"
+                    className="flex h-4 w-4 cursor-pointer list-none items-center justify-center rounded-full border border-border/70 font-sans text-[9px] text-muted transition-colors hover:border-border-xl hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden"
+                  >
+                    i
+                  </summary>
+                  <div className="absolute right-0 top-6 z-40 w-64 rounded-md border border-border/80 bg-card p-3 text-left font-sans text-xs leading-relaxed text-muted shadow-lg">
+                    <p className="font-medium text-fg">The first response couldn&apos;t be used.</p>
+                    <p className="mt-1.5 break-words whitespace-pre-wrap">{retryReason}</p>
+                  </div>
+                </details>
+              ) : null}
+              {total ? <span className="shrink-0">{total.toLocaleString()}</span> : null}
+            </div>
           </div>
         ) : null}
       </div>

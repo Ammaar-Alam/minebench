@@ -19,7 +19,7 @@ export function VoxelEmptyState() {
           <path d="M12 22v-9" />
         </svg>
       </div>
-      <span className="text-xs text-muted/80">No build yet</span>
+      <span className="text-xs text-muted/80">No build available yet</span>
     </div>
   );
 }

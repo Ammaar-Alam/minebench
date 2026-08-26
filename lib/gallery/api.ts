@@ -12,6 +12,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   account_suspended: 403,
   not_found: 404,
   already_finished: 409,
+  already_retried: 409,
   duplicate_unavailable: 409,
   generation_mismatch: 409,
   generation_not_available: 409,
@@ -20,6 +21,8 @@ const STATUS_BY_CODE: Record<string, number> = {
   selected_candidate: 409,
   storage_failsafe: 409,
   missing_provider_key: 401,
+  not_retryable: 409,
+  provider_key_expired: 409,
 };
 
 export function apiJson(body: unknown, status = 200): Response {

@@ -16,10 +16,6 @@ export function getCustomBuildJobLeaseSeconds(): number {
   return readIntEnv("CUSTOM_BUILD_JOB_LEASE_SECONDS", 180, 30, 60 * 30);
 }
 
-export function getCustomBuildJobMaxAttempts(): number {
-  return readIntEnv("CUSTOM_BUILD_JOB_MAX_ATTEMPTS", 3, 1, 10);
-}
-
 export async function claimNextCustomBuildJob(
   workerId: string,
   client: PrismaClient | PrismaTx = prisma,
@@ -101,6 +97,12 @@ export async function recoverStaleCustomBuildJobLeases(
 async function recoverStaleCustomBuildJobLeasesInTransaction(
   client: PrismaTx,
 ): Promise<{ requeued: number; failed: number }> {
+  await client.customBuildSecret.deleteMany({
+    where: {
+      expiresAt: { lte: new Date() },
+      customBuild: { status: "failed", errorRetryable: true },
+    },
+  });
   const expiredQueuedRows = await client.$queryRaw<Array<{ id: string; customBuildId: string; type: string }>>`
     UPDATE "CustomBuildJob" j
     SET status = 'failed'::"CustomBuildJobStatus",

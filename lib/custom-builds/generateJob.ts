@@ -1,4 +1,4 @@
-import type { CustomBuild, CustomBuildJob, Prisma } from "@prisma/client";
+import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
 import type { Provider } from "@/lib/ai/modelCatalog";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
 import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
@@ -45,6 +45,18 @@ type GeneratedBuildResult = {
   blockCount: number;
   generationTimeMs: number | null;
 };
+
+const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2;
+
+class CustomBuildGenerationFailedError extends Error {
+  constructor(
+    readonly reason: string,
+    readonly attempt: number,
+  ) {
+    super(reason);
+    this.name = "CustomBuildGenerationFailedError";
+  }
+}
 
 function asGenerateJobPayload(payload: Prisma.JsonValue | null): GenerateJobPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
@@ -139,6 +151,9 @@ function safeGenerateFailure(error: unknown, message: string) {
   }
   if (isTerminalCustomBuildGenerateError(message)) {
     return { code: "provider_rejected", message: "The provider rejected this generation request." };
+  }
+  if (error instanceof CustomBuildGenerationFailedError) {
+    return { code: "generation_failed", message: "No valid build was returned." };
   }
   return { code: "generation_failed", message: "Generation failed. Try again." };
 }
@@ -257,6 +272,7 @@ async function generateBuild(
   const gridSize = assertGridSize(customBuild.gridSize);
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
   const providerKeys = providerKeysForSecret(secret.provider, providerKey);
+  let providerAttempts = 0;
 
   throwIfCustomBuildLeaseLost(opts.signal);
   const result = await generateVoxelBuild(
@@ -270,7 +286,22 @@ async function generateBuild(
       preferOpenRouter: customBuild.preferOpenRouter,
       reasoning: customBuild.reasoning ?? undefined,
       abortSignal: opts.signal,
-      onRetry: (attempt) => emitCustomBuildEvent(customBuild.id, "retry", { attempt }),
+      maxAttempts: CUSTOM_BUILD_MODEL_MAX_ATTEMPTS,
+      onProviderRequest: (attempt) => {
+        providerAttempts = Math.max(providerAttempts, attempt);
+      },
+      onRetry: async (attempt, reason) => {
+        const safeReason = redactSensitiveText(reason, 1_000) || "The model response could not be used.";
+        const retrying = await prisma.customBuild.updateMany({
+          where: { id: customBuild.id, removedAt: null, status: "running" },
+          data: {
+            currentStage: "retrying",
+            progress: { attempt, reason: safeReason },
+          },
+        });
+        if (retrying.count !== 1) throw new CustomBuildLeaseLostError();
+        await appendCustomBuildEvent(customBuild.id, "retry", { attempt, reason: safeReason });
+      },
       acquireBuildProcessing: opts.acquireBuildProcessing,
       returnExpandedBuild: true,
     },
@@ -278,7 +309,10 @@ async function generateBuild(
 
   throwIfCustomBuildLeaseLost(opts.signal);
   if (!result.ok) {
-    throw new Error(redactSensitiveText(result.error));
+    throw new CustomBuildGenerationFailedError(
+      redactSensitiveText(result.error, 1_000) || "The model response could not be used.",
+      Math.max(1, providerAttempts),
+    );
   }
   return {
     build: result.build,
@@ -523,6 +557,7 @@ export async function runCustomBuildGenerateJob(
           errorCode: null,
           errorMessage: null,
           errorRetryable: null,
+          progress: Prisma.DbNull,
         },
       });
       if (completed.count !== 1) throw new CustomBuildLeaseLostError();
@@ -545,8 +580,12 @@ export async function runCustomBuildGenerateJob(
         ? new CustomBuildArtifactBookkeepingError(error)
         : error;
     const message = redactSensitiveText(effectiveError);
+    const manuallyRetryable =
+      effectiveError instanceof CustomBuildGenerationFailedError &&
+      !isTerminalCustomBuildGenerateError(message);
     const terminal =
       isCustomBuildArtifactPersistenceError(effectiveError) ||
+      effectiveError instanceof CustomBuildGenerationFailedError ||
       isTerminalCustomBuildGenerateError(message) ||
       job.attempts >= job.maxAttempts;
     if (terminal) {
@@ -559,9 +598,12 @@ export async function runCustomBuildGenerateJob(
           completedAt: new Date(),
           errorCode: failure.code,
           errorMessage: failure.message,
-          errorRetryable: false,
+          errorRetryable: manuallyRetryable,
+          progress: effectiveError instanceof CustomBuildGenerationFailedError
+            ? { attempt: effectiveError.attempt, reason: effectiveError.reason }
+            : Prisma.DbNull,
           objectsDeletedAt: null,
-          deletionPendingAt: new Date(),
+          deletionPendingAt: manuallyRetryable ? null : new Date(),
           deletionError: null,
         },
       });
@@ -571,7 +613,9 @@ export async function runCustomBuildGenerateJob(
         create: { day: new Date(new Date().toISOString().slice(0, 10)), failed: 1 },
         update: { failed: { increment: 1 } },
       });
-      await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+      if (!manuallyRetryable) {
+        await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+      }
       emitCustomBuildEvent(customBuild.id, "failed", { code: failure.code });
       throw new Error(failure.code);
     } else {

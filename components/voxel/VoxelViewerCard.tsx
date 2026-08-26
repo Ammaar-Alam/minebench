@@ -208,7 +208,9 @@ export function VoxelViewerCard({
       ? "relative h-[48svh] min-h-[260px] max-h-[440px] w-full sm:h-[48vh] sm:min-h-[280px] sm:max-h-[450px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
       : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
   const loadingLabel =
-    loadingMessage?.trim() ||
+    retryReason || (attempt && attempt > 1)
+      ? "Trying again…"
+      : loadingMessage?.trim() ||
     (attempt === 0
       ? "Queued…"
       : isThinking
@@ -301,17 +303,19 @@ export function VoxelViewerCard({
   return (
     <div className={embedded ? "overflow-hidden bg-card/25" : "mb-panel"}>
       <div className="mb-panel-inner">
-        <div className="border-b border-border/70 bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
-            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-              <div className="shrink-0 font-display text-sm font-semibold tracking-tight text-fg sm:text-base">
-                {title}
+        <div className="border-b border-border/70 bg-bg/10 px-4 py-3 sm:px-5 sm:py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                <div className="min-w-0 truncate font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
+                  {title}
+                </div>
+                {subtitle ? (
+                  <div className="min-w-0 truncate text-xs text-muted sm:text-sm">{subtitle}</div>
+                ) : null}
               </div>
-              {subtitle ? (
-                <div className="min-w-0 truncate text-xs sm:text-[13px]">{subtitle}</div>
-              ) : null}
               {build ? (
-                <div className="flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-muted sm:text-xs">
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs">
                   <span className="whitespace-nowrap">{blockCount.toLocaleString()} blocks</span>
                   {jsonSize ? <span className="whitespace-nowrap">{jsonSize} JSON</span> : null}
                   {timing ? <span className="whitespace-nowrap">{timing}</span> : null}
@@ -329,7 +333,7 @@ export function VoxelViewerCard({
               ) : null}
             </div>
 
-            <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
+            <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
               {showViewToggle ? (
                 <div className="relative flex w-[182px] rounded-full bg-bg/55 p-1 ring-1 ring-border/80 sm:w-[210px]">
                   <div className="pointer-events-none absolute inset-1 rounded-full">
@@ -470,6 +474,17 @@ export function VoxelViewerCard({
                 <div className="max-w-full break-words text-xs leading-relaxed text-muted">
                   {combinedError}
                 </div>
+                {retryReason ? (
+                  <details className="w-full max-w-xs text-left text-xs text-muted">
+                    <summary className="mx-auto flex w-fit cursor-pointer list-none items-center gap-1.5 rounded px-2 py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px]">i</span>
+                      Details
+                    </summary>
+                    <p className="mt-2 break-words whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 leading-relaxed">
+                      {retryReason}
+                    </p>
+                  </details>
+                ) : null}
                 {hasJsonView && showViewToggle ? (
                   <div className="text-[11px] text-muted/75">
                     Switch to JSON to inspect the raw output.
@@ -499,7 +514,7 @@ export function VoxelViewerCard({
             </div>
           ) : null}
 
-          {showBuildView && !build && !isLoading && !combinedError ? (
+          {showBuildView && !build && !combinedError ? (
             <VoxelEmptyState />
           ) : null}
 

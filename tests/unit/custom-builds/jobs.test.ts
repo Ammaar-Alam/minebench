@@ -53,6 +53,7 @@ async function main() {
   );
   assert.deepEqual(operations, [
     "$transaction.begin",
+    "customBuildSecret.deleteMany",
     "$queryRaw.1",
     "customBuild.updateMany",
     "customBuildSecret.deleteMany",

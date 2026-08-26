@@ -5,6 +5,7 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { publishGenerationToGallery } from "@/lib/gallery/client";
@@ -25,9 +26,11 @@ const SandboxGifExportButton = dynamic(
   },
 );
 
-function statusLabel(value: SavedGenerationPayload["status"]): string {
-  if (value === "succeeded") return "Ready";
-  return value.charAt(0).toUpperCase() + value.slice(1);
+function statusLabel(generation: SavedGenerationPayload): string {
+  if (generation.status === "succeeded") return "Ready";
+  if (generation.stage === "retrying") return "Trying again";
+  if (generation.status === "running") return "Generating";
+  return generation.status.charAt(0).toUpperCase() + generation.status.slice(1);
 }
 
 function GenerationDownloadButton({
@@ -105,6 +108,29 @@ function GenerationActions({
     }
   }
 
+  async function retry() {
+    setPending(true);
+    setMessage(null);
+    try {
+      const response = await fetch(
+        `/api/generations/${encodeURIComponent(generation.id)}/retry`,
+        { method: "POST" },
+      );
+      const body = (await response.json().catch(() => null)) as {
+        generation?: SavedGenerationPayload;
+        error?: { message?: string };
+      } | null;
+      if (!response.ok || !body?.generation) {
+        throw new Error(body?.error?.message ?? "Generation could not be retried.");
+      }
+      onUpdate(body.generation);
+    } catch (retryError) {
+      setMessage(retryError instanceof Error ? retryError.message : "Generation could not be retried.");
+    } finally {
+      setPending(false);
+    }
+  }
+
   async function remove(acknowledgePublicExamples = false) {
     setPending(true);
     setMessage(null);
@@ -147,14 +173,17 @@ function GenerationActions({
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
-        {(generation.status === "queued" || generation.status === "running") ? <button type="button" disabled={pending} className="mb-btn h-10" onClick={() => void cancel()}>Stop</button> : null}
-        {generation.status === "succeeded" && !suspended ? <button type="button" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-10" onClick={() => void submit()}>Add to Gallery</button> : null}
-        <GenerationDownloadButton generation={generation} onError={setMessage} />
-        <button type="button" disabled={pending} className="mb-btn h-10 text-muted hover:text-danger" onClick={() => void remove()}>Remove</button>
+    <div className="flex flex-col gap-3 border-t border-border/60 pt-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
+          {(generation.status === "queued" || generation.status === "running") ? <button type="button" disabled={pending} className="mb-btn h-10" onClick={() => void cancel()}>Stop</button> : null}
+          {generation.status === "failed" && generation.error?.retryable ? <button type="button" disabled={pending} className="mb-btn mb-btn-primary h-10" onClick={() => void retry()}>Retry</button> : null}
+          {generation.status === "succeeded" && !suspended ? <button type="button" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-10" onClick={() => void submit()}>Add to Gallery</button> : null}
+          <GenerationDownloadButton generation={generation} onError={setMessage} />
+          <button type="button" disabled={pending} className="mb-btn h-10 text-muted hover:text-danger" onClick={() => void remove()}>Remove</button>
+        </div>
+        {generation.status === "succeeded" && !suspended ? <label className="flex min-h-10 shrink-0 items-center gap-2 text-xs text-muted"><input type="checkbox" checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} />Post anonymously</label> : null}
       </div>
-      {generation.status === "succeeded" && !suspended ? <label className="flex min-h-10 items-center gap-2 text-xs text-muted"><input type="checkbox" checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} />Post anonymously</label> : null}
       {message ? <p role="status" className="text-sm text-muted">{message}</p> : null}
     </div>
   );
@@ -346,17 +375,25 @@ export function GalleryYours({
 
       <div className="mt-6 grid gap-4">
         {items.map((generation, index) => (
-          <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 rounded-md border border-border/80 bg-card/10 p-4 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none sm:p-5 mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
-            <button type="button" disabled={!generation.viewerUrl} aria-label={`View ${generation.prompt}`} className="group/open grid w-full gap-5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-default md:grid-cols-[11rem_minmax(0,1fr)]" onClick={() => setSelectedId(generation.id)}>
-              {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className={`object-contain p-1.5 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /></div> : <div className="grid aspect-[4/3] rounded bg-bg/55 text-center text-sm text-muted"><span className="self-center"><span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full bg-current ${(generation.status === "queued" || generation.status === "running") ? "animate-pulse motion-reduce:animate-none" : ""}`} />{statusLabel(generation.status)}</span></div>}
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span><time dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time></div>
-                <h3 className={`mt-2 text-xl font-semibold leading-snug text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
-                {generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}
-                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(generation.expandedBytes) ? <span>{formatBuildJsonSize(generation.expandedBytes)} JSON</span> : null}{formatBuildDuration(generation.generationTimeMs) ? <span>{formatBuildDuration(generation.generationTimeMs)}</span> : null}</div> : null}
+          <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
+            <div className="grid md:grid-cols-[15rem_minmax(0,1fr)] lg:grid-cols-[18rem_minmax(0,1fr)]">
+              <button type="button" disabled={!generation.viewerUrl} aria-label={`View ${generation.prompt}`} className="group/open relative min-h-52 overflow-hidden border-b border-border/60 bg-bg/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 disabled:cursor-default md:min-h-full md:border-b-0 md:border-r" onClick={() => setSelectedId(generation.id)}>
+                {generation.thumbnailUrl ? <Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="(min-width: 1024px) 18rem, (min-width: 768px) 15rem, 100vw" className={`object-contain p-3 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /> : <VoxelEmptyState />}
+              </button>
+              <div className="flex min-w-0 flex-col p-5 sm:p-6">
+                <button type="button" disabled={!generation.viewerUrl} className="group/open w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 disabled:cursor-default" onClick={() => setSelectedId(generation.id)}>
+                  <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted">
+                    <span className="flex min-w-0 items-center gap-3"><span className="flex shrink-0 items-center gap-2"><span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${generation.status === "succeeded" ? "bg-accent" : generation.status === "failed" || generation.status === "canceled" ? "bg-danger" : "animate-pulse bg-muted motion-reduce:animate-none"}`} />{statusLabel(generation)}</span><span className="truncate font-medium text-fg/75">{generation.model.label}</span></span>
+                    <time className="shrink-0" dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time>
+                  </div>
+                  <h3 className={`mt-3 text-balance font-display text-2xl font-semibold leading-tight tracking-tight text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
+                  {generation.error && (generation.status === "failed" || generation.status === "canceled") ? <p className="mt-3 text-sm text-danger">{generation.error.message}</p> : null}
+                  {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(generation.expandedBytes) ? <span>{formatBuildJsonSize(generation.expandedBytes)} JSON</span> : null}{formatBuildDuration(generation.generationTimeMs) ? <span>{formatBuildDuration(generation.generationTimeMs)}</span> : null}</div> : null}
+                </button>
+                {generation.retryReason ? <details className="mt-3 w-fit text-xs text-muted"><summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden"><span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px]">i</span>Details</summary><p className="mt-1 max-w-xl whitespace-pre-wrap break-words leading-relaxed">{generation.retryReason}</p></details> : null}
+                <div className="mt-auto pt-6"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>
               </div>
-            </button>
-            <div className="mt-5 md:ml-48"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>
+            </div>
           </article>
         ))}
         {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">No saved builds.</p></div> : null}

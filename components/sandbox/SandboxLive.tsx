@@ -74,6 +74,7 @@ type ModelResult = {
   renderPalette?: Palette;
   currentStage?: string;
   submittedPrompt?: string;
+  customBuildRetryable?: boolean;
 };
 
 type SavedGenerationCreateResponse = {
@@ -392,9 +393,10 @@ function customBuildStageLabel(status: SavedGenerationPayload): string {
   if (status.status === "succeeded") return "Ready";
   if (status.status === "failed") return "Failed";
   if (status.status === "canceled") return "Canceled";
-  if (status.stage === "generating") return "Building";
+  if (status.stage === "retrying") return "Trying again";
+  if (status.stage === "generating") return "Generating";
   if (status.stage === "queued") return "Queued";
-  return status.stage ?? (status.status === "running" ? "Building" : "Queued");
+  return status.stage ?? (status.status === "running" ? "Generating" : "Queued");
 }
 
 function customBuildStatusPath(id: string): string {
@@ -808,6 +810,9 @@ export function SandboxLive({
         startedAt: existing?.startedAt,
         currentStage: customBuildStageLabel(args.status),
         submittedPrompt: existing?.submittedPrompt,
+        attempt: args.status.attempt ?? undefined,
+        retryReason: args.status.retryReason ?? undefined,
+        customBuildRetryable: args.status.error?.retryable === true,
       };
 
       if (args.status.status === "failed" || args.status.status === "canceled") {
@@ -834,7 +839,7 @@ export function SandboxLive({
         ...base,
         status: "loading",
         voxelBuild: existing?.voxelBuild ?? null,
-        attempt: existing?.attempt ?? 1,
+        attempt: args.status.attempt ?? existing?.attempt ?? 1,
       });
       return next;
     });
@@ -885,6 +890,52 @@ export function SandboxLive({
       });
       if (status.status === "failed" || status.status === "canceled") return;
       await abortableDelay(2500, args.signal);
+    }
+  }
+
+  async function retryCustomBuild(model: SelectedLiveModel) {
+    const existing = results.get(model.id);
+    if (running || !existing?.customBuildId || !existing.customBuildRetryable) return;
+    const abortController = new AbortController();
+    customBuildAbortRef.current = abortController;
+    setRunning(true);
+    setRequestError(null);
+    try {
+      const response = await fetch(
+        `/api/generations/${encodeURIComponent(existing.customBuildId)}/retry`,
+        { method: "POST", signal: abortController.signal },
+      );
+      if (!response.ok) {
+        throw new Error(await readClientErrorResponse(response, "Generation could not be retried."));
+      }
+      const status = ((await response.json()) as { generation: SavedGenerationPayload }).generation;
+      setResults((current) => {
+        const next = new Map(current);
+        const value = next.get(model.id);
+        if (value) next.set(model.id, { ...value, startedAt: Date.now() });
+        return next;
+      });
+      const statusUrl = customBuildStatusPath(status.id);
+      applyCustomBuildStatus({
+        model,
+        status,
+        statusUrl,
+        pageUrl: `/account#${encodeURIComponent(status.id)}`,
+      });
+      await watchCustomBuild({
+        model,
+        statusUrl,
+        pageUrl: `/account#${encodeURIComponent(status.id)}`,
+        eventsUrl: "",
+        signal: abortController.signal,
+      });
+    } catch (error) {
+      if (!isAbortError(error)) {
+        setRequestError(error instanceof Error ? error.message : "Generation could not be retried.");
+      }
+    } finally {
+      if (customBuildAbortRef.current === abortController) customBuildAbortRef.current = null;
+      setRunning(false);
     }
   }
 
@@ -1299,8 +1350,8 @@ export function SandboxLive({
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
         debugRawText={isDurableResult ? undefined : liveRawText}
-        attempt={r?.status === "loading" && !isDurableResult ? r.attempt : undefined}
-        retryReason={r?.status === "loading" && !isDurableResult ? r.retryReason : undefined}
+        attempt={r?.status === "loading" ? r.attempt : undefined}
+        retryReason={r?.status === "loading" || r?.status === "error" ? r.retryReason : undefined}
         elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
         jsonBytes={r?.status === "success" ? r.customBuildExpandedBytes : undefined}
@@ -1319,6 +1370,16 @@ export function SandboxLive({
         exportPrompt={resultPrompt}
         actions={
           <>
+            {r?.status === "error" && r.customBuildRetryable ? (
+              <button
+                type="button"
+                disabled={running}
+                className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
+                onClick={() => void retryCustomBuild(model)}
+              >
+                Retry
+              </button>
+            ) : null}
             {selectedModels.length > 1 && r?.status === "success" && r.customBuildId && !gallerySuspended ? (
               <GenerationGalleryButton
                 key={r.customBuildId}

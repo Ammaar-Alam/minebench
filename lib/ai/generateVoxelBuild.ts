@@ -490,7 +490,7 @@ export type GenerateVoxelBuildParams = {
   abortSignal?: AbortSignal;
   // Fired immediately before every outbound generation request
   onProviderRequest?: (attempt: number) => void;
-  onRetry?: (attempt: number, reason: string) => void;
+  onRetry?: (attempt: number, reason: string) => unknown;
   // Fired after response text returns and before parsing or execution
   onRawResponse?: (attempt: number, rawText: string) => void;
   onDelta?: (delta: string) => void;
@@ -1179,7 +1179,14 @@ export async function generateVoxelBuild(
             ? `\n\nReminder: return ONLY the ${VOXEL_EXEC_TOOL_NAME} tool call JSON (not the build JSON).`
             : "");
 
-    if (attempt > 1) invokeCallback(params.onRetry, attempt, lastError);
+    if (attempt > 1 && params.onRetry) {
+      const callbackStartedAt = performance.now();
+      try {
+        await params.onRetry(attempt, lastError);
+      } finally {
+        callbackDurationMs += performance.now() - callbackStartedAt;
+      }
+    }
 
     let providerRequestStarted = false;
     try {
