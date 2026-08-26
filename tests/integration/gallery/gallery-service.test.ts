@@ -174,6 +174,10 @@ async function main() {
         postAnonymously: false,
       });
     }
+    const newest = await listGalleryCandidates({ sort: "new", limit: 10 });
+    assert.equal(newest.items[0]?.id, created.candidate.id, "a new example should refresh New order");
+    assert.equal(newest.items[0]?.cover?.id, created.candidate.cover?.id, "the original cover should stay fixed");
+    assert.ok(newest.items[0]?.alternate, "browse cards should include another visible example");
     const firstExamples = await getGalleryCandidate(created.candidate.id, { examplesLimit: 2 });
     assert.equal(firstExamples?.exampleCount, 4);
     assert.equal(firstExamples?.examples.length, 3, "the fixed cover should precede the first page");

@@ -44,8 +44,11 @@ assert.ok(
 assert.ok(
   explore.includes("VoxelEmptyState") &&
     explore.includes("candidate.cover?.previewUrl") &&
+    explore.includes("candidate.alternate?.previewUrl") &&
+    explore.includes("modelLabels.join") &&
+    explore.includes("candidate.exampleCount - 2") &&
     !explore.includes("featured"),
-  "every Gallery candidate should retain a clear media frame without fake build imagery",
+  "Gallery cards should keep a clear media frame and reveal additional model builds without extra requests",
 );
 assert.ok(
   !page.includes("key={sort}") &&

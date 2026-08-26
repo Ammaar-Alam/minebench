@@ -87,6 +87,10 @@ function SubmissionDialog({
 }
 
 function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayload; delayed: boolean }) {
+  const modelLabels = [...new Set(
+    [candidate.cover?.model.label, candidate.alternate?.model.label]
+      .filter((label): label is string => Boolean(label)),
+  )];
   return (
     <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[transform,border-color,background-color,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:border-accent/35 hover:bg-card/20 hover:shadow-soft active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
       <Link href={`/gallery/${candidate.id}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
@@ -100,6 +104,11 @@ function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayloa
               sizes="(min-width: 1536px) 25vw, (min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
               className="object-contain p-2 transition-transform duration-300 ease-out group-hover:scale-[1.025] motion-reduce:transition-none"
             />
+            {candidate.alternate?.previewUrl ? (
+              <span aria-hidden="true" className="absolute bottom-3 right-3 aspect-square w-[28%] overflow-hidden rounded-sm border border-border/90 bg-bg ring-2 ring-bg transition-transform duration-300 ease-out group-hover:-translate-y-0.5 group-hover:scale-[1.03] motion-reduce:transform-none motion-reduce:transition-none">
+                <Image src={candidate.alternate.previewUrl} alt="" fill unoptimized sizes="8rem" className="object-contain p-1" />
+              </span>
+            ) : null}
           </div>
         ) : <div className="relative aspect-[4/3] bg-bg/45"><VoxelEmptyState /></div>}
         <div className="flex flex-1 flex-col gap-3 p-5">
@@ -108,7 +117,7 @@ function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayloa
             {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
           </div>
           <h2 className="line-clamp-3 text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none">{candidate.prompt}</h2>
-          {candidate.cover ? <p className="mt-auto truncate pt-3 text-sm text-muted">{candidate.cover.model.label}</p> : null}
+          {modelLabels.length ? <p className="mt-auto flex min-w-0 items-center gap-2 pt-3 text-sm text-muted" title={modelLabels.join(", ")}><span className="truncate">{modelLabels.join(" · ")}</span>{candidate.exampleCount > 2 ? <span className="shrink-0">+{candidate.exampleCount - 2}</span> : null}</p> : null}
         </div>
       </Link>
       <div className="flex items-center justify-between px-3 pb-2">

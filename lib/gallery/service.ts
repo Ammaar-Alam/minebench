@@ -124,7 +124,7 @@ const candidateListSelect = {
     where: publicExampleWhere,
     select: exampleSelect,
     orderBy: [{ createdAt: "asc" as const }, { id: "asc" as const }],
-    take: 1,
+    take: 2,
   },
   _count: {
     select: { examples: { where: publicExampleWhere } },
@@ -173,6 +173,7 @@ function publicCandidate(
   exampleCount: number,
   upvoted = false,
   viewerUserId?: string | null,
+  alternate?: ExampleRow | null,
 ) {
   return {
     id: candidate.publicId,
@@ -190,6 +191,7 @@ function publicCandidate(
     publishedAt: candidate.publishedAt.toISOString(),
     exampleCount,
     cover: cover ? publicExample(cover) : null,
+    alternate: alternate ? publicExample(alternate) : null,
   };
 }
 
@@ -255,6 +257,7 @@ export async function listGalleryCandidates(options: {
         candidate._count.examples,
         upvoted.has(candidate.id),
         options.userId,
+        candidate.examples[1] ?? null,
       ),
     ),
     nextCursor: rows.length > limit && last
@@ -513,15 +516,24 @@ export async function addGalleryExample(
     throw new GalleryServiceError("model_label_rejected", "Choose a different public model label.");
   }
   const id = randomBytes(16).toString("hex");
-  const inserted = await prisma.galleryExample.createMany({
-    data: [{
-      id,
-      candidateId: candidate.id,
-      customBuildId: generation.id,
-      contributorId: userId,
-      postAnonymously: input.postAnonymously,
-    }],
-    skipDuplicates: true,
+  const inserted = await prisma.$transaction(async (tx) => {
+    const result = await tx.galleryExample.createMany({
+      data: [{
+        id,
+        candidateId: candidate.id,
+        customBuildId: generation.id,
+        contributorId: userId,
+        postAnonymously: input.postAnonymously,
+      }],
+      skipDuplicates: true,
+    });
+    if (result.count > 0) {
+      await tx.galleryCandidate.update({
+        where: { id: candidate.id },
+        data: { publishedAt: new Date() },
+      });
+    }
+    return result;
   });
   if (inserted.count === 0) {
     throw new GalleryServiceError("already_attached", "This generation is already attached.");
