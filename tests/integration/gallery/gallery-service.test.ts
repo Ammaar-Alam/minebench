@@ -60,6 +60,7 @@ async function main() {
         modelId: "gpt-5.4-mini",
         modelDisplayName: "GPT 5.4 Mini",
         blockCount: 4,
+        generationTimeMs: 125_000,
         buildSha256: "b".repeat(64),
         buildByteSize: 100,
         buildCompressedByteSize: 60,
@@ -105,6 +106,9 @@ async function main() {
     assert.equal(created.candidate.prompt, prompt);
     assert.equal(created.candidate.attribution, "Cliff Builder");
     assert.equal(created.candidate.exampleCount, 1);
+    assert.equal(created.candidate.cover?.blockCount, 4);
+    assert.equal(created.candidate.cover?.jsonBytes, 100);
+    assert.equal(created.candidate.cover?.generationTimeMs, 125_000);
     assert.equal(
       (await getGalleryCandidate(created.candidate.id, { userId: uploaderId }))?.canRemove,
       true,

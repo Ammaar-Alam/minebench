@@ -11,6 +11,7 @@ import {
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPreflightDialog";
+import { GenerationGalleryButton } from "@/components/gallery/GenerationGalleryButton";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { selectGenerationProviderKeys } from "@/lib/ai/providerKeys";
@@ -471,7 +472,17 @@ function customBuildPalette(value: string, fallback: Palette): Palette {
   return value === "advanced" ? "advanced" : value === "simple" ? "simple" : fallback;
 }
 
-export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: string; signedIn: boolean }) {
+export function SandboxLive({
+  initialPrompt,
+  signedIn,
+  hasPublicNickname,
+  gallerySuspended,
+}: {
+  initialPrompt?: string;
+  signedIn: boolean;
+  hasPublicNickname: boolean;
+  gallerySuspended: boolean;
+}) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "");
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
@@ -1244,6 +1255,9 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
   const comparePrompt = selectedModels
     .map((model) => results.get(model.id)?.submittedPrompt)
     .find((value): value is string => Boolean(value)) ?? prompt;
+  const singleGalleryResult = selectedModels.length === 1
+    ? results.get(selectedModels[0]!.id)
+    : undefined;
 
   const resultCards = selectedModels.map((model, idx) => {
     const r = results.get(model.id);
@@ -1289,6 +1303,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         retryReason={r?.status === "loading" && !isDurableResult ? r.retryReason : undefined}
         elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
+        jsonBytes={r?.status === "success" ? r.customBuildExpandedBytes : undefined}
         jsonText={isDurableResult ? undefined : r?.rawText}
         loadingMessage={isDurableResult ? r?.currentStage : undefined}
         palette={cardPalette}
@@ -1304,6 +1319,15 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         exportPrompt={resultPrompt}
         actions={
           <>
+            {selectedModels.length > 1 && r?.status === "success" && r.customBuildId && !gallerySuspended ? (
+              <GenerationGalleryButton
+                key={r.customBuildId}
+                generationId={r.customBuildId}
+                postAnonymously={!hasPublicNickname}
+                onError={setRequestError}
+                compact
+              />
+            ) : null}
             {r?.customBuildPageUrl ? (
               <Link
                 className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
@@ -1581,6 +1605,14 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         ) : null}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
+          {singleGalleryResult?.status === "success" && singleGalleryResult.customBuildId && !gallerySuspended ? (
+            <GenerationGalleryButton
+              key={singleGalleryResult.customBuildId}
+              generationId={singleGalleryResult.customBuildId}
+              postAnonymously={!hasPublicNickname}
+              onError={setRequestError}
+            />
+          ) : null}
           {selectedModels.length > 1 && compareTargets.length === selectedModels.length ? (
             <SandboxGifExportButton
               targets={compareTargets}

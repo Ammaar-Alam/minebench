@@ -34,7 +34,11 @@ import {
   xaiReasoningEffortAttempts,
   zaiReasoningEffortAttempts,
 } from "@/lib/ai/reasoningProfiles";
-import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
+import {
+  parseVoxelBuildSpec,
+  validateVoxelBuild,
+  validateVoxelBuildSpec,
+} from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import type {
@@ -491,6 +495,8 @@ export type GenerateVoxelBuildParams = {
   onRawResponse?: (attempt: number, rawText: string) => void;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
+  acquireBuildProcessing?: () => Promise<() => void>;
+  returnExpandedBuild?: boolean;
 };
 
 export type GenerateVoxelBuildResult =
@@ -1222,102 +1228,130 @@ export async function generateVoxelBuild(
           `Raw response callback failed for attempt ${attempt}: ${message}`,
         );
       }
-
-      const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
-      if (!json) {
-        lastError = "Could not find a valid JSON object in the response";
-        continue;
+      let releaseBuildProcessing: (() => void) | undefined;
+      if (params.acquireBuildProcessing) {
+        const acquireStartedAt = performance.now();
+        try {
+          releaseBuildProcessing = await params.acquireBuildProcessing();
+        } finally {
+          // Queueing behind another build is worker backpressure, not inference time
+          callbackDurationMs += performance.now() - acquireStartedAt;
+        }
       }
 
-      const buildJson: unknown = enableTools
-        ? (() => {
-            const parsedCall = voxelExecToolCallSchema.safeParse(json);
-            if (!parsedCall.success) {
-              lastError = parsedCall.error.message;
-              return null;
-            }
+      let keepBuildProcessingLease = false;
+      try {
+        params.abortSignal?.throwIfAborted();
+        const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
+        if (!json) {
+          lastError = "Could not find a valid JSON object in the response";
+          continue;
+        }
 
-            const call = parsedCall.data;
-            if (call.input.gridSize !== params.gridSize) {
-              lastError = `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})`;
-              return null;
-            }
-            if (call.input.palette !== params.palette) {
-              lastError = `Tool call palette mismatch (${call.input.palette} vs ${params.palette})`;
-              return null;
-            }
+        const buildJson: unknown = enableTools
+          ? (() => {
+              const parsedCall = voxelExecToolCallSchema.safeParse(json);
+              if (!parsedCall.success) {
+                lastError = parsedCall.error.message;
+                return null;
+              }
 
-            const run = runVoxelExec({
-              code: call.input.code,
+              const call = parsedCall.data;
+              if (call.input.gridSize !== params.gridSize) {
+                lastError = `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})`;
+                return null;
+              }
+              if (call.input.palette !== params.palette) {
+                lastError = `Tool call palette mismatch (${call.input.palette} vs ${params.palette})`;
+                return null;
+              }
+
+              const run = runVoxelExec({
+                code: call.input.code,
+                gridSize: params.gridSize,
+                palette: params.palette,
+                seed: call.input.seed,
+              });
+
+              return run.build;
+            })()
+          : json;
+
+        if (!buildJson) continue;
+
+        const validated = enableTools
+          ? validateVoxelBuildSpec(buildJson as VoxelBuild, {
+              palette: paletteDefs,
               gridSize: params.gridSize,
-              palette: params.palette,
-              seed: call.input.seed,
-            });
-
-            return run.build;
-          })()
-        : json;
-
-      if (!buildJson) continue;
-
-      const validated = validateParsedJson(buildJson, paletteDefs, params.gridSize);
-      if (!validated.ok) {
-        lastError = validated.error;
-        continue;
-      }
-
-      const expandedBuild = validated.value.build;
-      const blockCount = expandedBuild.blocks.length;
-
-      if (blockCount === 0) {
-        lastError =
-          "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
-        continue;
-      }
-
-      if (blockCount < minBlocks) {
-        lastError = `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
-        continue;
-      }
-
-      const bounds = buildBounds(expandedBuild);
-      if (bounds) {
-        const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.15));
-        const minHeight = Math.max(4, Math.floor(params.gridSize * 0.1));
-        const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
-
-        if (maxFootprintSpan < minFootprint) {
-          lastError = `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.`;
+              maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
+            })
+          : validateParsedJson(buildJson, paletteDefs, params.gridSize);
+        if (!validated.ok) {
+          lastError = validated.error;
           continue;
         }
 
-        if (bounds.spanY < minHeight) {
-          lastError = `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.`;
+        const expandedBuild = validated.value.build;
+        const blockCount = expandedBuild.blocks.length;
+
+        if (blockCount === 0) {
+          lastError =
+            "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
           continue;
         }
-      }
 
-      const spec = parseVoxelBuildSpec(buildJson);
-      if (!spec.ok) {
-        lastError = spec.error;
-        continue;
-      }
+        if (blockCount < minBlocks) {
+          lastError = `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
+          continue;
+        }
 
-      const generationTimeMs = measuredInferenceTimeMs();
-      return {
-        ok: true,
-        build: spec.value,
-        warnings: validated.value.warnings,
-        blockCount,
-        generationTimeMs,
-        acceptedOutputTokens,
-        providerRoute,
-        requestConfiguration,
-        acceptedRequestConfiguration,
-        rawText: text,
-      };
+        const bounds = buildBounds(expandedBuild);
+        if (bounds) {
+          const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.15));
+          const minHeight = Math.max(4, Math.floor(params.gridSize * 0.1));
+          const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
+
+          if (maxFootprintSpan < minFootprint) {
+            lastError = `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.`;
+            continue;
+          }
+
+          if (bounds.spanY < minHeight) {
+            lastError = `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.`;
+            continue;
+          }
+        }
+
+        let build = expandedBuild;
+        if (!params.returnExpandedBuild) {
+          const spec = parseVoxelBuildSpec(buildJson);
+          if (!spec.ok) {
+            lastError = spec.error;
+            continue;
+          }
+          build = spec.value;
+        }
+
+        const generationTimeMs = measuredInferenceTimeMs();
+        keepBuildProcessingLease = true;
+        return {
+          ok: true,
+          build,
+          warnings: validated.value.warnings,
+          blockCount,
+          generationTimeMs,
+          acceptedOutputTokens,
+          providerRoute,
+          requestConfiguration,
+          acceptedRequestConfiguration,
+          rawText: text,
+        };
+      } finally {
+        if (!keepBuildProcessingLease) releaseBuildProcessing?.();
+      }
     } catch (err) {
       lastError = getErrorMessage(err, "Provider request failed");
+      if (params.abortSignal?.aborted) break;
       // Retry transient work that failed safely before an outbound request
       if (
         !providerRequestStarted &&

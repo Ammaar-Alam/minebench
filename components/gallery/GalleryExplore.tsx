@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
+import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 function SubmissionDialog({
   open,
@@ -91,6 +92,8 @@ function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayloa
     [candidate.cover?.model.label, candidate.alternate?.model.label]
       .filter((label): label is string => Boolean(label)),
   )];
+  const jsonSize = formatBuildJsonSize(candidate.cover?.jsonBytes);
+  const duration = formatBuildDuration(candidate.cover?.generationTimeMs);
   return (
     <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[transform,border-color,background-color,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:border-accent/35 hover:bg-card/20 hover:shadow-soft active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
       <Link href={`/gallery/${candidate.id}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
@@ -118,6 +121,7 @@ function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayloa
           </div>
           <h2 className="line-clamp-3 text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none">{candidate.prompt}</h2>
           {modelLabels.length ? <p className="mt-auto flex min-w-0 items-center gap-2 pt-3 text-sm text-muted" title={modelLabels.join(", ")}><span className="truncate">{modelLabels.join(" · ")}</span>{candidate.exampleCount > 2 ? <span className="shrink-0">+{candidate.exampleCount - 2}</span> : null}</p> : null}
+          {candidate.cover ? <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted">{candidate.cover.blockCount != null ? <span>{candidate.cover.blockCount.toLocaleString()} blocks</span> : null}{jsonSize ? <span>{jsonSize} JSON</span> : null}{duration ? <span>{duration}</span> : null}</p> : null}
         </div>
       </Link>
       <div className="flex items-center justify-between px-3 pb-2">

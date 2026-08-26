@@ -12,6 +12,9 @@ const preflight = readFileSync("components/sandbox/GenerationPreflightDialog.tsx
 const sandboxPage = readFileSync("app/sandbox/page.tsx", "utf8");
 const galleryDetailPage = readFileSync("app/gallery/[publicId]/page.tsx", "utf8");
 const siteHeader = readFileSync("components/SiteHeader.tsx", "utf8");
+const galleryClient = readFileSync("lib/gallery/client.ts", "utf8");
+const galleryButton = readFileSync("components/gallery/GenerationGalleryButton.tsx", "utf8");
+const sandboxLive = readFileSync("components/sandbox/SandboxLive.tsx", "utf8");
 
 assert.ok(
   detail.includes("candidate.canRemove") &&
@@ -28,20 +31,30 @@ assert.ok(
   "public examples should reuse the full viewer GIF exporter",
 );
 assert.ok(
-  yours.includes("body.created === false") &&
-    yours.includes("/examples`") &&
+  galleryClient.includes("body.created === false") &&
+    galleryClient.includes("/examples`") &&
     yours.includes("Add to Gallery") &&
     !yours.includes("Add this generation as an example?") &&
     yours.includes("downloadSavedGenerationJson") &&
     yours.includes("SavedBuildDialog") &&
     yours.includes("generation.expandedBytes") &&
-    yours.includes("headerMeta=") &&
+    yours.includes("jsonBytes={generation.expandedBytes}") &&
+    yours.includes("generation.generationTimeMs") &&
     yours.includes("SHA-256 ") &&
     yours.includes("hover:after:scale-x-100") &&
     yours.includes('generation.status === "queued" || generation.status === "running"') &&
     !yours.includes("<VoxelEmptyState") &&
     yours.includes("embedded"),
   "saved builds should open privately, preserve lifecycle placeholders, and expose owner verification details",
+);
+assert.ok(
+  yours.includes("publishGenerationToGallery") &&
+    sandboxLive.includes("<GenerationGalleryButton") &&
+    sandboxLive.includes("singleGalleryResult") &&
+    sandboxLive.includes('r?.status === "success"') &&
+    galleryButton.includes("Add to Gallery") &&
+    galleryButton.includes("postAnonymously"),
+  "successful Generate results should reuse the Gallery submission path beside Generate",
 );
 assert.ok(
   yours.includes('fetch("/api/generations", { cache: "no-store", signal: controller.signal })') &&
@@ -67,6 +80,8 @@ assert.ok(
     explore.includes("candidate.cover?.previewUrl") &&
     explore.includes("candidate.alternate?.previewUrl") &&
     explore.includes("modelLabels.join") &&
+    explore.includes("candidate.cover?.jsonBytes") &&
+    explore.includes("candidate.cover?.generationTimeMs") &&
     explore.includes("candidate.exampleCount - 2") &&
     !explore.includes("featured"),
   "Gallery cards should keep a clear media frame and reveal additional model builds without extra requests",

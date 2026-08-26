@@ -36,6 +36,10 @@ export function getCustomBuildWorkerPollMs(): number {
   return readIntEnv("CUSTOM_BUILD_WORKER_POLL_MS", 2_000, 250, 60_000);
 }
 
+export function getCustomBuildWorkerConcurrency(): number {
+  return readIntEnv("CUSTOM_BUILD_WORKER_CONCURRENCY", 10, 1, 20);
+}
+
 export function getCustomBuildWorkerId(): string {
   return process.env.CUSTOM_BUILD_WORKER_ID?.trim() || DEFAULT_CUSTOM_BUILD_WORKER_ID;
 }
@@ -47,6 +51,39 @@ export function getCustomBuildWorkerHeartbeatMs(): number {
 
 export function getCustomBuildSynchronousExportLeaseMs(): number {
   return Math.max(getCustomBuildJobLeaseSeconds() * 1000, SYNCHRONOUS_EXPORT_LEASE_MS);
+}
+
+export function createCustomBuildProcessingGate(): {
+  acquire: (signal?: AbortSignal) => Promise<() => void>;
+} {
+  let tail = Promise.resolve();
+
+  return {
+    async acquire(signal) {
+      signal?.throwIfAborted();
+      let unlock = () => {};
+      const current = new Promise<void>((resolve) => {
+        unlock = resolve;
+      });
+      const previous = tail;
+      tail = previous.then(() => current);
+      await previous;
+
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        unlock();
+      };
+      try {
+        signal?.throwIfAborted();
+        return release;
+      } catch (error) {
+        release();
+        throw error;
+      }
+    },
+  };
 }
 
 function abortLease(controller: AbortController, message: string): void {
@@ -99,45 +136,68 @@ async function extendLeaseForSynchronousWork(job: CustomBuildJob, workerId: stri
   }
 }
 
-async function runJob(job: CustomBuildJob, workerId: string, signal: AbortSignal): Promise<void> {
-  throwIfCustomBuildLeaseLost(signal);
-  if (job.type === "generate") {
-    await runCustomBuildGenerateJob(job, {
-      signal,
-      beforeSynchronousArtifactPackaging: async () => {
-        throwIfCustomBuildLeaseLost(signal);
-        await extendLeaseForSynchronousWork(job, workerId);
-        throwIfCustomBuildLeaseLost(signal);
-      },
-    });
-    throwIfCustomBuildLeaseLost(signal);
-    return;
-  }
-  await runCustomBuildExportJob(job, {
-    signal,
-    beforeSynchronousExport: async () => {
+async function runJob(
+  job: CustomBuildJob,
+  workerId: string,
+  signal: AbortSignal,
+  processingGate: ReturnType<typeof createCustomBuildProcessingGate>,
+): Promise<void> {
+  let releaseProcessing: (() => void) | undefined;
+  const acquireProcessing = async () => {
+    const release = await processingGate.acquire(signal);
+    try {
       throwIfCustomBuildLeaseLost(signal);
       await extendLeaseForSynchronousWork(job, workerId);
       throwIfCustomBuildLeaseLost(signal);
-    },
-  });
-  throwIfCustomBuildLeaseLost(signal);
+      releaseProcessing = release;
+      return release;
+    } catch (error) {
+      release();
+      throw error;
+    }
+  };
+
+  try {
+    throwIfCustomBuildLeaseLost(signal);
+    if (job.type === "generate") {
+      await runCustomBuildGenerateJob(job, {
+        signal,
+        acquireBuildProcessing: acquireProcessing,
+        beforeSynchronousArtifactPackaging: async () => {
+          throwIfCustomBuildLeaseLost(signal);
+          await extendLeaseForSynchronousWork(job, workerId);
+          throwIfCustomBuildLeaseLost(signal);
+        },
+      });
+      throwIfCustomBuildLeaseLost(signal);
+      return;
+    }
+    await runCustomBuildExportJob(job, {
+      signal,
+      beforeSynchronousExport: async () => {
+        await acquireProcessing();
+      },
+    });
+    throwIfCustomBuildLeaseLost(signal);
+  } finally {
+    releaseProcessing?.();
+  }
 }
 
-export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId()): Promise<{
+async function processClaimedJob(
+  job: CustomBuildJob,
+  workerId: string,
+  processingGate: ReturnType<typeof createCustomBuildProcessingGate>,
+): Promise<{
   processed: boolean;
   jobId?: string;
   jobType?: string;
 }> {
-  await recoverStaleCustomBuildJobLeases();
-  const job = await claimNextCustomBuildJob(workerId);
-  if (!job) return { processed: false };
-
   const leaseAbort = new AbortController();
   const heartbeat = startCustomBuildJobHeartbeat(job, workerId, leaseAbort);
 
   try {
-    await runJob(job, workerId, leaseAbort.signal);
+    await runJob(job, workerId, leaseAbort.signal, processingGate);
     throwIfCustomBuildLeaseLost(leaseAbort.signal);
     await completeCustomBuildJob(job.id, workerId);
     return { processed: true, jobId: job.id, jobType: job.type };
@@ -163,8 +223,22 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
   }
 }
 
+export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId()): Promise<{
+  processed: boolean;
+  jobId?: string;
+  jobType?: string;
+}> {
+  await recoverStaleCustomBuildJobLeases();
+  const job = await claimNextCustomBuildJob(workerId);
+  if (!job) return { processed: false };
+  return processClaimedJob(job, workerId, createCustomBuildProcessingGate());
+}
+
 export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId()): Promise<void> {
   let shutdownRequested = false;
+  const concurrency = getCustomBuildWorkerConcurrency();
+  const processingGate = createCustomBuildProcessingGate();
+  const activeJobs = new Set<Promise<unknown>>();
   const stop = () => {
     shutdownRequested = true;
   };
@@ -172,11 +246,28 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   process.once("SIGTERM", stop);
 
   while (!shutdownRequested) {
-    const result = await runCustomBuildWorkerOnce(workerId);
-    if (!result.processed) {
-      await sleep(getCustomBuildWorkerPollMs());
+    await recoverStaleCustomBuildJobLeases();
+    let claimed = false;
+    while (!shutdownRequested && activeJobs.size < concurrency) {
+      const job = await claimNextCustomBuildJob(workerId);
+      if (!job) break;
+      claimed = true;
+      const active = processClaimedJob(job, workerId, processingGate);
+      activeJobs.add(active);
+      void active.then(
+        () => activeJobs.delete(active),
+        () => activeJobs.delete(active),
+      );
+    }
+
+    if (shutdownRequested) break;
+    if (activeJobs.size >= concurrency) {
+      await Promise.race(activeJobs);
+    } else if (!claimed) {
+      await Promise.race([sleep(getCustomBuildWorkerPollMs()), ...activeJobs]);
     }
   }
 
+  await Promise.all(activeJobs);
   await prisma.$disconnect();
 }

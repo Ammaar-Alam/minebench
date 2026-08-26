@@ -16,6 +16,7 @@ import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButto
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
+import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 import type { VoxelMeshPayload } from "@/lib/voxel/mesh";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import {
@@ -60,7 +61,7 @@ export function VoxelViewerCard({
   exportDisabled,
   exportDisabledReason,
   actions,
-  headerMeta,
+  jsonBytes,
   viewerRef,
   skipValidation = false,
   embedded = false,
@@ -100,7 +101,7 @@ export function VoxelViewerCard({
   exportDisabled?: boolean;
   exportDisabledReason?: string;
   actions?: ReactNode;
-  headerMeta?: string;
+  jsonBytes?: number | null;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
   embedded?: boolean;
@@ -189,13 +190,8 @@ export function VoxelViewerCard({
     ? buildJsonText || modelOutputText
     : modelOutputText || buildJsonText;
 
-  const timing = useMemo(() => {
-    const ms = metrics?.generationTimeMs;
-    if (typeof ms !== "number" || !Number.isFinite(ms)) return null;
-    if (ms >= 10_000) return `${Math.round(ms / 1000)}s`;
-    if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-    return `${Math.round(ms)}ms`;
-  }, [metrics?.generationTimeMs]);
+  const timing = formatBuildDuration(metrics?.generationTimeMs);
+  const jsonSize = formatBuildJsonSize(jsonBytes);
 
   const elapsed = useMemo(() => {
     const ms = elapsedMs;
@@ -306,8 +302,8 @@ export function VoxelViewerCard({
     <div className={embedded ? "overflow-hidden bg-card/25" : "mb-panel"}>
       <div className="mb-panel-inner">
         <div className="border-b border-border/70 bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
-          <div className="flex items-center justify-between gap-2 sm:gap-3">
-            <div className="flex min-w-0 flex-1 items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
               <div className="shrink-0 font-display text-sm font-semibold tracking-tight text-fg sm:text-base">
                 {title}
               </div>
@@ -315,10 +311,20 @@ export function VoxelViewerCard({
                 <div className="min-w-0 truncate text-xs sm:text-[13px]">{subtitle}</div>
               ) : null}
               {build ? (
-                <div className="flex items-center gap-1 font-mono text-[11px] text-muted sm:hidden">
-                  <span className="text-muted/40">•</span>
-                  <span>{blockCount.toLocaleString()}</span>
-                  {headerMeta ? <><span className="text-muted/40">•</span><span className="truncate">{headerMeta}</span></> : null}
+                <div className="flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-muted sm:text-xs">
+                  <span className="whitespace-nowrap">{blockCount.toLocaleString()} blocks</span>
+                  {jsonSize ? <span className="whitespace-nowrap">{jsonSize} JSON</span> : null}
+                  {timing ? <span className="whitespace-nowrap">{timing}</span> : null}
+                  {metrics?.attempts ? (
+                    <span className="whitespace-nowrap">
+                      {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                  {warnings.length ? (
+                    <span className="whitespace-nowrap">
+                      {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -371,25 +377,6 @@ export function VoxelViewerCard({
                   {actions}
                 </div>
               ) : null}
-              <div className="hidden text-right text-[11px] text-muted sm:block sm:text-xs">
-                {build ? (
-                  <div className="items-center gap-2 font-mono sm:flex">
-                    <span>{blockCount.toLocaleString()} blocks</span>
-                    {headerMeta ? <span>• {headerMeta}</span> : null}
-                    {timing ? <span>• {timing}</span> : null}
-                    {metrics?.attempts ? (
-                      <span>
-                        • {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
-                      </span>
-                    ) : null}
-                    {warnings.length ? (
-                      <span>
-                        • {warnings.length} warning{warnings.length === 1 ? "" : "s"}
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
             </div>
           </div>
         </div>

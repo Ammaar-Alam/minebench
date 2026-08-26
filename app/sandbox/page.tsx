@@ -48,7 +48,7 @@ export default async function SandboxPage({
   const hasComparisonState = sp.models !== undefined || sp.promptId !== undefined;
   const prompt =
     !hasComparisonState && typeof promptParam === "string" ? promptParam : undefined;
-  const signedIn = Boolean(await getCurrentAccount().catch(() => null));
+  const account = await getCurrentAccount().catch(() => null);
   return (
     <>
       <script
@@ -56,7 +56,12 @@ export default async function SandboxPage({
         dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumbData) }}
       />
       <h1 className="sr-only">MineBench sandbox for AI voxel builds</h1>
-      <Sandbox initialPrompt={prompt} signedIn={signedIn} />
+      <Sandbox
+        initialPrompt={prompt}
+        signedIn={Boolean(account)}
+        hasPublicNickname={Boolean(account?.publicNickname)}
+        gallerySuspended={Boolean(account?.gallerySuspendedAt)}
+      />
     </>
   );
 }

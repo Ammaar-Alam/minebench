@@ -103,6 +103,8 @@ const exampleSelect = {
       gridSize: true,
       palette: true,
       blockCount: true,
+      buildByteSize: true,
+      generationTimeMs: true,
       buildSha256: true,
       modelKind: true,
       modelId: true,
@@ -157,6 +159,8 @@ function publicExample(example: ExampleRow) {
     gridSize: example.customBuild.gridSize,
     palette: example.customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
     blockCount: example.customBuild.blockCount,
+    jsonBytes: example.customBuild.buildByteSize,
+    generationTimeMs: example.customBuild.generationTimeMs,
     checksum: example.customBuild.buildSha256,
     previewUrl: kinds.has("preview_svg")
       ? `/api/gallery/examples/${example.id}/preview`

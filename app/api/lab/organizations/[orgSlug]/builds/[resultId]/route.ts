@@ -30,11 +30,11 @@ function diagnostics(result: {
   requestConfiguration: string | null;
   error: string | null;
   updatedAt: Date;
-}) {
+}, fallbackGenerationTimeMs?: number | null) {
   return {
     status: result.status,
     attempts: result.attempts,
-    generationTimeMs: result.generationTimeMs,
+    generationTimeMs: result.generationTimeMs || fallbackGenerationTimeMs || 0,
     requestConfiguration: result.requestConfiguration,
     error: result.status === "FAILED" && result.error ? "Generation failed" : null,
     updatedAt: result.updatedAt.toISOString(),
@@ -109,6 +109,8 @@ export async function GET(
           palette: true,
           mode: true,
           blockCount: true,
+          voxelByteSize: true,
+          generationTimeMs: true,
         },
       },
     },
@@ -154,7 +156,8 @@ export async function GET(
       palette: normalizePalette(result.build.palette),
       mode: result.build.mode,
       blockCount: result.build.blockCount,
-      diagnostics: diagnostics(result),
+      jsonBytes: result.build.voxelByteSize,
+      diagnostics: diagnostics(result, result.build.generationTimeMs),
     },
     { headers: privateHeaders() },
   );

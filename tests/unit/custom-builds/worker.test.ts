@@ -3,7 +3,9 @@ import { readFileSync } from "node:fs";
 
 const previousLeaseSeconds = process.env.CUSTOM_BUILD_JOB_LEASE_SECONDS;
 const previousWorkerId = process.env.CUSTOM_BUILD_WORKER_ID;
+const previousWorkerConcurrency = process.env.CUSTOM_BUILD_WORKER_CONCURRENCY;
 delete process.env.CUSTOM_BUILD_WORKER_ID;
+delete process.env.CUSTOM_BUILD_WORKER_CONCURRENCY;
 const workerSource = readFileSync("lib/custom-builds/worker.ts", "utf8");
 const exportJobSource = readFileSync("lib/custom-builds/exportJob.ts", "utf8");
 
@@ -11,10 +13,37 @@ const exportJobSource = readFileSync("lib/custom-builds/exportJob.ts", "utf8");
 
 async function main() {
   const {
+    createCustomBuildProcessingGate,
     getCustomBuildSynchronousExportLeaseMs,
+    getCustomBuildWorkerConcurrency,
     getCustomBuildWorkerHeartbeatMs,
     getCustomBuildWorkerId,
   } = await import("../../../lib/custom-builds/worker");
+
+  assert.equal(
+    getCustomBuildWorkerConcurrency(),
+    10,
+    "one worker process should overlap ten provider-bound jobs by default",
+  );
+  process.env.CUSTOM_BUILD_WORKER_CONCURRENCY = "4";
+  assert.equal(getCustomBuildWorkerConcurrency(), 4);
+  process.env.CUSTOM_BUILD_WORKER_CONCURRENCY = "100";
+  assert.equal(getCustomBuildWorkerConcurrency(), 20, "configured concurrency should stay bounded");
+  delete process.env.CUSTOM_BUILD_WORKER_CONCURRENCY;
+
+  const processingGate = createCustomBuildProcessingGate();
+  const releaseFirst = await processingGate.acquire();
+  let secondAcquired = false;
+  const second = processingGate.acquire().then((release) => {
+    secondAcquired = true;
+    return release;
+  });
+  await Promise.resolve();
+  assert.equal(secondAcquired, false, "local build processing should remain single-file");
+  releaseFirst();
+  const releaseSecond = await second;
+  assert.equal(secondAcquired, true);
+  releaseSecond();
 
   const defaultWorkerId = getCustomBuildWorkerId();
   assert.match(
@@ -91,7 +120,8 @@ async function main() {
     "generate jobs should receive the heartbeat abort signal",
   );
   assert.ok(
-    workerSource.includes("runCustomBuildExportJob(job, {\n    signal,"),
+    workerSource.includes("runCustomBuildExportJob(job, {") &&
+      workerSource.indexOf("signal,", workerSource.indexOf("runCustomBuildExportJob(job, {")) > 0,
     "export jobs should receive the heartbeat abort signal",
   );
   assert.ok(
@@ -100,10 +130,10 @@ async function main() {
     "lost leases should stop the worker path without failing a job it may no longer own",
   );
   const callbackIndex = exportJobSource.indexOf("await opts.beforeSynchronousExport?.()");
-  const exportIndex = exportJobSource.indexOf("const artifact = exportVoxelBuild");
+  const downloadIndex = exportJobSource.indexOf("const bytes = await downloadCustomBuildArtifactBytes");
   assert.ok(
-    callbackIndex >= 0 && exportIndex > callbackIndex,
-    "export jobs should renew/extend the lease immediately before synchronous export work",
+    callbackIndex >= 0 && downloadIndex > callbackIndex,
+    "export jobs should enter the processing gate before loading their canonical build",
   );
 
   console.log("custom build worker lease checks passed");
@@ -120,6 +150,11 @@ main()
       delete process.env.CUSTOM_BUILD_WORKER_ID;
     } else {
       process.env.CUSTOM_BUILD_WORKER_ID = previousWorkerId;
+    }
+    if (previousWorkerConcurrency === undefined) {
+      delete process.env.CUSTOM_BUILD_WORKER_CONCURRENCY;
+    } else {
+      process.env.CUSTOM_BUILD_WORKER_CONCURRENCY = previousWorkerConcurrency;
     }
   })
   .catch((error) => {

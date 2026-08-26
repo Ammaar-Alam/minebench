@@ -7,8 +7,10 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
+import { publishGenerationToGallery } from "@/lib/gallery/client";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
+import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 const VoxelViewerCard = dynamic(
   () => import("@/components/voxel/VoxelViewerCard").then((module) => module.VoxelViewerCard),
@@ -26,14 +28,6 @@ const SandboxGifExportButton = dynamic(
 function statusLabel(value: SavedGenerationPayload["status"]): string {
   if (value === "succeeded") return "Ready";
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  const kibibytes = value / 1024;
-  if (kibibytes < 1024) return `${kibibytes.toFixed(kibibytes >= 10 ? 0 : 1)} KiB`;
-  const mebibytes = kibibytes / 1024;
-  return `${mebibytes.toFixed(mebibytes >= 10 ? 1 : 2)} MiB`;
 }
 
 function GenerationDownloadButton({
@@ -144,34 +138,8 @@ function GenerationActions({
     setPending(true);
     setMessage(null);
     try {
-      const response = await fetch("/api/gallery/candidates", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ generationId: generation.id, postAnonymously: anonymous }),
-      });
-      const body = (await response.json()) as {
-        created?: boolean;
-        candidate?: { id: string };
-        error?: { message?: string };
-      };
-      if (!response.ok || !body.candidate) throw new Error(body.error?.message ?? "Generation could not be submitted.");
-      if (body.created === false) {
-        const exampleResponse = await fetch(
-          `/api/gallery/candidates/${encodeURIComponent(body.candidate.id)}/examples`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ generationId: generation.id, postAnonymously: anonymous }),
-          },
-        );
-        const exampleBody = (await exampleResponse.json().catch(() => null)) as {
-          error?: { message?: string };
-        } | null;
-        if (!exampleResponse.ok) {
-          throw new Error(exampleBody?.error?.message ?? "Example could not be added.");
-        }
-      }
-      router.push(`/gallery/${body.candidate.id}`);
+      const candidateId = await publishGenerationToGallery(generation.id, anonymous);
+      router.push(`/gallery/${candidateId}`);
     } catch (submissionError) {
       setMessage(submissionError instanceof Error ? submissionError.message : "Generation could not be submitted.");
       setPending(false);
@@ -274,7 +242,12 @@ function SavedBuildDialog({
             exportLabel={generation.model.label}
             exportPrompt={generation.prompt}
             viewerRef={viewerRef}
-            headerMeta={generation.expandedBytes != null ? `${formatBytes(generation.expandedBytes)} JSON` : undefined}
+            jsonBytes={generation.expandedBytes}
+            metrics={generation.blockCount != null ? {
+              blockCount: generation.blockCount,
+              generationTimeMs: generation.generationTimeMs ?? undefined,
+              warnings: generation.warnings,
+            } : undefined}
             actions={build && !loading ? (
               <>
                 <GenerationDownloadButton generation={generation} compact onError={setDownloadError} />
@@ -380,7 +353,7 @@ export function GalleryYours({
                 <div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span><time dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time></div>
                 <h3 className={`mt-2 text-xl font-semibold leading-snug text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
                 {generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}
-                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{generation.expandedBytes != null ? <span>{formatBytes(generation.expandedBytes)} JSON</span> : null}</div> : null}
+                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(generation.expandedBytes) ? <span>{formatBuildJsonSize(generation.expandedBytes)} JSON</span> : null}{formatBuildDuration(generation.generationTimeMs) ? <span>{formatBuildDuration(generation.generationTimeMs)}</span> : null}</div> : null}
               </div>
             </button>
             <div className="mt-5 md:ml-48"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>

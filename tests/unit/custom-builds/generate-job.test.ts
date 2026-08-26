@@ -194,12 +194,18 @@ async function main() {
     isTerminalCustomBuildGenerateError,
     validateGeneratedBuildForArtifacts,
   } = await import("../../../lib/custom-builds/generateJob");
-  const { gzipBytes, jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
+  const { jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
 
   assert.ok(
     generateJobSource.includes("buildGalleryPreviewSvg(canonicalBuild)") &&
       generateJobSource.includes("blockCount: canonicalBuild.blocks.length"),
     "static thumbnails should derive from the canonical build rather than the sampled viewer preview",
+  );
+  assert.ok(
+    generateJobSource.includes("writeCanonicalBuildArtifact(canonicalBuild)") &&
+      !generateJobSource.includes("jsonBytes(canonicalBuild)") &&
+      !generateJobSource.includes("gzipBytes(fullBytes)"),
+    "canonical artifacts should be serialized and compressed without whole-build buffers",
   );
 
   assert.equal(
@@ -266,7 +272,6 @@ async function main() {
     blocks: [{ x: 1, y: 1, z: 1, type: "stone" }],
   });
   const expectedFullSourceSha = sha256Hex(expectedFullBytes);
-  const expectedFullArtifactSha = sha256Hex(gzipBytes(expectedFullBytes));
   const buildJsonArtifact = artifactCreates.find((artifact) => artifact.kind === "build_json");
   const previewArtifact = artifactCreates.find((artifact) => artifact.kind === "preview_mbv4");
   const viewerArtifact = artifactCreates.find((artifact) => artifact.kind === "viewer_mbv4");
@@ -275,7 +280,7 @@ async function main() {
   assert.ok(previewArtifact, "generate job should record the binary preview artifact");
   assert.ok(viewerArtifact, "generate job should record the full viewer artifact");
   assert.ok(thumbnailArtifact, "generate job should record the static preview artifact");
-  assert.equal(buildJsonArtifact.sha256, expectedFullArtifactSha);
+  assert.match(String(buildJsonArtifact.sha256), /^[a-f0-9]{64}$/);
   assert.equal(buildJsonArtifact.sourceBuildSha256, expectedFullSourceSha);
   assert.equal(previewArtifact.sourceBuildSha256, expectedFullSourceSha);
   assert.equal(viewerArtifact.sourceBuildSha256, expectedFullSourceSha);

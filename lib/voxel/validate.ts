@@ -115,13 +115,19 @@ export function validateVoxelBuildSpec(
   opts: ValidateVoxelOptions,
 ): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
   const allowed = new Set(opts.palette.map((b) => b.id));
+  const paletteIndex = new Map(opts.palette.map((block, index) => [block.id, index + 1]));
   const warnings: string[] = [];
   let droppedNegative = 0;
   let droppedOutOfBounds = 0;
   const droppedUnknownTypeCounts = new Map<string, number>();
 
-  const keyToBlock = new Map<number, { x: number; y: number; z: number; type: string }>();
-  // 10 bits per coordinate supports up to 1024³ grids (covers 512³).
+  // Sparse typed chunks keep coordinate dedupe outside V8's object heap
+  const chunks = new Map<number, Uint8Array | Uint16Array>();
+  let occupied = new Uint32Array(16_384);
+  let occupiedCount = 0;
+  const makeChunk = () =>
+    opts.palette.length <= 255 ? new Uint8Array(16 ** 3) : new Uint16Array(16 ** 3);
+  // 10 bits per coordinate supports up to 1024³ grids (covers 512³)
   const encode = (x: number, y: number, z: number) => x | (y << 10) | (z << 20);
 
   // Hard cap to prevent pathological expansions from primitives. We enforce this BEFORE building any huge intermediate arrays.
@@ -152,8 +158,26 @@ export function validateVoxelBuildSpec(
     const x = clampInt(Math.trunc(xRaw), 0, opts.gridSize - 1);
     const y = clampInt(Math.trunc(yRaw), 0, opts.gridSize - 1);
     const z = clampInt(Math.trunc(zRaw), 0, opts.gridSize - 1);
+    const encodedType = paletteIndex.get(type);
+    if (encodedType === undefined) return;
 
-    keyToBlock.set(encode(x, y, z), { x, y, z, type });
+    const chunkKey = (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12);
+    let chunk = chunks.get(chunkKey);
+    if (!chunk) {
+      chunk = makeChunk();
+      chunks.set(chunkKey, chunk);
+    }
+    const localIndex = (x & 15) | ((y & 15) << 4) | ((z & 15) << 8);
+    if (chunk[localIndex] === 0) {
+      if (occupiedCount === occupied.length) {
+        const grown = new Uint32Array(occupied.length * 2);
+        grown.set(occupied);
+        occupied = grown;
+      }
+      occupied[occupiedCount] = encode(x, y, z);
+      occupiedCount += 1;
+    }
+    chunk[localIndex] = encodedType;
   };
 
   try {
@@ -254,7 +278,16 @@ export function validateVoxelBuildSpec(
     if (remaining > 0) warnings.push(`Dropped ${remaining} additional unknown block types`);
   }
 
-  const blocks = Array.from(keyToBlock.values());
+  const blocks = Array.from({ length: occupiedCount }, (_, index) => {
+    const key = occupied[index]!;
+    const x = key & 1023;
+    const y = (key >>> 10) & 1023;
+    const z = (key >>> 20) & 1023;
+    const chunkKey = (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12);
+    const localIndex = (x & 15) | ((y & 15) << 4) | ((z & 15) << 8);
+    const type = opts.palette[(chunks.get(chunkKey)?.[localIndex] ?? 1) - 1]!.id;
+    return { x, y, z, type };
+  });
   if (blocks.length > opts.maxBlocks) {
     return {
       ok: false,

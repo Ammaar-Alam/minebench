@@ -124,8 +124,13 @@ assert.match(
 );
 assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);
 assert.match(generationRun, /deleteUnacceptedStealthBuild\(existing\.id\)/);
+assert.match(generationRun, /select: \{ id: true, generationTimeMs: true \}/);
+assert.match(generationRun, /generationTimeMs: existing\.generationTimeMs/);
 assert.match(generationRun, /sanitizeOperationalError\([\s\S]*configuredApiKey/);
 assert.match(generationRun, /complete \? "SUCCEEDED"/);
+const protectedBuildRoute = read("app/api/lab/organizations/[orgSlug]/builds/[resultId]/route.ts");
+assert.match(protectedBuildRoute, /generationTimeMs: result\.generationTimeMs \|\| fallbackGenerationTimeMs \|\| 0/);
+assert.match(protectedBuildRoute, /voxelByteSize: true/);
 const unacceptedCleanup = generationSource.slice(
   generationSource.indexOf("export async function deleteUnacceptedStealthBuild"),
   generationSource.indexOf("export function isMissingStealthBuildPayload"),

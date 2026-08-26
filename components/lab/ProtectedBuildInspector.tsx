@@ -28,6 +28,7 @@ type ProtectedBuildResponse = {
   gridSize: 64 | 256 | 512;
   palette: "simple" | "advanced";
   blockCount: number;
+  jsonBytes: number | null;
   diagnostics: {
     attempts: number;
     generationTimeMs: number;
@@ -340,6 +341,7 @@ export function ProtectedBuildInspector({
                 gridSize={payload?.gridSize ?? 256}
                 palette={payload?.palette ?? "simple"}
                 expectedBlockCount={payload?.blockCount ?? selected.blockCount ?? undefined}
+                jsonBytes={payload?.jsonBytes}
                 isLoading={loading}
                 loadingMessage="Loading build…"
                 loadingProgress={loadingProgress ?? undefined}

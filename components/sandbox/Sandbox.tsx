@@ -80,7 +80,17 @@ function SandboxModeTabs({
   );
 }
 
-export function Sandbox({ initialPrompt, signedIn }: { initialPrompt?: string; signedIn: boolean }) {
+export function Sandbox({
+  initialPrompt,
+  signedIn,
+  hasPublicNickname,
+  gallerySuspended,
+}: {
+  initialPrompt?: string;
+  signedIn: boolean;
+  hasPublicNickname: boolean;
+  gallerySuspended: boolean;
+}) {
   const searchParams = useSearchParams();
   const searchKey = searchParams.toString();
   const livePrompt =
@@ -122,7 +132,13 @@ export function Sandbox({ initialPrompt, signedIn }: { initialPrompt?: string; s
       {mode === "benchmark" ? (
         <SandboxBenchmark />
       ) : mode === "live" ? (
-        <SandboxLive key={livePrompt ?? "default"} initialPrompt={livePrompt} signedIn={signedIn} />
+        <SandboxLive
+          key={livePrompt ?? "default"}
+          initialPrompt={livePrompt}
+          signedIn={signedIn}
+          hasPublicNickname={hasPublicNickname}
+          gallerySuspended={gallerySuspended}
+        />
       ) : (
         <LocalLab />
       )}

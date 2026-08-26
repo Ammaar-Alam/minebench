@@ -70,6 +70,7 @@ export async function runCustomBuildExportJob(
     throw new Error("Custom build JSON artifact is missing");
   }
 
+  await opts.beforeSynchronousExport?.();
   throwIfCustomBuildLeaseLost(opts.signal);
   const bytes = await downloadCustomBuildArtifactBytes({
     bucket: buildArtifact.bucket,
@@ -88,7 +89,6 @@ export async function runCustomBuildExportJob(
   }
 
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
-  await opts.beforeSynchronousExport?.();
   throwIfCustomBuildLeaseLost(opts.signal);
   const artifact = exportVoxelBuild(build.value, getPalette(palette), format);
   throwIfCustomBuildLeaseLost(opts.signal);

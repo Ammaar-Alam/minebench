@@ -10,9 +10,9 @@ import {
   buildCustomBuildPreview,
   decodeAndVerifyCustomBuildArtifactText,
   gzipBytes,
-  jsonBytes,
   sha256Hex,
   uploadAndRecordCustomBuildArtifact,
+  writeCanonicalBuildArtifact,
 } from "@/lib/custom-builds/artifacts";
 import { appendCustomBuildEvent } from "@/lib/custom-builds/events";
 import {
@@ -203,7 +203,10 @@ function emitCustomBuildEvent(customBuildId: string, type: string, data: Prisma.
 async function generateBuild(
   customBuild: CustomBuild,
   job: CustomBuildJob,
-  opts: { signal?: AbortSignal } = {},
+  opts: {
+    signal?: AbortSignal;
+    acquireBuildProcessing?: () => Promise<() => void>;
+  } = {},
 ): Promise<GeneratedBuildResult> {
   throwIfCustomBuildLeaseLost(opts.signal);
   const payload = asGenerateJobPayload(job.payload);
@@ -212,6 +215,8 @@ async function generateBuild(
       throw new Error("Stub custom build jobs require CUSTOM_BUILD_STUB_PROVIDER=1");
     }
     const started = Date.now();
+    await opts.acquireBuildProcessing?.();
+    throwIfCustomBuildLeaseLost(opts.signal);
     const validated = validateGeneratedBuildForArtifacts(payload.stubBuild, customBuild);
     return {
       build: validated.build,
@@ -266,6 +271,8 @@ async function generateBuild(
       reasoning: customBuild.reasoning ?? undefined,
       abortSignal: opts.signal,
       onRetry: (attempt) => emitCustomBuildEvent(customBuild.id, "retry", { attempt }),
+      acquireBuildProcessing: opts.acquireBuildProcessing,
+      returnExpandedBuild: true,
     },
   );
 
@@ -273,12 +280,10 @@ async function generateBuild(
   if (!result.ok) {
     throw new Error(redactSensitiveText(result.error));
   }
-  const artifactBuild = validateGeneratedBuildForArtifacts(result.build, customBuild);
-  const warnings = Array.from(new Set([...result.warnings, ...artifactBuild.warnings]));
   return {
-    build: artifactBuild.build,
-    warnings,
-    blockCount: artifactBuild.build.blocks.length,
+    build: result.build,
+    warnings: result.warnings,
+    blockCount: result.blockCount,
     generationTimeMs: result.generationTimeMs,
   };
 }
@@ -289,7 +294,13 @@ function persistedWarnings(value: Prisma.JsonValue | null): string[] {
     : [];
 }
 
-async function recoverStoredBuild(customBuild: CustomBuild): Promise<GeneratedBuildResult | null> {
+async function recoverStoredBuild(
+  customBuild: CustomBuild,
+  opts: {
+    signal?: AbortSignal;
+    acquireBuildProcessing?: () => Promise<() => void>;
+  } = {},
+): Promise<GeneratedBuildResult | null> {
   const artifact = await prisma.customBuildArtifact.findFirst({
     where: { customBuildId: customBuild.id, kind: "build_json" },
     select: {
@@ -304,6 +315,8 @@ async function recoverStoredBuild(customBuild: CustomBuild): Promise<GeneratedBu
   });
   if (!artifact) return null;
   try {
+    await opts.acquireBuildProcessing?.();
+    throwIfCustomBuildLeaseLost(opts.signal);
     if (artifact.encoding !== "gzip" || !artifact.sourceBuildSha256) {
       throw new Error("Stored canonical artifact metadata is incomplete");
     }
@@ -336,6 +349,7 @@ export async function runCustomBuildGenerateJob(
   job: CustomBuildJob,
   opts: {
     signal?: AbortSignal;
+    acquireBuildProcessing?: () => Promise<() => void>;
     beforeSynchronousArtifactPackaging?: () => Promise<void> | void;
   } = {},
 ): Promise<void> {
@@ -368,7 +382,7 @@ export async function runCustomBuildGenerateJob(
     } catch (error) {
       throw new CustomBuildArtifactPersistenceError(error);
     }
-    const recovered = await recoverStoredBuild(customBuild);
+    const recovered = await recoverStoredBuild(customBuild, opts);
     const generated = recovered ?? await generateBuild(customBuild, job, opts);
     if (recovered) emitCustomBuildEvent(customBuild.id, "recovered", { stage: "finalizing" });
     throwIfCustomBuildLeaseLost(opts.signal);
@@ -376,26 +390,31 @@ export async function runCustomBuildGenerateJob(
     throwIfCustomBuildLeaseLost(opts.signal);
     const canonicalBuild: VoxelBuild = {
       version: "1.0",
-      blocks: [...generated.build.blocks].sort(
+      blocks: generated.build.blocks.sort(
         (a, b) => a.x - b.x || a.y - b.y || a.z - b.z || a.type.localeCompare(b.type),
       ),
     };
-    const fullBytes = jsonBytes(canonicalBuild);
-    const fullSha = sha256Hex(fullBytes);
-    const fullGzip = gzipBytes(fullBytes);
-    const fullArtifactSha = sha256Hex(fullGzip);
-    throwIfCustomBuildLeaseLost(opts.signal);
-    await persistCustomBuildArtifact({
-      customBuildId: customBuild.id,
-      publicId: customBuild.publicId,
-      kind: "build_json",
-      bytes: fullGzip,
-      uncompressedByteSize: fullBytes.byteLength,
-      sha256: fullArtifactSha,
-      sourceBuildSha256: fullSha,
-      blockCount: generated.blockCount,
-      encoding: "gzip",
-    });
+    const canonicalArtifact = await writeCanonicalBuildArtifact(canonicalBuild);
+    const buildByteSize = canonicalArtifact.byteSize;
+    const buildCompressedByteSize = canonicalArtifact.storedByteSize;
+    const fullSha = canonicalArtifact.sourceSha256;
+    try {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      await persistCustomBuildArtifact({
+        customBuildId: customBuild.id,
+        publicId: customBuild.publicId,
+        kind: "build_json",
+        filePath: canonicalArtifact.filePath,
+        storedByteSize: canonicalArtifact.storedByteSize,
+        uncompressedByteSize: canonicalArtifact.byteSize,
+        sha256: canonicalArtifact.sha256,
+        sourceBuildSha256: fullSha,
+        blockCount: generated.blockCount,
+        encoding: "gzip",
+      });
+    } finally {
+      await canonicalArtifact.cleanup();
+    }
     artifactsPersisted = true;
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
 
@@ -496,8 +515,8 @@ export async function runCustomBuildGenerateJob(
             warnings: generated.warnings,
           },
           buildSha256: fullSha,
-          buildByteSize: fullBytes.byteLength,
-          buildCompressedByteSize: fullGzip.byteLength,
+          buildByteSize,
+          buildCompressedByteSize,
           previewBlockCount: preview.blocks.length,
           previewSha256: previewArtifactSha,
           storedByteSize: stored._sum.storedByteSize ?? 0,

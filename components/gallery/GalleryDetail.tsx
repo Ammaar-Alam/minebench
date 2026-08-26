@@ -11,6 +11,7 @@ import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import type { GalleryCandidatePayload, GalleryExamplePayload } from "@/lib/gallery/service";
+import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 const SandboxGifExportButton = dynamic(
   () => import("@/components/sandbox/SandboxGifExportButton").then((module) => module.SandboxGifExportButton),
@@ -200,6 +201,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
             subtitle={`By ${selected.attribution}`}
             voxelBuild={build}
             expectedBlockCount={selected.blockCount ?? undefined}
+            jsonBytes={selected.jsonBytes}
             gridSize={selected.gridSize === 64 || selected.gridSize === 512 ? selected.gridSize : 256}
             palette={selected.palette}
             isLoading={loading}
@@ -209,6 +211,11 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
             exportLabel={selected.model.label}
             exportPrompt={candidate.prompt}
             viewerRef={viewerRef}
+            metrics={selected.blockCount != null ? {
+              blockCount: selected.blockCount,
+              generationTimeMs: selected.generationTimeMs ?? undefined,
+              warnings: [],
+            } : undefined}
             actions={build && !loading ? (
               <SandboxGifExportButton
                 targets={[{
@@ -230,7 +237,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
               {examples.map((example) => (
                 <button key={example.id} type="button" aria-pressed={example.id === selected.id} onClick={() => setSelectedId(example.id)} className={`group/example min-w-0 overflow-hidden rounded-md border text-left transition-[transform,border-color,background-color] duration-200 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none ${example.id === selected.id ? "border-accent/65 bg-accent/5" : "border-border bg-card/10 hover:border-muted"}`}>
                   {example.previewUrl ? <div className="relative aspect-[16/9] bg-bg"><Image src={example.previewUrl} alt="" fill unoptimized sizes="18rem" className="object-contain p-1.5 transition-transform duration-300 ease-out group-hover/example:scale-[1.025] motion-reduce:transition-none" /></div> : null}
-                  <div className="p-3"><p className="truncate text-sm font-medium text-fg">{example.model.label}</p><p className="mt-1 truncate text-xs text-muted">{example.attribution}</p></div>
+                  <div className="p-3"><p className="truncate text-sm font-medium text-fg">{example.model.label}</p><p className="mt-1 truncate text-xs text-muted">{example.attribution}</p><p className="mt-2 flex flex-wrap gap-x-2 font-mono text-[10px] text-muted">{example.blockCount != null ? <span>{example.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(example.jsonBytes) ? <span>{formatBuildJsonSize(example.jsonBytes)} JSON</span> : null}{formatBuildDuration(example.generationTimeMs) ? <span>{formatBuildDuration(example.generationTimeMs)}</span> : null}</p></div>
                 </button>
               ))}
             </div>

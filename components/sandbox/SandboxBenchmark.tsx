@@ -1047,6 +1047,7 @@ export function SandboxBenchmark() {
             meshCacheKey={meshCacheKey}
             gridSize={gridSize}
             palette={palette}
+            jsonBytes={build?.buildLoadHints.fullEstimatedBytes}
             animateIn
             useFirstRenderReady
             isLoading={isHydrating}

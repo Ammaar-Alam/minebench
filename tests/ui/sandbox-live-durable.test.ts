@@ -157,6 +157,7 @@ assert.ok(
   sourceText.includes("<GenerationPreflightDialog") &&
     sourceText.includes("void runGenerate(true)") &&
     sourceText.includes("customBuildPageUrl") &&
+    sourceText.includes("<GenerationGalleryButton") &&
     sourceText.includes('label="Export GIF"') &&
     sourceText.includes("embedded") &&
     !sourceText.includes("View saved builds") &&

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { VoxelBuild } from "../../../lib/voxel/types";
 import {
   assertCustomBuildPublicId,
   generateCustomBuildPublicId,
@@ -15,12 +16,14 @@ import {
   jsonBytes,
   sha256Hex,
   uploadAndRecordCustomBuildArtifact,
+  writeCanonicalBuildArtifact,
 } from "../../../lib/custom-builds/artifacts";
 import {
   deleteCustomBuildArtifact,
   downloadCustomBuildArtifactBytes,
   getCustomBuildArtifactPath,
   uploadCustomBuildArtifact,
+  uploadCustomBuildArtifactFile,
 } from "../../../lib/custom-builds/storage";
 
 async function main() {
@@ -112,6 +115,73 @@ async function main() {
 
   const originalBucket = process.env.CUSTOM_BUILD_STORAGE_BUCKET;
   const originalStorageDir = process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+  const canonicalBuild: VoxelBuild = {
+    version: "1.0",
+    blocks: [
+      { x: 1, y: 2, z: 3, type: "stone" },
+      { x: 4, y: 5, z: 6, type: "oak_planks" },
+    ],
+  };
+  const streamed = await writeCanonicalBuildArtifact(canonicalBuild);
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const stored = new Uint8Array(await readFile(streamed.filePath));
+    const expected = JSON.stringify({
+      version: "1.0",
+      blocks: [
+        { x: 1, y: 2, z: 3, type: "stone" },
+        { x: 4, y: 5, z: 6, type: "oak_planks" },
+      ],
+    });
+    assert.equal(streamed.byteSize, Buffer.byteLength(expected));
+    assert.equal(streamed.storedByteSize, stored.byteLength);
+    assert.equal(streamed.sourceSha256, sha256Hex(expected));
+    assert.equal(streamed.sha256, sha256Hex(stored));
+    assert.equal(
+      decodeAndVerifyCustomBuildArtifactText({
+        bytes: stored,
+        encoding: "gzip",
+        storedSha256: streamed.sha256,
+        sourceSha256: streamed.sourceSha256,
+      }),
+      expected,
+    );
+
+    process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
+    process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-stream-upload";
+    const streamedPath = getCustomBuildArtifactPath({
+      publicId: id,
+      kind: "build_json",
+      sha256: streamed.sha256,
+    });
+    await uploadCustomBuildArtifactFile({
+      bucket: "__local_fs__",
+      path: streamedPath,
+      filePath: streamed.filePath,
+      byteSize: streamed.storedByteSize,
+      contentType: "application/json",
+      encoding: "gzip",
+    });
+    assert.deepEqual(
+      await downloadCustomBuildArtifactBytes({ bucket: "__local_fs__", path: streamedPath }),
+      stored,
+    );
+    await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: streamedPath });
+  } finally {
+    await streamed.cleanup();
+    if (originalBucket === undefined) delete process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+    else process.env.CUSTOM_BUILD_STORAGE_BUCKET = originalBucket;
+    if (originalStorageDir === undefined) delete process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+    else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
+  }
+
+  const secondStream = await writeCanonicalBuildArtifact(canonicalBuild);
+  try {
+    assert.equal(secondStream.sha256, streamed.sha256, "streamed gzip output should be deterministic");
+  } finally {
+    await secondStream.cleanup();
+  }
+
   process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
   process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-artifact-compensation";
   const compensationBytes = new TextEncoder().encode("orphan candidate");

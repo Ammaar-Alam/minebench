@@ -1,3 +1,11 @@
+import { createHash } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { mkdtemp, rmdir, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGzip } from "node:zlib";
 import type { CustomBuildArtifact, Prisma, PrismaClient } from "@prisma/client";
 import { gzipSync } from "fflate";
 import { sha256Hex } from "@/lib/custom-builds/hash";
@@ -8,6 +16,7 @@ import {
   getCustomBuildStorageBucket,
   deleteCustomBuildArtifact,
   uploadCustomBuildArtifact,
+  uploadCustomBuildArtifactFile,
 } from "@/lib/custom-builds/storage";
 import type { CustomBuildArtifactKind, CustomBuildStorageEncoding } from "@/lib/custom-builds/types";
 import { decodeStoredBuildText } from "@/lib/storage/buildPayload";
@@ -37,6 +46,91 @@ export function jsonBytes(value: unknown): Uint8Array {
 
 export function gzipBytes(bytes: Uint8Array): Uint8Array {
   return gzipSync(bytes, { mtime: 0 });
+}
+
+function* canonicalBuildJsonChunks(build: VoxelBuild): Generator<Uint8Array> {
+  let chunk = '{"version":"1.0","blocks":[';
+  for (let index = 0; index < build.blocks.length; index += 1) {
+    const block = `${index === 0 ? "" : ","}${JSON.stringify(build.blocks[index])}`;
+    if (chunk.length + block.length > 64 * 1024) {
+      yield ENCODER.encode(chunk);
+      chunk = block;
+    } else {
+      chunk += block;
+    }
+  }
+  yield ENCODER.encode(`${chunk}]}`);
+}
+
+async function removeCanonicalArtifactFile(directory: string, filePath: string): Promise<void> {
+  try {
+    await unlink(filePath);
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  try {
+    await rmdir(directory);
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+export async function writeCanonicalBuildArtifact(build: VoxelBuild): Promise<{
+  filePath: string;
+  byteSize: number;
+  storedByteSize: number;
+  sha256: string;
+  sourceSha256: string;
+  cleanup: () => Promise<void>;
+}> {
+  const directory = await mkdtemp(path.join(tmpdir(), "minebench-build-"));
+  const filePath = path.join(directory, "build.json.gz");
+  const sourceHash = createHash("sha256");
+  const storedHash = createHash("sha256");
+  let byteSize = 0;
+  let storedByteSize = 0;
+  let cleaned = false;
+  const cleanup = async () => {
+    if (cleaned) return;
+    cleaned = true;
+    await removeCanonicalArtifactFile(directory, filePath);
+  };
+  try {
+    await pipeline(
+      Readable.from(canonicalBuildJsonChunks(build)),
+      new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          sourceHash.update(chunk);
+          byteSize += chunk.byteLength;
+          callback(null, chunk);
+        },
+      }),
+      createGzip(),
+      new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          storedHash.update(chunk);
+          storedByteSize += chunk.byteLength;
+          callback(null, chunk);
+        },
+      }),
+      createWriteStream(filePath, { flags: "wx" }),
+    );
+    return {
+      filePath,
+      byteSize,
+      storedByteSize,
+      sha256: storedHash.digest("hex"),
+      sourceSha256: sourceHash.digest("hex"),
+      cleanup,
+    };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
 function hasGzipMagic(bytes: Uint8Array): boolean {
@@ -80,7 +174,9 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
   customBuildId: string;
   publicId: string;
   kind: CustomBuildArtifactKind;
-  bytes: Uint8Array;
+  bytes?: Uint8Array;
+  filePath?: string;
+  storedByteSize?: number;
   uncompressedByteSize?: number;
   sha256?: string;
   sourceBuildSha256?: string;
@@ -91,7 +187,12 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
 }) {
   const client = args.client ?? prisma;
   const descriptor = getCustomBuildArtifactDescriptor(args.kind);
-  const sha256 = args.sha256 ?? sha256Hex(args.bytes);
+  const storedByteSize = args.bytes?.byteLength ?? args.storedByteSize;
+  if (storedByteSize == null || storedByteSize < 0) {
+    throw new Error("Custom build artifact stored byte size is required");
+  }
+  const sha256 = args.sha256 ?? (args.bytes ? sha256Hex(args.bytes) : undefined);
+  if (!sha256) throw new Error("Custom build artifact sha256 is required for file uploads");
   const path = getCustomBuildArtifactPath({
     publicId: args.publicId,
     kind: args.kind,
@@ -124,13 +225,26 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
                 ? `${args.publicId}-preview.svg`
         : `${args.publicId}.${descriptor.fileExtension}`;
 
-  await uploadCustomBuildArtifact({
-    bucket,
-    path,
-    bytes: args.bytes,
-    contentType: descriptor.contentType,
-    encoding: args.encoding,
-  });
+  if (args.bytes) {
+    await uploadCustomBuildArtifact({
+      bucket,
+      path,
+      bytes: args.bytes,
+      contentType: descriptor.contentType,
+      encoding: args.encoding,
+    });
+  } else if (args.filePath) {
+    await uploadCustomBuildArtifactFile({
+      bucket,
+      path,
+      filePath: args.filePath,
+      byteSize: storedByteSize,
+      contentType: descriptor.contentType,
+      encoding: args.encoding,
+    });
+  } else {
+    throw new Error("Custom build artifact bytes or file path are required");
+  }
 
   let artifact: CustomBuildArtifact;
   try {
@@ -147,9 +261,9 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
         fileName,
         sha256,
         sourceBuildSha256,
-        byteSize: args.uncompressedByteSize ?? args.bytes.byteLength,
-        compressedByteSize: args.encoding === "gzip" ? args.bytes.byteLength : undefined,
-        storedByteSize: args.bytes.byteLength,
+        byteSize: args.uncompressedByteSize ?? storedByteSize,
+        compressedByteSize: args.encoding === "gzip" ? storedByteSize : undefined,
+        storedByteSize,
         blockCount: args.blockCount,
         exportStats: args.exportStats,
       },
@@ -161,9 +275,9 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
         contentType: descriptor.contentType,
         fileName,
         sha256,
-        byteSize: args.uncompressedByteSize ?? args.bytes.byteLength,
-        compressedByteSize: args.encoding === "gzip" ? args.bytes.byteLength : null,
-        storedByteSize: args.bytes.byteLength,
+        byteSize: args.uncompressedByteSize ?? storedByteSize,
+        compressedByteSize: args.encoding === "gzip" ? storedByteSize : null,
+        storedByteSize,
         blockCount: args.blockCount,
         exportStats: args.exportStats,
       },
@@ -182,7 +296,7 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     where: { customBuildId: args.customBuildId },
     _sum: { storedByteSize: true },
   });
-  const storedByteSize = stored._sum.storedByteSize ?? 0;
+  const totalStoredByteSize = stored._sum.storedByteSize ?? 0;
   const generationArtifact = [
     "build_json",
     "preview_mbv4",
@@ -193,13 +307,13 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
   if (generationArtifact) {
     const updated = await client.customBuild.updateMany({
       where: { id: args.customBuildId, removedAt: null, status: "running" },
-      data: { storedByteSize },
+      data: { storedByteSize: totalStoredByteSize },
     });
     if (updated.count !== 1) {
       await client.customBuild.update({
         where: { id: args.customBuildId },
         data: {
-          storedByteSize,
+          storedByteSize: totalStoredByteSize,
           objectsDeletedAt: null,
           deletionPendingAt: new Date(),
           deletionError: "Artifact cleanup pending.",
@@ -210,7 +324,7 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
   } else {
     await client.customBuild.update({
       where: { id: args.customBuildId },
-      data: { storedByteSize },
+      data: { storedByteSize: totalStoredByteSize },
     });
   }
   return artifact;

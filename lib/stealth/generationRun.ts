@@ -503,7 +503,7 @@ export async function generateStealthPromptForRun(params: {
         mode: MODE,
       },
     },
-    select: { id: true },
+    select: { id: true, generationTimeMs: true },
   });
   if (existing) {
     try {
@@ -516,7 +516,7 @@ export async function generateStealthPromptForRun(params: {
         fromStatus: "GENERATING",
         buildId: existing.id,
         attempts: 0,
-        generationTimeMs: 0,
+        generationTimeMs: existing.generationTimeMs,
         requestConfiguration: null,
       });
       if (!accepted) return;

@@ -229,6 +229,11 @@ export type CustomBuildArtifactUpload = {
   encoding?: CustomBuildStorageEncoding;
 };
 
+export type CustomBuildArtifactFileUpload = Omit<CustomBuildArtifactUpload, "bytes"> & {
+  filePath: string;
+  byteSize: number;
+};
+
 export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload): Promise<void> {
   const bucket = (args.bucket ?? getCustomBuildStorageBucket()).trim();
   if (bucket === LOCAL_BUILD_STORAGE_BUCKET) {
@@ -251,6 +256,42 @@ export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload)
     },
     body: args.bytes as unknown as BodyInit,
   });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Custom build artifact upload failed (${resp.status}): ${text || "empty response"}`);
+  }
+}
+
+export async function uploadCustomBuildArtifactFile(
+  args: CustomBuildArtifactFileUpload,
+): Promise<void> {
+  const bucket = (args.bucket ?? getCustomBuildStorageBucket()).trim();
+  const { createReadStream, createWriteStream } = await import("node:fs");
+  if (bucket === LOCAL_BUILD_STORAGE_BUCKET) {
+    const { mkdir } = await import("node:fs/promises");
+    const { pipeline } = await import("node:stream/promises");
+    const absolutePath = resolveLocalCustomBuildStoragePath(args.path);
+    await mkdir(path.dirname(absolutePath), { recursive: true });
+    await pipeline(createReadStream(args.filePath), createWriteStream(absolutePath));
+    return;
+  }
+
+  const config = getSupabaseStorageConfig();
+  const encodedPath = encodeStoragePath(args.path);
+  const url = `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.serviceRoleKey}`,
+      apikey: config.serviceRoleKey,
+      "x-upsert": "true",
+      "Content-Type": args.contentType,
+      "Content-Length": String(args.byteSize),
+      ...(args.encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}),
+    },
+    body: createReadStream(args.filePath) as unknown as BodyInit,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`Custom build artifact upload failed (${resp.status}): ${text || "empty response"}`);
