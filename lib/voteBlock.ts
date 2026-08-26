@@ -2,10 +2,15 @@ import { galleryIdentityHmac } from "@/lib/gallery/policy";
 import { prisma } from "@/lib/prisma";
 
 function voteBlockSecret(): string {
-  const value = process.env.VOTE_BLOCK_HMAC_SECRET?.trim();
+  const value = [
+    process.env.VOTE_BLOCK_HMAC_SECRET,
+    process.env.ARENA_MATCHUP_SIGNING_SECRET,
+    process.env.ADMIN_TOKEN,
+    process.env.NEXTAUTH_SECRET,
+  ].find((candidate) => candidate?.trim())?.trim();
   if (value) return value;
   if (process.env.NODE_ENV !== "production") return "minebench-local-vote-block-secret";
-  throw new Error("VOTE_BLOCK_HMAC_SECRET is required");
+  throw new Error("A server signing secret is required for vote blocks");
 }
 
 export function trustedClientIp(headers: Headers): string | null {

@@ -11,6 +11,7 @@ import {
   publicGalleryTextError,
   resolveGalleryModelLabel,
 } from "../../../lib/gallery/policy";
+import { hashVoteSession } from "../../../lib/voteBlock";
 
 assert.equal(normalizeGalleryPrompt("  A tiny observatory  "), "A tiny observatory");
 assert.equal(normalizeGalleryPrompt("Castle"), "Castle");
@@ -79,5 +80,21 @@ assert.equal(decodeGalleryCursor("not-a-cursor"), null);
 
 assert.equal(galleryIdentityHmac("same", "secret"), galleryIdentityHmac("same", "secret"));
 assert.notEqual(galleryIdentityHmac("same", "secret"), galleryIdentityHmac("other", "secret"));
+
+const originalVoteSecret = process.env.VOTE_BLOCK_HMAC_SECRET;
+const originalAdminToken = process.env.ADMIN_TOKEN;
+try {
+  delete process.env.VOTE_BLOCK_HMAC_SECRET;
+  process.env.ADMIN_TOKEN = "vote-block-fallback-test";
+  assert.equal(
+    hashVoteSession("session"),
+    galleryIdentityHmac("session:session", "vote-block-fallback-test"),
+  );
+} finally {
+  if (originalVoteSecret === undefined) delete process.env.VOTE_BLOCK_HMAC_SECRET;
+  else process.env.VOTE_BLOCK_HMAC_SECRET = originalVoteSecret;
+  if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+  else process.env.ADMIN_TOKEN = originalAdminToken;
+}
 
 console.log("gallery policy checks passed");
