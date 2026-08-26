@@ -598,12 +598,16 @@
       "configurationIsConsistent": false,
       "outputCapSampleCount": 15,
       "outputCapIsConsistent": true,
+      "averageInferenceMs": 2239861,
+      "finalizedAttemptCount": 37,
       "outputCapTokens": 131072,
       "providerCallCount": 97,
+      "completedAttemptCount": 37,
       "failedAttemptCount": 55,
       "failedRunCount": 36,
       "interruptedRunCount": 20,
-      "providerCallTrackingJobCount": 15
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

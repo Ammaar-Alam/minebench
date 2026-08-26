@@ -180,6 +180,10 @@ runProviderConfigTest("zai family", {
     { label: "Sampling", value: "Temperature 1 · Top P 0.95" },
   ]);
   assert.deepEqual(getModelBenchmarkProfile(flash.key)?.totalCost, { usd: 0.74 });
+  assert.deepEqual(getModelBenchmarkProfile(flash.key)?.averageInference, {
+    milliseconds: 2_239_861,
+  });
+  assert.equal(getModelBenchmarkProfile(flash.key)?.totalAttempts, 37);
 
   capture.respondWith((request) => {
     if (request.body.model !== flash.modelId || request.body.stream !== true) return null;
