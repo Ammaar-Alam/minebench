@@ -374,6 +374,13 @@ class CustomBuildStatusReadError extends Error {
   }
 }
 
+class CustomBuildViewerReadError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = "CustomBuildViewerReadError";
+  }
+}
+
 async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): Promise<SavedGenerationPayload> {
   const res = await fetch(statusUrl, { cache: "no-store", signal });
   if (!res.ok) {
@@ -405,15 +412,25 @@ async function readCustomBuildViewer(
   signal?: AbortSignal,
 ): Promise<VoxelBuild | null> {
   if (!status.viewerUrl) return null;
-  const res = await fetch(status.viewerUrl, { cache: "no-store", signal, redirect: "follow" });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || "Viewer unavailable");
+  try {
+    const res = await fetch(status.viewerUrl, { cache: "no-store", signal, redirect: "follow" });
+    if (!res.ok) {
+      throw new CustomBuildViewerReadError(
+        "Viewer unavailable",
+        res.status === 408 || res.status === 429 || res.status >= 500,
+      );
+    }
+    const result = await readBuildVariantPayload(res, {
+      fallbackIdentity: { buildId: status.id, variant: "full", checksum: status.sha256 },
+    });
+    return result.payload.voxelBuild as VoxelBuild;
+  } catch (error) {
+    if (isAbortError(error) || error instanceof CustomBuildViewerReadError) throw error;
+    if (error instanceof TypeError) {
+      throw new CustomBuildViewerReadError("Viewer unavailable", true);
+    }
+    throw error;
   }
-  const result = await readBuildVariantPayload(res, {
-    fallbackIdentity: { buildId: status.id, variant: "full", checksum: status.sha256 },
-  });
-  return result.payload.voxelBuild as VoxelBuild;
 }
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -834,6 +851,7 @@ export function SandboxLive({
     signal: AbortSignal;
   }) {
     let consecutiveFailures = 0;
+    let viewerFailures = 0;
     while (!args.signal.aborted) {
       let status: SavedGenerationPayload;
       try {
@@ -869,9 +887,17 @@ export function SandboxLive({
             statusUrl: args.statusUrl,
             eventsUrl: args.eventsUrl,
           });
-        } catch (err) {
-          if (err instanceof Error && err.name === "AbortError") return;
-          console.warn("Custom build viewer unavailable", err);
+        } catch (error) {
+          if (isAbortError(error)) return;
+          if (error instanceof CustomBuildViewerReadError && error.retryable) {
+            viewerFailures += 1;
+            await abortableDelay(
+              Math.min(10_000, 1_000 * (2 ** Math.min(viewerFailures - 1, 3))),
+              args.signal,
+            );
+            continue;
+          }
+          console.warn("Custom build viewer unavailable", error);
         }
         return;
       }

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import {
   hasAuthenticationMethod,
   hasSupabaseAuthCookie,
+  isPasswordRecoveryMethod,
 } from "../../../lib/auth/account";
 import { parsePublicOAuthProvider } from "../../../lib/auth/providers";
 import { resolveRequestOrigin, safeNextPath } from "../../../lib/auth/redirects";
@@ -43,6 +44,7 @@ assert.equal(hasSupabaseAuthCookie("mb_session=value"), false);
 assert.equal(hasAuthenticationMethod([{ method: "password", timestamp: 1 }], "password"), true);
 assert.equal(hasAuthenticationMethod(["recovery"], "recovery"), true);
 assert.equal(hasAuthenticationMethod([{ method: "oauth", timestamp: 1 }], "password"), false);
+assert.equal(isPasswordRecoveryMethod([{ method: "otp", timestamp: 1 }]), true);
 assert.equal(readArenaSessionId("a=1; mb_session=session-123; b=2"), "session-123");
 assert.equal(readArenaSessionId("a=1"), null);
 

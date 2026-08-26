@@ -385,6 +385,7 @@ async function recoverStoredBuild(
       generationTimeMs: customBuild.generationTimeMs,
     };
   } catch (error) {
+    if (isCustomBuildLeaseLostError(error)) throw error;
     throw new CustomBuildArtifactBookkeepingError(error);
   }
 }

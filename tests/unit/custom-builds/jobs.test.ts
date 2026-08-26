@@ -3,7 +3,25 @@ import assert from "node:assert/strict";
 (globalThis as unknown as { prisma?: unknown }).prisma = {};
 
 async function main() {
-  const { recoverStaleCustomBuildJobLeases } = await import("../../../lib/custom-builds/jobs");
+  const {
+    failCustomBuildJob,
+    recoverStaleCustomBuildJobLeases,
+    renewCustomBuildJobLease,
+  } = await import("../../../lib/custom-builds/jobs");
+
+  let renewalQuery = "";
+  const renewed = await renewCustomBuildJobLease("job-row", "worker-row", {
+    $queryRaw: async (strings: TemplateStringsArray) => {
+      renewalQuery = strings.join("?");
+      return [{ id: "job-row" }];
+    },
+  } as never);
+  assert.equal(renewed, true);
+  assert.match(
+    renewalQuery,
+    /GREATEST\([\s\S]*"leaseExpiresAt"/,
+    "heartbeat renewal should never shorten an extended lease",
+  );
 
   const operations: string[] = [];
   const customBuildUpdates: Array<{ data: Record<string, unknown> }> = [];
@@ -63,6 +81,69 @@ async function main() {
     "customBuildSecret.deleteMany",
     "$transaction.commit",
   ]);
+
+  const terminalOperations: string[] = [];
+  const parentFailures: Array<Record<string, unknown>> = [];
+  const terminalTx = {
+    customBuildJob: {
+      updateMany: async () => {
+        terminalOperations.push("customBuildJob.updateMany");
+        return { count: 1 };
+      },
+    },
+    customBuild: {
+      updateMany: async (args: { data: Record<string, unknown> }) => {
+        terminalOperations.push("customBuild.updateMany");
+        parentFailures.push(args.data);
+        return { count: 1 };
+      },
+    },
+    customBuildSecret: {
+      deleteMany: async () => {
+        terminalOperations.push("customBuildSecret.deleteMany");
+        return { count: 1 };
+      },
+    },
+  };
+  const terminalRoot = {
+    customBuildJob: {
+      findFirst: async () => ({
+        attempts: 3,
+        maxAttempts: 3,
+        customBuildId: "terminal-build-row",
+        type: "generate",
+      }),
+      updateMany: async () => {
+        terminalOperations.push("customBuildJob.updateMany.outsideTransaction");
+        return { count: 1 };
+      },
+    },
+    $transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
+      terminalOperations.push("$transaction.begin");
+      const value = await callback(terminalTx);
+      terminalOperations.push("$transaction.commit");
+      return value;
+    },
+  };
+  const terminalResult = await failCustomBuildJob(
+    "terminal-job-row",
+    "worker-row",
+    { code: "worker_failed", message: "worker failed" },
+    terminalRoot as never,
+  );
+  assert.deepEqual(terminalResult, { requeued: false });
+  assert.deepEqual(terminalOperations, [
+    "$transaction.begin",
+    "customBuildJob.updateMany",
+    "customBuild.updateMany",
+    "customBuildSecret.deleteMany",
+    "$transaction.commit",
+  ]);
+  const parentFailure = parentFailures[0];
+  assert.ok(parentFailure);
+  assert.equal(parentFailure?.status, "failed");
+  assert.equal(parentFailure?.errorRetryable, false);
+  assert.ok(parentFailure?.deletionPendingAt instanceof Date);
 
   console.log("custom build stale job recovery checks passed");
 }

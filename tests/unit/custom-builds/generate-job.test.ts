@@ -200,6 +200,7 @@ async function main() {
   } = await import("../../../lib/custom-builds/generateJob");
   const { safeCustomBuildRetryReason } = await import("../../../lib/custom-builds/sanitize");
   const { jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
+  const { CustomBuildLeaseLostError } = await import("../../../lib/custom-builds/lease");
 
   assert.ok(
     generateJobSource.includes("buildGalleryPreviewSvg(canonicalBuild)") &&
@@ -500,6 +501,31 @@ async function main() {
     artifactCreates.find((artifact) => artifact.kind === "build_json")?.sourceBuildSha256,
     recoveredSourceSha,
     "recovery should not invoke the provider or replace its stored result",
+  );
+
+  updates.length = 0;
+  operations.length = 0;
+  currentCustomBuild = queuedCustomBuild;
+  await assert.rejects(
+    runCustomBuildGenerateJob({
+      id: "bookkeeping-recovery-lease-loss-job-row",
+      customBuildId,
+      type: "generate",
+      status: "running",
+      attempts: 2,
+      maxAttempts: 3,
+      payload: {},
+    } as never, {
+      acquireBuildProcessing: async () => {
+        throw new CustomBuildLeaseLostError();
+      },
+    }),
+    /lease is no longer owned/,
+  );
+  assert.equal(
+    updates.some((update) => update.data.status === "queued" || update.data.status === "failed"),
+    false,
+    "artifact recovery should not mutate a build after its lease is lost",
   );
 
   updates.length = 0;

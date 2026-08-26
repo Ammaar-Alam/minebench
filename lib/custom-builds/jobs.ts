@@ -52,17 +52,19 @@ export async function renewCustomBuildJobLease(
   client: PrismaClient | PrismaTx = prisma,
 ): Promise<boolean> {
   const leaseSeconds = getCustomBuildJobLeaseSeconds();
-  const result = await client.customBuildJob.updateMany({
-    where: {
-      id: jobId,
-      status: "running",
-      lockedBy: workerId,
-    },
-    data: {
-      leaseExpiresAt: new Date(Date.now() + leaseSeconds * 1000),
-    },
-  });
-  return result.count === 1;
+  const rows = await client.$queryRaw<Array<{ id: string }>>`
+    UPDATE "CustomBuildJob"
+    SET "leaseExpiresAt" = GREATEST(
+          COALESCE("leaseExpiresAt", now()::timestamp),
+          (now() + (${leaseSeconds}::int * interval '1 second'))::timestamp
+        ),
+        "updatedAt" = now()
+    WHERE id = ${jobId}
+      AND status = 'running'::"CustomBuildJobStatus"
+      AND "lockedBy" = ${workerId}
+    RETURNING id;
+  `;
+  return rows.length === 1;
 }
 
 export async function extendCustomBuildJobLease(
@@ -227,7 +229,7 @@ export async function failCustomBuildJob(
       status: "running",
       lockedBy: workerId,
     },
-    select: { attempts: true, maxAttempts: true },
+    select: { attempts: true, maxAttempts: true, customBuildId: true, type: true },
   });
   if (!job) return { requeued: false };
 
@@ -251,21 +253,50 @@ export async function failCustomBuildJob(
     return { requeued: true };
   }
 
-  await client.customBuildJob.updateMany({
-    where: {
-      id: jobId,
-      status: "running",
-      lockedBy: workerId,
-    },
-    data: {
-      status: "failed",
-      completedAt: new Date(),
-      lockedBy: null,
-      lockedAt: null,
-      leaseExpiresAt: null,
-      lastErrorCode: error.code,
-      lastErrorMessage: redactSensitiveText(error.message),
-    },
-  });
+  const failedAt = new Date();
+  const message = redactSensitiveText(error.message);
+  const terminalize = async (tx: PrismaTx) => {
+    const failed = await tx.customBuildJob.updateMany({
+      where: {
+        id: jobId,
+        status: "running",
+        lockedBy: workerId,
+      },
+      data: {
+        status: "failed",
+        completedAt: failedAt,
+        lockedBy: null,
+        lockedAt: null,
+        leaseExpiresAt: null,
+        lastErrorCode: error.code,
+        lastErrorMessage: message,
+      },
+    });
+    if (failed.count !== 1 || job.type !== "generate") return;
+    await tx.customBuild.updateMany({
+      where: {
+        id: job.customBuildId,
+        status: { in: ["queued", "running"] },
+      },
+      data: {
+        status: "failed",
+        currentStage: "failed",
+        completedAt: failedAt,
+        errorCode: error.code,
+        errorMessage: message,
+        errorRetryable: false,
+        objectsDeletedAt: null,
+        deletionPendingAt: failedAt,
+        deletionError: null,
+      },
+    });
+    await tx.customBuildSecret.deleteMany({ where: { customBuildId: job.customBuildId } });
+  };
+  const maybeTransactional = client as PrismaClient;
+  if (typeof maybeTransactional.$transaction === "function") {
+    await maybeTransactional.$transaction(terminalize);
+  } else {
+    await terminalize(client as PrismaTx);
+  }
   return { requeued: false };
 }

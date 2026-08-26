@@ -102,14 +102,8 @@ export async function purgeDueGalleryRecords(
     where: { id: { in: moderationIds.map(({ id }) => id) } },
   });
 
-  const sessionIds = await prisma.publicSessionActivity.findMany({
-    where: { lastSeenAt: { lte: new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS) } },
-    orderBy: { lastSeenAt: "asc" },
-    take: limit,
-    select: { id: true },
-  });
   const publicSessions = await prisma.publicSessionActivity.deleteMany({
-    where: { id: { in: sessionIds.map(({ id }) => id) } },
+    where: { lastSeenAt: { lte: new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS) } },
   });
 
   const exampleIds = await prisma.galleryExample.findMany({

@@ -136,6 +136,14 @@ assert.ok(
     watchBody.includes("continue;"),
   "durable status polling should survive transient reads with bounded backoff",
 );
+assert.ok(
+  sourceText.includes("class CustomBuildViewerReadError") &&
+    completedBuildBody.includes("CustomBuildViewerReadError") &&
+    watchBody.includes("viewerFailures") &&
+    watchBody.includes("error instanceof CustomBuildViewerReadError && error.retryable") &&
+    watchBody.includes("continue;"),
+  "durable viewer loading should retry transient network and server failures",
+);
 const durableInputGuardIndex = inputResetEffect.indexOf("if (signedIn)");
 const inputResetAbortIndex = inputResetEffect.indexOf("customBuildAbortRef.current?.abort()");
 assert.ok(durableInputGuardIndex >= 0, "durable input edits should have an explicit preservation guard");

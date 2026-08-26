@@ -15,6 +15,7 @@ async function main() {
   const past = new Date(now.getTime() - 60_000);
   const future = new Date(now.getTime() + 60_000);
   const deletedPaths: string[] = [];
+  const expiredSessionCount = 101;
   const { purgeDueGalleryRecords } = await import("../../../lib/gallery/purge");
 
   const buildData = (id: string, purgeAt: Date, path: string) => ({
@@ -160,10 +161,10 @@ async function main() {
     });
     await db.publicSessionActivity.createMany({
       data: [
-        {
-          sessionId: `purge-session-due-${suffix}`,
+        ...Array.from({ length: expiredSessionCount }, (_, index) => ({
+          sessionId: `purge-session-due-${index}-${suffix}`,
           lastSeenAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000),
-        },
+        })),
         {
           sessionId: `purge-session-current-${suffix}`,
           lastSeenAt: new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000),
@@ -191,7 +192,7 @@ async function main() {
       { minebenchAdmin: true },
       {
         now,
-        limit: 20,
+        limit: 100,
         deleteArtifact: async ({ path }) => {
           if (path.endsWith("failed.svg")) throw new Error("storage unavailable");
           deletedPaths.push(path);
@@ -204,7 +205,7 @@ async function main() {
     assert.equal(result.generations, 1);
     assert.equal(result.candidates, 2);
     assert.equal(result.moderationRecords, 1);
-    assert.equal(result.publicSessions, 1);
+    assert.equal(result.publicSessions, expiredSessionCount);
     assert.deepEqual(deletedPaths.sort(), [
       `gallery/${suffix}/canceled.svg`,
       `gallery/${suffix}/due.svg`,

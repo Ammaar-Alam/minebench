@@ -44,6 +44,10 @@ export function hasAuthenticationMethod(amr: unknown, method: string): boolean {
   });
 }
 
+export function isPasswordRecoveryMethod(amr: unknown): boolean {
+  return hasAuthenticationMethod(amr, "recovery") || hasAuthenticationMethod(amr, "otp");
+}
+
 export async function syncAuthUser(authUser: SupabaseAuthUser): Promise<PublicAccount | null> {
   const email = authUser.email?.trim().toLowerCase();
   if (!email) return null;
@@ -98,7 +102,7 @@ export async function getCurrentAccountSecurity(): Promise<AccountSecurity | nul
   const amr = claimsResult.error ? null : claimsResult.data?.claims.amr;
   return {
     account,
-    isPasswordRecovery: hasAuthenticationMethod(amr, "recovery"),
+    isPasswordRecovery: isPasswordRecoveryMethod(amr),
     signedInWithPassword: hasAuthenticationMethod(amr, "password"),
   };
 }
