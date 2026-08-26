@@ -22,6 +22,19 @@ import {
 import type { ModelKey } from "../../../lib/ai/modelCatalog";
 import { BENCHMARK_PROMPT_MAP } from "../../../scripts/uploadsCatalog";
 
+const batchGenerateSource = readFileSync("scripts/batch-generate.ts", "utf8");
+const uploadBuildStart = batchGenerateSource.indexOf("async function uploadBuild(");
+const uploadBuildEnd = batchGenerateSource.indexOf("function printStatus(", uploadBuildStart);
+assert.ok(uploadBuildStart >= 0 && uploadBuildEnd > uploadBuildStart);
+const uploadBuildSource = batchGenerateSource.slice(uploadBuildStart, uploadBuildEnd);
+const finalizeImport = uploadBuildSource.indexOf("finalizeStorageImport(");
+const artifactUpload = uploadBuildSource.indexOf("uploadArenaStreamArtifacts(");
+assert.ok(finalizeImport >= 0, "storage uploads must finalize the imported build");
+assert.ok(
+  artifactUpload === -1 || artifactUpload > finalizeImport,
+  "storage uploads must not register artifacts before the real build exists",
+);
+
 function job(modelKey: ModelKey) {
   return { modelKey };
 }
