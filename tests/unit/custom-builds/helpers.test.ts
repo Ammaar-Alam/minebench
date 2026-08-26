@@ -1,0 +1,261 @@
+import assert from "node:assert/strict";
+import type { VoxelBuild } from "../../../lib/voxel/types";
+import {
+  assertCustomBuildPublicId,
+  generateCustomBuildPublicId,
+  isCustomBuildPublicId,
+} from "../../../lib/custom-builds/ids";
+import {
+  decryptProviderKey,
+  encryptProviderKey,
+} from "../../../lib/custom-builds/secrets";
+import { redactSensitiveText } from "../../../lib/custom-builds/sanitize";
+import {
+  decodeAndVerifyCustomBuildArtifactText,
+  gzipBytes,
+  jsonBytes,
+  sha256Hex,
+  uploadAndRecordCustomBuildArtifact,
+  writeCanonicalBuildArtifact,
+} from "../../../lib/custom-builds/artifacts";
+import {
+  deleteCustomBuildArtifact,
+  downloadCustomBuildArtifactBytes,
+  getCustomBuildArtifactPath,
+  uploadCustomBuildArtifact,
+  uploadCustomBuildArtifactFile,
+} from "../../../lib/custom-builds/storage";
+
+async function main() {
+  const id = generateCustomBuildPublicId();
+  assert.match(id, /^cb_[A-Za-z0-9_-]{24}$/);
+  assert.equal(isCustomBuildPublicId(id), true);
+  assert.equal(assertCustomBuildPublicId(id), id);
+  assert.equal(isCustomBuildPublicId("cb_1"), false);
+  assert.equal(isCustomBuildPublicId("cb_123456789012345678901234/.."), false);
+  assert.equal(isCustomBuildPublicId("123"), false);
+  assert.throws(() => assertCustomBuildPublicId("../cb_123456789012345678901234"), /Invalid custom build id/);
+
+  process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-test-secret-material";
+  const encrypted = encryptProviderKey("sk-or-v1-test-secret-value", {
+    provider: "openrouter",
+  });
+  assert.equal(encrypted.provider, "openrouter");
+  assert.notEqual(encrypted.keyCiphertext, "sk-or-v1-test-secret-value");
+  assert.equal(decryptProviderKey(encrypted), "sk-or-v1-test-secret-value");
+
+  process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "different-secret-material";
+  assert.throws(() => decryptProviderKey(encrypted), /Failed to decrypt provider key/);
+
+  const redacted = redactSensitiveText(
+    "OpenRouter failed at https://private.example/v1/chat?token=opaque with Authorization: Bearer sk-or-v1-test-secret-value and api_key=sk-live-abc123456789",
+  );
+  assert.equal(redacted.includes("sk-or-v1-test-secret-value"), false);
+  assert.equal(redacted.includes("sk-live-abc123456789"), false);
+  assert.equal(redacted.includes("private.example"), false);
+  assert.match(redacted, /\[redacted]/);
+
+  const buildPath = getCustomBuildArtifactPath({
+    publicId: id,
+    kind: "build_json",
+    sha256: "a".repeat(64),
+  });
+  assert.equal(
+    buildPath,
+    `custom-builds/v1/${id}/build/build-${"a".repeat(64)}.json.gz`,
+  );
+
+  const exportPath = getCustomBuildArtifactPath({
+    publicId: id,
+    kind: "glb",
+    sourceBuildSha256: "b".repeat(64),
+  });
+  assert.equal(
+    exportPath,
+    `custom-builds/v1/${id}/exports/build-${"b".repeat(64)}.glb`,
+  );
+  assert.throws(
+    () => getCustomBuildArtifactPath({ publicId: "../escape", kind: "build_json", sha256: "a".repeat(64) }),
+    /Invalid custom build id/,
+  );
+
+  const canonicalText = JSON.stringify({ version: "1.0", blocks: [] });
+  const canonicalBytes = jsonBytes(JSON.parse(canonicalText));
+  const compressedBytes = gzipBytes(canonicalBytes);
+  const storedSha256 = sha256Hex(compressedBytes);
+  const sourceSha256 = sha256Hex(canonicalText);
+  assert.equal(
+    decodeAndVerifyCustomBuildArtifactText({
+      bytes: compressedBytes,
+      encoding: "gzip",
+      storedSha256,
+      sourceSha256,
+    }),
+    canonicalText,
+  );
+  assert.equal(
+    decodeAndVerifyCustomBuildArtifactText({
+      bytes: canonicalBytes,
+      encoding: "gzip",
+      storedSha256,
+      sourceSha256,
+    }),
+    canonicalText,
+    "gzip-marked objects already decoded by fetch should verify against the source checksum",
+  );
+  assert.throws(
+    () => decodeAndVerifyCustomBuildArtifactText({
+      bytes: canonicalBytes,
+      encoding: "gzip",
+      storedSha256,
+      sourceSha256: "f".repeat(64),
+    }),
+    /source checksum does not match/,
+  );
+
+  const originalBucket = process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+  const originalStorageDir = process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+  const canonicalBuild: VoxelBuild = {
+    version: "1.0",
+    blocks: [
+      { x: 1, y: 2, z: 3, type: "stone" },
+      { x: 4, y: 5, z: 6, type: "oak_planks" },
+    ],
+  };
+  const streamed = await writeCanonicalBuildArtifact(canonicalBuild);
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const stored = new Uint8Array(await readFile(streamed.filePath));
+    const expected = JSON.stringify({
+      version: "1.0",
+      blocks: [
+        { x: 1, y: 2, z: 3, type: "stone" },
+        { x: 4, y: 5, z: 6, type: "oak_planks" },
+      ],
+    });
+    assert.equal(streamed.byteSize, Buffer.byteLength(expected));
+    assert.equal(streamed.storedByteSize, stored.byteLength);
+    assert.equal(streamed.sourceSha256, sha256Hex(expected));
+    assert.equal(streamed.sha256, sha256Hex(stored));
+    assert.equal(
+      decodeAndVerifyCustomBuildArtifactText({
+        bytes: stored,
+        encoding: "gzip",
+        storedSha256: streamed.sha256,
+        sourceSha256: streamed.sourceSha256,
+      }),
+      expected,
+    );
+
+    process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
+    process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-stream-upload";
+    const streamedPath = getCustomBuildArtifactPath({
+      publicId: id,
+      kind: "build_json",
+      sha256: streamed.sha256,
+    });
+    await uploadCustomBuildArtifactFile({
+      bucket: "__local_fs__",
+      path: streamedPath,
+      filePath: streamed.filePath,
+      byteSize: streamed.storedByteSize,
+      contentType: "application/json",
+      encoding: "gzip",
+    });
+    assert.deepEqual(
+      await downloadCustomBuildArtifactBytes({ bucket: "__local_fs__", path: streamedPath }),
+      stored,
+    );
+    await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: streamedPath });
+  } finally {
+    await streamed.cleanup();
+    if (originalBucket === undefined) delete process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+    else process.env.CUSTOM_BUILD_STORAGE_BUCKET = originalBucket;
+    if (originalStorageDir === undefined) delete process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+    else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
+  }
+
+  const secondStream = await writeCanonicalBuildArtifact(canonicalBuild);
+  try {
+    assert.equal(secondStream.sha256, streamed.sha256, "streamed gzip output should be deterministic");
+  } finally {
+    await secondStream.cleanup();
+  }
+
+  process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
+  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-artifact-compensation";
+  const compensationBytes = new TextEncoder().encode("orphan candidate");
+  const compensationSha = sha256Hex(compensationBytes);
+  const compensationPath = getCustomBuildArtifactPath({
+    publicId: id,
+    kind: "preview_svg",
+    sha256: compensationSha,
+  });
+  try {
+    await assert.rejects(
+      uploadAndRecordCustomBuildArtifact({
+        customBuildId: "build-without-ownership",
+        publicId: id,
+        kind: "preview_svg",
+        bytes: compensationBytes,
+        client: {
+          customBuildArtifact: {
+            findUnique: async () => null,
+            upsert: async () => { throw new Error("database unavailable"); },
+          },
+        } as never,
+      }),
+      /database unavailable/,
+    );
+    await assert.rejects(
+      downloadCustomBuildArtifactBytes({ bucket: "__local_fs__", path: compensationPath }),
+      /ENOENT/,
+      "a failed ownership write should compensate the exact uploaded object",
+    );
+  } finally {
+    await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: compensationPath });
+    if (originalBucket === undefined) delete process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+    else process.env.CUSTOM_BUILD_STORAGE_BUCKET = originalBucket;
+    if (originalStorageDir === undefined) delete process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+    else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
+  }
+
+  const originalFetch = globalThis.fetch;
+  const originalSupabaseUrl = process.env.SUPABASE_URL;
+  const originalSupabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  let observedHeaders: Headers | null = null;
+  process.env.SUPABASE_URL = "https://example.supabase.co";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    observedHeaders = new Headers(init?.headers);
+    return new Response("{}", { status: 200 });
+  }) as typeof fetch;
+  try {
+    await uploadCustomBuildArtifact({
+      bucket: "builds",
+      path: "custom-builds/v1/cb_123456789012345678901234/build/build-a.json.gz",
+      bytes: new Uint8Array([1, 2, 3]),
+      contentType: "application/gzip",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSupabaseUrl === undefined) {
+      delete process.env.SUPABASE_URL;
+    } else {
+      process.env.SUPABASE_URL = originalSupabaseUrl;
+    }
+    if (originalSupabaseServiceRoleKey === undefined) {
+      delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    } else {
+      process.env.SUPABASE_SERVICE_ROLE_KEY = originalSupabaseServiceRoleKey;
+    }
+  }
+  const headers = observedHeaders as Headers | null;
+  assert.ok(headers, "Supabase upload headers should be captured");
+  assert.equal(headers.get("x-upsert"), "true");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

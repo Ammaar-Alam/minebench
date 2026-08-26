@@ -6,6 +6,7 @@ import { z } from "zod";
 import {
   finishPublicSignIn,
   hasAuthenticationMethod,
+  isPasswordRecoveryMethod,
   rotateArenaSession,
   syncAuthUser,
 } from "@/lib/auth/account";
@@ -191,7 +192,7 @@ export async function updatePassword(formData: FormData): Promise<never> {
       updateError = "unavailable";
     } else {
       const amr = claimsResult.data?.claims.amr;
-      const isRecovery = hasAuthenticationMethod(amr, "recovery");
+      const isRecovery = isPasswordRecoveryMethod(amr);
       const signedInWithPassword = hasAuthenticationMethod(amr, "password");
       if (!isRecovery && !signedInWithPassword) {
         updateError = "verify";

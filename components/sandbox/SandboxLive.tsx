@@ -1,20 +1,31 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
-import type { GenerateEvent, ProviderApiKeys } from "@/lib/ai/types";
+import type { GenerateEvent, GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
 import {
   SandboxGifExportButton,
   type SandboxGifExportTarget,
 } from "@/components/sandbox/SandboxGifExportButton";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPreflightDialog";
+import { GenerationGalleryButton } from "@/components/gallery/GenerationGalleryButton";
+import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import {
+  loadProviderKeysFromStorage,
+  saveProviderKeysToStorage,
+  selectGenerationProviderKeys,
+} from "@/lib/ai/providerKeys";
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
+import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
 import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
+import type { SavedGenerationPayload } from "@/lib/generations/service";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -57,6 +68,22 @@ type ModelResult = {
   retryReason?: string;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
   startedAt?: number;
+  customBuildId?: string;
+  customBuildPageUrl?: string;
+  customBuildStatusUrl?: string;
+  customBuildEventsUrl?: string;
+  customBuildDownloadUrl?: string;
+  customBuildExpandedBytes?: number | null;
+  renderGridSize?: GridSize;
+  renderPalette?: Palette;
+  currentStage?: string;
+  submittedPrompt?: string;
+  customBuildRetryable?: boolean;
+  retryProvider?: keyof ProviderApiKeys;
+};
+
+type SavedGenerationCreateResponse = {
+  generations: Array<{ id: string; status: "queued" }>;
 };
 
 const MAX_LIVE_RAW_TEXT_CHARS = 80_000;
@@ -64,7 +91,17 @@ const PREVIEW_MAX_BLOCKS = 30_000;
 const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
-const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
+const DIRECT_PROVIDER_KEYS = [
+  ["openai", "OpenAI"],
+  ["anthropic", "Anthropic"],
+  ["gemini", "Gemini"],
+  ["moonshot", "Moonshot"],
+  ["deepseek", "DeepSeek"],
+  ["minimax", "MiniMax"],
+  ["xai", "xAI"],
+  ["meta", "Meta Model API"],
+  ["zai", "Z.AI"],
+] as const satisfies ReadonlyArray<readonly [keyof ProviderApiKeys, string]>;
 const OPENROUTER_MODEL_VALUE = "__openrouter__";
 const CUSTOM_MODEL_VALUE = "__custom_api__";
 const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
@@ -75,7 +112,7 @@ const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
 const DEFAULT_MODEL_A: ModelKey =
-  ENABLED_MODELS.find((model) => model.key === "openai_gpt_5_6_luna")?.key ?? FALLBACK_MODEL_A;
+  ENABLED_MODELS.find((model) => model.key === "gemini_3_7_flash")?.key ?? FALLBACK_MODEL_A;
 const DEFAULT_MODEL_B: ModelKey =
   ENABLED_MODELS.find(
     (model) => model.key === "openai_gpt_5_4_nano" && model.key !== DEFAULT_MODEL_A
@@ -96,46 +133,6 @@ function safeJsonParseObject(text: string): Record<string, unknown> | null {
     return parsed as Record<string, unknown>;
   } catch {
     return null;
-  }
-}
-
-function loadProviderKeysFromStorage(): ProviderApiKeys {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(API_KEYS_STORAGE_KEY);
-    if (!raw) return {};
-    const obj = safeJsonParseObject(raw);
-    if (!obj) return {};
-    const keys: ProviderApiKeys = {};
-    const set = (k: keyof ProviderApiKeys) => {
-      const v = obj[k];
-      if (typeof v !== "string") return;
-      const t = v.trim();
-      if (t) keys[k] = t;
-    };
-    set("openrouter");
-    set("openai");
-    set("anthropic");
-    set("gemini");
-    set("moonshot");
-    set("deepseek");
-    set("minimax");
-    set("xai");
-    set("meta");
-    set("zai");
-    set("custom");
-    return keys;
-  } catch {
-    return {};
-  }
-}
-
-function saveProviderKeysToStorage(keys: ProviderApiKeys) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(keys));
-  } catch {
-    // ignore
   }
 }
 
@@ -356,8 +353,136 @@ function getRawBuildJsonForExport(args: {
   }
 }
 
-export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
-  const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
+function customBuildStageLabel(status: SavedGenerationPayload): string {
+  if (status.status === "succeeded") return "Ready";
+  if (status.status === "failed") return "Failed";
+  if (status.status === "canceled") return "Canceled";
+  if (status.stage === "retrying") return "Trying again";
+  if (status.stage === "generating") return "Generating";
+  if (status.stage === "queued") return "Queued";
+  return status.stage ?? (status.status === "running" ? "Generating" : "Queued");
+}
+
+function customBuildStatusPath(id: string): string {
+  return `/api/generations/${encodeURIComponent(id)}`;
+}
+
+class CustomBuildStatusReadError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = "CustomBuildStatusReadError";
+  }
+}
+
+class CustomBuildViewerReadError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = "CustomBuildViewerReadError";
+  }
+}
+
+async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): Promise<SavedGenerationPayload> {
+  const res = await fetch(statusUrl, { cache: "no-store", signal });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const obj = safeJsonParseObject(text);
+    const message =
+      obj &&
+      typeof obj.error === "object" &&
+      obj.error &&
+      "message" in obj.error &&
+      typeof (obj.error as { message?: unknown }).message === "string"
+        ? (obj.error as { message: string }).message
+        : text || "Status unavailable";
+    throw new CustomBuildStatusReadError(
+      message,
+      res.status === 408 || res.status === 429 || res.status >= 500,
+    );
+  }
+  const body = (await res.json()) as { generation: SavedGenerationPayload };
+  return body.generation;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+async function readCustomBuildViewer(
+  status: SavedGenerationPayload,
+  signal?: AbortSignal,
+): Promise<VoxelBuild | null> {
+  if (!status.viewerUrl) return null;
+  try {
+    const res = await fetch(status.viewerUrl, { cache: "no-store", signal, redirect: "follow" });
+    if (!res.ok) {
+      throw new CustomBuildViewerReadError(
+        "Viewer unavailable",
+        res.status === 408 || res.status === 429 || res.status >= 500,
+      );
+    }
+    const result = await readBuildVariantPayload(res, {
+      fallbackIdentity: { buildId: status.id, variant: "full", checksum: status.sha256 },
+    });
+    return result.payload.voxelBuild as VoxelBuild;
+  } catch (error) {
+    if (isAbortError(error) || error instanceof CustomBuildViewerReadError) throw error;
+    if (error instanceof TypeError) {
+      throw new CustomBuildViewerReadError("Viewer unavailable", true);
+    }
+    throw error;
+  }
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function customBuildMetrics(status: SavedGenerationPayload): ModelResult["metrics"] | undefined {
+  if (status.status !== "succeeded") return undefined;
+  return {
+    blockCount: status.blockCount ?? 0,
+    warnings: status.warnings,
+    generationTimeMs: status.generationTimeMs ?? 0,
+  };
+}
+
+function customBuildGridSize(value: number, fallback: GridSize): GridSize {
+  return value === 64 || value === 256 || value === 512 ? value : fallback;
+}
+
+function customBuildPalette(value: string, fallback: Palette): Palette {
+  return value === "advanced" ? "advanced" : value === "simple" ? "simple" : fallback;
+}
+
+function customBuildRetryProvider(status: SavedGenerationPayload): keyof ProviderApiKeys {
+  if (status.model.transport === "openrouter") return "openrouter";
+  if (status.model.transport === "custom") return "custom";
+  return status.model.provider as keyof ProviderApiKeys;
+}
+
+export function SandboxLive({
+  initialPrompt,
+  signedIn,
+  hasPublicNickname,
+  gallerySuspended,
+}: {
+  initialPrompt?: string;
+  signedIn: boolean;
+  hasPublicNickname: boolean;
+  gallerySuspended: boolean;
+}) {
+  const [prompt, setPrompt] = useState(() => initialPrompt ?? "");
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
@@ -379,8 +504,16 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   );
   const [running, setRunning] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [showGenerationPreflight, setShowGenerationPreflight] = useState(false);
+  const savedKeyCount = Object.values(providerKeys).filter((value) => Boolean(value?.trim())).length;
+  const [apiKeysOpen, setApiKeysOpen] = useState(false);
+  const [providerKeysOpen, setProviderKeysOpen] = useState(false);
   const [, forceRender] = useState(0);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const customBuildAbortRef = useRef<AbortController | null>(null);
+  const durableRunSequenceRef = useRef(0);
+  const activeDurableRunRef = useRef<number | null>(null);
+  const canceledDurableRunsRef = useRef(new Set<number>());
   const previewCacheRef = useRef(
     new Map<string, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
@@ -473,8 +606,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
   useEffect(() => {
     if (lastGenerateInputRef.current === inputSignature) return;
+    if (signedIn) {
+      previewCacheRef.current.clear();
+      setRequestError(null);
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
+    customBuildAbortRef.current?.abort();
+    customBuildAbortRef.current = null;
     previewCacheRef.current.clear();
     setRunning(false);
     setRequestError(null);
@@ -485,7 +625,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       }
       return next;
     });
-  }, [inputSignature, selectedModels]);
+  }, [inputSignature, selectedModels, signedIn]);
 
   useEffect(() => {
     if (!compareEnabled) return;
@@ -540,8 +680,45 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }
 
   function stopGenerate() {
+    if (signedIn) {
+      const runId = activeDurableRunRef.current;
+      if (runId !== null) canceledDurableRunsRef.current.add(runId);
+      const ids = selectedModels.flatMap((model) => {
+        const result = results.get(model.id);
+        return result?.status === "loading" && result.customBuildId ? [result.customBuildId] : [];
+      });
+      if (ids.length > 0) {
+        customBuildAbortRef.current?.abort();
+        customBuildAbortRef.current = null;
+      }
+      void Promise.all(
+        ids.map((id) =>
+          fetch(`/api/generations/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+        ),
+      ).then((responses) => {
+        if (responses.some((response) => !response.ok)) throw new Error("cancel_failed");
+      }).catch(() => setRequestError("Generation could not be stopped."));
+      setRunning(false);
+      setResults((prev) => {
+        const next = new Map(prev);
+        for (const model of selectedModels) {
+          const existing = next.get(model.id);
+          if (!existing || existing.status !== "loading") continue;
+          next.set(model.id, {
+            ...existing,
+            status: "error",
+            voxelBuild: null,
+            error: "Generation stopped",
+          });
+        }
+        return next;
+      });
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
+    customBuildAbortRef.current?.abort();
+    customBuildAbortRef.current = null;
     setRunning(false);
     setResults((prev) => {
       const next = new Map(prev);
@@ -562,10 +739,11 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   function exportModelJson(args: {
     modelName: string;
     modelKey: string;
+    promptText: string;
     rawBuildJson?: string;
   }) {
     const modelToken = sanitizeFilePart(args.modelName) || args.modelKey;
-    const promptToken = sanitizeFilePart(prompt) || "sandbox";
+    const promptToken = sanitizeFilePart(args.promptText) || "sandbox";
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const fileName = `minebench-build-${modelToken}-${promptToken}-${stamp}.json`;
     const json = typeof args.rawBuildJson === "string" ? args.rawBuildJson.trim() : "";
@@ -573,8 +751,330 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     triggerDownload(new Blob([json], { type: "application/json" }), fileName);
   }
 
-  async function runGenerate() {
+  function customBuildRequestModel(model: SelectedLiveModel): GenerateModelRequest {
+    if (model.kind === "catalog") {
+      return {
+        id: model.id,
+        kind: "catalog" as const,
+        modelKey: model.modelKey,
+      };
+    }
+    if (model.provider === "custom") {
+      return {
+        id: model.id,
+        kind: "custom",
+        provider: "custom",
+        displayName: model.displayName,
+        modelId: model.modelId,
+        baseUrl: model.baseUrl ?? "",
+      };
+    }
+    return {
+      id: model.id,
+      kind: "custom",
+      provider: "openrouter",
+      displayName: model.displayName,
+      modelId: model.modelId,
+    };
+  }
+
+  function applyCustomBuildStatus(args: {
+    model: SelectedLiveModel;
+    status: SavedGenerationPayload;
+    build?: unknown | null;
+    pageUrl?: string;
+    statusUrl?: string;
+    eventsUrl?: string;
+  }) {
+    setResults((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(args.model.id);
+      if (!existing || (existing?.customBuildId && existing.customBuildId !== args.status.id)) {
+        return prev;
+      }
+      const statusGridSize = customBuildGridSize(args.status.gridSize, existing?.renderGridSize ?? gridSize);
+      const statusPalette = customBuildPalette(args.status.palette, existing?.renderPalette ?? palette);
+      const base = {
+        modelKey: args.model.id,
+        customBuildId: args.status.id,
+        customBuildPageUrl: args.pageUrl ?? existing?.customBuildPageUrl ?? "/account#builds",
+        customBuildStatusUrl: args.statusUrl ?? existing?.customBuildStatusUrl,
+        customBuildEventsUrl: args.eventsUrl ?? existing?.customBuildEventsUrl,
+        customBuildDownloadUrl: args.status.downloadUrl ?? existing?.customBuildDownloadUrl,
+        customBuildExpandedBytes: args.status.expandedBytes,
+        renderGridSize: statusGridSize,
+        renderPalette: statusPalette,
+        startedAt: existing?.startedAt,
+        currentStage: customBuildStageLabel(args.status),
+        submittedPrompt: existing?.submittedPrompt,
+        attempt: args.status.attempt ?? undefined,
+        retryReason: args.status.retryReason ?? undefined,
+        customBuildRetryable: args.status.error?.retryable === true,
+        retryProvider: customBuildRetryProvider(args.status),
+      };
+
+      if (args.status.status === "failed" || args.status.status === "canceled") {
+        next.set(args.model.id, {
+          ...base,
+          status: "error",
+          voxelBuild: null,
+          error: args.status.error?.message ?? customBuildStageLabel(args.status),
+        });
+        return next;
+      }
+
+      if (args.status.status === "succeeded") {
+        next.set(args.model.id, {
+          ...base,
+          status: "success",
+          voxelBuild: args.build ?? existing?.voxelBuild ?? null,
+          metrics: customBuildMetrics(args.status),
+        });
+        return next;
+      }
+
+      next.set(args.model.id, {
+        ...base,
+        status: "loading",
+        voxelBuild: existing?.voxelBuild ?? null,
+        attempt: args.status.attempt ?? existing?.attempt ?? 1,
+      });
+      return next;
+    });
+  }
+
+  async function watchCustomBuild(args: {
+    model: SelectedLiveModel;
+    statusUrl: string;
+    pageUrl: string;
+    eventsUrl: string;
+    signal: AbortSignal;
+  }) {
+    let consecutiveFailures = 0;
+    let viewerFailures = 0;
+    while (!args.signal.aborted) {
+      let status: SavedGenerationPayload;
+      try {
+        status = await readCustomBuildStatus(args.statusUrl, args.signal);
+        consecutiveFailures = 0;
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        if (error instanceof CustomBuildStatusReadError && !error.retryable) throw error;
+        consecutiveFailures += 1;
+        await abortableDelay(
+          Math.min(10_000, 1_000 * (2 ** Math.min(consecutiveFailures - 1, 3))),
+          args.signal,
+        );
+        continue;
+      }
+      if (args.signal.aborted) return;
+      if (status.status === "succeeded") {
+        applyCustomBuildStatus({
+          model: args.model,
+          status,
+          pageUrl: args.pageUrl,
+          statusUrl: args.statusUrl,
+          eventsUrl: args.eventsUrl,
+        });
+        try {
+          const viewer = await readCustomBuildViewer(status, args.signal);
+          if (args.signal.aborted) return;
+          applyCustomBuildStatus({
+            model: args.model,
+            status,
+            build: viewer,
+            pageUrl: args.pageUrl,
+            statusUrl: args.statusUrl,
+            eventsUrl: args.eventsUrl,
+          });
+        } catch (error) {
+          if (isAbortError(error)) return;
+          if (error instanceof CustomBuildViewerReadError && error.retryable) {
+            viewerFailures += 1;
+            await abortableDelay(
+              Math.min(10_000, 1_000 * (2 ** Math.min(viewerFailures - 1, 3))),
+              args.signal,
+            );
+            continue;
+          }
+          console.warn("Custom build viewer unavailable", error);
+        }
+        return;
+      }
+
+      applyCustomBuildStatus({
+        model: args.model,
+        status,
+        pageUrl: args.pageUrl,
+        statusUrl: args.statusUrl,
+        eventsUrl: args.eventsUrl,
+      });
+      if (status.status === "failed" || status.status === "canceled") return;
+      await abortableDelay(2500, args.signal);
+    }
+  }
+
+  async function retryCustomBuild(model: SelectedLiveModel) {
+    const existing = results.get(model.id);
+    if (running || !existing?.customBuildId || !existing.customBuildRetryable) return;
+    const providerKey = existing.retryProvider
+      ? providerKeys[existing.retryProvider]?.trim()
+      : undefined;
+    if (!providerKey) {
+      setRequestError("Add the required API key before retrying.");
+      return;
+    }
+    const abortController = new AbortController();
+    customBuildAbortRef.current = abortController;
+    setRunning(true);
+    setRequestError(null);
+    try {
+      const response = await fetch(
+        `/api/generations/${encodeURIComponent(existing.customBuildId)}/retry`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
+          body: JSON.stringify({
+            providerKey,
+            ...(model.kind === "custom" && model.provider === "custom"
+              ? { customBaseUrl: model.baseUrl }
+              : {}),
+          }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await readClientErrorResponse(response, "Generation could not be retried."));
+      }
+      const status = ((await response.json()) as { generation: SavedGenerationPayload }).generation;
+      setResults((current) => {
+        const next = new Map(current);
+        const value = next.get(model.id);
+        if (value) next.set(model.id, { ...value, startedAt: Date.now() });
+        return next;
+      });
+      const statusUrl = customBuildStatusPath(status.id);
+      applyCustomBuildStatus({
+        model,
+        status,
+        statusUrl,
+        pageUrl: `/account#${encodeURIComponent(status.id)}`,
+      });
+      await watchCustomBuild({
+        model,
+        statusUrl,
+        pageUrl: `/account#${encodeURIComponent(status.id)}`,
+        eventsUrl: "",
+        signal: abortController.signal,
+      });
+    } catch (error) {
+      if (!isAbortError(error)) {
+        setRequestError(error instanceof Error ? error.message : "Generation could not be retried.");
+      }
+    } finally {
+      if (customBuildAbortRef.current === abortController) customBuildAbortRef.current = null;
+      setRunning(false);
+    }
+  }
+
+  async function runGenerateDurable(args: {
+    abortController: AbortController;
+    providerKeys: ProviderApiKeys;
+    prompt: string;
+    runId: number;
+  }) {
+    customBuildAbortRef.current = args.abortController;
+    const res = await fetch("/api/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: args.abortController.signal,
+      body: JSON.stringify({
+        prompt: args.prompt,
+        gridSize,
+        palette,
+        models: selectedModels.map(customBuildRequestModel),
+        providerKeys: args.providerKeys,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      const obj = safeJsonParseObject(text);
+      const message =
+        obj && typeof obj.error === "object" && obj.error &&
+        "message" in obj.error && typeof (obj.error as { message?: unknown }).message === "string"
+          ? (obj.error as { message: string }).message
+          : text || "Request failed";
+      throw new Error(message);
+    }
+    const created = (await res.json()) as SavedGenerationCreateResponse;
+    if (created.generations.length !== selectedModels.length) {
+      throw new Error("Generation queue returned an incomplete result.");
+    }
+    if (canceledDurableRunsRef.current.has(args.runId)) {
+      const responses = await Promise.all(created.generations.map((generation) =>
+        fetch(`/api/generations/${encodeURIComponent(generation.id)}/cancel`, { method: "POST" }),
+      ));
+      if (responses.some((response) => !response.ok)) {
+        throw new Error("Generation could not be stopped.");
+      }
+      return;
+    }
+    setResults((prev) => {
+      const next = new Map(prev);
+      selectedModels.forEach((model, index) => {
+        const generation = created.generations[index];
+        if (!generation) return;
+        const existing = next.get(model.id);
+        next.set(model.id, {
+          modelKey: model.id,
+          status: "loading",
+          voxelBuild: null,
+          attempt: 1,
+          startedAt: existing?.startedAt ?? Date.now(),
+          customBuildId: generation.id,
+          customBuildPageUrl: `/account#${encodeURIComponent(generation.id)}`,
+          customBuildStatusUrl: customBuildStatusPath(generation.id),
+          renderGridSize: gridSize,
+          renderPalette: palette,
+          currentStage: "Queued",
+          submittedPrompt: existing?.submittedPrompt ?? args.prompt,
+        });
+      });
+      return next;
+    });
+    await Promise.all(
+      selectedModels.map((model, index) => {
+        const generation = created.generations[index];
+        if (!generation) return Promise.resolve();
+        const statusUrl = customBuildStatusPath(generation.id);
+        return watchCustomBuild({
+          model,
+          statusUrl,
+          pageUrl: `/account#${encodeURIComponent(generation.id)}`,
+          eventsUrl: "",
+          signal: args.abortController.signal,
+        }).catch((err) => {
+          if (isAbortError(err)) return;
+          setResults((prev) => {
+            const next = new Map(prev);
+            const existing = next.get(model.id);
+            next.set(model.id, {
+              ...existing,
+              modelKey: model.id,
+              status: "error",
+              voxelBuild: existing?.voxelBuild ?? null,
+              error: err instanceof Error ? err.message : "Status unavailable",
+            });
+            return next;
+          });
+        });
+      }),
+    );
+  }
+
+  async function runGenerate(continueTransient = false) {
     if (!prompt.trim() || selectedModels.length === 0) return;
+    const submittedPrompt = prompt.trim();
 
     const invalidCustomModel = selectedModels.find(
       (model) => model.kind === "custom" && !model.modelId.trim()
@@ -589,6 +1089,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     if (missingCustomUrl) {
       setRequestError("Enter a chat completions URL for the OpenAI-compatible model.");
       return;
+    }
+    if (!signedIn && !continueTransient) {
+      setShowGenerationPreflight(true);
+      return;
+    }
+    const durableRunId = signedIn ? durableRunSequenceRef.current + 1 : null;
+    if (durableRunId !== null) {
+      durableRunSequenceRef.current = durableRunId;
+      activeDurableRunRef.current = durableRunId;
     }
 
     setRunning(true);
@@ -607,6 +1116,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
           retryReason: undefined,
           metrics: undefined,
           startedAt: now,
+          submittedPrompt,
         });
       }
       return next;
@@ -615,48 +1125,28 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const abortController = new AbortController();
     generateAbortRef.current = abortController;
     try {
-      const sanitizedKeys: ProviderApiKeys = {};
-      const setKey = (k: keyof ProviderApiKeys, v: unknown) => {
-        if (typeof v !== "string") return;
-        const t = v.trim();
-        if (t) sanitizedKeys[k] = t;
-      };
-      setKey("openrouter", providerKeys.openrouter);
-      setKey("openai", providerKeys.openai);
-      setKey("anthropic", providerKeys.anthropic);
-      setKey("gemini", providerKeys.gemini);
-      setKey("moonshot", providerKeys.moonshot);
-      setKey("deepseek", providerKeys.deepseek);
-      setKey("minimax", providerKeys.minimax);
-      setKey("xai", providerKeys.xai);
-      setKey("meta", providerKeys.meta);
-      setKey("zai", providerKeys.zai);
-      setKey("custom", providerKeys.custom);
+      const requestModels = selectedModels.map(customBuildRequestModel);
+      const sanitizedKeys = selectGenerationProviderKeys(requestModels, providerKeys);
+
+      if (signedIn) {
+        await runGenerateDurable({
+          abortController,
+          providerKeys: sanitizedKeys,
+          prompt: submittedPrompt,
+          runId: durableRunId!,
+        });
+        return;
+      }
 
       const res = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         signal: abortController.signal,
         body: JSON.stringify({
-          prompt,
+          prompt: submittedPrompt,
           gridSize,
           palette,
-          models: selectedModels.map((model) =>
-            model.kind === "catalog"
-              ? {
-                  id: model.id,
-                  kind: "catalog" as const,
-                  modelKey: model.modelKey,
-                }
-              : {
-                  id: model.id,
-                  kind: "custom" as const,
-                  provider: model.provider,
-                  displayName: model.displayName,
-                  modelId: model.modelId,
-                  baseUrl: model.baseUrl,
-                }
-          ),
+          models: requestModels,
           providerKeys: sanitizedKeys,
         }),
       });
@@ -698,6 +1188,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 attempt: 1,
                 rawText: "",
                 startedAt: existing?.startedAt ?? Date.now(),
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -716,6 +1207,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 retryReason: evt.reason,
                 rawText: "",
                 startedAt: existing?.startedAt ?? Date.now(),
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -739,6 +1231,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 startedAt: existing?.startedAt,
                 rawText: nextText,
                 error: existing?.error,
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -755,6 +1248,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 metrics: evt.metrics,
                 startedAt: existing?.startedAt,
                 rawText: existing?.rawText,
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -769,6 +1263,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 error: evt.message,
                 rawText: evt.rawText ?? existing?.rawText,
                 startedAt: existing?.startedAt,
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -798,6 +1293,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       }
       setRequestError(err instanceof Error ? err.message : "Request failed");
     } finally {
+      if (customBuildAbortRef.current === abortController) {
+        customBuildAbortRef.current = null;
+      }
+      if (durableRunId !== null) {
+        canceledDurableRunsRef.current.delete(durableRunId);
+        if (activeDurableRunRef.current === durableRunId) {
+          activeDurableRunRef.current = null;
+        }
+      }
       if (generateAbortRef.current === abortController) {
         generateAbortRef.current = null;
         setRunning(false);
@@ -805,16 +1309,22 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     }
   }
 
-  function getPreviewBuild(modelKey: string, rawText: string | undefined): VoxelBuild | null {
+  function getPreviewBuild(
+    modelKey: string,
+    rawText: string | undefined,
+    previewGridSize: GridSize,
+    previewPalette: Palette,
+  ): VoxelBuild | null {
     if (!rawText) return null;
     const now = Date.now();
-    const cached = previewCacheRef.current.get(modelKey);
+    const cacheKey = `${modelKey}:${previewGridSize}:${previewPalette}`;
+    const cached = previewCacheRef.current.get(cacheKey);
     const textLen = rawText.length;
     if (cached && now - cached.at < PREVIEW_THROTTLE_MS && textLen <= cached.textLen + 80) {
       return cached.build;
     }
-    const build = buildPreviewFromRawText({ rawText, gridSize, palette });
-    previewCacheRef.current.set(modelKey, { at: now, textLen, build });
+    const build = buildPreviewFromRawText({ rawText, gridSize: previewGridSize, palette: previewPalette });
+    previewCacheRef.current.set(cacheKey, { at: now, textLen, build });
     return build;
   }
 
@@ -831,15 +1341,22 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       };
     })
     .filter((target): target is SandboxGifExportTarget => Boolean(target));
+  const comparePrompt = selectedModels
+    .map((model) => results.get(model.id)?.submittedPrompt)
+    .find((value): value is string => Boolean(value)) ?? prompt;
+  const singleGalleryResult = selectedModels.length === 1
+    ? results.get(selectedModels[0]!.id)
+    : undefined;
 
   const resultCards = selectedModels.map((model, idx) => {
     const r = results.get(model.id);
     const viewerRef = idx === 0 ? viewerARef : viewerBRef;
     const modelName = model.displayName;
     const providerName = model.providerLabel;
+    const isDurableResult = Boolean(r?.customBuildId);
     const rawBuildJsonForExport = getRawBuildJsonForExport({
-      voxelBuild: r?.voxelBuild ?? undefined,
-      rawJsonText: r?.rawText,
+      voxelBuild: isDurableResult ? undefined : r?.voxelBuild ?? undefined,
+      rawJsonText: isDurableResult ? undefined : r?.rawText,
     });
     const hasJsonExport = Boolean(rawBuildJsonForExport);
     const gifTargets: SandboxGifExportTarget[] =
@@ -856,510 +1373,521 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     const liveRawText = r?.rawText;
-    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText) : null;
+    const cardGridSize = r?.renderGridSize ?? gridSize;
+    const cardPalette = r?.renderPalette ?? palette;
+    const resultPrompt = r?.submittedPrompt ?? prompt;
+    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText, cardGridSize, cardPalette) : null;
     return (
       <VoxelViewerCard
         key={model.id}
         title={model.displayName}
         subtitle={providerName}
         voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
-        gridSize={gridSize}
+        gridSize={cardGridSize}
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
-        debugRawText={liveRawText}
+        debugRawText={isDurableResult ? undefined : liveRawText}
         attempt={r?.status === "loading" ? r.attempt : undefined}
-        retryReason={r?.status === "loading" ? r.retryReason : undefined}
+        retryReason={r?.status === "loading" || r?.status === "error" ? r.retryReason : undefined}
         elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
-        jsonText={r?.rawText}
-        palette={palette}
+        jsonBytes={r?.status === "success" ? r.customBuildExpandedBytes : undefined}
+        jsonText={isDurableResult ? undefined : r?.rawText}
+        loadingMessage={isDurableResult ? r?.currentStage : undefined}
+        palette={cardPalette}
         viewerRef={viewerRef}
+        skipValidation={isDurableResult}
         onBuildMetrics={
           r?.status === "success"
             ? (metrics) => enqueueVoxelMetric("sandbox", "full", metrics)
             : undefined
         }
-        enableBuildJsonToggle
-        enableBuildExport={r?.status === "success"}
+        enableBuildJsonToggle={!isDurableResult}
+        enableBuildExport={r?.status === "success" && !isDurableResult}
         exportLabel={modelName}
-        exportPrompt={prompt}
+        exportPrompt={resultPrompt}
         actions={
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label="Export JSON"
-              title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
-              disabled={!hasJsonExport}
-              className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-              onClick={() =>
-                exportModelJson({
-                  modelName,
-                  modelKey: model.id,
-                  rawBuildJson: rawBuildJsonForExport ?? undefined,
-                })
-              }
-            >
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-                <path
-                  d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="1.8"
-                />
-              </svg>
-            </button>
+          <>
+            {r?.status === "error" && r.customBuildRetryable ? (
+              <button
+                type="button"
+                disabled={running}
+                className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
+                onClick={() => void retryCustomBuild(model)}
+              >
+                Retry
+              </button>
+            ) : null}
+            {selectedModels.length > 1 && r?.status === "success" && r.customBuildId && !gallerySuspended ? (
+              <GenerationGalleryButton
+                key={r.customBuildId}
+                generationId={r.customBuildId}
+                postAnonymously={!hasPublicNickname}
+                canChooseAttribution={hasPublicNickname}
+                onError={setRequestError}
+                compact
+              />
+            ) : null}
+            {r?.customBuildPageUrl ? (
+              <Link
+                className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
+                href={r.customBuildPageUrl}
+              >
+                Builds
+              </Link>
+            ) : null}
+            {r?.customBuildDownloadUrl ? (
+              <button
+                type="button"
+                aria-label="Download JSON"
+                title="Download JSON"
+                className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg"
+                onClick={() => {
+                  setRequestError(null);
+                  void downloadSavedGenerationJson({
+                    url: r.customBuildDownloadUrl!,
+                    fileName: `${r.customBuildId ?? "minebench-build"}.json`,
+                    expandedBytes: r.customBuildExpandedBytes,
+                  }).catch(() => setRequestError("JSON could not be downloaded."));
+                }}
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <path
+                    d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-label="Export JSON"
+                title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
+                disabled={!hasJsonExport}
+                className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() =>
+                  exportModelJson({
+                    modelName,
+                    modelKey: model.id,
+                    promptText: resultPrompt,
+                    rawBuildJson: rawBuildJsonForExport ?? undefined,
+                  })
+                }
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <path
+                    d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </button>
+            )}
             <SandboxGifExportButton
               targets={gifTargets}
-              promptText={prompt}
+              promptText={r?.submittedPrompt ?? prompt}
               cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
               iconOnly
+              embedded
+              className="h-8 w-8"
               label="Export GIF"
             />
-          </div>
+          </>
         }
       />
     );
   });
 
   return (
-    <div className="flex flex-col gap-5">
-      <div className="mb-panel p-4 sm:p-5">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(21rem,0.56fr)_minmax(0,1fr)]">
+      <div className="mb-panel flex h-fit flex-col gap-5 p-4 sm:p-5">
         <div className="flex flex-col gap-1.5">
-          <div className="font-display text-2xl font-semibold tracking-tight">
-            Live generate
-          </div>
-          <div className="text-sm text-muted">
-            Generate a build from your own prompt, or compare two models side by side.
-          </div>
+          <div className="font-display text-2xl font-semibold tracking-tight">Generate</div>
+          <div className="text-sm text-muted">Build from your own prompt.</div>
         </div>
 
-          <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-            <section className="flex flex-col">
-              <label className="flex flex-col gap-2">
-                <span className="mb-eyebrow">Prompt</span>
-                <textarea
-                  className="mb-field min-h-44 resize-none py-3"
-                  placeholder="Describe the build — shape, materials, scale, mood…"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                />
-              </label>
-            </section>
+        <label className="flex flex-col gap-2">
+          <span className="mb-eyebrow">Prompt</span>
+          <textarea
+            className="mb-field min-h-36 resize-none py-3"
+            placeholder="Describe the build..."
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+          />
+        </label>
 
-            <div className="flex flex-col gap-5">
-              <section>
-                <div className="mb-eyebrow">Build settings</div>
-                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Size</div>
-                    <div className="relative">
-                      <select
-                        className="mb-field h-10 w-full"
-                        value={gridSize}
-                        onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
-                      >
-                        <option value={64}>64</option>
-                        <option value={256}>256</option>
-                        <option value={512}>512</option>
-                      </select>
-                    </div>
-                  </label>
+        <section>
+          <div className="mb-eyebrow">Build</div>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <label className="flex min-w-0 flex-col gap-1">
+              <div className="text-xs font-medium text-muted">Size</div>
+              <select
+                className="mb-field h-10 w-full"
+                value={gridSize}
+                onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
+              >
+                <option value={64}>64</option>
+                <option value={256}>256</option>
+                <option value={512}>512</option>
+              </select>
+            </label>
 
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Palette</div>
-                    <div className="relative">
-                      <select
-                        className="mb-field h-10 w-full"
-                        value={palette}
-                        onChange={(e) => setPalette(e.target.value as Palette)}
-                      >
-                        <option value="simple">Simple</option>
-                        <option value="advanced">Advanced</option>
-                      </select>
-                    </div>
-                  </label>
-                </div>
-              </section>
+            <label className="flex min-w-0 flex-col gap-1">
+              <div className="text-xs font-medium text-muted">Palette</div>
+              <select
+                className="mb-field h-10 w-full"
+                value={palette}
+                onChange={(e) => setPalette(e.target.value as Palette)}
+              >
+                <option value="simple">Simple</option>
+                <option value="advanced">Advanced</option>
+              </select>
+            </label>
+          </div>
+        </section>
 
-              <section>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="mb-eyebrow">Models</div>
-                  <button
-                    type="button"
-                    aria-pressed={compareEnabled}
-                    onClick={() => setCompareEnabled((v) => !v)}
-                    disabled={running || !canCompare}
-                    className={`mb-btn h-7 px-2.5 text-[11px] ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
-                    {compareEnabled ? "Stop comparing" : "Compare models"}
-                  </button>
-                </div>
-
-                <div className={`mt-3 grid grid-cols-1 gap-3 ${compareEnabled ? "sm:grid-cols-2" : ""}`}>
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">{compareEnabled ? "Model A" : "Model"}</div>
-                    <div className="relative">
-                      <select
-                        className="mb-field h-11 w-full"
-                        value={modelPair.a}
-                        onChange={(e) => handleModelChange("a", e.target.value)}
-                        disabled={running}
-                      >
-                        {modelGroups.map((group) => (
-                          <optgroup key={group.label} label={group.label}>
-                            {group.models.map((model) => (
-                              <option
-                                key={model.key}
-                                value={model.key}
-                                disabled={
-                                  compareEnabled &&
-                                  modelPair.b != null &&
-                                  !isAdHocModelValue(modelPair.b) &&
-                                  model.key === modelPair.b
-                                }
-                              >
-                                {model.displayName}
-                              </option>
-                            ))}
-                          </optgroup>
-                        ))}
-                        <optgroup label="OpenRouter">
-                          <option
-                            value={OPENROUTER_MODEL_VALUE}
-                            disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
-                          >
-                            Other OpenRouter model
-                          </option>
-                        </optgroup>
-                        <optgroup label="Custom">
-                          <option
-                            value={CUSTOM_MODEL_VALUE}
-                            disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
-                          >
-                            OpenAI-compatible model
-                          </option>
-                        </optgroup>
-                      </select>
-                    </div>
-                  </label>
-
-                  {compareEnabled ? (
-                    <label className="flex flex-col gap-1">
-                      <div className="text-xs font-medium text-muted">Model B</div>
-                      <div className="relative">
-                        <select
-                          className="mb-field h-11 w-full"
-                          value={modelPair.b ?? ""}
-                          onChange={(e) => handleModelChange("b", e.target.value)}
-                          disabled={running || !canCompare}
-                        >
-                          <option value="" disabled>
-                            Select model
-                          </option>
-                          {modelGroups.map((group) => (
-                            <optgroup key={group.label} label={group.label}>
-                              {group.models.map((model) => (
-                                <option
-                                  key={model.key}
-                                  value={model.key}
-                                  disabled={!isAdHocModelValue(modelPair.a) && model.key === modelPair.a}
-                                >
-                                  {model.displayName}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ))}
-                          <optgroup label="OpenRouter">
-                            <option value={OPENROUTER_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
-                              Other OpenRouter model
-                            </option>
-                          </optgroup>
-                          <optgroup label="Custom">
-                            <option value={CUSTOM_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
-                              OpenAI-compatible model
-                            </option>
-                          </optgroup>
-                        </select>
-                      </div>
-                    </label>
-                  ) : null}
-                </div>
-
-                {usesAdHocModel ? (
-                  <div className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3">
-                    <div className="text-xs font-medium text-muted">
-                      {usesOpenRouterModel ? "OpenRouter model" : "OpenAI-compatible model"}
-                    </div>
-                    <div className="mt-3 grid grid-cols-1 gap-3">
-                      {usesOpenAiCompatibleModel ? (
-                        <label className="flex flex-col gap-1">
-                          <div className="text-xs font-medium text-muted">Display name</div>
-                          <input
-                            className="mb-field h-10 w-full"
-                            value={customModel.displayName}
-                            onChange={(e) => updateCustomModel({ displayName: e.target.value })}
-                            disabled={running}
-                            placeholder="My model"
-                          />
-                        </label>
-                      ) : null}
-                      <label className="flex flex-col gap-1">
-                        <div className="text-xs font-medium text-muted">Model ID</div>
-                        <input
-                          className="mb-field h-10 w-full"
-                          value={customModel.modelId}
-                          onChange={(e) => updateCustomModel({ modelId: e.target.value })}
-                          disabled={running}
-                          placeholder={usesOpenRouterModel ? "stealth/ox-alpha" : undefined}
-                        />
-                      </label>
-                      {usesOpenAiCompatibleModel ? (
-                        <label className="flex flex-col gap-1">
-                          <div className="text-xs font-medium text-muted">Chat completions URL</div>
-                          <input
-                            className="mb-field h-10 w-full"
-                            value={customModel.baseUrl}
-                            onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
-                            disabled={running}
-                            type="url"
-                          />
-                        </label>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : null}
-              </section>
-            </div>
+        <section>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="mb-eyebrow">Model</div>
+            <button
+              type="button"
+              aria-pressed={compareEnabled}
+              onClick={() => setCompareEnabled((v) => !v)}
+              disabled={running || !canCompare}
+              className={`mb-btn h-7 px-2.5 text-[11px] ${compareEnabled ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
+            >
+              {compareEnabled ? "Single" : "Compare"}
+            </button>
           </div>
 
-          <div className="mt-5 border-t border-border/70 pt-4 sm:pt-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="mb-eyebrow">API keys</div>
-                <div className="mt-1 text-xs text-muted">Stored in your browser only.</div>
+          <div className="mt-3 grid grid-cols-1 gap-3">
+            <label className="flex flex-col gap-1">
+              <div className="text-xs font-medium text-muted">{compareEnabled ? "Model A" : "Model"}</div>
+              <select
+                className="mb-field h-11 w-full"
+                value={modelPair.a}
+                onChange={(e) => handleModelChange("a", e.target.value)}
+                disabled={running}
+              >
+                {modelGroups.map((group) => (
+                  <optgroup key={group.label} label={group.label}>
+                    {group.models.map((model) => (
+                      <option
+                        key={model.key}
+                        value={model.key}
+                        disabled={
+                          compareEnabled &&
+                          modelPair.b != null &&
+                          !isAdHocModelValue(modelPair.b) &&
+                          model.key === modelPair.b
+                        }
+                      >
+                        {model.displayName}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+                <optgroup label="OpenRouter">
+                  <option
+                    value={OPENROUTER_MODEL_VALUE}
+                    disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
+                  >
+                    Other OpenRouter model
+                  </option>
+                </optgroup>
+                <optgroup label="Custom">
+                  <option
+                    value={CUSTOM_MODEL_VALUE}
+                    disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
+                  >
+                    OpenAI-compatible model
+                  </option>
+                </optgroup>
+              </select>
+            </label>
+
+            {compareEnabled ? (
+              <label className="flex flex-col gap-1">
+                <div className="text-xs font-medium text-muted">Model B</div>
+                <select
+                  className="mb-field h-11 w-full"
+                  value={modelPair.b ?? ""}
+                  onChange={(e) => handleModelChange("b", e.target.value)}
+                  disabled={running || !canCompare}
+                >
+                  <option value="" disabled>
+                    Select model
+                  </option>
+                  {modelGroups.map((group) => (
+                    <optgroup key={group.label} label={group.label}>
+                      {group.models.map((model) => (
+                        <option
+                          key={model.key}
+                          value={model.key}
+                          disabled={!isAdHocModelValue(modelPair.a) && model.key === modelPair.a}
+                        >
+                          {model.displayName}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                  <optgroup label="OpenRouter">
+                    <option value={OPENROUTER_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
+                      Other OpenRouter model
+                    </option>
+                  </optgroup>
+                  <optgroup label="Custom">
+                    <option value={CUSTOM_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
+                      OpenAI-compatible model
+                    </option>
+                  </optgroup>
+                </select>
+              </label>
+            ) : null}
+          </div>
+
+          {usesAdHocModel ? (
+            <div className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3">
+              <div className="text-xs font-medium text-muted">
+                {usesOpenRouterModel ? "OpenRouter model" : "OpenAI-compatible model"}
               </div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="mt-3 grid grid-cols-1 gap-3">
+                {usesOpenAiCompatibleModel ? (
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Display name</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      value={customModel.displayName}
+                      onChange={(e) => updateCustomModel({ displayName: e.target.value })}
+                      disabled={running}
+                      placeholder="My model"
+                    />
+                  </label>
+                ) : null}
+                <label className="flex flex-col gap-1">
+                  <div className="text-xs font-medium text-muted">Model ID</div>
+                  <input
+                    className="mb-field h-10 w-full"
+                    value={customModel.modelId}
+                    onChange={(e) => updateCustomModel({ modelId: e.target.value })}
+                    disabled={running}
+                    placeholder={usesOpenRouterModel ? "stealth/ox-alpha" : undefined}
+                  />
+                </label>
+                {usesOpenAiCompatibleModel ? (
+                  <label className="flex flex-col gap-1">
+                    <div className="text-xs font-medium text-muted">Chat completions URL</div>
+                    <input
+                      className="mb-field h-10 w-full"
+                      value={customModel.baseUrl}
+                      onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
+                      disabled={running}
+                      type="url"
+                    />
+                  </label>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </section>
+
+        {requestError ? (
+          <div className="rounded-md border border-danger/30 bg-danger/[0.08] px-3 py-2 text-xs text-danger">
+            {requestError}
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
+          {singleGalleryResult?.status === "success" && singleGalleryResult.customBuildId && !gallerySuspended ? (
+            <GenerationGalleryButton
+              key={singleGalleryResult.customBuildId}
+              generationId={singleGalleryResult.customBuildId}
+              postAnonymously={!hasPublicNickname}
+              canChooseAttribution={hasPublicNickname}
+              onError={setRequestError}
+            />
+          ) : null}
+          {selectedModels.length > 1 && compareTargets.length === selectedModels.length ? (
+            <SandboxGifExportButton
+              targets={compareTargets}
+              promptText={comparePrompt}
+              cancelKey={`${inputSignature}:${compareTargets
+                .map((target) => `${target.modelName}:${target.blockCount}`)
+                .join("|")}`}
+              label="Export comparison GIF"
+            />
+          ) : null}
+          <button
+            className={`mb-btn ml-auto h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50 ${running ? "" : "mb-btn-primary"}`}
+            disabled={!running && (selectedModels.length === 0 || !prompt.trim())}
+            onClick={running ? stopGenerate : () => void runGenerate()}
+          >
+            {running ? "Stop" : "Generate"}
+          </button>
+        </div>
+      </div>
+
+      <div className={`grid min-w-0 grid-cols-1 gap-4 ${selectedModels.length > 1 ? "2xl:grid-cols-2" : ""}`}>
+        {resultCards}
+      </div>
+
+      <section className="border-t border-border/70 xl:col-span-2">
+        <button
+          type="button"
+          aria-expanded={apiKeysOpen}
+          aria-controls="sandbox-api-keys"
+          className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          onClick={() => setApiKeysOpen((open) => !open)}
+        >
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="text-sm font-semibold text-fg">API keys</span>
+            <span className="truncate text-xs text-muted">
+              {savedKeyCount ? `${savedKeyCount} saved in this browser` : "None saved"}
+            </span>
+          </span>
+          <svg
+            aria-hidden="true"
+            className={`mb-disclosure-chevron h-3 w-3 shrink-0 text-muted ${apiKeysOpen ? "is-open" : ""}`}
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 6.5L8 10.5L12 6.5" />
+          </svg>
+        </button>
+
+        {apiKeysOpen ? (
+          <div id="sandbox-api-keys" className="mb-fade-in pb-4 pt-2">
+            <div className="flex min-h-11 items-center justify-end gap-4">
+              {savedKeyCount ? (
                 <button
                   type="button"
-                  className="mb-btn mb-btn-ghost h-7 px-2.5 text-[11px] disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex min-h-11 items-center rounded-sm px-1 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
                   onClick={() => {
                     setProviderKeys({});
                     setRequestError(null);
                   }}
                   disabled={running}
                 >
-                  Clear keys
+                  Clear
                 </button>
-                <button
-                  type="button"
-                  aria-pressed={showKeys}
-                  className={`mb-btn h-7 px-2.5 text-[11px] ${showKeys ? "mb-btn-primary" : "mb-btn-ghost"} disabled:cursor-not-allowed disabled:opacity-50`}
-                  onClick={() => setShowKeys((v) => !v)}
-                  disabled={running}
-                >
-                  {showKeys ? "Hide" : "Show"}
-                </button>
-              </div>
+              ) : null}
+              <button
+                type="button"
+                aria-pressed={showKeys}
+                className="inline-flex min-h-11 items-center rounded-sm px-1 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+                onClick={() => setShowKeys((visible) => !visible)}
+                disabled={running}
+              >
+                {showKeys ? "Hide" : "Show"}
+              </button>
             </div>
 
-            {requestError ? (
-              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
-                {requestError}
-              </div>
-            ) : null}
-
-            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-              <label className="flex flex-col gap-1 md:col-span-2">
-                <div className="text-xs font-medium text-muted">OpenRouter API key</div>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <div className="text-xs font-medium text-muted">OpenRouter</div>
                 <input
                   className="mb-field h-10 w-full"
                   type={showKeys ? "text" : "password"}
                   value={providerKeys.openrouter ?? ""}
-                  onChange={(e) => setProviderKeys((prev) => ({ ...prev, openrouter: e.target.value }))}
+                  onChange={(event) =>
+                    setProviderKeys((current) => ({ ...current, openrouter: event.target.value }))
+                  }
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="Paste your OpenRouter key"
+                  placeholder="Paste key"
                 />
               </label>
 
               {usesOpenAiCompatibleModel ? (
-                <label className="flex flex-col gap-1 md:col-span-2">
-                  <div className="text-xs font-medium text-muted">OpenAI-compatible API key</div>
+                <label className="flex flex-col gap-1">
+                  <div className="text-xs font-medium text-muted">OpenAI-compatible</div>
                   <input
                     className="mb-field h-10 w-full"
                     type={showKeys ? "text" : "password"}
                     value={providerKeys.custom ?? ""}
-                    onChange={(e) =>
-                      setProviderKeys((prev) => ({ ...prev, custom: e.target.value }))
+                    onChange={(event) =>
+                      setProviderKeys((current) => ({ ...current, custom: event.target.value }))
                     }
                     autoComplete="off"
                     spellCheck={false}
-                    placeholder="Paste the key for this server"
+                    placeholder="Paste key"
                   />
                 </label>
               ) : null}
-
-              <details className="md:col-span-2 rounded-md border border-border/70 bg-bg/35 px-3 py-2">
-                <summary className="cursor-pointer select-none text-xs font-medium text-muted">
-                  Use a provider-specific key instead (optional)
-                </summary>
-                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">OpenAI</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.openai ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, openai: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your OpenAI key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Anthropic</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.anthropic ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, anthropic: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Anthropic key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Gemini</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.gemini ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, gemini: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Google AI key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Moonshot</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.moonshot ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, moonshot: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Moonshot key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">DeepSeek</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.deepseek ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, deepseek: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your DeepSeek key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">MiniMax</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.minimax ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, minimax: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your MiniMax key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">xAI</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.xai ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, xai: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your xAI key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Meta Model API</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.meta ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, meta: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Meta Model API key"
-                    />
-                  </label>
-
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Z.AI</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      type={showKeys ? "text" : "password"}
-                      value={providerKeys.zai ?? ""}
-                      onChange={(e) => setProviderKeys((prev) => ({ ...prev, zai: e.target.value }))}
-                      autoComplete="off"
-                      spellCheck={false}
-                      placeholder="Paste your Z.AI key"
-                    />
-                  </label>
-                </div>
-              </details>
             </div>
-          </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-5">
-            <SandboxGifExportButton
-              targets={compareTargets}
-              promptText={prompt}
-              cancelKey={`${inputSignature}:${compareTargets
-                .map((target) => `${target.modelName}:${target.blockCount}`)
-                .join("|")}`}
-              label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
-            />
-            <div className="flex items-center gap-2">
-              {running ? (
-                <button
-                  className="mb-btn h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
-                  onClick={stopGenerate}
-                >
-                  Stop generating
-                </button>
-              ) : null}
+            <div className="mt-5 border-t border-border/70 pt-2">
               <button
-                className="mb-btn mb-btn-primary h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={running || selectedModels.length === 0 || !prompt.trim()}
-                onClick={runGenerate}
+                type="button"
+                aria-expanded={providerKeysOpen}
+                aria-controls="sandbox-provider-keys"
+                className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 text-left text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"
+                onClick={() => setProviderKeysOpen((open) => !open)}
               >
-                {running ? "Generating…" : "Generate"}
+                Provider keys
+                <svg
+                  aria-hidden="true"
+                  className={`mb-disclosure-chevron h-3 w-3 shrink-0 ${providerKeysOpen ? "is-open" : ""}`}
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M4 6.5L8 10.5L12 6.5" />
+                </svg>
               </button>
+
+              {providerKeysOpen ? (
+                <div
+                  id="sandbox-provider-keys"
+                  className="mb-fade-in grid grid-cols-1 gap-3 pt-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+                >
+                  {DIRECT_PROVIDER_KEYS.map(([provider, label]) => (
+                    <label key={provider} className="flex flex-col gap-1">
+                      <div className="text-xs font-medium text-muted">{label}</div>
+                      <input
+                        className="mb-field h-10 w-full"
+                        type={showKeys ? "text" : "password"}
+                        value={providerKeys[provider] ?? ""}
+                        onChange={(event) =>
+                          setProviderKeys((current) => ({ ...current, [provider]: event.target.value }))
+                        }
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="Paste key"
+                      />
+                    </label>
+                  ))}
+                </div>
+              ) : null}
             </div>
           </div>
-      </div>
+        ) : null}
+      </section>
 
-      <div className={`grid grid-cols-1 gap-4 ${selectedModels.length > 1 ? "md:grid-cols-2" : ""}`}>
-        {resultCards}
-      </div>
+      <GenerationPreflightDialog
+        open={showGenerationPreflight}
+        signInHref={`/sign-in?next=${encodeURIComponent(`/sandbox?mode=live&prompt=${encodeURIComponent(prompt)}`)}`}
+        onClose={() => setShowGenerationPreflight(false)}
+        onContinue={() => {
+          setShowGenerationPreflight(false);
+          void runGenerate(true);
+        }}
+      />
     </div>
   );
 }

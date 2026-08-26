@@ -41,7 +41,7 @@ export async function PersonalRanking({ userId }: { userId: string }) {
           role="region"
           aria-label="Ranked models"
           tabIndex={0}
-          className="max-h-[min(32rem,55dvh)] scroll-pt-11 overflow-x-hidden overflow-y-auto rounded-md border border-border [scrollbar-gutter:stable] [-webkit-overflow-scrolling:touch] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+          className="max-h-80 scroll-pt-11 overflow-x-hidden overflow-y-auto rounded-md border border-border [scrollbar-gutter:stable] [-webkit-overflow-scrolling:touch] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40 sm:max-h-[22.75rem]"
         >
           <div className="sticky top-0 z-10 hidden grid-cols-[3rem_minmax(0,1fr)_10rem_6rem] gap-3 border-b border-border bg-bg/95 px-4 py-3 font-mono text-[10px] uppercase tracking-[0.16em] text-muted backdrop-blur-sm sm:grid">
             <span>Rank</span>

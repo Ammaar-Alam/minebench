@@ -1047,6 +1047,7 @@ export function SandboxBenchmark() {
             meshCacheKey={meshCacheKey}
             gridSize={gridSize}
             palette={palette}
+            jsonBytes={build?.buildLoadHints.fullEstimatedBytes}
             animateIn
             useFirstRenderReady
             isLoading={isHydrating}
@@ -1075,6 +1076,8 @@ export function SandboxBenchmark() {
                   promptText={selectedPromptText}
                   cancelKey={`${promptId}:${slot}:${build.buildId}:${model.key}`}
                   iconOnly
+                  embedded
+                  className="h-8 w-8"
                   label="Export GIF"
                 />
               ) : null

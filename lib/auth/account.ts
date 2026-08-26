@@ -7,6 +7,7 @@ import {
   ARENA_SESSION_COOKIE_OPTIONS,
 } from "@/lib/arena/session";
 import { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
+import { claimAnonymousGalleryVotes } from "@/lib/gallery/service";
 
 export { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
 
@@ -14,7 +15,10 @@ export type PublicAccount = {
   id: string;
   email: string;
   displayName: string | null;
+  publicNickname: string | null;
   isMineBenchAdmin: boolean;
+  gallerySuspendedAt: Date | null;
+  gallerySuspensionReason: string | null;
   createdAt: Date;
 };
 
@@ -40,6 +44,10 @@ export function hasAuthenticationMethod(amr: unknown, method: string): boolean {
   });
 }
 
+export function isPasswordRecoveryMethod(amr: unknown): boolean {
+  return hasAuthenticationMethod(amr, "recovery") || hasAuthenticationMethod(amr, "otp");
+}
+
 export async function syncAuthUser(authUser: SupabaseAuthUser): Promise<PublicAccount | null> {
   const email = authUser.email?.trim().toLowerCase();
   if (!email) return null;
@@ -62,7 +70,10 @@ export async function syncAuthUser(authUser: SupabaseAuthUser): Promise<PublicAc
       id: true,
       email: true,
       displayName: true,
+      publicNickname: true,
       isMineBenchAdmin: true,
+      gallerySuspendedAt: true,
+      gallerySuspensionReason: true,
       createdAt: true,
     },
   });
@@ -91,7 +102,7 @@ export async function getCurrentAccountSecurity(): Promise<AccountSecurity | nul
   const amr = claimsResult.error ? null : claimsResult.data?.claims.amr;
   return {
     account,
-    isPasswordRecovery: hasAuthenticationMethod(amr, "recovery"),
+    isPasswordRecovery: isPasswordRecoveryMethod(amr),
     signedInWithPassword: hasAuthenticationMethod(amr, "password"),
   };
 }
@@ -115,15 +126,22 @@ export async function claimAnonymousPublicVotes(
   sessionId: string | null,
 ): Promise<number> {
   if (!sessionId) return 0;
-  const result = await prisma.vote.updateMany({
-    where: {
-      userId: null,
-      sessionId,
-      matchup: { stealthVariantId: null },
-    },
-    data: { userId },
-  });
-  return result.count;
+  const [arena, gallery] = await Promise.all([
+    prisma.vote.updateMany({
+      where: {
+        userId: null,
+        sessionId,
+        matchup: { stealthVariantId: null },
+      },
+      data: { userId },
+    }),
+    claimAnonymousGalleryVotes(userId, sessionId),
+    prisma.publicSessionActivity.updateMany({
+      where: { sessionId },
+      data: { userId },
+    }),
+  ]);
+  return arena.count + gallery;
 }
 
 async function clearLocalAuthSession(): Promise<void> {

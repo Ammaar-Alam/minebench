@@ -211,5 +211,10 @@ assert.ok(
   viewerSourceText.includes("renderer.setPixelRatio(EXPORT_CAPTURE_PIXEL_RATIO)"),
   "GIF capture should supersample before compositing at the export size",
 );
+assert.ok(
+  sourceText.includes("aria-describedby={iconOnly && !embedded ? tooltipId : undefined}") &&
+    sourceText.includes("title={iconOnly && !embedded ? undefined : buttonTitle}"),
+  "embedded icon exports should expose a native tooltip without referencing an omitted tooltip node",
+);
 
 console.log("gif export config checks passed");

@@ -173,6 +173,23 @@ Reference prompt template:
 - `GET /api/sandbox/benchmark?promptId=&modelA=&modelB=&modelC=&modelD=`
 - `GET /api/leaderboard`
 
+### Gallery and Saved Generation Routes
+
+Saved generations are private, account-owned Sandbox results. Gallery metadata and votes remain separate from Arena benchmark tables. See [Architecture](./architecture.md#saved-generations) for durable execution and [Gallery and saved generations](./gallery.md) for the user-facing workflow.
+
+- `POST /api/generations` creates one durable job per selected model
+- `GET /api/generations` lists the current account's jobs and results
+- `GET|DELETE /api/generations/$GENERATION_ID` reads or removes one owned generation
+- `POST /api/generations/$GENERATION_ID/cancel` intentionally cancels active work
+- `GET /api/generations/$GENERATION_ID/download` redirects canonical JSON to private Storage
+- `GET /api/gallery/candidates` lists public Gallery metadata
+- `POST /api/gallery/candidates` submits an exact prompt or owned successful generation
+- `GET /api/gallery/candidates/$PUBLIC_ID` returns a candidate and cursor-paginated examples
+- `PUT /api/gallery/candidates/$PUBLIC_ID/vote` reversibly updates the current visitor's vote
+- `POST /api/gallery/reports` records a report from authoritative server-loaded content
+
+`GET /api/admin/status` includes queue age, failed jobs, stored bytes, pending object deletions, purge backlog, and email delivery failures. `GET /api/admin/gallery/purge` accepts `ADMIN_TOKEN` or `CRON_SECRET` and is scheduled daily.
+
 ### Admin Routes
 
 Bearer `ADMIN_TOKEN` required.

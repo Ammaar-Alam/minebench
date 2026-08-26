@@ -46,6 +46,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 
 * **Arena** — blind head-to-head comparisons of pre-generated builds with confidence-aware ranking
 * **Sandbox** — compare existing builds, generate new ones, or import output from any model
+* **Gallery** — explore community prompts and keep signed-in generations
 * **Leaderboard** — live rankings with win/loss/draw stats across all models
 * **Exports** — save builds as GLB, STL, or WorldEdit `.schem` for Blender, 3D printing, and Minecraft
 
@@ -54,6 +55,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 * Full docs index: [`docs/README.md`](docs/README.md)
 * Local development: [`docs/local-development.md`](docs/local-development.md)
 * Operations and API reference: [`docs/operations.md`](docs/operations.md)
+* Gallery and saved generations: [`docs/gallery.md`](docs/gallery.md)
 * Arena ranking: [`docs/arena-ranking-system.md`](docs/arena-ranking-system.md)
 * Build export and imports: [`docs/build-export-import.md`](docs/build-export-import.md)
 

@@ -8,6 +8,7 @@ import { findCatalogEntryBySlugOrKey } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
 import { databaseIdentityFromUrl } from "@/lib/db/identity";
 import { getSupabaseStorageReadiness } from "@/lib/storage/buildPayload";
+import { PUBLIC_SESSION_RETENTION_MS } from "@/lib/publicPresence";
 
 export const runtime = "nodejs";
 
@@ -71,6 +72,99 @@ async function getArenaVoteJobStatus() {
   };
 }
 
+async function getCustomBuildOpsStatus() {
+  const now = new Date();
+  const [
+    queued,
+    running,
+    succeeded,
+    failed,
+    canceled,
+    jobsQueued,
+    jobsRunning,
+    jobsFailed,
+    oldestQueuedJob,
+    staleLeases,
+    artifactAggregate,
+    retainedAggregate,
+    pendingObjectDeletions,
+    dueGenerations,
+    dueCandidates,
+    dueExamples,
+    dueModerationRecords,
+    duePublicSessions,
+    emailDeliveryFailures,
+  ] = await Promise.all([
+    prisma.customBuild.count({ where: { status: "queued" } }),
+    prisma.customBuild.count({ where: { status: "running" } }),
+    prisma.customBuild.count({ where: { status: "succeeded" } }),
+    prisma.customBuild.count({ where: { status: "failed" } }),
+    prisma.customBuild.count({ where: { status: "canceled" } }),
+    prisma.customBuildJob.count({ where: { status: "queued" } }),
+    prisma.customBuildJob.count({ where: { status: "running" } }),
+    prisma.customBuildJob.count({ where: { status: "failed" } }),
+    prisma.customBuildJob.findFirst({
+      where: { status: "queued" },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    }),
+    prisma.customBuildJob.count({
+      where: {
+        status: "running",
+        leaseExpiresAt: { lt: new Date() },
+      },
+    }),
+    prisma.customBuildArtifact.aggregate({
+      _count: { id: true },
+      _sum: {
+        compressedByteSize: true,
+        byteSize: true,
+        storedByteSize: true,
+      },
+    }),
+    prisma.customBuild.aggregate({ _sum: { storedByteSize: true } }),
+    prisma.customBuild.count({ where: { deletionPendingAt: { not: null } } }),
+    prisma.customBuild.count({ where: { removedAt: { not: null }, purgeAt: { lte: now } } }),
+    prisma.galleryCandidate.count({
+      where: { purgeAt: { lte: now }, selectedAt: null, officialPromptId: null },
+    }),
+    prisma.galleryExample.count({ where: { purgeAt: { lte: now } } }),
+    prisma.galleryModerationRecord.count({ where: { purgeAt: { lte: now } } }),
+    prisma.publicSessionActivity.count({
+      where: { lastSeenAt: { lte: new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS) } },
+    }),
+    prisma.galleryModerationRecord.count({ where: { action: "email_delivery_failed" } }),
+  ]);
+
+  return {
+    counts: {
+      queued,
+      running,
+      succeeded,
+      failed,
+      canceled,
+    },
+    jobs: {
+      queued: jobsQueued,
+      running: jobsRunning,
+      failed: jobsFailed,
+      oldestQueuedAgeMs: oldestQueuedJob ? Math.max(0, Date.now() - oldestQueuedJob.createdAt.getTime()) : null,
+      staleLeases,
+    },
+    artifacts: {
+      objects: artifactAggregate._count.id,
+      compressedBytes: artifactAggregate._sum.compressedByteSize ?? 0,
+      logicalBytes: artifactAggregate._sum.byteSize ?? 0,
+      storedBytes: artifactAggregate._sum.storedByteSize ?? 0,
+    },
+    retainedStoredBytes: retainedAggregate._sum.storedByteSize ?? 0,
+    pendingObjectDeletions,
+    purgeBacklog:
+      dueGenerations + dueCandidates + dueExamples + dueModerationRecords + duePublicSessions,
+    emailDeliveryFailures,
+  };
+}
+
 export async function GET(req: Request) {
   const denied = requireAdmin(req);
   if (denied) return NextResponse.json({ error: denied }, { status: 401 });
@@ -101,6 +195,7 @@ export async function GET(req: Request) {
       voteJobs,
       shownJobs,
       storage,
+      customBuilds,
     ] = await Promise.all([
       prisma.prompt.count(),
       prisma.prompt.count({ where: { active: true } }),
@@ -113,6 +208,7 @@ export async function GET(req: Request) {
       getArenaVoteJobStatus(),
       getArenaShownJobStatus(),
       getSupabaseStorageReadiness(),
+      getCustomBuildOpsStatus(),
     ]);
     timing.end("artifact_status", artifactStartedAt);
     timing.end("total", requestStartedAt);
@@ -136,6 +232,7 @@ export async function GET(req: Request) {
         storage,
         voteJobs,
         shownJobs,
+        customBuilds,
       },
       { headers }
     );

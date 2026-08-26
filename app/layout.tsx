@@ -4,6 +4,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { OfflineBanner } from "@/components/OfflineBanner";
+import { PublicPresence } from "@/components/PublicPresence";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 import { SiteHealthBanner } from "@/components/SiteHealthBanner";
@@ -149,6 +150,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         </div>
         <Analytics />
         <SpeedInsights />
+        <PublicPresence />
       </body>
     </html>
   );

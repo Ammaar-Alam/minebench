@@ -2992,6 +2992,7 @@ export function Arena() {
                 loadingProgress={laneProgressA ?? undefined}
                 autoRotate={!isCoarsePointer || mobileBuildView === "a"}
                 viewerSize="arena"
+                jsonBytes={matchup?.a.buildLoadHints?.fullEstimatedBytes}
                 enableBuildExport={Boolean(matchup?.a.build && !laneNeedsFullA)}
                 exportLabel={matchup?.a.model?.displayName ?? "build-a"}
                 exportPrompt={promptText}
@@ -3059,6 +3060,7 @@ export function Arena() {
                 loadingProgress={laneProgressB ?? undefined}
                 autoRotate={!isCoarsePointer || mobileBuildView === "b"}
                 viewerSize="arena"
+                jsonBytes={matchup?.b.buildLoadHints?.fullEstimatedBytes}
                 enableBuildExport={Boolean(matchup?.b.build && !laneNeedsFullB)}
                 exportLabel={matchup?.b.model?.displayName ?? "build-b"}
                 exportPrompt={promptText}

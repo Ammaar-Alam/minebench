@@ -18,6 +18,7 @@ Documentation for running, extending, and understanding MineBench.
 
 ## Builds & Generation
 
+- [Gallery and Saved Generations](./gallery.md)
 - [Build Export and Import](./build-export-import.md)
 - [Voxel Exec Runtime and Workflows](./voxel-exec-raw-output.md)
 - [ChatGPT Web Voxel Prompt](./chatgpt-web-voxel-prompt.md)

@@ -13,8 +13,10 @@ import {
   type VoxelViewerHandle,
 } from "@/components/voxel/VoxelViewer";
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
+import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
+import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 import type { VoxelMeshPayload } from "@/lib/voxel/mesh";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import {
@@ -59,6 +61,7 @@ export function VoxelViewerCard({
   exportDisabled,
   exportDisabledReason,
   actions,
+  jsonBytes,
   viewerRef,
   skipValidation = false,
   embedded = false,
@@ -98,6 +101,7 @@ export function VoxelViewerCard({
   exportDisabled?: boolean;
   exportDisabledReason?: string;
   actions?: ReactNode;
+  jsonBytes?: number | null;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
   embedded?: boolean;
@@ -151,6 +155,9 @@ export function VoxelViewerCard({
   const [placementProgress, setPlacementProgress] = useState<PlacementProgressState | null>(null);
   const [placementError, setPlacementError] = useState<string | null>(null);
   const combinedError = error ?? placementError ?? rendered.error ?? undefined;
+  const verboseError = Boolean(combinedError && (combinedError.length > 180 || combinedError.includes("\n")));
+  const errorSummary = verboseError ? "The build data couldn’t be read." : combinedError;
+  const errorDetails = retryReason ?? (verboseError ? combinedError : undefined);
 
   const modelOutputText = useMemo(() => {
     const explicitText =
@@ -186,13 +193,8 @@ export function VoxelViewerCard({
     ? buildJsonText || modelOutputText
     : modelOutputText || buildJsonText;
 
-  const timing = useMemo(() => {
-    const ms = metrics?.generationTimeMs;
-    if (typeof ms !== "number" || !Number.isFinite(ms)) return null;
-    if (ms >= 10_000) return `${Math.round(ms / 1000)}s`;
-    if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
-    return `${Math.round(ms)}ms`;
-  }, [metrics?.generationTimeMs]);
+  const timing = formatBuildDuration(metrics?.generationTimeMs);
+  const jsonSize = formatBuildJsonSize(jsonBytes);
 
   const elapsed = useMemo(() => {
     const ms = elapsedMs;
@@ -209,7 +211,9 @@ export function VoxelViewerCard({
       ? "relative h-[48svh] min-h-[260px] max-h-[440px] w-full sm:h-[48vh] sm:min-h-[280px] sm:max-h-[450px] md:h-[52vh] md:min-h-[320px] md:max-h-[420px] lg:h-[56vh] lg:max-h-[480px] xl:h-[60vh] xl:max-h-[520px]"
       : "relative h-[300px] w-full sm:h-[360px] md:h-[420px] lg:h-[480px] xl:h-[520px]";
   const loadingLabel =
-    loadingMessage?.trim() ||
+    retryReason || (attempt && attempt > 1)
+      ? "Trying again…"
+      : loadingMessage?.trim() ||
     (attempt === 0
       ? "Queued…"
       : isThinking
@@ -302,24 +306,37 @@ export function VoxelViewerCard({
   return (
     <div className={embedded ? "overflow-hidden bg-card/25" : "mb-panel"}>
       <div className="mb-panel-inner">
-        <div className="border-b border-border/70 bg-bg/10 px-3 py-2 sm:px-4 sm:py-2.5">
-          <div className="flex items-center justify-between gap-2 sm:gap-3">
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <div className="shrink-0 font-display text-sm font-semibold tracking-tight text-fg sm:text-base">
-                {title}
+        <div className="border-b border-border/70 bg-bg/10 px-4 py-3 sm:px-5 sm:py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 flex-wrap items-baseline gap-x-2.5 gap-y-1">
+                <div className="min-w-0 truncate font-display text-lg font-semibold tracking-tight text-fg sm:text-xl">
+                  {title}
+                </div>
+                {subtitle ? (
+                  <div className="min-w-0 truncate text-xs text-muted sm:text-sm">{subtitle}</div>
+                ) : null}
               </div>
-              {subtitle ? (
-                <div className="min-w-0 truncate text-xs sm:text-[13px]">{subtitle}</div>
-              ) : null}
               {build ? (
-                <div className="flex items-center gap-1 font-mono text-[11px] text-muted sm:hidden">
-                  <span className="text-muted/40">•</span>
-                  <span>{blockCount.toLocaleString()}</span>
+                <div className="mt-1.5 flex flex-wrap items-center gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs [&>span+span]:before:mx-2 [&>span+span]:before:text-border [&>span+span]:before:content-['·']">
+                  <span className="whitespace-nowrap">{blockCount.toLocaleString()} blocks</span>
+                  {jsonSize ? <span className="whitespace-nowrap">{jsonSize} JSON</span> : null}
+                  {timing ? <span className="whitespace-nowrap">{timing}</span> : null}
+                  {metrics?.attempts ? (
+                    <span className="whitespace-nowrap">
+                      {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
+                  {warnings.length ? (
+                    <span className="whitespace-nowrap">
+                      {warnings.length} warning{warnings.length === 1 ? "" : "s"}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </div>
 
-            <div className="flex shrink-0 items-center justify-end gap-1.5 sm:gap-2">
+            <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
               {showViewToggle ? (
                 <div className="relative flex w-[182px] rounded-full bg-bg/55 p-1 ring-1 ring-border/80 sm:w-[210px]">
                   <div className="pointer-events-none absolute inset-1 rounded-full">
@@ -367,24 +384,6 @@ export function VoxelViewerCard({
                   {actions}
                 </div>
               ) : null}
-              <div className="hidden text-right text-[11px] text-muted sm:block sm:text-xs">
-                {build ? (
-                  <div className="items-center gap-2 font-mono sm:flex">
-                    <span>{blockCount.toLocaleString()} blocks</span>
-                    {timing ? <span>• {timing}</span> : null}
-                    {metrics?.attempts ? (
-                      <span>
-                        • {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
-                      </span>
-                    ) : null}
-                    {warnings.length ? (
-                      <span>
-                        • {warnings.length} warning{warnings.length === 1 ? "" : "s"}
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
-              </div>
             </div>
           </div>
         </div>
@@ -476,8 +475,19 @@ export function VoxelViewerCard({
                 </div>
                 <div className="text-sm font-medium text-fg">Couldn&apos;t render this build</div>
                 <div className="max-w-full break-words text-xs leading-relaxed text-muted">
-                  {combinedError}
+                  {errorSummary}
                 </div>
+                {errorDetails ? (
+                  <details className="w-full max-w-xs text-left text-xs text-muted">
+                    <summary className="mx-auto flex min-h-8 w-fit cursor-pointer list-none items-center gap-1.5 rounded px-2 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></svg>
+                      Details
+                    </summary>
+                    <p className="mt-2 max-h-40 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 leading-relaxed [overflow-wrap:anywhere]">
+                      {errorDetails}
+                    </p>
+                  </details>
+                ) : null}
                 {hasJsonView && showViewToggle ? (
                   <div className="text-[11px] text-muted/75">
                     Switch to JSON to inspect the raw output.
@@ -503,32 +513,12 @@ export function VoxelViewerCard({
                 <path d="M12 16h.01" />
                 <circle cx="12" cy="12" r="9" />
               </svg>
-              <span className="min-w-0 break-words">{combinedError}</span>
+              <span className="min-w-0 break-words">{errorSummary}</span>
             </div>
           ) : null}
 
-          {showBuildView && !build && !isLoading && !combinedError ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-bg/20 text-sm text-muted">
-              <div
-                aria-hidden="true"
-                className="flex h-9 w-9 items-center justify-center rounded-lg border border-dashed border-border/70 text-muted/60"
-              >
-                <svg
-                  className="h-4 w-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                  <path d="M3.3 7l8.7 5 8.7-5" />
-                  <path d="M12 22v-9" />
-                </svg>
-              </div>
-              <span className="text-xs text-muted/80">No build yet</span>
-            </div>
+          {showBuildView && !build && !combinedError ? (
+            <VoxelEmptyState />
           ) : null}
 
           {showJsonView && !hasJsonView && !isLoading ? (

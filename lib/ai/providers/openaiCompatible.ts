@@ -307,9 +307,9 @@ export async function openAiCompatibleGenerateText(params: {
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error(`${serviceLabel} request timed out`);
     }
-    console.error(`${serviceLabel} network error:`, err);
-    const cause = err instanceof Error && err.cause ? ` (cause: ${String(err.cause)})` : "";
-    throw new Error(`${serviceLabel} request failed: ${err instanceof Error ? err.message : String(err)}${cause}`);
+    const code = err && typeof err === "object" && "code" in err ? String(err.code) : "unknown";
+    console.error("OpenAI-compatible provider network error", { code });
+    throw new Error(`${serviceLabel} request failed`);
   } finally {
     detachAbort();
     if (timeout) clearTimeout(timeout);

@@ -8,19 +8,30 @@ while validated builds are compiled into compact, immutable render artifacts.
 
 ```mermaid
 flowchart LR
-    MODEL["Model provider"] --> GEN["Generation + voxel.exec"]
+    BROWSER["Browser<br/>Arena · Sandbox · Gallery · Account"] <--> WEB["Vercel<br/>Next.js + API"]
+    WEB <--> DB[("Supabase Postgres<br/>benchmarks, Gallery, jobs")]
+
+    MODEL["Model providers"] --> GEN["Benchmark generation<br/>+ voxel.exec"]
     GEN --> SOURCE["Source build JSON"]
 
     SOURCE --> METRICS["Benchmark metrics<br/>original bytes + primitive usage"]
     SOURCE --> IMPORT["Import + validation<br/>expand primitives, normalize,<br/>bounds-check, deduplicate"]
 
-    IMPORT --> DB[("Postgres<br/>models, prompts, build metadata,<br/>ratings, votes, storage pointers")]
     IMPORT --> RAW[("Supabase Storage<br/>gzip source JSON")]
+    IMPORT --> DB
     IMPORT --> PREP["Arena preparation<br/>render filtering + preview"]
     PREP --> ARTIFACTS[("Supabase Storage<br/>MBV4 + MBF1 artifacts")]
     ARTIFACTS --> COVERAGE["Artifact coverage audit"]
-    COVERAGE --> ARENA["Arena, Sandbox,<br/>Leaderboard"]
-    ARENA --> VIEWER["Decode → mesh worker<br/>→ Three.js → first frame"]
+    COVERAGE --> WEB
+
+    DB <-->|claim jobs + persist progress| WORKER["AWS Lightsail worker<br/>durable generation + artifacts"]
+    WORKER <--> MODEL
+    WORKER --> RAW
+    WORKER --> ARTIFACTS
+
+    RAW --> WEB
+    ARTIFACTS --> WEB
+    BROWSER --> VIEWER["Decode → mesh worker<br/>→ Three.js → first frame"]
 ```
 
 The source and render paths intentionally diverge after import. Expanding a
@@ -74,6 +85,18 @@ Derived objects are immutable and checksum-addressed. `ArenaBuildArtifact`
 rows record which build owns each Storage object so lifecycle cleanup can remove
 unreferenced artifacts without guessing from path names.
 
+## Saved generations
+
+Signed-in Sandbox requests enqueue one durable Postgres job per model. The AWS
+worker claims those jobs with renewable leases, calls the selected providers,
+and writes canonical JSON plus derived viewer and thumbnail artifacts to private
+Storage. Persisted progress lets account and Gallery views survive navigation,
+browser closure, and worker restarts.
+
+Provider credentials are encrypted for one job and removed at terminal state.
+Provider calls are bounded so a broken endpoint cannot occupy a worker lane
+forever. Downloads use short-lived private object access.
+
 ## Arena delivery and rendering
 
 ```mermaid
@@ -125,6 +148,13 @@ erDiagram
     User o|--o{ Vote : owns
     Vote ||--o{ ArenaVoteJob : queues
     Model ||--o{ ModelRankSnapshot : records
+    User ||--o{ CustomBuild : owns
+    CustomBuild ||--o{ CustomBuildJob : runs
+    User ||--o{ GalleryCandidate : submits
+    GalleryCandidate ||--o{ GalleryExample : presents
+    CustomBuild ||--o{ GalleryExample : contributes
+    GalleryCandidate ||--o{ GalleryVote : receives
+    User o|--o{ GalleryVote : owns
 
     Build {
         string id PK

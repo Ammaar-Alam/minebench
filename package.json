@@ -58,7 +58,9 @@
     "staging:run": "node scripts/with-staging-env.mjs",
     "staging:publish": "node scripts/with-staging-env.mjs tsx scripts/model-publish.ts",
     "staging:prisma:migrate": "node scripts/with-staging-env.mjs prisma migrate deploy",
-    "stealth:eval": "tsx scripts/stealth-eval.ts"
+    "stealth:eval": "tsx scripts/stealth-eval.ts",
+    "generations:worker": "tsx scripts/custom-build-worker.ts",
+    "generations:artifacts:audit": "tsx scripts/audit-saved-generation-artifacts.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
@@ -74,6 +76,7 @@
     "gifsicle-wasm-browser": "^1.5.19",
     "next": "^15.0.0",
     "nodemailer": "^9.0.5",
+    "obscenity": "0.4.6",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "three": "^0.184.0",

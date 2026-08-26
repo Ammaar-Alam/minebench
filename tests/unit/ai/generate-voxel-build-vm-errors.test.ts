@@ -9,6 +9,7 @@ type OpenRouterRequest = {
 const originalFetch = globalThis.fetch;
 const originalOpenRouterBaseUrl = process.env.OPENROUTER_BASE_URL;
 const requests: OpenRouterRequest[] = [];
+let retryRecorded = false;
 
 const invalidToolCall = JSON.stringify({
   tool: "voxel.exec",
@@ -24,6 +25,7 @@ globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promi
   const body = init?.body;
   if (typeof body !== "string") throw new Error("Expected a serialized OpenRouter request body");
   requests.push(JSON.parse(body) as OpenRouterRequest);
+  if (requests.length === 2) assert.equal(retryRecorded, true, "retry state should persist before the next request");
 
   return new Response(
     JSON.stringify({
@@ -49,7 +51,11 @@ async function main() {
     enableTools: true,
     providerKeys: { openrouter: "test-openrouter-key" },
     allowServerKeys: false,
-    onRetry: (attempt, reason) => retries.push({ attempt, reason }),
+    onRetry: async (attempt, reason) => {
+      await Promise.resolve();
+      retries.push({ attempt, reason });
+      retryRecorded = true;
+    },
   });
 
   assert.equal(requests.length, 2);

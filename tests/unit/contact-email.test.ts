@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   renderContactNotification,
   renderContactReceipt,
+  sendMineBenchEmail,
 } from "../../lib/contactEmail";
 import type { ContactSubmission } from "../../lib/contact";
 
@@ -49,4 +50,15 @@ const anonymousNotification = renderContactNotification({
 assert.match(anonymousNotification.text, /Email: Not provided/);
 assert.doesNotMatch(anonymousNotification.html, />Reply</);
 
-console.log("contact email template checks passed");
+delete process.env.CONTACT_SMTP_PASSWORD;
+void assert.rejects(
+  sendMineBenchEmail({ to: "researcher@example.com", subject: "Test", text: "Test", html: "Test" }),
+  (error: unknown) =>
+    error instanceof Error && "code" in error && error.code === "smtp_not_configured",
+).then(
+  () => console.log("contact email template checks passed"),
+  (error) => {
+    console.error(error);
+    process.exitCode = 1;
+  },
+);

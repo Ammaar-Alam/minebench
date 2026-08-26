@@ -69,10 +69,28 @@ export function VoxelLoadingHud({
 
         {(total || elapsed || (attempt && attempt > 1) || retryReason) ? (
           <div className="flex items-baseline justify-between gap-3 font-mono text-[10px] leading-none tabular-nums text-muted/45">
-            <span className="truncate">
-              {retryReason || (attempt && attempt > 1 ? `retry ${attempt}` : elapsed) || ""}
-            </span>
-            {total ? <span className="shrink-0">{total.toLocaleString()}</span> : null}
+            <span>{elapsed ?? ""}</span>
+            <div className="flex items-center gap-2">
+              {retryReason ? (
+                <details className="group pointer-events-auto relative">
+                  <summary
+                    aria-label="Why MineBench is trying again"
+                    className="flex h-5 w-5 cursor-pointer list-none items-center justify-center rounded text-muted transition-colors hover:bg-card hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M12 11v5" />
+                      <path d="M12 8h.01" />
+                    </svg>
+                  </summary>
+                  <div className="absolute right-0 top-6 z-40 max-h-40 w-52 overflow-y-auto overscroll-contain rounded-md border border-border/80 bg-card p-3 text-left font-sans text-xs leading-relaxed text-muted shadow-lg sm:w-64">
+                    <p className="font-medium text-fg">Retry details</p>
+                    <p className="mt-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]">{retryReason}</p>
+                  </div>
+                </details>
+              ) : null}
+              {total ? <span className="shrink-0">{total.toLocaleString()}</span> : null}
+            </div>
           </div>
         ) : null}
       </div>

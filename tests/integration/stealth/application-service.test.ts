@@ -1590,15 +1590,17 @@ async function main() {
   } finally {
     global.fetch = originalGenerationFetch;
   }
+  const reusedResult = await prisma.stealthGenerationResult.findUniqueOrThrow({
+    where: {
+      runId_promptId: { runId: reuseRun.runId, promptId: reusePrompt.prompt.id },
+    },
+    include: { build: { select: { generationTimeMs: true } } },
+  });
+  assert.equal(reusedResult.status, "READY");
   assert.equal(
-    (
-      await prisma.stealthGenerationResult.findUniqueOrThrow({
-        where: {
-          runId_promptId: { runId: reuseRun.runId, promptId: reusePrompt.prompt.id },
-        },
-      })
-    ).status,
-    "READY",
+    reusedResult.generationTimeMs,
+    reusedResult.build?.generationTimeMs,
+    "reused evaluation results should retain the original build generation time",
   );
   await failStealthGenerationRun(reuseRun.runId, "Test cleanup");
   await disableStealthEndpoint(memberActor, organization.id, failureCheckpoint.variantId);
