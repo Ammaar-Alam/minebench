@@ -19,9 +19,9 @@ assert.deepEqual(normalizeGalleryNickname("  Mine Builder  "), {
   display: "Mine Builder",
   normalized: "mine builder",
 });
+const blockedInflection = String.fromCodePoint(102, 117, 99, 107, 105, 110, 103);
 assert.equal(publicGalleryTextError("A quiet garden"), null);
-assert.equal(publicGalleryTextError("what the fuck"), "blocked_language");
-assert.equal(publicGalleryTextError("a faggot monument"), "blocked_language");
+assert.equal(publicGalleryTextError(`A monument ${blockedInflection}`), "blocked_language");
 assert.equal(publicGalleryTextError("shellfish monument"), null);
 assert.equal(publicGalleryTextError("classic stonework"), null);
 

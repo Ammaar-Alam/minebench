@@ -1,17 +1,14 @@
 import { createHmac } from "node:crypto";
+import {
+  englishDataset,
+  englishRecommendedTransformers,
+  RegExpMatcher,
+} from "obscenity";
 
-const BLOCKED_PUBLIC_WORDS = [
-  "bitch",
-  "chink",
-  "cunt",
-  "faggot",
-  "fuck",
-  "kike",
-  "nigger",
-  "retard",
-  "shit",
-  "spic",
-] as const;
+const publicTextMatcher = new RegExpMatcher({
+  ...englishDataset.build(),
+  ...englishRecommendedTransformers,
+});
 
 export type GalleryCursor = {
   score: number;
@@ -32,10 +29,7 @@ export function normalizeGalleryNickname(value: string): {
 }
 
 export function publicGalleryTextError(value: string): "blocked_language" | null {
-  const words = value.normalize("NFKC").toLocaleLowerCase("en-US").match(/[\p{L}\p{N}']+/gu) ?? [];
-  return words.some((word) => (BLOCKED_PUBLIC_WORDS as readonly string[]).includes(word))
-    ? "blocked_language"
-    : null;
+  return publicTextMatcher.hasMatch(value.normalize("NFKC")) ? "blocked_language" : null;
 }
 
 export function isGalleryContributionVisible(value: {
