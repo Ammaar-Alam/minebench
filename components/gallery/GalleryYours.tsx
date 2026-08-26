@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
 
@@ -23,6 +24,7 @@ function GenerationActions({
   onUpdate: (generation: SavedGenerationPayload) => void;
   onRemove: () => void;
 }) {
+  const router = useRouter();
   const [anonymous, setAnonymous] = useState(!hasNickname);
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -102,7 +104,7 @@ function GenerationActions({
           throw new Error(exampleBody?.error?.message ?? "Example could not be added.");
         }
       }
-      window.location.assign(`/gallery/${body.candidate.id}`);
+      router.push(`/gallery/${body.candidate.id}`);
     } catch (submissionError) {
       setMessage(submissionError instanceof Error ? submissionError.message : "Generation could not be submitted.");
       setPending(false);
@@ -171,27 +173,27 @@ export function GalleryYours({
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl py-4 sm:py-8">
+    <section id="builds" className="scroll-mt-24" aria-labelledby="saved-builds-title">
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-        <div><Link href="/gallery" className="mb-eyebrow hover:text-fg">Gallery</Link><h1 className="mt-2 font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Yours</h1></div>
+        <div><p className="mb-eyebrow">Builds</p><h2 id="saved-builds-title" className="mt-2 text-xl font-semibold tracking-tight text-fg">Saved builds</h2></div>
         <div className="flex gap-2"><Link href="/gallery" className="mb-btn h-11">Explore</Link><Link href="/sandbox?mode=live" className="mb-btn mb-btn-primary h-11">Generate</Link></div>
       </header>
-      {suspended ? <div className="mt-10 border border-danger/40 bg-danger/5 px-4 py-3"><p className="font-semibold text-fg">Account suspended</p><p className="mt-1 text-sm text-muted">Private generations remain available.</p></div> : null}
+      {suspended ? <div className="mt-6 rounded-md border border-danger/40 bg-danger/5 px-4 py-3"><p className="font-semibold text-fg">Gallery access suspended</p><p className="mt-1 text-sm text-muted">Your private builds remain available.</p></div> : null}
 
-      <div className="mt-10 divide-y divide-border/70">
-        {items.map((generation) => (
-          <article id={generation.id} key={generation.id} className="grid scroll-mt-24 gap-6 py-6 lg:grid-cols-[14rem_minmax(0,1fr)_auto] lg:items-start">
-            {generation.thumbnailUrl ? <div className="relative aspect-[4/3] border border-border bg-bg"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="14rem" className="object-contain p-3" /></div> : <div className="grid aspect-[4/3] border border-border bg-bg text-center text-sm text-muted"><span className="self-center">{statusLabel(generation.status)}</span></div>}
-            <div className="min-w-0 space-y-4">
-              <div><div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span>{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}</div><h2 className="mt-2 text-xl font-semibold leading-snug text-fg">{generation.prompt}</h2>{generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}</div>
+      <div className="mt-6 grid gap-4">
+        {items.map((generation, index) => (
+          <article id={generation.id} key={generation.id} className={`group grid scroll-mt-24 gap-5 rounded-md border border-border/80 bg-card/10 p-4 transition-colors hover:border-border hover:bg-card/20 motion-reduce:transition-none sm:p-5 md:grid-cols-[11rem_minmax(0,1fr)] mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
+            {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className="object-contain p-1.5 transition-transform duration-300 ease-out group-hover:scale-[1.025] motion-reduce:transition-none" /></div> : <div className="grid aspect-[4/3] rounded bg-bg/55 text-center text-sm text-muted"><span className="self-center"><span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full bg-current ${(generation.status === "queued" || generation.status === "running") ? "animate-pulse motion-reduce:animate-none" : ""}`} />{statusLabel(generation.status)}</span></div>}
+            <div className="min-w-0">
+              <div><div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span></div><h3 className="mt-2 text-xl font-semibold leading-snug text-fg">{generation.prompt}</h3>{generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}</div>
+              <div className="mt-5"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>
             </div>
-            <GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} />
           </article>
         ))}
-        {items.length === 0 ? <div className="py-14 sm:py-20"><p className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">Nothing saved.</p></div> : null}
+        {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">No saved builds.</p></div> : null}
       </div>
       {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-btn h-11 min-w-36" onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "More"}</button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
-    </div>
+    </section>
   );
 }

@@ -23,7 +23,7 @@ Current surfaces:
 
 The live generation surface also has a JSON download button. That is separate from the build export menu and exists for quickly saving the raw MineBench build payload.
 
-Signed-in Sandbox generations keep canonical JSON in private Storage. Yours downloads that source artifact directly; Gallery viewers reuse the existing client-side export controls without creating server export jobs.
+Signed-in Sandbox generations keep canonical JSON in private Storage. Account downloads that source artifact directly; Gallery viewers reuse the existing client-side export controls without creating server export jobs.
 
 ## Export Formats
 

@@ -2,10 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
-import { GalleryBuildPlaceholder } from "@/components/gallery/GalleryBuildPlaceholder";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
+import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import type { GalleryCandidatePayload, GalleryExamplePayload } from "@/lib/gallery/service";
 
@@ -63,7 +64,7 @@ function ReportDialog({
   }
 
   return (
-    <dialog ref={ref} aria-labelledby="report-title" className="m-auto w-[min(32rem,calc(100%-2rem))] border border-border bg-bg p-0 text-fg backdrop:bg-black/55" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
+    <dialog ref={ref} aria-labelledby="report-title" className="mb-card-enter m-auto w-[min(32rem,calc(100%-2rem))] rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/55" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
       {sent ? (
         <div className="space-y-6 p-6"><h2 id="report-title" className="text-2xl font-semibold">Report sent</h2><button type="button" className="mb-btn h-11 w-full" onClick={onClose}>Close</button></div>
       ) : (
@@ -81,6 +82,7 @@ function ReportDialog({
 }
 
 export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }) {
+  const router = useRouter();
   const [examples, setExamples] = useState(candidate.examples);
   const [nextExamplesCursor, setNextExamplesCursor] = useState(candidate.nextExamplesCursor);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -103,7 +105,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         method: "DELETE",
       });
       if (!response.ok) throw new Error("Prompt could not be removed");
-      window.location.assign("/gallery");
+      router.push("/gallery");
     } catch {
       setActionError("Prompt could not be removed");
       setRemoving(false);
@@ -160,10 +162,10 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   }, [selected]);
 
   return (
-    <article className="mx-auto w-full max-w-7xl py-4 sm:py-8">
+    <article className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
       <nav aria-label="Breadcrumb">
-        <Link href="/gallery" className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted hover:text-fg">
-          <span aria-hidden="true">←</span>
+        <Link href="/gallery" className="group inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-fg motion-reduce:transition-none">
+          <span aria-hidden="true" className="transition-transform duration-200 group-hover:-translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">←</span>
           Gallery
         </Link>
       </nav>
@@ -199,8 +201,8 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
             <h2 id="viewer-title" className="mb-eyebrow">Examples</h2>
             <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-1">
               {examples.map((example) => (
-                <button key={example.id} type="button" aria-pressed={example.id === selected.id} onClick={() => setSelectedId(example.id)} className={`min-w-0 border text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${example.id === selected.id ? "border-fg" : "border-border hover:border-muted"}`}>
-                  {example.previewUrl ? <div className="relative aspect-[16/9] border-b border-border bg-bg"><Image src={example.previewUrl} alt="" fill unoptimized sizes="18rem" className="object-contain p-2" /></div> : null}
+                <button key={example.id} type="button" aria-pressed={example.id === selected.id} onClick={() => setSelectedId(example.id)} className={`group/example min-w-0 overflow-hidden rounded-md border text-left transition-[transform,border-color,background-color] duration-200 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none ${example.id === selected.id ? "border-accent/65 bg-accent/5" : "border-border bg-card/10 hover:border-muted"}`}>
+                  {example.previewUrl ? <div className="relative aspect-[16/9] bg-bg"><Image src={example.previewUrl} alt="" fill unoptimized sizes="18rem" className="object-contain p-1.5 transition-transform duration-300 ease-out group-hover/example:scale-[1.025] motion-reduce:transition-none" /></div> : null}
                   <div className="p-3"><p className="truncate text-sm font-medium text-fg">{example.model.label}</p><p className="mt-1 truncate text-xs text-muted">{example.attribution}</p></div>
                 </button>
               ))}
@@ -214,12 +216,12 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
           </div>
         </section>
       ) : (
-        <GalleryBuildPlaceholder className="mt-10 min-h-56 border border-border/80 sm:mt-12 sm:aspect-[16/5]" />
+        <div className="relative mt-10 min-h-56 overflow-hidden rounded-md border border-border/80 bg-card/15 sm:mt-12 sm:aspect-[16/5]"><VoxelEmptyState /></div>
       )}
 
       <footer className="mt-8 flex flex-wrap items-center gap-5 text-sm text-muted sm:mt-10">
-        {candidate.canRemove ? <button type="button" disabled={removing} className="min-h-11 hover:text-danger disabled:opacity-65" onClick={() => void removeCandidate()}>{removing ? "Removing…" : "Remove prompt"}</button> : null}
-        <button type="button" className="min-h-11 hover:text-fg" onClick={() => setReportOpen(true)}>Report</button>
+        {candidate.canRemove ? <button type="button" disabled={removing} className="min-h-11 transition-colors hover:text-danger disabled:opacity-65 motion-reduce:transition-none" onClick={() => void removeCandidate()}>{removing ? "Removing…" : "Remove prompt"}</button> : null}
+        <button type="button" className="min-h-11 transition-colors hover:text-fg motion-reduce:transition-none" onClick={() => setReportOpen(true)}>Report</button>
       </footer>
       <ReportDialog open={reportOpen} candidate={{ ...candidate, examples }} onClose={() => setReportOpen(false)} />
     </article>

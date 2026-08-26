@@ -68,8 +68,8 @@ assert.ok(
 assert.ok(
   sourceText.includes("function customBuildStatusPath(id: string): string") &&
     durableBody.includes("const statusUrl = customBuildStatusPath(generation.id)") &&
-    durableBody.includes('pageUrl: `/gallery/yours#${encodeURIComponent(generation.id)}`') &&
-    sourceText.includes("Yours"),
+    durableBody.includes('pageUrl: `/account#${encodeURIComponent(generation.id)}`') &&
+    sourceText.includes("Builds"),
   "saved generation watchers should link to the exact owner-only result",
 );
 assert.ok(
@@ -150,7 +150,7 @@ assert.ok(
 assert.ok(
   sourceText.includes("<GenerationPreflightDialog") &&
     sourceText.includes("void runGenerate(true)") &&
-    sourceText.includes("Saved in Yours") &&
+    sourceText.includes("View saved builds") &&
     !sourceText.includes("DURABLE_CUSTOM_BUILDS_ENABLED"),
   "preflight continuation and signed-in saved-state navigation should remain visible without a feature flag",
 );

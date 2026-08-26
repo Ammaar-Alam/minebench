@@ -768,7 +768,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
       const base = {
         modelKey: args.model.id,
         customBuildId: args.status.id,
-        customBuildPageUrl: args.pageUrl ?? existing?.customBuildPageUrl ?? "/gallery/yours",
+        customBuildPageUrl: args.pageUrl ?? existing?.customBuildPageUrl ?? "/account#builds",
         customBuildStatusUrl: args.statusUrl ?? existing?.customBuildStatusUrl,
         customBuildEventsUrl: args.eventsUrl ?? existing?.customBuildEventsUrl,
         customBuildDownloadUrl: args.status.downloadUrl ?? existing?.customBuildDownloadUrl,
@@ -910,7 +910,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
           attempt: 1,
           startedAt: existing?.startedAt ?? Date.now(),
           customBuildId: generation.id,
-          customBuildPageUrl: `/gallery/yours#${encodeURIComponent(generation.id)}`,
+          customBuildPageUrl: `/account#${encodeURIComponent(generation.id)}`,
           customBuildStatusUrl: customBuildStatusPath(generation.id),
           renderGridSize: gridSize,
           renderPalette: palette,
@@ -927,7 +927,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         return watchCustomBuild({
           model,
           statusUrl,
-          pageUrl: `/gallery/yours#${encodeURIComponent(generation.id)}`,
+          pageUrl: `/account#${encodeURIComponent(generation.id)}`,
           eventsUrl: "",
           signal: args.abortController.signal,
         }).catch((err) => {
@@ -1300,12 +1300,12 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         actions={
           <div className="flex items-center gap-1">
             {r?.customBuildPageUrl ? (
-              <a
+              <Link
                 className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
                 href={r.customBuildPageUrl}
               >
-                Yours
-              </a>
+                Builds
+              </Link>
             ) : null}
             {r?.customBuildDownloadUrl ? (
               <a
@@ -1781,8 +1781,8 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
               label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
             {signedIn ? (
-              <Link href="/gallery/yours" className="text-xs text-muted hover:text-fg">
-                Saved in Yours
+              <Link href="/account#builds" className="text-xs text-muted hover:text-fg">
+                View saved builds
               </Link>
             ) : null}
             <div className="flex items-center gap-2">

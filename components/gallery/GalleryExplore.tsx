@@ -2,10 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
-import { GalleryBuildPlaceholder } from "@/components/gallery/GalleryBuildPlaceholder";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
+import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 
 function SubmissionDialog({
   open,
@@ -16,6 +17,7 @@ function SubmissionDialog({
   hasNickname: boolean;
   onClose: () => void;
 }) {
+  const router = useRouter();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [prompt, setPrompt] = useState("");
   const [anonymous, setAnonymous] = useState(!hasNickname);
@@ -45,7 +47,7 @@ function SubmissionDialog({
         error?: { message?: string };
       };
       if (!response.ok || !body.candidate) throw new Error(body.error?.message ?? "Prompt could not be submitted.");
-      window.location.assign(`/gallery/${body.candidate.id}`);
+      router.push(`/gallery/${body.candidate.id}`);
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : "Prompt could not be submitted.");
       setPending(false);
@@ -56,7 +58,7 @@ function SubmissionDialog({
     <dialog
       ref={dialogRef}
       aria-labelledby="submit-prompt-title"
-      className="m-auto w-[min(36rem,calc(100%-2rem))] border border-border bg-bg p-0 text-fg backdrop:bg-black/55"
+      className="mb-card-enter m-auto w-[min(36rem,calc(100%-2rem))] rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/55"
       onCancel={(event) => { event.preventDefault(); onClose(); }}
       onClose={onClose}
     >
@@ -84,34 +86,34 @@ function SubmissionDialog({
   );
 }
 
-function GalleryCard({ candidate }: { candidate: GalleryCandidatePayload }) {
+function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayload; delayed: boolean }) {
   return (
-    <article className="group flex min-w-0 flex-col border border-border/80 bg-card/10">
+    <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[transform,border-color,background-color,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:border-accent/35 hover:bg-card/20 hover:shadow-soft active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
       <Link href={`/gallery/${candidate.id}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
-          <div className="relative aspect-[16/10] overflow-hidden border-b border-border/70 bg-card/15">
+          <div className="relative aspect-[4/3] overflow-hidden bg-bg/45">
             <Image
               src={candidate.cover.previewUrl}
               alt=""
               fill
               unoptimized
-              sizes="(min-width: 768px) 50vw, 100vw"
-              className="object-contain p-5 transition-transform duration-300 ease-out group-hover:scale-[1.015] motion-reduce:transition-none"
+              sizes="(min-width: 1536px) 25vw, (min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
+              className="object-contain p-2 transition-transform duration-300 ease-out group-hover:scale-[1.025] motion-reduce:transition-none"
             />
           </div>
-        ) : <GalleryBuildPlaceholder className="aspect-[16/10] border-b border-border/70" />}
-        <div className="flex flex-1 flex-col gap-3 p-5 sm:p-6">
+        ) : <div className="relative aspect-[4/3] bg-bg/45"><VoxelEmptyState /></div>}
+        <div className="flex flex-1 flex-col gap-3 p-5">
           <div className="flex items-center justify-between gap-3 text-xs text-muted">
             <span>{candidate.attribution}</span>
             {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
           </div>
-          <h2 className="text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none sm:text-2xl">{candidate.prompt}</h2>
+          <h2 className="line-clamp-3 text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none">{candidate.prompt}</h2>
           {candidate.cover ? <p className="mt-auto truncate pt-3 text-sm text-muted">{candidate.cover.model.label}</p> : null}
         </div>
       </Link>
-      <div className="flex items-center justify-between border-t border-border/70 px-3 py-2">
+      <div className="flex items-center justify-between px-3 pb-2">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
-        <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted hover:text-fg">Use prompt</Link>
+        <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
       </div>
     </article>
   );
@@ -156,11 +158,11 @@ export function GalleryExplore({
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl py-4 sm:py-8">
+    <div className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
         <h1 className="font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Gallery</h1>
         <div className="flex flex-wrap items-center gap-3">
-          <Link href={signedIn ? "/gallery/yours" : "/sign-in?next=/gallery/yours"} className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-muted hover:text-fg">Yours</Link>
+          <Link href={signedIn ? "/account#builds" : "/sign-in?next=/account"} className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-muted transition-colors hover:text-fg motion-reduce:transition-none">Builds</Link>
           {signedIn && !suspended ? (
             <button type="button" className="mb-btn mb-btn-primary h-11" onClick={() => setSubmitOpen(true)}>Add prompt</button>
           ) : !signedIn ? (
@@ -170,13 +172,13 @@ export function GalleryExplore({
       </header>
 
       <nav className="mt-10 flex items-center gap-7" aria-label="Gallery sorting">
-        <Link href="/gallery" aria-current={sort === "top" ? "page" : undefined} className={`inline-flex min-h-11 items-center text-sm ${sort === "top" ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}>Top</Link>
-        <Link href="/gallery?sort=new" aria-current={sort === "new" ? "page" : undefined} className={`inline-flex min-h-11 items-center text-sm ${sort === "new" ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}>New</Link>
+        <Link href="/gallery" aria-current={sort === "top" ? "page" : undefined} className={`inline-flex min-h-11 items-center border-b-2 text-sm transition-colors motion-reduce:transition-none ${sort === "top" ? "border-fg font-semibold text-fg" : "border-transparent text-muted hover:text-fg"}`}>Top</Link>
+        <Link href="/gallery?sort=new" aria-current={sort === "new" ? "page" : undefined} className={`inline-flex min-h-11 items-center border-b-2 text-sm transition-colors motion-reduce:transition-none ${sort === "new" ? "border-fg font-semibold text-fg" : "border-transparent text-muted hover:text-fg"}`}>New</Link>
       </nav>
 
       {items.length ? (
-        <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2">
-          {items.map((candidate) => <GalleryCard key={candidate.id} candidate={candidate} />)}
+        <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} />)}
         </div>
       ) : (
         <section className="mt-14 py-10 sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">

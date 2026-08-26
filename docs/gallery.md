@@ -6,7 +6,7 @@ Gallery is MineBench's public prompt exhibition. It is deliberately separate fro
 
 - `/gallery` lists public candidates by raw vote count or publication time
 - `/gallery/[publicId]` is the canonical public detail page
-- `/gallery/yours` lists the signed-in account's private generation jobs and results
+- `/account#builds` lists the signed-in account's private generation jobs and results
 - Sandbox Generate uses the existing transient stream while signed out and durable jobs while signed in
 - `/admin/gallery` is limited to `isMineBenchAdmin` accounts
 

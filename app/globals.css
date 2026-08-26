@@ -1493,7 +1493,8 @@
     }
 
     .mb-model-reveal-in,
-    .mb-card-enter {
+    .mb-card-enter,
+    .mb-fade-in {
       animation: none;
       opacity: 1;
       transform: none;

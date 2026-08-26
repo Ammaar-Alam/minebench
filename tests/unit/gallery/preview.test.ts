@@ -16,6 +16,17 @@ assert.equal(first, second);
 assert.match(first, /^<svg[^>]+viewBox="0 0 640 400"/);
 assert.match(first, /aria-hidden="true"/);
 assert.equal(first.includes("<script"), false);
-assert.equal((first.match(/<path /g) ?? []).length, 3);
+assert.equal((first.match(/<path /g) ?? []).length, 9);
+
+const bounded = buildGalleryPreviewSvg({
+  version: "1.0",
+  blocks: Array.from({ length: 2_000 }, (_, index) => ({
+    x: index % 50,
+    y: Math.floor(index / 500),
+    z: Math.floor(index / 50),
+    type: "stone",
+  })),
+});
+assert.equal((bounded.match(/<path /g) ?? []).length, 2_700);
 
 console.log("gallery preview checks passed");
