@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
@@ -19,7 +20,7 @@ const SandboxGifExportButton = dynamic(
   () => import("@/components/sandbox/SandboxGifExportButton").then((module) => module.SandboxGifExportButton),
   {
     ssr: false,
-    loading: () => <button type="button" disabled className="h-8 px-2 text-xs text-muted">GIF</button>,
+    loading: () => <button type="button" disabled className="mb-btn mb-btn-ghost h-8 px-2 text-xs text-muted">GIF</button>,
   },
 );
 
@@ -54,7 +55,9 @@ function GenerationDownloadButton({
       disabled={pending}
       aria-label="Download JSON"
       title="Download expanded JSON"
-      className={compact ? "mb-btn mb-btn-ghost h-8 px-2 text-xs" : "mb-btn h-10"}
+      className={compact
+        ? "mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg"
+        : "relative inline-flex h-10 items-center px-2 text-sm font-semibold text-fg after:absolute after:inset-x-2 after:bottom-1 after:h-px after:origin-left after:scale-x-0 after:bg-fg after:transition-transform after:duration-200 after:ease-out hover:after:scale-x-100 disabled:opacity-50 disabled:hover:after:scale-x-0 motion-reduce:after:transition-none"}
       onClick={() => {
         setPending(true);
         onError(null);
@@ -67,7 +70,11 @@ function GenerationDownloadButton({
           .finally(() => setPending(false));
       }}
     >
-      {pending ? (compact ? "JSON…" : "Preparing…") : (compact ? "JSON" : "Download JSON")}
+      {compact ? (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className={`h-4 w-4 ${pending ? "animate-pulse motion-reduce:animate-none" : ""}`}>
+          <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+        </svg>
+      ) : pending ? "Preparing…" : "Download JSON"}
     </button>
   );
 }
@@ -237,17 +244,11 @@ function SavedBuildDialog({
     return () => controller.abort();
   }, [generation.id, generation.sha256, generation.viewerUrl]);
 
-  const metrics = [
-    generation.blockCount != null ? `${generation.blockCount.toLocaleString()} blocks` : null,
-    generation.expandedBytes != null ? `${formatBytes(generation.expandedBytes)} JSON` : null,
-    generation.storedBytes != null ? `${formatBytes(generation.storedBytes)} stored` : null,
-  ].filter(Boolean);
-
   return (
     <dialog
       ref={dialogRef}
       aria-labelledby="saved-build-dialog-title"
-      className="mb-card-enter m-auto w-[calc(100%-2rem)] max-w-3xl overflow-hidden rounded-md border-0 bg-card p-0 text-fg ring-1 ring-border-xl backdrop:bg-bg/60 backdrop:backdrop-blur-sm"
+      className="mb-dialog m-auto w-[calc(100%-2rem)] max-w-3xl overflow-hidden rounded-md border-0 bg-card p-0 text-fg ring-1 ring-border-xl backdrop:bg-bg/60 backdrop:backdrop-blur-sm"
       onCancel={(event) => { event.preventDefault(); onClose(); }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
       onClose={onClose}
@@ -257,7 +258,6 @@ function SavedBuildDialog({
           <div className="min-w-0">
             <p className="mb-eyebrow">Saved build</p>
             <h2 id="saved-build-dialog-title" className="mt-1 truncate text-lg font-semibold tracking-tight sm:text-xl">{generation.prompt}</h2>
-            {metrics.length ? <p className="mt-1 truncate text-xs text-muted">{metrics.join(" · ")}</p> : null}
           </div>
           <button type="button" autoFocus className="mb-btn mb-btn-ghost h-9 shrink-0 px-3 text-xs" onClick={onClose}>Close <span className="ml-1 mb-kbd">Esc</span></button>
         </header>
@@ -275,6 +275,7 @@ function SavedBuildDialog({
             exportLabel={generation.model.label}
             exportPrompt={generation.prompt}
             viewerRef={viewerRef}
+            headerMeta={generation.expandedBytes != null ? `${formatBytes(generation.expandedBytes)} JSON` : undefined}
             actions={build && !loading ? (
               <>
                 <GenerationDownloadButton generation={generation} compact onError={setDownloadError} />
@@ -288,12 +289,11 @@ function SavedBuildDialog({
                   promptText={generation.prompt}
                   cancelKey={`${generation.id}:${generation.sha256 ?? ""}`}
                   label="GIF"
-                  className="border border-border/70 bg-bg/55"
+                  embedded
                 />
               </>
             ) : undefined}
           />
-          {generation.sha256 ? <p className="mt-3 truncate px-1 font-mono text-[11px] text-muted" title={generation.sha256}>SHA-256 {generation.sha256}</p> : null}
           {downloadError ? <p role="status" className="mt-2 px-1 text-sm text-danger">{downloadError}</p> : null}
         </div>
       </div>
@@ -362,12 +362,12 @@ export function GalleryYours({
         {items.map((generation, index) => (
           <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 rounded-md border border-border/80 bg-card/10 p-4 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none sm:p-5 mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
             <button type="button" disabled={!generation.viewerUrl} aria-label={`View ${generation.prompt}`} className="group/open grid w-full gap-5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-default md:grid-cols-[11rem_minmax(0,1fr)]" onClick={() => setSelectedId(generation.id)}>
-              {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className={`object-contain p-1.5 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /></div> : <div className="grid aspect-[4/3] rounded bg-bg/55 text-center text-sm text-muted"><span className="self-center"><span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full bg-current ${(generation.status === "queued" || generation.status === "running") ? "animate-pulse motion-reduce:animate-none" : ""}`} />{statusLabel(generation.status)}</span></div>}
+              {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className={`object-contain p-1.5 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /></div> : <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><VoxelEmptyState /></div>}
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span><time dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time></div>
                 <h3 className={`mt-2 text-xl font-semibold leading-snug text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
                 {generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}
-                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{generation.expandedBytes != null ? <span>{formatBytes(generation.expandedBytes)} JSON</span> : null}{generation.storedBytes != null ? <span>{formatBytes(generation.storedBytes)} stored</span> : null}</div> : null}
+                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{generation.expandedBytes != null ? <span>{formatBytes(generation.expandedBytes)} JSON</span> : null}</div> : null}
               </div>
             </button>
             <div className="mt-5 md:ml-48"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>

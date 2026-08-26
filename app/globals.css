@@ -901,6 +901,7 @@
   }
 
   .mb-btn:active:not(:disabled) {
+    transform: translateY(1px) scale(0.985);
     transition-duration: 60ms;
   }
 
@@ -1391,6 +1392,17 @@
     animation: mb-card-enter 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
+  .mb-dialog[open],
+  .mb-dialog-panel {
+    transform-origin: center;
+    animation: mb-card-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .mb-dialog[open]::backdrop,
+  .mb-dialog-backdrop {
+    animation: mb-col-fade-in 180ms ease-out both;
+  }
+
   .mb-card-enter-delay {
     animation-delay: 60ms;
   }
@@ -1494,6 +1506,10 @@
 
     .mb-model-reveal-in,
     .mb-card-enter,
+    .mb-dialog[open],
+    .mb-dialog-panel,
+    .mb-dialog[open]::backdrop,
+    .mb-dialog-backdrop,
     .mb-fade-in {
       animation: none;
       opacity: 1;

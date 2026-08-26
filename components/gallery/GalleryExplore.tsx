@@ -58,7 +58,7 @@ function SubmissionDialog({
     <dialog
       ref={dialogRef}
       aria-labelledby="submit-prompt-title"
-      className="mb-card-enter m-auto w-[min(36rem,calc(100%-2rem))] rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/55"
+      className="mb-dialog m-auto w-[min(36rem,calc(100%-2rem))] rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/55"
       onCancel={(event) => { event.preventDefault(); onClose(); }}
       onClose={onClose}
     >

@@ -28,7 +28,7 @@ export function GenerationPreflightDialog({
     <dialog
       ref={dialogRef}
       aria-labelledby="generation-preflight-title"
-      className="m-auto w-[min(28rem,calc(100%-2rem))] border border-border bg-bg p-0 text-fg backdrop:bg-black/55"
+      className="mb-dialog m-auto w-[min(28rem,calc(100%-2rem))] rounded-md border-0 bg-card p-0 text-fg ring-1 ring-border-xl backdrop:bg-bg/60 backdrop:backdrop-blur-sm"
       onCancel={(event) => {
         event.preventDefault();
         onClose();

@@ -16,7 +16,7 @@ const SandboxGifExportButton = dynamic(
   () => import("@/components/sandbox/SandboxGifExportButton").then((module) => module.SandboxGifExportButton),
   {
     ssr: false,
-    loading: () => <button type="button" disabled className="h-8 px-2 text-xs text-muted">GIF</button>,
+    loading: () => <button type="button" disabled className="mb-btn mb-btn-ghost h-8 px-2 text-xs text-muted">GIF</button>,
   },
 );
 
@@ -74,7 +74,7 @@ function ReportDialog({
   }
 
   return (
-    <dialog ref={ref} aria-labelledby="report-title" className="mb-card-enter m-auto w-[min(32rem,calc(100%-2rem))] rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/55" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
+    <dialog ref={ref} aria-labelledby="report-title" className="mb-dialog m-auto w-[min(32rem,calc(100%-2rem))] rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/55" onCancel={(event) => { event.preventDefault(); onClose(); }} onClose={onClose}>
       {sent ? (
         <div className="space-y-6 p-6"><h2 id="report-title" className="text-2xl font-semibold">Report sent</h2><button type="button" className="mb-btn h-11 w-full" onClick={onClose}>Close</button></div>
       ) : (
@@ -220,7 +220,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
                 promptText={candidate.prompt}
                 cancelKey={`${selected.id}:${selected.checksum ?? ""}`}
                 label="GIF"
-                className="border border-border/70 bg-bg/55"
+                embedded
               />
             ) : undefined}
           />

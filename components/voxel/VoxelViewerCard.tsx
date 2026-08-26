@@ -60,6 +60,7 @@ export function VoxelViewerCard({
   exportDisabled,
   exportDisabledReason,
   actions,
+  headerMeta,
   viewerRef,
   skipValidation = false,
   embedded = false,
@@ -99,6 +100,7 @@ export function VoxelViewerCard({
   exportDisabled?: boolean;
   exportDisabledReason?: string;
   actions?: ReactNode;
+  headerMeta?: string;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
   skipValidation?: boolean;
   embedded?: boolean;
@@ -316,6 +318,7 @@ export function VoxelViewerCard({
                 <div className="flex items-center gap-1 font-mono text-[11px] text-muted sm:hidden">
                   <span className="text-muted/40">•</span>
                   <span>{blockCount.toLocaleString()}</span>
+                  {headerMeta ? <><span className="text-muted/40">•</span><span className="truncate">{headerMeta}</span></> : null}
                 </div>
               ) : null}
             </div>
@@ -372,6 +375,7 @@ export function VoxelViewerCard({
                 {build ? (
                   <div className="items-center gap-2 font-mono sm:flex">
                     <span>{blockCount.toLocaleString()} blocks</span>
+                    {headerMeta ? <span>• {headerMeta}</span> : null}
                     {timing ? <span>• {timing}</span> : null}
                     {metrics?.attempts ? (
                       <span>

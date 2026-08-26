@@ -1943,7 +1943,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           <button
             type="button"
             aria-label="Close"
-            className="absolute inset-0 bg-bg/60 backdrop-blur-sm"
+            className="mb-dialog-backdrop absolute inset-0 bg-bg/60 backdrop-blur-sm"
             onClick={() => setPromptWithUrl(null)}
           />
           <div
@@ -1951,7 +1951,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
             role="dialog"
             aria-modal="true"
             aria-label="Full prompt details"
-            className="relative w-full max-w-3xl overflow-hidden rounded-md bg-card ring-1 ring-border-xl"
+            className="mb-dialog-panel relative w-full max-w-3xl overflow-hidden rounded-md bg-card ring-1 ring-border-xl"
           >
             <div className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-3 sm:gap-3 sm:px-4">
               <PromptLateralNav

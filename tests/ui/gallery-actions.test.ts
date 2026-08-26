@@ -20,6 +20,7 @@ assert.ok(
   detail.includes("SandboxGifExportButton") &&
     detail.includes("viewerRef={viewerRef}") &&
     detail.includes('label="GIF"') &&
+    detail.includes("embedded") &&
     !detail.includes("iconOnly"),
   "public examples should reuse the full viewer GIF exporter",
 );
@@ -30,7 +31,12 @@ assert.ok(
     !yours.includes("Add this generation as an example?") &&
     yours.includes("downloadSavedGenerationJson") &&
     yours.includes("SavedBuildDialog") &&
-    yours.includes("generation.expandedBytes"),
+    yours.includes("generation.expandedBytes") &&
+    !yours.includes("generation.storedBytes") &&
+    yours.includes("headerMeta=") &&
+    !yours.includes("SHA-256 ") &&
+    yours.includes("hover:after:scale-x-100") &&
+    yours.includes("embedded"),
   "saved builds should open privately and expose their expanded JSON download and size",
 );
 assert.ok(
@@ -57,6 +63,10 @@ assert.equal(
   [detail, explore, preflight].some((source) => source.includes("shadow-2xl")),
   false,
   "public dialogs should follow the flat-surface design language",
+);
+assert.ok(
+  [detail, explore, yours, preflight].every((source) => source.includes("mb-dialog")),
+  "Gallery and generation dialogs should share the same entrance motion",
 );
 assert.equal(
   ["Build what comes next.", "Prompts and worlds from the community.", "The first prompt is yours.", "Use the prompt, then share your result."].some((copy) => detail.includes(copy) || explore.includes(copy)),

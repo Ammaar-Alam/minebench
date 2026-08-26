@@ -20,6 +20,7 @@ type Props = {
   promptText?: string;
   label?: string;
   iconOnly?: boolean;
+  embedded?: boolean;
   className?: string;
   cancelKey?: string;
 };
@@ -844,7 +845,7 @@ function GifFormatSelector({
   );
 }
 
-export function SandboxGifExportButton({ targets, promptText, label, iconOnly, className, cancelKey }: Props) {
+export function SandboxGifExportButton({ targets, promptText, label, iconOnly, embedded, className, cancelKey }: Props) {
   const tooltipId = useId();
   const [exporting, setExporting] = useState(false);
   const [optimizing, setOptimizing] = useState(false);
@@ -1000,7 +1001,9 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       title={iconOnly ? undefined : buttonTitle}
       onClick={() => void handleExport()}
       disabled={isUnavailable}
-      className={`inline-flex select-none items-center justify-center rounded-full font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${
+      className={`inline-flex select-none items-center justify-center font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${
+        embedded ? "mb-btn mb-btn-ghost rounded-md border border-border/70 bg-bg/55" : "rounded-full"
+      } ${
         iconOnly
           ? "h-7 w-7 p-0 text-muted hover:bg-fg/7 hover:text-fg"
           : "h-8 gap-1.5 px-3 text-xs tracking-[0.01em] hover:bg-fg/7 sm:px-3.5 sm:text-sm"
@@ -1024,6 +1027,8 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, c
       </span>
     </button>
   );
+
+  if (embedded) return button;
 
   if (!iconOnly) {
     return (
