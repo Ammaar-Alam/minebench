@@ -12,41 +12,9 @@ Gallery is MineBench's public prompt exhibition. It is deliberately separate fro
 
 Candidate prompts deduplicate by the exact literal text after boundary trimming. The first visible example is the cover; later examples are cursor-paginated newest first. Nicknames are optional, unique after NFKC/case/space normalization, and resolved dynamically. Each candidate and example can instead be attributed to Anonymous.
 
-## Durable generation lifecycle
+## Saved generations
 
-`POST /api/generations` creates one owned record and one queued job per selected model. Request-scoped provider credentials and custom endpoint URLs are encrypted with AES-256-GCM, bound to the generation ID, and deleted on success, failure, cancellation, or expiry. The worker is started separately:
-
-```bash
-pnpm exec tsx scripts/custom-build-worker.ts
-```
-
-Successful jobs store four private objects under `CUSTOM_BUILD_STORAGE_PREFIX/<publicId>/`:
-
-- canonical normalized JSON, gzip encoded
-- an MBV4 preview
-- an MBV4 or MBF1 viewer artifact
-- a deterministic SVG thumbnail
-
-The canonical JSON remains the source artifact. Owner downloads redirect to a short-lived Storage URL and do not proxy large production objects through Vercel. Actual stored bytes are recorded per artifact and generation; new jobs stop at the internal per-account failsafe once retained objects reach 1 GiB.
-
-Required runtime configuration:
-
-- `CUSTOM_BUILD_KEY_ENCRYPTION_SECRET`
-- `CUSTOM_BUILD_STORAGE_BUCKET`
-- `CUSTOM_BUILD_STORAGE_PREFIX`
-- Supabase URL and service-role credentials used by existing private build storage
-- `VOTE_BLOCK_HMAC_SECRET`
-- SMTP configuration used by the contact flow
-- `CRON_SECRET` or `ADMIN_TOKEN` for scheduled purge
-
-Run the read-only storage ownership and byte-accounting audit with:
-
-```bash
-pnpm exec tsx scripts/audit-saved-generation-artifacts.ts
-pnpm exec tsx scripts/audit-saved-generation-artifacts.ts --deep
-```
-
-`--deep` checks referenced object existence and unowned objects in the configured prefix. `--limit` performs a metadata-only sample and intentionally skips orphan enumeration.
+Signed-in Sandbox generations are private, account-owned results. Contributing a successful result to a Gallery prompt is a separate action and does not expose the private generation record or storage identity. The durable execution and artifact boundaries are described in [Architecture](./architecture.md#saved-generation-execution).
 
 ## Moderation and retention
 

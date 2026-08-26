@@ -74,6 +74,37 @@ Derived objects are immutable and checksum-addressed. `ArenaBuildArtifact`
 rows record which build owns each Storage object so lifecycle cleanup can remove
 unreferenced artifacts without guessing from path names.
 
+## Saved generation execution
+
+```mermaid
+flowchart LR
+    CLIENT["Signed-in Sandbox"] --> WEB["Web route<br/>validate + enqueue"]
+    WEB --> QUEUE[("Postgres<br/>generation + durable job")]
+    QUEUE --> WORKER["Supervised worker<br/>claim + renew lease"]
+    WORKER --> PROVIDER["Selected model provider"]
+    PROVIDER --> WORKER
+    WORKER --> CANONICAL[("Private Storage<br/>canonical JSON")]
+    CANONICAL --> DERIVED["Validated preview,<br/>viewer, and thumbnail artifacts"]
+    DERIVED --> STORAGE[("Private Storage<br/>derived artifacts")]
+    WORKER --> QUEUE
+    QUEUE --> WEB
+    WEB --> CLIENT
+```
+
+The web request returns after enqueueing and never depends on a long-running
+provider call. A separately supervised worker targets one deployment
+environment, claims one job at a time with a renewable database lease, and
+records progress for browser polling. If a worker loses its lease, it stops
+writing; another process can recover stale work. Retries resume from an already
+stored canonical artifact rather than invoking the provider twice.
+
+Provider credentials belong to a single request. They are encrypted, bound to
+the saved generation, and removed after success, terminal failure,
+cancellation, or expiry. The canonical JSON is the recovery source of truth;
+preview and viewer formats are derived from it. Account-owned downloads use
+short-lived object access instead of proxying large files through the web
+process.
+
 ## Arena delivery and rendering
 
 ```mermaid
