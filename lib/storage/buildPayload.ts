@@ -3,12 +3,25 @@ import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { supabaseProjectRefFromApiUrl } from "@/lib/db/identity";
-import { getSupabaseServerConfig } from "@/lib/supabase/config";
+import {
+  getBuildStorageBucketFromEnv,
+  getSupabaseStorageConfig,
+  LOCAL_BUILD_STORAGE_BUCKET,
+  normalizeBuildStoragePath,
+  type SupabaseStorageConfig,
+} from "@/lib/storage/config";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
-export const DEFAULT_BUILD_STORAGE_BUCKET = "builds";
-export const LOCAL_BUILD_STORAGE_BUCKET = "__local_fs__";
 const STORAGE_DELETE_BATCH_SIZE = 100;
+
+export {
+  DEFAULT_BUILD_STORAGE_BUCKET,
+  getBuildStorageBucketFromEnv,
+  getSupabaseStorageConfig,
+  hasSupabaseStorageConfig,
+  LOCAL_BUILD_STORAGE_BUCKET,
+  normalizeBuildStoragePath,
+} from "@/lib/storage/config";
 
 export type BuildStorageRef = {
   bucket: string;
@@ -32,18 +45,12 @@ type LoadBuildPayloadOptions = {
   maxBytes?: number;
 };
 
-type SupabaseStorageConfig = {
-  url: string;
-  serviceRoleKey: string;
-};
-
 export type SupabaseStorageReadiness = {
   projectRef: string | null;
   bucket: string | null;
   ready: boolean;
   error: string | null;
 };
-
 function encodePath(path: string): string {
   return path
     .split("/")
@@ -76,25 +83,6 @@ function encodingWantsGzip(encoding: string | null | undefined): boolean {
   if (!encoding) return false;
   const first = encoding.split(",")[0]?.trim().toLowerCase();
   return first === "gzip" || first === "x-gzip";
-}
-
-export function getSupabaseStorageConfig(): SupabaseStorageConfig {
-  const config = getSupabaseServerConfig();
-  return { url: config.url, serviceRoleKey: config.secretKey };
-}
-
-export function hasSupabaseStorageConfig(): boolean {
-  const url = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
-  const serviceRoleKey = (
-    process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""
-  ).trim();
-  return Boolean(url && serviceRoleKey);
-}
-
-export function getBuildStorageBucketFromEnv(): string {
-  // an env var present but blank must fall back, not silently disable artifact
-  // delivery for every build
-  return process.env.SUPABASE_STORAGE_BUCKET?.trim() || DEFAULT_BUILD_STORAGE_BUCKET;
 }
 
 export async function deleteSupabaseStorageObjects(
@@ -184,10 +172,6 @@ export async function getSupabaseStorageReadiness(): Promise<SupabaseStorageRead
       error: error instanceof Error ? error.message : "Storage list probe failed",
     };
   }
-}
-
-export function normalizeBuildStoragePath(rawPath: string): string {
-  return rawPath.replace(/^\/+/, "");
 }
 
 export async function fetchStoredBuildBytes(

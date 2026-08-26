@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import {
+  decodeGalleryCursor,
+  encodeGalleryCursor,
+  galleryAttribution,
+  galleryIdentityHmac,
+  isGalleryContributionVisible,
+  normalizeGalleryNickname,
+  normalizeGalleryPrompt,
+  publicGalleryTextError,
+  resolveGalleryModelLabel,
+} from "../../../lib/gallery/policy";
+
+assert.equal(normalizeGalleryPrompt("  A tiny observatory  "), "A tiny observatory");
+assert.equal(normalizeGalleryPrompt("Castle"), "Castle");
+assert.notEqual(normalizeGalleryPrompt("Castle"), normalizeGalleryPrompt("castle"));
+
+assert.deepEqual(normalizeGalleryNickname("  Mine Builder  "), {
+  display: "Mine Builder",
+  normalized: "mine builder",
+});
+assert.equal(publicGalleryTextError("A quiet garden"), null);
+assert.equal(publicGalleryTextError("what the fuck"), "blocked_language");
+assert.equal(publicGalleryTextError("a faggot monument"), "blocked_language");
+assert.equal(publicGalleryTextError("shellfish monument"), null);
+assert.equal(publicGalleryTextError("classic stonework"), null);
+
+assert.equal(
+  isGalleryContributionVisible({
+    removedAt: null,
+    adminHiddenAt: null,
+    contributorSuspendedAt: new Date(),
+    selectedAt: new Date(),
+  }),
+  true,
+);
+assert.equal(
+  isGalleryContributionVisible({
+    removedAt: null,
+    adminHiddenAt: null,
+    contributorSuspendedAt: new Date(),
+    selectedAt: null,
+  }),
+  false,
+);
+assert.equal(
+  isGalleryContributionVisible({
+    removedAt: new Date(),
+    adminHiddenAt: null,
+    contributorSuspendedAt: null,
+    selectedAt: new Date(),
+  }),
+  false,
+);
+
+assert.equal(galleryAttribution({ postAnonymously: true, publicNickname: "Builder" }), "Anonymous");
+assert.equal(galleryAttribution({ postAnonymously: false, publicNickname: "Builder" }), "Builder");
+assert.equal(galleryAttribution({ postAnonymously: false, publicNickname: null }), "Anonymous");
+
+assert.equal(resolveGalleryModelLabel({ kind: "catalog", displayName: "Claude" }), "Claude");
+assert.equal(
+  resolveGalleryModelLabel({ kind: "openrouter", displayName: "Hidden", modelId: "vendor/model" }),
+  "vendor/model",
+);
+assert.equal(
+  resolveGalleryModelLabel({ kind: "custom", displayName: "Local model", modelId: "secret" }),
+  "Custom · Local model · secret",
+);
+
+const cursor = encodeGalleryCursor({ score: 4, publishedAt: new Date("2026-08-25T12:00:00Z"), id: "abc" });
+assert.deepEqual(decodeGalleryCursor(cursor), {
+  score: 4,
+  publishedAt: new Date("2026-08-25T12:00:00.000Z"),
+  id: "abc",
+});
+assert.equal(decodeGalleryCursor("not-a-cursor"), null);
+
+assert.equal(galleryIdentityHmac("same", "secret"), galleryIdentityHmac("same", "secret"));
+assert.notEqual(galleryIdentityHmac("same", "secret"), galleryIdentityHmac("other", "secret"));
+
+console.log("gallery policy checks passed");

@@ -15,6 +15,10 @@
     {
       "path": "/api/admin/private-evaluations/purge",
       "schedule": "17 3 * * *"
+    },
+    {
+      "path": "/api/admin/gallery/purge",
+      "schedule": "27 3 * * *"
     }
   ]
 }

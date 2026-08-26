@@ -7,6 +7,7 @@ import {
   ARENA_SESSION_COOKIE_OPTIONS,
 } from "@/lib/arena/session";
 import { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
+import { claimAnonymousGalleryVotes } from "@/lib/gallery/service";
 
 export { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
 
@@ -14,7 +15,10 @@ export type PublicAccount = {
   id: string;
   email: string;
   displayName: string | null;
+  publicNickname: string | null;
   isMineBenchAdmin: boolean;
+  gallerySuspendedAt: Date | null;
+  gallerySuspensionReason: string | null;
   createdAt: Date;
 };
 
@@ -62,7 +66,10 @@ export async function syncAuthUser(authUser: SupabaseAuthUser): Promise<PublicAc
       id: true,
       email: true,
       displayName: true,
+      publicNickname: true,
       isMineBenchAdmin: true,
+      gallerySuspendedAt: true,
+      gallerySuspensionReason: true,
       createdAt: true,
     },
   });
@@ -115,15 +122,18 @@ export async function claimAnonymousPublicVotes(
   sessionId: string | null,
 ): Promise<number> {
   if (!sessionId) return 0;
-  const result = await prisma.vote.updateMany({
-    where: {
-      userId: null,
-      sessionId,
-      matchup: { stealthVariantId: null },
-    },
-    data: { userId },
-  });
-  return result.count;
+  const [arena, gallery] = await Promise.all([
+    prisma.vote.updateMany({
+      where: {
+        userId: null,
+        sessionId,
+        matchup: { stealthVariantId: null },
+      },
+      data: { userId },
+    }),
+    claimAnonymousGalleryVotes(userId, sessionId),
+  ]);
+  return arena.count + gallery;
 }
 
 async function clearLocalAuthSession(): Promise<void> {

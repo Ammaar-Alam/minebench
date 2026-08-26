@@ -18,9 +18,12 @@ Current surfaces:
 - Arena matchup build cards.
 - Sandbox benchmark result cards.
 - Sandbox live model result cards.
+- Gallery detail viewers after the selected example has loaded.
 - Leaderboard model detail prompt modal after the selected build has loaded.
 
 The live generation surface also has a JSON download button. That is separate from the build export menu and exists for quickly saving the raw MineBench build payload.
+
+Signed-in Sandbox generations keep canonical JSON in private Storage. Yours downloads that source artifact directly; Gallery viewers reuse the existing client-side export controls without creating server export jobs.
 
 ## Export Formats
 

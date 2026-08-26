@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent, ProviderApiKeys } from "@/lib/ai/types";
 import {
@@ -9,12 +10,15 @@ import {
 } from "@/components/sandbox/SandboxGifExportButton";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPreflightDialog";
+import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
 import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
+import type { SavedGenerationPayload } from "@/lib/generations/service";
 
 type Palette = "simple" | "advanced";
 type GridSize = 64 | 256 | 512;
@@ -57,6 +61,18 @@ type ModelResult = {
   retryReason?: string;
   metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
   startedAt?: number;
+  customBuildId?: string;
+  customBuildPageUrl?: string;
+  customBuildStatusUrl?: string;
+  customBuildEventsUrl?: string;
+  customBuildDownloadUrl?: string;
+  renderGridSize?: GridSize;
+  renderPalette?: Palette;
+  currentStage?: string;
+};
+
+type SavedGenerationCreateResponse = {
+  generations: Array<{ id: string; status: "queued" }>;
 };
 
 const MAX_LIVE_RAW_TEXT_CHARS = 80_000;
@@ -356,7 +372,91 @@ function getRawBuildJsonForExport(args: {
   }
 }
 
-export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
+function customBuildStageLabel(status: SavedGenerationPayload): string {
+  if (status.status === "succeeded") return "Ready";
+  if (status.status === "failed") return "Failed";
+  if (status.status === "canceled") return "Canceled";
+  if (status.stage === "generating") return "Building";
+  if (status.stage === "queued") return "Queued";
+  return status.stage ?? (status.status === "running" ? "Building" : "Queued");
+}
+
+function customBuildStatusPath(id: string): string {
+  return `/api/generations/${encodeURIComponent(id)}`;
+}
+
+async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): Promise<SavedGenerationPayload> {
+  const res = await fetch(statusUrl, { cache: "no-store", signal });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    const obj = safeJsonParseObject(text);
+    const message =
+      obj &&
+      typeof obj.error === "object" &&
+      obj.error &&
+      "message" in obj.error &&
+      typeof (obj.error as { message?: unknown }).message === "string"
+        ? (obj.error as { message: string }).message
+        : text || "Status unavailable";
+    throw new Error(message);
+  }
+  const body = (await res.json()) as { generation: SavedGenerationPayload };
+  return body.generation;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+async function readCustomBuildPreview(
+  status: SavedGenerationPayload,
+  signal?: AbortSignal,
+): Promise<VoxelBuild | null> {
+  if (!status.previewUrl) return null;
+  const res = await fetch(status.previewUrl, { cache: "no-store", signal, redirect: "follow" });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || "Preview unavailable");
+  }
+  const result = await readBuildVariantPayload(res, {
+    fallbackIdentity: { buildId: status.id, variant: "preview", checksum: status.sha256 },
+  });
+  return result.payload.voxelBuild as VoxelBuild;
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function customBuildMetrics(status: SavedGenerationPayload): ModelResult["metrics"] | undefined {
+  if (status.status !== "succeeded") return undefined;
+  return {
+    blockCount: status.blockCount ?? 0,
+    warnings: status.warnings,
+    generationTimeMs: status.generationTimeMs ?? 0,
+  };
+}
+
+function customBuildGridSize(value: number, fallback: GridSize): GridSize {
+  return value === 64 || value === 256 || value === 512 ? value : fallback;
+}
+
+function customBuildPalette(value: string, fallback: Palette): Palette {
+  return value === "advanced" ? "advanced" : value === "simple" ? "simple" : fallback;
+}
+
+export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: string; signedIn: boolean }) {
   const [prompt, setPrompt] = useState(() => initialPrompt ?? "a pirate ship with sails");
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
@@ -379,8 +479,13 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   );
   const [running, setRunning] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
+  const [showGenerationPreflight, setShowGenerationPreflight] = useState(false);
   const [, forceRender] = useState(0);
   const generateAbortRef = useRef<AbortController | null>(null);
+  const customBuildAbortRef = useRef<AbortController | null>(null);
+  const durableRunSequenceRef = useRef(0);
+  const activeDurableRunRef = useRef<number | null>(null);
+  const canceledDurableRunsRef = useRef(new Set<number>());
   const previewCacheRef = useRef(
     new Map<string, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
@@ -473,8 +578,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
 
   useEffect(() => {
     if (lastGenerateInputRef.current === inputSignature) return;
+    if (signedIn) {
+      previewCacheRef.current.clear();
+      setRequestError(null);
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
+    customBuildAbortRef.current?.abort();
+    customBuildAbortRef.current = null;
     previewCacheRef.current.clear();
     setRunning(false);
     setRequestError(null);
@@ -485,7 +597,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       }
       return next;
     });
-  }, [inputSignature, selectedModels]);
+  }, [inputSignature, selectedModels, signedIn]);
 
   useEffect(() => {
     if (!compareEnabled) return;
@@ -540,8 +652,45 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
   }
 
   function stopGenerate() {
+    if (signedIn) {
+      const runId = activeDurableRunRef.current;
+      if (runId !== null) canceledDurableRunsRef.current.add(runId);
+      const ids = selectedModels.flatMap((model) => {
+        const result = results.get(model.id);
+        return result?.status === "loading" && result.customBuildId ? [result.customBuildId] : [];
+      });
+      if (ids.length > 0) {
+        customBuildAbortRef.current?.abort();
+        customBuildAbortRef.current = null;
+      }
+      void Promise.all(
+        ids.map((id) =>
+          fetch(`/api/generations/${encodeURIComponent(id)}/cancel`, { method: "POST" }),
+        ),
+      ).then((responses) => {
+        if (responses.some((response) => !response.ok)) throw new Error("cancel_failed");
+      }).catch(() => setRequestError("Generation could not be stopped."));
+      setRunning(false);
+      setResults((prev) => {
+        const next = new Map(prev);
+        for (const model of selectedModels) {
+          const existing = next.get(model.id);
+          if (!existing || existing.status !== "loading") continue;
+          next.set(model.id, {
+            ...existing,
+            status: "error",
+            voxelBuild: null,
+            error: "Generation stopped",
+          });
+        }
+        return next;
+      });
+      return;
+    }
     generateAbortRef.current?.abort();
     generateAbortRef.current = null;
+    customBuildAbortRef.current?.abort();
+    customBuildAbortRef.current = null;
     setRunning(false);
     setResults((prev) => {
       const next = new Map(prev);
@@ -573,7 +722,223 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     triggerDownload(new Blob([json], { type: "application/json" }), fileName);
   }
 
-  async function runGenerate() {
+  function customBuildRequestModel(model: SelectedLiveModel) {
+    if (model.kind === "catalog") {
+      return {
+        kind: "catalog" as const,
+        modelKey: model.modelKey,
+      };
+    }
+    return {
+      kind: "custom" as const,
+      provider: model.provider,
+      displayName: model.displayName,
+      modelId: model.modelId,
+      ...(model.provider === "custom" ? { baseUrl: model.baseUrl ?? "" } : {}),
+    };
+  }
+
+  function applyCustomBuildStatus(args: {
+    model: SelectedLiveModel;
+    status: SavedGenerationPayload;
+    preview?: unknown | null;
+    pageUrl?: string;
+    statusUrl?: string;
+    eventsUrl?: string;
+  }) {
+    setResults((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(args.model.id);
+      if (!existing || (existing?.customBuildId && existing.customBuildId !== args.status.id)) {
+        return prev;
+      }
+      const statusGridSize = customBuildGridSize(args.status.gridSize, existing?.renderGridSize ?? gridSize);
+      const statusPalette = customBuildPalette(args.status.palette, existing?.renderPalette ?? palette);
+      const base = {
+        modelKey: args.model.id,
+        customBuildId: args.status.id,
+        customBuildPageUrl: args.pageUrl ?? existing?.customBuildPageUrl ?? "/gallery/yours",
+        customBuildStatusUrl: args.statusUrl ?? existing?.customBuildStatusUrl,
+        customBuildEventsUrl: args.eventsUrl ?? existing?.customBuildEventsUrl,
+        customBuildDownloadUrl: args.status.downloadUrl ?? existing?.customBuildDownloadUrl,
+        renderGridSize: statusGridSize,
+        renderPalette: statusPalette,
+        startedAt: existing?.startedAt,
+        currentStage: customBuildStageLabel(args.status),
+      };
+
+      if (args.status.status === "failed" || args.status.status === "canceled") {
+        next.set(args.model.id, {
+          ...base,
+          status: "error",
+          voxelBuild: null,
+          error: args.status.error?.message ?? customBuildStageLabel(args.status),
+        });
+        return next;
+      }
+
+      if (args.status.status === "succeeded") {
+        next.set(args.model.id, {
+          ...base,
+          status: "success",
+          voxelBuild: args.preview ?? existing?.voxelBuild ?? null,
+          metrics: customBuildMetrics(args.status),
+        });
+        return next;
+      }
+
+      next.set(args.model.id, {
+        ...base,
+        status: "loading",
+        voxelBuild: existing?.voxelBuild ?? null,
+        attempt: existing?.attempt ?? 1,
+      });
+      return next;
+    });
+  }
+
+  async function watchCustomBuild(args: {
+    model: SelectedLiveModel;
+    statusUrl: string;
+    pageUrl: string;
+    eventsUrl: string;
+    signal: AbortSignal;
+  }) {
+    while (!args.signal.aborted) {
+      const status = await readCustomBuildStatus(args.statusUrl, args.signal);
+      if (args.signal.aborted) return;
+      if (status.status === "succeeded") {
+        applyCustomBuildStatus({
+          model: args.model,
+          status,
+          pageUrl: args.pageUrl,
+          statusUrl: args.statusUrl,
+          eventsUrl: args.eventsUrl,
+        });
+        try {
+          const preview = await readCustomBuildPreview(status, args.signal);
+          if (args.signal.aborted) return;
+          applyCustomBuildStatus({
+            model: args.model,
+            status,
+            preview,
+            pageUrl: args.pageUrl,
+            statusUrl: args.statusUrl,
+            eventsUrl: args.eventsUrl,
+          });
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return;
+          console.warn("Custom build preview unavailable", err);
+        }
+        return;
+      }
+
+      applyCustomBuildStatus({
+        model: args.model,
+        status,
+        pageUrl: args.pageUrl,
+        statusUrl: args.statusUrl,
+        eventsUrl: args.eventsUrl,
+      });
+      if (status.status === "failed" || status.status === "canceled") return;
+      await abortableDelay(2500, args.signal);
+    }
+  }
+
+  async function runGenerateDurable(args: {
+    abortController: AbortController;
+    providerKeys: ProviderApiKeys;
+    runId: number;
+  }) {
+    customBuildAbortRef.current = args.abortController;
+    const res = await fetch("/api/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: args.abortController.signal,
+      body: JSON.stringify({
+        prompt,
+        gridSize,
+        palette,
+        models: selectedModels.map(customBuildRequestModel),
+        providerKeys: args.providerKeys,
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      const obj = safeJsonParseObject(text);
+      const message =
+        obj && typeof obj.error === "object" && obj.error &&
+        "message" in obj.error && typeof (obj.error as { message?: unknown }).message === "string"
+          ? (obj.error as { message: string }).message
+          : text || "Request failed";
+      throw new Error(message);
+    }
+    const created = (await res.json()) as SavedGenerationCreateResponse;
+    if (created.generations.length !== selectedModels.length) {
+      throw new Error("Generation queue returned an incomplete result.");
+    }
+    if (canceledDurableRunsRef.current.has(args.runId)) {
+      const responses = await Promise.all(created.generations.map((generation) =>
+        fetch(`/api/generations/${encodeURIComponent(generation.id)}/cancel`, { method: "POST" }),
+      ));
+      if (responses.some((response) => !response.ok)) {
+        throw new Error("Generation could not be stopped.");
+      }
+      return;
+    }
+    setResults((prev) => {
+      const next = new Map(prev);
+      selectedModels.forEach((model, index) => {
+        const generation = created.generations[index];
+        if (!generation) return;
+        const existing = next.get(model.id);
+        next.set(model.id, {
+          modelKey: model.id,
+          status: "loading",
+          voxelBuild: null,
+          attempt: 1,
+          startedAt: existing?.startedAt ?? Date.now(),
+          customBuildId: generation.id,
+          customBuildPageUrl: "/gallery/yours",
+          customBuildStatusUrl: customBuildStatusPath(generation.id),
+          renderGridSize: gridSize,
+          renderPalette: palette,
+          currentStage: "Queued",
+        });
+      });
+      return next;
+    });
+    await Promise.all(
+      selectedModels.map((model, index) => {
+        const generation = created.generations[index];
+        if (!generation) return Promise.resolve();
+        const statusUrl = customBuildStatusPath(generation.id);
+        return watchCustomBuild({
+          model,
+          statusUrl,
+          pageUrl: "/gallery/yours",
+          eventsUrl: "",
+          signal: args.abortController.signal,
+        }).catch((err) => {
+          if (isAbortError(err)) return;
+          setResults((prev) => {
+            const next = new Map(prev);
+            const existing = next.get(model.id);
+            next.set(model.id, {
+              ...existing,
+              modelKey: model.id,
+              status: "error",
+              voxelBuild: existing?.voxelBuild ?? null,
+              error: err instanceof Error ? err.message : "Status unavailable",
+            });
+            return next;
+          });
+        });
+      }),
+    );
+  }
+
+  async function runGenerate(continueTransient = false) {
     if (!prompt.trim() || selectedModels.length === 0) return;
 
     const invalidCustomModel = selectedModels.find(
@@ -589,6 +954,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     if (missingCustomUrl) {
       setRequestError("Enter a chat completions URL for the OpenAI-compatible model.");
       return;
+    }
+    if (!signedIn && !continueTransient) {
+      setShowGenerationPreflight(true);
+      return;
+    }
+    const durableRunId = signedIn ? durableRunSequenceRef.current + 1 : null;
+    if (durableRunId !== null) {
+      durableRunSequenceRef.current = durableRunId;
+      activeDurableRunRef.current = durableRunId;
     }
 
     setRunning(true);
@@ -632,6 +1006,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       setKey("meta", providerKeys.meta);
       setKey("zai", providerKeys.zai);
       setKey("custom", providerKeys.custom);
+
+      if (signedIn) {
+        await runGenerateDurable({
+          abortController,
+          providerKeys: sanitizedKeys,
+          runId: durableRunId!,
+        });
+        return;
+      }
 
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -798,6 +1181,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       }
       setRequestError(err instanceof Error ? err.message : "Request failed");
     } finally {
+      if (customBuildAbortRef.current === abortController) {
+        customBuildAbortRef.current = null;
+      }
+      if (durableRunId !== null) {
+        canceledDurableRunsRef.current.delete(durableRunId);
+        if (activeDurableRunRef.current === durableRunId) {
+          activeDurableRunRef.current = null;
+        }
+      }
       if (generateAbortRef.current === abortController) {
         generateAbortRef.current = null;
         setRunning(false);
@@ -805,16 +1197,22 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     }
   }
 
-  function getPreviewBuild(modelKey: string, rawText: string | undefined): VoxelBuild | null {
+  function getPreviewBuild(
+    modelKey: string,
+    rawText: string | undefined,
+    previewGridSize: GridSize,
+    previewPalette: Palette,
+  ): VoxelBuild | null {
     if (!rawText) return null;
     const now = Date.now();
-    const cached = previewCacheRef.current.get(modelKey);
+    const cacheKey = `${modelKey}:${previewGridSize}:${previewPalette}`;
+    const cached = previewCacheRef.current.get(cacheKey);
     const textLen = rawText.length;
     if (cached && now - cached.at < PREVIEW_THROTTLE_MS && textLen <= cached.textLen + 80) {
       return cached.build;
     }
-    const build = buildPreviewFromRawText({ rawText, gridSize, palette });
-    previewCacheRef.current.set(modelKey, { at: now, textLen, build });
+    const build = buildPreviewFromRawText({ rawText, gridSize: previewGridSize, palette: previewPalette });
+    previewCacheRef.current.set(cacheKey, { at: now, textLen, build });
     return build;
   }
 
@@ -837,9 +1235,10 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const viewerRef = idx === 0 ? viewerARef : viewerBRef;
     const modelName = model.displayName;
     const providerName = model.providerLabel;
+    const isDurableResult = Boolean(r?.customBuildId);
     const rawBuildJsonForExport = getRawBuildJsonForExport({
-      voxelBuild: r?.voxelBuild ?? undefined,
-      rawJsonText: r?.rawText,
+      voxelBuild: isDurableResult ? undefined : r?.voxelBuild ?? undefined,
+      rawJsonText: isDurableResult ? undefined : r?.rawText,
     });
     const hasJsonExport = Boolean(rawBuildJsonForExport);
     const gifTargets: SandboxGifExportTarget[] =
@@ -856,68 +1255,103 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
     const elapsedMs =
       r?.status === "loading" && r.startedAt ? Math.max(0, Date.now() - r.startedAt) : undefined;
     const liveRawText = r?.rawText;
-    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText) : null;
+    const cardGridSize = r?.renderGridSize ?? gridSize;
+    const cardPalette = r?.renderPalette ?? palette;
+    const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText, cardGridSize, cardPalette) : null;
     return (
       <VoxelViewerCard
         key={model.id}
         title={model.displayName}
         subtitle={providerName}
         voxelBuild={r?.status === "success" ? r.voxelBuild : previewBuild}
-        gridSize={gridSize}
+        gridSize={cardGridSize}
         animateIn={r?.status === "success"}
         isLoading={r?.status === "loading"}
         error={r?.status === "error" ? r.error : undefined}
-        debugRawText={liveRawText}
-        attempt={r?.status === "loading" ? r.attempt : undefined}
-        retryReason={r?.status === "loading" ? r.retryReason : undefined}
+        debugRawText={isDurableResult ? undefined : liveRawText}
+        attempt={r?.status === "loading" && !isDurableResult ? r.attempt : undefined}
+        retryReason={r?.status === "loading" && !isDurableResult ? r.retryReason : undefined}
         elapsedMs={elapsedMs}
         metrics={r?.status === "success" ? r.metrics : undefined}
-        jsonText={r?.rawText}
-        palette={palette}
+        jsonText={isDurableResult ? undefined : r?.rawText}
+        loadingMessage={isDurableResult ? r?.currentStage : undefined}
+        palette={cardPalette}
         viewerRef={viewerRef}
         onBuildMetrics={
           r?.status === "success"
             ? (metrics) => enqueueVoxelMetric("sandbox", "full", metrics)
             : undefined
         }
-        enableBuildJsonToggle
-        enableBuildExport={r?.status === "success"}
+        enableBuildJsonToggle={!isDurableResult}
+        enableBuildExport={r?.status === "success" && !isDurableResult}
         exportLabel={modelName}
         exportPrompt={prompt}
         actions={
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label="Export JSON"
-              title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
-              disabled={!hasJsonExport}
-              className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-              onClick={() =>
-                exportModelJson({
-                  modelName,
-                  modelKey: model.id,
-                  rawBuildJson: rawBuildJsonForExport ?? undefined,
-                })
-              }
-            >
-              <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
-                <path
-                  d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="1.8"
-                />
-              </svg>
-            </button>
-            <SandboxGifExportButton
-              targets={gifTargets}
-              promptText={prompt}
-              cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
-              iconOnly
-              label="Export GIF"
-            />
+            {r?.customBuildPageUrl ? (
+              <a
+                className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
+                href={r.customBuildPageUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open
+              </a>
+            ) : null}
+            {r?.customBuildDownloadUrl ? (
+              <a
+                aria-label="Download JSON"
+                title="Download JSON"
+                className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg"
+                href={r.customBuildDownloadUrl}
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <path
+                    d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </a>
+            ) : !isDurableResult ? (
+              <button
+                type="button"
+                aria-label="Export JSON"
+                title={hasJsonExport ? "Export JSON" : "No JSON to export yet"}
+                disabled={!hasJsonExport}
+                className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+                onClick={() =>
+                  exportModelJson({
+                    modelName,
+                    modelKey: model.id,
+                    rawBuildJson: rawBuildJsonForExport ?? undefined,
+                  })
+                }
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
+                  <path
+                    d="M12 4v10m0 0 4-4m-4 4-4-4M5 18h14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                  />
+                </svg>
+              </button>
+            ) : null}
+            {!isDurableResult ? (
+              <SandboxGifExportButton
+                targets={gifTargets}
+                promptText={prompt}
+                cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
+                iconOnly
+                label="Export GIF"
+              />
+            ) : null}
           </div>
         }
       />
@@ -1139,7 +1573,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <div className="mb-eyebrow">API keys</div>
-                <div className="mt-1 text-xs text-muted">Stored in your browser only.</div>
+                <div className="mt-1 text-xs text-muted">Saved in this browser.</div>
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -1328,7 +1762,7 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
             </div>
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 border-t border-border/70 pt-5">
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border/70 pt-5">
             <SandboxGifExportButton
               targets={compareTargets}
               promptText={prompt}
@@ -1337,19 +1771,24 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
                 .join("|")}`}
               label={selectedModels.length > 1 ? "Export comparison GIF" : "Export GIF"}
             />
+            {signedIn ? (
+              <Link href="/gallery/yours" className="text-xs text-muted hover:text-fg">
+                Saved in Yours
+              </Link>
+            ) : null}
             <div className="flex items-center gap-2">
               {running ? (
                 <button
                   className="mb-btn h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={stopGenerate}
                 >
-                  Stop generating
+                  Stop
                 </button>
               ) : null}
               <button
                 className="mb-btn mb-btn-primary h-11 min-w-[160px] disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={running || selectedModels.length === 0 || !prompt.trim()}
-                onClick={runGenerate}
+                onClick={() => void runGenerate()}
               >
                 {running ? "Generating…" : "Generate"}
               </button>
@@ -1360,6 +1799,15 @@ export function SandboxLive({ initialPrompt }: { initialPrompt?: string }) {
       <div className={`grid grid-cols-1 gap-4 ${selectedModels.length > 1 ? "md:grid-cols-2" : ""}`}>
         {resultCards}
       </div>
+      <GenerationPreflightDialog
+        open={showGenerationPreflight}
+        signInHref={`/sign-in?next=${encodeURIComponent(`/sandbox?mode=live&prompt=${encodeURIComponent(prompt)}`)}`}
+        onClose={() => setShowGenerationPreflight(false)}
+        onContinue={() => {
+          setShowGenerationPreflight(false);
+          void runGenerate(true);
+        }}
+      />
     </div>
   );
 }

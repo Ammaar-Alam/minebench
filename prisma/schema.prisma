@@ -56,17 +56,38 @@ enum StealthGenerationResultStatus {
 }
 
 model User {
-  id               String    @id @db.Uuid
-  email            String    @unique
-  displayName      String?
-  lastSeenAt       DateTime?
-  isMineBenchAdmin Boolean   @default(false)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                       String    @id @db.Uuid
+  email                    String    @unique
+  displayName              String?
+  publicNickname           String?   @db.VarChar(40)
+  publicNicknameNormalized String?   @unique @db.VarChar(40)
+  lastSeenAt               DateTime?
+  isMineBenchAdmin         Boolean   @default(false)
+  gallerySuspendedAt       DateTime?
+  gallerySuspensionReason  String?   @db.VarChar(240)
+  gallerySuspendedById     String?   @db.Uuid
+  galleryRestoredAt        DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   memberships     OrganizationMembership[]
   acceptedInvites OrganizationInvitation[] @relation("AcceptedOrganizationInvites")
   votes           Vote[]
+  customBuilds    CustomBuild[]
+
+  gallerySuspendedBy       User?                     @relation("GallerySuspendingAdmin", fields: [gallerySuspendedById], references: [id], onDelete: SetNull)
+  gallerySuspendedUsers    User[]                    @relation("GallerySuspendingAdmin")
+  galleryCandidates        GalleryCandidate[]        @relation("GalleryCandidateUploader")
+  selectedGalleryCandidates GalleryCandidate[]       @relation("GalleryCandidateSelector")
+  galleryExamples          GalleryExample[]          @relation("GalleryExampleContributor")
+  galleryVotes             GalleryVote[]
+  galleryModerationAuthored GalleryModerationRecord[] @relation("GalleryModerationActor")
+  galleryModerationSubjects GalleryModerationRecord[] @relation("GalleryModerationSubject")
+  galleryVoteBlocks        GalleryVoteBlock[]        @relation("GalleryVoteBlockSubject")
+  galleryVoteBlocksCreated GalleryVoteBlock[]        @relation("GalleryVoteBlockCreator")
+  galleryVoteBlocksReversed GalleryVoteBlock[]       @relation("GalleryVoteBlockReverser")
+
+  @@index([gallerySuspendedById])
 }
 
 model Organization {
@@ -255,6 +276,45 @@ model StealthGenerationResult {
   @@index([buildId])
 }
 
+enum CustomBuildStatus {
+  queued
+  running
+  succeeded
+  failed
+  canceled
+}
+
+enum CustomBuildJobType {
+  generate
+  export
+}
+
+enum CustomBuildJobStatus {
+  queued
+  running
+  succeeded
+  failed
+  canceled
+}
+
+enum CustomBuildArtifactKind {
+  build_json
+  preview_json
+  raw_text_debug
+  glb
+  stl
+  schem
+  preview_mbv4
+  viewer_mbv4
+  viewer_mbf1
+  preview_svg
+}
+
+enum CustomBuildStorageEncoding {
+  identity
+  gzip
+}
+
 model Model {
   id          String   @id @default(cuid())
   key         String   @unique
@@ -321,6 +381,7 @@ model Prompt {
   coverageByModel ArenaCoverageModelPrompt[]
   coveragePairs ArenaCoveragePairPrompt[]
   stealthGenerationResults StealthGenerationResult[]
+  selectedGalleryCandidate GalleryCandidate?
 
   @@unique([text])
   @@index([active])
@@ -498,4 +559,325 @@ model ArenaCoveragePairPrompt {
 
   @@id([modelLowId, modelHighId, promptId])
   @@index([promptId])
+}
+
+model CustomBuild {
+  id          String   @id @default(cuid())
+  publicId    String   @unique
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+  removedAt   DateTime?
+  purgeAt     DateTime?
+  objectsDeletedAt DateTime?
+  deletionPendingAt DateTime?
+  deletionError String?
+
+  ownerId String? @db.Uuid
+  owner   User?   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+
+  status       CustomBuildStatus @default(queued)
+  currentStage String?
+  progress     Json?
+
+  promptText     String
+  promptSha256   String
+  gridSize       Int
+  palette        String
+  mode           String @default("precise")
+  generationMode String @default("tool")
+
+  modelKind         String
+  modelKey          String?
+  modelProvider     String
+  modelId           String
+  modelDisplayName  String
+  openRouterModelId String?
+  legacyCustomBaseUrl String? @map("customBaseUrl") @ignore
+  preferOpenRouter  Boolean @default(false)
+  reasoning         String?
+
+  blockCount       Int?
+  generationTimeMs Int?
+  warnings         Json?
+  metrics          Json?
+
+  buildSha256             String?
+  buildByteSize           Int?
+  buildCompressedByteSize Int?
+  previewBlockCount       Int?
+  previewSha256           String?
+  storedByteSize          Int @default(0)
+
+  errorCode      String?
+  errorMessage   String?
+  errorRetryable Boolean?
+
+  requestedIpHash        String?
+  requestedUserAgentHash String?
+
+  jobs      CustomBuildJob[]
+  artifacts CustomBuildArtifact[]
+  events    CustomBuildEvent[]
+  secret    CustomBuildSecret?
+  galleryExamples GalleryExample[]
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@index([ownerId, removedAt, status, createdAt])
+  @@index([ownerId, deletionPendingAt])
+  @@index([promptSha256])
+  @@index([modelProvider, modelId])
+}
+
+model CustomBuildSecret {
+  id            String @id @default(cuid())
+  customBuildId String @unique
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  provider      String
+  keyCiphertext String
+  keyIv         String
+  keyAuthTag    String?
+  endpointCiphertext String?
+  endpointIv String?
+  endpointAuthTag String?
+  keyVersion    Int @default(1)
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  deletedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
+}
+
+model CustomBuildJob {
+  id            String @id @default(cuid())
+  customBuildId String
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  type     CustomBuildJobType
+  status   CustomBuildJobStatus @default(queued)
+  payload  Json?
+  priority Int @default(0)
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(3)
+  runAfter    DateTime @default(now())
+
+  lockedBy       String?
+  lockedAt       DateTime?
+  leaseExpiresAt DateTime?
+
+  startedAt        DateTime?
+  completedAt      DateTime?
+  lastErrorCode    String?
+  lastErrorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, runAfter, priority, createdAt])
+  @@index([leaseExpiresAt])
+  @@index([customBuildId, type, status])
+}
+
+model CustomBuildArtifact {
+  id            String @id @default(cuid())
+  customBuildId String
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  kind        CustomBuildArtifactKind
+  format      String
+  bucket      String
+  path        String
+  encoding    CustomBuildStorageEncoding @default(identity)
+  contentType String
+  fileName    String
+
+  sha256             String
+  sourceBuildSha256  String?
+  byteSize           Int
+  compressedByteSize Int?
+  storedByteSize     Int
+  blockCount         Int?
+  exportStats        Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([customBuildId, kind, sourceBuildSha256])
+  @@index([customBuildId, kind])
+  @@index([sha256])
+}
+
+model CustomBuildEvent {
+  id            String @id @default(cuid())
+  customBuildId String
+  customBuild   CustomBuild @relation(fields: [customBuildId], references: [id], onDelete: Cascade)
+
+  seq       Int
+  type      String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@unique([customBuildId, seq])
+  @@index([customBuildId, createdAt])
+}
+
+model CustomBuildStatsDaily {
+  day              DateTime @id
+  created          Int @default(0)
+  succeeded        Int @default(0)
+  failed           Int @default(0)
+  canceled         Int @default(0)
+  exportsRequested Int @default(0)
+  exportsSucceeded Int @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+enum GalleryModerationKind {
+  REPORT
+  FILTER_REJECTION
+  APPEAL
+  ADMIN_ACTION
+}
+
+enum GalleryModerationTarget {
+  CANDIDATE
+  EXAMPLE
+  ACCOUNT
+  VOTE_BLOCK
+}
+
+enum GalleryReportReason {
+  OFFENSIVE
+  SPAM
+  MISLEADING
+  OTHER
+}
+
+model GalleryCandidate {
+  id              String   @id @default(cuid())
+  publicId        String   @unique
+  promptText      String
+  promptKey       String   @unique
+  uploaderId      String   @db.Uuid
+  postAnonymously Boolean  @default(false)
+  upvoteCount     Int      @default(0)
+  publishedAt     DateTime @default(now())
+  selectedAt      DateTime?
+  selectedById    String?  @db.Uuid
+  officialPromptId String? @unique
+  removedAt       DateTime?
+  adminHiddenAt   DateTime?
+  purgeAt         DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  uploader       User       @relation("GalleryCandidateUploader", fields: [uploaderId], references: [id], onDelete: Restrict)
+  selectedBy     User?      @relation("GalleryCandidateSelector", fields: [selectedById], references: [id], onDelete: SetNull)
+  officialPrompt Prompt?    @relation(fields: [officialPromptId], references: [id], onDelete: SetNull)
+  examples       GalleryExample[]
+  votes          GalleryVote[]
+  moderationRecords GalleryModerationRecord[]
+
+  @@index([adminHiddenAt, removedAt, upvoteCount, publishedAt, id], map: "GalleryCandidate_adminHiddenAt_removedAt_upvoteCount_publis_idx")
+  @@index([adminHiddenAt, removedAt, publishedAt, id])
+  @@index([uploaderId, removedAt, publishedAt])
+  @@index([selectedById])
+}
+
+model GalleryExample {
+  id              String   @id @default(cuid())
+  candidateId     String
+  customBuildId   String
+  contributorId   String   @db.Uuid
+  postAnonymously Boolean  @default(false)
+  removedAt       DateTime?
+  adminHiddenAt   DateTime?
+  purgeAt         DateTime?
+  previewRetained Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  candidate   GalleryCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  customBuild CustomBuild      @relation(fields: [customBuildId], references: [id], onDelete: Restrict)
+  contributor User             @relation("GalleryExampleContributor", fields: [contributorId], references: [id], onDelete: Restrict)
+  moderationRecords GalleryModerationRecord[]
+
+  @@unique([candidateId, customBuildId])
+  @@index([candidateId, adminHiddenAt, removedAt, createdAt], map: "GalleryExample_candidateId_adminHiddenAt_removedAt_createdA_idx")
+  @@index([contributorId, removedAt, createdAt])
+  @@index([customBuildId])
+}
+
+model GalleryVote {
+  id          String   @id @default(cuid())
+  candidateId String
+  sessionId   String
+  userId      String?  @db.Uuid
+  createdAt   DateTime @default(now())
+
+  candidate GalleryCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user      User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([candidateId, sessionId])
+  @@unique([candidateId, userId])
+  @@index([sessionId])
+  @@index([userId, createdAt])
+}
+
+model GalleryModerationRecord {
+  id            String                  @id @default(cuid())
+  kind          GalleryModerationKind
+  target        GalleryModerationTarget
+  action        String?
+  reportReason  GalleryReportReason?
+  note          String?
+  safeSnapshot  Json?
+  actorUserId   String?                 @db.Uuid
+  subjectUserId String?                 @db.Uuid
+  candidateId   String?
+  exampleId     String?
+  sessionHash   String?
+  ipHmac        String?
+  createdAt     DateTime                @default(now())
+  purgeAt       DateTime?
+
+  actor     User?             @relation("GalleryModerationActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  subject   User?             @relation("GalleryModerationSubject", fields: [subjectUserId], references: [id], onDelete: SetNull)
+  candidate GalleryCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  example   GalleryExample?   @relation(fields: [exampleId], references: [id], onDelete: SetNull)
+
+  @@index([kind, createdAt])
+  @@index([purgeAt, createdAt])
+  @@index([candidateId])
+  @@index([exampleId])
+  @@index([actorUserId])
+  @@index([subjectUserId])
+}
+
+model GalleryVoteBlock {
+  id           String    @id @default(cuid())
+  userId       String?   @db.Uuid
+  sessionHash  String?
+  ipHmac       String?
+  createdById  String    @db.Uuid
+  reversedById String?   @db.Uuid
+  internalNote String?
+  createdAt    DateTime  @default(now())
+  reversedAt   DateTime?
+
+  user       User? @relation("GalleryVoteBlockSubject", fields: [userId], references: [id], onDelete: SetNull)
+  createdBy  User  @relation("GalleryVoteBlockCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  reversedBy User? @relation("GalleryVoteBlockReverser", fields: [reversedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, reversedAt])
+  @@index([sessionHash, reversedAt])
+  @@index([ipHmac, reversedAt])
+  @@index([createdById, createdAt])
+  @@index([reversedById])
 }

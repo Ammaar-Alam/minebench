@@ -1,0 +1,32 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+
+const detail = readFileSync("components/gallery/GalleryDetail.tsx", "utf8");
+const explore = readFileSync("components/gallery/GalleryExplore.tsx", "utf8");
+const yours = readFileSync("components/gallery/GalleryYours.tsx", "utf8");
+const page = readFileSync("app/gallery/page.tsx", "utf8");
+const preflight = readFileSync("components/sandbox/GenerationPreflightDialog.tsx", "utf8");
+
+assert.ok(
+  detail.includes("candidate.canRemove") &&
+    detail.includes('method: "DELETE"') &&
+    detail.includes('window.location.assign("/gallery")'),
+  "ordinary candidate owners should have a reachable Remove action",
+);
+assert.ok(
+  yours.includes("body.created === false") &&
+    yours.includes("Add this generation as an example?") &&
+    yours.includes("/examples`"),
+  "duplicate prompt submission should offer an explicit example contribution",
+);
+assert.ok(
+  page.includes("key={sort}"),
+  "Top and New should remount with their own server-provided result set",
+);
+assert.equal(
+  [detail, explore, preflight].some((source) => source.includes("shadow-2xl")),
+  false,
+  "public dialogs should follow the flat-surface design language",
+);
+
+console.log("Gallery action UI checks passed");

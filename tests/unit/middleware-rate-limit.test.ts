@@ -137,6 +137,38 @@ async function main() {
   );
   assert.equal(contactIpLimited.status, 429);
 
+  const generationHeaders = {
+    cookie: "mb_rls=generation-session",
+    "x-real-ip": "203.0.113.151",
+  };
+  for (let index = 0; index < 5; index += 1) {
+    assert.equal((await middleware(new NextRequest("http://localhost/api/generations", {
+      method: "POST",
+      headers: generationHeaders,
+    }))).status, 200);
+  }
+  assert.equal((await middleware(new NextRequest("http://localhost/api/generations", {
+    method: "POST",
+    headers: generationHeaders,
+  }))).status, 429);
+
+  const reportHeaders = {
+    cookie: "mb_rls=gallery-report-session",
+    "x-real-ip": "203.0.113.152",
+  };
+  for (let index = 0; index < 5; index += 1) {
+    assert.equal((await middleware(new NextRequest("http://localhost/api/gallery/reports", {
+      method: "POST",
+      headers: reportHeaders,
+    }))).status, 200);
+  }
+  const reportLimited = await middleware(new NextRequest("http://localhost/api/gallery/reports", {
+    method: "POST",
+    headers: reportHeaders,
+  }));
+  assert.equal(reportLimited.status, 429);
+  assert.ok(Number(reportLimited.headers.get("retry-after")) > 3_500);
+
   console.log("middleware rate-limit contract checks passed");
 }
 

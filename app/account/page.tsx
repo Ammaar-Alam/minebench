@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { signOutAccount } from "@/app/(auth)/actions";
 import { getCurrentAccount } from "@/lib/auth/account";
 import { PersonalRanking, PersonalRankingSkeleton } from "./PersonalRanking";
+import { GalleryAccountSettings } from "./GalleryAccountSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +62,12 @@ export default async function AccountPage({
           <PersonalRanking userId={account.id} />
         </Suspense>
       </section>
+
+      <GalleryAccountSettings
+        publicNickname={account.publicNickname}
+        suspendedAt={account.gallerySuspendedAt?.toISOString() ?? null}
+        suspensionReason={account.gallerySuspensionReason}
+      />
 
       <section
         className="grid gap-7 border-t border-border pt-8 lg:grid-cols-[minmax(0,1fr)_18rem]"

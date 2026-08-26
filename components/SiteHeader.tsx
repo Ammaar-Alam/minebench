@@ -200,7 +200,7 @@ function LabHeader() {
 
 function NavLink({ href, label }: { href: string; label: string }) {
   const pathname = usePathname();
-  const active = pathname === href;
+  const active = href === "/" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
   return (
     <Link
       aria-current={active ? "page" : undefined}
@@ -340,6 +340,7 @@ export function SiteHeader() {
             <div className="flex items-center gap-5 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
               <NavLink href="/" label="Arena" />
               <NavLink href="/sandbox" label="Sandbox" />
+              <NavLink href="/gallery" label="Gallery" />
               <NavLink href="/leaderboard" label="Leaderboard" />
               <NavLink href="/faq" label="FAQ" />
               <div className="mx-0.5 h-5 w-px shrink-0 bg-border/50 sm:mx-1" aria-hidden="true" />

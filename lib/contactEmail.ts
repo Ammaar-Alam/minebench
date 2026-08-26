@@ -11,7 +11,7 @@ const ICON_URL = `${MINEBENCH_URL}/icon.png`;
 
 let transporter: Transporter | null = null;
 
-function escapeHtml(value: string): string {
+export function escapeEmailHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -21,10 +21,10 @@ function escapeHtml(value: string): string {
 }
 
 function messageHtml(value: string): string {
-  return escapeHtml(value).replace(/\r?\n/g, "<br>");
+  return escapeEmailHtml(value).replace(/\r?\n/g, "<br>");
 }
 
-function renderEmailShell({
+export function renderMineBenchEmail({
   preheader,
   eyebrow,
   heading,
@@ -42,7 +42,7 @@ function renderEmailShell({
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(heading)}</title>
+  <title>${escapeEmailHtml(heading)}</title>
   <style>
     @media only screen and (max-width: 480px) {
       .mb-email-wrap { padding: 28px 12px !important; }
@@ -52,7 +52,7 @@ function renderEmailShell({
 </head>
 <body style="margin:0; padding:0; background:#f6f6f4; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#181818;">
   <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
-    ${escapeHtml(preheader)}
+    ${escapeEmailHtml(preheader)}
   </div>
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; background:#f6f6f4;">
     <tr>
@@ -74,14 +74,14 @@ function renderEmailShell({
           </tr>
           <tr>
             <td class="mb-email-card" style="background:#ffffff; border:1px solid #e4e4e1; border-radius:12px; padding:38px 38px 36px 38px;">
-              <p style="margin:0 0 12px 0; font-size:12px; line-height:18px; font-weight:700; letter-spacing:0.7px; text-transform:uppercase; color:#168765;">${escapeHtml(eyebrow)}</p>
-              <h1 style="margin:0 0 18px 0; font-size:25px; line-height:1.3; font-weight:700; letter-spacing:-0.5px; color:#181818;">${escapeHtml(heading)}</h1>
+              <p style="margin:0 0 12px 0; font-size:12px; line-height:18px; font-weight:700; letter-spacing:0.7px; text-transform:uppercase; color:#168765;">${escapeEmailHtml(eyebrow)}</p>
+              <h1 style="margin:0 0 18px 0; font-size:25px; line-height:1.3; font-weight:700; letter-spacing:-0.5px; color:#181818;">${escapeEmailHtml(heading)}</h1>
               ${content}
             </td>
           </tr>
           <tr>
             <td style="padding:20px 4px 0 4px;">
-              <p style="margin:0; font-size:12px; line-height:1.6; color:#8e8e8e;">${escapeHtml(footer)}</p>
+              <p style="margin:0; font-size:12px; line-height:1.6; color:#8e8e8e;">${escapeEmailHtml(footer)}</p>
               <p style="margin:2px 0 0 0; font-size:12px; line-height:1.6; color:#aaaaaa;">${SUPPORT_EMAIL}</p>
             </td>
           </tr>
@@ -98,18 +98,18 @@ function renderSubmissionDetails(submission: ContactSubmission, includeEmail: bo
   const emailRow = includeEmail
     ? `<tr>
         <td style="padding:5px 18px 5px 0; font-size:12px; line-height:18px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; color:#898989;">Email</td>
-        <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333; word-break:break-word;">${submission.email ? escapeHtml(submission.email) : "Not provided"}</td>
+        <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333; word-break:break-word;">${submission.email ? escapeEmailHtml(submission.email) : "Not provided"}</td>
       </tr>`
     : "";
 
   return `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; margin:0 0 26px 0;">
     <tr>
       <td style="padding:5px 18px 5px 0; font-size:12px; line-height:18px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; color:#898989;">Category</td>
-      <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333;">${escapeHtml(category)}</td>
+      <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333;">${escapeEmailHtml(category)}</td>
     </tr>
     <tr>
       <td style="padding:5px 18px 5px 0; font-size:12px; line-height:18px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; color:#898989;">Title</td>
-      <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333; word-break:break-word;">${escapeHtml(submission.title)}</td>
+      <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333; word-break:break-word;">${escapeEmailHtml(submission.title)}</td>
     </tr>
     ${emailRow}
   </table>
@@ -128,7 +128,7 @@ export function renderContactNotification(submission: ContactSubmission): {
     ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:28px;">
         <tr>
           <td bgcolor="#181818" style="border-radius:8px;">
-            <a href="mailto:${escapeHtml(submission.email)}" style="display:inline-block; padding:12px 18px; border-radius:8px; color:#ffffff; font-size:14px; line-height:20px; font-weight:650; text-decoration:none;">Reply</a>
+            <a href="mailto:${escapeEmailHtml(submission.email)}" style="display:inline-block; padding:12px 18px; border-radius:8px; color:#ffffff; font-size:14px; line-height:20px; font-weight:650; text-decoration:none;">Reply</a>
           </td>
         </tr>
       </table>`
@@ -146,7 +146,7 @@ export function renderContactNotification(submission: ContactSubmission): {
       "Message",
       submission.message,
     ].join("\n"),
-    html: renderEmailShell({
+    html: renderMineBenchEmail({
       preheader: `New ${category.toLowerCase()} for MineBench`,
       eyebrow: `Contact · ${category}`,
       heading: submission.title,
@@ -176,15 +176,15 @@ export function renderContactReceipt(submission: ContactSubmission): {
       "MineBench",
       SUPPORT_EMAIL,
     ].join("\n"),
-    html: renderEmailShell({
+    html: renderMineBenchEmail({
       preheader: "MineBench received your message",
       eyebrow: "Message received",
       heading: "Thanks for reaching out",
-      content: `<p style="margin:0 0 24px 0; font-size:15px; line-height:1.7; color:#555555;">${escapeHtml(intro)}</p>
+      content: `<p style="margin:0 0 24px 0; font-size:15px; line-height:1.7; color:#555555;">${escapeEmailHtml(intro)}</p>
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%; margin:0 0 24px 0;">
           <tr>
             <td style="padding:5px 18px 5px 0; font-size:12px; line-height:18px; font-weight:700; letter-spacing:0.5px; text-transform:uppercase; color:#898989;">Category</td>
-            <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333;">${escapeHtml(category)}</td>
+            <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333;">${escapeEmailHtml(category)}</td>
           </tr>
         </table>
         <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:24px;">
@@ -216,6 +216,19 @@ function getTransporter(): Transporter {
     socketTimeout: 15_000,
   });
   return transporter;
+}
+
+export async function sendMineBenchEmail(message: {
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+  replyTo?: string;
+}): Promise<void> {
+  await getTransporter().sendMail({
+    from: { name: "MineBench", address: SUPPORT_EMAIL },
+    ...message,
+  });
 }
 
 export async function deliverContactSubmission(

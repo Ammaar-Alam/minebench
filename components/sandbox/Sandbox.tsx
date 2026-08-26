@@ -80,7 +80,7 @@ function SandboxModeTabs({
   );
 }
 
-export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
+export function Sandbox({ initialPrompt, signedIn }: { initialPrompt?: string; signedIn: boolean }) {
   const searchParams = useSearchParams();
   const searchKey = searchParams.toString();
   const livePrompt =
@@ -122,7 +122,7 @@ export function Sandbox({ initialPrompt }: { initialPrompt?: string }) {
       {mode === "benchmark" ? (
         <SandboxBenchmark />
       ) : mode === "live" ? (
-        <SandboxLive key={livePrompt ?? "default"} initialPrompt={livePrompt} />
+        <SandboxLive key={livePrompt ?? "default"} initialPrompt={livePrompt} signedIn={signedIn} />
       ) : (
         <LocalLab />
       )}

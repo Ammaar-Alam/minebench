@@ -4,7 +4,10 @@ import { Prisma } from "@prisma/client";
 async function main() {
   process.env.ARENA_STREAM_ARTIFACTS_ENABLED = "false";
   process.env.SUPABASE_URL = "https://abcdefghijklmnop.supabase.co";
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://abcdefghijklmnop.supabase.co";
   process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
+  process.env.DATABASE_URL = "postgresql://postgres@db.abcdefghijklmnop.supabase.co:5432/postgres";
+  process.env.DIRECT_URL = process.env.DATABASE_URL;
 
   const { expectedArtifactRequirements } = await import(
     "../../../lib/arena/artifactCoverage"

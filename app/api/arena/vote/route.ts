@@ -18,6 +18,7 @@ import {
   readArenaSessionId,
 } from "@/lib/arena/session";
 import { logArenaVoteRequest } from "@/lib/observability/arenaVoteLog";
+import { isVoteWriteBlocked, trustedClientIp } from "@/lib/voteBlock";
 
 export const runtime = "nodejs";
 
@@ -157,6 +158,25 @@ export async function POST(req: Request) {
     const session = getOrCreateSessionId(req);
     const sessionId = session.id;
     const authUserId = await getAuthenticatedUserId(req.headers.get("cookie"));
+    const blocked = await isVoteWriteBlocked({
+      userId: authUserId,
+      sessionId,
+      ip: trustedClientIp(req.headers),
+    });
+    if (blocked) {
+      const blockedResponse = NextResponse.json(
+        { ok: true, reveal } satisfies ArenaVoteResponse,
+        { headers: finalizeHeaders({ "Cache-Control": "no-store" }) },
+      );
+      if (session.cookieValue) {
+        blockedResponse.cookies.set(
+          ARENA_SESSION_COOKIE,
+          session.cookieValue,
+          ARENA_SESSION_COOKIE_OPTIONS,
+        );
+      }
+      return blockedResponse;
+    }
     const voteOwnerSql = !matchup.stealthVariantId && authUserId
       ? Prisma.sql`(SELECT id FROM "User" WHERE id = CAST(${authUserId} AS UUID))`
       : Prisma.sql`NULL`;
