@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
-import type { GenerateEvent, ProviderApiKeys } from "@/lib/ai/types";
+import type { GenerateEvent, GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
 import {
   SandboxGifExportButton,
   type SandboxGifExportTarget,
@@ -722,19 +722,30 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
     triggerDownload(new Blob([json], { type: "application/json" }), fileName);
   }
 
-  function customBuildRequestModel(model: SelectedLiveModel) {
+  function customBuildRequestModel(model: SelectedLiveModel): GenerateModelRequest {
     if (model.kind === "catalog") {
       return {
+        id: model.id,
         kind: "catalog" as const,
         modelKey: model.modelKey,
       };
     }
+    if (model.provider === "custom") {
+      return {
+        id: model.id,
+        kind: "custom",
+        provider: "custom",
+        displayName: model.displayName,
+        modelId: model.modelId,
+        baseUrl: model.baseUrl ?? "",
+      };
+    }
     return {
-      kind: "custom" as const,
-      provider: model.provider,
+      id: model.id,
+      kind: "custom",
+      provider: "openrouter",
       displayName: model.displayName,
       modelId: model.modelId,
-      ...(model.provider === "custom" ? { baseUrl: model.baseUrl ?? "" } : {}),
     };
   }
 

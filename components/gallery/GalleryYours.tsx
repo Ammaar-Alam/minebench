@@ -181,14 +181,14 @@ export function GalleryYours({
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-10 py-4 sm:py-8">
-      <header className="flex flex-col gap-6 border-b border-border pb-8 sm:flex-row sm:items-end sm:justify-between">
-        <div><p className="mb-eyebrow">Gallery</p><h1 className="mt-3 font-display text-4xl font-semibold tracking-tight text-fg sm:text-5xl">Yours</h1><p className="mt-3 text-sm text-muted">Generations you keep.</p></div>
+    <div className="mx-auto w-full max-w-6xl py-4 sm:py-8">
+      <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        <div><Link href="/gallery" className="mb-eyebrow hover:text-fg">Gallery</Link><h1 className="mt-2 font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Yours</h1></div>
         <div className="flex gap-2"><Link href="/gallery" className="mb-btn h-11">Explore</Link><Link href="/sandbox?mode=live" className="mb-btn mb-btn-primary h-11">Generate</Link></div>
       </header>
-      {suspended ? <div className="border-l-2 border-danger pl-4"><p className="font-semibold text-fg">Account suspended</p><p className="mt-1 text-sm text-muted">Private generations remain available.</p></div> : null}
+      {suspended ? <div className="mt-10 border-l-2 border-danger pl-4"><p className="font-semibold text-fg">Account suspended</p><p className="mt-1 text-sm text-muted">Private generations remain available.</p></div> : null}
 
-      <div className="divide-y divide-border border-y border-border">
+      <div className="mt-10 divide-y divide-border/70">
         {items.map((generation) => (
           <article key={generation.id} className="grid gap-6 py-6 lg:grid-cols-[14rem_minmax(0,1fr)_auto] lg:items-start">
             {generation.thumbnailUrl ? <div className="relative aspect-[4/3] border border-border bg-bg"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="14rem" className="object-contain p-3" /></div> : <div className="grid aspect-[4/3] border border-border bg-bg text-center text-sm text-muted"><span className="self-center">{statusLabel(generation.status)}</span></div>}
@@ -200,10 +200,10 @@ export function GalleryYours({
             <GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} />
           </article>
         ))}
-        {items.length === 0 ? <div className="py-16 text-center"><p className="text-lg text-fg">Nothing saved yet.</p><Link href="/sandbox?mode=live" className="mt-4 inline-flex text-sm text-accent">Generate a build</Link></div> : null}
+        {items.length === 0 ? <div className="py-14 sm:py-20"><p className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">Nothing saved.</p></div> : null}
       </div>
-      {cursor ? <div className="flex justify-center"><button type="button" disabled={loadingMore} className="mb-btn h-11 min-w-36" onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "More"}</button></div> : null}
-      {loadError ? <p role="status" className="text-center text-sm text-danger">{loadError}</p> : null}
+      {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-btn h-11 min-w-36" onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "More"}</button></div> : null}
+      {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
     </div>
   );
 }

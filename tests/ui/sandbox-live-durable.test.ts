@@ -46,6 +46,7 @@ function effectBodyTextContaining(marker: string): string {
 }
 
 const durableBody = functionBodyText("runGenerateDurable");
+const requestModelBody = functionBodyText("customBuildRequestModel");
 const runBody = functionBodyText("runGenerate");
 const stopBody = functionBodyText("stopGenerate");
 const watchBody = functionBodyText("watchCustomBuild");
@@ -89,6 +90,10 @@ assert.ok(
     durableBody.includes("await Promise.all(") &&
     durableBody.includes("selectedModels.map((model, index)"),
   "one signed-in request should create and watch one saved generation per selected model",
+);
+assert.ok(
+  requestModelBody.includes("id: model.id"),
+  "saved-generation requests should include the selected model identity required by the API",
 );
 assert.ok(
   stopBody.includes("if (signedIn)") &&

@@ -159,24 +159,27 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   }, [selected]);
 
   return (
-    <article className="mx-auto w-full max-w-7xl space-y-10 py-4 sm:space-y-12 sm:py-8">
-      <header className="grid gap-8 border-b border-border pb-8 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-        <div className="max-w-4xl">
-          <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>Gallery</span>{candidate.selected ? <span className="text-accent">Selected</span> : null}</div>
-          <h1 className="mt-4 text-balance font-display text-3xl font-semibold leading-tight tracking-tight text-fg sm:text-5xl">{candidate.prompt}</h1>
-          <p className="mt-4 text-sm text-muted">By {candidate.attribution}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+    <article className="mx-auto w-full max-w-7xl py-4 sm:py-8">
+      <nav aria-label="Breadcrumb">
+        <Link href="/gallery" className="inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted hover:text-fg">
+          <span aria-hidden="true">←</span>
+          Gallery
+        </Link>
+      </nav>
+
+      <header className="mt-6 max-w-5xl sm:mt-8">
+        <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Selected</span> : null}</div>
+        <h1 className="mt-3 text-balance font-display text-3xl font-semibold leading-tight tracking-tight text-fg sm:text-4xl lg:text-5xl">{candidate.prompt}</h1>
+        <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
           <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
-          {candidate.canRemove ? <button type="button" disabled={removing} className="mb-btn h-11 text-muted hover:text-danger" onClick={() => void removeCandidate()}>{removing ? "Removing…" : "Remove"}</button> : null}
         </div>
       </header>
 
-      {actionError ? <p role="alert" className="text-sm text-danger">{actionError}</p> : null}
+      {actionError ? <p role="alert" className="mt-5 text-sm text-danger">{actionError}</p> : null}
 
       {selected ? (
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]" aria-labelledby="viewer-title">
+        <section className="mt-10 grid gap-6 sm:mt-12 lg:grid-cols-[minmax(0,1fr)_18rem]" aria-labelledby="viewer-title">
           <VoxelViewerCard
             title={selected.model.label}
             subtitle={`By ${selected.attribution}`}
@@ -209,11 +212,12 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
             {examplesError ? <p className="mt-2 text-xs text-danger">{examplesError}</p> : null}
           </div>
         </section>
-      ) : (
-        <section className="border-y border-border py-16"><p className="text-lg text-fg">No examples yet.</p><p className="mt-2 text-sm text-muted">Use the prompt, then share your result.</p></section>
-      )}
+      ) : null}
 
-      <footer className="flex items-center justify-between border-t border-border pt-6 text-sm text-muted"><Link href="/gallery" className="hover:text-fg">Back to Gallery</Link><button type="button" className="min-h-11 px-2 hover:text-fg" onClick={() => setReportOpen(true)}>Report</button></footer>
+      <footer className="mt-12 flex flex-wrap items-center gap-5 text-sm text-muted sm:mt-16">
+        {candidate.canRemove ? <button type="button" disabled={removing} className="min-h-11 hover:text-danger disabled:opacity-65" onClick={() => void removeCandidate()}>{removing ? "Removing…" : "Remove prompt"}</button> : null}
+        <button type="button" className="min-h-11 hover:text-fg" onClick={() => setReportOpen(true)}>Report</button>
+      </footer>
       <ReportDialog open={reportOpen} candidate={{ ...candidate, examples }} onClose={() => setReportOpen(false)} />
     </article>
   );

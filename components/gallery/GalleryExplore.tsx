@@ -85,10 +85,10 @@ function SubmissionDialog({
 
 function GalleryCard({ candidate, featured }: { candidate: GalleryCandidatePayload; featured: boolean }) {
   return (
-    <article className={`group min-w-0 border border-border bg-card/15 ${featured ? "md:col-span-2" : ""}`}>
+    <article className={`group min-w-0 ${featured ? "md:col-span-2" : ""}`}>
       <Link href={`/gallery/${candidate.id}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
-          <div className={`relative overflow-hidden border-b border-border bg-bg ${featured ? "aspect-[16/7]" : "aspect-[4/3]"}`}>
+          <div className={`relative overflow-hidden border border-border/70 bg-card/15 ${featured ? "aspect-[16/7]" : "aspect-[4/3]"}`}>
             <Image
               src={candidate.cover.previewUrl}
               alt={`Preview of ${candidate.prompt}`}
@@ -98,21 +98,17 @@ function GalleryCard({ candidate, featured }: { candidate: GalleryCandidatePaylo
               className="object-contain p-5 transition-transform duration-300 ease-out group-hover:scale-[1.015] motion-reduce:transition-none"
             />
           </div>
-        ) : (
-          <div className={`grid border-b border-border bg-bg px-6 ${featured ? "min-h-48" : "min-h-36"}`}>
-            <span className="self-end pb-6 font-display text-2xl text-border">MineBench</span>
-          </div>
-        )}
-        <div className="space-y-4 p-5 sm:p-6">
+        ) : null}
+        <div className={`space-y-3 ${candidate.cover?.previewUrl ? "pt-4" : "border-t border-border/70 py-7 sm:py-9"}`}>
           <div className="flex items-center justify-between gap-3 text-xs text-muted">
             <span>{candidate.attribution}</span>
             {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
           </div>
-          <h2 className={`${featured ? "text-2xl sm:text-3xl" : "text-xl"} text-balance font-semibold leading-snug tracking-tight text-fg`}>{candidate.prompt}</h2>
+          <h2 className={`${featured ? "text-2xl sm:text-3xl" : "text-xl"} text-balance font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none`}>{candidate.prompt}</h2>
           {candidate.cover ? <p className="truncate text-sm text-muted">{candidate.cover.model.label}</p> : null}
         </div>
       </Link>
-      <div className="flex items-center justify-between border-t border-border px-3 sm:px-4">
+      <div className="mt-2 flex items-center justify-between">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
         <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted hover:text-fg">Use prompt</Link>
       </div>
@@ -159,15 +155,11 @@ export function GalleryExplore({
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-10 py-4 sm:space-y-14 sm:py-8">
-      <header className="grid gap-7 border-b border-border pb-8 lg:grid-cols-[1fr_auto] lg:items-end">
-        <div className="max-w-3xl">
-          <p className="mb-eyebrow">Gallery</p>
-          <h1 className="mt-3 font-display text-4xl font-semibold tracking-tight text-fg sm:text-5xl lg:text-6xl">Build what comes next.</h1>
-          <p className="mt-4 text-base text-muted">Prompts and worlds from the community.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link href={signedIn ? "/gallery/yours" : "/sign-in?next=/gallery/yours"} className="mb-btn h-11">Yours</Link>
+    <div className="mx-auto w-full max-w-7xl py-4 sm:py-8">
+      <header className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        <h1 className="font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Gallery</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <Link href={signedIn ? "/gallery/yours" : "/sign-in?next=/gallery/yours"} className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-muted hover:text-fg">Yours</Link>
           {signedIn && !suspended ? (
             <button type="button" className="mb-btn mb-btn-primary h-11" onClick={() => setSubmitOpen(true)}>Submit prompt</button>
           ) : !signedIn ? (
@@ -176,21 +168,23 @@ export function GalleryExplore({
         </div>
       </header>
 
-      <div className="flex items-center gap-6 border-b border-border" aria-label="Gallery sorting">
-        <Link href="/gallery" aria-current={sort === "top" ? "page" : undefined} className={`min-h-11 border-b-2 px-1 pt-3 text-sm ${sort === "top" ? "border-fg text-fg" : "border-transparent text-muted hover:text-fg"}`}>Top</Link>
-        <Link href="/gallery?sort=new" aria-current={sort === "new" ? "page" : undefined} className={`min-h-11 border-b-2 px-1 pt-3 text-sm ${sort === "new" ? "border-fg text-fg" : "border-transparent text-muted hover:text-fg"}`}>New</Link>
-      </div>
+      <nav className="mt-10 flex items-center gap-7" aria-label="Gallery sorting">
+        <Link href="/gallery" aria-current={sort === "top" ? "page" : undefined} className={`inline-flex min-h-11 items-center text-sm ${sort === "top" ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}>Top</Link>
+        <Link href="/gallery?sort=new" aria-current={sort === "new" ? "page" : undefined} className={`inline-flex min-h-11 items-center text-sm ${sort === "new" ? "font-semibold text-fg" : "text-muted hover:text-fg"}`}>New</Link>
+      </nav>
 
       {items.length ? (
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-7 grid grid-cols-1 gap-x-5 gap-y-12 md:grid-cols-2 xl:grid-cols-3">
           {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} featured={index === 0} />)}
         </div>
       ) : (
-        <div className="border-y border-border py-20 text-center"><p className="text-lg text-fg">The first prompt is yours.</p></div>
+        <section className="mt-14 py-10 sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">
+          <h2 id="empty-gallery-title" className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">No prompts yet.</h2>
+        </section>
       )}
 
-      {cursor ? <div className="flex justify-center"><button type="button" className="mb-btn h-11 min-w-36" disabled={loading} onClick={() => void loadMore()}>{loading ? "Loading…" : "More"}</button></div> : null}
-      {loadError ? <p role="status" className="text-center text-sm text-danger">{loadError}</p> : null}
+      {cursor ? <div className="mt-12 flex justify-center"><button type="button" className="mb-btn h-11 min-w-36" disabled={loading} onClick={() => void loadMore()}>{loading ? "Loading…" : "More"}</button></div> : null}
+      {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
       <SubmissionDialog open={submitOpen} hasNickname={hasNickname} onClose={() => setSubmitOpen(false)} />
     </div>
   );

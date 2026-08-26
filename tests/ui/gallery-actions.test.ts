@@ -28,5 +28,10 @@ assert.equal(
   false,
   "public dialogs should follow the flat-surface design language",
 );
+assert.equal(
+  ["Build what comes next.", "Prompts and worlds from the community.", "The first prompt is yours.", "Use the prompt, then share your result."].some((copy) => detail.includes(copy) || explore.includes(copy)),
+  false,
+  "Gallery surfaces should avoid generic promotional and empty-state narration",
+);
 
 console.log("Gallery action UI checks passed");
