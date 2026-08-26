@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
+import { GalleryBuildPlaceholder } from "@/components/gallery/GalleryBuildPlaceholder";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import type { GalleryCandidatePayload, GalleryExamplePayload } from "@/lib/gallery/service";
@@ -212,9 +213,11 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
             {examplesError ? <p className="mt-2 text-xs text-danger">{examplesError}</p> : null}
           </div>
         </section>
-      ) : null}
+      ) : (
+        <GalleryBuildPlaceholder className="mt-10 min-h-56 border border-border/80 sm:mt-12 sm:aspect-[16/5]" />
+      )}
 
-      <footer className="mt-12 flex flex-wrap items-center gap-5 text-sm text-muted sm:mt-16">
+      <footer className="mt-8 flex flex-wrap items-center gap-5 text-sm text-muted sm:mt-10">
         {candidate.canRemove ? <button type="button" disabled={removing} className="min-h-11 hover:text-danger disabled:opacity-65" onClick={() => void removeCandidate()}>{removing ? "Removing…" : "Remove prompt"}</button> : null}
         <button type="button" className="min-h-11 hover:text-fg" onClick={() => setReportOpen(true)}>Report</button>
       </footer>

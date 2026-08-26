@@ -50,7 +50,7 @@ const requestModelBody = functionBodyText("customBuildRequestModel");
 const runBody = functionBodyText("runGenerate");
 const stopBody = functionBodyText("stopGenerate");
 const watchBody = functionBodyText("watchCustomBuild");
-const previewBody = functionBodyText("readCustomBuildPreview");
+const completedBuildBody = functionBodyText("readCustomBuildViewer");
 const inputResetEffect = effectBodyTextContaining("lastGenerateInputRef.current === inputSignature");
 const assignIndex = durableBody.indexOf("customBuildAbortRef.current = args.abortController");
 assert.ok(assignIndex >= 0, "durable generation should store the active abort controller");
@@ -68,8 +68,9 @@ assert.ok(
 assert.ok(
   sourceText.includes("function customBuildStatusPath(id: string): string") &&
     durableBody.includes("const statusUrl = customBuildStatusPath(generation.id)") &&
-    durableBody.includes('pageUrl: "/gallery/yours"'),
-  "saved generation watchers should use owner-only application routes",
+    durableBody.includes('pageUrl: `/gallery/yours#${encodeURIComponent(generation.id)}`') &&
+    sourceText.includes("Yours"),
+  "saved generation watchers should link to the exact owner-only result",
 );
 assert.ok(
   sourceText.includes("renderGridSize?: GridSize") &&
@@ -117,10 +118,10 @@ assert.ok(
 );
 assert.ok(
   watchBody.includes("try {") &&
-    watchBody.includes("readCustomBuildPreview") &&
+    watchBody.includes("readCustomBuildViewer") &&
     watchBody.includes("catch") &&
-    watchBody.includes("console.warn(\"Custom build preview unavailable\""),
-  "durable watch should treat preview loading as optional after generation succeeds",
+    watchBody.includes("console.warn(\"Custom build viewer unavailable\""),
+  "durable watch should treat viewer loading as optional after generation succeeds",
 );
 const durableInputGuardIndex = inputResetEffect.indexOf("if (signedIn)");
 const inputResetAbortIndex = inputResetEffect.indexOf("customBuildAbortRef.current?.abort()");
@@ -132,10 +133,11 @@ assert.ok(
   "durable input edits should preserve private links and watchers until another generation starts",
 );
 assert.ok(
-  previewBody.includes("status.previewUrl") &&
-    previewBody.includes("readBuildVariantPayload") &&
-    previewBody.includes('variant: "preview"'),
-  "saved-generation previews should use the shared binary decoder",
+  completedBuildBody.includes("status.viewerUrl") &&
+    completedBuildBody.includes("readBuildVariantPayload") &&
+    completedBuildBody.includes('variant: "full"') &&
+    !completedBuildBody.includes("status.previewUrl"),
+  "successful saved generations should load the full optimized viewer artifact",
 );
 assert.ok(
   runBody.includes("if (!signedIn && !continueTransient)") &&

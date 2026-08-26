@@ -408,18 +408,18 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
-async function readCustomBuildPreview(
+async function readCustomBuildViewer(
   status: SavedGenerationPayload,
   signal?: AbortSignal,
 ): Promise<VoxelBuild | null> {
-  if (!status.previewUrl) return null;
-  const res = await fetch(status.previewUrl, { cache: "no-store", signal, redirect: "follow" });
+  if (!status.viewerUrl) return null;
+  const res = await fetch(status.viewerUrl, { cache: "no-store", signal, redirect: "follow" });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || "Preview unavailable");
+    throw new Error(text || "Viewer unavailable");
   }
   const result = await readBuildVariantPayload(res, {
-    fallbackIdentity: { buildId: status.id, variant: "preview", checksum: status.sha256 },
+    fallbackIdentity: { buildId: status.id, variant: "full", checksum: status.sha256 },
   });
   return result.payload.voxelBuild as VoxelBuild;
 }
@@ -752,7 +752,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
   function applyCustomBuildStatus(args: {
     model: SelectedLiveModel;
     status: SavedGenerationPayload;
-    preview?: unknown | null;
+    build?: unknown | null;
     pageUrl?: string;
     statusUrl?: string;
     eventsUrl?: string;
@@ -792,7 +792,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         next.set(args.model.id, {
           ...base,
           status: "success",
-          voxelBuild: args.preview ?? existing?.voxelBuild ?? null,
+          voxelBuild: args.build ?? existing?.voxelBuild ?? null,
           metrics: customBuildMetrics(args.status),
         });
         return next;
@@ -827,19 +827,19 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
           eventsUrl: args.eventsUrl,
         });
         try {
-          const preview = await readCustomBuildPreview(status, args.signal);
+          const viewer = await readCustomBuildViewer(status, args.signal);
           if (args.signal.aborted) return;
           applyCustomBuildStatus({
             model: args.model,
             status,
-            preview,
+            build: viewer,
             pageUrl: args.pageUrl,
             statusUrl: args.statusUrl,
             eventsUrl: args.eventsUrl,
           });
         } catch (err) {
           if (err instanceof Error && err.name === "AbortError") return;
-          console.warn("Custom build preview unavailable", err);
+          console.warn("Custom build viewer unavailable", err);
         }
         return;
       }
@@ -910,7 +910,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
           attempt: 1,
           startedAt: existing?.startedAt ?? Date.now(),
           customBuildId: generation.id,
-          customBuildPageUrl: "/gallery/yours",
+          customBuildPageUrl: `/gallery/yours#${encodeURIComponent(generation.id)}`,
           customBuildStatusUrl: customBuildStatusPath(generation.id),
           renderGridSize: gridSize,
           renderPalette: palette,
@@ -927,7 +927,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         return watchCustomBuild({
           model,
           statusUrl,
-          pageUrl: "/gallery/yours",
+          pageUrl: `/gallery/yours#${encodeURIComponent(generation.id)}`,
           eventsUrl: "",
           signal: args.abortController.signal,
         }).catch((err) => {
@@ -1303,10 +1303,8 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
               <a
                 className="mb-btn mb-btn-ghost h-8 px-3 text-xs"
                 href={r.customBuildPageUrl}
-                target="_blank"
-                rel="noreferrer"
               >
-                Open
+                Yours
               </a>
             ) : null}
             {r?.customBuildDownloadUrl ? (

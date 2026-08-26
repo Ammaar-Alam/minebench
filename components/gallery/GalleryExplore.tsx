@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
+import { GalleryBuildPlaceholder } from "@/components/gallery/GalleryBuildPlaceholder";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 
 function SubmissionDialog({
@@ -62,7 +63,7 @@ function SubmissionDialog({
       <form onSubmit={submit} className="space-y-6 p-6 sm:p-7">
         <div>
           <p className="mb-eyebrow">Gallery</p>
-          <h2 id="submit-prompt-title" className="mt-2 text-2xl font-semibold tracking-tight">Submit prompt</h2>
+          <h2 id="submit-prompt-title" className="mt-2 text-2xl font-semibold tracking-tight">Add prompt</h2>
         </div>
         <label className="block space-y-2">
           <span className="text-sm font-medium">Prompt</span>
@@ -75,7 +76,7 @@ function SubmissionDialog({
         {!hasNickname && !anonymous ? <p className="text-sm text-muted">Choose a public name in Account.</p> : null}
         {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
         <div className="grid gap-2 sm:grid-cols-2">
-          <button type="submit" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-11">{pending ? "Submitting…" : "Submit"}</button>
+          <button type="submit" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-11">{pending ? "Adding…" : "Add"}</button>
           <button type="button" className="mb-btn h-11" onClick={onClose}>Cancel</button>
         </div>
       </form>
@@ -83,32 +84,32 @@ function SubmissionDialog({
   );
 }
 
-function GalleryCard({ candidate, featured }: { candidate: GalleryCandidatePayload; featured: boolean }) {
+function GalleryCard({ candidate }: { candidate: GalleryCandidatePayload }) {
   return (
-    <article className={`group min-w-0 ${featured ? "md:col-span-2" : ""}`}>
-      <Link href={`/gallery/${candidate.id}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+    <article className="group flex min-w-0 flex-col border border-border/80 bg-card/10">
+      <Link href={`/gallery/${candidate.id}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
-          <div className={`relative overflow-hidden border border-border/70 bg-card/15 ${featured ? "aspect-[16/7]" : "aspect-[4/3]"}`}>
+          <div className="relative aspect-[16/10] overflow-hidden border-b border-border/70 bg-card/15">
             <Image
               src={candidate.cover.previewUrl}
-              alt={`Preview of ${candidate.prompt}`}
+              alt=""
               fill
               unoptimized
-              sizes={featured ? "(min-width: 768px) 66vw, 100vw" : "(min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"}
+              sizes="(min-width: 768px) 50vw, 100vw"
               className="object-contain p-5 transition-transform duration-300 ease-out group-hover:scale-[1.015] motion-reduce:transition-none"
             />
           </div>
-        ) : null}
-        <div className={`space-y-3 ${candidate.cover?.previewUrl ? "pt-4" : "border-t border-border/70 py-7 sm:py-9"}`}>
+        ) : <GalleryBuildPlaceholder className="aspect-[16/10] border-b border-border/70" />}
+        <div className="flex flex-1 flex-col gap-3 p-5 sm:p-6">
           <div className="flex items-center justify-between gap-3 text-xs text-muted">
             <span>{candidate.attribution}</span>
             {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
           </div>
-          <h2 className={`${featured ? "text-2xl sm:text-3xl" : "text-xl"} text-balance font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none`}>{candidate.prompt}</h2>
-          {candidate.cover ? <p className="truncate text-sm text-muted">{candidate.cover.model.label}</p> : null}
+          <h2 className="text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none sm:text-2xl">{candidate.prompt}</h2>
+          {candidate.cover ? <p className="mt-auto truncate pt-3 text-sm text-muted">{candidate.cover.model.label}</p> : null}
         </div>
       </Link>
-      <div className="mt-2 flex items-center justify-between">
+      <div className="flex items-center justify-between border-t border-border/70 px-3 py-2">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
         <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted hover:text-fg">Use prompt</Link>
       </div>
@@ -161,7 +162,7 @@ export function GalleryExplore({
         <div className="flex flex-wrap items-center gap-3">
           <Link href={signedIn ? "/gallery/yours" : "/sign-in?next=/gallery/yours"} className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-muted hover:text-fg">Yours</Link>
           {signedIn && !suspended ? (
-            <button type="button" className="mb-btn mb-btn-primary h-11" onClick={() => setSubmitOpen(true)}>Submit prompt</button>
+            <button type="button" className="mb-btn mb-btn-primary h-11" onClick={() => setSubmitOpen(true)}>Add prompt</button>
           ) : !signedIn ? (
             <Link href="/sign-in?next=/gallery" className="mb-btn mb-btn-primary h-11">Sign in</Link>
           ) : null}
@@ -174,8 +175,8 @@ export function GalleryExplore({
       </nav>
 
       {items.length ? (
-        <div className="mt-7 grid grid-cols-1 gap-x-5 gap-y-12 md:grid-cols-2 xl:grid-cols-3">
-          {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} featured={index === 0} />)}
+        <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2">
+          {items.map((candidate) => <GalleryCard key={candidate.id} candidate={candidate} />)}
         </div>
       ) : (
         <section className="mt-14 py-10 sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">

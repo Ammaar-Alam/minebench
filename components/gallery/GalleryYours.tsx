@@ -5,14 +5,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
 
-function bytes(value: number | null): string {
-  if (value == null) return "—";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function statusLabel(value: SavedGenerationPayload["status"]): string {
+  if (value === "succeeded") return "Ready";
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
@@ -93,10 +87,6 @@ function GenerationActions({
       };
       if (!response.ok || !body.candidate) throw new Error(body.error?.message ?? "Generation could not be submitted.");
       if (body.created === false) {
-        if (!window.confirm("This prompt is already in Gallery. Add this generation as an example?")) {
-          setPending(false);
-          return;
-        }
         const exampleResponse = await fetch(
           `/api/gallery/candidates/${encodeURIComponent(body.candidate.id)}/examples`,
           {
@@ -106,9 +96,9 @@ function GenerationActions({
           },
         );
         const exampleBody = (await exampleResponse.json().catch(() => null)) as {
-          error?: { message?: string };
+          error?: { code?: string; message?: string };
         } | null;
-        if (!exampleResponse.ok) {
+        if (!exampleResponse.ok && exampleBody?.error?.code !== "already_attached") {
           throw new Error(exampleBody?.error?.message ?? "Example could not be added.");
         }
       }
@@ -123,8 +113,8 @@ function GenerationActions({
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2">
         {(generation.status === "queued" || generation.status === "running") ? <button type="button" disabled={pending} className="mb-btn h-10" onClick={() => void cancel()}>Stop</button> : null}
-        {generation.status === "succeeded" && !suspended ? <button type="button" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-10" onClick={() => void submit()}>Submit</button> : null}
-        {generation.downloadUrl ? <a className="mb-btn h-10" href={generation.downloadUrl}>Download JSON</a> : null}
+        {generation.status === "succeeded" && !suspended ? <button type="button" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-10" onClick={() => void submit()}>Add to Gallery</button> : null}
+        {generation.downloadUrl ? <a aria-label="Download JSON" className="mb-btn h-10" href={generation.downloadUrl}>Download</a> : null}
         <button type="button" disabled={pending} className="mb-btn h-10 text-muted hover:text-danger" onClick={() => void remove()}>Remove</button>
       </div>
       {generation.status === "succeeded" && !suspended ? <label className="flex min-h-10 items-center gap-2 text-xs text-muted"><input type="checkbox" checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} />Post anonymously</label> : null}
@@ -186,16 +176,14 @@ export function GalleryYours({
         <div><Link href="/gallery" className="mb-eyebrow hover:text-fg">Gallery</Link><h1 className="mt-2 font-display text-3xl font-semibold tracking-tight text-fg sm:text-4xl">Yours</h1></div>
         <div className="flex gap-2"><Link href="/gallery" className="mb-btn h-11">Explore</Link><Link href="/sandbox?mode=live" className="mb-btn mb-btn-primary h-11">Generate</Link></div>
       </header>
-      {suspended ? <div className="mt-10 border-l-2 border-danger pl-4"><p className="font-semibold text-fg">Account suspended</p><p className="mt-1 text-sm text-muted">Private generations remain available.</p></div> : null}
+      {suspended ? <div className="mt-10 border border-danger/40 bg-danger/5 px-4 py-3"><p className="font-semibold text-fg">Account suspended</p><p className="mt-1 text-sm text-muted">Private generations remain available.</p></div> : null}
 
       <div className="mt-10 divide-y divide-border/70">
         {items.map((generation) => (
-          <article key={generation.id} className="grid gap-6 py-6 lg:grid-cols-[14rem_minmax(0,1fr)_auto] lg:items-start">
+          <article id={generation.id} key={generation.id} className="grid scroll-mt-24 gap-6 py-6 lg:grid-cols-[14rem_minmax(0,1fr)_auto] lg:items-start">
             {generation.thumbnailUrl ? <div className="relative aspect-[4/3] border border-border bg-bg"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="14rem" className="object-contain p-3" /></div> : <div className="grid aspect-[4/3] border border-border bg-bg text-center text-sm text-muted"><span className="self-center">{statusLabel(generation.status)}</span></div>}
             <div className="min-w-0 space-y-4">
-              <div><div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span></div><h2 className="mt-2 text-xl font-semibold leading-snug text-fg">{generation.prompt}</h2>{generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}</div>
-              {generation.status === "succeeded" ? <dl className="grid gap-x-5 gap-y-3 text-xs sm:grid-cols-3"><div><dt className="text-muted">Blocks</dt><dd className="mt-1 text-fg">{generation.blockCount?.toLocaleString() ?? "—"}</dd></div><div><dt className="text-muted">Expanded JSON</dt><dd className="mt-1 text-fg">{bytes(generation.expandedBytes)}</dd></div><div><dt className="text-muted">Stored</dt><dd className="mt-1 text-fg">{bytes(generation.storedBytes)}</dd></div></dl> : null}
-              {generation.sha256 ? <p className="break-all font-mono text-[11px] leading-5 text-muted">SHA-256 {generation.sha256}</p> : null}
+              <div><div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span>{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}</div><h2 className="mt-2 text-xl font-semibold leading-snug text-fg">{generation.prompt}</h2>{generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}</div>
             </div>
             <GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} />
           </article>

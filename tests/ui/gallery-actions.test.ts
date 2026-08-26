@@ -15,9 +15,17 @@ assert.ok(
 );
 assert.ok(
   yours.includes("body.created === false") &&
-    yours.includes("Add this generation as an example?") &&
-    yours.includes("/examples`"),
-  "duplicate prompt submission should offer an explicit example contribution",
+    yours.includes("/examples`") &&
+    yours.includes("Add to Gallery") &&
+    !yours.includes("Add this generation as an example?") &&
+    !yours.includes(">Download JSON<"),
+  "one explicit Gallery action should attach a saved build without a second confirmation",
+);
+assert.ok(
+  explore.includes("GalleryBuildPlaceholder") &&
+    explore.includes("candidate.cover?.previewUrl") &&
+    !explore.includes("featured"),
+  "every Gallery candidate should retain a clear media frame without fake build imagery",
 );
 assert.ok(
   page.includes("key={sort}"),
