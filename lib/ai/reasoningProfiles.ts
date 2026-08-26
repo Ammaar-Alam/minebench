@@ -126,7 +126,7 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
   },
   { ids: ["moonshotai/kimi-k3"], ladder: ["max"] },
   {
-    ids: ["glm-5.3", "z-ai/glm-5.3"],
+    ids: ["glm-5.3", "z-ai/glm-5.3", "glm-5.3-flash", "z-ai/glm-5.3-flash"],
     ladder: ["max", "high", "low"],
     aliases: { xhigh: null },
     supported: "max, xhigh, high, low",
@@ -230,6 +230,8 @@ export function modelRequiresReasoning(modelId: string): boolean {
     normalized === "x-ai/grok-4.6" ||
     normalized === "glm-5.3" ||
     normalized === "z-ai/glm-5.3" ||
+    normalized === "glm-5.3-flash" ||
+    normalized === "z-ai/glm-5.3-flash" ||
     normalized === "google/gemini-3.7-flash" ||
     normalized === "muse-spark-1.2" ||
     normalized === "meta/muse-spark-1.2"

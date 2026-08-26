@@ -1,5 +1,8 @@
 import { withMaxOutputTokens } from "@/lib/ai/providers/shared";
-import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
+import {
+  modelRecommendedTopP,
+  modelUsesDefaultSampling,
+} from "@/lib/ai/modelRequestProfiles";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
@@ -142,6 +145,10 @@ function openRouterTemperaturePayload(modelId: string, temperature?: number): { 
   return { temperature: temperature ?? 0.2 };
 }
 
+function openRouterTopPPayload(topP?: number): { top_p?: number } {
+  return topP === undefined ? {} : { top_p: topP };
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -201,7 +208,7 @@ export async function openrouterGenerateText(params: {
   const maxTokens = params.maxOutputTokens ?? 8192;
   const responseFormat = !params.jsonSchema
     ? undefined
-    : params.modelId === "z-ai/glm-5.3"
+    : params.modelId === "z-ai/glm-5.3" || params.modelId === "z-ai/glm-5.3-flash"
       ? { type: "json_object" }
       : {
           type: "json_schema",
@@ -285,6 +292,7 @@ export async function openrouterGenerateText(params: {
                   : {}),
                 stream: Boolean(params.onDelta),
                 ...openRouterTemperaturePayload(params.modelId, params.temperature),
+                ...openRouterTopPPayload(modelRecommendedTopP(params.modelId)),
                 max_tokens: tok,
                 reasoning: reasoningConfig,
                 ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),

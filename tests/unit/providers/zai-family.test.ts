@@ -11,6 +11,7 @@ import {
   assertTraceLine,
   runGeneration,
   runProviderConfigTest,
+  validBuildJson,
 } from "../../helpers/providerConfigHarness";
 
 runProviderConfigTest("zai family", {
@@ -157,6 +158,73 @@ runProviderConfigTest("zai family", {
     "OpenRouter trace should report the 131072-token cap and the GLM 5.3 effort ladder",
     ["disabled"],
   );
+
+  const flash = assertCatalogEntry({
+    key: "zai_glm_5_3_flash",
+    provider: "zai",
+    modelId: "glm-5.3-flash",
+    displayName: "Z.AI GLM 5.3 Flash",
+    openRouterModelId: "z-ai/glm-5.3-flash",
+    slug: "glm-5-3-flash",
+  });
+  assert.equal(modelRequiresReasoning(flash.modelId), true);
+  assert.equal(modelRequiresReasoning(flash.openRouterModelId!), true);
+  assert.deepEqual(zaiReasoningEffortAttempts(flash.modelId), ["max", "high", "low"]);
+  assert.deepEqual(openRouterReasoningEffortAttempts(flash.openRouterModelId!), [
+    "max",
+    "high",
+    "low",
+  ]);
+  assert.deepEqual(getModelBenchmarkProfile(flash.key)?.parameters, [
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Temperature 1 · Top P 0.95" },
+  ]);
+
+  capture.respondWith((request) => {
+    if (request.body.model !== flash.modelId || request.body.stream !== true) return null;
+    return new Response(
+      `data: ${JSON.stringify({ choices: [{ delta: { content: validBuildJson() } }] })}\n\ndata: [DONE]\n\n`,
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
+  });
+  const flashDirect = await runGeneration(capture, {
+    modelKey: flash.key,
+    providerKeys: {},
+    allowServerKeys: true,
+  });
+  capture.respondWith(null);
+  const flashDirectRequest = flashDirect.requests.find((request) =>
+    request.url.includes("zai.test"),
+  );
+  assert.ok(flashDirectRequest, "Direct GLM 5.3 Flash request should be captured");
+  assert.equal(flashDirectRequest.body.model, "glm-5.3-flash");
+  assert.equal(flashDirectRequest.body.max_tokens, 131_072);
+  assert.equal(flashDirectRequest.body.temperature, 1);
+  assert.equal(flashDirectRequest.body.top_p, 0.95);
+  assert.equal(flashDirectRequest.body.stream, true);
+  assert.equal(flashDirectRequest.headers.accept, "text/event-stream");
+  assert.equal(flashDirectRequest.body.reasoning_effort, "max");
+  assert.deepEqual(flashDirectRequest.body.thinking, {
+    type: "enabled",
+    clear_thinking: false,
+  });
+  assert.deepEqual(flashDirectRequest.body.response_format, { type: "json_object" });
+
+  const flashOpenRouter = await runGeneration(capture, {
+    modelKey: flash.key,
+    providerKeys: { openrouter: "test-openrouter-key" },
+    preferOpenRouter: true,
+  });
+  const flashOpenRouterRequest = flashOpenRouter.requests.find((request) =>
+    request.url.includes("openrouter.test"),
+  )?.body;
+  assert.ok(flashOpenRouterRequest, "OpenRouter GLM 5.3 Flash request should be captured");
+  assert.equal(flashOpenRouterRequest.model, "z-ai/glm-5.3-flash");
+  assert.equal(flashOpenRouterRequest.max_tokens, 131_072);
+  assert.equal(flashOpenRouterRequest.temperature, 1);
+  assert.equal(flashOpenRouterRequest.top_p, 0.95);
+  assert.deepEqual(flashOpenRouterRequest.reasoning, { effort: "max" });
+  assert.deepEqual(flashOpenRouterRequest.response_format, { type: "json_object" });
 
   const glm52 = assertCatalogEntry({
     key: "zai_glm_5_2",
