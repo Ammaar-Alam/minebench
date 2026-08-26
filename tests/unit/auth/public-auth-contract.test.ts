@@ -91,7 +91,8 @@ assert.match(accountPage, /id="ranking-title"/);
 assert.equal(existsSync("app/account/loading.tsx"), false);
 
 const personalRankingView = readFileSync("app/account/PersonalRanking.tsx", "utf8");
-assert.match(personalRankingView, /max-h-\[min\(32rem,55dvh\)\]/);
+assert.match(personalRankingView, /max-h-80/);
+assert.match(personalRankingView, /sm:max-h-\[22\.75rem\]/);
 assert.match(personalRankingView, /sticky top-0/);
 assert.match(personalRankingView, /overflow-y-auto/);
 assert.doesNotMatch(personalRankingView, /Ties count|Early signal/);

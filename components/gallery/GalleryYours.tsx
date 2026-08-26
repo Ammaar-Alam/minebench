@@ -247,13 +247,13 @@ function SavedBuildDialog({
     <dialog
       ref={dialogRef}
       aria-labelledby="saved-build-dialog-title"
-      className="mb-card-enter m-auto max-h-[calc(100dvh-1rem)] w-[min(80rem,calc(100%-1rem))] overflow-hidden rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/60 sm:max-h-[calc(100dvh-2rem)] sm:w-[min(80rem,calc(100%-2rem))]"
+      className="mb-card-enter m-auto w-[calc(100%-2rem)] max-w-3xl overflow-hidden rounded-md border-0 bg-card p-0 text-fg ring-1 ring-border-xl backdrop:bg-bg/60 backdrop:backdrop-blur-sm"
       onCancel={(event) => { event.preventDefault(); onClose(); }}
       onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
       onClose={onClose}
     >
-      <div className="flex max-h-[inherit] flex-col">
-        <header className="flex items-start justify-between gap-4 border-b border-border/70 px-4 py-3 sm:px-5 sm:py-4">
+      <div className="flex max-h-[min(86vh,1060px)] flex-col">
+        <header className="flex items-start justify-between gap-2 border-b border-border/60 px-3 py-3 sm:gap-3 sm:px-4">
           <div className="min-w-0">
             <p className="mb-eyebrow">Saved build</p>
             <h2 id="saved-build-dialog-title" className="mt-1 truncate text-lg font-semibold tracking-tight sm:text-xl">{generation.prompt}</h2>
@@ -261,7 +261,7 @@ function SavedBuildDialog({
           </div>
           <button type="button" autoFocus className="mb-btn mb-btn-ghost h-9 shrink-0 px-3 text-xs" onClick={onClose}>Close <span className="ml-1 mb-kbd">Esc</span></button>
         </header>
-        <div className="overflow-y-auto p-2 sm:p-4">
+        <div className="min-h-0 overflow-y-auto px-4 py-4">
           <VoxelViewerCard
             title={generation.model.label}
             voxelBuild={build}

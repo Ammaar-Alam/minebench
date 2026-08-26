@@ -40,8 +40,11 @@ assert.ok(
   "every Gallery candidate should retain a clear media frame without fake build imagery",
 );
 assert.ok(
-  page.includes("key={sort}"),
-  "Top and New should remount with their own server-provided result set",
+  !page.includes("key={sort}") &&
+    explore.includes("changeSort") &&
+    explore.includes("window.history.replaceState") &&
+    explore.includes("key={activeSort}"),
+  "Top and New should replace only the Gallery results and animate the new grid",
 );
 assert.ok(
   account.includes("<GalleryYours") &&

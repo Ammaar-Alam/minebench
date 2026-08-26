@@ -31,7 +31,6 @@ export default async function GalleryPage({ searchParams }: { searchParams: Prom
   });
   return (
     <GalleryExplore
-      key={sort}
       initialItems={page.items}
       initialCursor={page.nextCursor}
       sort={sort}

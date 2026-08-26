@@ -136,16 +136,42 @@ export function GalleryExplore({
 }) {
   const [items, setItems] = useState(initialItems);
   const [cursor, setCursor] = useState(initialCursor);
+  const [activeSort, setActiveSort] = useState(sort);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
+
+  useEffect(() => {
+    setItems(initialItems);
+    setCursor(initialCursor);
+    setActiveSort(sort);
+  }, [initialCursor, initialItems, sort]);
+
+  async function changeSort(nextSort: "top" | "new") {
+    if (nextSort === activeSort || loading) return;
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const response = await fetch(`/api/gallery/candidates?sort=${nextSort}`, { cache: "no-store" });
+      const page = (await response.json()) as { items: GalleryCandidatePayload[]; nextCursor: string | null };
+      if (!response.ok) throw new Error("Gallery unavailable");
+      setItems(page.items);
+      setCursor(page.nextCursor);
+      setActiveSort(nextSort);
+      window.history.replaceState(window.history.state, "", nextSort === "new" ? "/gallery?sort=new" : "/gallery");
+    } catch {
+      setLoadError("Gallery unavailable");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function loadMore() {
     if (!cursor || loading) return;
     setLoading(true);
     setLoadError(null);
     try {
-      const response = await fetch(`/api/gallery/candidates?sort=${sort}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
+      const response = await fetch(`/api/gallery/candidates?sort=${activeSort}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
       const page = (await response.json()) as { items: GalleryCandidatePayload[]; nextCursor: string | null };
       if (!response.ok) throw new Error("Gallery unavailable");
       setItems((current) => [...current, ...page.items]);
@@ -172,19 +198,31 @@ export function GalleryExplore({
       </header>
 
       <nav className="mt-10 flex items-center gap-7" aria-label="Gallery sorting">
-        <Link href="/gallery" aria-current={sort === "top" ? "page" : undefined} className={`inline-flex min-h-11 items-center border-b-2 text-sm transition-colors motion-reduce:transition-none ${sort === "top" ? "border-fg font-semibold text-fg" : "border-transparent text-muted hover:text-fg"}`}>Top</Link>
-        <Link href="/gallery?sort=new" aria-current={sort === "new" ? "page" : undefined} className={`inline-flex min-h-11 items-center border-b-2 text-sm transition-colors motion-reduce:transition-none ${sort === "new" ? "border-fg font-semibold text-fg" : "border-transparent text-muted hover:text-fg"}`}>New</Link>
+        {(["top", "new"] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            disabled={loading}
+            aria-current={activeSort === option ? "page" : undefined}
+            className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
+            onClick={() => void changeSort(option)}
+          >
+            {option}
+          </button>
+        ))}
       </nav>
 
-      {items.length ? (
-        <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-          {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} />)}
-        </div>
-      ) : (
-        <section className="mt-14 py-10 sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">
-          <h2 id="empty-gallery-title" className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">No prompts yet.</h2>
-        </section>
-      )}
+      <div key={activeSort} className="mb-fade-in">
+        {items.length ? (
+          <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} />)}
+          </div>
+        ) : (
+          <section className="mt-14 py-10 sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">
+            <h2 id="empty-gallery-title" className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">No prompts yet.</h2>
+          </section>
+        )}
+      </div>
 
       {cursor ? <div className="mt-12 flex justify-center"><button type="button" className="mb-btn h-11 min-w-36" disabled={loading} onClick={() => void loadMore()}>{loading ? "Loading…" : "More"}</button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
