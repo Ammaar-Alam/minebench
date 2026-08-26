@@ -274,7 +274,10 @@ function SavedBuildDialog({
             exportLabel={generation.model.label}
             exportPrompt={generation.prompt}
             viewerRef={viewerRef}
-            headerMeta={generation.expandedBytes != null ? `${formatBytes(generation.expandedBytes)} JSON` : undefined}
+            headerMeta={[
+              generation.expandedBytes != null ? `${formatBytes(generation.expandedBytes)} JSON` : null,
+              generation.storedBytes != null ? `${formatBytes(generation.storedBytes)} stored` : null,
+            ].filter(Boolean).join(" · ") || undefined}
             actions={build && !loading ? (
               <>
                 <GenerationDownloadButton generation={generation} compact onError={setDownloadError} />
@@ -294,6 +297,7 @@ function SavedBuildDialog({
             ) : undefined}
           />
           {downloadError ? <p role="status" className="mt-2 px-1 text-sm text-danger">{downloadError}</p> : null}
+          {generation.sha256 ? <p className="mt-3 break-all px-1 font-mono text-xs text-muted">SHA-256 {generation.sha256}</p> : null}
         </div>
       </div>
     </dialog>
@@ -366,7 +370,7 @@ export function GalleryYours({
                 <div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span><time dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time></div>
                 <h3 className={`mt-2 text-xl font-semibold leading-snug text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
                 {generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}
-                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{generation.expandedBytes != null ? <span>{formatBytes(generation.expandedBytes)} JSON</span> : null}</div> : null}
+                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{generation.expandedBytes != null ? <span>{formatBytes(generation.expandedBytes)} JSON</span> : null}{generation.storedBytes != null ? <span>{formatBytes(generation.storedBytes)} stored</span> : null}</div> : null}
               </div>
             </button>
             <div className="mt-5 md:ml-48"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>

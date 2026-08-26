@@ -396,6 +396,7 @@ export async function runCustomBuildGenerateJob(
       blockCount: generated.blockCount,
       encoding: "gzip",
     });
+    artifactsPersisted = true;
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
 
     throwIfCustomBuildLeaseLost(opts.signal);
@@ -540,6 +541,9 @@ export async function runCustomBuildGenerateJob(
           errorCode: failure.code,
           errorMessage: failure.message,
           errorRetryable: false,
+          objectsDeletedAt: null,
+          deletionPendingAt: new Date(),
+          deletionError: null,
         },
       });
       if (failed.count !== 1) throw new CustomBuildLeaseLostError();

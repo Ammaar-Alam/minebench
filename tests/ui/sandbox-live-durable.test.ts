@@ -93,6 +93,12 @@ assert.ok(
   "one signed-in request should create and watch one saved generation per selected model",
 );
 assert.ok(
+  runBody.includes("selectGenerationProviderKeys") &&
+    durableBody.includes("providerKeys: args.providerKeys") &&
+    !runBody.includes('setKey("anthropic"'),
+  "saved generation requests should send only credentials selected by their model routes",
+);
+assert.ok(
   requestModelBody.includes("id: model.id"),
   "saved-generation requests should include the selected model identity required by the API",
 );
@@ -157,6 +163,14 @@ assert.ok(
     !sourceText.includes('"Generating…"') &&
     !sourceText.includes("DURABLE_CUSTOM_BUILDS_ENABLED"),
   "preflight continuation and renderer-owned saved build actions should remain visible without duplicate page controls",
+);
+assert.ok(
+  sourceText.includes("downloadSavedGenerationJson") &&
+    !sourceText.includes("href={r.customBuildDownloadUrl}") &&
+    sourceText.includes("submittedPrompt") &&
+    sourceText.includes("promptText={r?.submittedPrompt ?? prompt}") &&
+    sourceText.includes("exportPrompt={resultPrompt}"),
+  "durable exports should expand stored JSON and retain the submitted prompt snapshot",
 );
 
 console.log("sandbox saved-generation contract checks passed");

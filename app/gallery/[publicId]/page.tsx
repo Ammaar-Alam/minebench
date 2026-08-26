@@ -21,7 +21,7 @@ export async function generateMetadata({ params }: { params: Promise<{ publicId:
 }
 
 export default async function GalleryDetailPage({ params }: { params: Promise<{ publicId: string }> }) {
-  const [cookieStore, account] = await Promise.all([cookies(), getCurrentAccount()]);
+  const [cookieStore, account] = await Promise.all([cookies(), getCurrentAccount().catch(() => null)]);
   const candidate = await getGalleryCandidate((await params).publicId, {
     sessionId: cookieStore.get(ARENA_SESSION_COOKIE)?.value ?? null,
     userId: account?.id,

@@ -36,37 +36,50 @@ export async function purgeDueGalleryRecords(
     take: limit,
     select: {
       id: true,
-      artifacts: { select: { id: true, bucket: true, path: true } },
+      galleryExamples: {
+        where: { previewRetained: true, purgeAt: { gt: now } },
+        select: { id: true },
+      },
+      artifacts: { select: { id: true, kind: true, bucket: true, path: true } },
     },
   });
 
   let objectsDeleted = 0;
   let objectDeletionFailures = 0;
   for (const build of pendingBuilds) {
+    const retainPreview = build.galleryExamples.length > 0;
+    const artifacts = retainPreview
+      ? build.artifacts.filter((artifact) => artifact.kind !== "preview_svg")
+      : build.artifacts;
     try {
-      for (const artifact of build.artifacts) {
+      for (const artifact of artifacts) {
         await removeObject(artifact);
       }
       await prisma.$transaction(async (tx) => {
         await tx.customBuildArtifact.deleteMany({
-          where: { id: { in: build.artifacts.map((artifact) => artifact.id) } },
+          where: { id: { in: artifacts.map((artifact) => artifact.id) } },
         });
         const remaining = await tx.customBuildArtifact.aggregate({
           where: { customBuildId: build.id },
           _sum: { storedByteSize: true },
           _count: true,
         });
+        const cleanupPending = retainPreview
+          ? (await tx.customBuildArtifact.count({
+              where: { customBuildId: build.id, kind: { not: "preview_svg" } },
+            })) > 0
+          : remaining._count > 0;
         await tx.customBuild.update({
           where: { id: build.id },
           data: {
             storedByteSize: remaining._sum.storedByteSize ?? 0,
-            objectsDeletedAt: remaining._count === 0 ? now : null,
-            deletionPendingAt: remaining._count === 0 ? null : now,
-            deletionError: remaining._count === 0 ? null : "Artifact cleanup pending.",
+            objectsDeletedAt: cleanupPending ? null : now,
+            deletionPendingAt: cleanupPending ? now : null,
+            deletionError: cleanupPending ? "Artifact cleanup pending." : null,
           },
         });
       });
-      objectsDeleted += build.artifacts.length;
+      objectsDeleted += artifacts.length;
     } catch (error) {
       objectDeletionFailures += 1;
       await prisma.customBuild.update({
@@ -101,7 +114,7 @@ export async function purgeDueGalleryRecords(
 
   const candidateIds = await prisma.galleryCandidate.findMany({
     where: {
-      removedAt: { not: null },
+      OR: [{ removedAt: { not: null } }, { adminHiddenAt: { not: null } }],
       purgeAt: { lte: now },
       selectedAt: null,
       officialPromptId: null,
@@ -113,7 +126,7 @@ export async function purgeDueGalleryRecords(
   const candidates = await prisma.galleryCandidate.deleteMany({
     where: {
       id: { in: candidateIds.map(({ id }) => id) },
-      removedAt: { not: null },
+      OR: [{ removedAt: { not: null } }, { adminHiddenAt: { not: null } }],
       purgeAt: { lte: now },
       selectedAt: null,
       officialPromptId: null,

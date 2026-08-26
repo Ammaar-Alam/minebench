@@ -58,11 +58,30 @@ async function main() {
     assert.equal((await getSavedGeneration(ownerId, created[0]!.id))?.prompt, "A tiny observatory");
     assert.equal((await listSavedGenerations(ownerId, { limit: 10 })).items.length, 2);
 
+    await db.customBuildArtifact.create({
+      data: {
+        customBuildId: rows[1]!.id,
+        kind: "preview_svg",
+        format: "svg",
+        bucket: "builds",
+        path: `gallery/${suffix}/cancel-race.svg`,
+        contentType: "image/svg+xml",
+        fileName: "preview.svg",
+        sha256: "c".repeat(64),
+        sourceBuildSha256: "d".repeat(64),
+        byteSize: 10,
+        storedByteSize: 10,
+      },
+    });
     const canceled = await cancelSavedGeneration(ownerId, created[1]!.id);
     assert.equal(canceled.status, "canceled");
     assert.equal(
       await db.customBuildSecret.count({ where: { customBuildId: rows[1]!.id } }),
       0,
+    );
+    assert.ok(
+      (await db.customBuild.findUniqueOrThrow({ where: { id: rows[1]!.id } })).deletionPendingAt,
+      "canceling a generation with recorded artifacts should schedule their cleanup",
     );
 
     const removable = await createSavedGenerations({

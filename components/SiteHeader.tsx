@@ -133,7 +133,7 @@ function AccountLink({ quiet = false }: { quiet?: boolean }) {
 
   useEffect(() => {
     setSignedIn(active || hasSupabaseAuthCookie(document.cookie));
-  }, [active]);
+  }, [active, pathname]);
 
   const label = signedIn ? "Account" : "Sign in";
   return (

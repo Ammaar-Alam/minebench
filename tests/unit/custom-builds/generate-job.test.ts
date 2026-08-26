@@ -51,6 +51,7 @@ let txSeq = 0;
 let failEventWrites = false;
 let failSuccessBookkeeping = false;
 let cancelDuringArtifactRecord = false;
+let failArtifactKind: string | null = null;
 
 const fakePrisma = {
   customBuild: {
@@ -76,7 +77,9 @@ const fakePrisma = {
   },
   customBuildArtifact: {
     findFirst: async () => artifactCreates.find((artifact) => artifact.kind === "build_json") ?? null,
+    findUnique: async () => null,
     upsert: async (args: { create: Record<string, unknown> }) => {
+      if (args.create.kind === failArtifactKind) throw new Error("artifact bookkeeping unavailable");
       const index = artifactCreates.findIndex((artifact) =>
         artifact.kind === args.create.kind &&
         artifact.sourceBuildSha256 === args.create.sourceBuildSha256
@@ -352,6 +355,45 @@ async function main() {
   assert.equal(artifactFailureUpdate.data.errorCode, "artifact_persistence_failed");
   assert.equal(artifactFailureUpdate.data.errorRetryable, false);
   process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-generate-job";
+
+  updates.length = 0;
+  operations.length = 0;
+  artifactCreates.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
+  currentCustomBuild = queuedCustomBuild;
+  failArtifactKind = "preview_mbv4";
+  try {
+    await assert.rejects(
+      runCustomBuildGenerateJob({
+        id: "partial-artifact-failure-job-row",
+        customBuildId,
+        type: "generate",
+        status: "running",
+        attempts: 1,
+        maxAttempts: 3,
+        payload: {
+          stubBuild: {
+            version: "1.0",
+            blocks: [{ x: 3, y: 2, z: 1, type: "stone" }],
+          },
+        },
+      } as never),
+      /artifact_persistence_failed/,
+    );
+  } finally {
+    failArtifactKind = null;
+  }
+  assert.equal(
+    artifactCreates.some((artifact) => artifact.kind === "build_json"),
+    true,
+    "the partial-failure fixture should record the canonical artifact first",
+  );
+  assert.equal(
+    updates.some((update) => update.data.deletionPendingAt instanceof Date),
+    true,
+    "terminal partial artifact failures should schedule recorded objects for cleanup",
+  );
 
   updates.length = 0;
   operations.length = 0;

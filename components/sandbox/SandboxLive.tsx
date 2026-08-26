@@ -13,7 +13,9 @@ import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPreflightDialog";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import { selectGenerationProviderKeys } from "@/lib/ai/providerKeys";
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
+import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -66,9 +68,11 @@ type ModelResult = {
   customBuildStatusUrl?: string;
   customBuildEventsUrl?: string;
   customBuildDownloadUrl?: string;
+  customBuildExpandedBytes?: number | null;
   renderGridSize?: GridSize;
   renderPalette?: Palette;
   currentStage?: string;
+  submittedPrompt?: string;
 };
 
 type SavedGenerationCreateResponse = {
@@ -711,10 +715,11 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
   function exportModelJson(args: {
     modelName: string;
     modelKey: string;
+    promptText: string;
     rawBuildJson?: string;
   }) {
     const modelToken = sanitizeFilePart(args.modelName) || args.modelKey;
-    const promptToken = sanitizeFilePart(prompt) || "sandbox";
+    const promptToken = sanitizeFilePart(args.promptText) || "sandbox";
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const fileName = `minebench-build-${modelToken}-${promptToken}-${stamp}.json`;
     const json = typeof args.rawBuildJson === "string" ? args.rawBuildJson.trim() : "";
@@ -772,10 +777,12 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         customBuildStatusUrl: args.statusUrl ?? existing?.customBuildStatusUrl,
         customBuildEventsUrl: args.eventsUrl ?? existing?.customBuildEventsUrl,
         customBuildDownloadUrl: args.status.downloadUrl ?? existing?.customBuildDownloadUrl,
+        customBuildExpandedBytes: args.status.expandedBytes,
         renderGridSize: statusGridSize,
         renderPalette: statusPalette,
         startedAt: existing?.startedAt,
         currentStage: customBuildStageLabel(args.status),
+        submittedPrompt: existing?.submittedPrompt,
       };
 
       if (args.status.status === "failed" || args.status.status === "canceled") {
@@ -859,6 +866,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
   async function runGenerateDurable(args: {
     abortController: AbortController;
     providerKeys: ProviderApiKeys;
+    prompt: string;
     runId: number;
   }) {
     customBuildAbortRef.current = args.abortController;
@@ -867,7 +875,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
       headers: { "Content-Type": "application/json" },
       signal: args.abortController.signal,
       body: JSON.stringify({
-        prompt,
+        prompt: args.prompt,
         gridSize,
         palette,
         models: selectedModels.map(customBuildRequestModel),
@@ -915,6 +923,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
           renderGridSize: gridSize,
           renderPalette: palette,
           currentStage: "Queued",
+          submittedPrompt: existing?.submittedPrompt ?? args.prompt,
         });
       });
       return next;
@@ -951,6 +960,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
 
   async function runGenerate(continueTransient = false) {
     if (!prompt.trim() || selectedModels.length === 0) return;
+    const submittedPrompt = prompt.trim();
 
     const invalidCustomModel = selectedModels.find(
       (model) => model.kind === "custom" && !model.modelId.trim()
@@ -992,6 +1002,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
           retryReason: undefined,
           metrics: undefined,
           startedAt: now,
+          submittedPrompt,
         });
       }
       return next;
@@ -1000,28 +1011,14 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
     const abortController = new AbortController();
     generateAbortRef.current = abortController;
     try {
-      const sanitizedKeys: ProviderApiKeys = {};
-      const setKey = (k: keyof ProviderApiKeys, v: unknown) => {
-        if (typeof v !== "string") return;
-        const t = v.trim();
-        if (t) sanitizedKeys[k] = t;
-      };
-      setKey("openrouter", providerKeys.openrouter);
-      setKey("openai", providerKeys.openai);
-      setKey("anthropic", providerKeys.anthropic);
-      setKey("gemini", providerKeys.gemini);
-      setKey("moonshot", providerKeys.moonshot);
-      setKey("deepseek", providerKeys.deepseek);
-      setKey("minimax", providerKeys.minimax);
-      setKey("xai", providerKeys.xai);
-      setKey("meta", providerKeys.meta);
-      setKey("zai", providerKeys.zai);
-      setKey("custom", providerKeys.custom);
+      const requestModels = selectedModels.map(customBuildRequestModel);
+      const sanitizedKeys = selectGenerationProviderKeys(requestModels, providerKeys);
 
       if (signedIn) {
         await runGenerateDurable({
           abortController,
           providerKeys: sanitizedKeys,
+          prompt: submittedPrompt,
           runId: durableRunId!,
         });
         return;
@@ -1032,25 +1029,10 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         headers: { "Content-Type": "application/json" },
         signal: abortController.signal,
         body: JSON.stringify({
-          prompt,
+          prompt: submittedPrompt,
           gridSize,
           palette,
-          models: selectedModels.map((model) =>
-            model.kind === "catalog"
-              ? {
-                  id: model.id,
-                  kind: "catalog" as const,
-                  modelKey: model.modelKey,
-                }
-              : {
-                  id: model.id,
-                  kind: "custom" as const,
-                  provider: model.provider,
-                  displayName: model.displayName,
-                  modelId: model.modelId,
-                  baseUrl: model.baseUrl,
-                }
-          ),
+          models: requestModels,
           providerKeys: sanitizedKeys,
         }),
       });
@@ -1092,6 +1074,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                 attempt: 1,
                 rawText: "",
                 startedAt: existing?.startedAt ?? Date.now(),
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -1110,6 +1093,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                 retryReason: evt.reason,
                 rawText: "",
                 startedAt: existing?.startedAt ?? Date.now(),
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -1133,6 +1117,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                 startedAt: existing?.startedAt,
                 rawText: nextText,
                 error: existing?.error,
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -1149,6 +1134,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                 metrics: evt.metrics,
                 startedAt: existing?.startedAt,
                 rawText: existing?.rawText,
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -1163,6 +1149,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                 error: evt.message,
                 rawText: evt.rawText ?? existing?.rawText,
                 startedAt: existing?.startedAt,
+                submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
               });
               return next;
             });
@@ -1240,6 +1227,9 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
       };
     })
     .filter((target): target is SandboxGifExportTarget => Boolean(target));
+  const comparePrompt = selectedModels
+    .map((model) => results.get(model.id)?.submittedPrompt)
+    .find((value): value is string => Boolean(value)) ?? prompt;
 
   const resultCards = selectedModels.map((model, idx) => {
     const r = results.get(model.id);
@@ -1268,6 +1258,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
     const liveRawText = r?.rawText;
     const cardGridSize = r?.renderGridSize ?? gridSize;
     const cardPalette = r?.renderPalette ?? palette;
+    const resultPrompt = r?.submittedPrompt ?? prompt;
     const previewBuild = r?.status === "loading" ? getPreviewBuild(model.id, r.rawText, cardGridSize, cardPalette) : null;
     return (
       <VoxelViewerCard
@@ -1296,7 +1287,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
         enableBuildJsonToggle={!isDurableResult}
         enableBuildExport={r?.status === "success" && !isDurableResult}
         exportLabel={modelName}
-        exportPrompt={prompt}
+        exportPrompt={resultPrompt}
         actions={
           <>
             {r?.customBuildPageUrl ? (
@@ -1308,11 +1299,19 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
               </Link>
             ) : null}
             {r?.customBuildDownloadUrl ? (
-              <a
+              <button
+                type="button"
                 aria-label="Download JSON"
                 title="Download JSON"
                 className="mb-btn mb-btn-ghost h-8 w-8 border border-border/70 bg-bg/55 p-0 text-muted hover:text-fg"
-                href={r.customBuildDownloadUrl}
+                onClick={() => {
+                  setRequestError(null);
+                  void downloadSavedGenerationJson({
+                    url: r.customBuildDownloadUrl!,
+                    fileName: `${r.customBuildId ?? "minebench-build"}.json`,
+                    expandedBytes: r.customBuildExpandedBytes,
+                  }).catch(() => setRequestError("JSON could not be downloaded."));
+                }}
               >
                 <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4">
                   <path
@@ -1324,7 +1323,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                     strokeWidth="1.8"
                   />
                 </svg>
-              </a>
+              </button>
             ) : (
               <button
                 type="button"
@@ -1336,6 +1335,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
                   exportModelJson({
                     modelName,
                     modelKey: model.id,
+                    promptText: resultPrompt,
                     rawBuildJson: rawBuildJsonForExport ?? undefined,
                   })
                 }
@@ -1354,7 +1354,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
             )}
             <SandboxGifExportButton
               targets={gifTargets}
-              promptText={prompt}
+              promptText={r?.submittedPrompt ?? prompt}
               cancelKey={`${inputSignature}:${model.id}:${r?.status ?? "idle"}:${r?.metrics?.blockCount ?? 0}`}
               iconOnly
               embedded
@@ -1775,7 +1775,7 @@ export function SandboxLive({ initialPrompt, signedIn }: { initialPrompt?: strin
             {selectedModels.length > 1 && compareTargets.length === selectedModels.length ? (
               <SandboxGifExportButton
                 targets={compareTargets}
-                promptText={prompt}
+                promptText={comparePrompt}
                 cancelKey={`${inputSignature}:${compareTargets
                   .map((target) => `${target.modelName}:${target.blockCount}`)
                   .join("|")}`}

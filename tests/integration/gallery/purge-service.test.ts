@@ -60,6 +60,24 @@ async function main() {
     await db.customBuild.create({ data: buildData(`${suffix}due`, past, `gallery/${suffix}/due.svg`) });
     await db.customBuild.create({ data: buildData(`${suffix}failed`, past, `gallery/${suffix}/failed.svg`) });
     await db.customBuild.create({ data: buildData(`${suffix}future`, future, `gallery/${suffix}/future.svg`) });
+    const retainedBuild = await db.customBuild.create({
+      data: buildData(`${suffix}retained`, future, `gallery/${suffix}/retained-preview.svg`),
+    });
+    await db.customBuildArtifact.create({
+      data: {
+        customBuildId: retainedBuild.id,
+        kind: "build_json",
+        format: "json.gz",
+        bucket: "builds",
+        path: `gallery/${suffix}/retained-build.json.gz`,
+        contentType: "application/json",
+        fileName: "build.json",
+        sha256: "e".repeat(64),
+        sourceBuildSha256: "f".repeat(64),
+        byteSize: 10,
+        storedByteSize: 10,
+      },
+    });
     await db.customBuild.create({
       data: {
         ...buildData(`${suffix}canceled`, future, `gallery/${suffix}/canceled.svg`),
@@ -100,6 +118,34 @@ async function main() {
         purgeAt: past,
       },
     });
+    const hiddenDueCandidate = await db.galleryCandidate.create({
+      data: {
+        publicId: `gal_${suffix}hidden`,
+        promptText: "Admin-hidden prompt",
+        promptKey: `${suffix}-hidden`,
+        uploaderId: ownerId,
+        adminHiddenAt: past,
+        purgeAt: past,
+      },
+    });
+    const retainedCandidate = await db.galleryCandidate.create({
+      data: {
+        publicId: `gal_${suffix}retained`,
+        promptText: "Retained preview prompt",
+        promptKey: `${suffix}-retained`,
+        uploaderId: ownerId,
+      },
+    });
+    await db.galleryExample.create({
+      data: {
+        candidateId: retainedCandidate.id,
+        customBuildId: retainedBuild.id,
+        contributorId: ownerId,
+        adminHiddenAt: past,
+        purgeAt: future,
+        previewRetained: true,
+      },
+    });
     const futureRecord = await db.galleryModerationRecord.create({
       data: { kind: "APPEAL", target: "ACCOUNT", actorUserId: ownerId, purgeAt: future },
     });
@@ -138,17 +184,24 @@ async function main() {
     assert.equal(result.expiredSecrets, 1);
     assert.equal(result.objectDeletionFailures, 1);
     assert.equal(result.generations, 1);
-    assert.equal(result.candidates, 1);
+    assert.equal(result.candidates, 2);
     assert.equal(result.moderationRecords, 1);
     assert.deepEqual(deletedPaths.sort(), [
       `gallery/${suffix}/canceled.svg`,
       `gallery/${suffix}/due.svg`,
       `gallery/${suffix}/future.svg`,
+      `gallery/${suffix}/retained-build.json.gz`,
     ]);
     assert.equal(await db.customBuild.count({ where: { id: `${suffix}due` } }), 0);
     assert.equal(await db.customBuild.count({ where: { id: `${suffix}failed` } }), 1);
     assert.match((await db.customBuild.findUniqueOrThrow({ where: { id: `${suffix}failed` } })).deletionError ?? "", /storage unavailable/);
     assert.equal(await db.customBuild.count({ where: { id: `${suffix}future` } }), 1);
+    const retained = await db.customBuild.findUniqueOrThrow({
+      where: { id: retainedBuild.id },
+      include: { artifacts: true },
+    });
+    assert.deepEqual(retained.artifacts.map((artifact) => artifact.kind), ["preview_svg"]);
+    assert.equal(retained.deletionPendingAt, null);
     const canceled = await db.customBuild.findUniqueOrThrow({
       where: { id: `${suffix}canceled` },
       include: { artifacts: true },
@@ -160,6 +213,7 @@ async function main() {
     assert.equal(await db.galleryCandidate.count({ where: { id: dueCandidate.id } }), 0);
     assert.equal(await db.galleryCandidate.count({ where: { id: selectedCandidate.id } }), 1);
     assert.equal(await db.galleryCandidate.count({ where: { id: activeDueCandidate.id } }), 1);
+    assert.equal(await db.galleryCandidate.count({ where: { id: hiddenDueCandidate.id } }), 0);
     assert.equal(await db.galleryModerationRecord.count({ where: { id: dueRecord.id } }), 0);
     assert.equal(await db.galleryModerationRecord.count({ where: { id: futureRecord.id } }), 1);
 

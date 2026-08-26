@@ -9,6 +9,9 @@ const account = readFileSync("app/account/page.tsx", "utf8");
 const identity = readFileSync("app/account/GalleryAccountSettings.tsx", "utf8");
 const yoursPage = readFileSync("app/gallery/yours/page.tsx", "utf8");
 const preflight = readFileSync("components/sandbox/GenerationPreflightDialog.tsx", "utf8");
+const sandboxPage = readFileSync("app/sandbox/page.tsx", "utf8");
+const galleryDetailPage = readFileSync("app/gallery/[publicId]/page.tsx", "utf8");
+const siteHeader = readFileSync("components/SiteHeader.tsx", "utf8");
 
 assert.ok(
   detail.includes("candidate.canRemove") &&
@@ -32,14 +35,22 @@ assert.ok(
     yours.includes("downloadSavedGenerationJson") &&
     yours.includes("SavedBuildDialog") &&
     yours.includes("generation.expandedBytes") &&
-    !yours.includes("generation.storedBytes") &&
+    yours.includes("generation.storedBytes") &&
     yours.includes("headerMeta=") &&
-    !yours.includes("SHA-256 ") &&
+    yours.includes("SHA-256 ") &&
     yours.includes("hover:after:scale-x-100") &&
     yours.includes('generation.status === "queued" || generation.status === "running"') &&
     !yours.includes("<VoxelEmptyState") &&
     yours.includes("embedded"),
-  "saved builds should open privately, preserve lifecycle placeholders, and expose expanded JSON details",
+  "saved builds should open privately, preserve lifecycle placeholders, and expose owner verification details",
+);
+assert.ok(
+  [page, galleryDetailPage, sandboxPage].every((source) => source.includes("getCurrentAccount().catch(() => null)")),
+  "public pages should treat account lookup as optional when Auth is not configured",
+);
+assert.ok(
+  siteHeader.includes("[active, pathname]"),
+  "the persistent header should recheck Auth state after every route change",
 );
 assert.ok(
   explore.includes("VoxelEmptyState") &&

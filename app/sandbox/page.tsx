@@ -48,7 +48,7 @@ export default async function SandboxPage({
   const hasComparisonState = sp.models !== undefined || sp.promptId !== undefined;
   const prompt =
     !hasComparisonState && typeof promptParam === "string" ? promptParam : undefined;
-  const signedIn = Boolean(await getCurrentAccount());
+  const signedIn = Boolean(await getCurrentAccount().catch(() => null));
   return (
     <>
       <script

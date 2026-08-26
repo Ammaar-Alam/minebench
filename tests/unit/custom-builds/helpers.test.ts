@@ -14,8 +14,14 @@ import {
   gzipBytes,
   jsonBytes,
   sha256Hex,
+  uploadAndRecordCustomBuildArtifact,
 } from "../../../lib/custom-builds/artifacts";
-import { getCustomBuildArtifactPath, uploadCustomBuildArtifact } from "../../../lib/custom-builds/storage";
+import {
+  deleteCustomBuildArtifact,
+  downloadCustomBuildArtifactBytes,
+  getCustomBuildArtifactPath,
+  uploadCustomBuildArtifact,
+} from "../../../lib/custom-builds/storage";
 
 async function main() {
   const id = generateCustomBuildPublicId();
@@ -103,6 +109,46 @@ async function main() {
     }),
     /source checksum does not match/,
   );
+
+  const originalBucket = process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+  const originalStorageDir = process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+  process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
+  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-artifact-compensation";
+  const compensationBytes = new TextEncoder().encode("orphan candidate");
+  const compensationSha = sha256Hex(compensationBytes);
+  const compensationPath = getCustomBuildArtifactPath({
+    publicId: id,
+    kind: "preview_svg",
+    sha256: compensationSha,
+  });
+  try {
+    await assert.rejects(
+      uploadAndRecordCustomBuildArtifact({
+        customBuildId: "build-without-ownership",
+        publicId: id,
+        kind: "preview_svg",
+        bytes: compensationBytes,
+        client: {
+          customBuildArtifact: {
+            findUnique: async () => null,
+            upsert: async () => { throw new Error("database unavailable"); },
+          },
+        } as never,
+      }),
+      /database unavailable/,
+    );
+    await assert.rejects(
+      downloadCustomBuildArtifactBytes({ bucket: "__local_fs__", path: compensationPath }),
+      /ENOENT/,
+      "a failed ownership write should compensate the exact uploaded object",
+    );
+  } finally {
+    await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: compensationPath });
+    if (originalBucket === undefined) delete process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+    else process.env.CUSTOM_BUILD_STORAGE_BUCKET = originalBucket;
+    if (originalStorageDir === undefined) delete process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+    else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
+  }
 
   const originalFetch = globalThis.fetch;
   const originalSupabaseUrl = process.env.SUPABASE_URL;

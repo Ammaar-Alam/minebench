@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { CustomBuildArtifact, Prisma, PrismaClient } from "@prisma/client";
 import { gzipSync } from "fflate";
 import { sha256Hex } from "@/lib/custom-builds/hash";
 import { prisma } from "@/lib/prisma";
@@ -6,6 +6,7 @@ import {
   getCustomBuildArtifactDescriptor,
   getCustomBuildArtifactPath,
   getCustomBuildStorageBucket,
+  deleteCustomBuildArtifact,
   uploadCustomBuildArtifact,
 } from "@/lib/custom-builds/storage";
 import type { CustomBuildArtifactKind, CustomBuildStorageEncoding } from "@/lib/custom-builds/types";
@@ -98,6 +99,16 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     sourceBuildSha256: args.sourceBuildSha256,
   });
   const bucket = getCustomBuildStorageBucket();
+  const sourceBuildSha256 = args.sourceBuildSha256 ?? sha256;
+  const ownershipKey = {
+    customBuildId: args.customBuildId,
+    kind: args.kind,
+    sourceBuildSha256,
+  };
+  const existingArtifact = await client.customBuildArtifact.findUnique({
+    where: { customBuildId_kind_sourceBuildSha256: ownershipKey },
+    select: { bucket: true, path: true },
+  });
   const fileName =
     args.kind === "build_json"
       ? `${args.publicId}.json`
@@ -121,46 +132,52 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     encoding: args.encoding,
   });
 
-  const artifact = await client.customBuildArtifact.upsert({
-    where: {
-      customBuildId_kind_sourceBuildSha256: {
+  let artifact: CustomBuildArtifact;
+  try {
+    artifact = await client.customBuildArtifact.upsert({
+      where: { customBuildId_kind_sourceBuildSha256: ownershipKey },
+      create: {
         customBuildId: args.customBuildId,
         kind: args.kind,
-        sourceBuildSha256: args.sourceBuildSha256 ?? sha256,
+        format: descriptor.format,
+        bucket,
+        path,
+        encoding: args.encoding ?? "identity",
+        contentType: descriptor.contentType,
+        fileName,
+        sha256,
+        sourceBuildSha256,
+        byteSize: args.uncompressedByteSize ?? args.bytes.byteLength,
+        compressedByteSize: args.encoding === "gzip" ? args.bytes.byteLength : undefined,
+        storedByteSize: args.bytes.byteLength,
+        blockCount: args.blockCount,
+        exportStats: args.exportStats,
       },
-    },
-    create: {
-      customBuildId: args.customBuildId,
-      kind: args.kind,
-      format: descriptor.format,
-      bucket,
-      path,
-      encoding: args.encoding ?? "identity",
-      contentType: descriptor.contentType,
-      fileName,
-      sha256,
-      sourceBuildSha256: args.sourceBuildSha256 ?? sha256,
-      byteSize: args.uncompressedByteSize ?? args.bytes.byteLength,
-      compressedByteSize: args.encoding === "gzip" ? args.bytes.byteLength : undefined,
-      storedByteSize: args.bytes.byteLength,
-      blockCount: args.blockCount,
-      exportStats: args.exportStats,
-    },
-    update: {
-      format: descriptor.format,
-      bucket,
-      path,
-      encoding: args.encoding ?? "identity",
-      contentType: descriptor.contentType,
-      fileName,
-      sha256,
-      byteSize: args.uncompressedByteSize ?? args.bytes.byteLength,
-      compressedByteSize: args.encoding === "gzip" ? args.bytes.byteLength : null,
-      storedByteSize: args.bytes.byteLength,
-      blockCount: args.blockCount,
-      exportStats: args.exportStats,
-    },
-  });
+      update: {
+        format: descriptor.format,
+        bucket,
+        path,
+        encoding: args.encoding ?? "identity",
+        contentType: descriptor.contentType,
+        fileName,
+        sha256,
+        byteSize: args.uncompressedByteSize ?? args.bytes.byteLength,
+        compressedByteSize: args.encoding === "gzip" ? args.bytes.byteLength : null,
+        storedByteSize: args.bytes.byteLength,
+        blockCount: args.blockCount,
+        exportStats: args.exportStats,
+      },
+    });
+  } catch (error) {
+    if (!existingArtifact || existingArtifact.bucket !== bucket || existingArtifact.path !== path) {
+      try {
+        await deleteCustomBuildArtifact({ bucket, path });
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], "Custom build artifact ownership and compensation failed");
+      }
+    }
+    throw error;
+  }
   const stored = await client.customBuildArtifact.aggregate({
     where: { customBuildId: args.customBuildId },
     _sum: { storedByteSize: true },

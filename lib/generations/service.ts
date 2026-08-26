@@ -335,6 +335,9 @@ export async function cancelSavedGeneration(ownerId: string, publicId: string) {
         errorCode: "canceled",
         errorMessage: "Generation stopped.",
         errorRetryable: false,
+        objectsDeletedAt: null,
+        deletionPendingAt: now,
+        deletionError: null,
       },
     });
     if (canceled.count !== 1) {

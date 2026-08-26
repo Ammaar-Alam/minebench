@@ -22,7 +22,7 @@ export default async function GalleryPage({ searchParams }: { searchParams: Prom
   const sort = (await searchParams).sort === "new" ? "new" : "top";
   const [cookieStore, account] = await Promise.all([
     cookies(),
-    getCurrentAccount(),
+    getCurrentAccount().catch(() => null),
   ]);
   const page = await listGalleryCandidates({
     sort,
