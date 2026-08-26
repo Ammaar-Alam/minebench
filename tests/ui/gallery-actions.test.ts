@@ -19,7 +19,8 @@ assert.ok(
 assert.ok(
   detail.includes("SandboxGifExportButton") &&
     detail.includes("viewerRef={viewerRef}") &&
-    detail.includes('label="Export GIF"'),
+    detail.includes('label="GIF"') &&
+    !detail.includes("iconOnly"),
   "public examples should reuse the full viewer GIF exporter",
 );
 assert.ok(
@@ -27,8 +28,10 @@ assert.ok(
     yours.includes("/examples`") &&
     yours.includes("Add to Gallery") &&
     !yours.includes("Add this generation as an example?") &&
-    !yours.includes(">Download JSON<"),
-  "one explicit Gallery action should attach a saved build without a second confirmation",
+    yours.includes("downloadSavedGenerationJson") &&
+    yours.includes("SavedBuildDialog") &&
+    yours.includes("generation.expandedBytes"),
+  "saved builds should open privately and expose their expanded JSON download and size",
 );
 assert.ok(
   explore.includes("VoxelEmptyState") &&

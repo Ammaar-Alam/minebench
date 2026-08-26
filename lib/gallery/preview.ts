@@ -20,7 +20,15 @@ function colorForBlock(type: string, shade = 0): string {
 function framedRange(values: number[]): [number, number] {
   const sorted = [...values].sort((a, b) => a - b);
   const trim = sorted.length >= 100 ? Math.floor(sorted.length * 0.03) : 0;
-  return [sorted[trim] ?? 0, sorted.at(-(trim + 1)) ?? 1];
+  const fullMin = sorted[0] ?? 0;
+  const fullMax = sorted.at(-1) ?? 1;
+  if (!trim) return [fullMin, fullMax];
+  const coreMin = sorted[trim] ?? fullMin;
+  const coreMax = sorted.at(-(trim + 1)) ?? fullMax;
+  const coreRange = Math.max(1, coreMax - coreMin);
+  if (fullMax - fullMin <= coreRange * 1.35) return [fullMin, fullMax];
+  const padding = coreRange * 0.08;
+  return [Math.max(fullMin, coreMin - padding), Math.min(fullMax, coreMax + padding)];
 }
 
 function compactBlocks(blocks: PreviewBlock[]): PreviewBlock[] {
@@ -73,10 +81,11 @@ export function buildGalleryPreviewSvg(build: VoxelBuild): string {
 
   const [minX, maxX] = framedRange(points.map((point) => point.x));
   const [minY, maxY] = framedRange(points.map((point) => point.y));
-  const scale = Math.min(20, 576 / Math.max(1, maxX - minX), 336 / Math.max(1, maxY - minY));
-  const size = Math.max(2.2, Math.min(8, scale * 0.62));
-  const topDepth = size * 0.5;
-  const sideDepth = size * 0.85;
+  const scale = Math.min(20, 512 / Math.max(1, maxX - minX), 272 / Math.max(1, maxY - minY));
+  const cubeScale = Math.max(2.2, scale);
+  const size = cubeScale * 0.866;
+  const topDepth = cubeScale * 0.5;
+  const sideDepth = cubeScale;
   const offsetX = WIDTH / 2 - ((minX + maxX) / 2) * scale;
   const offsetY = HEIGHT / 2 - ((minY + maxY) / 2) * scale - sideDepth / 2;
   const paths = points.map((point) => {

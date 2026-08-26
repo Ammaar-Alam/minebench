@@ -2,13 +2,74 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
+import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
+
+const VoxelViewerCard = dynamic(
+  () => import("@/components/voxel/VoxelViewerCard").then((module) => module.VoxelViewerCard),
+  { ssr: false },
+);
+
+const SandboxGifExportButton = dynamic(
+  () => import("@/components/sandbox/SandboxGifExportButton").then((module) => module.SandboxGifExportButton),
+  {
+    ssr: false,
+    loading: () => <button type="button" disabled className="h-8 px-2 text-xs text-muted">GIF</button>,
+  },
+);
 
 function statusLabel(value: SavedGenerationPayload["status"]): string {
   if (value === "succeeded") return "Ready";
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  const kibibytes = value / 1024;
+  if (kibibytes < 1024) return `${kibibytes.toFixed(kibibytes >= 10 ? 0 : 1)} KiB`;
+  const mebibytes = kibibytes / 1024;
+  return `${mebibytes.toFixed(mebibytes >= 10 ? 1 : 2)} MiB`;
+}
+
+function GenerationDownloadButton({
+  generation,
+  compact = false,
+  onError,
+}: {
+  generation: SavedGenerationPayload;
+  compact?: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const [pending, setPending] = useState(false);
+
+  if (!generation.downloadUrl) return null;
+  return (
+    <button
+      type="button"
+      disabled={pending}
+      aria-label="Download JSON"
+      title="Download expanded JSON"
+      className={compact ? "mb-btn mb-btn-ghost h-8 px-2 text-xs" : "mb-btn h-10"}
+      onClick={() => {
+        setPending(true);
+        onError(null);
+        void downloadSavedGenerationJson({
+          url: generation.downloadUrl!,
+          fileName: `${generation.id}.json`,
+          expandedBytes: generation.expandedBytes,
+        })
+          .catch(() => onError("JSON could not be downloaded."))
+          .finally(() => setPending(false));
+      }}
+    >
+      {pending ? (compact ? "JSON…" : "Preparing…") : (compact ? "JSON" : "Download JSON")}
+    </button>
+  );
 }
 
 function GenerationActions({
@@ -116,12 +177,127 @@ function GenerationActions({
       <div className="flex flex-wrap gap-2">
         {(generation.status === "queued" || generation.status === "running") ? <button type="button" disabled={pending} className="mb-btn h-10" onClick={() => void cancel()}>Stop</button> : null}
         {generation.status === "succeeded" && !suspended ? <button type="button" disabled={pending || (!hasNickname && !anonymous)} className="mb-btn mb-btn-primary h-10" onClick={() => void submit()}>Add to Gallery</button> : null}
-        {generation.downloadUrl ? <a aria-label="Download JSON" className="mb-btn h-10" href={generation.downloadUrl}>Download</a> : null}
+        <GenerationDownloadButton generation={generation} onError={setMessage} />
         <button type="button" disabled={pending} className="mb-btn h-10 text-muted hover:text-danger" onClick={() => void remove()}>Remove</button>
       </div>
       {generation.status === "succeeded" && !suspended ? <label className="flex min-h-10 items-center gap-2 text-xs text-muted"><input type="checkbox" checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} />Post anonymously</label> : null}
       {message ? <p role="status" className="text-sm text-muted">{message}</p> : null}
     </div>
+  );
+}
+
+function SavedBuildDialog({
+  generation,
+  onClose,
+}: {
+  generation: SavedGenerationPayload;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const viewerRef = useRef<VoxelViewerHandle>(null);
+  const [build, setBuild] = useState<unknown | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog && !dialog.open) dialog.showModal();
+  }, []);
+
+  useEffect(() => {
+    if (!generation.viewerUrl) {
+      setLoading(false);
+      setError("Viewer unavailable");
+      return;
+    }
+    const controller = new AbortController();
+    setBuild(null);
+    setLoading(true);
+    setError(null);
+    void fetch(generation.viewerUrl, { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Viewer unavailable");
+        return readBuildVariantPayload(response, {
+          fallbackIdentity: {
+            buildId: generation.id,
+            variant: "full",
+            checksum: generation.sha256,
+          },
+        });
+      })
+      .then((result) => setBuild(result.payload.voxelBuild))
+      .catch((viewerError) => {
+        if (viewerError instanceof Error && viewerError.name === "AbortError") return;
+        setError("Viewer unavailable");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [generation.id, generation.sha256, generation.viewerUrl]);
+
+  const metrics = [
+    generation.blockCount != null ? `${generation.blockCount.toLocaleString()} blocks` : null,
+    generation.expandedBytes != null ? `${formatBytes(generation.expandedBytes)} JSON` : null,
+    generation.storedBytes != null ? `${formatBytes(generation.storedBytes)} stored` : null,
+  ].filter(Boolean);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="saved-build-dialog-title"
+      className="mb-card-enter m-auto max-h-[calc(100dvh-1rem)] w-[min(80rem,calc(100%-1rem))] overflow-hidden rounded-md border border-border bg-bg p-0 text-fg backdrop:bg-black/60 sm:max-h-[calc(100dvh-2rem)] sm:w-[min(80rem,calc(100%-2rem))]"
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onClose={onClose}
+    >
+      <div className="flex max-h-[inherit] flex-col">
+        <header className="flex items-start justify-between gap-4 border-b border-border/70 px-4 py-3 sm:px-5 sm:py-4">
+          <div className="min-w-0">
+            <p className="mb-eyebrow">Saved build</p>
+            <h2 id="saved-build-dialog-title" className="mt-1 truncate text-lg font-semibold tracking-tight sm:text-xl">{generation.prompt}</h2>
+            {metrics.length ? <p className="mt-1 truncate text-xs text-muted">{metrics.join(" · ")}</p> : null}
+          </div>
+          <button type="button" autoFocus className="mb-btn mb-btn-ghost h-9 shrink-0 px-3 text-xs" onClick={onClose}>Close <span className="ml-1 mb-kbd">Esc</span></button>
+        </header>
+        <div className="overflow-y-auto p-2 sm:p-4">
+          <VoxelViewerCard
+            title={generation.model.label}
+            voxelBuild={build}
+            expectedBlockCount={generation.blockCount ?? undefined}
+            gridSize={generation.gridSize === 64 || generation.gridSize === 512 ? generation.gridSize : 256}
+            palette={generation.palette === "advanced" ? "advanced" : "simple"}
+            isLoading={loading}
+            error={error ?? undefined}
+            skipValidation
+            enableBuildExport={Boolean(build)}
+            exportLabel={generation.model.label}
+            exportPrompt={generation.prompt}
+            viewerRef={viewerRef}
+            actions={build && !loading ? (
+              <>
+                <GenerationDownloadButton generation={generation} compact onError={setDownloadError} />
+                <SandboxGifExportButton
+                  targets={[{
+                    viewerRef,
+                    modelName: generation.model.label,
+                    company: "MineBench",
+                    blockCount: generation.blockCount ?? 0,
+                  }]}
+                  promptText={generation.prompt}
+                  cancelKey={`${generation.id}:${generation.sha256 ?? ""}`}
+                  label="GIF"
+                  className="border border-border/70 bg-bg/55"
+                />
+              </>
+            ) : undefined}
+          />
+          {generation.sha256 ? <p className="mt-3 truncate px-1 font-mono text-[11px] text-muted" title={generation.sha256}>SHA-256 {generation.sha256}</p> : null}
+          {downloadError ? <p role="status" className="mt-2 px-1 text-sm text-danger">{downloadError}</p> : null}
+        </div>
+      </div>
+    </dialog>
   );
 }
 
@@ -140,6 +316,8 @@ export function GalleryYours({
   const [cursor, setCursor] = useState(initialCursor);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = items.find((item) => item.id === selectedId) ?? null;
 
   useEffect(() => {
     if (!items.some((item) => item.status === "queued" || item.status === "running")) return;
@@ -182,18 +360,24 @@ export function GalleryYours({
 
       <div className="mt-6 grid gap-4">
         {items.map((generation, index) => (
-          <article id={generation.id} key={generation.id} className={`group grid scroll-mt-24 gap-5 rounded-md border border-border/80 bg-card/10 p-4 transition-colors hover:border-border hover:bg-card/20 motion-reduce:transition-none sm:p-5 md:grid-cols-[11rem_minmax(0,1fr)] mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
-            {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className="object-contain p-1.5 transition-transform duration-300 ease-out group-hover:scale-[1.025] motion-reduce:transition-none" /></div> : <div className="grid aspect-[4/3] rounded bg-bg/55 text-center text-sm text-muted"><span className="self-center"><span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full bg-current ${(generation.status === "queued" || generation.status === "running") ? "animate-pulse motion-reduce:animate-none" : ""}`} />{statusLabel(generation.status)}</span></div>}
-            <div className="min-w-0">
-              <div><div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span></div><h3 className="mt-2 text-xl font-semibold leading-snug text-fg">{generation.prompt}</h3>{generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}</div>
-              <div className="mt-5"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>
-            </div>
+          <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 rounded-md border border-border/80 bg-card/10 p-4 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none sm:p-5 mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
+            <button type="button" disabled={!generation.viewerUrl} aria-label={`View ${generation.prompt}`} className="group/open grid w-full gap-5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-default md:grid-cols-[11rem_minmax(0,1fr)]" onClick={() => setSelectedId(generation.id)}>
+              {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className={`object-contain p-1.5 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /></div> : <div className="grid aspect-[4/3] rounded bg-bg/55 text-center text-sm text-muted"><span className="self-center"><span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full bg-current ${(generation.status === "queued" || generation.status === "running") ? "animate-pulse motion-reduce:animate-none" : ""}`} />{statusLabel(generation.status)}</span></div>}
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span><time dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time></div>
+                <h3 className={`mt-2 text-xl font-semibold leading-snug text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
+                {generation.error ? <p className="mt-2 text-sm text-danger">{generation.error.message}</p> : null}
+                {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{generation.expandedBytes != null ? <span>{formatBytes(generation.expandedBytes)} JSON</span> : null}{generation.storedBytes != null ? <span>{formatBytes(generation.storedBytes)} stored</span> : null}</div> : null}
+              </div>
+            </button>
+            <div className="mt-5 md:ml-48"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>
           </article>
         ))}
         {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">No saved builds.</p></div> : null}
       </div>
       {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-btn h-11 min-w-36" onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "More"}</button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
+      {selected ? <SavedBuildDialog generation={selected} onClose={() => setSelectedId(null)} /> : null}
     </section>
   );
 }

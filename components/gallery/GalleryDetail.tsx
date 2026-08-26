@@ -14,7 +14,10 @@ import type { GalleryCandidatePayload, GalleryExamplePayload } from "@/lib/galle
 
 const SandboxGifExportButton = dynamic(
   () => import("@/components/sandbox/SandboxGifExportButton").then((module) => module.SandboxGifExportButton),
-  { ssr: false },
+  {
+    ssr: false,
+    loading: () => <button type="button" disabled className="h-8 px-2 text-xs text-muted">GIF</button>,
+  },
 );
 
 type GalleryDetailPayload = GalleryCandidatePayload & {
@@ -216,8 +219,8 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
                 }]}
                 promptText={candidate.prompt}
                 cancelKey={`${selected.id}:${selected.checksum ?? ""}`}
-                iconOnly
-                label="Export GIF"
+                label="GIF"
+                className="border border-border/70 bg-bg/55"
               />
             ) : undefined}
           />
