@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import { sha256Hex } from "@/lib/custom-builds/artifacts";
+import { sha256Hex } from "@/lib/custom-builds/hash";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import {

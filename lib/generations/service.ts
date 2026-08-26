@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type CustomBuildArtifactKind } from "@prisma/client";
 import type { GenerateModelRequest, PaletteMode, ProviderApiKeys } from "@/lib/ai/types";
-import { sha256Hex } from "@/lib/custom-builds/artifacts";
+import { sha256Hex } from "@/lib/custom-builds/hash";
 import { generateCustomBuildPublicId } from "@/lib/custom-builds/ids";
 import { getCustomBuildJobMaxAttempts } from "@/lib/custom-builds/jobs";
 import { encryptProviderKey, encryptSecretValue } from "@/lib/custom-builds/secrets";

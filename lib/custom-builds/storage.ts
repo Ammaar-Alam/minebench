@@ -11,6 +11,7 @@ import { getSupabaseStorageConfig, LOCAL_BUILD_STORAGE_BUCKET } from "@/lib/stor
 
 const DEFAULT_CUSTOM_BUILD_STORAGE_BUCKET = "builds";
 const DEFAULT_CUSTOM_BUILD_STORAGE_PREFIX = "custom-builds/v1";
+const DEFAULT_CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage";
 const DEFAULT_SIGNED_URL_TTL_SEC = 3600;
 
 function readIntEnv(name: string, fallback: number, min: number, max: number): number {
@@ -33,10 +34,22 @@ function encodeStoragePath(path: string): string {
     .join("/");
 }
 
+function resolveLocalCustomBuildStorageRoot(): string {
+  const base = path.join(process.cwd(), DEFAULT_CUSTOM_BUILD_LOCAL_STORAGE_DIR);
+  const configured = process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR?.trim();
+  if (!configured || configured === DEFAULT_CUSTOM_BUILD_LOCAL_STORAGE_DIR) return base;
+  const normalized = configured.replaceAll("\\", "/").replace(/^\.\//, "");
+  const relative = normalized.startsWith(`${DEFAULT_CUSTOM_BUILD_LOCAL_STORAGE_DIR}/`)
+    ? normalized.slice(DEFAULT_CUSTOM_BUILD_LOCAL_STORAGE_DIR.length + 1)
+    : normalized;
+  if (path.isAbsolute(configured) || relative.split("/").includes("..")) {
+    throw new Error("Custom build local storage directory must stay under .custom-build-storage");
+  }
+  return path.resolve(base, relative);
+}
+
 function resolveLocalCustomBuildStoragePath(objectPath: string): string {
-  const storageRoot = process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR?.trim() || ".custom-build-storage";
-  const repoRoot = path.resolve(process.cwd());
-  const root = path.resolve(repoRoot, storageRoot);
+  const root = resolveLocalCustomBuildStorageRoot();
   const normalizedPath = objectPath.replace(/^\/+/, "");
   const absolutePath = path.resolve(root, normalizedPath);
   const rootPrefix = `${root}${path.sep}`;

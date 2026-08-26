@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { gzipSync } from "fflate";
+import { sha256Hex } from "@/lib/custom-builds/hash";
 import { prisma } from "@/lib/prisma";
 import {
   getCustomBuildArtifactDescriptor,
@@ -28,9 +28,7 @@ export function getCustomBuildPreviewTargetBlocks(): number {
   return readIntEnv("CUSTOM_BUILD_PREVIEW_TARGET_BLOCKS", 3_000, 100, 100_000);
 }
 
-export function sha256Hex(bytes: Uint8Array | string): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
+export { sha256Hex } from "@/lib/custom-builds/hash";
 
 export function jsonBytes(value: unknown): Uint8Array {
   return ENCODER.encode(JSON.stringify(value));

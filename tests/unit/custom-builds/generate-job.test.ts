@@ -315,7 +315,7 @@ async function main() {
   eventSeq = 0;
   txSeq = 0;
   currentCustomBuild = queuedCustomBuild;
-  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = "package.json";
+  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = "../package.json";
   await assert.rejects(
     runCustomBuildGenerateJob({
       id: "artifact-failure-job-row",
