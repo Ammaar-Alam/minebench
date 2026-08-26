@@ -27,6 +27,7 @@ async function main() {
     selectGalleryCandidate,
     setGalleryPublishingSuspension,
     setGalleryVote,
+    submitGalleryAppeal,
     submitGalleryCandidate,
   } = await import("../../../lib/gallery/service");
 
@@ -282,6 +283,23 @@ async function main() {
       suspended: true,
       reason: "Review in progress",
     });
+    const appealResults = await Promise.allSettled(
+      Array.from({ length: 8 }, () => submitGalleryAppeal(uploaderId, "Please review this suspension.")),
+    );
+    assert.equal(
+      appealResults.filter((result) => result.status === "fulfilled").length,
+      1,
+      "concurrent appeals must admit only one request per account",
+    );
+    assert.equal(
+      appealResults.filter((result) => result.status === "rejected").every((result) =>
+        result.reason instanceof GalleryServiceError && result.reason.code === "appeal_rate_limited"
+      ),
+      true,
+    );
+    assert.equal(await db.galleryModerationRecord.count({
+      where: { kind: "APPEAL", subjectUserId: uploaderId },
+    }), 1);
     const visible = await listGalleryCandidates({ sort: "new", limit: 10 });
     assert.equal(visible.items.some((item) => item.id === created.candidate.id), true);
     assert.equal(visible.items.some((item) => item.id === caseVariant.candidate.id), false);

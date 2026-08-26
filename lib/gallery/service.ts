@@ -867,38 +867,49 @@ export async function submitGalleryAppeal(userId: string, explanation: string) {
   if (!note || note.length > 2000) {
     throw new GalleryServiceError("invalid_appeal", "Explain why the suspension should be reviewed.");
   }
-  const account = await prisma.user.findUnique({
-    where: { id: userId },
-    select: {
-      email: true,
-      publicNickname: true,
-      gallerySuspendedAt: true,
-      gallerySuspensionReason: true,
-    },
-  });
-  if (!account?.gallerySuspendedAt) {
-    throw new GalleryServiceError("not_suspended", "This account is not suspended.");
-  }
-  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const recent = await prisma.galleryModerationRecord.findFirst({
-    where: { kind: "APPEAL", subjectUserId: userId, createdAt: { gte: cutoff } },
-    select: { id: true },
-  });
-  if (recent) throw new GalleryServiceError("appeal_rate_limited", "An appeal was already submitted in the last 24 hours.");
-  const now = new Date();
-  await prisma.galleryModerationRecord.create({
-    data: {
-      kind: "APPEAL",
-      target: "ACCOUNT",
-      actorUserId: userId,
-      subjectUserId: userId,
-      note,
-      safeSnapshot: {
-        suspendedAt: account.gallerySuspendedAt.toISOString(),
-        reason: account.gallerySuspensionReason,
+  const account = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE
+    `;
+    const account = locked[0]
+      ? await tx.user.findUnique({
+          where: { id: locked[0].id },
+          select: {
+            email: true,
+            publicNickname: true,
+            gallerySuspendedAt: true,
+            gallerySuspensionReason: true,
+          },
+        })
+      : null;
+    if (!account?.gallerySuspendedAt) {
+      throw new GalleryServiceError("not_suspended", "This account is not suspended.");
+    }
+    const now = new Date();
+    const recent = await tx.galleryModerationRecord.findFirst({
+      where: {
+        kind: "APPEAL",
+        subjectUserId: userId,
+        createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
       },
-      purgeAt: new Date(now.getTime() + RETENTION_MS),
-    },
+      select: { id: true },
+    });
+    if (recent) throw new GalleryServiceError("appeal_rate_limited", "An appeal was already submitted in the last 24 hours.");
+    await tx.galleryModerationRecord.create({
+      data: {
+        kind: "APPEAL",
+        target: "ACCOUNT",
+        actorUserId: userId,
+        subjectUserId: userId,
+        note,
+        safeSnapshot: {
+          suspendedAt: account.gallerySuspendedAt.toISOString(),
+          reason: account.gallerySuspensionReason,
+        },
+        purgeAt: new Date(now.getTime() + RETENTION_MS),
+      },
+    });
+    return account;
   });
   await deliverGalleryEmail(
     sendGalleryAdminNotification({

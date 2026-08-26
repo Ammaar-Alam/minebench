@@ -520,10 +520,6 @@ export async function removeSavedGeneration(
         deletionError: redactSensitiveText(error).slice(0, 500),
       },
     });
-    throw new GenerationServiceError(
-      "artifact_deletion_pending",
-      "The generation is hidden while storage cleanup retries.",
-    );
   }
   return { removed: true, publicExamplesRemoved: build.galleryExamples.length };
 }

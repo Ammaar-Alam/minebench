@@ -86,6 +86,12 @@ async function main() {
         purgeAt: null,
       },
     });
+    const artifactFreeBuild = await db.customBuild.create({
+      data: {
+        ...buildData(`${suffix}empty`, future, `gallery/${suffix}/empty.svg`),
+        artifacts: { create: [] },
+      },
+    });
 
     const dueCandidate = await db.galleryCandidate.create({
       data: {
@@ -209,6 +215,11 @@ async function main() {
     assert.equal(canceled.status, "canceled");
     assert.equal(canceled.artifacts.length, 0);
     assert.equal(canceled.deletionPendingAt, null);
+    const artifactFree = await db.customBuild.findUniqueOrThrow({
+      where: { id: artifactFreeBuild.id },
+    });
+    assert.equal(artifactFree.deletionPendingAt, null);
+    assert.equal(artifactFree.objectsDeletedAt?.getTime(), now.getTime());
     assert.equal(await db.customBuildSecret.count({ where: { customBuildId: expiredBuild.id } }), 0);
     assert.equal(await db.galleryCandidate.count({ where: { id: dueCandidate.id } }), 0);
     assert.equal(await db.galleryCandidate.count({ where: { id: selectedCandidate.id } }), 1);

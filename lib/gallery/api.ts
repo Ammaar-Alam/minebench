@@ -19,7 +19,6 @@ const STATUS_BY_CODE: Record<string, number> = {
   public_examples_require_confirmation: 409,
   selected_candidate: 409,
   storage_failsafe: 409,
-  artifact_deletion_pending: 503,
   missing_provider_key: 401,
 };
 

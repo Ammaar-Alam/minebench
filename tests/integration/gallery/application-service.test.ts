@@ -92,13 +92,38 @@ async function main() {
       models: [{ id: "removable", kind: "catalog", modelKey: "openai_gpt_5_4_mini" }],
       providerKeys: { openai: "request-only-secret" },
     });
-    await removeSavedGeneration(ownerId, removable[0]!.id, { deleteArtifact: async () => undefined });
+    const removableRow = await db.customBuild.findUniqueOrThrow({
+      where: { publicId: removable[0]!.id },
+    });
+    await db.customBuildArtifact.create({
+      data: {
+        customBuildId: removableRow.id,
+        kind: "preview_svg",
+        format: "svg",
+        bucket: "builds",
+        path: `gallery/${suffix}/remove-retry.svg`,
+        contentType: "image/svg+xml",
+        fileName: "preview.svg",
+        sha256: "e".repeat(64),
+        byteSize: 10,
+        storedByteSize: 10,
+      },
+    });
+    assert.deepEqual(
+      await removeSavedGeneration(ownerId, removable[0]!.id, {
+        deleteArtifact: async () => {
+          throw new Error("storage unavailable");
+        },
+      }),
+      { removed: true, publicExamplesRemoved: 0 },
+    );
     const removed = await db.customBuild.findUniqueOrThrow({
       where: { publicId: removable[0]!.id },
       include: { jobs: true, secret: true },
     });
     assert.equal(removed.status, "canceled");
     assert.ok(removed.removedAt);
+    assert.ok(removed.deletionPendingAt);
     assert.equal(removed.secret, null);
     assert.equal(removed.jobs.every((job) => job.status === "canceled"), true);
 

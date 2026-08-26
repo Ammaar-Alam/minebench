@@ -6,6 +6,7 @@ async function main() {
   const { recoverStaleCustomBuildJobLeases } = await import("../../../lib/custom-builds/jobs");
 
   const operations: string[] = [];
+  const customBuildUpdates: Array<{ data: Record<string, unknown> }> = [];
   let queryCount = 0;
   const txClient = {
     $queryRaw: async () => {
@@ -20,8 +21,9 @@ async function main() {
       return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate" }];
     },
     customBuild: {
-      updateMany: async () => {
+      updateMany: async (args: { data: Record<string, unknown> }) => {
         operations.push("customBuild.updateMany");
+        customBuildUpdates.push(args);
         return { count: 1 };
       },
     },
@@ -43,6 +45,12 @@ async function main() {
 
   const result = await recoverStaleCustomBuildJobLeases(rootClient as never);
   assert.deepEqual(result, { requeued: 1, failed: 2 });
+  assert.equal(customBuildUpdates.length, 2);
+  assert.equal(
+    customBuildUpdates.every((update) => update.data.deletionPendingAt instanceof Date),
+    true,
+    "terminal lease recovery should schedule cleanup for any partially persisted artifacts",
+  );
   assert.deepEqual(operations, [
     "$transaction.begin",
     "$queryRaw.1",

@@ -26,7 +26,6 @@ export async function purgeDueGalleryRecords(
   });
   const pendingBuilds = await prisma.customBuild.findMany({
     where: {
-      artifacts: { some: {} },
       OR: [
         { deletionPendingAt: { not: null } },
         { removedAt: { not: null }, purgeAt: { lte: now } },

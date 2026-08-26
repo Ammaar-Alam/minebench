@@ -131,6 +131,9 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         errorCode: "provider_key_expired",
         errorMessage: "Provider key expired before the worker could start.",
         errorRetryable: false,
+        objectsDeletedAt: null,
+        deletionPendingAt: new Date(),
+        deletionError: null,
       },
     });
     await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
@@ -178,6 +181,9 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         errorCode: "lease_expired",
         errorMessage: "Worker lease expired after maximum attempts.",
         errorRetryable: false,
+        objectsDeletedAt: null,
+        deletionPendingAt: new Date(),
+        deletionError: null,
       },
     });
     await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
