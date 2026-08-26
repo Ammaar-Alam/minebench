@@ -197,6 +197,10 @@ const MODEL_RUN_PARAMETERS = {
   ],
   xai_grok_4_20: [{ label: "Reasoning", value: "Thinking enabled" }],
   zai_glm_5_3: [{ label: "Reasoning effort", value: "Max" }],
+  zai_glm_5_3_flash: [
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Sampling", value: "Temperature 1 · Top P 0.95" },
+  ],
   zai_glm_5_2: [
     { label: "Reasoning effort", value: "XHigh → High" },
   ],

@@ -32,7 +32,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
   // MiniMax M2.7 rejects the larger MineBench default on its OpenAI-compatible route
   {
     tokens: 131_072,
-    ids: ["glm-5.3", "glm-5.2", "glm-5.1", "glm-5", "minimax-m2.7", "muse-spark-1.2"],
+    ids: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5", "minimax-m2.7", "muse-spark-1.2"],
   },
   {
     tokens: 65_536,
@@ -75,6 +75,10 @@ const DEFAULT_SAMPLING_IDS: readonly string[] = [
 
 const DEFAULT_SAMPLING_PREFIXES: readonly string[] = ["gpt-5.6", "openai/gpt-5.6"];
 
+const RECOMMENDED_TOP_P: readonly { topP: number; ids: readonly string[] }[] = [
+  { topP: 0.95, ids: ["glm-5.3-flash"] },
+];
+
 // Returns the catalogued counterpart IDs for a model ID, so a fact declared
 // under one route's ID also resolves from the other
 function counterpartIds(normalized: string): string[] {
@@ -108,4 +112,13 @@ export function modelUsesDefaultSampling(modelId: string): boolean {
     ) ||
     DEFAULT_SAMPLING_PREFIXES.some((prefix) => normalized.startsWith(prefix))
   );
+}
+
+export function modelRecommendedTopP(modelId: string): number | undefined {
+  const normalized = modelId.toLowerCase();
+  for (const id of [normalized, ...counterpartIds(normalized)]) {
+    const match = RECOMMENDED_TOP_P.find(({ ids }) => ids.includes(id));
+    if (match) return match.topP;
+  }
+  return undefined;
 }

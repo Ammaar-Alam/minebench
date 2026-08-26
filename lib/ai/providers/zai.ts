@@ -3,6 +3,7 @@ import {
   postChatCompletionWithTokenBudgetRetry,
   withMaxOutputTokens,
 } from "@/lib/ai/providers/shared";
+import { modelRecommendedTopP } from "@/lib/ai/modelRequestProfiles";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
 
@@ -62,6 +63,12 @@ export async function zaiGenerateText(params: {
     ? params.reasoningEffortAttempts
     : [undefined];
   const useJsonOutput = Boolean(params.jsonSchema);
+  const stream = Boolean(params.onDelta) || params.modelId === "glm-5.3-flash";
+  const topP = modelRecommendedTopP(params.modelId);
+  const thinking =
+    params.modelId === "glm-5.3-flash"
+      ? { type: "enabled", clear_thinking: false }
+      : { type: "enabled" };
 
   let reasoningEffort: string | undefined;
   let response: Awaited<ReturnType<typeof postChatCompletionWithTokenBudgetRetry>> | null = null;
@@ -72,7 +79,7 @@ export async function zaiGenerateText(params: {
         url,
         apiKey,
         maxOutputTokens: maxTokens,
-        stream: Boolean(params.onDelta),
+        stream,
         looksLikeTokenLimitError,
         signal: params.signal,
         onProviderRequest: params.onProviderRequest,
@@ -82,10 +89,11 @@ export async function zaiGenerateText(params: {
             { role: "system", content: params.system },
             { role: "user", content: params.user },
           ],
-          stream: Boolean(params.onDelta),
+          stream,
           max_tokens: tok,
-          thinking: { type: "enabled" },
+          thinking,
           ...(params.temperature === undefined ? {} : { temperature: params.temperature }),
+          ...(topP === undefined ? {} : { top_p: topP }),
           ...(effort ? { reasoning_effort: effort } : {}),
           ...(useJsonOutput ? { response_format: { type: "json_object" } } : {}),
         }),
@@ -121,7 +129,7 @@ export async function zaiGenerateText(params: {
     ),
   );
 
-  if (params.onDelta) {
+  if (stream) {
     let text = "";
     await consumeSseStream(res, (evt) => {
       if (evt.data === "[DONE]") return;

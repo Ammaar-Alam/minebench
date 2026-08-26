@@ -480,6 +480,15 @@ const CATALOG = [
     openRouterModelId: "z-ai/glm-5.3",
   },
   {
+    key: "zai_glm_5_3_flash",
+    slug: "glm-5-3-flash",
+    provider: "zai",
+    modelId: "glm-5.3-flash",
+    displayName: "Z.AI GLM 5.3 Flash",
+    enabled: true,
+    openRouterModelId: "z-ai/glm-5.3-flash",
+  },
+  {
     key: "zai_glm_5_2",
     slug: "glm-5-2",
     provider: "zai",

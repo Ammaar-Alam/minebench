@@ -587,6 +587,23 @@
       "interruptedRunCount": 0,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "zai_glm_5_3_flash": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 27273756,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": false,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "outputCapTokens": 131072,
+      "providerCallCount": 97,
+      "failedAttemptCount": 55,
+      "failedRunCount": 36,
+      "interruptedRunCount": 20,
+      "providerCallTrackingJobCount": 15
     }
   }
 }
