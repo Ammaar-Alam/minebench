@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import type { Prisma } from "@prisma/client";
+
+const generateJobSource = readFileSync("lib/custom-builds/generateJob.ts", "utf8");
 
 const publicId = "cb_123456789012345678901234";
 const customBuildId = "custom-build-row";
@@ -189,6 +192,12 @@ async function main() {
     validateGeneratedBuildForArtifacts,
   } = await import("../../../lib/custom-builds/generateJob");
   const { gzipBytes, jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
+
+  assert.ok(
+    generateJobSource.includes("buildGalleryPreviewSvg(canonicalBuild)") &&
+      generateJobSource.includes("blockCount: canonicalBuild.blocks.length"),
+    "static thumbnails should derive from the canonical build rather than the sampled viewer preview",
+  );
 
   assert.equal(
     isTerminalCustomBuildGenerateError("OpenAI error 401: invalid_api_key"),

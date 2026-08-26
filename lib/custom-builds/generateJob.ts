@@ -461,7 +461,7 @@ export async function runCustomBuildGenerateJob(
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: viewerKind });
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const previewSvg = new TextEncoder().encode(buildGalleryPreviewSvg(preview));
+    const previewSvg = new TextEncoder().encode(buildGalleryPreviewSvg(canonicalBuild));
     await persistCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
@@ -469,7 +469,7 @@ export async function runCustomBuildGenerateJob(
       bytes: previewSvg,
       sha256: sha256Hex(previewSvg),
       sourceBuildSha256: fullSha,
-      blockCount: preview.blocks.length,
+      blockCount: canonicalBuild.blocks.length,
     });
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_svg" });
     artifactsPersisted = true;

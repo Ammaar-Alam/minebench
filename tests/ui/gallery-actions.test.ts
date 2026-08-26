@@ -17,6 +17,12 @@ assert.ok(
   "ordinary candidate owners should have a reachable Remove action",
 );
 assert.ok(
+  detail.includes("SandboxGifExportButton") &&
+    detail.includes("viewerRef={viewerRef}") &&
+    detail.includes('label="Export GIF"'),
+  "public examples should reuse the full viewer GIF exporter",
+);
+assert.ok(
   yours.includes("body.created === false") &&
     yours.includes("/examples`") &&
     yours.includes("Add to Gallery") &&

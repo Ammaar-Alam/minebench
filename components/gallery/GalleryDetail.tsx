@@ -2,13 +2,20 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import type { GalleryCandidatePayload, GalleryExamplePayload } from "@/lib/gallery/service";
+
+const SandboxGifExportButton = dynamic(
+  () => import("@/components/sandbox/SandboxGifExportButton").then((module) => module.SandboxGifExportButton),
+  { ssr: false },
+);
 
 type GalleryDetailPayload = GalleryCandidatePayload & {
   examples: GalleryExamplePayload[];
@@ -83,6 +90,7 @@ function ReportDialog({
 
 export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }) {
   const router = useRouter();
+  const viewerRef = useRef<VoxelViewerHandle>(null);
   const [examples, setExamples] = useState(candidate.examples);
   const [nextExamplesCursor, setNextExamplesCursor] = useState(candidate.nextExamplesCursor);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -141,6 +149,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       return;
     }
     const controller = new AbortController();
+    setBuild(null);
     setLoading(true);
     setError(null);
     void fetch(selected.viewerUrl, { signal: controller.signal, cache: "no-store" })
@@ -196,6 +205,21 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
             enableBuildExport={Boolean(build)}
             exportLabel={selected.model.label}
             exportPrompt={candidate.prompt}
+            viewerRef={viewerRef}
+            actions={build && !loading ? (
+              <SandboxGifExportButton
+                targets={[{
+                  viewerRef,
+                  modelName: selected.model.label,
+                  company: selected.attribution,
+                  blockCount: selected.blockCount ?? 0,
+                }]}
+                promptText={candidate.prompt}
+                cancelKey={`${selected.id}:${selected.checksum ?? ""}`}
+                iconOnly
+                label="Export GIF"
+              />
+            ) : undefined}
           />
           <div>
             <h2 id="viewer-title" className="mb-eyebrow">Examples</h2>
