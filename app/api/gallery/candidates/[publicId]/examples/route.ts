@@ -16,7 +16,8 @@ export async function POST(request: Request, context: { params: Promise<{ public
   const parsed = requestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return apiJson({ error: { code: "invalid_request", message: "Check the saved generation." } }, 400);
   try {
-    return apiJson(await addGalleryExample(userId, (await context.params).publicId, parsed.data), 201);
+    const result = await addGalleryExample(userId, (await context.params).publicId, parsed.data);
+    return apiJson(result, result.created ? 201 : 200);
   } catch (error) {
     return apiServiceError(error);
   }

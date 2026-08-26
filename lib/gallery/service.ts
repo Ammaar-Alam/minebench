@@ -516,29 +516,33 @@ export async function addGalleryExample(
     throw new GalleryServiceError("model_label_rejected", "Choose a different public model label.");
   }
   const id = randomBytes(16).toString("hex");
-  const inserted = await prisma.$transaction(async (tx) => {
-    const result = await tx.galleryExample.createMany({
-      data: [{
+  return prisma.$transaction(async (tx) => {
+    const example = await tx.galleryExample.upsert({
+      where: {
+        candidateId_customBuildId: {
+          candidateId: candidate.id,
+          customBuildId: generation.id,
+        },
+      },
+      create: {
         id,
         candidateId: candidate.id,
         customBuildId: generation.id,
         contributorId: userId,
         postAnonymously: input.postAnonymously,
-      }],
-      skipDuplicates: true,
+      },
+      update: { postAnonymously: input.postAnonymously },
+      select: { id: true },
     });
-    if (result.count > 0) {
+    const created = example.id === id;
+    if (created) {
       await tx.galleryCandidate.update({
         where: { id: candidate.id },
         data: { publishedAt: new Date() },
       });
     }
-    return result;
+    return { ...example, created };
   });
-  if (inserted.count === 0) {
-    throw new GalleryServiceError("already_attached", "This generation is already attached.");
-  }
-  return { id };
 }
 
 export async function removeGalleryCandidate(userId: string, publicId: string) {

@@ -165,9 +165,9 @@ function GenerationActions({
           },
         );
         const exampleBody = (await exampleResponse.json().catch(() => null)) as {
-          error?: { code?: string; message?: string };
+          error?: { message?: string };
         } | null;
-        if (!exampleResponse.ok && exampleBody?.error?.code !== "already_attached") {
+        if (!exampleResponse.ok) {
           throw new Error(exampleBody?.error?.message ?? "Example could not be added.");
         }
       }

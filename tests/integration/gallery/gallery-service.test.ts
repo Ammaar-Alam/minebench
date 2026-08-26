@@ -124,14 +124,15 @@ async function main() {
     });
     assert.equal(caseVariant.created, true);
 
-    await assert.rejects(
-      () => addGalleryExample(uploaderId, created.candidate.id, {
-        generationId: buildPublicId,
-        postAnonymously: false,
-      }),
-      (error: unknown) =>
-        error instanceof GalleryServiceError && error.code === "already_attached",
-    );
+    const updatedExample = await addGalleryExample(uploaderId, created.candidate.id, {
+      generationId: buildPublicId,
+      postAnonymously: true,
+    });
+    assert.equal(updatedExample.created, false);
+    const updatedCandidate = await getGalleryCandidate(created.candidate.id);
+    assert.equal(updatedCandidate?.exampleCount, 1, "an attribution update must not duplicate the build");
+    assert.equal(updatedCandidate?.cover?.attribution, "Anonymous");
+    assert.equal(updatedCandidate?.publishedAt, created.candidate.publishedAt, "an attribution update must not refresh New order");
 
     for (let index = 0; index < 3; index += 1) {
       const extraId = randomUUID();

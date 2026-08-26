@@ -11,7 +11,6 @@ const STATUS_BY_CODE: Record<string, number> = {
   forbidden: 403,
   account_suspended: 403,
   not_found: 404,
-  already_attached: 409,
   already_finished: 409,
   duplicate_unavailable: 409,
   generation_mismatch: 409,
