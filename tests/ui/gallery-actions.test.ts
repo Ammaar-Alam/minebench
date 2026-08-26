@@ -36,8 +36,10 @@ assert.ok(
     yours.includes("headerMeta=") &&
     !yours.includes("SHA-256 ") &&
     yours.includes("hover:after:scale-x-100") &&
+    yours.includes('generation.status === "queued" || generation.status === "running"') &&
+    !yours.includes("<VoxelEmptyState") &&
     yours.includes("embedded"),
-  "saved builds should open privately and expose their expanded JSON download and size",
+  "saved builds should open privately, preserve lifecycle placeholders, and expose expanded JSON details",
 );
 assert.ok(
   explore.includes("VoxelEmptyState") &&

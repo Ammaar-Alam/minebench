@@ -6,7 +6,6 @@ import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
-import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
@@ -362,7 +361,7 @@ export function GalleryYours({
         {items.map((generation, index) => (
           <article id={generation.id} key={generation.id} className={`group/card scroll-mt-24 rounded-md border border-border/80 bg-card/10 p-4 transition-[border-color,background-color] hover:border-border hover:bg-card/20 motion-reduce:transition-none sm:p-5 mb-card-enter ${index % 2 === 1 ? "mb-card-enter-delay" : ""}`}>
             <button type="button" disabled={!generation.viewerUrl} aria-label={`View ${generation.prompt}`} className="group/open grid w-full gap-5 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-default md:grid-cols-[11rem_minmax(0,1fr)]" onClick={() => setSelectedId(generation.id)}>
-              {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className={`object-contain p-1.5 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /></div> : <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><VoxelEmptyState /></div>}
+              {generation.thumbnailUrl ? <div className="relative aspect-[4/3] overflow-hidden rounded bg-bg/55"><Image src={generation.thumbnailUrl} alt="" fill unoptimized sizes="11rem" className={`object-contain p-1.5 motion-reduce:transition-none ${generation.viewerUrl ? "transition-transform duration-300 ease-out group-hover/open:scale-[1.025]" : ""}`} /></div> : <div className="grid aspect-[4/3] rounded bg-bg/55 text-center text-sm text-muted"><span className="self-center"><span className={`mr-2 inline-block h-1.5 w-1.5 rounded-full bg-current ${(generation.status === "queued" || generation.status === "running") ? "animate-pulse motion-reduce:animate-none" : ""}`} />{statusLabel(generation.status)}</span></div>}
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-3 text-xs text-muted"><span>{statusLabel(generation.status)}</span><span>{generation.model.label}</span><time dateTime={generation.createdAt}>{new Date(generation.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</time></div>
                 <h3 className={`mt-2 text-xl font-semibold leading-snug text-fg motion-reduce:transition-none ${generation.viewerUrl ? "transition-colors group-hover/open:text-accent" : ""}`}>{generation.prompt}</h3>
