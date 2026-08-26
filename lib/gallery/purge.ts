@@ -2,6 +2,7 @@ import type { CustomBuildArtifact } from "@prisma/client";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { prisma } from "@/lib/prisma";
+import { PUBLIC_SESSION_RETENTION_MS } from "@/lib/publicPresence";
 
 const DEFAULT_BATCH_SIZE = 100;
 
@@ -101,6 +102,16 @@ export async function purgeDueGalleryRecords(
     where: { id: { in: moderationIds.map(({ id }) => id) } },
   });
 
+  const sessionIds = await prisma.publicSessionActivity.findMany({
+    where: { lastSeenAt: { lte: new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS) } },
+    orderBy: { lastSeenAt: "asc" },
+    take: limit,
+    select: { id: true },
+  });
+  const publicSessions = await prisma.publicSessionActivity.deleteMany({
+    where: { id: { in: sessionIds.map(({ id }) => id) } },
+  });
+
   const exampleIds = await prisma.galleryExample.findMany({
     where: { purgeAt: { lte: now } },
     orderBy: [{ purgeAt: "asc" }, { createdAt: "asc" }],
@@ -153,6 +164,7 @@ export async function purgeDueGalleryRecords(
     objectsDeleted,
     objectDeletionFailures,
     moderationRecords: moderationRecords.count,
+    publicSessions: publicSessions.count,
     examples: examples.count,
     candidates: candidates.count,
     generations: generations.count,

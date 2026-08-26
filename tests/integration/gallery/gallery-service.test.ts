@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 
 async function main() {
@@ -15,6 +15,7 @@ async function main() {
   const buildId = randomUUID();
   const buildPublicId = `cb_${suffix}saved`;
   const prompt = "A lantern-lit cliff observatory";
+  const legacyPrompt = `A legacy-key Gallery prompt ${suffix}`;
   const racePrompt = `A selection and removal race ${suffix}`;
   const {
     addGalleryExample,
@@ -24,7 +25,7 @@ async function main() {
     hideGalleryExample,
     listGalleryCandidates,
     removeGalleryCandidate,
-    selectGalleryCandidate,
+    setGalleryCandidateSelected,
     setGalleryPublishingSuspension,
     setGalleryVote,
     submitGalleryAppeal,
@@ -127,7 +128,25 @@ async function main() {
       prompt: prompt.toUpperCase(),
       postAnonymously: true,
     });
-    assert.equal(caseVariant.created, true);
+    assert.equal(caseVariant.created, false);
+    assert.equal(caseVariant.candidate.id, created.candidate.id);
+
+    const legacyCandidate = await db.galleryCandidate.create({
+      data: {
+        publicId: `gal_${suffix}legacy`,
+        promptText: legacyPrompt,
+        promptKey: createHash("sha256").update(legacyPrompt).digest("hex"),
+        uploaderId,
+        postAnonymously: true,
+      },
+    });
+    const legacyDuplicate = await submitGalleryCandidate(uploaderId, {
+      prompt: legacyPrompt,
+      postAnonymously: true,
+    });
+    assert.equal(legacyDuplicate.created, false);
+    assert.equal(legacyDuplicate.candidate.id, legacyCandidate.publicId);
+    assert.equal(await db.galleryCandidate.count({ where: { promptText: legacyPrompt } }), 1);
 
     const updatedExample = await addGalleryExample(uploaderId, created.candidate.id, {
       generationId: buildPublicId,
@@ -149,7 +168,7 @@ async function main() {
           ownerId: uploaderId,
           status: "succeeded",
           currentStage: "complete",
-          promptText: prompt,
+          promptText: index === 0 ? prompt.toUpperCase() : prompt,
           promptSha256: `${index + 1}`.repeat(64),
           gridSize: 64,
           palette: "simple",
@@ -253,7 +272,7 @@ async function main() {
       postAnonymously: true,
     });
     const raceResults = await Promise.allSettled([
-      selectGalleryCandidate(adminId, raceCandidate.candidate.id),
+      setGalleryCandidateSelected(adminId, raceCandidate.candidate.id, true),
       removeGalleryCandidate(uploaderId, raceCandidate.candidate.id),
     ]);
     assert.equal(
@@ -268,13 +287,19 @@ async function main() {
     assert.notEqual(Boolean(racedRow.selectedAt), Boolean(racedRow.removedAt));
 
     const selections = await Promise.all([
-      selectGalleryCandidate(adminId, created.candidate.id),
-      selectGalleryCandidate(adminId, created.candidate.id),
+      setGalleryCandidateSelected(adminId, created.candidate.id, true),
+      setGalleryCandidateSelected(adminId, created.candidate.id, true),
     ]);
     assert.equal(selections[0]?.promptId, selections[1]?.promptId);
     assert.equal(await db.galleryModerationRecord.count({
       where: { candidate: { publicId: created.candidate.id }, action: "selected" },
     }), 1);
+    await setGalleryCandidateSelected(adminId, created.candidate.id, false);
+    await setGalleryCandidateSelected(adminId, created.candidate.id, false);
+    assert.equal(await db.galleryModerationRecord.count({
+      where: { candidate: { publicId: created.candidate.id }, action: "unselected" },
+    }), 1);
+    await setGalleryCandidateSelected(adminId, created.candidate.id, true);
     assert.equal(
       (await getGalleryCandidate(created.candidate.id, { userId: uploaderId }))?.canRemove,
       false,
@@ -302,7 +327,6 @@ async function main() {
     }), 1);
     const visible = await listGalleryCandidates({ sort: "new", limit: 10 });
     assert.equal(visible.items.some((item) => item.id === created.candidate.id), true);
-    assert.equal(visible.items.some((item) => item.id === caseVariant.candidate.id), false);
 
     await assert.rejects(
       () => removeGalleryCandidate(uploaderId, created.candidate.id),
@@ -310,10 +334,20 @@ async function main() {
         error instanceof GalleryServiceError && error.code === "selected_candidate",
     );
     await setGalleryPublishingSuspension(adminId, uploaderId, { suspended: false });
-    await removeGalleryCandidate(uploaderId, caseVariant.candidate.id);
+    await setGalleryPublishingSuspension(adminId, uploaderId, { suspended: true });
+    await submitGalleryAppeal(uploaderId, "Please review this new suspension.");
+    assert.equal(await db.galleryModerationRecord.count({
+      where: { kind: "APPEAL", subjectUserId: uploaderId },
+    }), 2, "restoring an account must reset its appeal cooldown");
+    await setGalleryPublishingSuspension(adminId, uploaderId, { suspended: false });
+    const removable = await submitGalleryCandidate(uploaderId, {
+      prompt: `A removable Gallery prompt ${suffix}`,
+      postAnonymously: true,
+    });
+    await removeGalleryCandidate(uploaderId, removable.candidate.id);
     assert.equal(
       (await listGalleryCandidates({ sort: "new", limit: 10 })).items.some(
-        (item) => item.id === caseVariant.candidate.id,
+        (item) => item.id === removable.candidate.id,
       ),
       false,
     );
@@ -330,7 +364,7 @@ async function main() {
     console.log("Gallery application-service checks passed");
   } finally {
     await db.galleryCandidate.deleteMany({ where: { uploaderId } });
-    await db.prompt.deleteMany({ where: { text: { in: [prompt, racePrompt] } } });
+    await db.prompt.deleteMany({ where: { text: { in: [prompt, legacyPrompt, racePrompt] } } });
     await db.customBuild.deleteMany({ where: { ownerId: uploaderId } });
     await db.user.deleteMany({ where: { id: { in: [uploaderId, visitorId, adminId] } } });
     await db.$disconnect();

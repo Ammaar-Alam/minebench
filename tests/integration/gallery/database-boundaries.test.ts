@@ -14,6 +14,7 @@ const privateTables = [
   "GalleryVote",
   "GalleryModerationRecord",
   "GalleryVoteBlock",
+  "PublicSessionActivity",
 ];
 
 async function main() {
@@ -53,6 +54,19 @@ async function main() {
   `;
   assert.deepEqual(clientGrants, [], "browser roles must not retain Gallery-table grants");
 
+  const presenceIpColumns = await db.$queryRaw<Array<{ name: string }>>`
+    SELECT column_name AS name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'PublicSessionActivity'
+      AND column_name ILIKE '%ip%'
+  `;
+  assert.deepEqual(
+    presenceIpColumns.map((column) => column.name),
+    ["ipHmac"],
+    "presence may persist only the one-way IP abuse signal",
+  );
+
   const indexes = await db.$queryRaw<Array<{ name: string }>>`
     SELECT indexname AS name
     FROM pg_indexes
@@ -62,9 +76,13 @@ async function main() {
         "GalleryCandidate_promptKey_key",
         "GalleryVote_candidateId_sessionId_key",
         "GalleryVote_candidateId_userId_key",
+        "PublicSessionActivity_sessionId_key",
+        "PublicSessionActivity_lastSeenAt_idx",
+        "PublicSessionActivity_userId_lastSeenAt_idx",
+        "PublicSessionActivity_ipHmac_lastSeenAt_idx",
       ]})
   `;
-  assert.equal(indexes.length, 4, "identity, prompt, and vote uniqueness must be database-enforced");
+  assert.equal(indexes.length, 8, "identity, prompt, vote, and presence lookups must be indexed");
 
   console.log("Gallery PostgreSQL boundary checks passed");
 }

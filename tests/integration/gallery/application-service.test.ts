@@ -52,7 +52,7 @@ async function main() {
     });
     assert.equal(rows.length, 2);
     assert.equal(rows.every((row) => row.jobs.length === 1), true);
-    assert.equal(rows.every((row) => row.jobs[0]?.maxAttempts === 1), true);
+    assert.equal(rows.every((row) => row.jobs[0]?.maxAttempts === 2), true);
     assert.equal(rows.every((row) => row.secret?.keyCiphertext !== "request-only-secret"), true);
     assert.notEqual(rows[0]?.secret?.keyCiphertext, rows[1]?.secret?.keyCiphertext);
 
@@ -69,21 +69,32 @@ async function main() {
         errorCode: "generation_failed",
         errorMessage: "No valid build was returned.",
         errorRetryable: true,
-        progress: { attempt: 2, reason: "Build footprint too small." },
+        progress: { attempt: 2, reason: 'Gemini error 400: {"private":"provider body"}' },
       },
     });
+    assert.equal(
+      (await getSavedGeneration(ownerId, created[0]!.id))?.retryReason,
+      "The first response could not be used.",
+      "legacy retry details must be categorized before returning to the browser",
+    );
     await db.customBuildJob.updateMany({
       where: { customBuildId: rows[0]!.id },
       data: { status: "failed", completedAt: new Date() },
     });
-    const retried = await retrySavedGeneration(ownerId, created[0]!.id);
+    await db.customBuildSecret.deleteMany({ where: { customBuildId: rows[0]!.id } });
+    const retried = await retrySavedGeneration(ownerId, created[0]!.id, {
+      providerKey: "fresh-request-only-secret",
+    });
     assert.equal(retried.status, "queued");
     assert.equal(retried.retryReason, null);
+    const retrySecret = await db.customBuildSecret.findUnique({ where: { customBuildId: rows[0]!.id } });
+    assert.ok(retrySecret);
+    assert.notEqual(retrySecret.keyCiphertext, "fresh-request-only-secret");
     const retriedJobs = await db.customBuildJob.findMany({ where: { customBuildId: rows[0]!.id } });
     assert.equal(retriedJobs.length, 2);
-    assert.equal(retriedJobs.at(-1)?.maxAttempts, 1);
+    assert.equal(retriedJobs.at(-1)?.maxAttempts, 2);
     await assert.rejects(
-      () => retrySavedGeneration(ownerId, created[0]!.id),
+      () => retrySavedGeneration(ownerId, created[0]!.id, { providerKey: "unused-secret" }),
       (error: unknown) => error instanceof GenerationServiceError && error.code === "not_retryable",
     );
 

@@ -8,6 +8,8 @@ import { useEffect, useRef, useState } from "react";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
+import { loadProviderKeysFromStorage } from "@/lib/ai/providerKeys";
+import type { ProviderApiKeys } from "@/lib/ai/types";
 import { publishGenerationToGallery } from "@/lib/gallery/client";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
@@ -112,9 +114,21 @@ function GenerationActions({
     setPending(true);
     setMessage(null);
     try {
+      const retryProvider = generation.model.transport === "openrouter"
+        ? "openrouter"
+        : generation.model.provider as keyof ProviderApiKeys;
+      if (generation.model.transport === "custom") {
+        throw new Error("Reconnect this model in Generate.");
+      }
+      const providerKey = loadProviderKeysFromStorage()[retryProvider]?.trim();
+      if (!providerKey) throw new Error("Add the required API key in Generate first.");
       const response = await fetch(
         `/api/generations/${encodeURIComponent(generation.id)}/retry`,
-        { method: "POST" },
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ providerKey }),
+        },
       );
       const body = (await response.json().catch(() => null)) as {
         generation?: SavedGenerationPayload;

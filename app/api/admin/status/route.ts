@@ -8,6 +8,7 @@ import { findCatalogEntryBySlugOrKey } from "@/lib/ai/modelCatalog";
 import { ServerTiming } from "@/lib/serverTiming";
 import { databaseIdentityFromUrl } from "@/lib/db/identity";
 import { getSupabaseStorageReadiness } from "@/lib/storage/buildPayload";
+import { PUBLIC_SESSION_RETENTION_MS } from "@/lib/publicPresence";
 
 export const runtime = "nodejs";
 
@@ -91,6 +92,7 @@ async function getCustomBuildOpsStatus() {
     dueCandidates,
     dueExamples,
     dueModerationRecords,
+    duePublicSessions,
     emailDeliveryFailures,
   ] = await Promise.all([
     prisma.customBuild.count({ where: { status: "queued" } }),
@@ -128,6 +130,9 @@ async function getCustomBuildOpsStatus() {
     }),
     prisma.galleryExample.count({ where: { purgeAt: { lte: now } } }),
     prisma.galleryModerationRecord.count({ where: { purgeAt: { lte: now } } }),
+    prisma.publicSessionActivity.count({
+      where: { lastSeenAt: { lte: new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS) } },
+    }),
     prisma.galleryModerationRecord.count({ where: { action: "email_delivery_failed" } }),
   ]);
 
@@ -154,7 +159,8 @@ async function getCustomBuildOpsStatus() {
     },
     retainedStoredBytes: retainedAggregate._sum.storedByteSize ?? 0,
     pendingObjectDeletions,
-    purgeBacklog: dueGenerations + dueCandidates + dueExamples + dueModerationRecords,
+    purgeBacklog:
+      dueGenerations + dueCandidates + dueExamples + dueModerationRecords + duePublicSessions,
     emailDeliveryFailures,
   };
 }

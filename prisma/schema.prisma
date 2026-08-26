@@ -81,6 +81,7 @@ model User {
   selectedGalleryCandidates GalleryCandidate[]       @relation("GalleryCandidateSelector")
   galleryExamples          GalleryExample[]          @relation("GalleryExampleContributor")
   galleryVotes             GalleryVote[]
+  publicSessionActivities  PublicSessionActivity[]
   galleryModerationAuthored GalleryModerationRecord[] @relation("GalleryModerationActor")
   galleryModerationSubjects GalleryModerationRecord[] @relation("GalleryModerationSubject")
   galleryVoteBlocks        GalleryVoteBlock[]        @relation("GalleryVoteBlockSubject")
@@ -880,4 +881,23 @@ model GalleryVoteBlock {
   @@index([ipHmac, reversedAt])
   @@index([createdById, createdAt])
   @@index([reversedById])
+}
+
+model PublicSessionActivity {
+  id            String   @id @default(cuid())
+  sessionId     String   @unique
+  userId        String?  @db.Uuid
+  lastSeenAt    DateTime @default(now())
+  city          String?  @db.VarChar(160)
+  countryRegion String?  @db.VarChar(64)
+  country       String?  @db.VarChar(8)
+  ipHmac        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([lastSeenAt])
+  @@index([userId, lastSeenAt])
+  @@index([ipHmac, lastSeenAt])
 }

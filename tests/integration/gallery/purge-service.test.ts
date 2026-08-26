@@ -158,6 +158,18 @@ async function main() {
     const dueRecord = await db.galleryModerationRecord.create({
       data: { kind: "ADMIN_ACTION", target: "CANDIDATE", candidateId: dueCandidate.id, purgeAt: past },
     });
+    await db.publicSessionActivity.createMany({
+      data: [
+        {
+          sessionId: `purge-session-due-${suffix}`,
+          lastSeenAt: new Date(now.getTime() - 31 * 24 * 60 * 60 * 1000),
+        },
+        {
+          sessionId: `purge-session-current-${suffix}`,
+          lastSeenAt: new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000),
+        },
+      ],
+    });
     const expiredBuild = await db.customBuild.create({
       data: {
         ...buildData(`${suffix}secret`, future, `gallery/${suffix}/secret.svg`),
@@ -192,6 +204,7 @@ async function main() {
     assert.equal(result.generations, 1);
     assert.equal(result.candidates, 2);
     assert.equal(result.moderationRecords, 1);
+    assert.equal(result.publicSessions, 1);
     assert.deepEqual(deletedPaths.sort(), [
       `gallery/${suffix}/canceled.svg`,
       `gallery/${suffix}/due.svg`,
@@ -227,10 +240,16 @@ async function main() {
     assert.equal(await db.galleryCandidate.count({ where: { id: hiddenDueCandidate.id } }), 0);
     assert.equal(await db.galleryModerationRecord.count({ where: { id: dueRecord.id } }), 0);
     assert.equal(await db.galleryModerationRecord.count({ where: { id: futureRecord.id } }), 1);
+    assert.equal(await db.publicSessionActivity.count({
+      where: { sessionId: { startsWith: "purge-session-", endsWith: suffix } },
+    }), 1);
 
     console.log("Gallery bounded purge checks passed");
   } finally {
     await db.galleryModerationRecord.deleteMany({ where: { actorUserId: ownerId } });
+    await db.publicSessionActivity.deleteMany({
+      where: { sessionId: { startsWith: "purge-session-", endsWith: suffix } },
+    });
     await db.galleryCandidate.deleteMany({ where: { uploaderId: ownerId } });
     await db.customBuild.deleteMany({ where: { ownerId } });
     await db.user.deleteMany({ where: { id: { in: [ownerId, adminId] } } });

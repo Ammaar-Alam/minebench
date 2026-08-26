@@ -1,17 +1,34 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { getCurrentAccount } from "@/lib/auth/account";
 import {
-  hideGalleryCandidate,
+  GalleryServiceError,
+  getGalleryAdminPerson,
   hideGalleryExample,
-  selectGalleryCandidate,
+  setGalleryCandidateSelected,
+  setGalleryCandidateHidden,
+  setGalleryPersonVoteBlocked,
   setGalleryPublishingSuspension,
 } from "@/lib/gallery/service";
-import {
-  createVoteBlockFromModerationRecord,
-  reverseVoteBlock,
-} from "@/lib/voteBlock";
+
+const mutationSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("candidate_hidden"), publicId: z.string().min(1).max(100), hidden: z.boolean() }),
+  z.object({ type: z.literal("example_hidden"), exampleId: z.string().min(1).max(100) }),
+  z.object({
+    type: z.literal("candidate_selected"),
+    publicId: z.string().min(1).max(100),
+    selected: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("account_suspended"),
+    userId: z.string().uuid(),
+    suspended: z.boolean(),
+    reason: z.string().trim().max(240).optional(),
+  }),
+  z.object({ type: z.literal("votes_blocked"), personId: z.string().min(1).max(120), blocked: z.boolean() }),
+]);
 
 async function adminId() {
   const account = await getCurrentAccount();
@@ -24,46 +41,48 @@ function refreshGalleryAdmin() {
   revalidatePath("/gallery");
 }
 
-export async function hideCandidateAction(formData: FormData) {
-  await hideGalleryCandidate(await adminId(), String(formData.get("publicId") ?? ""));
-  refreshGalleryAdmin();
+function actionError(error: unknown): string {
+  if (error instanceof GalleryServiceError) return error.message;
+  console.error("Gallery admin action failed", error);
+  return "Action failed.";
 }
 
-export async function hideExampleAction(formData: FormData) {
-  await hideGalleryExample(await adminId(), String(formData.get("exampleId") ?? ""));
-  refreshGalleryAdmin();
+export async function mutateGalleryAdmin(input: unknown) {
+  const parsed = mutationSchema.safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Check the action." };
+  try {
+    const actorId = await adminId();
+    switch (parsed.data.type) {
+      case "candidate_hidden":
+        await setGalleryCandidateHidden(actorId, parsed.data.publicId, parsed.data.hidden);
+        break;
+      case "example_hidden":
+        await hideGalleryExample(actorId, parsed.data.exampleId);
+        break;
+      case "candidate_selected":
+        await setGalleryCandidateSelected(actorId, parsed.data.publicId, parsed.data.selected);
+        break;
+      case "account_suspended":
+        await setGalleryPublishingSuspension(actorId, parsed.data.userId, {
+          suspended: parsed.data.suspended,
+          reason: parsed.data.reason,
+        });
+        break;
+      case "votes_blocked":
+        await setGalleryPersonVoteBlocked(actorId, parsed.data.personId, parsed.data.blocked);
+        break;
+    }
+    refreshGalleryAdmin();
+    return { ok: true as const };
+  } catch (error) {
+    return { ok: false as const, error: actionError(error) };
+  }
 }
 
-export async function selectCandidateAction(formData: FormData) {
-  await selectGalleryCandidate(await adminId(), String(formData.get("publicId") ?? ""));
-  refreshGalleryAdmin();
-}
-
-export async function suspendAccountAction(formData: FormData) {
-  await setGalleryPublishingSuspension(await adminId(), String(formData.get("userId") ?? ""), {
-    suspended: true,
-    reason: String(formData.get("reason") ?? ""),
-  });
-  refreshGalleryAdmin();
-}
-
-export async function restoreAccountAction(formData: FormData) {
-  await setGalleryPublishingSuspension(await adminId(), String(formData.get("userId") ?? ""), {
-    suspended: false,
-  });
-  refreshGalleryAdmin();
-}
-
-export async function blockVoteIdentityAction(formData: FormData) {
-  await createVoteBlockFromModerationRecord(
-    await adminId(),
-    String(formData.get("recordId") ?? ""),
-    String(formData.get("note") ?? ""),
-  );
-  refreshGalleryAdmin();
-}
-
-export async function reverseVoteBlockAction(formData: FormData) {
-  await reverseVoteBlock(await adminId(), String(formData.get("blockId") ?? ""));
-  refreshGalleryAdmin();
+export async function loadGalleryAdminPerson(personId: string) {
+  try {
+    return { ok: true as const, person: await getGalleryAdminPerson(await adminId(), personId) };
+  } catch (error) {
+    return { ok: false as const, error: actionError(error) };
+  }
 }

@@ -20,6 +20,16 @@ export function escapeEmailHtml(value: string): string {
     .replaceAll("'", "&#39;");
 }
 
+export function renderEmailAction(label: string, href: string): string {
+  return `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:24px;">
+    <tr>
+      <td bgcolor="#181818" style="border-radius:8px;">
+        <a href="${escapeEmailHtml(href)}" style="display:inline-block; padding:12px 18px; border-radius:8px; color:#ffffff; font-size:14px; line-height:20px; font-weight:650; text-decoration:none;">${escapeEmailHtml(label)}</a>
+      </td>
+    </tr>
+  </table>`;
+}
+
 function messageHtml(value: string): string {
   return escapeEmailHtml(value).replace(/\r?\n/g, "<br>");
 }
@@ -125,13 +135,7 @@ export function renderContactNotification(submission: ContactSubmission): {
 } {
   const category = getContactCategoryLabel(submission.category);
   const replyButton = submission.email
-    ? `<table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:28px;">
-        <tr>
-          <td bgcolor="#181818" style="border-radius:8px;">
-            <a href="mailto:${escapeEmailHtml(submission.email)}" style="display:inline-block; padding:12px 18px; border-radius:8px; color:#ffffff; font-size:14px; line-height:20px; font-weight:650; text-decoration:none;">Reply</a>
-          </td>
-        </tr>
-      </table>`
+    ? renderEmailAction("Reply", `mailto:${submission.email}`)
     : "";
 
   return {
@@ -187,13 +191,7 @@ export function renderContactReceipt(submission: ContactSubmission): {
             <td style="padding:5px 0; font-size:14px; line-height:20px; color:#333333;">${escapeEmailHtml(category)}</td>
           </tr>
         </table>
-        <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin-top:24px;">
-          <tr>
-            <td bgcolor="#181818" style="border-radius:8px;">
-              <a href="${MINEBENCH_URL}" style="display:inline-block; padding:12px 18px; border-radius:8px; color:#ffffff; font-size:14px; line-height:20px; font-weight:650; text-decoration:none;">Return to MineBench</a>
-            </td>
-          </tr>
-        </table>`,
+        ${renderEmailAction("Return to MineBench", MINEBENCH_URL)}`,
       footer: "MineBench · AI spatial reasoning benchmark",
     }),
   };
@@ -203,7 +201,11 @@ function getTransporter(): Transporter {
   if (transporter) return transporter;
 
   const password = process.env.CONTACT_SMTP_PASSWORD;
-  if (!password) throw new Error("CONTACT_SMTP_PASSWORD is not configured");
+  if (!password) {
+    throw Object.assign(new Error("CONTACT_SMTP_PASSWORD is not configured"), {
+      code: "smtp_not_configured",
+    });
+  }
 
   transporter = nodemailer.createTransport({
     service: "gmail",

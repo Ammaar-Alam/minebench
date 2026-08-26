@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Prisma, type CustomBuildArtifactKind } from "@prisma/client";
 import type { GenerateModelRequest, PaletteMode, ProviderApiKeys } from "@/lib/ai/types";
+import { isProviderApiKeyName } from "@/lib/ai/providerKeys";
+import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import { sha256Hex } from "@/lib/custom-builds/hash";
 import { generateCustomBuildPublicId } from "@/lib/custom-builds/ids";
+import { safeCustomBuildRetryReason } from "@/lib/custom-builds/sanitize";
 import { encryptProviderKey, encryptSecretValue } from "@/lib/custom-builds/secrets";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
@@ -11,7 +14,7 @@ import { prisma } from "@/lib/prisma";
 
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
-const GENERATE_JOB_MAX_ATTEMPTS = 1;
+const GENERATE_JOB_MAX_ATTEMPTS = 2;
 
 export class GenerationServiceError extends Error {
   constructor(
@@ -50,9 +53,11 @@ const generationSelect = {
   gridSize: true,
   palette: true,
   modelKind: true,
+  modelKey: true,
   modelProvider: true,
   modelId: true,
   modelDisplayName: true,
+  preferOpenRouter: true,
   blockCount: true,
   generationTimeMs: true,
   warnings: true,
@@ -112,15 +117,21 @@ function serializeGeneration(row: GenerationRow) {
     status: row.status,
     stage: row.currentStage,
     attempt: progress.attempt,
-    retryReason: progress.reason,
+    retryReason: progress.reason ? safeCustomBuildRetryReason(progress.reason) : null,
     prompt: row.promptText,
     gridSize: row.gridSize,
     palette: row.palette,
     model: {
       kind: row.modelKind,
+      key: row.modelKey,
       provider: row.modelProvider,
       id: row.modelId,
       label: row.modelDisplayName,
+      transport: row.modelKind === "custom"
+        ? "custom"
+        : row.modelKind === "openrouter" || row.preferOpenRouter
+          ? "openrouter"
+          : "direct",
     },
     blockCount: row.blockCount,
     generationTimeMs: row.generationTimeMs,
@@ -329,36 +340,58 @@ export async function getSavedGeneration(ownerId: string, publicId: string) {
   return row ? serializeGeneration(row) : null;
 }
 
-export async function retrySavedGeneration(ownerId: string, publicId: string) {
-  const now = new Date();
-  const outcome = await prisma.$transaction(async (tx) => {
-    const build = await tx.customBuild.findFirst({
-      where: { publicId, ownerId, removedAt: null },
-      select: {
-        id: true,
-        status: true,
-        errorRetryable: true,
-        secret: { select: { expiresAt: true, deletedAt: true } },
-      },
-    });
-    if (!build) throw new GenerationServiceError("not_found", "Saved generation not found.");
-    if (build.status !== "failed" || build.errorRetryable !== true) {
-      throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
-    }
-    if (!build.secret || build.secret.deletedAt || build.secret.expiresAt <= now) {
-      await tx.customBuild.update({
-        where: { id: build.id },
-        data: {
-          errorCode: "provider_key_expired",
-          errorMessage: "Reconnect this model in Generate.",
-          errorRetryable: false,
-          progress: Prisma.DbNull,
-        },
-      });
-      await tx.customBuildSecret.deleteMany({ where: { customBuildId: build.id } });
-      return "expired" as const;
-    }
+function retryCredentialProvider(build: {
+  modelKind: string;
+  modelProvider: string;
+  preferOpenRouter: boolean;
+}): keyof ProviderApiKeys | null {
+  if (build.modelKind === "custom") return "custom";
+  if (build.modelKind === "openrouter" || build.preferOpenRouter) return "openrouter";
+  return isProviderApiKeyName(build.modelProvider) ? build.modelProvider : null;
+}
 
+export async function retrySavedGeneration(
+  ownerId: string,
+  publicId: string,
+  input: { providerKey: string; customBaseUrl?: string },
+) {
+  const now = new Date();
+  const build = await prisma.customBuild.findFirst({
+    where: { publicId, ownerId, removedAt: null },
+    select: {
+      id: true,
+      status: true,
+      errorRetryable: true,
+      modelKind: true,
+      modelProvider: true,
+      preferOpenRouter: true,
+    },
+  });
+  if (!build) throw new GenerationServiceError("not_found", "Saved generation not found.");
+  if (build.status !== "failed" || build.errorRetryable !== true) {
+    throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
+  }
+  const provider = retryCredentialProvider(build);
+  const providerKey = input.providerKey.trim();
+  if (!provider || !providerKey) {
+    throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
+  }
+  let customBaseUrl: string | undefined;
+  if (provider === "custom") {
+    customBaseUrl = input.customBaseUrl?.trim();
+    if (!customBaseUrl) {
+      throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
+    }
+    try {
+      await assertSafeCustomApiUrl(customBaseUrl);
+    } catch {
+      throw new GenerationServiceError("invalid_model", "Check the custom model endpoint.");
+    }
+  }
+  const credential = encryptProviderKey(providerKey, { provider, binding: build.id });
+  const endpoint = customBaseUrl ? encryptSecretValue(customBaseUrl, build.id) : null;
+
+  await prisma.$transaction(async (tx) => {
     const queued = await tx.customBuild.updateMany({
       where: {
         id: build.id,
@@ -383,6 +416,21 @@ export async function retrySavedGeneration(ownerId: string, publicId: string) {
     if (queued.count !== 1) {
       throw new GenerationServiceError("already_retried", "This generation is already retrying.");
     }
+    await tx.customBuildSecret.deleteMany({ where: { customBuildId: build.id } });
+    await tx.customBuildSecret.create({
+      data: {
+        customBuildId: build.id,
+        provider: credential.provider,
+        keyCiphertext: credential.keyCiphertext,
+        keyIv: credential.keyIv,
+        keyAuthTag: credential.keyAuthTag,
+        keyVersion: credential.keyVersion,
+        endpointCiphertext: endpoint?.ciphertext,
+        endpointIv: endpoint?.iv,
+        endpointAuthTag: endpoint?.authTag,
+        expiresAt: new Date(now.getTime() + SECRET_TTL_MS),
+      },
+    });
     await tx.customBuildJob.create({
       data: {
         customBuildId: build.id,
@@ -403,11 +451,7 @@ export async function retrySavedGeneration(ownerId: string, publicId: string) {
         data: { retry: true },
       },
     });
-    return "queued" as const;
   });
-  if (outcome === "expired") {
-    throw new GenerationServiceError("provider_key_expired", "Reconnect this model in Generate.");
-  }
   const generation = await getSavedGeneration(ownerId, publicId);
   if (!generation) throw new GenerationServiceError("not_found", "Saved generation not found.");
   return generation;

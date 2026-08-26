@@ -118,6 +118,7 @@ async function main() {
         { matchupId: ownedMatchup.id, sessionId: `${sessionId}-owned`, choice: "B", userId: user.id },
       ],
     });
+    await db.publicSessionActivity.create({ data: { sessionId } });
 
     const organization = await db.organization.create({
       data: { slug: `account-${suffix}`, name: "Account test" },
@@ -179,6 +180,7 @@ async function main() {
 
     assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 1);
     assert.equal(await claimAnonymousPublicVotes(user.id, sessionId), 0);
+    assert.equal((await db.publicSessionActivity.findUniqueOrThrow({ where: { sessionId } })).userId, user.id);
     assert.equal((await db.vote.findUniqueOrThrow({ where: { id: privateVote.id } })).userId, null);
 
     const ranking = await getPersonalRanking(user.id);
@@ -194,6 +196,7 @@ async function main() {
 
     console.log("public account database checks passed");
   } finally {
+    await db.publicSessionActivity.deleteMany({ where: { sessionId } });
     await db.vote.deleteMany({ where: { sessionId: { startsWith: sessionId } } });
     if (matchupIds.length) await db.matchup.deleteMany({ where: { id: { in: matchupIds } } });
     if (organizationId) await db.organization.deleteMany({ where: { id: organizationId } });

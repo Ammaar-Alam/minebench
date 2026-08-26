@@ -787,22 +787,6 @@
     display: none;
   }
 
-  .mb-back-link {
-    @apply inline-flex h-9 w-9 items-center justify-center rounded-full bg-bg/55 text-muted ring-1 ring-border/70;
-    transition: box-shadow 180ms ease, border-color 180ms ease, background-color 180ms ease, color 180ms ease;
-  }
-
-  .mb-back-link:hover {
-    border-color: hsl(var(--accent) / 0.35);
-    background-color: hsl(var(--fg) / 0.05);
-    color: hsl(var(--accent));
-  }
-
-  .mb-back-link:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px hsl(var(--accent) / 0.45);
-  }
-
   .mb-subpanel {
     @apply rounded-md border border-border/70;
   }

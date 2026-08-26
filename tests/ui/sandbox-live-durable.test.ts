@@ -129,6 +129,13 @@ assert.ok(
     watchBody.includes("console.warn(\"Custom build viewer unavailable\""),
   "durable watch should treat viewer loading as optional after generation succeeds",
 );
+assert.ok(
+  watchBody.includes("consecutiveFailures") &&
+    watchBody.includes("CustomBuildStatusReadError") &&
+    watchBody.includes("Math.min(10_000") &&
+    watchBody.includes("continue;"),
+  "durable status polling should survive transient reads with bounded backoff",
+);
 const durableInputGuardIndex = inputResetEffect.indexOf("if (signedIn)");
 const inputResetAbortIndex = inputResetEffect.indexOf("customBuildAbortRef.current?.abort()");
 assert.ok(durableInputGuardIndex >= 0, "durable input edits should have an explicit preservation guard");
@@ -170,7 +177,8 @@ assert.ok(
     !sourceText.includes("href={r.customBuildDownloadUrl}") &&
     sourceText.includes("submittedPrompt") &&
     sourceText.includes("promptText={r?.submittedPrompt ?? prompt}") &&
-    sourceText.includes("exportPrompt={resultPrompt}"),
+    sourceText.includes("exportPrompt={resultPrompt}") &&
+    sourceText.includes("skipValidation={isDurableResult}"),
   "durable exports should expand stored JSON and retain the submitted prompt snapshot",
 );
 assert.ok(

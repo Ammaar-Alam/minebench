@@ -131,6 +131,9 @@ const fakePrisma = {
           return currentCustomBuild;
         },
         updateMany: async (args: { data: Record<string, unknown> }) => {
+          if (cancelDuringArtifactRecord && args.data.status === "failed") {
+            return { count: 0 };
+          }
           if (args.data.status === "succeeded" && failSuccessBookkeeping) {
             throw new Error("bookkeeping update failed");
           }
@@ -191,9 +194,11 @@ async function flushAsyncEvents() {
 async function main() {
   const {
     runCustomBuildGenerateJob,
+    customBuildProviderSignal,
     isTerminalCustomBuildGenerateError,
     validateGeneratedBuildForArtifacts,
   } = await import("../../../lib/custom-builds/generateJob");
+  const { safeCustomBuildRetryReason } = await import("../../../lib/custom-builds/sanitize");
   const { jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
 
   assert.ok(
@@ -211,6 +216,24 @@ async function main() {
     generateJobSource.includes("const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2") &&
       generateJobSource.includes("maxAttempts: CUSTOM_BUILD_MODEL_MAX_ATTEMPTS"),
     "durable generations should make at most one automatic repair request",
+  );
+  assert.ok(
+    generateJobSource.includes("const CUSTOM_BUILD_PROVIDER_TIMEOUT_MS = 90 * 60 * 1000") &&
+      generateJobSource.includes("customBuildProviderSignal(opts.signal)") &&
+      !generateJobSource.includes("if (!manuallyRetryable)"),
+    "provider waits should have a 90-minute deadline and terminal failures should always delete credentials",
+  );
+
+  const providerSignal = customBuildProviderSignal(undefined, 5);
+  await new Promise<void>((resolve) => setTimeout(resolve, 20));
+  assert.equal(providerSignal.aborted, true);
+  assert.equal(
+    safeCustomBuildRetryReason('Gemini error 429: {"private":"provider body"}'),
+    "The first response could not be used.",
+  );
+  assert.equal(
+    safeCustomBuildRetryReason('[{"code":"invalid_type","message":"Required"}]'),
+    "The first response did not match the build format.",
   );
 
   assert.equal(

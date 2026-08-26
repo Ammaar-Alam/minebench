@@ -7,6 +7,7 @@ import {
   isGalleryContributionVisible,
   normalizeGalleryNickname,
   normalizeGalleryPrompt,
+  normalizeGalleryPromptIdentity,
   publicGalleryTextError,
   resolveGalleryModelLabel,
 } from "../../../lib/gallery/policy";
@@ -14,6 +15,7 @@ import {
 assert.equal(normalizeGalleryPrompt("  A tiny observatory  "), "A tiny observatory");
 assert.equal(normalizeGalleryPrompt("Castle"), "Castle");
 assert.notEqual(normalizeGalleryPrompt("Castle"), normalizeGalleryPrompt("castle"));
+assert.equal(normalizeGalleryPromptIdentity("  Circle  "), normalizeGalleryPromptIdentity("circle"));
 
 assert.deepEqual(normalizeGalleryNickname("  Mine Builder  "), {
   display: "Mine Builder",

@@ -20,6 +20,13 @@ export function normalizeGalleryPrompt(value: string): string {
   return value.trim();
 }
 
+export function normalizeGalleryPromptIdentity(value: string): string {
+  return normalizeGalleryPrompt(value)
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("en-US");
+}
+
 export function normalizeGalleryNickname(value: string): {
   display: string;
   normalized: string;

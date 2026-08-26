@@ -132,6 +132,10 @@ export async function claimAnonymousPublicVotes(
       data: { userId },
     }),
     claimAnonymousGalleryVotes(userId, sessionId),
+    prisma.publicSessionActivity.updateMany({
+      where: { sessionId },
+      data: { userId },
+    }),
   ]);
   return arena.count + gallery;
 }

@@ -155,6 +155,9 @@ export function VoxelViewerCard({
   const [placementProgress, setPlacementProgress] = useState<PlacementProgressState | null>(null);
   const [placementError, setPlacementError] = useState<string | null>(null);
   const combinedError = error ?? placementError ?? rendered.error ?? undefined;
+  const verboseError = Boolean(combinedError && (combinedError.length > 180 || combinedError.includes("\n")));
+  const errorSummary = verboseError ? "The build data couldn’t be read." : combinedError;
+  const errorDetails = retryReason ?? (verboseError ? combinedError : undefined);
 
   const modelOutputText = useMemo(() => {
     const explicitText =
@@ -472,16 +475,16 @@ export function VoxelViewerCard({
                 </div>
                 <div className="text-sm font-medium text-fg">Couldn&apos;t render this build</div>
                 <div className="max-w-full break-words text-xs leading-relaxed text-muted">
-                  {combinedError}
+                  {errorSummary}
                 </div>
-                {retryReason ? (
+                {errorDetails ? (
                   <details className="w-full max-w-xs text-left text-xs text-muted">
-                    <summary className="mx-auto flex w-fit cursor-pointer list-none items-center gap-1.5 rounded px-2 py-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px]">i</span>
+                    <summary className="mx-auto flex min-h-8 w-fit cursor-pointer list-none items-center gap-1.5 rounded px-2 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
+                      <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></svg>
                       Details
                     </summary>
-                    <p className="mt-2 break-words whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 leading-relaxed">
-                      {retryReason}
+                    <p className="mt-2 max-h-40 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 leading-relaxed [overflow-wrap:anywhere]">
+                      {errorDetails}
                     </p>
                   </details>
                 ) : null}
@@ -510,7 +513,7 @@ export function VoxelViewerCard({
                 <path d="M12 16h.01" />
                 <circle cx="12" cy="12" r="9" />
               </svg>
-              <span className="min-w-0 break-words">{combinedError}</span>
+              <span className="min-w-0 break-words">{errorSummary}</span>
             </div>
           ) : null}
 

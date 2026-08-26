@@ -75,13 +75,17 @@ export function VoxelLoadingHud({
                 <details className="group pointer-events-auto relative">
                   <summary
                     aria-label="Why MineBench is trying again"
-                    className="flex h-4 w-4 cursor-pointer list-none items-center justify-center rounded-full border border-border/70 font-sans text-[9px] text-muted transition-colors hover:border-border-xl hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden"
+                    className="flex h-5 w-5 cursor-pointer list-none items-center justify-center rounded text-muted transition-colors hover:bg-card hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden"
                   >
-                    i
+                    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M12 11v5" />
+                      <path d="M12 8h.01" />
+                    </svg>
                   </summary>
-                  <div className="absolute right-0 top-6 z-40 w-64 rounded-md border border-border/80 bg-card p-3 text-left font-sans text-xs leading-relaxed text-muted shadow-lg">
-                    <p className="font-medium text-fg">The first response couldn&apos;t be used.</p>
-                    <p className="mt-1.5 break-words whitespace-pre-wrap">{retryReason}</p>
+                  <div className="absolute right-0 top-6 z-40 max-h-40 w-52 overflow-y-auto overscroll-contain rounded-md border border-border/80 bg-card p-3 text-left font-sans text-xs leading-relaxed text-muted shadow-lg sm:w-64">
+                    <p className="font-medium text-fg">Retry details</p>
+                    <p className="mt-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]">{retryReason}</p>
                   </div>
                 </details>
               ) : null}

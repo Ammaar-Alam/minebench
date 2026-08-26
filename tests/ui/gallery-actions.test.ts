@@ -15,6 +15,9 @@ const siteHeader = readFileSync("components/SiteHeader.tsx", "utf8");
 const galleryClient = readFileSync("lib/gallery/client.ts", "utf8");
 const galleryButton = readFileSync("components/gallery/GenerationGalleryButton.tsx", "utf8");
 const sandboxLive = readFileSync("components/sandbox/SandboxLive.tsx", "utf8");
+const adminActions = readFileSync("app/admin/gallery/actions.ts", "utf8");
+const adminDashboard = readFileSync("components/gallery/GalleryAdminDashboard.tsx", "utf8");
+const galleryService = readFileSync("lib/gallery/service.ts", "utf8");
 
 assert.ok(
   detail.includes("candidate.canRemove") &&
@@ -24,11 +27,17 @@ assert.ok(
 );
 assert.ok(
   detail.includes("SandboxGifExportButton") &&
-    detail.includes("viewerRef={viewerRef}") &&
+    detail.includes("MAX_COMPARISON_EXAMPLES = 4") &&
+    detail.includes("event.metaKey || event.ctrlKey") &&
+    detail.includes("compareMode && selectedIds.length === 1 && selectedIds[0] === exampleId") &&
+    detail.includes('compareMode ? "Single" : "Compare"') &&
+    detail.includes("comparisonTargets") &&
+    detail.includes("selectedIds.slice(0, 1)") &&
+    detail.includes("viewerRef={getViewerRef(example.id)}") &&
     detail.includes('label="GIF"') &&
     detail.includes("embedded") &&
     !detail.includes("iconOnly"),
-  "public examples should reuse the full viewer GIF exporter",
+  "public examples should support accessible four-build comparison through the shared GIF exporter",
 );
 assert.ok(
   galleryClient.includes("body.created === false") &&
@@ -56,8 +65,19 @@ assert.ok(
     sandboxLive.includes('r?.status === "success"') &&
     sandboxLive.includes("retryCustomBuild") &&
     galleryButton.includes("Add to Gallery") &&
-    galleryButton.includes("postAnonymously"),
+    galleryButton.includes("canChooseAttribution") &&
+    galleryButton.includes("checked={anonymous}"),
   "successful Generate results should reuse the Gallery submission path beside Generate",
+);
+assert.ok(
+  adminActions.includes('type: z.literal("example_hidden")') &&
+    adminActions.includes("hideGalleryExample") &&
+    adminDashboard.includes("Hide build"),
+  "reported Gallery examples should expose the exact-build moderation action",
+);
+assert.ok(
+  galleryService.includes('action: { label: "Appeal", href: galleryUrl("/account") }'),
+  "suspension email should link directly to the account appeal surface",
 );
 assert.ok(
   yours.includes('fetch("/api/generations", { cache: "no-store", signal: controller.signal })') &&

@@ -14,7 +14,11 @@ import { GenerationPreflightDialog } from "@/components/sandbox/GenerationPrefli
 import { GenerationGalleryButton } from "@/components/gallery/GenerationGalleryButton";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
-import { selectGenerationProviderKeys } from "@/lib/ai/providerKeys";
+import {
+  loadProviderKeysFromStorage,
+  saveProviderKeysToStorage,
+  selectGenerationProviderKeys,
+} from "@/lib/ai/providerKeys";
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -75,6 +79,7 @@ type ModelResult = {
   currentStage?: string;
   submittedPrompt?: string;
   customBuildRetryable?: boolean;
+  retryProvider?: keyof ProviderApiKeys;
 };
 
 type SavedGenerationCreateResponse = {
@@ -86,7 +91,6 @@ const PREVIEW_MAX_BLOCKS = 30_000;
 const PREVIEW_THROTTLE_MS = 450;
 const PREVIEW_MAX_BOXES = 600;
 const PREVIEW_MAX_LINES = 800;
-const API_KEYS_STORAGE_KEY = "mb_provider_keys_v1";
 const DIRECT_PROVIDER_KEYS = [
   ["openai", "OpenAI"],
   ["anthropic", "Anthropic"],
@@ -129,46 +133,6 @@ function safeJsonParseObject(text: string): Record<string, unknown> | null {
     return parsed as Record<string, unknown>;
   } catch {
     return null;
-  }
-}
-
-function loadProviderKeysFromStorage(): ProviderApiKeys {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(API_KEYS_STORAGE_KEY);
-    if (!raw) return {};
-    const obj = safeJsonParseObject(raw);
-    if (!obj) return {};
-    const keys: ProviderApiKeys = {};
-    const set = (k: keyof ProviderApiKeys) => {
-      const v = obj[k];
-      if (typeof v !== "string") return;
-      const t = v.trim();
-      if (t) keys[k] = t;
-    };
-    set("openrouter");
-    set("openai");
-    set("anthropic");
-    set("gemini");
-    set("moonshot");
-    set("deepseek");
-    set("minimax");
-    set("xai");
-    set("meta");
-    set("zai");
-    set("custom");
-    return keys;
-  } catch {
-    return {};
-  }
-}
-
-function saveProviderKeysToStorage(keys: ProviderApiKeys) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(API_KEYS_STORAGE_KEY, JSON.stringify(keys));
-  } catch {
-    // ignore
   }
 }
 
@@ -403,6 +367,13 @@ function customBuildStatusPath(id: string): string {
   return `/api/generations/${encodeURIComponent(id)}`;
 }
 
+class CustomBuildStatusReadError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = "CustomBuildStatusReadError";
+  }
+}
+
 async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): Promise<SavedGenerationPayload> {
   const res = await fetch(statusUrl, { cache: "no-store", signal });
   if (!res.ok) {
@@ -416,7 +387,10 @@ async function readCustomBuildStatus(statusUrl: string, signal?: AbortSignal): P
       typeof (obj.error as { message?: unknown }).message === "string"
         ? (obj.error as { message: string }).message
         : text || "Status unavailable";
-    throw new Error(message);
+    throw new CustomBuildStatusReadError(
+      message,
+      res.status === 408 || res.status === 429 || res.status >= 500,
+    );
   }
   const body = (await res.json()) as { generation: SavedGenerationPayload };
   return body.generation;
@@ -472,6 +446,12 @@ function customBuildGridSize(value: number, fallback: GridSize): GridSize {
 
 function customBuildPalette(value: string, fallback: Palette): Palette {
   return value === "advanced" ? "advanced" : value === "simple" ? "simple" : fallback;
+}
+
+function customBuildRetryProvider(status: SavedGenerationPayload): keyof ProviderApiKeys {
+  if (status.model.transport === "openrouter") return "openrouter";
+  if (status.model.transport === "custom") return "custom";
+  return status.model.provider as keyof ProviderApiKeys;
 }
 
 export function SandboxLive({
@@ -813,6 +793,7 @@ export function SandboxLive({
         attempt: args.status.attempt ?? undefined,
         retryReason: args.status.retryReason ?? undefined,
         customBuildRetryable: args.status.error?.retryable === true,
+        retryProvider: customBuildRetryProvider(args.status),
       };
 
       if (args.status.status === "failed" || args.status.status === "canceled") {
@@ -852,8 +833,22 @@ export function SandboxLive({
     eventsUrl: string;
     signal: AbortSignal;
   }) {
+    let consecutiveFailures = 0;
     while (!args.signal.aborted) {
-      const status = await readCustomBuildStatus(args.statusUrl, args.signal);
+      let status: SavedGenerationPayload;
+      try {
+        status = await readCustomBuildStatus(args.statusUrl, args.signal);
+        consecutiveFailures = 0;
+      } catch (error) {
+        if (isAbortError(error)) throw error;
+        if (error instanceof CustomBuildStatusReadError && !error.retryable) throw error;
+        consecutiveFailures += 1;
+        await abortableDelay(
+          Math.min(10_000, 1_000 * (2 ** Math.min(consecutiveFailures - 1, 3))),
+          args.signal,
+        );
+        continue;
+      }
       if (args.signal.aborted) return;
       if (status.status === "succeeded") {
         applyCustomBuildStatus({
@@ -896,6 +891,13 @@ export function SandboxLive({
   async function retryCustomBuild(model: SelectedLiveModel) {
     const existing = results.get(model.id);
     if (running || !existing?.customBuildId || !existing.customBuildRetryable) return;
+    const providerKey = existing.retryProvider
+      ? providerKeys[existing.retryProvider]?.trim()
+      : undefined;
+    if (!providerKey) {
+      setRequestError("Add the required API key before retrying.");
+      return;
+    }
     const abortController = new AbortController();
     customBuildAbortRef.current = abortController;
     setRunning(true);
@@ -903,7 +905,17 @@ export function SandboxLive({
     try {
       const response = await fetch(
         `/api/generations/${encodeURIComponent(existing.customBuildId)}/retry`,
-        { method: "POST", signal: abortController.signal },
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
+          body: JSON.stringify({
+            providerKey,
+            ...(model.kind === "custom" && model.provider === "custom"
+              ? { customBaseUrl: model.baseUrl }
+              : {}),
+          }),
+        },
       );
       if (!response.ok) {
         throw new Error(await readClientErrorResponse(response, "Generation could not be retried."));
@@ -1359,6 +1371,7 @@ export function SandboxLive({
         loadingMessage={isDurableResult ? r?.currentStage : undefined}
         palette={cardPalette}
         viewerRef={viewerRef}
+        skipValidation={isDurableResult}
         onBuildMetrics={
           r?.status === "success"
             ? (metrics) => enqueueVoxelMetric("sandbox", "full", metrics)
@@ -1385,6 +1398,7 @@ export function SandboxLive({
                 key={r.customBuildId}
                 generationId={r.customBuildId}
                 postAnonymously={!hasPublicNickname}
+                canChooseAttribution={hasPublicNickname}
                 onError={setRequestError}
                 compact
               />
@@ -1671,6 +1685,7 @@ export function SandboxLive({
               key={singleGalleryResult.customBuildId}
               generationId={singleGalleryResult.customBuildId}
               postAnonymously={!hasPublicNickname}
+              canChooseAttribution={hasPublicNickname}
               onError={setRequestError}
             />
           ) : null}

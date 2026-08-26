@@ -4,7 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { createRef, useCallback, useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
@@ -25,6 +26,14 @@ type GalleryDetailPayload = GalleryCandidatePayload & {
   examples: GalleryExamplePayload[];
   nextExamplesCursor: string | null;
 };
+
+type ExampleViewerState = {
+  build: unknown | null;
+  loading: boolean;
+  error: string | null;
+};
+
+const MAX_COMPARISON_EXAMPLES = 4;
 
 function ReportDialog({
   open,
@@ -94,19 +103,40 @@ function ReportDialog({
 
 export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }) {
   const router = useRouter();
-  const viewerRef = useRef<VoxelViewerHandle>(null);
   const [examples, setExamples] = useState(candidate.examples);
   const [nextExamplesCursor, setNextExamplesCursor] = useState(candidate.nextExamplesCursor);
   const [loadingMore, setLoadingMore] = useState(false);
   const [examplesError, setExamplesError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState(examples[0]?.id ?? null);
-  const [build, setBuild] = useState<unknown | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>(examples[0] ? [examples[0].id] : []);
+  const [compareMode, setCompareMode] = useState(false);
+  const [viewerStates, setViewerStates] = useState<Record<string, ExampleViewerState>>({});
+  const viewerStatesRef = useRef<Record<string, ExampleViewerState>>({});
+  const viewerRefs = useRef(new Map<string, RefObject<VoxelViewerHandle | null>>());
+  const viewerControllers = useRef(new Map<string, AbortController>());
   const [reportOpen, setReportOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const selected = examples.find((example) => example.id === selectedId) ?? examples[0] ?? null;
+  const selectedExamples = selectedIds
+    .map((id) => examples.find((example) => example.id === id))
+    .filter((example): example is GalleryExamplePayload => Boolean(example));
+  const selected = selectedExamples[0] ?? examples[0] ?? null;
+
+  const getViewerRef = useCallback((exampleId: string) => {
+    let viewerRef = viewerRefs.current.get(exampleId);
+    if (!viewerRef) {
+      viewerRef = createRef<VoxelViewerHandle>();
+      viewerRefs.current.set(exampleId, viewerRef);
+    }
+    return viewerRef;
+  }, []);
+
+  const updateViewerState = useCallback((exampleId: string, state: ExampleViewerState) => {
+    setViewerStates((current) => {
+      const next = { ...current, [exampleId]: state };
+      viewerStatesRef.current = next;
+      return next;
+    });
+  }, []);
 
   async function removeCandidate() {
     if (!window.confirm("Remove this prompt from Gallery?")) return;
@@ -148,31 +178,138 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   }
 
   useEffect(() => {
-    if (!selected?.viewerUrl) {
-      setBuild(null);
+    const selectedSet = new Set(selectedIds);
+
+    for (const [exampleId, controller] of viewerControllers.current) {
+      if (selectedSet.has(exampleId)) continue;
+      controller.abort();
+      viewerControllers.current.delete(exampleId);
+    }
+    for (const exampleId of viewerRefs.current.keys()) {
+      if (!selectedSet.has(exampleId)) viewerRefs.current.delete(exampleId);
+    }
+
+    const retainedStates = Object.fromEntries(
+      Object.entries(viewerStatesRef.current).filter(([exampleId]) => selectedSet.has(exampleId)),
+    );
+    if (Object.keys(retainedStates).length !== Object.keys(viewerStatesRef.current).length) {
+      viewerStatesRef.current = retainedStates;
+      setViewerStates(retainedStates);
+    }
+
+    for (const exampleId of selectedIds) {
+      const example = examples.find((item) => item.id === exampleId);
+      if (!example || viewerStatesRef.current[exampleId] || viewerControllers.current.has(exampleId)) continue;
+      if (!example.viewerUrl) {
+        updateViewerState(exampleId, { build: null, loading: false, error: "Viewer unavailable" });
+        continue;
+      }
+
+      const controller = new AbortController();
+      viewerControllers.current.set(exampleId, controller);
+      updateViewerState(exampleId, { build: null, loading: true, error: null });
+      void fetch(example.viewerUrl, { signal: controller.signal, cache: "no-store" })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Viewer unavailable");
+          return readBuildVariantPayload(response, {
+            fallbackIdentity: { buildId: example.id, variant: "full", checksum: example.checksum },
+          });
+        })
+        .then((result) => {
+          if (!controller.signal.aborted) {
+            updateViewerState(exampleId, { build: result.payload.voxelBuild, loading: false, error: null });
+          }
+        })
+        .catch((viewerError) => {
+          if (controller.signal.aborted || (viewerError instanceof Error && viewerError.name === "AbortError")) return;
+          updateViewerState(exampleId, { build: null, loading: false, error: "Viewer unavailable" });
+        })
+        .finally(() => {
+          if (viewerControllers.current.get(exampleId) === controller) {
+            viewerControllers.current.delete(exampleId);
+          }
+        });
+    }
+  }, [examples, selectedIds, updateViewerState]);
+
+  useEffect(() => () => {
+    for (const controller of viewerControllers.current.values()) controller.abort();
+    viewerControllers.current.clear();
+    viewerStatesRef.current = {};
+  }, []);
+
+  function selectExample(event: React.MouseEvent<HTMLButtonElement>, exampleId: string) {
+    const additive = event.metaKey || event.ctrlKey;
+    if (compareMode && selectedIds.length === 1 && selectedIds[0] === exampleId) {
+      setCompareMode(false);
       return;
     }
-    const controller = new AbortController();
-    setBuild(null);
-    setLoading(true);
-    setError(null);
-    void fetch(selected.viewerUrl, { signal: controller.signal, cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Viewer unavailable");
-        return readBuildVariantPayload(response, {
-          fallbackIdentity: { buildId: selected.id, variant: "full", checksum: selected.checksum },
-        });
-      })
-      .then((result) => setBuild(result.payload.voxelBuild))
-      .catch((viewerError) => {
-        if (viewerError instanceof Error && viewerError.name === "AbortError") return;
-        setError("Viewer unavailable");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [selected]);
+    if (!compareMode && !additive) {
+      setSelectedIds([exampleId]);
+      return;
+    }
+
+    if (additive) setCompareMode(true);
+    setSelectedIds((current) => {
+      if (current.includes(exampleId)) {
+        return current.length === 1 ? current : current.filter((id) => id !== exampleId);
+      }
+      return current.length >= MAX_COMPARISON_EXAMPLES ? current : [...current, exampleId];
+    });
+  }
+
+  function renderViewerCard(example: GalleryExamplePayload, isComparison: boolean) {
+    const state = viewerStates[example.id];
+    const build = state?.build ?? null;
+    const loading = state?.loading ?? Boolean(example.viewerUrl);
+    return (
+      <VoxelViewerCard
+        title={example.model.label}
+        subtitle={`By ${example.attribution}`}
+        voxelBuild={build}
+        expectedBlockCount={example.blockCount ?? undefined}
+        jsonBytes={example.jsonBytes}
+        gridSize={example.gridSize === 64 || example.gridSize === 512 ? example.gridSize : 256}
+        palette={example.palette}
+        isLoading={loading}
+        error={state?.error ?? undefined}
+        skipValidation
+        viewerSize={isComparison ? "arena" : "default"}
+        enableBuildExport={Boolean(build)}
+        exportLabel={example.model.label}
+        exportPrompt={candidate.prompt}
+        viewerRef={getViewerRef(example.id)}
+        metrics={example.blockCount != null ? {
+          blockCount: example.blockCount,
+          generationTimeMs: example.generationTimeMs ?? undefined,
+          warnings: [],
+        } : undefined}
+        actions={!isComparison && build && !loading ? (
+          <SandboxGifExportButton
+            targets={[{
+              viewerRef: getViewerRef(example.id),
+              modelName: example.model.label,
+              company: example.attribution,
+              blockCount: example.blockCount ?? 0,
+            }]}
+            promptText={candidate.prompt}
+            cancelKey={`${example.id}:${example.checksum ?? ""}`}
+            label="GIF"
+            embedded
+          />
+        ) : undefined}
+      />
+    );
+  }
+
+  const comparisonTargets = selectedExamples.length > 1 && selectedExamples.every((example) => viewerStates[example.id]?.build)
+    ? selectedExamples.map((example) => ({
+        viewerRef: getViewerRef(example.id),
+        modelName: example.model.label,
+        company: example.attribution,
+        blockCount: example.blockCount ?? 0,
+      }))
+    : [];
 
   return (
     <article className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
@@ -196,50 +333,59 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
 
       {selected ? (
         <section className="mt-10 grid gap-6 sm:mt-12 lg:grid-cols-[minmax(0,1fr)_18rem]" aria-labelledby="viewer-title">
-          <VoxelViewerCard
-            title={selected.model.label}
-            subtitle={`By ${selected.attribution}`}
-            voxelBuild={build}
-            expectedBlockCount={selected.blockCount ?? undefined}
-            jsonBytes={selected.jsonBytes}
-            gridSize={selected.gridSize === 64 || selected.gridSize === 512 ? selected.gridSize : 256}
-            palette={selected.palette}
-            isLoading={loading}
-            error={error ?? undefined}
-            skipValidation
-            enableBuildExport={Boolean(build)}
-            exportLabel={selected.model.label}
-            exportPrompt={candidate.prompt}
-            viewerRef={viewerRef}
-            metrics={selected.blockCount != null ? {
-              blockCount: selected.blockCount,
-              generationTimeMs: selected.generationTimeMs ?? undefined,
-              warnings: [],
-            } : undefined}
-            actions={build && !loading ? (
-              <SandboxGifExportButton
-                targets={[{
-                  viewerRef,
-                  modelName: selected.model.label,
-                  company: selected.attribution,
-                  blockCount: selected.blockCount ?? 0,
-                }]}
-                promptText={candidate.prompt}
-                cancelKey={`${selected.id}:${selected.checksum ?? ""}`}
-                label="GIF"
-                embedded
-              />
-            ) : undefined}
-          />
+          {selectedExamples.length > 1 ? (
+            <div className="min-w-0">
+              <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
+                <p className="mb-eyebrow">Compare</p>
+                <SandboxGifExportButton
+                  targets={comparisonTargets}
+                  promptText={candidate.prompt}
+                  cancelKey={selectedExamples.map((example) => `${example.id}:${example.checksum ?? ""}`).join(":")}
+                  label="GIF"
+                />
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                {selectedExamples.map((example, index) => (
+                  <div key={example.id} className={`min-w-0 mb-card-enter ${selectedExamples.length === 3 && index === 0 ? "md:col-span-2" : ""}`}>
+                    {renderViewerCard(example, true)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : renderViewerCard(selected, false)}
           <div>
-            <h2 id="viewer-title" className="mb-eyebrow">Examples</h2>
+            <div className="flex min-h-9 items-center justify-between gap-3">
+              <h2 id="viewer-title" className="mb-eyebrow">Examples</h2>
+              {examples.length > 1 ? (
+                <button
+                  type="button"
+                  aria-pressed={compareMode}
+                  className="min-h-9 rounded px-2 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 motion-reduce:transition-none"
+                  onClick={() => {
+                    if (compareMode) {
+                      setCompareMode(false);
+                      setSelectedIds(selectedIds.slice(0, 1));
+                    } else {
+                      setCompareMode(true);
+                    }
+                  }}
+                >
+                  {compareMode ? "Single" : "Compare"}
+                </button>
+              ) : null}
+            </div>
             <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-1">
-              {examples.map((example) => (
-                <button key={example.id} type="button" aria-pressed={example.id === selected.id} onClick={() => setSelectedId(example.id)} className={`group/example min-w-0 overflow-hidden rounded-md border text-left transition-[transform,border-color,background-color] duration-200 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none ${example.id === selected.id ? "border-accent/65 bg-accent/5" : "border-border bg-card/10 hover:border-muted"}`}>
+              {examples.map((example) => {
+                const selectedOrder = selectedIds.indexOf(example.id);
+                const atLimit = compareMode && selectedOrder < 0 && selectedIds.length >= MAX_COMPARISON_EXAMPLES;
+                return (
+                <button key={example.id} type="button" aria-pressed={selectedOrder >= 0} aria-disabled={atLimit || undefined} onClick={(event) => selectExample(event, example.id)} className={`group/example relative min-w-0 overflow-hidden rounded-md border text-left transition-[transform,border-color,background-color,opacity] duration-200 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none ${selectedOrder >= 0 ? "border-accent/65 bg-accent/5" : "border-border bg-card/10 hover:border-muted"} ${atLimit ? "opacity-50" : ""}`}>
+                  {compareMode && selectedOrder >= 0 ? <span aria-hidden="true" className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-full bg-accent text-xs font-semibold text-bg shadow-soft">{selectedOrder + 1}</span> : null}
                   {example.previewUrl ? <div className="relative aspect-[16/9] bg-bg"><Image src={example.previewUrl} alt="" fill unoptimized sizes="18rem" className="object-contain p-1.5 transition-transform duration-300 ease-out group-hover/example:scale-[1.025] motion-reduce:transition-none" /></div> : null}
                   <div className="p-3"><p className="truncate text-sm font-medium text-fg">{example.model.label}</p><p className="mt-1 truncate text-xs text-muted">{example.attribution}</p><p className="mt-2 flex flex-wrap gap-x-2 font-mono text-[10px] text-muted">{example.blockCount != null ? <span>{example.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(example.jsonBytes) ? <span>{formatBuildJsonSize(example.jsonBytes)} JSON</span> : null}{formatBuildDuration(example.generationTimeMs) ? <span>{formatBuildDuration(example.generationTimeMs)}</span> : null}</p></div>
                 </button>
-              ))}
+                );
+              })}
             </div>
             {nextExamplesCursor ? (
               <button type="button" className="mb-btn mt-3 h-10 w-full" disabled={loadingMore} onClick={() => void loadMoreExamples()}>

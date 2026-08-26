@@ -13,10 +13,16 @@ import {
   galleryAttribution,
   normalizeGalleryNickname,
   normalizeGalleryPrompt,
+  normalizeGalleryPromptIdentity,
   publicGalleryTextError,
   resolveGalleryModelLabel,
 } from "@/lib/gallery/policy";
 import { prisma } from "@/lib/prisma";
+import {
+  PUBLIC_SESSION_ONLINE_MS,
+  PUBLIC_SESSION_RETENTION_MS,
+} from "@/lib/publicPresence";
+import { hashVoteSession } from "@/lib/voteBlock";
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -357,6 +363,14 @@ async function requirePublishingAccount(userId: string) {
   return account;
 }
 
+function galleryUrl(path: string): string {
+  return `${(process.env.MINEBENCH_SITE_URL?.trim() || "https://minebench.ai").replace(/\/+$/, "")}${path}`;
+}
+
+function galleryAdminUrl(): string {
+  return galleryUrl("/admin/gallery");
+}
+
 async function recordFilterRejection(args: {
   userId: string;
   target: "CANDIDATE" | "EXAMPLE" | "ACCOUNT";
@@ -370,7 +384,7 @@ async function recordFilterRejection(args: {
       createdAt: { gte: new Date(now.getTime() - 60 * 60 * 1000) },
     },
   });
-  await prisma.galleryModerationRecord.create({
+  const rejection = await prisma.galleryModerationRecord.create({
     data: {
       kind: "FILTER_REJECTION",
       target: args.target,
@@ -380,13 +394,15 @@ async function recordFilterRejection(args: {
       safeSnapshot: { content: args.content },
       purgeAt: new Date(now.getTime() + RETENTION_MS),
     },
+    select: { actor: { select: { email: true } } },
   });
   if (recent < 3) {
     await deliverGalleryEmail(
       sendGalleryAdminNotification({
         heading: "Public submission rejected",
         intro: "A Gallery public-text check rejected a contribution.",
-        details: { Type: args.target, Content: args.content },
+        details: { Account: rejection.actor?.email, Type: args.target, Content: args.content },
+        action: { label: "Review submission", href: galleryAdminUrl() },
       }),
       "filter_rejection",
     );
@@ -456,7 +472,18 @@ export async function submitGalleryCandidate(
   }
 
   const proposedId = randomBytes(16).toString("hex");
-  const promptKey = sha256Hex(prompt);
+  const promptKey = sha256Hex(normalizeGalleryPromptIdentity(prompt));
+  const legacyPromptKey = sha256Hex(prompt);
+  if (legacyPromptKey !== promptKey) {
+    try {
+      await prisma.galleryCandidate.updateMany({
+        where: { promptKey: legacyPromptKey },
+        data: { promptKey },
+      });
+    } catch (error) {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "P2002") throw error;
+    }
+  }
   const candidate = await prisma.$transaction(async (tx) => {
     const row = await tx.galleryCandidate.upsert({
       where: { promptKey },
@@ -505,7 +532,10 @@ export async function addGalleryExample(
     loadEligibleGeneration(userId, input.generationId),
   ]);
   if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
-  if (!generation || generation.promptText !== candidate.promptText) {
+  if (
+    !generation ||
+    normalizeGalleryPromptIdentity(generation.promptText) !== normalizeGalleryPromptIdentity(candidate.promptText)
+  ) {
     throw new GalleryServiceError("generation_mismatch", "Choose a successful generation for this exact prompt.");
   }
   if (
@@ -693,16 +723,15 @@ async function requireMineBenchAdmin(userId: string) {
   if (!admin) throw new GalleryServiceError("forbidden", "MineBench admin access required.");
 }
 
-export async function selectGalleryCandidate(adminId: string, publicId: string) {
+export async function setGalleryCandidateSelected(adminId: string, publicId: string, selected: boolean) {
   await requireMineBenchAdmin(adminId);
   const now = new Date();
-  const selected = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const locked = await tx.$queryRaw<Array<{ id: string }>>`
       SELECT id
       FROM "GalleryCandidate"
       WHERE "publicId" = ${publicId}
         AND "removedAt" IS NULL
-        AND "adminHiddenAt" IS NULL
       FOR UPDATE
     `;
     const candidate = locked[0]
@@ -713,13 +742,16 @@ export async function selectGalleryCandidate(adminId: string, publicId: string) 
             promptText: true,
             selectedAt: true,
             officialPromptId: true,
+            adminHiddenAt: true,
             uploaderId: true,
             uploader: { select: { email: true } },
           },
         })
       : null;
-    if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
-    if (candidate.selectedAt) {
+    if (!candidate || (selected && candidate.adminHiddenAt)) {
+      throw new GalleryServiceError("not_found", "Gallery prompt not found.");
+    }
+    if (Boolean(candidate.selectedAt || candidate.officialPromptId) === selected) {
       return {
         promptId: candidate.officialPromptId,
         promptText: candidate.promptText,
@@ -727,22 +759,31 @@ export async function selectGalleryCandidate(adminId: string, publicId: string) 
         transitioned: false,
       };
     }
-    const prompt = await tx.prompt.upsert({
-      where: { text: candidate.promptText },
-      create: { text: candidate.promptText, active: false },
-      update: {},
-      select: { id: true },
-    });
+    const prompt = selected
+      ? await tx.prompt.upsert({
+          where: { text: candidate.promptText },
+          create: { text: candidate.promptText, active: false },
+          update: {},
+          select: { id: true },
+        })
+      : null;
     const transition = await tx.galleryCandidate.updateMany({
-      where: { id: candidate.id, selectedAt: null },
-      data: { selectedAt: now, selectedById: adminId, officialPromptId: prompt.id },
+      where: selected
+        ? { id: candidate.id, selectedAt: null, removedAt: null, adminHiddenAt: null }
+        : {
+            id: candidate.id,
+            OR: [{ selectedAt: { not: null } }, { officialPromptId: { not: null } }],
+          },
+      data: selected
+        ? { selectedAt: now, selectedById: adminId, officialPromptId: prompt!.id }
+        : { selectedAt: null, selectedById: null, officialPromptId: null },
     });
     if (transition.count !== 1) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
     await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
         target: "CANDIDATE",
-        action: "selected",
+        action: selected ? "selected" : "unselected",
         actorUserId: adminId,
         subjectUserId: candidate.uploaderId,
         candidateId: candidate.id,
@@ -751,23 +792,23 @@ export async function selectGalleryCandidate(adminId: string, publicId: string) 
       },
     });
     return {
-      promptId: prompt.id,
+      promptId: prompt?.id ?? null,
       promptText: candidate.promptText,
       uploaderEmail: candidate.uploader.email,
       transitioned: true,
     };
   });
-  if (selected.transitioned) {
+  if (selected && result.transitioned) {
     await deliverGalleryEmail(
-      sendGalleryAccountNotification(selected.uploaderEmail, {
+      sendGalleryAccountNotification(result.uploaderEmail, {
         heading: "Your prompt was selected",
         intro: "MineBench selected your Gallery prompt for the benchmark collection.",
-        details: { Prompt: selected.promptText },
+        details: { Prompt: result.promptText },
       }),
       "candidate_selected",
     );
   }
-  return { selected: true, promptId: selected.promptId };
+  return { selected, promptId: result.promptId };
 }
 
 export async function setGalleryPublishingSuspension(
@@ -776,14 +817,22 @@ export async function setGalleryPublishingSuspension(
   input: { suspended: boolean; reason?: string },
 ) {
   await requireMineBenchAdmin(adminId);
-  const account = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { id: true, email: true },
-  });
-  if (!account) throw new GalleryServiceError("not_found", "Account not found.");
   const now = new Date();
   const reason = input.reason?.trim().slice(0, 240) || null;
-  await prisma.$transaction(async (tx) => {
+  const account = await prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "User" WHERE id = ${userId}::uuid FOR UPDATE
+    `;
+    const account = locked[0]
+      ? await tx.user.findUnique({
+          where: { id: locked[0].id },
+          select: { id: true, email: true, gallerySuspendedAt: true },
+        })
+      : null;
+    if (!account) throw new GalleryServiceError("not_found", "Account not found.");
+    if (Boolean(account.gallerySuspendedAt) === input.suspended) {
+      return { ...account, changed: false };
+    }
     await tx.user.update({
       where: { id: userId },
       data: input.suspended
@@ -791,7 +840,6 @@ export async function setGalleryPublishingSuspension(
             gallerySuspendedAt: now,
             gallerySuspensionReason: reason,
             gallerySuspendedById: adminId,
-            galleryRestoredAt: null,
           }
         : {
             gallerySuspendedAt: null,
@@ -811,21 +859,25 @@ export async function setGalleryPublishingSuspension(
         purgeAt: new Date(now.getTime() + RETENTION_MS),
       },
     });
+    return { ...account, changed: true };
   });
-  await deliverGalleryEmail(
-    sendGalleryAccountNotification(account.email, input.suspended
-      ? {
-          heading: "Account suspended",
-          intro: "Gallery publishing has been suspended for this account. You can appeal from Account settings.",
-          details: { Reason: reason },
-        }
-      : {
-          heading: "Gallery publishing restored",
-          intro: "Gallery publishing has been restored for this account.",
-        }),
-    input.suspended ? "account_suspended" : "account_restored",
-  );
-  return { suspended: input.suspended };
+  if (account.changed) {
+    await deliverGalleryEmail(
+      sendGalleryAccountNotification(account.email, input.suspended
+        ? {
+            heading: "Account suspended",
+            intro: "Gallery publishing has been suspended for this account. You can appeal from Account settings.",
+            details: { Reason: reason },
+            action: { label: "Appeal", href: galleryUrl("/account") },
+          }
+        : {
+            heading: "Gallery publishing restored",
+            intro: "Gallery publishing has been restored for this account.",
+          }),
+      input.suspended ? "account_suspended" : "account_restored",
+    );
+  }
+  return { suspended: input.suspended, changed: account.changed };
 }
 
 export async function updateGalleryNickname(userId: string, draft: string) {
@@ -879,6 +931,7 @@ export async function submitGalleryAppeal(userId: string, explanation: string) {
             publicNickname: true,
             gallerySuspendedAt: true,
             gallerySuspensionReason: true,
+            galleryRestoredAt: true,
           },
         })
       : null;
@@ -890,7 +943,10 @@ export async function submitGalleryAppeal(userId: string, explanation: string) {
       where: {
         kind: "APPEAL",
         subjectUserId: userId,
-        createdAt: { gte: new Date(now.getTime() - 24 * 60 * 60 * 1000) },
+        createdAt: {
+          gte: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+          ...(account.galleryRestoredAt ? { gt: account.galleryRestoredAt } : {}),
+        },
       },
       select: { id: true },
     });
@@ -1038,30 +1094,54 @@ export async function getPublicGalleryExampleArtifact(
   });
 }
 
-export async function hideGalleryCandidate(adminId: string, publicId: string) {
+export async function setGalleryCandidateHidden(
+  adminId: string,
+  publicId: string,
+  hidden: boolean,
+) {
   await requireMineBenchAdmin(adminId);
-  const candidate = await prisma.galleryCandidate.findFirst({
-    where: { publicId, removedAt: null },
-    select: { id: true, promptText: true, uploaderId: true },
-  });
-  if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
   const now = new Date();
-  await prisma.$transaction([
-    prisma.galleryCandidate.update({ where: { id: candidate.id }, data: { adminHiddenAt: now, purgeAt: new Date(now.getTime() + RETENTION_MS) } }),
-    prisma.galleryModerationRecord.create({
+  return prisma.$transaction(async (tx) => {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT id
+      FROM "GalleryCandidate"
+      WHERE "publicId" = ${publicId}
+        AND "removedAt" IS NULL
+      FOR UPDATE
+    `;
+    const candidate = locked[0]
+      ? await tx.galleryCandidate.findUnique({
+          where: { id: locked[0].id },
+          select: { id: true, promptText: true, uploaderId: true, adminHiddenAt: true },
+        })
+      : null;
+    if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
+    if (Boolean(candidate.adminHiddenAt) === hidden) return { hidden, changed: false };
+
+    await tx.galleryCandidate.update({
+      where: { id: candidate.id },
+      data: hidden
+        ? { adminHiddenAt: now, purgeAt: new Date(now.getTime() + RETENTION_MS) }
+        : { adminHiddenAt: null, purgeAt: null },
+    });
+    await tx.galleryModerationRecord.create({
       data: {
         kind: "ADMIN_ACTION",
         target: "CANDIDATE",
-        action: "admin_hidden",
+        action: hidden ? "admin_hidden" : "admin_restored",
         actorUserId: adminId,
         subjectUserId: candidate.uploaderId,
         candidateId: candidate.id,
         safeSnapshot: { prompt: candidate.promptText },
         purgeAt: new Date(now.getTime() + RETENTION_MS),
       },
-    }),
-  ]);
-  return { hidden: true };
+    });
+    return { hidden, changed: true };
+  });
+}
+
+export async function hideGalleryCandidate(adminId: string, publicId: string) {
+  return setGalleryCandidateHidden(adminId, publicId, true);
 }
 
 export async function hideGalleryExample(
@@ -1071,7 +1151,7 @@ export async function hideGalleryExample(
 ) {
   await requireMineBenchAdmin(adminId);
   const example = await prisma.galleryExample.findFirst({
-    where: { id: exampleId, removedAt: null },
+    where: { id: exampleId, removedAt: null, adminHiddenAt: null },
     select: {
       id: true,
       candidateId: true,
@@ -1144,10 +1224,44 @@ export async function hideGalleryExample(
   return { hidden: true };
 }
 
-export async function getGalleryAdminDashboard(adminId: string) {
+function adminSnapshotField(value: Prisma.JsonValue | null, key: string): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const text = value[key];
+  return typeof text === "string" ? text.slice(0, 240) : null;
+}
+
+function adminSnapshotText(value: Prisma.JsonValue | null): string | null {
+  for (const key of ["prompt", "content", "model", "visitor"]) {
+    const text = adminSnapshotField(value, key);
+    if (text) return text;
+  }
+  return null;
+}
+
+function adminLocation(value: {
+  city: string | null;
+  countryRegion: string | null;
+  country: string | null;
+}): string | null {
+  const parts = [value.city, value.countryRegion, value.country].filter(Boolean);
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+function adminGuestLabel(sessionId: string): string {
+  const identity = hashVoteSession(sessionId) ?? sessionId;
+  return `Guest ${identity.slice(0, 6).toUpperCase()}`;
+}
+
+export async function getGalleryAdminDashboard(
+  adminId: string,
+  options: { now?: Date } = {},
+) {
   await requireMineBenchAdmin(adminId);
-  const [moderation, candidates, suspendedAccounts, voteBlocks] = await Promise.all([
+  const now = options.now ?? new Date();
+  const retainedSince = new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS);
+  const [moderation, prompts, accounts, sessions, voteBlocks] = await Promise.all([
     prisma.galleryModerationRecord.findMany({
+      where: { NOT: { action: "email_delivery_failed" } },
       orderBy: { createdAt: "desc" },
       take: 100,
       select: {
@@ -1158,46 +1272,453 @@ export async function getGalleryAdminDashboard(adminId: string) {
         reportReason: true,
         note: true,
         safeSnapshot: true,
-        actorUserId: true,
-        sessionHash: true,
-        ipHmac: true,
-        subjectUserId: true,
-        candidate: { select: { publicId: true } },
-        exampleId: true,
         createdAt: true,
+        actor: { select: { email: true, publicNickname: true } },
+        subject: { select: { email: true, publicNickname: true } },
+        candidate: { select: { promptText: true } },
+        example: { select: { id: true, removedAt: true, adminHiddenAt: true } },
       },
     }),
     prisma.galleryCandidate.findMany({
-      where: { removedAt: null, adminHiddenAt: null },
-      orderBy: [{ selectedAt: "asc" }, { upvoteCount: "desc" }, { publishedAt: "desc" }],
-      take: 100,
+      where: { removedAt: null },
+      orderBy: [{ publishedAt: "desc" }, { id: "desc" }],
+      take: 200,
       select: {
         publicId: true,
         promptText: true,
         upvoteCount: true,
+        publishedAt: true,
         selectedAt: true,
+        adminHiddenAt: true,
         uploaderId: true,
-        uploader: { select: { publicNickname: true, email: true, gallerySuspendedAt: true } },
+        uploader: {
+          select: {
+            publicNickname: true,
+            email: true,
+            gallerySuspendedAt: true,
+          },
+        },
+        _count: {
+          select: { moderationRecords: { where: { kind: "REPORT" } } },
+        },
       },
     }),
     prisma.user.findMany({
-      where: { gallerySuspendedAt: { not: null } },
-      orderBy: { gallerySuspendedAt: "desc" },
-      take: 100,
+      orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
+      take: 200,
       select: {
         id: true,
         email: true,
         publicNickname: true,
+        lastSeenAt: true,
         gallerySuspendedAt: true,
-        gallerySuspensionReason: true,
+      },
+    }),
+    prisma.publicSessionActivity.findMany({
+      where: { lastSeenAt: { gte: retainedSince } },
+      orderBy: { lastSeenAt: "desc" },
+      take: 250,
+      select: {
+        id: true,
+        sessionId: true,
+        userId: true,
+        lastSeenAt: true,
+        city: true,
+        countryRegion: true,
+        country: true,
+        ipHmac: true,
+        user: {
+          select: {
+            email: true,
+            publicNickname: true,
+            gallerySuspendedAt: true,
+          },
+        },
       },
     }),
     prisma.galleryVoteBlock.findMany({
       where: { reversedAt: null },
-      orderBy: { createdAt: "desc" },
-      take: 100,
-      select: { id: true, userId: true, internalNote: true, createdAt: true },
+      select: { userId: true, sessionHash: true, ipHmac: true },
     }),
   ]);
-  return { moderation, candidates, suspendedAccounts, voteBlocks };
+
+  const blockedUsers = new Set(voteBlocks.flatMap((block) => block.userId ? [block.userId] : []));
+  const blockedSessions = new Set(voteBlocks.flatMap((block) => block.sessionHash ? [block.sessionHash] : []));
+  const blockedIps = new Set(voteBlocks.flatMap((block) => block.ipHmac ? [block.ipHmac] : []));
+  const onlineSince = now.getTime() - PUBLIC_SESSION_ONLINE_MS;
+  const people = new Map<string, {
+    id: string;
+    label: string;
+    email: string | null;
+    lastSeenAt: string | null;
+    location: string | null;
+    online: boolean;
+    suspended: boolean;
+    voteBlocked: boolean;
+  }>();
+
+  for (const account of accounts) {
+    people.set(`user:${account.id}`, {
+      id: `user:${account.id}`,
+      label: account.publicNickname ?? account.email,
+      email: account.email,
+      lastSeenAt: account.lastSeenAt?.toISOString() ?? null,
+      location: null,
+      online: false,
+      suspended: Boolean(account.gallerySuspendedAt),
+      voteBlocked: blockedUsers.has(account.id),
+    });
+  }
+
+  for (const session of sessions) {
+    const online = session.lastSeenAt.getTime() >= onlineSince;
+    const sessionHash = hashVoteSession(session.sessionId);
+    const sessionBlocked = Boolean(
+      (sessionHash && blockedSessions.has(sessionHash)) ||
+      (session.ipHmac && blockedIps.has(session.ipHmac)),
+    );
+    if (session.userId && session.user) {
+      const id = `user:${session.userId}`;
+      const existing = people.get(id);
+      const newer = !existing?.lastSeenAt || session.lastSeenAt.getTime() > new Date(existing.lastSeenAt).getTime();
+      people.set(id, {
+        id,
+        label: session.user.publicNickname ?? session.user.email,
+        email: session.user.email,
+        lastSeenAt: newer ? session.lastSeenAt.toISOString() : existing?.lastSeenAt ?? null,
+        location: newer ? adminLocation(session) : existing?.location ?? null,
+        online: Boolean(existing?.online || online),
+        suspended: Boolean(session.user.gallerySuspendedAt),
+        voteBlocked: Boolean(existing?.voteBlocked || blockedUsers.has(session.userId) || sessionBlocked),
+      });
+      continue;
+    }
+    people.set(`session:${session.id}`, {
+      id: `session:${session.id}`,
+      label: adminGuestLabel(session.sessionId),
+      email: null,
+      lastSeenAt: session.lastSeenAt.toISOString(),
+      location: adminLocation(session),
+      online,
+      suspended: false,
+      voteBlocked: sessionBlocked,
+    });
+  }
+
+  return {
+    prompts: prompts.map((prompt) => ({
+      publicId: prompt.publicId,
+      prompt: prompt.promptText,
+      upvoteCount: prompt.upvoteCount,
+      publishedAt: prompt.publishedAt.toISOString(),
+      selected: Boolean(prompt.selectedAt),
+      hidden: Boolean(prompt.adminHiddenAt),
+      reportCount: prompt._count.moderationRecords,
+      uploader: {
+        id: prompt.uploaderId,
+        email: prompt.uploader.email,
+        publicNickname: prompt.uploader.publicNickname,
+        suspended: Boolean(prompt.uploader.gallerySuspendedAt),
+      },
+    })),
+    people: [...people.values()].sort((a, b) =>
+      Number(b.online) - Number(a.online)
+      || (b.lastSeenAt ? new Date(b.lastSeenAt).getTime() : 0)
+        - (a.lastSeenAt ? new Date(a.lastSeenAt).getTime() : 0)
+      || a.label.localeCompare(b.label)
+    ),
+    activity: moderation.map((record) => ({
+      id: record.id,
+      kind: record.kind,
+      target: record.target,
+      action: record.action,
+      reason: record.reportReason,
+      note: record.note,
+      summary: record.candidate?.promptText
+        ?? adminSnapshotText(record.safeSnapshot)
+        ?? record.action
+        ?? record.reportReason
+        ?? record.target,
+      actor: record.actor?.publicNickname ?? record.actor?.email ?? null,
+      subject: record.subject?.publicNickname ?? record.subject?.email ?? null,
+      detail: record.target === "EXAMPLE" ? adminSnapshotField(record.safeSnapshot, "model") : null,
+      exampleId: record.kind === "REPORT" && record.target === "EXAMPLE"
+        && record.example && !record.example.removedAt && !record.example.adminHiddenAt
+        ? record.example.id
+        : null,
+      createdAt: record.createdAt.toISOString(),
+    })),
+  };
+}
+
+async function resolveGalleryAdminPerson(personId: string) {
+  if (personId.startsWith("user:")) {
+    const userId = personId.slice(5);
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        publicNickname: true,
+        lastSeenAt: true,
+        gallerySuspendedAt: true,
+        gallerySuspensionReason: true,
+        publicSessionActivities: {
+          orderBy: { lastSeenAt: "desc" },
+          take: 50,
+          select: {
+            sessionId: true,
+            lastSeenAt: true,
+            city: true,
+            countryRegion: true,
+            country: true,
+            ipHmac: true,
+          },
+        },
+      },
+    });
+    if (!user) throw new GalleryServiceError("not_found", "Person not found.");
+    const latest = user.publicSessionActivities[0];
+    return {
+      id: personId,
+      userId: user.id,
+      sessionIds: user.publicSessionActivities.map((session) => session.sessionId),
+      ipHmacs: Array.from(new Set(user.publicSessionActivities.flatMap((session) =>
+        session.ipHmac ? [session.ipHmac] : []
+      ))),
+      label: user.publicNickname ?? user.email,
+      email: user.email,
+      lastSeenAt: latest?.lastSeenAt ?? user.lastSeenAt,
+      location: latest ? adminLocation(latest) : null,
+      suspendedAt: user.gallerySuspendedAt,
+      suspensionReason: user.gallerySuspensionReason,
+    };
+  }
+
+  if (personId.startsWith("session:")) {
+    const session = await prisma.publicSessionActivity.findUnique({
+      where: { id: personId.slice(8) },
+      select: {
+        sessionId: true,
+        lastSeenAt: true,
+        city: true,
+        countryRegion: true,
+        country: true,
+        ipHmac: true,
+      },
+    });
+    if (!session) throw new GalleryServiceError("not_found", "Person not found.");
+    return {
+      id: personId,
+      userId: null,
+      sessionIds: [session.sessionId],
+      ipHmacs: session.ipHmac ? [session.ipHmac] : [],
+      label: adminGuestLabel(session.sessionId),
+      email: null,
+      lastSeenAt: session.lastSeenAt,
+      location: adminLocation(session),
+      suspendedAt: null,
+      suspensionReason: null,
+    };
+  }
+
+  throw new GalleryServiceError("not_found", "Person not found.");
+}
+
+function adminArenaChoice(
+  choice: string,
+  modelA: string,
+  modelB: string,
+): string {
+  if (choice === "A") return modelA;
+  if (choice === "B") return modelB;
+  return choice.toLowerCase().replaceAll("_", " ");
+}
+
+export async function getGalleryAdminPerson(adminId: string, personId: string) {
+  await requireMineBenchAdmin(adminId);
+  const person = await resolveGalleryAdminPerson(personId);
+  const voteIdentities = [
+    person.userId ? { userId: person.userId } : null,
+    person.sessionIds.length > 0 ? { sessionId: { in: person.sessionIds } } : null,
+  ].filter((value): value is NonNullable<typeof value> => Boolean(value));
+  const sessionHashes = person.sessionIds.map(hashVoteSession).filter((value): value is string => Boolean(value));
+  const blockIdentities = [
+    person.userId ? { userId: person.userId } : null,
+    ...sessionHashes.map((sessionHash) => ({ sessionHash })),
+    ...person.ipHmacs.map((ipHmac) => ({ ipHmac })),
+  ].filter((value): value is NonNullable<typeof value> => Boolean(value));
+  const [arenaVotes, galleryVotes, contributions, voteBlocked] = await Promise.all([
+    voteIdentities.length > 0
+      ? prisma.vote.findMany({
+          where: { OR: voteIdentities, matchup: { stealthVariantId: null } },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+          select: {
+            id: true,
+            choice: true,
+            createdAt: true,
+            matchup: {
+              select: {
+                prompt: { select: { text: true } },
+                modelA: { select: { displayName: true } },
+                modelB: { select: { displayName: true } },
+              },
+            },
+          },
+        })
+      : [],
+    voteIdentities.length > 0
+      ? prisma.galleryVote.findMany({
+          where: { OR: voteIdentities },
+          orderBy: { createdAt: "desc" },
+          take: 100,
+          select: {
+            id: true,
+            createdAt: true,
+            candidate: { select: { publicId: true, promptText: true } },
+          },
+        })
+      : [],
+    person.userId
+      ? prisma.galleryCandidate.findMany({
+          where: { uploaderId: person.userId },
+          orderBy: { publishedAt: "desc" },
+          take: 25,
+          select: {
+            publicId: true,
+            promptText: true,
+            publishedAt: true,
+            selectedAt: true,
+            removedAt: true,
+            adminHiddenAt: true,
+          },
+        })
+      : [],
+    blockIdentities.length > 0
+      ? prisma.galleryVoteBlock.findFirst({
+          where: { reversedAt: null, OR: blockIdentities },
+          select: { id: true },
+        })
+      : null,
+  ]);
+
+  const votes = [
+    ...arenaVotes.map((vote) => ({
+      id: `arena:${vote.id}`,
+      source: "Arena" as const,
+      prompt: vote.matchup.prompt.text,
+      result: adminArenaChoice(
+        vote.choice,
+        vote.matchup.modelA.displayName,
+        vote.matchup.modelB.displayName,
+      ),
+      href: null,
+      createdAt: vote.createdAt.toISOString(),
+    })),
+    ...galleryVotes.map((vote) => ({
+      id: `gallery:${vote.id}`,
+      source: "Gallery" as const,
+      prompt: vote.candidate.promptText,
+      result: "Upvoted",
+      href: `/gallery/${vote.candidate.publicId}`,
+      createdAt: vote.createdAt.toISOString(),
+    })),
+  ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 100);
+
+  return {
+    id: person.id,
+    userId: person.userId,
+    label: person.label,
+    email: person.email,
+    lastSeenAt: person.lastSeenAt?.toISOString() ?? null,
+    location: person.location,
+    online: Boolean(person.lastSeenAt && person.lastSeenAt.getTime() >= Date.now() - PUBLIC_SESSION_ONLINE_MS),
+    suspended: Boolean(person.suspendedAt),
+    suspensionReason: person.suspensionReason,
+    voteBlocked: Boolean(voteBlocked),
+    contributions: contributions.map((candidate) => ({
+      publicId: candidate.publicId,
+      prompt: candidate.promptText,
+      publishedAt: candidate.publishedAt.toISOString(),
+      status: candidate.removedAt
+        ? "Removed"
+        : candidate.adminHiddenAt
+          ? "Hidden"
+          : candidate.selectedAt
+            ? "Selected"
+            : "Live",
+    })),
+    votes,
+  };
+}
+
+export async function setGalleryPersonVoteBlocked(
+  adminId: string,
+  personId: string,
+  blocked: boolean,
+) {
+  await requireMineBenchAdmin(adminId);
+  const person = await resolveGalleryAdminPerson(personId);
+  const sessionHashes = person.sessionIds.map(hashVoteSession).filter((value): value is string => Boolean(value));
+  const sessionHash = sessionHashes[0] ?? null;
+  const ipHmac = person.ipHmacs[0] ?? null;
+  const identities = [
+    person.userId ? { userId: person.userId } : null,
+    ...sessionHashes.map((value) => ({ sessionHash: value })),
+    ...person.ipHmacs.map((value) => ({ ipHmac: value })),
+  ].filter((value): value is NonNullable<typeof value> => Boolean(value));
+  if (identities.length === 0) throw new GalleryServiceError("not_found", "Person not found.");
+  const now = new Date();
+
+  return prisma.$transaction(async (tx) => {
+    if (person.userId) {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${person.userId}::uuid FOR UPDATE`;
+    } else {
+      await tx.$queryRaw`SELECT id FROM "PublicSessionActivity" WHERE id = ${personId.slice(8)} FOR UPDATE`;
+    }
+    let changed = false;
+    if (blocked) {
+      const active = await tx.galleryVoteBlock.findMany({
+        where: { reversedAt: null, OR: identities },
+        select: { userId: true, sessionHash: true, ipHmac: true },
+      });
+      const activeKeys = new Set(active.flatMap((entry) => [
+        entry.userId ? `user:${entry.userId}` : null,
+        entry.sessionHash ? `session:${entry.sessionHash}` : null,
+        entry.ipHmac ? `ip:${entry.ipHmac}` : null,
+      ].filter((value): value is string => Boolean(value))));
+      const rows = [
+        person.userId && !activeKeys.has(`user:${person.userId}`) ? { userId: person.userId } : null,
+        ...sessionHashes.map((value) => activeKeys.has(`session:${value}`) ? null : { sessionHash: value }),
+        ...person.ipHmacs.map((value) => activeKeys.has(`ip:${value}`) ? null : { ipHmac: value }),
+      ].filter((value): value is NonNullable<typeof value> => Boolean(value));
+      if (rows.length === 0) return { blocked, changed: false };
+      await tx.galleryVoteBlock.createMany({
+        data: rows.map((identity) => ({ ...identity, createdById: adminId })),
+      });
+      changed = true;
+    } else {
+      const reversed = await tx.galleryVoteBlock.updateMany({
+        where: { reversedAt: null, OR: identities },
+        data: { reversedAt: now, reversedById: adminId },
+      });
+      if (reversed.count === 0) return { blocked, changed: false };
+      changed = true;
+    }
+    await tx.galleryModerationRecord.create({
+      data: {
+        kind: "ADMIN_ACTION",
+        target: "VOTE_BLOCK",
+        action: blocked ? "vote_blocked" : "vote_restored",
+        actorUserId: adminId,
+        subjectUserId: person.userId,
+        sessionHash,
+        ipHmac,
+        safeSnapshot: person.userId ? undefined : { visitor: person.label },
+        purgeAt: new Date(now.getTime() + RETENTION_MS),
+      },
+    });
+    return { blocked, changed };
+  });
 }

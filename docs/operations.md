@@ -175,7 +175,7 @@ Reference prompt template:
 
 ### Gallery and Saved Generation Routes
 
-Saved generations are private, account-owned Sandbox results. Gallery metadata and votes remain separate from Arena benchmark tables. See [Architecture](./architecture.md#saved-generation-execution) for durable execution and [Gallery and saved generations](./gallery.md) for public behavior, moderation, and retention.
+Saved generations are private, account-owned Sandbox results. Gallery metadata and votes remain separate from Arena benchmark tables. See [Architecture](./architecture.md#saved-generations) for durable execution and [Gallery and saved generations](./gallery.md) for the user-facing workflow.
 
 - `POST /api/generations` creates one durable job per selected model
 - `GET /api/generations` lists the current account's jobs and results

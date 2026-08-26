@@ -1,6 +1,6 @@
 # MineBench Privacy Policy
 
-Effective and last updated: August 25, 2026
+Effective and last updated: August 26, 2026
 
 MineBench is an independent service operated by Ammaar Alam in the United States. This Privacy Policy explains how MineBench handles information when you use [minebench.ai](https://minebench.ai), participate in model evaluations, use MineBench's generation tools, or communicate with MineBench.
 
@@ -32,7 +32,7 @@ The selected provider processes prompts and related information under its own te
 
 MineBench uses:
 
-- `mb_session` to identify an Arena voting session and prevent duplicate votes;
+- `mb_session` to identify a public voting session, prevent duplicate votes, and measure recent activity for moderation;
 - `mb_rls` for rate limiting and abuse prevention;
 - `mb-theme` to remember your display preference;
 - Supabase authentication cookies to keep signed-in users authenticated; and
@@ -41,6 +41,8 @@ MineBench uses:
 The Arena cookies may remain for up to one year. They are not used for advertising.
 
 Arena vote requests create restricted operational logs that may contain the vote's opaque identifier, choice, IP address, user agent, authentication status, and IP-derived location. MineBench uses these records to investigate manipulation and enforce rate limits or temporary blocks. IP-derived location is approximate and is not device GPS data.
+
+MineBench also keeps a restricted activity record with the pseudonymous session identifier, optional signed-in account association, latest activity time, coarse city, region, and country, and a one-way IP abuse-prevention HMAC. The activity record does not store the raw IP address and is scheduled for deletion after 30 days.
 
 MineBench uses Vercel Web Analytics for aggregate usage and performance measurement. Vercel Web Analytics does not use third-party analytics cookies or provide MineBench with a persistent cross-site identity. Its visitor-identification hash expires after 24 hours. MineBench's custom analytics events are limited to reliability and performance information and are not intended to contain prompts, API credentials, or direct identifiers.
 

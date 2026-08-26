@@ -13,3 +13,14 @@ export function redactSensitiveText(value: unknown, maxLength = 2_000): string {
     .replace(URL_RE, "[redacted-url]");
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}...` : redacted;
 }
+
+export function safeCustomBuildRetryReason(reason: unknown): string {
+  const normalized = String(reason ?? "").toLowerCase();
+  if (/too small|footprint|height/.test(normalized)) {
+    return "The first build was incomplete.";
+  }
+  if (/json|tool call|gridsize|palette|validat|schema|literal|required/.test(normalized)) {
+    return "The first response did not match the build format.";
+  }
+  return "The first response could not be used.";
+}

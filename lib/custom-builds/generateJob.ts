@@ -21,7 +21,7 @@ import {
   throwIfCustomBuildLeaseLost,
 } from "@/lib/custom-builds/lease";
 import { decryptProviderKey, decryptSecretValue } from "@/lib/custom-builds/secrets";
-import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
+import { redactSensitiveText, safeCustomBuildRetryReason } from "@/lib/custom-builds/sanitize";
 import {
   assertCustomBuildStorageConfigured,
   downloadCustomBuildArtifactBytes,
@@ -47,6 +47,15 @@ type GeneratedBuildResult = {
 };
 
 const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2;
+const CUSTOM_BUILD_PROVIDER_TIMEOUT_MS = 90 * 60 * 1000;
+
+export function customBuildProviderSignal(
+  signal?: AbortSignal,
+  timeoutMs = CUSTOM_BUILD_PROVIDER_TIMEOUT_MS,
+): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
 
 class CustomBuildGenerationFailedError extends Error {
   constructor(
@@ -273,6 +282,7 @@ async function generateBuild(
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
   const providerKeys = providerKeysForSecret(secret.provider, providerKey);
   let providerAttempts = 0;
+  const providerSignal = customBuildProviderSignal(opts.signal);
 
   throwIfCustomBuildLeaseLost(opts.signal);
   const result = await generateVoxelBuild(
@@ -285,13 +295,13 @@ async function generateBuild(
       allowServerKeys: false,
       preferOpenRouter: customBuild.preferOpenRouter,
       reasoning: customBuild.reasoning ?? undefined,
-      abortSignal: opts.signal,
+      abortSignal: providerSignal,
       maxAttempts: CUSTOM_BUILD_MODEL_MAX_ATTEMPTS,
       onProviderRequest: (attempt) => {
         providerAttempts = Math.max(providerAttempts, attempt);
       },
       onRetry: async (attempt, reason) => {
-        const safeReason = redactSensitiveText(reason, 1_000) || "The model response could not be used.";
+        const safeReason = safeCustomBuildRetryReason(reason);
         const retrying = await prisma.customBuild.updateMany({
           where: { id: customBuild.id, removedAt: null, status: "running" },
           data: {
@@ -590,32 +600,32 @@ export async function runCustomBuildGenerateJob(
       job.attempts >= job.maxAttempts;
     if (terminal) {
       const failure = safeGenerateFailure(effectiveError, message);
-      const failed = await prisma.customBuild.updateMany({
-        where: { id: customBuild.id, removedAt: null, status: "running" },
-        data: {
-          status: "failed",
-          currentStage: "failed",
-          completedAt: new Date(),
-          errorCode: failure.code,
-          errorMessage: failure.message,
-          errorRetryable: manuallyRetryable,
-          progress: effectiveError instanceof CustomBuildGenerationFailedError
-            ? { attempt: effectiveError.attempt, reason: effectiveError.reason }
-            : Prisma.DbNull,
-          objectsDeletedAt: null,
-          deletionPendingAt: manuallyRetryable ? null : new Date(),
-          deletionError: null,
-        },
+      await prisma.$transaction(async (tx) => {
+        const failed = await tx.customBuild.updateMany({
+          where: { id: customBuild.id, removedAt: null, status: "running" },
+          data: {
+            status: "failed",
+            currentStage: "failed",
+            completedAt: new Date(),
+            errorCode: failure.code,
+            errorMessage: failure.message,
+            errorRetryable: manuallyRetryable,
+            progress: effectiveError instanceof CustomBuildGenerationFailedError
+              ? { attempt: effectiveError.attempt, reason: safeCustomBuildRetryReason(effectiveError.reason) }
+              : Prisma.DbNull,
+            objectsDeletedAt: null,
+            deletionPendingAt: manuallyRetryable ? null : new Date(),
+            deletionError: null,
+          },
+        });
+        if (failed.count !== 1) throw new CustomBuildLeaseLostError();
+        await tx.customBuildStatsDaily.upsert({
+          where: { day: new Date(new Date().toISOString().slice(0, 10)) },
+          create: { day: new Date(new Date().toISOString().slice(0, 10)), failed: 1 },
+          update: { failed: { increment: 1 } },
+        });
+        await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
       });
-      if (failed.count !== 1) throw new CustomBuildLeaseLostError();
-      await prisma.customBuildStatsDaily.upsert({
-        where: { day: new Date(new Date().toISOString().slice(0, 10)) },
-        create: { day: new Date(new Date().toISOString().slice(0, 10)), failed: 1 },
-        update: { failed: { increment: 1 } },
-      });
-      if (!manuallyRetryable) {
-        await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
-      }
       emitCustomBuildEvent(customBuild.id, "failed", { code: failure.code });
       throw new Error(failure.code);
     } else {
