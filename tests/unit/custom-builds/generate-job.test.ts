@@ -240,6 +240,14 @@ async function main() {
     safeCustomBuildRetryReason('Bearer sk-1234567890abcdef'),
     'Bearer [redacted]',
   );
+  assert.equal(
+    safeCustomBuildRetryReason('Custom error: {"api_key":"supersecretcredential"}'),
+    'Custom error: {"api_key":"[redacted]"}',
+  );
+  assert.equal(
+    safeCustomBuildRetryReason('{"apiKey": "my-secret-key", "status": 401}'),
+    '{"apiKey": "[redacted]", "status": 401}',
+  );
 
   assert.equal(
     isTerminalCustomBuildGenerateError("OpenAI error 401: invalid_api_key"),
