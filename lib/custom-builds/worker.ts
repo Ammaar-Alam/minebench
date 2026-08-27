@@ -19,6 +19,7 @@ import {
   throwIfCustomBuildLeaseLost,
 } from "@/lib/custom-builds/lease";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
+import { recordQueueHeartbeat, startActiveGenerationsHeartbeat } from "@/lib/observability/cloudwatch";
 import { prisma } from "@/lib/prisma";
 
 function readIntEnv(name: string, fallback: number, min: number, max: number): number {
@@ -234,40 +235,69 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
   return processClaimedJob(job, workerId, createCustomBuildProcessingGate());
 }
 
+async function checkAndReportQueueHealth(): Promise<void> {
+  try {
+    const oldest = await prisma.customBuildJob.findFirst({
+      where: { status: "queued", runAfter: { lte: new Date() } },
+      orderBy: { runAfter: "asc" },
+      select: { runAfter: true },
+    });
+    const queuedCount = await prisma.customBuildJob.count({
+      where: { status: "queued", runAfter: { lte: new Date() } },
+    });
+    const oldestAgeSeconds = oldest
+      ? Math.max(0, (Date.now() - oldest.runAfter.getTime()) / 1000)
+      : 0;
+    recordQueueHeartbeat({ queuedCount, oldestAgeSeconds });
+  } catch {
+    // Non-blocking telemetry
+  }
+}
+
 export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId()): Promise<void> {
   let shutdownRequested = false;
   const concurrency = getCustomBuildWorkerConcurrency();
   const processingGate = createCustomBuildProcessingGate();
   const activeJobs = new Set<Promise<unknown>>();
+  const heartbeat = startActiveGenerationsHeartbeat(() => activeJobs.size, 30_000, "worker");
+  let lastQueueReport = 0;
   const stop = () => {
     shutdownRequested = true;
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  while (!shutdownRequested) {
-    await recoverStaleCustomBuildJobLeases();
-    let claimed = false;
-    while (!shutdownRequested && activeJobs.size < concurrency) {
-      const job = await claimNextCustomBuildJob(workerId);
-      if (!job) break;
-      claimed = true;
-      const active = processClaimedJob(job, workerId, processingGate);
-      activeJobs.add(active);
-      void active.then(
-        () => activeJobs.delete(active),
-        () => activeJobs.delete(active),
-      );
+  try {
+    while (!shutdownRequested) {
+      if (Date.now() - lastQueueReport >= 30_000) {
+        lastQueueReport = Date.now();
+        void checkAndReportQueueHealth();
+      }
+      await recoverStaleCustomBuildJobLeases();
+      let claimed = false;
+      while (!shutdownRequested && activeJobs.size < concurrency) {
+        const job = await claimNextCustomBuildJob(workerId);
+        if (!job) break;
+        claimed = true;
+        const active = processClaimedJob(job, workerId, processingGate);
+        activeJobs.add(active);
+        void active.then(
+          () => activeJobs.delete(active),
+          () => activeJobs.delete(active),
+        );
+      }
+
+      if (shutdownRequested) break;
+      if (activeJobs.size >= concurrency) {
+        await Promise.race(activeJobs);
+      } else if (!claimed) {
+        await Promise.race([sleep(getCustomBuildWorkerPollMs()), ...activeJobs]);
+      }
     }
 
-    if (shutdownRequested) break;
-    if (activeJobs.size >= concurrency) {
-      await Promise.race(activeJobs);
-    } else if (!claimed) {
-      await Promise.race([sleep(getCustomBuildWorkerPollMs()), ...activeJobs]);
-    }
+    await Promise.all(activeJobs);
+  } finally {
+    clearInterval(heartbeat);
+    await prisma.$disconnect();
   }
-
-  await Promise.all(activeJobs);
-  await prisma.$disconnect();
 }

@@ -4,6 +4,7 @@ import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/gene
 import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
+import { recordGenerationError, recordGenerationSuccess } from "@/lib/observability/cloudwatch";
 import { ARENA_MESH_FACTS_MIN_BLOCKS } from "@/lib/arena/types";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
@@ -584,6 +585,11 @@ export async function runCustomBuildGenerateJob(
     throwIfCustomBuildLeaseLost(opts.signal);
     throwIfCustomBuildLeaseLost(opts.signal);
     emitCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
+    recordGenerationSuccess({
+      jobType: "worker",
+      model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
+      durationMs: generated.generationTimeMs ?? (Date.now() - (customBuild.startedAt?.getTime() ?? Date.now())),
+    });
   } catch (error) {
     if (isCustomBuildLeaseLostError(error)) throw error;
     const effectiveError =
@@ -591,6 +597,11 @@ export async function runCustomBuildGenerateJob(
         ? new CustomBuildArtifactBookkeepingError(error)
         : error;
     const message = redactSensitiveText(effectiveError);
+    recordGenerationError({
+      jobType: "worker",
+      model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
+      errorType: message,
+    });
     const manuallyRetryable =
       effectiveError instanceof CustomBuildGenerationFailedError &&
       !isTerminalCustomBuildGenerateError(message);
