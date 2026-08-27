@@ -4,6 +4,8 @@
  * automatically parses and flushes to AWS CloudWatch Metrics asynchronously with zero network latency.
  */
 
+import type { MetricDatum } from "@aws-sdk/client-cloudwatch";
+
 export type JobType = "worker" | "stream";
 
 export interface GenerationSuccessEvent {
@@ -18,8 +20,13 @@ export interface GenerationErrorEvent {
   errorType: string;
 }
 
-const CLOUDWATCH_NAMESPACE = process.env.CLOUDWATCH_NAMESPACE || "MineBench/Production";
-const ENVIRONMENT = "production";
+function cloudWatchNamespace(): string {
+  return process.env.CLOUDWATCH_NAMESPACE?.trim() || "MineBench/Production";
+}
+
+function metricEnvironment(): string {
+  return process.env.MINEBENCH_ENVIRONMENT?.trim() || process.env.VERCEL_ENV?.trim() || "production";
+}
 
 export type MetricLogWriter = (line: string) => void;
 
@@ -51,13 +58,13 @@ export function emitEmf(
       Timestamp: Date.now(),
       CloudWatchMetrics: [
         {
-          Namespace: CLOUDWATCH_NAMESPACE,
+          Namespace: cloudWatchNamespace(),
           Dimensions: dimensions,
           Metrics: metrics,
         },
       ],
     },
-    Environment: ENVIRONMENT,
+    Environment: metricEnvironment(),
     ...properties,
   };
 
@@ -76,7 +83,7 @@ export function recordGenerationSuccess(
   writer?: MetricLogWriter,
 ): void {
   emitEmf(
-    [["Environment", "JobType", "Model"]],
+    [["Environment"], ["Environment", "JobType", "Model"]],
     [
       { Name: "GenerationsCount", Unit: "Count" },
       { Name: "GenerationDuration", Unit: "Milliseconds" },
@@ -99,6 +106,9 @@ export function normalizeErrorClassification(rawError: string | undefined): stri
   if (!rawError) return "unknown_error";
   const lower = rawError.toLowerCase();
 
+  if (lower.includes("insufficient credits") || lower.includes("error 402")) {
+    return "insufficient_credits";
+  }
   if (lower.includes("timeout") || lower.includes("aborted") || lower.includes("etimedout")) {
     return "timeout";
   }
@@ -155,7 +165,7 @@ export function recordGenerationError(
 ): void {
   const classification = normalizeErrorClassification(event.errorType);
   emitEmf(
-    [["Environment", "JobType", "Model", "ErrorType"]],
+    [["Environment"], ["Environment", "JobType", "Model", "ErrorType"]],
     [{ Name: "GenerationErrors", Unit: "Count" }],
     {
       JobType: event.jobType,
@@ -175,13 +185,18 @@ export function recordActiveGenerations(
   count: number,
   jobType: JobType = "worker",
   writer?: MetricLogWriter,
+  acceptingJobs = true,
 ): void {
   emitEmf(
     [["Environment", "JobType"]],
-    [{ Name: "ActiveGenerations", Unit: "Count" }],
+    [
+      { Name: "ActiveGenerations", Unit: "Count" },
+      { Name: "WorkerAcceptingJobs", Unit: "Count" },
+    ],
     {
       JobType: jobType,
       ActiveGenerations: Math.max(0, count),
+      WorkerAcceptingJobs: acceptingJobs ? 1 : 0,
     },
     writer,
   );
@@ -219,12 +234,96 @@ export function recordQueueHeartbeat(
  */
 export function startActiveGenerationsHeartbeat(
   getActiveCount: () => number,
+  getAcceptingJobs: () => boolean,
   intervalMs = 30_000,
   jobType: JobType = "worker",
   writer?: MetricLogWriter,
 ): NodeJS.Timeout {
-  return setInterval(() => {
-    recordActiveGenerations(getActiveCount(), jobType, writer);
-  }, intervalMs);
+  const report = () => {
+    recordActiveGenerations(getActiveCount(), jobType, writer, getAcceptingJobs());
+  };
+  report();
+  return setInterval(report, intervalMs);
 }
 
+function dimensions(values: Record<string, string>): NonNullable<MetricDatum["Dimensions"]> {
+  return Object.entries(values).map(([Name, Value]) => ({ Name, Value }));
+}
+
+export function generationSuccessMetricData(event: GenerationSuccessEvent): MetricDatum[] {
+  const environment = metricEnvironment();
+  const model = event.model || "unknown";
+  const duration = Math.max(0, Math.round(event.durationMs));
+  const aggregate = dimensions({ Environment: environment });
+  const detailed = dimensions({ Environment: environment, JobType: event.jobType, Model: model });
+  return [
+    { MetricName: "GenerationsCount", Unit: "Count", Value: 1, Dimensions: aggregate },
+    { MetricName: "GenerationDuration", Unit: "Milliseconds", Value: duration, Dimensions: aggregate },
+    { MetricName: "GenerationsCount", Unit: "Count", Value: 1, Dimensions: detailed },
+    { MetricName: "GenerationDuration", Unit: "Milliseconds", Value: duration, Dimensions: detailed },
+  ];
+}
+
+export function generationErrorMetricData(event: GenerationErrorEvent): MetricDatum[] {
+  const environment = metricEnvironment();
+  const model = event.model || "unknown";
+  const classification = normalizeErrorClassification(event.errorType);
+  return [
+    {
+      MetricName: "GenerationErrors",
+      Unit: "Count",
+      Value: 1,
+      Dimensions: dimensions({ Environment: environment }),
+    },
+    {
+      MetricName: "GenerationErrors",
+      Unit: "Count",
+      Value: 1,
+      Dimensions: dimensions({
+        Environment: environment,
+        JobType: event.jobType,
+        Model: model,
+        ErrorType: classification,
+      }),
+    },
+  ];
+}
+
+let cloudWatchClientPromise: Promise<import("@aws-sdk/client-cloudwatch").CloudWatchClient> | undefined;
+
+async function publishMetricData(metricData: MetricDatum[]): Promise<void> {
+  const roleArn = process.env.MINEBENCH_CLOUDWATCH_ROLE_ARN?.trim();
+  if (process.env.VERCEL_ENV !== "production" || !roleArn) return;
+
+  try {
+    cloudWatchClientPromise ??= Promise.all([
+      import("@aws-sdk/client-cloudwatch"),
+      import("@vercel/oidc-aws-credentials-provider"),
+    ]).then(([{ CloudWatchClient }, { awsCredentialsProvider }]) => {
+      const region = process.env.MINEBENCH_CLOUDWATCH_REGION?.trim() || "us-east-1";
+      return new CloudWatchClient({
+        region,
+        credentials: awsCredentialsProvider({ roleArn, clientConfig: { region } }),
+      });
+    });
+    const [{ PutMetricDataCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-cloudwatch"),
+      cloudWatchClientPromise,
+    ]);
+    await client.send(new PutMetricDataCommand({
+      Namespace: cloudWatchNamespace(),
+      MetricData: metricData,
+    }));
+  } catch {
+    cloudWatchClientPromise = undefined;
+    console.warn("CloudWatch metric publish failed");
+  }
+}
+
+export function publishGenerationSuccess(event: GenerationSuccessEvent): Promise<void> {
+  return publishMetricData(generationSuccessMetricData(event));
+}
+
+export function publishGenerationError(event: GenerationErrorEvent): Promise<void> {
+  return publishMetricData(generationErrorMetricData(event));
+}

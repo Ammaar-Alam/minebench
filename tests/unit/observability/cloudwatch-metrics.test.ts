@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import {
+  generationErrorMetricData,
+  generationSuccessMetricData,
   recordGenerationSuccess,
   recordGenerationError,
   recordActiveGenerations,
@@ -33,11 +35,24 @@ async function main() {
   assert.equal(successParsed.GenerationDuration, 12451);
   assert.equal(successParsed._aws.CloudWatchMetrics[0].Namespace, "MineBench/Production");
   assert.deepEqual(successParsed._aws.CloudWatchMetrics[0].Dimensions, [
+    ["Environment"],
     ["Environment", "JobType", "Model"],
   ]);
   assert.deepEqual(successParsed._aws.CloudWatchMetrics[0].Metrics, [
     { Name: "GenerationsCount", Unit: "Count" },
     { Name: "GenerationDuration", Unit: "Milliseconds" },
+  ]);
+  const successMetricData = generationSuccessMetricData({
+    jobType: "stream",
+    model: "gpt-test",
+    durationMs: 3210,
+  });
+  assert.equal(successMetricData.length, 4);
+  assert.deepEqual(successMetricData[0]?.Dimensions, [{ Name: "Environment", Value: "production" }]);
+  assert.deepEqual(successMetricData[2]?.Dimensions, [
+    { Name: "Environment", Value: "production" },
+    { Name: "JobType", Value: "stream" },
+    { Name: "Model", Value: "gpt-test" },
   ]);
 
   // 2. Test recordGenerationError
@@ -60,10 +75,23 @@ async function main() {
   assert.equal(errorParsed.RawError, "rate_limit_exceeded (request_id: req_12345)");
   assert.equal(errorParsed.GenerationErrors, 1);
   assert.deepEqual(errorParsed._aws.CloudWatchMetrics[0].Dimensions, [
+    ["Environment"],
     ["Environment", "JobType", "Model", "ErrorType"],
   ]);
   assert.deepEqual(errorParsed._aws.CloudWatchMetrics[0].Metrics, [
     { Name: "GenerationErrors", Unit: "Count" },
+  ]);
+  const errorMetricData = generationErrorMetricData({
+    jobType: "stream",
+    model: "gpt-test",
+    errorType: "OpenRouter error 402: Insufficient credits",
+  });
+  assert.equal(errorMetricData.length, 2);
+  assert.deepEqual(errorMetricData[1]?.Dimensions, [
+    { Name: "Environment", Value: "production" },
+    { Name: "JobType", Value: "stream" },
+    { Name: "Model", Value: "gpt-test" },
+    { Name: "ErrorType", Value: "insufficient_credits" },
   ]);
 
   // 3. Test recordActiveGenerations (Gauge)
@@ -75,8 +103,13 @@ async function main() {
   assert.equal(activeParsed.Environment, "production");
   assert.equal(activeParsed.JobType, "worker");
   assert.equal(activeParsed.ActiveGenerations, 4);
+  assert.equal(activeParsed.WorkerAcceptingJobs, 1);
   assert.deepEqual(activeParsed._aws.CloudWatchMetrics[0].Dimensions, [
     ["Environment", "JobType"],
+  ]);
+  assert.deepEqual(activeParsed._aws.CloudWatchMetrics[0].Metrics, [
+    { Name: "ActiveGenerations", Unit: "Count" },
+    { Name: "WorkerAcceptingJobs", Unit: "Count" },
   ]);
 
   // 4. Test recordQueueHeartbeat
@@ -103,14 +136,27 @@ async function main() {
   // 5. Test Heartbeat interval
   lines.length = 0;
   let currentCount = 2;
-  const heartbeat = startActiveGenerationsHeartbeat(() => currentCount, 50, "worker", mockWriter);
+  let acceptingJobs = true;
+  const heartbeat = startActiveGenerationsHeartbeat(
+    () => currentCount,
+    () => acceptingJobs,
+    50,
+    "worker",
+    mockWriter,
+  );
+
+  assert.equal(lines.length, 1, "worker heartbeats should emit immediately on startup");
+  assert.equal(JSON.parse(lines[0]).WorkerAcceptingJobs, 1);
+
+  acceptingJobs = false;
 
   await new Promise((resolve) => setTimeout(resolve, 130));
   clearInterval(heartbeat);
 
-  assert.ok(lines.length >= 2);
-  const heartbeatParsed = JSON.parse(lines[0]);
+  assert.ok(lines.length >= 3);
+  const heartbeatParsed = JSON.parse(lines[1]);
   assert.equal(heartbeatParsed.ActiveGenerations, 2);
+  assert.equal(heartbeatParsed.WorkerAcceptingJobs, 0);
 
   // 6. Test normalizeErrorClassification
   assert.equal(normalizeErrorClassification("ETIMEDOUT connection failed"), "timeout");
@@ -118,6 +164,7 @@ async function main() {
   assert.equal(normalizeErrorClassification("provider_key_expired: key 12345 expired"), "auth_failed");
   assert.equal(normalizeErrorClassification("Request exceeds context length 128000"), "context_length_exceeded");
   assert.equal(normalizeErrorClassification("Custom build lease lost for job"), "lease_lost");
+  assert.equal(normalizeErrorClassification("OpenRouter error 402: Insufficient credits"), "insufficient_credits");
   assert.equal(normalizeErrorClassification(undefined), "unknown_error");
 
   console.log("cloudwatch metrics unit tests passed");
