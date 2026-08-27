@@ -141,6 +141,10 @@ async function main() {
       workerSource.includes("clearInterval(queueHeartbeat)"),
     "queue health reporting should continue while the worker drains active jobs",
   );
+  assert.ok(
+    workerSource.includes('recordActiveGenerations(activeJobs.size, "worker", undefined, false);'),
+    "shutdown should report the non-accepting state before a short drain can finish",
+  );
   const callbackIndex = exportJobSource.indexOf("await opts.beforeSynchronousExport?.()");
   const downloadIndex = exportJobSource.indexOf("const bytes = await downloadCustomBuildArtifactBytes");
   assert.ok(

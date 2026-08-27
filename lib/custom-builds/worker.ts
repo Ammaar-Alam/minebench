@@ -19,7 +19,11 @@ import {
   throwIfCustomBuildLeaseLost,
 } from "@/lib/custom-builds/lease";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
-import { recordQueueHeartbeat, startActiveGenerationsHeartbeat } from "@/lib/observability/cloudwatch";
+import {
+  recordActiveGenerations,
+  recordQueueHeartbeat,
+  startActiveGenerationsHeartbeat,
+} from "@/lib/observability/cloudwatch";
 import { prisma } from "@/lib/prisma";
 
 function readIntEnv(name: string, fallback: number, min: number, max: number): number {
@@ -276,7 +280,9 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
     void checkAndReportQueueHealth();
   }, 30_000);
   const stop = () => {
+    if (shutdownRequested) return;
     shutdownRequested = true;
+    recordActiveGenerations(activeJobs.size, "worker", undefined, false);
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
