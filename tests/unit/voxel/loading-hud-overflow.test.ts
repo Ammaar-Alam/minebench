@@ -15,10 +15,9 @@ async function main() {
   );
 
   assert.match(markup, /aria-label="Why MineBench is trying again"/);
-  assert.match(markup, /max-h-/);
-  assert.match(markup, /overflow-y-auto/);
+  assert.match(markup, /aria-expanded="false"/);
 
-  console.log("voxel loading retry details stay within the viewer");
+  console.log("voxel loading retry details popover trigger renders cleanly");
 }
 
 void main();

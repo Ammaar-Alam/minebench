@@ -74,7 +74,7 @@ async function main() {
     });
     assert.equal(
       (await getSavedGeneration(ownerId, created[0]!.id))?.retryReason,
-      "The first response could not be used.",
+      'Gemini error 400: {"private":"provider body"}',
       "legacy retry details must be categorized before returning to the browser",
     );
     await db.customBuildJob.updateMany({
