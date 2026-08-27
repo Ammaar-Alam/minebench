@@ -478,14 +478,14 @@ export function VoxelViewerCard({
                   {errorSummary}
                 </div>
                 {errorDetails ? (
-                  <details className="w-full max-w-xs text-left text-xs text-muted">
+                  <details className="w-full max-w-sm text-left text-xs text-muted">
                     <summary className="mx-auto flex min-h-8 w-fit cursor-pointer list-none items-center gap-1.5 rounded px-2 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
                       <svg aria-hidden="true" viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 11v5" /><path d="M12 8h.01" /></svg>
                       Details
                     </summary>
-                    <p className="mt-2 max-h-40 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 leading-relaxed [overflow-wrap:anywhere]">
+                    <pre className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 font-mono text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
                       {errorDetails}
-                    </p>
+                    </pre>
                   </details>
                 ) : null}
                 {hasJsonView && showViewToggle ? (

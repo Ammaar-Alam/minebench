@@ -173,30 +173,38 @@ function PersonInspector({
   }
 
   return (
-    <div className="min-h-0 space-y-5">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between gap-4">
+    <div className="min-h-0 min-w-0 space-y-5">
+      <div className="min-w-0 space-y-3">
+        <div className="flex items-center justify-between gap-3">
           <button
             type="button"
-            className="group -ml-2 inline-flex min-h-10 min-w-10 items-center justify-center text-muted transition-colors duration-150 hover:text-fg focus-visible:outline-none focus-visible:text-accent"
+            className="group -ml-2 inline-flex min-h-9 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted transition-colors hover:bg-card/40 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             aria-label="Back to people"
             onClick={onBack}
           >
             <span aria-hidden="true" className="transition-transform duration-200 group-hover:-translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">←</span>
+            <span>All people</span>
           </button>
-          <span className={`text-xs font-medium ${person.online ? "text-success" : "text-muted"}`}>
+          <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${person.online ? "text-success" : "text-muted"}`}>
+            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${person.online ? "bg-success" : "bg-muted/40"}`} />
             {person.online ? "Online" : "Offline"}
           </span>
         </div>
-        <div className="min-w-0 space-y-1">
-          <h3 className="truncate text-lg font-semibold text-fg">{person.label}</h3>
-          {person.email ? <p className="truncate text-xs text-muted">{person.email}</p> : null}
+        <div className="min-w-0 space-y-0.5">
+          <h3 className="truncate text-lg font-semibold text-fg" title={person.label}>{person.label}</h3>
+          {person.email ? <p className="truncate font-mono text-xs text-muted" title={person.email}>{person.email}</p> : null}
         </div>
       </div>
 
-      <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-        <div><dt className="text-xs text-muted">Last active</dt><dd className="mt-1 text-fg">{formatDate(person.lastSeenAt)}</dd></div>
-        <div><dt className="text-xs text-muted">Location</dt><dd className="mt-1 text-fg">{person.location ?? "Unavailable"}</dd></div>
+      <dl className="grid grid-cols-2 gap-3 text-xs">
+        <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
+          <dt className="text-muted">Last active</dt>
+          <dd className="mt-1 truncate font-medium text-fg" title={formatDate(person.lastSeenAt)}>{formatDate(person.lastSeenAt)}</dd>
+        </div>
+        <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
+          <dt className="text-muted">Location</dt>
+          <dd className="mt-1 truncate font-medium text-fg" title={person.location ?? "Unavailable"}>{person.location ?? "Unavailable"}</dd>
+        </div>
       </dl>
 
       <div className="flex flex-wrap gap-2">
@@ -205,63 +213,135 @@ function PersonInspector({
             <button
               type="button"
               disabled={pending}
-              className="mb-btn h-10"
+              className="mb-btn h-9 text-xs"
               onClick={() => void onMutate({ type: "account_suspended", userId: person.userId!, suspended: false })}
             >
               Restore
             </button>
           ) : (
-            <button type="button" disabled={pending} className="mb-btn h-10" onClick={() => onSuspend({ userId: person.userId!, email: person.email! })}>Suspend</button>
+            <button type="button" disabled={pending} className="mb-btn h-9 text-xs" onClick={() => onSuspend({ userId: person.userId!, email: person.email! })}>Suspend</button>
           )
         ) : null}
         <button
           type="button"
           disabled={pending}
-          className={`mb-btn h-10${person.voteBlocked ? "" : " mb-btn-danger"}`}
+          className={`mb-btn h-9 text-xs${person.voteBlocked ? "" : " mb-btn-danger"}`}
           onClick={() => void onMutate({ type: "votes_blocked", personId: person.id, blocked: !person.voteBlocked })}
         >
           {person.voteBlocked ? "Unblock votes" : "Block votes"}
         </button>
       </div>
-      {person.suspensionReason ? <p className="text-sm text-muted">{person.suspensionReason}</p> : null}
+      {person.suspensionReason ? <p className="break-words text-xs text-muted">{person.suspensionReason}</p> : null}
 
       {person.userId ? (
-        <section className="space-y-3">
-          <h4 className="text-sm font-semibold text-fg">Prompts</h4>
-          <div className={person.contributions.length > 0 ? "max-h-40 divide-y divide-border overflow-y-auto border-y border-border" : ""}>
+        <section className="min-w-0 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">Prompts</h4>
+            <span className="text-[11px] tabular-nums text-muted">{person.contributions.length}</span>
+          </div>
+          <div className={person.contributions.length > 0 ? "max-h-40 min-w-0 divide-y divide-border/60 overflow-y-auto rounded-md border border-border/60 bg-card/10 px-3" : ""}>
             {person.contributions.map((candidate) => {
               const content = (
-                <><span className="truncate">{candidate.prompt}</span><span className="shrink-0 text-xs text-muted">{candidate.status}</span></>
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                  <span className="min-w-0 truncate font-medium" title={candidate.prompt}>{candidate.prompt}</span>
+                  <span className="shrink-0 text-xs text-muted">{candidate.status}</span>
+                </div>
               );
-              const className = "flex min-h-11 items-center justify-between gap-3 py-2 text-sm";
+              const className = "flex min-h-10 min-w-0 items-center py-2 text-xs";
               return candidate.status === "Hidden" || candidate.status === "Removed" ? (
                 <div key={candidate.publicId} className={className}>{content}</div>
               ) : (
                 <Link key={candidate.publicId} href={`/gallery/${candidate.publicId}`} className={`${className} hover:text-accent`}>{content}</Link>
               );
             })}
-            {person.contributions.length === 0 ? <p className="text-sm text-muted">No prompts</p> : null}
+            {person.contributions.length === 0 ? <p className="py-3 text-xs text-muted">No prompts</p> : null}
           </div>
         </section>
       ) : null}
 
-      <section className="space-y-3">
-        <h4 className="text-sm font-semibold text-fg">Votes</h4>
-        <div className={person.votes.length > 0 ? "max-h-72 divide-y divide-border overflow-y-auto border-y border-border" : ""}>
-          {person.votes.map((vote) => {
-            const content = (
-              <>
-                <span className="min-w-0"><span className="block truncate text-fg">{vote.prompt}</span><span className="text-xs text-muted">{vote.source} · {vote.result}</span></span>
-                <time className="shrink-0 text-[11px] text-muted" dateTime={vote.createdAt}>{dateTime.format(new Date(vote.createdAt))}</time>
-              </>
-            );
-            return vote.href ? (
-              <Link key={vote.id} href={vote.href} className="flex min-h-12 items-center justify-between gap-3 py-2 text-sm hover:text-accent">{content}</Link>
-            ) : (
-              <div key={vote.id} className="flex min-h-12 items-center justify-between gap-3 py-2 text-sm">{content}</div>
-            );
-          })}
-          {person.votes.length === 0 ? <p className="text-sm text-muted">No public votes</p> : null}
+      <section className="min-w-0 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">Vote history</h4>
+          <span className="text-[11px] tabular-nums text-muted">{person.votes.length}</span>
+        </div>
+        <div className={person.votes.length > 0 ? "max-h-80 min-w-0 space-y-2 overflow-y-auto pr-1" : ""}>
+          {person.votes.map((vote) => (
+            <article key={vote.id} className="min-w-0 rounded-lg border border-border/70 bg-card/20 p-3 transition-colors hover:border-border hover:bg-card/40">
+              <div className="flex items-center justify-between gap-2">
+                <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                  vote.source === "Arena"
+                    ? "border border-border/80 bg-bg/70 text-muted"
+                    : "border border-accent/30 bg-accent/10 text-accent"
+                }`}>
+                  {vote.source === "Gallery" ? (
+                    <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                  ) : null}
+                  {vote.source}
+                </span>
+                <time className="shrink-0 text-[11px] tabular-nums text-muted" dateTime={vote.createdAt}>
+                  {dateTime.format(new Date(vote.createdAt))}
+                </time>
+              </div>
+
+              <p className="mt-2 truncate text-xs font-medium text-fg" title={vote.prompt}>
+                {vote.prompt}
+              </p>
+
+              {vote.source === "Arena" && vote.modelA && vote.modelB ? (
+                <div className="mt-2 flex min-w-0 items-center gap-1.5 text-xs">
+                  <span
+                    className={`inline-flex min-w-0 max-w-[44%] items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
+                      vote.choice === "A"
+                        ? "border border-accent/40 bg-accent/15 font-semibold text-accent"
+                        : "border border-border/60 bg-bg/40 text-muted"
+                    }`}
+                    title={`${vote.modelA}${vote.choice === "A" ? " (Voted)" : ""}`}
+                  >
+                    {vote.choice === "A" ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : null}
+                    <span className="truncate">{vote.modelA}</span>
+                  </span>
+
+                  <span className="shrink-0 text-[10px] font-medium text-muted/60">vs</span>
+
+                  <span
+                    className={`inline-flex min-w-0 max-w-[44%] items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
+                      vote.choice === "B"
+                        ? "border border-accent/40 bg-accent/15 font-semibold text-accent"
+                        : "border border-border/60 bg-bg/40 text-muted"
+                    }`}
+                    title={`${vote.modelB}${vote.choice === "B" ? " (Voted)" : ""}`}
+                  >
+                    {vote.choice === "B" ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" /> : null}
+                    <span className="truncate">{vote.modelB}</span>
+                  </span>
+
+                  {vote.choice === "TIE" ? (
+                    <span className="ml-auto shrink-0 rounded border border-border/80 bg-bg/70 px-1.5 py-0.5 text-[10px] font-medium text-muted">
+                      Tie
+                    </span>
+                  ) : vote.choice === "BOTH_BAD" ? (
+                    <span className="ml-auto shrink-0 rounded border border-danger/30 bg-danger/10 px-1.5 py-0.5 text-[10px] font-medium text-danger">
+                      Both bad
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {vote.source === "Gallery" && vote.href ? (
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-[11px] text-muted">Upvoted prompt</span>
+                  <Link
+                    href={vote.href}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-accent transition-colors hover:underline focus-visible:outline-none focus-visible:underline"
+                  >
+                    <span>View in gallery</span>
+                    <span aria-hidden="true">→</span>
+                  </Link>
+                </div>
+              ) : null}
+            </article>
+          ))}
+          {person.votes.length === 0 ? <p className="py-3 text-xs text-muted">No public votes</p> : null}
         </div>
       </section>
     </div>
@@ -343,7 +423,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   return (
     <>
       {notice ? <p role="alert" className="text-sm text-danger">{notice}</p> : null}
-      <div className="grid items-start gap-10 lg:h-[calc(100dvh-8rem)] lg:grid-cols-[minmax(0,1.7fr)_minmax(20rem,0.8fr)]">
+      <div className="grid items-start gap-8 lg:h-[calc(100dvh-8rem)] lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
         <section className="min-w-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col" aria-labelledby="admin-prompts-title">
           <div className="flex flex-wrap items-end justify-between gap-5 border-b border-border pb-4">
             <div>
@@ -402,10 +482,10 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
           </div>
         </section>
 
-        <aside className="grid min-h-0 gap-8 lg:sticky lg:top-24 lg:h-full lg:grid-rows-[minmax(18rem,3fr)_minmax(14rem,2fr)] lg:border-l lg:border-border lg:pl-8">
-          <section className="flex min-h-0 flex-col" aria-labelledby="admin-people-title">
+        <aside className="grid min-h-0 min-w-0 w-full gap-8 lg:sticky lg:top-24 lg:h-full lg:grid-rows-[minmax(18rem,3fr)_minmax(14rem,2fr)] lg:border-l lg:border-border lg:pl-8">
+          <section className="flex min-h-0 min-w-0 w-full flex-col" aria-labelledby="admin-people-title">
             {selectedPersonId ? (
-              <div className="min-h-0 overflow-y-auto pr-1">
+              <div className="min-h-0 min-w-0 overflow-y-auto pr-1">
                 <PersonInspector
                   person={person}
                   loading={personLoading}

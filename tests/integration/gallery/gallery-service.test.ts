@@ -8,7 +8,7 @@ async function main() {
     return;
   }
   const db = new PrismaClient();
-  const suffix = randomUUID().slice(0, 8);
+  const suffix = randomUUID().replace(/[^0-9]/g, "").slice(0, 8) || "12345678";
   const uploaderId = randomUUID();
   const visitorId = randomUUID();
   const adminId = randomUUID();
