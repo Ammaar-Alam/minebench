@@ -208,10 +208,7 @@ async function processClaimedJob(
       return { processed: true, jobId: job.id, jobType: job.type };
     }
     const message = redactSensitiveText(error);
-    const forceTerminal = job.type === "generate" && (
-      isTerminalCustomBuildGenerateError(message) ||
-      ["artifact_persistence_failed", "artifact_bookkeeping_failed", "provider_rejected"].includes(message)
-    );
+    const forceTerminal = job.type === "generate" && isTerminalCustomBuildJobFailure(message);
     await failCustomBuildJob(job.id, workerId, {
       code: message === "provider_key_expired" ? "provider_key_expired" : "worker_failed",
       message,
@@ -222,6 +219,15 @@ async function processClaimedJob(
   } finally {
     clearInterval(heartbeat);
   }
+}
+
+export function isTerminalCustomBuildJobFailure(message: string): boolean {
+  return isTerminalCustomBuildGenerateError(message) || [
+    "artifact_persistence_failed",
+    "artifact_bookkeeping_failed",
+    "generation_failed",
+    "provider_rejected",
+  ].includes(message);
 }
 
 export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId()): Promise<{
@@ -259,8 +265,16 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   const concurrency = getCustomBuildWorkerConcurrency();
   const processingGate = createCustomBuildProcessingGate();
   const activeJobs = new Set<Promise<unknown>>();
-  const heartbeat = startActiveGenerationsHeartbeat(() => activeJobs.size, 30_000, "worker");
-  let lastQueueReport = 0;
+  const heartbeat = startActiveGenerationsHeartbeat(
+    () => activeJobs.size,
+    () => !shutdownRequested,
+    30_000,
+    "worker",
+  );
+  void checkAndReportQueueHealth();
+  const queueHeartbeat = setInterval(() => {
+    void checkAndReportQueueHealth();
+  }, 30_000);
   const stop = () => {
     shutdownRequested = true;
   };
@@ -269,10 +283,6 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
 
   try {
     while (!shutdownRequested) {
-      if (Date.now() - lastQueueReport >= 30_000) {
-        lastQueueReport = Date.now();
-        void checkAndReportQueueHealth();
-      }
       await recoverStaleCustomBuildJobLeases();
       let claimed = false;
       while (!shutdownRequested && activeJobs.size < concurrency) {
@@ -298,6 +308,7 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
     await Promise.all(activeJobs);
   } finally {
     clearInterval(heartbeat);
+    clearInterval(queueHeartbeat);
     await prisma.$disconnect();
   }
 }

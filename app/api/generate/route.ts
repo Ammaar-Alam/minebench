@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
+import { waitUntil } from "@vercel/functions";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import type { GenerateEvent, GenerateModelRequest, GenerateRequest } from "@/lib/ai/types";
-import { recordGenerationError, recordGenerationSuccess } from "@/lib/observability/cloudwatch";
+import { publishGenerationError, publishGenerationSuccess } from "@/lib/observability/cloudwatch";
 
 export const runtime = "nodejs";
 
@@ -241,11 +242,11 @@ export async function POST(req: Request) {
         )
           .then((r) => {
             if (r.ok) {
-              recordGenerationSuccess({
+              waitUntil(publishGenerationSuccess({
                 jobType: "stream",
                 model: requestModelKey,
                 durationMs: r.generationTimeMs ?? 0,
-              });
+              }));
               send({
                 type: "result",
                 modelKey: requestModelKey,
@@ -257,11 +258,11 @@ export async function POST(req: Request) {
                 },
               });
             } else {
-              recordGenerationError({
+              waitUntil(publishGenerationError({
                 jobType: "stream",
                 model: requestModelKey,
                 errorType: r.error || "generation_error",
-              });
+              }));
               send({
                 type: "error",
                 modelKey: requestModelKey,
@@ -272,11 +273,11 @@ export async function POST(req: Request) {
           })
           .catch((err: unknown) => {
             const message = err instanceof Error ? err.message : "Generation failed";
-            recordGenerationError({
+            waitUntil(publishGenerationError({
               jobType: "stream",
               model: requestModelKey,
               errorType: message,
-            });
+            }));
             send({
               type: "error",
               modelKey: requestModelKey,

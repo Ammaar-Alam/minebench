@@ -18,7 +18,14 @@ async function main() {
     getCustomBuildWorkerConcurrency,
     getCustomBuildWorkerHeartbeatMs,
     getCustomBuildWorkerId,
+    isTerminalCustomBuildJobFailure,
   } = await import("../../../lib/custom-builds/worker");
+
+  assert.equal(
+    isTerminalCustomBuildJobFailure("generation_failed"),
+    true,
+    "a terminally failed build must not leave its job runnable",
+  );
 
   assert.equal(
     getCustomBuildWorkerConcurrency(),
@@ -128,6 +135,11 @@ async function main() {
     workerSource.includes("isCustomBuildLeaseLostError(error)") &&
       workerSource.includes("return { processed: true, jobId: job.id, jobType: job.type };"),
     "lost leases should stop the worker path without failing a job it may no longer own",
+  );
+  assert.ok(
+    workerSource.includes("const queueHeartbeat = setInterval") &&
+      workerSource.includes("clearInterval(queueHeartbeat)"),
+    "queue health reporting should continue while the worker drains active jobs",
   );
   const callbackIndex = exportJobSource.indexOf("await opts.beforeSynchronousExport?.()");
   const downloadIndex = exportJobSource.indexOf("const bytes = await downloadCustomBuildArtifactBytes");

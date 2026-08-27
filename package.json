@@ -63,12 +63,14 @@
     "generations:artifacts:audit": "tsx scripts/audit-saved-generation-artifacts.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1119.0",
     "@opentelemetry/api": "^1.9.1",
     "@prisma/client": "^6.0.0",
     "@supabase/ssr": "0.12.4",
     "@supabase/supabase-js": "2.112.3",
     "@vercel/analytics": "^1.6.1",
     "@vercel/functions": "^3.9.5",
+    "@vercel/oidc-aws-credentials-provider": "^3.3.5",
     "@vercel/otel": "^2.1.3",
     "@vercel/speed-insights": "^2.0.0",
     "fflate": "^0.8.3",
