@@ -5,6 +5,7 @@ import {
   recordActiveGenerations,
   recordQueueHeartbeat,
   startActiveGenerationsHeartbeat,
+  normalizeErrorClassification,
 } from "../../../lib/observability/cloudwatch";
 
 async function main() {
@@ -45,7 +46,7 @@ async function main() {
     {
       jobType: "stream",
       model: "claude-opus-5",
-      errorType: "rate_limit_exceeded",
+      errorType: "rate_limit_exceeded (request_id: req_12345)",
     },
     mockWriter,
   );
@@ -55,7 +56,8 @@ async function main() {
   assert.equal(errorParsed.Environment, "production");
   assert.equal(errorParsed.JobType, "stream");
   assert.equal(errorParsed.Model, "claude-opus-5");
-  assert.equal(errorParsed.ErrorType, "rate_limit_exceeded");
+  assert.equal(errorParsed.ErrorType, "rate_limit");
+  assert.equal(errorParsed.RawError, "rate_limit_exceeded (request_id: req_12345)");
   assert.equal(errorParsed.GenerationErrors, 1);
   assert.deepEqual(errorParsed._aws.CloudWatchMetrics[0].Dimensions, [
     ["Environment", "JobType", "Model", "ErrorType"],
@@ -109,6 +111,14 @@ async function main() {
   assert.ok(lines.length >= 2);
   const heartbeatParsed = JSON.parse(lines[0]);
   assert.equal(heartbeatParsed.ActiveGenerations, 2);
+
+  // 6. Test normalizeErrorClassification
+  assert.equal(normalizeErrorClassification("ETIMEDOUT connection failed"), "timeout");
+  assert.equal(normalizeErrorClassification("Rate limit exceeded: 429 Too Many Requests"), "rate_limit");
+  assert.equal(normalizeErrorClassification("provider_key_expired: key 12345 expired"), "auth_failed");
+  assert.equal(normalizeErrorClassification("Request exceeds context length 128000"), "context_length_exceeded");
+  assert.equal(normalizeErrorClassification("Custom build lease lost for job"), "lease_lost");
+  assert.equal(normalizeErrorClassification(undefined), "unknown_error");
 
   console.log("cloudwatch metrics unit tests passed");
 }

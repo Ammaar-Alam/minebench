@@ -92,19 +92,76 @@ export function recordGenerationSuccess(
 }
 
 /**
+ * Maps raw error messages to a bounded set of stable classification dimensions
+ * to prevent high cardinality / unique dimension series in CloudWatch.
+ */
+export function normalizeErrorClassification(rawError: string | undefined): string {
+  if (!rawError) return "unknown_error";
+  const lower = rawError.toLowerCase();
+
+  if (lower.includes("timeout") || lower.includes("aborted") || lower.includes("etimedout")) {
+    return "timeout";
+  }
+  if (lower.includes("rate_limit") || lower.includes("too many requests") || lower.includes("429")) {
+    return "rate_limit";
+  }
+  if (
+    lower.includes("provider_key_expired") ||
+    lower.includes("unauthorized") ||
+    lower.includes("invalid_api_key") ||
+    lower.includes("invalid key") ||
+    lower.includes("401") ||
+    lower.includes("403")
+  ) {
+    return "auth_failed";
+  }
+  if (
+    lower.includes("context_length") ||
+    lower.includes("context length") ||
+    lower.includes("context_window") ||
+    lower.includes("context window") ||
+    lower.includes("maximum context") ||
+    lower.includes("too long")
+  ) {
+    return "context_length_exceeded";
+  }
+  if (lower.includes("content_filter") || lower.includes("moderation") || lower.includes("safety")) {
+    return "content_filter";
+  }
+  if (lower.includes("lease") || lower.includes("lease_lost")) {
+    return "lease_lost";
+  }
+  if (lower.includes("persistence_failed") || lower.includes("storage")) {
+    return "persistence_failed";
+  }
+  if (lower.includes("bookkeeping_failed")) {
+    return "bookkeeping_failed";
+  }
+  if (lower.includes("format") || lower.includes("json") || lower.includes("syntax") || lower.includes("parse")) {
+    return "format_invalid";
+  }
+  if (lower.includes("unavailable") || lower.includes("503") || lower.includes("502") || lower.includes("500")) {
+    return "provider_unavailable";
+  }
+  return "other_error";
+}
+
+/**
  * Record a failed generation attempt
  */
 export function recordGenerationError(
   event: GenerationErrorEvent,
   writer?: MetricLogWriter,
 ): void {
+  const classification = normalizeErrorClassification(event.errorType);
   emitEmf(
     [["Environment", "JobType", "Model", "ErrorType"]],
     [{ Name: "GenerationErrors", Unit: "Count" }],
     {
       JobType: event.jobType,
       Model: event.model || "unknown",
-      ErrorType: (event.errorType || "unknown_error").slice(0, 100),
+      ErrorType: classification,
+      RawError: (event.errorType || "").slice(0, 1000),
       GenerationErrors: 1,
     },
     writer,
