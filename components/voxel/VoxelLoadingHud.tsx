@@ -83,9 +83,9 @@ export function VoxelLoadingHud({
                       <path d="M12 8h.01" />
                     </svg>
                   </summary>
-                  <div className="absolute right-0 top-6 z-40 max-h-40 w-52 overflow-y-auto overscroll-contain rounded-md border border-border/80 bg-card p-3 text-left font-sans text-xs leading-relaxed text-muted shadow-lg sm:w-64">
-                    <p className="font-medium text-fg">Retry details</p>
-                    <p className="mt-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]">{retryReason}</p>
+                  <div className="absolute right-0 top-6 z-40 max-h-48 w-60 overflow-y-auto overscroll-contain rounded-md border border-border/80 bg-card p-3 text-left font-mono text-[11px] leading-relaxed text-muted shadow-lg sm:w-72">
+                    <p className="font-sans font-medium text-fg">Retry details</p>
+                    <pre className="mt-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]">{retryReason}</pre>
                   </div>
                 </details>
               ) : null}

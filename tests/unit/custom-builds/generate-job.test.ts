@@ -230,11 +230,15 @@ async function main() {
   assert.equal(providerSignal.aborted, true);
   assert.equal(
     safeCustomBuildRetryReason('Gemini error 429: {"private":"provider body"}'),
-    "The first response could not be used.",
+    'Gemini error 429: {"private":"provider body"}',
   );
   assert.equal(
     safeCustomBuildRetryReason('[{"code":"invalid_type","message":"Required"}]'),
-    "The first response did not match the build format.",
+    '[{"code":"invalid_type","message":"Required"}]',
+  );
+  assert.equal(
+    safeCustomBuildRetryReason('Bearer sk-1234567890abcdef'),
+    'Bearer [redacted]',
   );
 
   assert.equal(

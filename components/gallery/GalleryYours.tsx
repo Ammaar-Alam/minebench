@@ -310,6 +310,17 @@ function SavedBuildDialog({
             ) : undefined}
           />
           {downloadError ? <p role="status" className="mt-2 px-1 text-sm text-danger">{downloadError}</p> : null}
+          {generation.retryReason ? (
+            <details className="mt-3 w-full max-w-xl px-1 text-xs text-muted">
+              <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
+                <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px] font-semibold">i</span>
+                Retry details
+              </summary>
+              <pre className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 font-mono text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
+                {generation.retryReason}
+              </pre>
+            </details>
+          ) : null}
           {generation.sha256 ? (
             <details className="mt-3 w-fit px-1 text-xs text-muted">
               <summary className="cursor-pointer list-none py-1 hover:text-fg">Build details</summary>
@@ -409,7 +420,17 @@ export function GalleryYours({
                   {generation.error && (generation.status === "failed" || generation.status === "canceled") ? <p className="mt-3 text-sm text-danger">{generation.error.message}</p> : null}
                   {generation.status === "succeeded" ? <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] tabular-nums text-muted sm:text-xs">{generation.blockCount != null ? <span>{generation.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(generation.expandedBytes) ? <span>{formatBuildJsonSize(generation.expandedBytes)} JSON</span> : null}{formatBuildDuration(generation.generationTimeMs) ? <span>{formatBuildDuration(generation.generationTimeMs)}</span> : null}</div> : null}
                 </button>
-                {generation.retryReason ? <details className="mt-3 w-fit text-xs text-muted"><summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden"><span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px]">i</span>Details</summary><p className="mt-1 max-w-xl whitespace-pre-wrap break-words leading-relaxed">{generation.retryReason}</p></details> : null}
+                {generation.retryReason ? (
+                  <details className="mt-3 w-full max-w-xl text-xs text-muted">
+                    <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px] font-semibold">i</span>
+                      Details
+                    </summary>
+                    <pre className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 font-mono text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
+                      {generation.retryReason}
+                    </pre>
+                  </details>
+                ) : null}
                 <div className="mt-auto pt-6"><GenerationActions generation={generation} hasNickname={hasNickname} suspended={suspended} onUpdate={(next) => setItems((current) => current.map((item) => item.id === next.id ? next : item))} onRemove={() => setItems((current) => current.filter((item) => item.id !== generation.id))} /></div>
               </div>
             </div>
