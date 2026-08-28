@@ -40,6 +40,17 @@ assert.ok(
   "public examples should support accessible four-build comparison through the shared GIF exporter",
 );
 assert.ok(
+  detail.includes("GalleryNavigationArrow") &&
+    detail.includes('aria-keyshortcuts={previous ? "ArrowLeft" : "ArrowRight"}') &&
+    detail.includes('event.key === "ArrowLeft"') &&
+    detail.includes('event.key === "ArrowRight"') &&
+    detail.includes("event.repeat || event.isComposing") &&
+    detail.includes("motion-reduce:transform-none") &&
+    explore.includes('sort === "new" ? "?sort=new" : ""') &&
+    galleryDetailPage.includes("navigationSort: sort"),
+  "Gallery details should preserve their ordering and expose polished pointer and keyboard navigation",
+);
+assert.ok(
   galleryClient.includes("body.created === false") &&
     galleryClient.includes("/examples`") &&
     yours.includes("Add to Gallery") &&

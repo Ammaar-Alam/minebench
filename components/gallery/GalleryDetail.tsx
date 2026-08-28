@@ -25,6 +25,11 @@ const SandboxGifExportButton = dynamic(
 type GalleryDetailPayload = GalleryCandidatePayload & {
   examples: GalleryExamplePayload[];
   nextExamplesCursor: string | null;
+  navigation: {
+    sort: "top" | "new";
+    previousId: string | null;
+    nextId: string | null;
+  } | null;
 };
 
 type ExampleViewerState = {
@@ -34,6 +39,53 @@ type ExampleViewerState = {
 };
 
 const MAX_COMPARISON_EXAMPLES = 4;
+
+function galleryDetailHref(publicId: string, sort: "top" | "new") {
+  return `/gallery/${publicId}${sort === "new" ? "?sort=new" : ""}`;
+}
+
+function GalleryNavigationArrow({
+  direction,
+  publicId,
+  sort,
+}: {
+  direction: "previous" | "next";
+  publicId: string | null;
+  sort: "top" | "new";
+}) {
+  const previous = direction === "previous";
+  const label = previous ? "Previous build" : "Next build";
+  const icon = (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={`h-4 w-4 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-active:scale-90 motion-reduce:transform-none motion-reduce:transition-none ${previous ? "group-hover:-translate-x-0.5 group-active:-translate-x-1" : "group-hover:translate-x-0.5 group-active:translate-x-1"}`}
+    >
+      <path d={previous ? "M10 3.5L5.5 8L10 12.5" : "M6 3.5L10.5 8L6 12.5"} />
+    </svg>
+  );
+  const divider = previous ? "" : "border-l border-border/70";
+
+  if (!publicId) {
+    return <span aria-hidden="true" className={`grid h-11 w-11 place-items-center text-muted/25 ${divider}`}>{icon}</span>;
+  }
+  return (
+    <Link
+      href={galleryDetailHref(publicId, sort)}
+      aria-label={label}
+      aria-keyshortcuts={previous ? "ArrowLeft" : "ArrowRight"}
+      title={`${label} (${previous ? "Left" : "Right"} Arrow)`}
+      className={`group grid h-11 w-11 place-items-center text-muted transition-colors duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] hover:bg-card/50 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45 active:bg-card/70 motion-reduce:transition-none ${divider}`}
+    >
+      {icon}
+    </Link>
+  );
+}
 
 function ReportDialog({
   open,
@@ -103,6 +155,7 @@ function ReportDialog({
 
 export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }) {
   const router = useRouter();
+  const navigation = candidate.navigation;
   const [examples, setExamples] = useState(candidate.examples);
   const [nextExamplesCursor, setNextExamplesCursor] = useState(candidate.nextExamplesCursor);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -238,6 +291,29 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
     viewerStatesRef.current = {};
   }, []);
 
+  useEffect(() => {
+    if (!navigation || reportOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || event.isComposing) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (
+        target.isContentEditable ||
+        target.closest("input, textarea, select, dialog, [contenteditable='true'], [role='menu']")
+      )) return;
+      const publicId = event.key === "ArrowLeft"
+        ? navigation.previousId
+        : event.key === "ArrowRight"
+          ? navigation.nextId
+          : null;
+      if (!publicId) return;
+      event.preventDefault();
+      router.push(galleryDetailHref(publicId, navigation.sort));
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [navigation, reportOpen, router]);
+
   function selectExample(event: React.MouseEvent<HTMLButtonElement>, exampleId: string) {
     const additive = event.metaKey || event.ctrlKey;
     if (compareMode && selectedIds.length === 1 && selectedIds[0] === exampleId) {
@@ -313,11 +389,17 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
 
   return (
     <article className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
-      <nav aria-label="Breadcrumb">
-        <Link href="/gallery" className="group inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-fg motion-reduce:transition-none">
+      <nav aria-label="Gallery navigation" className="flex items-center justify-between gap-4">
+        <Link href={navigation?.sort === "new" ? "/gallery?sort=new" : "/gallery"} className="group inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-fg motion-reduce:transition-none">
           <span aria-hidden="true" className="transition-transform duration-200 group-hover:-translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">←</span>
           Gallery
         </Link>
+        {navigation ? (
+          <div className="flex overflow-hidden rounded-md border border-border/70 bg-card/10">
+            <GalleryNavigationArrow direction="previous" publicId={navigation.previousId} sort={navigation.sort} />
+            <GalleryNavigationArrow direction="next" publicId={navigation.nextId} sort={navigation.sort} />
+          </div>
+        ) : null}
       </nav>
 
       <header className="mt-6 max-w-5xl sm:mt-8">

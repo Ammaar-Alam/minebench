@@ -20,11 +20,24 @@ export async function generateMetadata({ params }: { params: Promise<{ publicId:
   };
 }
 
-export default async function GalleryDetailPage({ params }: { params: Promise<{ publicId: string }> }) {
-  const [cookieStore, account] = await Promise.all([cookies(), getCurrentAccount().catch(() => null)]);
-  const candidate = await getGalleryCandidate((await params).publicId, {
+export default async function GalleryDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ publicId: string }>;
+  searchParams: Promise<{ sort?: string }>;
+}) {
+  const [route, query, cookieStore, account] = await Promise.all([
+    params,
+    searchParams,
+    cookies(),
+    getCurrentAccount().catch(() => null),
+  ]);
+  const sort = query.sort === "new" ? "new" : "top";
+  const candidate = await getGalleryCandidate(route.publicId, {
     sessionId: cookieStore.get(ARENA_SESSION_COOKIE)?.value ?? null,
     userId: account?.id,
+    navigationSort: sort,
   });
   if (!candidate) notFound();
   return <GalleryDetail candidate={candidate} />;

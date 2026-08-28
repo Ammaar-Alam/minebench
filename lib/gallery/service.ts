@@ -209,8 +209,16 @@ function publicCandidate(
 export type GalleryCandidatePayload = ReturnType<typeof publicCandidate>;
 export type GalleryExamplePayload = ReturnType<typeof publicExample>;
 
+type GallerySort = "top" | "new";
+
+function galleryCandidateOrder(sort: GallerySort): Prisma.GalleryCandidateOrderByWithRelationInput[] {
+  return sort === "top"
+    ? [{ upvoteCount: "desc" }, { publishedAt: "desc" }, { id: "desc" }]
+    : [{ publishedAt: "desc" }, { id: "desc" }];
+}
+
 export async function listGalleryCandidates(options: {
-  sort: "top" | "new";
+  sort: GallerySort;
   cursor?: string | null;
   limit?: number;
   sessionId?: string | null;
@@ -242,9 +250,7 @@ export async function listGalleryCandidates(options: {
   const rows = await prisma.galleryCandidate.findMany({
     where: { AND: [publicCandidateWhere, cursorWhere] },
     select: candidateListSelect,
-    orderBy: options.sort === "top"
-      ? [{ upvoteCount: "desc" }, { publishedAt: "desc" }, { id: "desc" }]
-      : [{ publishedAt: "desc" }, { id: "desc" }],
+    orderBy: galleryCandidateOrder(options.sort),
     take: limit + 1,
   });
   const page = rows.slice(0, limit);
@@ -288,6 +294,7 @@ export async function getGalleryCandidate(
     userId?: string | null;
     examplesCursor?: string | null;
     examplesLimit?: number;
+    navigationSort?: GallerySort;
   } = {},
 ) {
   const candidate = await prisma.galleryCandidate.findFirst({
@@ -297,7 +304,7 @@ export async function getGalleryCandidate(
   if (!candidate) return null;
   const limit = Math.max(1, Math.min(options.examplesLimit ?? 24, 48));
   const cursor = decodeGalleryCursor(options.examplesCursor);
-  const [cover, exampleCount, upvoted] = await Promise.all([
+  const [cover, exampleCount, upvoted, previousCandidates, nextCandidates] = await Promise.all([
     prisma.galleryExample.findFirst({
       where: { candidateId: candidate.id, ...publicExampleWhere },
       select: exampleSelect,
@@ -316,6 +323,26 @@ export async function getGalleryCandidate(
         select: { id: true },
       })
       : null,
+    options.navigationSort
+      ? prisma.galleryCandidate.findMany({
+          where: publicCandidateWhere,
+          cursor: { id: candidate.id },
+          skip: 1,
+          take: -1,
+          select: { publicId: true },
+          orderBy: galleryCandidateOrder(options.navigationSort),
+        })
+      : [],
+    options.navigationSort
+      ? prisma.galleryCandidate.findMany({
+          where: publicCandidateWhere,
+          cursor: { id: candidate.id },
+          skip: 1,
+          take: 1,
+          select: { publicId: true },
+          orderBy: galleryCandidateOrder(options.navigationSort),
+        })
+      : [],
   ]);
   const additional = await prisma.galleryExample.findMany({
     where: {
@@ -344,6 +371,13 @@ export async function getGalleryCandidate(
       .map(publicExample),
     nextExamplesCursor: additional.length > limit && last
       ? encodeGalleryCursor({ score: 0, publishedAt: last.createdAt, id: last.id })
+      : null,
+    navigation: options.navigationSort
+      ? {
+          sort: options.navigationSort,
+          previousId: previousCandidates[0]?.publicId ?? null,
+          nextId: nextCandidates[0]?.publicId ?? null,
+        }
       : null,
   };
 }
