@@ -19,6 +19,8 @@ export type PublicAccount = {
   isMineBenchAdmin: boolean;
   gallerySuspendedAt: Date | null;
   gallerySuspensionReason: string | null;
+  hostedGenerationCount: number;
+  hostedGenerationLimit: number;
   createdAt: Date;
 };
 
@@ -74,6 +76,8 @@ export async function syncAuthUser(authUser: SupabaseAuthUser): Promise<PublicAc
       isMineBenchAdmin: true,
       gallerySuspendedAt: true,
       gallerySuspensionReason: true,
+      hostedGenerationCount: true,
+      hostedGenerationLimit: true,
       createdAt: true,
     },
   });

@@ -97,6 +97,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `META_MODEL_API_KEY`
 - `ZAI_API_KEY`
 - `OPENROUTER_API_KEY`
+- `MINEBENCH_FREE_OPENROUTER_API_KEY` (server-only key for the signed-in Gemini 3.7 Flash promotion)
 
 ### Optional Provider and Runtime Tuning
 

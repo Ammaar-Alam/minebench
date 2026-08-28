@@ -25,9 +25,11 @@ async function main() {
   const {
     getGalleryAdminDashboard,
     getGalleryAdminPerson,
+    GalleryServiceError,
     setGalleryCandidateHidden,
     setGalleryPersonVoteBlocked,
     setGalleryPublishingSuspension,
+    setHostedGenerationLimit,
   } = await import("../../../lib/gallery/service");
   const { touchPublicSessionActivity } = await import("../../../lib/publicPresence");
   const { hashVoteSession } = await import("../../../lib/voteBlock");
@@ -37,7 +39,44 @@ async function main() {
     await db.user.createMany({
       data: [
         { id: adminId, email: `admin-${suffix}@example.test`, isMineBenchAdmin: true },
-        { id: memberId, email: `member-${suffix}@example.test`, publicNickname: "Builder" },
+        {
+          id: memberId,
+          email: `member-${suffix}@example.test`,
+          publicNickname: "Builder",
+          totalGenerationCount: 2,
+          hostedGenerationCount: 7,
+          hostedGenerationLimit: 125,
+        },
+      ],
+    });
+    await db.customBuild.createMany({
+      data: [
+        {
+          publicId: `cst_admin_one_${suffix}`,
+          ownerId: memberId,
+          promptText,
+          promptSha256: "a".repeat(64),
+          gridSize: 64,
+          palette: "simple",
+          modelKind: "catalog",
+          modelProvider: "gemini",
+          modelId: "gemini-3.7-flash",
+          modelDisplayName: "Gemini 3.7 Flash",
+          usesHostedGeneration: true,
+        },
+        {
+          publicId: `cst_admin_two_${suffix}`,
+          ownerId: memberId,
+          promptText,
+          promptSha256: "b".repeat(64),
+          gridSize: 64,
+          palette: "simple",
+          modelKind: "catalog",
+          modelProvider: "gemini",
+          modelId: "gemini-3.7-flash",
+          modelDisplayName: "Gemini 3.7 Flash",
+          removedAt: now,
+        },
       ],
     });
     const presenceResponse = await recordPresence(new Request("http://localhost/api/presence", { method: "POST" }));
@@ -151,9 +190,35 @@ async function main() {
 
     const member = dashboard.people.find((person) => person.id === `user:${memberId}`);
     assert.ok(member);
+    assert.equal(member.totalGenerationCount, 2);
+    assert.equal(member.hostedGenerationCount, 7);
+    assert.equal(member.hostedGenerationLimit, 125);
     const detail = await getGalleryAdminPerson(adminId, member!.id);
     assert.deepEqual(new Set(detail.votes.map((vote) => vote.source)), new Set(["Arena", "Gallery"]));
     assert.equal(JSON.stringify(detail).includes(memberSession), false);
+    assert.equal(detail.totalGenerationCount, 2, "removed generations remain part of the lifetime total");
+    assert.equal(detail.hostedGenerationCount, 7);
+    assert.equal(detail.hostedGenerationLimit, 125);
+
+    await setHostedGenerationLimit(adminId, memberId, 0);
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: memberId },
+        select: { hostedGenerationCount: true, hostedGenerationLimit: true },
+      }),
+      { hostedGenerationCount: 7, hostedGenerationLimit: 0 },
+      "changing the promotional cap must not change usage or the lifetime generation total",
+    );
+    await setHostedGenerationLimit(adminId, memberId, 4);
+    assert.equal((await getGalleryAdminPerson(adminId, member!.id)).hostedGenerationLimit, 4);
+    await assert.rejects(
+      () => setHostedGenerationLimit(adminId, memberId, -1),
+      (error: unknown) => error instanceof GalleryServiceError && error.code === "invalid_request",
+    );
+    await assert.rejects(
+      () => setHostedGenerationLimit(memberId, memberId, 100),
+      (error: unknown) => error instanceof GalleryServiceError && error.code === "forbidden",
+    );
 
     await setGalleryPublishingSuspension(adminId, memberId, { suspended: true });
     await setGalleryPublishingSuspension(adminId, memberId, { suspended: true });
@@ -193,6 +258,7 @@ async function main() {
     });
     await db.galleryModerationRecord.deleteMany({ where: { OR: [{ actorUserId: adminId }, { subjectUserId: memberId }] } });
     await db.galleryCandidate.deleteMany({ where: { uploaderId: memberId } });
+    await db.customBuild.deleteMany({ where: { ownerId: memberId } });
     await db.vote.deleteMany({ where: { sessionId: memberSession } });
     await db.matchup.deleteMany({ where: { prompt: { text: promptText } } });
     await db.build.deleteMany({ where: { prompt: { text: promptText } } });

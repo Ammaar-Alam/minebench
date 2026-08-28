@@ -1,6 +1,6 @@
 # MineBench Privacy Policy
 
-Effective and last updated: August 26, 2026
+Effective and last updated: August 28, 2026
 
 MineBench is an independent service operated by Ammaar Alam in the United States. This Privacy Policy explains how MineBench handles information when you use [minebench.ai](https://minebench.ai), participate in model evaluations, use MineBench's generation tools, or communicate with MineBench.
 
@@ -24,7 +24,9 @@ Do not submit personal, confidential, or sensitive information in prompts or fil
 
 ## API Credentials and Model Providers
 
-API credentials entered in Sandbox are stored in your browser's local storage. They pass through MineBench's server with a generation request and are sent to the model provider or custom endpoint you select. MineBench does not intentionally retain those credentials after the request.
+API credentials entered in Sandbox are stored in your browser's local storage. They pass through MineBench's server with a generation request and are sent to the model provider or custom endpoint you select. For saved generations, MineBench temporarily encrypts the required credential while the job is processed and deletes it when processing ends.
+
+For limited hosted generation offers, MineBench may supply the provider credential instead. The prompt, generation settings, and model output are still processed by OpenRouter and the underlying model provider.
 
 The selected provider processes prompts and related information under its own terms and privacy practices. You can remove saved credentials through Sandbox settings or by clearing MineBench site data in your browser.
 

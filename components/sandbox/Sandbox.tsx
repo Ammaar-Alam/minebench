@@ -83,11 +83,13 @@ function SandboxModeTabs({
 export function Sandbox({
   initialPrompt,
   signedIn,
+  hostedGeminiAvailable,
   hasPublicNickname,
   gallerySuspended,
 }: {
   initialPrompt?: string;
   signedIn: boolean;
+  hostedGeminiAvailable: boolean;
   hasPublicNickname: boolean;
   gallerySuspended: boolean;
 }) {
@@ -136,6 +138,7 @@ export function Sandbox({
           key={livePrompt ?? "default"}
           initialPrompt={livePrompt}
           signedIn={signedIn}
+          hostedGeminiAvailable={hostedGeminiAvailable}
           hasPublicNickname={hasPublicNickname}
           gallerySuspended={gallerySuspended}
         />

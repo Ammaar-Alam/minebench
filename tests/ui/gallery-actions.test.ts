@@ -76,6 +76,14 @@ assert.ok(
   "reported Gallery examples should expose the exact-build moderation action",
 );
 assert.ok(
+  adminActions.includes('type: z.literal("hosted_generation_limit")') &&
+    adminActions.includes("setHostedGenerationLimit") &&
+    adminDashboard.includes("Total generations") &&
+    adminDashboard.includes("Hosted generations") &&
+    adminDashboard.includes('name="limit"'),
+  "Gallery admin should show lifetime and hosted generation counts with an editable hosted limit",
+);
+assert.ok(
   galleryService.includes('action: { label: "Appeal", href: galleryUrl("/account") }'),
   "suspension email should link directly to the account appeal surface",
 );

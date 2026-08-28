@@ -16,6 +16,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   duplicate_unavailable: 409,
   generation_mismatch: 409,
   generation_not_available: 409,
+  hosted_generation_limit_reached: 409,
   nickname_required: 409,
   public_examples_require_confirmation: 409,
   selected_candidate: 409,
