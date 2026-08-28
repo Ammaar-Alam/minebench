@@ -396,7 +396,7 @@ function retryCredentialProvider(build: {
 export async function retrySavedGeneration(
   ownerId: string,
   publicId: string,
-  input: { providerKey: string; customBaseUrl?: string },
+  input: { providerKey?: string; customBaseUrl?: string },
 ) {
   const now = new Date();
   const build = await prisma.customBuild.findFirst({
@@ -406,8 +406,10 @@ export async function retrySavedGeneration(
       status: true,
       errorRetryable: true,
       modelKind: true,
+      modelKey: true,
       modelProvider: true,
       preferOpenRouter: true,
+      usesHostedGeneration: true,
     },
   });
   if (!build) throw new GenerationServiceError("not_found", "Saved generation not found.");
@@ -415,7 +417,13 @@ export async function retrySavedGeneration(
     throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
   }
   const provider = retryCredentialProvider(build);
-  const providerKey = input.providerKey.trim();
+  const providerKey = input.providerKey?.trim() || (
+    build.usesHostedGeneration &&
+    build.modelKey === HOSTED_GEMINI_MODEL_KEY &&
+    provider === "openrouter"
+      ? process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim()
+      : undefined
+  );
   if (!provider || !providerKey) {
     throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
   }

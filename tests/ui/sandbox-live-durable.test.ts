@@ -50,6 +50,7 @@ const requestModelBody = functionBodyText("customBuildRequestModel");
 const runBody = functionBodyText("runGenerate");
 const stopBody = functionBodyText("stopGenerate");
 const watchBody = functionBodyText("watchCustomBuild");
+const retryBody = functionBodyText("retryCustomBuild");
 const completedBuildBody = functionBodyText("readCustomBuildViewer");
 const inputResetEffect = effectBodyTextContaining("lastGenerateInputRef.current === inputSignature");
 const assignIndex = durableBody.indexOf("customBuildAbortRef.current = args.abortController");
@@ -213,8 +214,10 @@ assert.ok(
     sourceText.includes("!providerKeys.gemini?.trim()") &&
     sourceText.includes("!providerKeys.openrouter?.trim()") &&
     sourceText.includes("`${model.displayName} · Free`") &&
+    retryBody.includes("...(providerKey ? { providerKey } : {})") &&
+    !retryBody.includes("Add the required API key") &&
     !sourceText.includes("hostedGenerationCount"),
-  "the signed-in Gemini offer should announce once, defer to user keys, and avoid a live usage counter",
+  "the signed-in Gemini offer should announce once, defer to user keys, support hosted retries, and avoid a live usage counter",
 );
 
 console.log("sandbox saved-generation contract checks passed");

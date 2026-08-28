@@ -189,6 +189,37 @@ async function main() {
     );
 
     await db.customBuild.update({
+      where: { id: hostedRow.id },
+      data: {
+        status: "failed",
+        currentStage: "failed",
+        completedAt: new Date(),
+        errorCode: "generation_failed",
+        errorMessage: "No valid build was returned.",
+        errorRetryable: true,
+      },
+    });
+    await db.customBuildJob.updateMany({
+      where: { customBuildId: hostedRow.id },
+      data: { status: "failed", completedAt: new Date() },
+    });
+    await db.customBuildSecret.deleteMany({ where: { customBuildId: hostedRow.id } });
+    assert.equal((await retrySavedGeneration(ownerId, hosted[0]!.id, {})).status, "queued");
+    const hostedRetrySecret = await db.customBuildSecret.findUniqueOrThrow({
+      where: { customBuildId: hostedRow.id },
+    });
+    assert.equal(hostedRetrySecret.provider, "openrouter");
+    assert.notEqual(hostedRetrySecret.keyCiphertext, "hosted-openrouter-secret");
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: ownerId },
+        select: { totalGenerationCount: true, hostedGenerationCount: true },
+      }),
+      { totalGenerationCount: 4, hostedGenerationCount: 1 },
+      "retrying an existing hosted build must not consume another allowance",
+    );
+
+    await db.customBuild.update({
       where: { id: rows[0]!.id },
       data: {
         status: "failed",

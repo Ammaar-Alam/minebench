@@ -121,13 +121,12 @@ function GenerationActions({
         throw new Error("Reconnect this model in Generate.");
       }
       const providerKey = loadProviderKeysFromStorage()[retryProvider]?.trim();
-      if (!providerKey) throw new Error("Add the required API key in Generate first.");
       const response = await fetch(
         `/api/generations/${encodeURIComponent(generation.id)}/retry`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ providerKey }),
+          body: JSON.stringify(providerKey ? { providerKey } : {}),
         },
       );
       const body = (await response.json().catch(() => null)) as {

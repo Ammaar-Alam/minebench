@@ -997,10 +997,6 @@ export function SandboxLive({
     const providerKey = existing.retryProvider
       ? providerKeys[existing.retryProvider]?.trim()
       : undefined;
-    if (!providerKey) {
-      setRequestError("Add the required API key before retrying.");
-      return;
-    }
     const abortController = new AbortController();
     customBuildAbortRef.current = abortController;
     setRunning(true);
@@ -1013,7 +1009,7 @@ export function SandboxLive({
           headers: { "Content-Type": "application/json" },
           signal: abortController.signal,
           body: JSON.stringify({
-            providerKey,
+            ...(providerKey ? { providerKey } : {}),
             ...(model.kind === "custom" && model.provider === "custom"
               ? { customBaseUrl: model.baseUrl }
               : {}),
