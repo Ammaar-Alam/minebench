@@ -104,6 +104,8 @@ const DIRECT_PROVIDER_KEYS = [
 ] as const satisfies ReadonlyArray<readonly [keyof ProviderApiKeys, string]>;
 const OPENROUTER_MODEL_VALUE = "__openrouter__";
 const CUSTOM_MODEL_VALUE = "__custom_api__";
+const HOSTED_GEMINI_MODEL_KEY = "gemini_3_7_flash";
+const HOSTED_GEMINI_NOTICE_KEY = "mb_hosted_gemini_3_7_notice_v1";
 const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
   displayName: "OpenAI-compatible model",
   modelId: "",
@@ -125,6 +127,49 @@ const DEFAULT_MODEL_B: ModelKey =
   )?.key ??
   ENABLED_MODELS.find((model) => model.key !== DEFAULT_MODEL_A)?.key ??
   DEFAULT_MODEL_A;
+
+function HostedGeminiAnnouncement({
+  open,
+  onDismiss,
+}: {
+  open: boolean;
+  onDismiss: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (open && dialog && !dialog.open) dialog.showModal();
+  }, [open]);
+
+  if (!open) return null;
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="hosted-gemini-title"
+      className="mb-dialog m-auto w-[min(28rem,calc(100%-2rem))] rounded-md border-0 bg-card p-0 text-fg ring-1 ring-border-xl backdrop:bg-bg/60 backdrop:backdrop-blur-sm"
+      onCancel={(event) => {
+        event.preventDefault();
+        onDismiss();
+      }}
+    >
+      <div className="space-y-6 p-6 sm:p-7">
+        <div>
+          <p className="mb-eyebrow">Generate</p>
+          <h2 id="hosted-gemini-title" className="mt-2 text-2xl font-semibold tracking-tight">
+            Gemini 3.7 Flash is free
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-muted">
+            Signed-in users can generate without a Gemini or OpenRouter API key for a limited time.
+          </p>
+        </div>
+        <button type="button" className="mb-btn mb-btn-primary h-11 w-full" onClick={onDismiss}>
+          Got it
+        </button>
+      </div>
+    </dialog>
+  );
+}
 
 function safeJsonParseObject(text: string): Record<string, unknown> | null {
   try {
@@ -474,11 +519,13 @@ function customBuildRetryProvider(status: SavedGenerationPayload): keyof Provide
 export function SandboxLive({
   initialPrompt,
   signedIn,
+  hostedGeminiAvailable,
   hasPublicNickname,
   gallerySuspended,
 }: {
   initialPrompt?: string;
   signedIn: boolean;
+  hostedGeminiAvailable: boolean;
   hasPublicNickname: boolean;
   gallerySuspended: boolean;
 }) {
@@ -505,7 +552,13 @@ export function SandboxLive({
   const [running, setRunning] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
   const [showGenerationPreflight, setShowGenerationPreflight] = useState(false);
+  const [showHostedGeminiAnnouncement, setShowHostedGeminiAnnouncement] = useState(false);
   const savedKeyCount = Object.values(providerKeys).filter((value) => Boolean(value?.trim())).length;
+  const canUseHostedGemini = Boolean(
+    hostedGeminiAvailable &&
+    !providerKeys.gemini?.trim() &&
+    !providerKeys.openrouter?.trim(),
+  );
   const [apiKeysOpen, setApiKeysOpen] = useState(false);
   const [providerKeysOpen, setProviderKeysOpen] = useState(false);
   const [, forceRender] = useState(0);
@@ -603,6 +656,30 @@ export function SandboxLive({
   useEffect(() => {
     saveProviderKeysToStorage(providerKeys);
   }, [providerKeys]);
+
+  useEffect(() => {
+    if (!signedIn || !hostedGeminiAvailable) return;
+    try {
+      if (!window.localStorage.getItem(HOSTED_GEMINI_NOTICE_KEY)) {
+        setShowHostedGeminiAnnouncement(true);
+      }
+    } catch {
+      setShowHostedGeminiAnnouncement(true);
+    }
+  }, [hostedGeminiAvailable, signedIn]);
+
+  function dismissHostedGeminiAnnouncement() {
+    try {
+      window.localStorage.setItem(HOSTED_GEMINI_NOTICE_KEY, "1");
+    } catch {}
+    setShowHostedGeminiAnnouncement(false);
+  }
+
+  function modelOptionLabel(model: (typeof ENABLED_MODELS)[number]): string {
+    return model.key === HOSTED_GEMINI_MODEL_KEY && canUseHostedGemini
+      ? `${model.displayName} · Free`
+      : model.displayName;
+  }
 
   useEffect(() => {
     if (lastGenerateInputRef.current === inputSignature) return;
@@ -1590,7 +1667,7 @@ export function SandboxLive({
                           model.key === modelPair.b
                         }
                       >
-                        {model.displayName}
+                        {modelOptionLabel(model)}
                       </option>
                     ))}
                   </optgroup>
@@ -1634,7 +1711,7 @@ export function SandboxLive({
                           value={model.key}
                           disabled={!isAdHocModelValue(modelPair.a) && model.key === modelPair.a}
                         >
-                          {model.displayName}
+                          {modelOptionLabel(model)}
                         </option>
                       ))}
                     </optgroup>
@@ -1887,6 +1964,10 @@ export function SandboxLive({
           setShowGenerationPreflight(false);
           void runGenerate(true);
         }}
+      />
+      <HostedGeminiAnnouncement
+        open={showHostedGeminiAnnouncement}
+        onDismiss={dismissHostedGeminiAnnouncement}
       />
     </div>
   );

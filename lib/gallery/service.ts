@@ -25,6 +25,7 @@ import {
 import { hashVoteSession } from "@/lib/voteBlock";
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_HOSTED_GENERATION_LIMIT = 2_147_483_647;
 
 async function deliverGalleryEmail(task: Promise<void>, context: string) {
   try {
@@ -880,6 +881,29 @@ export async function setGalleryPublishingSuspension(
   return { suspended: input.suspended, changed: account.changed };
 }
 
+export async function setHostedGenerationLimit(
+  adminId: string,
+  userId: string,
+  limit: number,
+) {
+  await requireMineBenchAdmin(adminId);
+  if (!Number.isInteger(limit) || limit < 0 || limit > MAX_HOSTED_GENERATION_LIMIT) {
+    throw new GalleryServiceError("invalid_request", "Enter a valid hosted generation limit.");
+  }
+  try {
+    return await prisma.user.update({
+      where: { id: userId },
+      data: { hostedGenerationLimit: limit },
+      select: { hostedGenerationCount: true, hostedGenerationLimit: true },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      throw new GalleryServiceError("not_found", "Account not found.");
+    }
+    throw error;
+  }
+}
+
 export async function updateGalleryNickname(userId: string, draft: string) {
   const value = normalizeGalleryNickname(draft);
   if (!value.display) {
@@ -1312,6 +1336,9 @@ export async function getGalleryAdminDashboard(
         publicNickname: true,
         lastSeenAt: true,
         gallerySuspendedAt: true,
+        totalGenerationCount: true,
+        hostedGenerationCount: true,
+        hostedGenerationLimit: true,
       },
     }),
     prisma.publicSessionActivity.findMany({
@@ -1332,6 +1359,9 @@ export async function getGalleryAdminDashboard(
             email: true,
             publicNickname: true,
             gallerySuspendedAt: true,
+            totalGenerationCount: true,
+            hostedGenerationCount: true,
+            hostedGenerationLimit: true,
           },
         },
       },
@@ -1355,6 +1385,9 @@ export async function getGalleryAdminDashboard(
     online: boolean;
     suspended: boolean;
     voteBlocked: boolean;
+    totalGenerationCount: number | null;
+    hostedGenerationCount: number | null;
+    hostedGenerationLimit: number | null;
   }>();
 
   for (const account of accounts) {
@@ -1367,6 +1400,9 @@ export async function getGalleryAdminDashboard(
       online: false,
       suspended: Boolean(account.gallerySuspendedAt),
       voteBlocked: blockedUsers.has(account.id),
+      totalGenerationCount: account.totalGenerationCount,
+      hostedGenerationCount: account.hostedGenerationCount,
+      hostedGenerationLimit: account.hostedGenerationLimit,
     });
   }
 
@@ -1390,6 +1426,9 @@ export async function getGalleryAdminDashboard(
         online: Boolean(existing?.online || online),
         suspended: Boolean(session.user.gallerySuspendedAt),
         voteBlocked: Boolean(existing?.voteBlocked || blockedUsers.has(session.userId) || sessionBlocked),
+        totalGenerationCount: session.user.totalGenerationCount,
+        hostedGenerationCount: session.user.hostedGenerationCount,
+        hostedGenerationLimit: session.user.hostedGenerationLimit,
       });
       continue;
     }
@@ -1402,6 +1441,9 @@ export async function getGalleryAdminDashboard(
       online,
       suspended: false,
       voteBlocked: sessionBlocked,
+      totalGenerationCount: null,
+      hostedGenerationCount: null,
+      hostedGenerationLimit: null,
     });
   }
 
@@ -1463,6 +1505,9 @@ async function resolveGalleryAdminPerson(personId: string) {
         lastSeenAt: true,
         gallerySuspendedAt: true,
         gallerySuspensionReason: true,
+        totalGenerationCount: true,
+        hostedGenerationCount: true,
+        hostedGenerationLimit: true,
         publicSessionActivities: {
           orderBy: { lastSeenAt: "desc" },
           take: 50,
@@ -1492,6 +1537,9 @@ async function resolveGalleryAdminPerson(personId: string) {
       location: latest ? adminLocation(latest) : null,
       suspendedAt: user.gallerySuspendedAt,
       suspensionReason: user.gallerySuspensionReason,
+      totalGenerationCount: user.totalGenerationCount,
+      hostedGenerationCount: user.hostedGenerationCount,
+      hostedGenerationLimit: user.hostedGenerationLimit,
     };
   }
 
@@ -1519,6 +1567,9 @@ async function resolveGalleryAdminPerson(personId: string) {
       location: adminLocation(session),
       suspendedAt: null,
       suspensionReason: null,
+      totalGenerationCount: null,
+      hostedGenerationCount: null,
+      hostedGenerationLimit: null,
     };
   }
 
@@ -1642,6 +1693,9 @@ export async function getGalleryAdminPerson(adminId: string, personId: string) {
     online: Boolean(person.lastSeenAt && person.lastSeenAt.getTime() >= Date.now() - PUBLIC_SESSION_ONLINE_MS),
     suspended: Boolean(person.suspendedAt),
     suspensionReason: person.suspensionReason,
+    totalGenerationCount: person.totalGenerationCount,
+    hostedGenerationCount: person.hostedGenerationCount,
+    hostedGenerationLimit: person.hostedGenerationLimit,
     voteBlocked: Boolean(voteBlocked),
     contributions: contributions.map((candidate) => ({
       publicId: candidate.publicId,

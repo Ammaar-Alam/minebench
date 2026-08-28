@@ -15,6 +15,7 @@ import { prisma } from "@/lib/prisma";
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
 const GENERATE_JOB_MAX_ATTEMPTS = 2;
+const HOSTED_GEMINI_MODEL_KEY = "gemini_3_7_flash";
 
 export class GenerationServiceError extends Error {
   constructor(
@@ -191,10 +192,28 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
     );
   }
 
+  const hostedOpenRouterKey = process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim();
+  const hasUserGeminiCredential = Boolean(
+    input.providerKeys.gemini?.trim() || input.providerKeys.openrouter?.trim(),
+  );
   let resolved;
   try {
     resolved = await Promise.all(
-      input.models.map((model) => resolveSavedGenerationModel(model, input.providerKeys)),
+      input.models.map(async (request) => {
+        const usesHostedGeneration = Boolean(
+          hostedOpenRouterKey &&
+          !hasUserGeminiCredential &&
+          request.kind === "catalog" &&
+          request.modelKey === HOSTED_GEMINI_MODEL_KEY,
+        );
+        const model = await resolveSavedGenerationModel(
+          request,
+          usesHostedGeneration
+            ? { ...input.providerKeys, openrouter: hostedOpenRouterKey }
+            : input.providerKeys,
+        );
+        return { model, usesHostedGeneration };
+      }),
     );
   } catch (error) {
     if (error instanceof GenerationServiceError) throw error;
@@ -206,7 +225,7 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
   }
 
   const now = new Date();
-  const prepared = resolved.map((model) => {
+  const prepared = resolved.map(({ model, usesHostedGeneration }) => {
     const id = randomUUID();
     const publicId = generateCustomBuildPublicId();
     const credential = encryptProviderKey(model.credential.value, {
@@ -216,10 +235,33 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
     const endpoint = model.customBaseUrl
       ? encryptSecretValue(model.customBaseUrl, id)
       : null;
-    return { id, publicId, model, credential, endpoint };
+    return { id, publicId, model, credential, endpoint, usesHostedGeneration };
   });
 
   await prisma.$transaction(async (tx) => {
+    const hostedGenerationCount = prepared.filter((item) => item.usesHostedGeneration).length;
+    const account = await tx.$queryRaw<Array<{ id: string }>>`
+      UPDATE "User"
+      SET
+        "totalGenerationCount" = "totalGenerationCount" + ${prepared.length},
+        "hostedGenerationCount" = "hostedGenerationCount" + ${hostedGenerationCount},
+        "updatedAt" = ${now}
+      WHERE id = ${input.ownerId}::uuid
+        AND (
+          ${hostedGenerationCount} = 0 OR
+          "hostedGenerationCount" + ${hostedGenerationCount} <= "hostedGenerationLimit"
+        )
+      RETURNING id
+    `;
+    if (account.length !== 1) {
+      throw new GenerationServiceError(
+        hostedGenerationCount > 0 ? "hosted_generation_limit_reached" : "invalid_request",
+        hostedGenerationCount > 0
+          ? "Free Gemini 3.7 Flash limit reached. Add a Gemini or OpenRouter key to continue."
+          : "Account not found.",
+      );
+    }
+
     for (const item of prepared) {
       await tx.customBuild.create({
         data: {
@@ -239,6 +281,7 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
           modelDisplayName: item.model.modelDisplayName,
           openRouterModelId: item.model.openRouterModelId,
           preferOpenRouter: item.model.preferOpenRouter,
+          usesHostedGeneration: item.usesHostedGeneration,
           reasoning: input.reasoning,
           requestedIpHash: input.requestedIpHash,
           requestedUserAgentHash: input.requestedUserAgentHash,

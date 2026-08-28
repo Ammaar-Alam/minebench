@@ -21,7 +21,8 @@ type Mutation =
   | { type: "example_hidden"; exampleId: string }
   | { type: "candidate_selected"; publicId: string; selected: boolean }
   | { type: "account_suspended"; userId: string; suspended: boolean; reason?: string }
-  | { type: "votes_blocked"; personId: string; blocked: boolean };
+  | { type: "votes_blocked"; personId: string; blocked: boolean }
+  | { type: "hosted_generation_limit"; userId: string; limit: number };
 
 const dateTime = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
@@ -171,6 +172,7 @@ function PersonInspector({
       </div>
     );
   }
+  const userId = person.userId;
 
   return (
     <div className="min-h-0 min-w-0 space-y-5">
@@ -205,7 +207,50 @@ function PersonInspector({
           <dt className="text-muted">Location</dt>
           <dd className="mt-1 truncate font-medium text-fg" title={person.location ?? "Unavailable"}>{person.location ?? "Unavailable"}</dd>
         </div>
+        {userId ? (
+          <>
+            <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
+              <dt className="text-muted">Total generations</dt>
+              <dd className="mt-1 font-medium tabular-nums text-fg">{(person.totalGenerationCount ?? 0).toLocaleString()}</dd>
+            </div>
+            <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
+              <dt className="text-muted">Hosted generations</dt>
+              <dd className="mt-1 font-medium tabular-nums text-fg">
+                {(person.hostedGenerationCount ?? 0).toLocaleString()} / {(person.hostedGenerationLimit ?? 0).toLocaleString()}
+              </dd>
+            </div>
+          </>
+        ) : null}
       </dl>
+
+      {userId ? (
+        <form
+          key={`${person.id}:${person.hostedGenerationLimit}`}
+          className="flex items-end gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const limit = Number(new FormData(event.currentTarget).get("limit"));
+            void onMutate({ type: "hosted_generation_limit", userId, limit });
+          }}
+        >
+          <label className="min-w-0 flex-1 space-y-1">
+            <span className="text-xs font-medium text-muted">Hosted limit</span>
+            <input
+              className="mb-field h-9"
+              type="number"
+              name="limit"
+              min={0}
+              max={2_147_483_647}
+              step={1}
+              required
+              defaultValue={person.hostedGenerationLimit ?? 0}
+            />
+          </label>
+          <button type="submit" disabled={pending} className="mb-btn h-9 text-xs">
+            {pending ? "Saving…" : "Save"}
+          </button>
+        </form>
+      ) : null}
 
       <div className="flex flex-wrap gap-2">
         {person.userId && person.email ? (
@@ -408,7 +453,11 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
       return false;
     }
     setNotice(null);
-    if (selectedPersonId && (mutation.type === "account_suspended" || mutation.type === "votes_blocked")) {
+    if (selectedPersonId && (
+      mutation.type === "account_suspended" ||
+      mutation.type === "votes_blocked" ||
+      mutation.type === "hosted_generation_limit"
+    )) {
       await loadPerson(selectedPersonId);
     }
     startTransition(() => router.refresh());
@@ -515,7 +564,14 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
                 <div className="max-h-[32rem] min-h-0 flex-1 divide-y divide-border overflow-y-auto border-b border-border pr-1 lg:max-h-none">
                   {people.map((entry) => (
                     <button key={entry.id} type="button" className="flex min-h-14 w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:text-accent focus-visible:outline-none focus-visible:text-accent" onClick={() => void loadPerson(entry.id)}>
-                      <span className="min-w-0"><span className="block truncate text-sm font-medium">{entry.label}</span><span className="block truncate text-xs text-muted">{entry.location ?? formatDate(entry.lastSeenAt)}</span></span>
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium">{entry.label}</span>
+                        <span className="block truncate text-xs text-muted">
+                          {entry.totalGenerationCount == null
+                            ? entry.location ?? formatDate(entry.lastSeenAt)
+                            : `${entry.totalGenerationCount.toLocaleString()} total · ${(entry.hostedGenerationCount ?? 0).toLocaleString()} / ${(entry.hostedGenerationLimit ?? 0).toLocaleString()} hosted`}
+                        </span>
+                      </span>
                       <span className="flex shrink-0 items-center gap-2 text-[11px] text-muted">
                         {entry.suspended ? "Suspended" : entry.voteBlocked ? "Votes blocked" : null}
                         <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${entry.online ? "bg-success" : "bg-muted/50"}`} />

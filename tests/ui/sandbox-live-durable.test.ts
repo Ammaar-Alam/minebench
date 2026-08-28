@@ -204,5 +204,17 @@ assert.ok(
     !sourceText.includes("a pirate ship with sails"),
   "Generate should start blank with Gemini 3.7 Flash selected",
 );
+assert.ok(
+  sourceText.includes("HOSTED_GEMINI_NOTICE_KEY") &&
+    sourceText.includes("Gemini 3.7 Flash is free") &&
+    sourceText.includes("if (!signedIn || !hostedGeminiAvailable) return") &&
+    sourceText.includes("window.localStorage.getItem(HOSTED_GEMINI_NOTICE_KEY)") &&
+    sourceText.includes("window.localStorage.setItem(HOSTED_GEMINI_NOTICE_KEY") &&
+    sourceText.includes("!providerKeys.gemini?.trim()") &&
+    sourceText.includes("!providerKeys.openrouter?.trim()") &&
+    sourceText.includes("`${model.displayName} · Free`") &&
+    !sourceText.includes("hostedGenerationCount"),
+  "the signed-in Gemini offer should announce once, defer to user keys, and avoid a live usage counter",
+);
 
 console.log("sandbox saved-generation contract checks passed");
