@@ -214,19 +214,27 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     "Gemini schema sanitization should not mutate the shared tool schema",
   );
 
-  for (const expected of EXPECTATIONS) {
+  const openRouterToolModels = [
+    ...EXPECTATIONS.map((expected) => expected.catalog),
+    {
+      key: "gemma_4_31b" as const,
+      displayName: "Gemma 4 31B",
+      openRouterModelId: "google/gemma-4-31b-it",
+    },
+  ];
+  for (const model of openRouterToolModels) {
     const openRouterTool = await runGeneration(capture, {
-      modelKey: expected.catalog.key,
+      modelKey: model.key,
       maxAttempts: 1,
       enableTools: true,
       providerKeys: { openrouter: "test-openrouter-key" },
     });
     const openRouterToolRequest = openRouterTool.requests.find(
-      (request) => request.body.model === expected.catalog.openRouterModelId,
+      (request) => request.body.model === model.openRouterModelId,
     )?.body;
     assert.ok(
       openRouterToolRequest,
-      `OpenRouter ${expected.catalog.displayName} tool-schema request should be captured`,
+      `OpenRouter ${model.displayName} tool-schema request should be captured`,
     );
     const openRouterToolFormat = openRouterToolRequest.response_format as {
       json_schema?: { schema?: unknown };
@@ -234,7 +242,7 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     assert.deepEqual(
       openRouterToolFormat.json_schema?.schema,
       toolGenerationConfig.responseJsonSchema,
-      `OpenRouter ${expected.catalog.displayName} should receive the direct Gemini schema`,
+      `OpenRouter ${model.displayName} should receive the direct Gemini schema`,
     );
   }
   assert.equal(

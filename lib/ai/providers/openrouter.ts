@@ -207,7 +207,9 @@ export async function openrouterGenerateText(params: {
 
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
   const maxTokens = params.maxOutputTokens ?? 8192;
-  const jsonSchema = params.modelId.startsWith("google/gemini-")
+  const usesGeminiSchema =
+    params.modelId.startsWith("google/gemini-") || params.modelId.startsWith("google/gemma-");
+  const jsonSchema = usesGeminiSchema
     ? (sanitizeGeminiJsonSchema(params.jsonSchema) as Record<string, unknown> | undefined)
     : params.jsonSchema;
   const responseFormat = !jsonSchema
