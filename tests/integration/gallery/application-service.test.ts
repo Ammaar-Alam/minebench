@@ -8,6 +8,8 @@ async function main() {
     return;
   }
   process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "gallery-test-encryption-secret";
+  const previousHostedKey = process.env.MINEBENCH_FREE_OPENROUTER_API_KEY;
+  process.env.MINEBENCH_FREE_OPENROUTER_API_KEY = "hosted-openrouter-secret";
   const db = new PrismaClient();
   const ownerId = randomUUID();
   const otherId = randomUUID();
@@ -55,10 +57,167 @@ async function main() {
     assert.equal(rows.every((row) => row.jobs[0]?.maxAttempts === 2), true);
     assert.equal(rows.every((row) => row.secret?.keyCiphertext !== "request-only-secret"), true);
     assert.notEqual(rows[0]?.secret?.keyCiphertext, rows[1]?.secret?.keyCiphertext);
+    assert.equal(rows.every((row) => !row.usesHostedGeneration), true);
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: ownerId },
+        select: { totalGenerationCount: true, hostedGenerationCount: true },
+      }),
+      { totalGenerationCount: 2, hostedGenerationCount: 0 },
+    );
 
     assert.equal(await getSavedGeneration(otherId, created[0]!.id), null);
     assert.equal((await getSavedGeneration(ownerId, created[0]!.id))?.prompt, "A tiny observatory");
     assert.equal((await listSavedGenerations(ownerId, { limit: 10 })).items.length, 2);
+
+    const hosted = await createSavedGenerations({
+      ownerId,
+      prompt: "A hosted observatory",
+      gridSize: 64,
+      palette: "simple",
+      models: [{ id: "hosted", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+      providerKeys: {},
+    });
+    const hostedRow = await db.customBuild.findUniqueOrThrow({
+      where: { publicId: hosted[0]!.id },
+      include: { secret: true },
+    });
+    assert.equal(hostedRow.usesHostedGeneration, true);
+    assert.equal(hostedRow.preferOpenRouter, true);
+    assert.equal(hostedRow.openRouterModelId, "google/gemini-3.7-flash");
+    assert.equal(hostedRow.secret?.provider, "openrouter");
+    assert.notEqual(hostedRow.secret?.keyCiphertext, "hosted-openrouter-secret");
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: ownerId },
+        select: { totalGenerationCount: true, hostedGenerationCount: true },
+      }),
+      { totalGenerationCount: 3, hostedGenerationCount: 1 },
+    );
+
+    const routedWithUserKey = await createSavedGenerations({
+      ownerId,
+      prompt: "A user-funded observatory",
+      gridSize: 64,
+      palette: "simple",
+      models: [{ id: "user-funded", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+      providerKeys: { openrouter: "user-openrouter-secret" },
+    });
+    assert.equal(
+      (await db.customBuild.findUniqueOrThrow({ where: { publicId: routedWithUserKey[0]!.id } })).usesHostedGeneration,
+      false,
+    );
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: ownerId },
+        select: { totalGenerationCount: true, hostedGenerationCount: true },
+      }),
+      { totalGenerationCount: 4, hostedGenerationCount: 1 },
+    );
+
+    await assert.rejects(
+      () => createSavedGenerations({
+        ownerId,
+        prompt: "An ineligible hosted model",
+        gridSize: 64,
+        palette: "simple",
+        models: [{ id: "ineligible", kind: "catalog", modelKey: "openai_gpt_5_4_mini" }],
+        providerKeys: {},
+      }),
+      (error: unknown) => error instanceof GenerationServiceError && error.code === "missing_provider_key",
+    );
+
+    await db.user.update({
+      where: { id: otherId },
+      data: { hostedGenerationCount: 99, hostedGenerationLimit: 100 },
+    });
+    const concurrent = await Promise.allSettled([
+      createSavedGenerations({
+        ownerId: otherId,
+        prompt: "First concurrent hosted build",
+        gridSize: 64,
+        palette: "simple",
+        models: [{ id: "concurrent-one", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+        providerKeys: {},
+      }),
+      createSavedGenerations({
+        ownerId: otherId,
+        prompt: "Second concurrent hosted build",
+        gridSize: 64,
+        palette: "simple",
+        models: [{ id: "concurrent-two", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+        providerKeys: {},
+      }),
+    ]);
+    assert.equal(concurrent.filter((result) => result.status === "fulfilled").length, 1);
+    assert.equal(concurrent.filter((result) => result.status === "rejected").length, 1);
+    assert.equal(
+      concurrent.some((result) =>
+        result.status === "rejected" &&
+        result.reason instanceof GenerationServiceError &&
+        result.reason.code === "hosted_generation_limit_reached"
+      ),
+      true,
+    );
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: otherId },
+        select: { totalGenerationCount: true, hostedGenerationCount: true },
+      }),
+      { totalGenerationCount: 1, hostedGenerationCount: 100 },
+    );
+    assert.equal(await db.customBuild.count({ where: { ownerId: otherId, usesHostedGeneration: true } }), 1);
+
+    const byokAtLimit = await createSavedGenerations({
+      ownerId: otherId,
+      prompt: "A build after the hosted limit",
+      gridSize: 64,
+      palette: "simple",
+      models: [{ id: "byok-at-limit", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+      providerKeys: { gemini: "user-gemini-secret" },
+    });
+    assert.equal(
+      (await db.customBuild.findUniqueOrThrow({ where: { publicId: byokAtLimit[0]!.id } })).usesHostedGeneration,
+      false,
+    );
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: otherId },
+        select: { totalGenerationCount: true, hostedGenerationCount: true },
+      }),
+      { totalGenerationCount: 2, hostedGenerationCount: 100 },
+    );
+
+    await db.customBuild.update({
+      where: { id: hostedRow.id },
+      data: {
+        status: "failed",
+        currentStage: "failed",
+        completedAt: new Date(),
+        errorCode: "generation_failed",
+        errorMessage: "No valid build was returned.",
+        errorRetryable: true,
+      },
+    });
+    await db.customBuildJob.updateMany({
+      where: { customBuildId: hostedRow.id },
+      data: { status: "failed", completedAt: new Date() },
+    });
+    await db.customBuildSecret.deleteMany({ where: { customBuildId: hostedRow.id } });
+    assert.equal((await retrySavedGeneration(ownerId, hosted[0]!.id, {})).status, "queued");
+    const hostedRetrySecret = await db.customBuildSecret.findUniqueOrThrow({
+      where: { customBuildId: hostedRow.id },
+    });
+    assert.equal(hostedRetrySecret.provider, "openrouter");
+    assert.notEqual(hostedRetrySecret.keyCiphertext, "hosted-openrouter-secret");
+    assert.deepEqual(
+      await db.user.findUniqueOrThrow({
+        where: { id: ownerId },
+        select: { totalGenerationCount: true, hostedGenerationCount: true },
+      }),
+      { totalGenerationCount: 4, hostedGenerationCount: 1 },
+      "retrying an existing hosted build must not consume another allowance",
+    );
 
     await db.customBuild.update({
       where: { id: rows[0]!.id },
@@ -189,6 +348,8 @@ async function main() {
     await db.customBuild.deleteMany({ where: { ownerId: { in: [ownerId, otherId] } } });
     await db.user.deleteMany({ where: { id: { in: [ownerId, otherId] } } });
     await db.$disconnect();
+    if (previousHostedKey === undefined) delete process.env.MINEBENCH_FREE_OPENROUTER_API_KEY;
+    else process.env.MINEBENCH_FREE_OPENROUTER_API_KEY = previousHostedKey;
   }
 }
 

@@ -59,6 +59,11 @@ export default async function SandboxPage({
       <Sandbox
         initialPrompt={prompt}
         signedIn={Boolean(account)}
+        hostedGeminiAvailable={Boolean(
+          account &&
+          process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim() &&
+          account.hostedGenerationCount < account.hostedGenerationLimit
+        )}
         hasPublicNickname={Boolean(account?.publicNickname)}
         gallerySuspended={Boolean(account?.gallerySuspendedAt)}
       />

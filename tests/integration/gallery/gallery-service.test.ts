@@ -131,6 +131,67 @@ async function main() {
     assert.equal(caseVariant.created, false);
     assert.equal(caseVariant.candidate.id, created.candidate.id);
 
+    const navigationIds = {
+      newest: `gal_${suffix}newest`,
+      highest: `gal_${suffix}highest`,
+      middle: `gal_${suffix}middle`,
+      hidden: `gal_${suffix}hidden`,
+    };
+    await db.galleryCandidate.createMany({
+      data: [
+        {
+          id: `nav_${suffix}_newest`,
+          publicId: navigationIds.newest,
+          promptText: `Newest navigation prompt ${suffix}`,
+          promptKey: `navigation-newest-${suffix}`,
+          uploaderId,
+          upvoteCount: 1_000_100,
+          publishedAt: new Date("2035-01-03T00:00:00.000Z"),
+        },
+        {
+          id: `nav_${suffix}_highest`,
+          publicId: navigationIds.highest,
+          promptText: `Highest navigation prompt ${suffix}`,
+          promptKey: `navigation-highest-${suffix}`,
+          uploaderId,
+          upvoteCount: 1_000_300,
+          publishedAt: new Date("2035-01-02T00:00:00.000Z"),
+        },
+        {
+          id: `nav_${suffix}_middle`,
+          publicId: navigationIds.middle,
+          promptText: `Middle navigation prompt ${suffix}`,
+          promptKey: `navigation-middle-${suffix}`,
+          uploaderId,
+          upvoteCount: 1_000_200,
+          publishedAt: new Date("2035-01-01T00:00:00.000Z"),
+        },
+        {
+          id: `nav_${suffix}_hidden`,
+          publicId: navigationIds.hidden,
+          promptText: `Hidden navigation prompt ${suffix}`,
+          promptKey: `navigation-hidden-${suffix}`,
+          uploaderId,
+          upvoteCount: 1_000_250,
+          publishedAt: new Date("2035-01-01T12:00:00.000Z"),
+          adminHiddenAt: new Date(),
+        },
+      ],
+    });
+    assert.deepEqual(
+      (await getGalleryCandidate(navigationIds.highest, { navigationSort: "new" }))?.navigation,
+      { sort: "new", previousId: navigationIds.newest, nextId: navigationIds.middle },
+      "New navigation should follow visible publication order",
+    );
+    assert.deepEqual(
+      (await getGalleryCandidate(navigationIds.middle, { navigationSort: "top" }))?.navigation,
+      { sort: "top", previousId: navigationIds.highest, nextId: navigationIds.newest },
+      "Top navigation should follow visible vote order",
+    );
+    await db.galleryCandidate.deleteMany({
+      where: { publicId: { in: Object.values(navigationIds) } },
+    });
+
     const legacyCandidate = await db.galleryCandidate.create({
       data: {
         publicId: `gal_${suffix}legacy`,

@@ -40,6 +40,17 @@ assert.ok(
   "public examples should support accessible four-build comparison through the shared GIF exporter",
 );
 assert.ok(
+  detail.includes("GalleryNavigationArrow") &&
+    detail.includes('aria-keyshortcuts={previous ? "ArrowLeft" : "ArrowRight"}') &&
+    detail.includes('event.key === "ArrowLeft"') &&
+    detail.includes('event.key === "ArrowRight"') &&
+    detail.includes("event.repeat || event.isComposing") &&
+    detail.includes("motion-reduce:transform-none") &&
+    explore.includes('sort === "new" ? "?sort=new" : ""') &&
+    galleryDetailPage.includes("navigationSort: sort"),
+  "Gallery details should preserve their ordering and expose polished pointer and keyboard navigation",
+);
+assert.ok(
   galleryClient.includes("body.created === false") &&
     galleryClient.includes("/examples`") &&
     yours.includes("Add to Gallery") &&
@@ -55,6 +66,8 @@ assert.ok(
     yours.includes("<VoxelEmptyState") &&
     yours.includes('generation.error?.retryable') &&
     yours.includes('/retry`') &&
+    yours.includes("JSON.stringify(providerKey ? { providerKey } : {})") &&
+    !yours.includes("Add the required API key") &&
     yours.includes("embedded"),
   "saved builds should open privately, reuse lifecycle placeholders, support retry, and expose owner verification details",
 );
@@ -74,6 +87,14 @@ assert.ok(
     adminActions.includes("hideGalleryExample") &&
     adminDashboard.includes("Hide build"),
   "reported Gallery examples should expose the exact-build moderation action",
+);
+assert.ok(
+  adminActions.includes('type: z.literal("hosted_generation_limit")') &&
+    adminActions.includes("setHostedGenerationLimit") &&
+    adminDashboard.includes("Total generations") &&
+    adminDashboard.includes("Hosted generations") &&
+    adminDashboard.includes('name="limit"'),
+  "Gallery admin should show lifetime and hosted generation counts with an editable hosted limit",
 );
 assert.ok(
   galleryService.includes('action: { label: "Appeal", href: galleryUrl("/account") }'),

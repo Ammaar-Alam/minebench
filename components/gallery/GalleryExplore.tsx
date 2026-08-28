@@ -87,7 +87,15 @@ function SubmissionDialog({
   );
 }
 
-function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayload; delayed: boolean }) {
+function GalleryCard({
+  candidate,
+  delayed,
+  sort,
+}: {
+  candidate: GalleryCandidatePayload;
+  delayed: boolean;
+  sort: "top" | "new";
+}) {
   const modelLabels = [...new Set(
     [candidate.cover?.model.label, candidate.alternate?.model.label]
       .filter((label): label is string => Boolean(label)),
@@ -96,7 +104,7 @@ function GalleryCard({ candidate, delayed }: { candidate: GalleryCandidatePayloa
   const duration = formatBuildDuration(candidate.cover?.generationTimeMs);
   return (
     <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[transform,border-color,background-color,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:border-accent/35 hover:bg-card/20 hover:shadow-soft active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
-      <Link href={`/gallery/${candidate.id}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+      <Link href={`/gallery/${candidate.id}${sort === "new" ? "?sort=new" : ""}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
           <div className="relative aspect-[4/3] overflow-hidden bg-bg/45">
             <Image
@@ -233,7 +241,7 @@ export function GalleryExplore({
       <div key={activeSort} className="mb-fade-in">
         {items.length ? (
           <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} />)}
+            {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} sort={activeSort} />)}
           </div>
         ) : (
           <section className="mt-14 py-10 sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">

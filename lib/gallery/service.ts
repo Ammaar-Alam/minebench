@@ -25,6 +25,7 @@ import {
 import { hashVoteSession } from "@/lib/voteBlock";
 
 const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_HOSTED_GENERATION_LIMIT = 2_147_483_647;
 
 async function deliverGalleryEmail(task: Promise<void>, context: string) {
   try {
@@ -208,8 +209,16 @@ function publicCandidate(
 export type GalleryCandidatePayload = ReturnType<typeof publicCandidate>;
 export type GalleryExamplePayload = ReturnType<typeof publicExample>;
 
+type GallerySort = "top" | "new";
+
+function galleryCandidateOrder(sort: GallerySort): Prisma.GalleryCandidateOrderByWithRelationInput[] {
+  return sort === "top"
+    ? [{ upvoteCount: "desc" }, { publishedAt: "desc" }, { id: "desc" }]
+    : [{ publishedAt: "desc" }, { id: "desc" }];
+}
+
 export async function listGalleryCandidates(options: {
-  sort: "top" | "new";
+  sort: GallerySort;
   cursor?: string | null;
   limit?: number;
   sessionId?: string | null;
@@ -241,9 +250,7 @@ export async function listGalleryCandidates(options: {
   const rows = await prisma.galleryCandidate.findMany({
     where: { AND: [publicCandidateWhere, cursorWhere] },
     select: candidateListSelect,
-    orderBy: options.sort === "top"
-      ? [{ upvoteCount: "desc" }, { publishedAt: "desc" }, { id: "desc" }]
-      : [{ publishedAt: "desc" }, { id: "desc" }],
+    orderBy: galleryCandidateOrder(options.sort),
     take: limit + 1,
   });
   const page = rows.slice(0, limit);
@@ -287,6 +294,7 @@ export async function getGalleryCandidate(
     userId?: string | null;
     examplesCursor?: string | null;
     examplesLimit?: number;
+    navigationSort?: GallerySort;
   } = {},
 ) {
   const candidate = await prisma.galleryCandidate.findFirst({
@@ -296,7 +304,7 @@ export async function getGalleryCandidate(
   if (!candidate) return null;
   const limit = Math.max(1, Math.min(options.examplesLimit ?? 24, 48));
   const cursor = decodeGalleryCursor(options.examplesCursor);
-  const [cover, exampleCount, upvoted] = await Promise.all([
+  const [cover, exampleCount, upvoted, previousCandidates, nextCandidates] = await Promise.all([
     prisma.galleryExample.findFirst({
       where: { candidateId: candidate.id, ...publicExampleWhere },
       select: exampleSelect,
@@ -315,6 +323,26 @@ export async function getGalleryCandidate(
         select: { id: true },
       })
       : null,
+    options.navigationSort
+      ? prisma.galleryCandidate.findMany({
+          where: publicCandidateWhere,
+          cursor: { id: candidate.id },
+          skip: 1,
+          take: -1,
+          select: { publicId: true },
+          orderBy: galleryCandidateOrder(options.navigationSort),
+        })
+      : [],
+    options.navigationSort
+      ? prisma.galleryCandidate.findMany({
+          where: publicCandidateWhere,
+          cursor: { id: candidate.id },
+          skip: 1,
+          take: 1,
+          select: { publicId: true },
+          orderBy: galleryCandidateOrder(options.navigationSort),
+        })
+      : [],
   ]);
   const additional = await prisma.galleryExample.findMany({
     where: {
@@ -343,6 +371,13 @@ export async function getGalleryCandidate(
       .map(publicExample),
     nextExamplesCursor: additional.length > limit && last
       ? encodeGalleryCursor({ score: 0, publishedAt: last.createdAt, id: last.id })
+      : null,
+    navigation: options.navigationSort
+      ? {
+          sort: options.navigationSort,
+          previousId: previousCandidates[0]?.publicId ?? null,
+          nextId: nextCandidates[0]?.publicId ?? null,
+        }
       : null,
   };
 }
@@ -880,6 +915,29 @@ export async function setGalleryPublishingSuspension(
   return { suspended: input.suspended, changed: account.changed };
 }
 
+export async function setHostedGenerationLimit(
+  adminId: string,
+  userId: string,
+  limit: number,
+) {
+  await requireMineBenchAdmin(adminId);
+  if (!Number.isInteger(limit) || limit < 0 || limit > MAX_HOSTED_GENERATION_LIMIT) {
+    throw new GalleryServiceError("invalid_request", "Enter a valid hosted generation limit.");
+  }
+  try {
+    return await prisma.user.update({
+      where: { id: userId },
+      data: { hostedGenerationLimit: limit },
+      select: { hostedGenerationCount: true, hostedGenerationLimit: true },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      throw new GalleryServiceError("not_found", "Account not found.");
+    }
+    throw error;
+  }
+}
+
 export async function updateGalleryNickname(userId: string, draft: string) {
   const value = normalizeGalleryNickname(draft);
   if (!value.display) {
@@ -1312,6 +1370,9 @@ export async function getGalleryAdminDashboard(
         publicNickname: true,
         lastSeenAt: true,
         gallerySuspendedAt: true,
+        totalGenerationCount: true,
+        hostedGenerationCount: true,
+        hostedGenerationLimit: true,
       },
     }),
     prisma.publicSessionActivity.findMany({
@@ -1332,6 +1393,9 @@ export async function getGalleryAdminDashboard(
             email: true,
             publicNickname: true,
             gallerySuspendedAt: true,
+            totalGenerationCount: true,
+            hostedGenerationCount: true,
+            hostedGenerationLimit: true,
           },
         },
       },
@@ -1355,6 +1419,9 @@ export async function getGalleryAdminDashboard(
     online: boolean;
     suspended: boolean;
     voteBlocked: boolean;
+    totalGenerationCount: number | null;
+    hostedGenerationCount: number | null;
+    hostedGenerationLimit: number | null;
   }>();
 
   for (const account of accounts) {
@@ -1367,6 +1434,9 @@ export async function getGalleryAdminDashboard(
       online: false,
       suspended: Boolean(account.gallerySuspendedAt),
       voteBlocked: blockedUsers.has(account.id),
+      totalGenerationCount: account.totalGenerationCount,
+      hostedGenerationCount: account.hostedGenerationCount,
+      hostedGenerationLimit: account.hostedGenerationLimit,
     });
   }
 
@@ -1390,6 +1460,9 @@ export async function getGalleryAdminDashboard(
         online: Boolean(existing?.online || online),
         suspended: Boolean(session.user.gallerySuspendedAt),
         voteBlocked: Boolean(existing?.voteBlocked || blockedUsers.has(session.userId) || sessionBlocked),
+        totalGenerationCount: session.user.totalGenerationCount,
+        hostedGenerationCount: session.user.hostedGenerationCount,
+        hostedGenerationLimit: session.user.hostedGenerationLimit,
       });
       continue;
     }
@@ -1402,6 +1475,9 @@ export async function getGalleryAdminDashboard(
       online,
       suspended: false,
       voteBlocked: sessionBlocked,
+      totalGenerationCount: null,
+      hostedGenerationCount: null,
+      hostedGenerationLimit: null,
     });
   }
 
@@ -1463,6 +1539,9 @@ async function resolveGalleryAdminPerson(personId: string) {
         lastSeenAt: true,
         gallerySuspendedAt: true,
         gallerySuspensionReason: true,
+        totalGenerationCount: true,
+        hostedGenerationCount: true,
+        hostedGenerationLimit: true,
         publicSessionActivities: {
           orderBy: { lastSeenAt: "desc" },
           take: 50,
@@ -1492,6 +1571,9 @@ async function resolveGalleryAdminPerson(personId: string) {
       location: latest ? adminLocation(latest) : null,
       suspendedAt: user.gallerySuspendedAt,
       suspensionReason: user.gallerySuspensionReason,
+      totalGenerationCount: user.totalGenerationCount,
+      hostedGenerationCount: user.hostedGenerationCount,
+      hostedGenerationLimit: user.hostedGenerationLimit,
     };
   }
 
@@ -1519,6 +1601,9 @@ async function resolveGalleryAdminPerson(personId: string) {
       location: adminLocation(session),
       suspendedAt: null,
       suspensionReason: null,
+      totalGenerationCount: null,
+      hostedGenerationCount: null,
+      hostedGenerationLimit: null,
     };
   }
 
@@ -1642,6 +1727,9 @@ export async function getGalleryAdminPerson(adminId: string, personId: string) {
     online: Boolean(person.lastSeenAt && person.lastSeenAt.getTime() >= Date.now() - PUBLIC_SESSION_ONLINE_MS),
     suspended: Boolean(person.suspendedAt),
     suspensionReason: person.suspensionReason,
+    totalGenerationCount: person.totalGenerationCount,
+    hostedGenerationCount: person.hostedGenerationCount,
+    hostedGenerationLimit: person.hostedGenerationLimit,
     voteBlocked: Boolean(voteBlocked),
     contributions: contributions.map((candidate) => ({
       publicId: candidate.publicId,

@@ -67,6 +67,9 @@ model User {
   gallerySuspensionReason  String?   @db.VarChar(240)
   gallerySuspendedById     String?   @db.Uuid
   galleryRestoredAt        DateTime?
+  totalGenerationCount     Int       @default(0)
+  hostedGenerationCount    Int       @default(0)
+  hostedGenerationLimit    Int       @default(100)
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
@@ -597,6 +600,7 @@ model CustomBuild {
   openRouterModelId String?
   legacyCustomBaseUrl String? @map("customBaseUrl") @ignore
   preferOpenRouter  Boolean @default(false)
+  usesHostedGeneration Boolean @default(false)
   reasoning         String?
 
   blockCount       Int?

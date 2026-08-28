@@ -11,6 +11,7 @@ import {
   setGalleryCandidateHidden,
   setGalleryPersonVoteBlocked,
   setGalleryPublishingSuspension,
+  setHostedGenerationLimit,
 } from "@/lib/gallery/service";
 
 const mutationSchema = z.discriminatedUnion("type", [
@@ -28,6 +29,11 @@ const mutationSchema = z.discriminatedUnion("type", [
     reason: z.string().trim().max(240).optional(),
   }),
   z.object({ type: z.literal("votes_blocked"), personId: z.string().min(1).max(120), blocked: z.boolean() }),
+  z.object({
+    type: z.literal("hosted_generation_limit"),
+    userId: z.string().uuid(),
+    limit: z.number().int().min(0).max(2_147_483_647),
+  }),
 ]);
 
 async function adminId() {
@@ -70,6 +76,9 @@ export async function mutateGalleryAdmin(input: unknown) {
         break;
       case "votes_blocked":
         await setGalleryPersonVoteBlocked(actorId, parsed.data.personId, parsed.data.blocked);
+        break;
+      case "hosted_generation_limit":
+        await setHostedGenerationLimit(actorId, parsed.data.userId, parsed.data.limit);
         break;
     }
     refreshGalleryAdmin();

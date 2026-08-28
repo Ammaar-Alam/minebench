@@ -6,7 +6,7 @@ import { retrySavedGeneration } from "@/lib/generations/service";
 export const runtime = "nodejs";
 
 const retryRequest = z.object({
-  providerKey: z.string().trim().min(1).max(4000),
+  providerKey: z.string().trim().min(1).max(4000).optional(),
   customBaseUrl: z.string().trim().url().max(4000).optional(),
 });
 

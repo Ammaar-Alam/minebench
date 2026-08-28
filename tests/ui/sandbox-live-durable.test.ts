@@ -50,6 +50,7 @@ const requestModelBody = functionBodyText("customBuildRequestModel");
 const runBody = functionBodyText("runGenerate");
 const stopBody = functionBodyText("stopGenerate");
 const watchBody = functionBodyText("watchCustomBuild");
+const retryBody = functionBodyText("retryCustomBuild");
 const completedBuildBody = functionBodyText("readCustomBuildViewer");
 const inputResetEffect = effectBodyTextContaining("lastGenerateInputRef.current === inputSignature");
 const assignIndex = durableBody.indexOf("customBuildAbortRef.current = args.abortController");
@@ -203,6 +204,20 @@ assert.ok(
     sourceText.includes('useState(() => initialPrompt ?? "")') &&
     !sourceText.includes("a pirate ship with sails"),
   "Generate should start blank with Gemini 3.7 Flash selected",
+);
+assert.ok(
+  sourceText.includes("HOSTED_GEMINI_NOTICE_KEY") &&
+    sourceText.includes("Gemini 3.7 Flash is free") &&
+    sourceText.includes("if (!signedIn || !hostedGeminiAvailable) return") &&
+    sourceText.includes("window.localStorage.getItem(HOSTED_GEMINI_NOTICE_KEY)") &&
+    sourceText.includes("window.localStorage.setItem(HOSTED_GEMINI_NOTICE_KEY") &&
+    sourceText.includes("!providerKeys.gemini?.trim()") &&
+    sourceText.includes("!providerKeys.openrouter?.trim()") &&
+    sourceText.includes("`${model.displayName} · Free`") &&
+    retryBody.includes("...(providerKey ? { providerKey } : {})") &&
+    !retryBody.includes("Add the required API key") &&
+    !sourceText.includes("hostedGenerationCount"),
+  "the signed-in Gemini offer should announce once, defer to user keys, support hosted retries, and avoid a live usage counter",
 );
 
 console.log("sandbox saved-generation contract checks passed");
