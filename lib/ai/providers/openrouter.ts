@@ -4,6 +4,7 @@ import {
   modelUsesDefaultSampling,
 } from "@/lib/ai/modelRequestProfiles";
 import { attachAbortSignal } from "@/lib/ai/providers/abort";
+import { sanitizeGeminiJsonSchema } from "@/lib/ai/providers/gemini";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
@@ -206,7 +207,10 @@ export async function openrouterGenerateText(params: {
 
   const baseUrl = process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api";
   const maxTokens = params.maxOutputTokens ?? 8192;
-  const responseFormat = !params.jsonSchema
+  const jsonSchema = params.modelId.startsWith("google/gemini-")
+    ? (sanitizeGeminiJsonSchema(params.jsonSchema) as Record<string, unknown> | undefined)
+    : params.jsonSchema;
+  const responseFormat = !jsonSchema
     ? undefined
     : params.modelId === "z-ai/glm-5.3" || params.modelId === "z-ai/glm-5.3-flash"
       ? { type: "json_object" }
@@ -215,7 +219,7 @@ export async function openrouterGenerateText(params: {
           json_schema: {
             name: VOXEL_BUILD_JSON_SCHEMA_NAME,
             strict: true,
-            schema: params.jsonSchema,
+            schema: jsonSchema,
           },
         };
   const reasoningAttempts = reasoningConfigFallbacks({
