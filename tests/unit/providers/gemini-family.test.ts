@@ -214,6 +214,35 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     "Gemini schema sanitization should not mutate the shared tool schema",
   );
 
+  for (const expected of EXPECTATIONS) {
+    const openRouterTool = await runGeneration(capture, {
+      modelKey: expected.catalog.key,
+      maxAttempts: 1,
+      enableTools: true,
+      providerKeys: { openrouter: "test-openrouter-key" },
+    });
+    const openRouterToolRequest = openRouterTool.requests.find(
+      (request) => request.body.model === expected.catalog.openRouterModelId,
+    )?.body;
+    assert.ok(
+      openRouterToolRequest,
+      `OpenRouter ${expected.catalog.displayName} tool-schema request should be captured`,
+    );
+    const openRouterToolFormat = openRouterToolRequest.response_format as {
+      json_schema?: { schema?: unknown };
+    };
+    assert.deepEqual(
+      openRouterToolFormat.json_schema?.schema,
+      toolGenerationConfig.responseJsonSchema,
+      `OpenRouter ${expected.catalog.displayName} should receive the direct Gemini schema`,
+    );
+  }
+  assert.equal(
+    schemaContainsKey(toolSchema, "minLength"),
+    true,
+    "OpenRouter Gemini schema sanitization should not mutate the shared tool schema",
+  );
+
   // A terminal schema rejection is not retried and never drops the schema
   capture.respondWith((request) =>
     request.url.includes("generativelanguage.googleapis.com")

@@ -31,7 +31,7 @@ const GEMINI_SUPPORTED_JSON_SCHEMA_KEYS = new Set([
   "propertyOrdering",
 ]);
 
-function sanitizeGeminiJsonSchema(value: unknown): unknown {
+export function sanitizeGeminiJsonSchema(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sanitizeGeminiJsonSchema);
   if (!value || typeof value !== "object") return value;
 
