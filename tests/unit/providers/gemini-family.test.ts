@@ -149,15 +149,10 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     assert.deepEqual(openRouterRequest.reasoning, { effort: "high" });
     assert.equal(Object.hasOwn(openRouterRequest, "temperature"), false);
     assert.deepEqual(openRouterRequest.provider, { require_parameters: true });
-    const responseFormat = openRouterRequest.response_format as {
-      type?: unknown;
-      json_schema?: { strict?: unknown; schema?: unknown };
-    };
-    assert.equal(responseFormat?.type, "json_schema");
-    assert.equal(responseFormat?.json_schema?.strict, true);
-    assert.ok(
-      responseFormat?.json_schema?.schema,
-      "OpenRouter request should include the voxel schema",
+    assert.deepEqual(
+      openRouterRequest.response_format,
+      { type: "json_object" },
+      `OpenRouter ${model.displayName} should avoid broken Google schema translation`,
     );
     assertTraceLine(
       openRouter.traces,
@@ -236,6 +231,14 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
       openRouterToolRequest,
       `OpenRouter ${model.displayName} tool-schema request should be captured`,
     );
+    if (model.openRouterModelId?.startsWith("google/gemini-")) {
+      assert.deepEqual(
+        openRouterToolRequest.response_format,
+        { type: "json_object" },
+        `OpenRouter ${model.displayName} tool mode should avoid broken Google schema translation`,
+      );
+      continue;
+    }
     const openRouterToolFormat = openRouterToolRequest.response_format as {
       json_schema?: { schema?: unknown };
     };

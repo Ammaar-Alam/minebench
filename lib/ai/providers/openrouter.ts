@@ -214,7 +214,9 @@ export async function openrouterGenerateText(params: {
     : params.jsonSchema;
   const responseFormat = !jsonSchema
     ? undefined
-    : params.modelId === "z-ai/glm-5.3" || params.modelId === "z-ai/glm-5.3-flash"
+    : params.modelId.startsWith("google/gemini-") ||
+        params.modelId === "z-ai/glm-5.3" ||
+        params.modelId === "z-ai/glm-5.3-flash"
       ? { type: "json_object" }
       : {
           type: "json_schema",
