@@ -240,10 +240,10 @@ async function main() {
       const extraId = randomUUID();
       const extraPublicId = `cb_${suffix}extra${index}`;
       const model = index === 0
-        ? { key: "gemini_3_7_flash", provider: "google", id: "gemini-3.7-flash", label: "Gemini 3.7 Flash" }
+        ? { kind: "catalog", key: "gemini_3_7_flash", provider: "google", id: "gemini-3.7-flash", label: "Gemini 3.7 Flash" }
         : index === 2
-          ? { key: "openai_gpt_5_6_sol", provider: "openai", id: "gpt-5.6-sol", label: "GPT 5.6 Sol Pro" }
-          : { key: "openai_gpt_5_4_mini", provider: "openai", id: "gpt-5.4-mini", label: "GPT 5.4 Mini" };
+          ? { kind: "catalog", key: "openai_gpt_5_6_sol", provider: "openai", id: "gpt-5.6-sol", label: "GPT 5.6 Sol Pro" }
+          : { kind: "custom", key: null, provider: "custom", id: `local-v1-${suffix}`, label: "Local Forge" };
       await db.customBuild.create({
         data: {
           id: extraId,
@@ -255,7 +255,7 @@ async function main() {
           promptSha256: `${index + 1}`.repeat(64),
           gridSize: 64,
           palette: "simple",
-          modelKind: "catalog",
+          modelKind: model.kind,
           modelKey: model.key,
           modelProvider: model.provider,
           modelId: model.id,
@@ -289,12 +289,15 @@ async function main() {
     assert.ok(newest.items[0]?.alternate, "browse cards should include another visible example");
     assert.deepEqual(
       newest.items[0]?.modelLabels,
-      ["GPT 5.4 Mini", "Gemini 3.7 Flash", "GPT 5.6 Sol Pro"],
+      ["GPT 5.4 Mini", "Gemini 3.7 Flash", `Custom · Local Forge · local-v1-${suffix}`, "GPT 5.6 Sol Pro"],
       "browse cards should expose distinct model labels in example order",
     );
     const hiddenModelSearch = await listGalleryCandidates({ sort: "top", limit: 10, query: "sol pro" });
     assert.equal(hiddenModelSearch.items[0]?.id, created.candidate.id, "search should include models beyond the card previews");
     assert.deepEqual(hiddenModelSearch.items[0]?.matchedModelLabels, ["GPT 5.6 Sol Pro"]);
+    const customModelSearch = await listGalleryCandidates({ sort: "top", limit: 10, query: "custom" });
+    assert.equal(customModelSearch.items[0]?.id, created.candidate.id, "search should include the displayed custom-model prefix");
+    assert.deepEqual(customModelSearch.items[0]?.matchedModelLabels, [`Custom · Local Forge · local-v1-${suffix}`]);
     const firstExamples = await getGalleryCandidate(created.candidate.id, { examplesLimit: 2 });
     assert.equal(firstExamples?.exampleCount, 4);
     assert.equal(firstExamples?.examples.length, 3, "the fixed cover should precede the first page");
