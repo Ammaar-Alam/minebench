@@ -199,7 +199,13 @@ function publicCandidate(
   viewerUserId?: string | null,
   alternate?: ExampleRow | null,
   matchedModels: GalleryModelRow[] = [],
+  models: GalleryModelRow[] = [],
 ) {
+  const modelLabels = [...new Set(
+    [cover?.customBuild, alternate?.customBuild, ...models]
+      .filter((model): model is GalleryModelRow => Boolean(model))
+      .map((model) => publicGalleryModel(model).label),
+  )];
   return {
     id: candidate.publicId,
     prompt: candidate.promptText,
@@ -217,6 +223,7 @@ function publicCandidate(
     exampleCount,
     cover: cover ? publicExample(cover) : null,
     alternate: alternate ? publicExample(alternate) : null,
+    modelLabels,
     matchedModelLabels: [...new Set(matchedModels.map((model) => publicGalleryModel(model).label))],
   };
 }
@@ -296,41 +303,50 @@ export async function listGalleryCandidates(options: {
     options.sessionId ? { sessionId: options.sessionId } : null,
     options.userId ? { userId: options.userId } : null,
   ].filter((value): value is NonNullable<typeof value> => Boolean(value));
-  const [votes, matchingExamples] = await Promise.all([
+  const [votes, modelExamples] = await Promise.all([
     voteIdentities.length > 0
       ? prisma.galleryVote.findMany({
           where: { OR: voteIdentities, candidateId: { in: page.map((row) => row.id) } },
           select: { candidateId: true },
         })
       : [],
-    searchExampleWhere && page.length > 0
+    page.length > 0
       ? prisma.galleryExample.findMany({
-          where: { candidateId: { in: page.map((row) => row.id) }, ...searchExampleWhere },
+          where: { candidateId: { in: page.map((row) => row.id) }, ...publicExampleWhere },
           select: { candidateId: true, customBuild: { select: galleryModelSelect } },
           orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         })
       : [],
   ]);
   const upvoted = new Set(votes.map((vote) => vote.candidateId));
-  const matchedModels = new Map<string, GalleryModelRow[]>();
-  for (const example of matchingExamples) {
-    const models = matchedModels.get(example.candidateId) ?? [];
+  const modelsByCandidate = new Map<string, GalleryModelRow[]>();
+  for (const example of modelExamples) {
+    const models = modelsByCandidate.get(example.candidateId) ?? [];
     models.push(example.customBuild);
-    matchedModels.set(example.candidateId, models);
+    modelsByCandidate.set(example.candidateId, models);
   }
+  const modelQuery = query?.toLowerCase();
   const last = page.at(-1);
   return {
-    items: page.map((candidate) =>
-      publicCandidate(
+    items: page.map((candidate) => {
+      const models = modelsByCandidate.get(candidate.id) ?? [];
+      const matchedModels = modelQuery
+        ? models.filter((model) =>
+            model.modelDisplayName.toLowerCase().includes(modelQuery)
+            || model.modelId.toLowerCase().includes(modelQuery),
+          )
+        : [];
+      return publicCandidate(
         candidate,
         candidate.examples[0] ?? null,
         candidate._count.examples,
         upvoted.has(candidate.id),
         options.userId,
         candidate.examples[1] ?? null,
-        matchedModels.get(candidate.id),
-      ),
-    ),
+        matchedModels,
+        models,
+      );
+    }),
     nextCursor: rows.length > limit && last
       ? encodeGalleryCursor({
           score: options.sort === "top" ? last.upvoteCount : 0,

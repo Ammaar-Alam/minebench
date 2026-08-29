@@ -124,12 +124,20 @@ assert.ok(
   explore.includes("VoxelEmptyState") &&
     explore.includes("candidate.cover?.previewUrl") &&
     explore.includes("candidate.alternate?.previewUrl") &&
-    explore.includes("modelLabels.join") &&
+    explore.includes("visibleModelLabels.join") &&
     explore.includes("candidate.cover?.jsonBytes") &&
     explore.includes("candidate.cover?.generationTimeMs") &&
-    explore.includes("candidate.exampleCount - 2") &&
+    explore.includes("candidate.modelLabels") &&
+    explore.includes("hiddenModelLabels.length") &&
+    explore.includes('role="tooltip"') &&
     !explore.includes("featured"),
-  "Gallery cards should keep a clear media frame and reveal additional model builds without extra requests",
+  "Gallery cards should keep a clear media frame and disclose distinct hidden models without extra client requests",
+);
+assert.ok(
+  explore.includes("onLoad={() => setCoverLoaded(true)}") &&
+    explore.includes('coverLoaded ? "opacity-100" : "opacity-0"') &&
+    explore.includes("onLoad={() => setAlternateLoaded(true)}"),
+  "Gallery cards should retain their media skeletons until each preview is ready",
 );
 assert.ok(
   explore.includes("candidate.matchedModelLabels") &&
@@ -143,6 +151,8 @@ assert.ok(
 assert.ok(
   !page.includes("key={sort}") &&
     explore.includes("changeSort") &&
+    explore.includes("requestedSortRef.current = nextSort") &&
+    explore.includes("const requestSort = requestedSortRef.current") &&
     explore.includes("window.history.replaceState") &&
     explore.includes("key={activeSort}"),
   "Top and New should replace only the Gallery results and animate the new grid",

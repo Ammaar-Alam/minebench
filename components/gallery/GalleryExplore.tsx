@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useDeferredValue, useRef, useState } from "react";
+import { useEffect, useDeferredValue, useId, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
@@ -147,49 +147,80 @@ function GalleryCard({
   delayed: boolean;
   sort: "top" | "new";
 }) {
+  const modelsTooltipId = useId();
+  const [coverLoaded, setCoverLoaded] = useState(false);
+  const [alternateLoaded, setAlternateLoaded] = useState(false);
   const modelLabels = [...new Set(
     [
       ...candidate.matchedModelLabels,
-      candidate.cover?.model.label,
-      candidate.alternate?.model.label,
-    ]
-      .filter((label): label is string => Boolean(label)),
+      ...candidate.modelLabels,
+    ],
   )];
   const visibleModelLabels = modelLabels.slice(0, 2);
+  const hiddenModelLabels = modelLabels.slice(2);
   const jsonSize = formatBuildJsonSize(candidate.cover?.jsonBytes);
   const duration = formatBuildDuration(candidate.cover?.generationTimeMs);
   return (
     <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] duration-200 ease-out hover:border-accent/35 hover:bg-card/20 motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
-      <Link href={`/gallery/${candidate.id}${sort === "new" ? "?sort=new" : ""}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+      <Link href={`/gallery/${candidate.id}${sort === "new" ? "?sort=new" : ""}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
           <div className="relative aspect-[4/3] overflow-hidden bg-bg/45">
+            <div aria-hidden="true" className={`absolute inset-0 bg-card/25 transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none motion-reduce:transition-none ${coverLoaded ? "pointer-events-none opacity-0" : "animate-pulse opacity-100"}`} />
             <Image
               src={candidate.cover.previewUrl}
               alt=""
               fill
               unoptimized
               sizes="(min-width: 1536px) 25vw, (min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
-              className="object-contain p-2 transition-transform duration-300 ease-out group-hover:scale-[1.025] motion-reduce:transition-none"
+              onLoad={() => setCoverLoaded(true)}
+              onError={() => setCoverLoaded(true)}
+              className={`object-contain p-2 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.025] motion-reduce:transition-none ${coverLoaded ? "opacity-100" : "opacity-0"}`}
             />
             {candidate.alternate?.previewUrl ? (
               <span aria-hidden="true" className="absolute bottom-3 right-3 aspect-square w-[28%] overflow-hidden rounded-sm border border-border/90 bg-bg ring-2 ring-bg transition-transform duration-300 ease-out group-hover:-translate-y-0.5 group-hover:scale-[1.03] motion-reduce:transform-none motion-reduce:transition-none">
-                <Image src={candidate.alternate.previewUrl} alt="" fill unoptimized sizes="8rem" className="object-contain p-1" />
+                <span className={`absolute inset-0 bg-card/25 transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none motion-reduce:transition-none ${alternateLoaded ? "pointer-events-none opacity-0" : "animate-pulse opacity-100"}`} />
+                <Image src={candidate.alternate.previewUrl} alt="" fill unoptimized sizes="8rem" onLoad={() => setAlternateLoaded(true)} onError={() => setAlternateLoaded(true)} className={`object-contain p-1 transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${alternateLoaded ? "opacity-100" : "opacity-0"}`} />
               </span>
             ) : null}
           </div>
         ) : <div className="relative aspect-[4/3] bg-bg/45"><VoxelEmptyState /></div>}
-        <div className="flex flex-1 flex-col gap-3 p-5">
+        <div className="flex flex-col gap-3 p-5 pb-0">
           <div className="flex items-center justify-between gap-3 text-xs text-muted">
             <span>{candidate.attribution}</span>
             {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
           </div>
           <h2 className="line-clamp-3 text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none">{candidate.prompt}</h2>
-          <div className="mt-auto flex flex-col gap-2 pt-3">
-            {visibleModelLabels.length ? <p className="flex min-w-0 items-center gap-2 text-sm text-muted" title={modelLabels.join(", ")}><span className="truncate">{visibleModelLabels.join(" · ")}</span>{candidate.exampleCount > 2 ? <span className="shrink-0">+{candidate.exampleCount - 2}</span> : null}</p> : null}
-            {candidate.cover ? <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted/80">{candidate.cover.blockCount != null ? <span>{candidate.cover.blockCount.toLocaleString()} blocks</span> : null}{jsonSize ? <span>{jsonSize} JSON</span> : null}{duration ? <span>{duration}</span> : null}</p> : null}
-          </div>
         </div>
       </Link>
+      <div className="mt-auto flex flex-col gap-2 px-5 pb-5 pt-6">
+        {visibleModelLabels.length ? (
+          <p className="flex min-w-0 items-center gap-2 text-sm text-muted">
+            <span className="truncate" title={visibleModelLabels.join(", ")}>{visibleModelLabels.join(" · ")}</span>
+            {hiddenModelLabels.length ? (
+              <span className="group/models relative inline-flex shrink-0">
+                <button
+                  type="button"
+                  aria-label={`${hiddenModelLabels.length} more ${hiddenModelLabels.length === 1 ? "model" : "models"}`}
+                  aria-describedby={modelsTooltipId}
+                  onClick={(event) => event.currentTarget.focus()}
+                  onKeyDown={(event) => { if (event.key === "Escape") event.currentTarget.blur(); }}
+                  className="-my-3 inline-flex min-h-11 items-center rounded-sm px-1 text-muted underline decoration-dotted underline-offset-4 transition-colors hover:text-fg focus-visible:outline-none focus-visible:text-fg motion-reduce:transition-none"
+                >
+                  +{hiddenModelLabels.length}
+                </button>
+                <span
+                  id={modelsTooltipId}
+                  role="tooltip"
+                  className="pointer-events-none invisible absolute bottom-[calc(100%+0.25rem)] right-0 z-20 w-max max-w-56 translate-y-1 rounded-md border border-border bg-bg px-3 py-2 text-left text-xs leading-relaxed text-fg opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover/models:visible group-hover/models:translate-y-0 group-hover/models:opacity-100 group-focus-within/models:visible group-focus-within/models:translate-y-0 group-focus-within/models:opacity-100 motion-reduce:transform-none motion-reduce:transition-none"
+                >
+                  {hiddenModelLabels.map((label) => <span key={label} className="block">{label}</span>)}
+                </span>
+              </span>
+            ) : null}
+          </p>
+        ) : null}
+        {candidate.cover ? <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted/80">{candidate.cover.blockCount != null ? <span>{candidate.cover.blockCount.toLocaleString()} blocks</span> : null}{jsonSize ? <span>{jsonSize} JSON</span> : null}{duration ? <span>{duration}</span> : null}</p> : null}
+      </div>
       <div className="flex items-center justify-between border-t border-border/40 px-3 py-1">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
         <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
@@ -224,6 +255,8 @@ export function GalleryExplore({
   const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const activeSortRef = useRef(activeSort);
+  const requestedSortRef = useRef(activeSort);
+  const loadedSortRef = useRef(activeSort);
   const loadedQueryRef = useRef("");
   const firstPageRequestRef = useRef(0);
   const normalizedQuery = deferredQuery.trim();
@@ -235,10 +268,13 @@ export function GalleryExplore({
     setCursor(initialCursor);
     setActiveSort(sort);
     activeSortRef.current = sort;
+    requestedSortRef.current = sort;
+    loadedSortRef.current = sort;
   }, [initialCursor, initialItems, sort]);
 
   useEffect(() => {
-    if (normalizedQuery === loadedQueryRef.current) return;
+    const requestSort = requestedSortRef.current;
+    if (normalizedQuery === loadedQueryRef.current && requestSort === loadedSortRef.current) return;
     const requestId = ++firstPageRequestRef.current;
     const controller = new AbortController();
     const timeout = window.setTimeout(async () => {
@@ -247,7 +283,7 @@ export function GalleryExplore({
       setLoadError(null);
       try {
         const response = await fetch(
-          galleryCandidatesUrl(activeSortRef.current, normalizedQuery),
+          galleryCandidatesUrl(requestSort, normalizedQuery),
           { cache: "no-store", signal: controller.signal },
         );
         const page = (await response.json()) as { items: GalleryCandidatePayload[]; nextCursor: string | null };
@@ -255,7 +291,14 @@ export function GalleryExplore({
         if (requestId !== firstPageRequestRef.current) return;
         setItems(page.items);
         setCursor(page.nextCursor);
+        const sortChanged = activeSortRef.current !== requestSort;
+        setActiveSort(requestSort);
+        activeSortRef.current = requestSort;
+        loadedSortRef.current = requestSort;
         loadedQueryRef.current = normalizedQuery;
+        if (sortChanged) {
+          window.history.replaceState(window.history.state, "", requestSort === "new" ? "/gallery?sort=new" : "/gallery");
+        }
       } catch {
         if (!controller.signal.aborted && requestId === firstPageRequestRef.current) {
           setLoadError("Gallery unavailable");
@@ -295,6 +338,7 @@ export function GalleryExplore({
 
   async function changeSort(nextSort: "top" | "new") {
     if (nextSort === activeSort || loading || loadingMore) return;
+    requestedSortRef.current = nextSort;
     const requestId = ++firstPageRequestRef.current;
     const query = searchQuery.trim();
     setLoading(true);
@@ -308,10 +352,14 @@ export function GalleryExplore({
       setCursor(page.nextCursor);
       setActiveSort(nextSort);
       activeSortRef.current = nextSort;
+      loadedSortRef.current = nextSort;
       loadedQueryRef.current = query;
       window.history.replaceState(window.history.state, "", nextSort === "new" ? "/gallery?sort=new" : "/gallery");
     } catch {
-      if (requestId === firstPageRequestRef.current) setLoadError("Gallery unavailable");
+      if (requestId === firstPageRequestRef.current) {
+        requestedSortRef.current = activeSortRef.current;
+        setLoadError("Gallery unavailable");
+      }
     } finally {
       if (requestId === firstPageRequestRef.current) setLoading(false);
     }
