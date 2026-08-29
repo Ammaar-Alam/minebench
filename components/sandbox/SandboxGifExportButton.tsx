@@ -48,6 +48,9 @@ const SINGLE_FRAME_DELAY_MS = 40;
 const CREATOR_FRAME_RATE = 30;
 const CREATOR_FRAME_COUNT = 180;
 const CREATOR_DURATION_MS = 6000;
+const CREATOR_MP4_BITRATE = 24_000_000;
+const CREATOR_MP4_QUANTIZER = 12;
+const CREATOR_MP4_METADATA_FONT_SIZE = 14;
 const SOCIAL_SAFE_CAMERA_DISTANCE_SCALE = 1.18;
 const SOCIAL_SAFE_WATERMARK_FONT_SIZE = 16;
 const COMPARISON_PALETTE_SAMPLE_COUNT = 12;
@@ -565,12 +568,14 @@ function drawPanel(
     capture: HTMLCanvasElement;
     captureRect: ExportRect;
     contentBounds: { left: number; right: number } | null;
+    highFidelityMetadata: boolean;
   },
 ) {
-  const { x, y, width, height, target, capture, captureRect, contentBounds } = opts;
+  const { x, y, width, height, target, capture, captureRect, contentBounds, highFidelityMetadata } = opts;
   const { x: captureX, y: captureY, width: captureWidth, height: captureHeight } = captureRect;
   const metaLeft = Math.max(x + PANEL_PAD, contentBounds?.left ?? x + PANEL_PAD);
   const metaRight = Math.min(x + width - PANEL_PAD, contentBounds?.right ?? x + width - PANEL_PAD);
+  const metadataFontSize = highFidelityMetadata ? CREATOR_MP4_METADATA_FONT_SIZE : 11;
 
   ctx.save();
   roundedRectPath(ctx, x, y, width, height, PANEL_RADIUS);
@@ -582,23 +587,29 @@ function drawPanel(
   ctx.restore();
 
   ctx.fillStyle = "rgba(125, 211, 252, 0.96)";
-  ctx.font = '700 11px "IBM Plex Sans", "Segoe UI", sans-serif';
+  ctx.font = `700 ${metadataFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
   ctx.textBaseline = "top";
   ctx.fillText(target.company.toUpperCase(), metaLeft, y + 12);
 
   const blockLabel = `${target.blockCount.toLocaleString()} blocks`;
-  ctx.font = '600 11px "IBM Plex Sans", "Segoe UI", sans-serif';
-  const badgeWidth = Math.ceil(ctx.measureText(blockLabel).width + 16);
+  ctx.font = `600 ${metadataFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+  const badgePaddingX = highFidelityMetadata ? 10 : 8;
+  const badgeHeight = highFidelityMetadata ? 26 : 22;
+  const badgeWidth = Math.ceil(ctx.measureText(blockLabel).width + badgePaddingX * 2);
   const badgeX = metaRight - badgeWidth;
-  const badgeY = y + 14;
-  roundedRectPath(ctx, badgeX, badgeY, badgeWidth, 22, 11);
+  const badgeY = y + (highFidelityMetadata ? 12 : 14);
+  roundedRectPath(ctx, badgeX, badgeY, badgeWidth, badgeHeight, badgeHeight / 2);
   ctx.fillStyle = "rgba(30, 41, 59, 0.9)";
   ctx.fill();
   ctx.strokeStyle = "rgba(148, 163, 184, 0.34)";
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = "rgba(226, 232, 240, 0.96)";
-  ctx.fillText(blockLabel, badgeX + 8, badgeY + 5);
+  ctx.fillText(
+    blockLabel,
+    badgeX + badgePaddingX,
+    badgeY + Math.floor((badgeHeight - metadataFontSize) / 2),
+  );
 
   ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
   ctx.font = '700 23px "Sora", "Avenir Next", "Segoe UI", sans-serif';
@@ -627,6 +638,7 @@ function renderCompositeFrame(
   targets: SandboxGifExportTarget[],
   rotationBases: GifExportRotationBases,
   angle: number,
+  highFidelityMetadata = false,
 ) {
   drawBaseBackdrop(ctx, layout.width, layout.height, layout.header);
   const contentBounds = layout.safeInsets
@@ -662,6 +674,7 @@ function renderCompositeFrame(
       capture,
       captureRect,
       contentBounds,
+      highFidelityMetadata,
     });
   }
 }
@@ -885,12 +898,17 @@ async function buildMp4Blob(
   throwIfAborted(signal);
 
   const { width, height } = profile;
-  const quality = new Quality("very-high");
+  const quality = new Quality({
+    bitrate: CREATOR_MP4_BITRATE,
+    quantizer: CREATOR_MP4_QUANTIZER,
+    bitrateMode: "variable",
+  });
   const supported = await canEncodeVideo("avc", {
     width,
     height,
     quality,
     latencyMode: "quality",
+    contentHint: "detail",
   });
   if (!supported) {
     throw new Error("MP4 export isn’t supported in this browser. Choose GIF in Account settings.");
@@ -913,6 +931,7 @@ async function buildMp4Blob(
     quality,
     latencyMode: "quality",
     keyFrameInterval: 2,
+    contentHint: "detail",
   });
   output.addVideoTrack(videoSource, { frameRate: runtime.frameRate });
   const rotationBases = getExportRotationBases(targets);
@@ -932,7 +951,7 @@ async function buildMp4Blob(
     for (let frame = 0; frame < runtime.frameCount; frame += 1) {
       throwIfAborted(signal);
       const t = frame / runtime.frameCount;
-      renderCompositeFrame(frameCtx, layout, targets, rotationBases, t * Math.PI * 2);
+      renderCompositeFrame(frameCtx, layout, targets, rotationBases, t * Math.PI * 2, true);
       await videoSource.add(frame / runtime.frameRate, frameDuration);
       onProgress?.(frame + 1, runtime.frameCount);
 

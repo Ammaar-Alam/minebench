@@ -141,6 +141,8 @@ const singleFrameDelayMs = readNumericConst("SINGLE_FRAME_DELAY_MS");
 const creatorFrameRate = readNumericConst("CREATOR_FRAME_RATE");
 const creatorFrameCount = readNumericConst("CREATOR_FRAME_COUNT");
 const creatorDurationMs = readNumericConst("CREATOR_DURATION_MS");
+const creatorMp4Bitrate = readNumericConst("CREATOR_MP4_BITRATE");
+const creatorMp4Quantizer = readNumericConst("CREATOR_MP4_QUANTIZER");
 
 assert.equal(comparisonFrameCount, 108);
 assert.equal(singleFrameCount, 135);
@@ -151,6 +153,9 @@ assert.equal(singleFrameCount * singleFrameDelayMs, 5400);
 assert.equal(creatorFrameRate, 30);
 assert.equal(creatorFrameCount, 180);
 assert.equal(creatorDurationMs, 6000);
+assert.equal(creatorMp4Bitrate, 24_000_000);
+assert.equal(creatorMp4Quantizer, 12);
+assert.equal(readNumericConst("CREATOR_MP4_METADATA_FONT_SIZE"), 14);
 assert.equal(creatorFrameCount / creatorFrameRate, creatorDurationMs / 1000);
 assert.equal(readNumericConst("SOCIAL_SAFE_CAMERA_DISTANCE_SCALE"), 1.18);
 assert.equal(readNumericConst("SOCIAL_SAFE_WATERMARK_FONT_SIZE"), 16);
@@ -246,10 +251,13 @@ assert.ok(
 assert.ok(
   sourceText.includes('await import("mediabunny")') &&
     sourceText.includes('codec: "avc"') &&
-    sourceText.includes('new Quality("very-high")') &&
+    sourceText.includes("bitrate: CREATOR_MP4_BITRATE") &&
+    sourceText.includes("quantizer: CREATOR_MP4_QUANTIZER") &&
+    sourceText.includes('contentHint: "detail"') &&
+    sourceText.includes("t * Math.PI * 2, true") &&
     sourceText.includes("frame / runtime.frameRate") &&
     sourceText.includes('type: "video/mp4"'),
-  "Creator MP4 should be a lazily loaded, deterministic, very-high-quality H.264 export",
+  "Creator MP4 should be a lazily loaded, deterministic, detail-preserving H.264 export",
 );
 assert.ok(
   sourceText.includes('exportPreference.quality === "standard"') &&
