@@ -49,6 +49,9 @@ export default async function SandboxPage({
   const prompt =
     !hasComparisonState && typeof promptParam === "string" ? promptParam : undefined;
   const account = await getCurrentAccount().catch(() => null);
+  const anonymousServerKeysEnabled =
+    process.env.NODE_ENV !== "production" ||
+    process.env.MINEBENCH_ALLOW_SERVER_KEYS === "1";
   const hostedGeminiEnabled = Boolean(
     process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim(),
   );
@@ -62,6 +65,7 @@ export default async function SandboxPage({
       <Sandbox
         initialPrompt={prompt}
         signedIn={Boolean(account)}
+        anonymousServerKeysEnabled={anonymousServerKeysEnabled}
         hostedGeminiEnabled={hostedGeminiEnabled}
         hostedGeminiAvailable={Boolean(
           account &&

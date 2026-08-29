@@ -5,6 +5,7 @@ import ts from "typescript";
 const SOURCE_PATH = "components/sandbox/SandboxLive.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
 const sandboxPageText = readFileSync("app/sandbox/page.tsx", "utf8");
+const sandboxShellText = readFileSync("components/sandbox/Sandbox.tsx", "utf8");
 const preflightText = readFileSync("components/sandbox/GenerationPreflightDialog.tsx", "utf8");
 const generateRouteText = readFileSync("app/api/generate/route.ts", "utf8");
 const sourceFile = ts.createSourceFile(SOURCE_PATH, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -175,6 +176,14 @@ assert.ok(
     runBody.includes("await runGenerateDurable") &&
     runBody.includes('fetch("/api/generate"'),
   "signed-out generation should distinguish the free, missing-key, and save preflight paths",
+);
+assert.ok(
+  sandboxPageText.includes('process.env.NODE_ENV !== "production"') &&
+    sandboxPageText.includes('process.env.MINEBENCH_ALLOW_SERVER_KEYS === "1"') &&
+    sandboxPageText.includes("anonymousServerKeysEnabled={anonymousServerKeysEnabled}") &&
+    sandboxShellText.includes("anonymousServerKeysEnabled={anonymousServerKeysEnabled}") &&
+    runBody.includes("if (!signedIn && anonymousServerKeysEnabled)"),
+  "signed-out generation should still continue when the Generate route permits server keys",
 );
 assert.ok(
   sourceText.includes("<GenerationPreflightDialog") &&

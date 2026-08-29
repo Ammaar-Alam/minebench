@@ -550,6 +550,7 @@ function customBuildRetryProvider(status: SavedGenerationPayload): keyof Provide
 export function SandboxLive({
   initialPrompt,
   signedIn,
+  anonymousServerKeysEnabled,
   hostedGeminiEnabled,
   hostedGeminiAvailable,
   hasPublicNickname,
@@ -557,6 +558,7 @@ export function SandboxLive({
 }: {
   initialPrompt?: string;
   signedIn: boolean;
+  anonymousServerKeysEnabled: boolean;
   hostedGeminiEnabled: boolean;
   hostedGeminiAvailable: boolean;
   hasPublicNickname: boolean;
@@ -1256,6 +1258,7 @@ export function SandboxLive({
     }
     const requestModels = selectedModels.map(customBuildRequestModel);
     const missingProviderModels = selectedModels.filter((model) => {
+      if (!signedIn && anonymousServerKeysEnabled) return false;
       if (
         signedIn &&
         hostedGeminiAvailable &&

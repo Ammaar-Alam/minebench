@@ -83,6 +83,7 @@ function SandboxModeTabs({
 export function Sandbox({
   initialPrompt,
   signedIn,
+  anonymousServerKeysEnabled,
   hostedGeminiEnabled,
   hostedGeminiAvailable,
   hasPublicNickname,
@@ -90,6 +91,7 @@ export function Sandbox({
 }: {
   initialPrompt?: string;
   signedIn: boolean;
+  anonymousServerKeysEnabled: boolean;
   hostedGeminiEnabled: boolean;
   hostedGeminiAvailable: boolean;
   hasPublicNickname: boolean;
@@ -140,6 +142,7 @@ export function Sandbox({
           key={livePrompt ?? "default"}
           initialPrompt={livePrompt}
           signedIn={signedIn}
+          anonymousServerKeysEnabled={anonymousServerKeysEnabled}
           hostedGeminiEnabled={hostedGeminiEnabled}
           hostedGeminiAvailable={hostedGeminiAvailable}
           hasPublicNickname={hasPublicNickname}

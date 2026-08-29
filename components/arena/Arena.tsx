@@ -1161,18 +1161,23 @@ function RevealLane({
 function ArenaAccountPrompt({
   open,
   onDismiss,
+  onShown,
 }: {
   open: boolean;
   onDismiss: () => void;
+  onShown: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      onShown();
+    }
     if (!open && dialog.open) dialog.close();
-  }, [open]);
+  }, [onShown, open]);
 
   return (
     <dialog
@@ -2625,6 +2630,15 @@ export function Arena() {
     }
   }
 
+  function markArenaConversionSeen() {
+    arenaConversionSeenRef.current = true;
+    try {
+      window.localStorage.setItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY, "1");
+    } catch {
+      // The in-memory guard still keeps the prompt one-time for this tab
+    }
+  }
+
   function recordAnonymousVoteForConversion() {
     if (hasSupabaseAuthCookie(document.cookie) || arenaConversionSeenRef.current) return;
 
@@ -2651,12 +2665,6 @@ export function Arena() {
     anonymousVoteCountRef.current = voteCount;
     if (voteCount < ANONYMOUS_VOTE_CONVERSION_THRESHOLD) return;
 
-    arenaConversionSeenRef.current = true;
-    try {
-      window.localStorage.setItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY, "1");
-    } catch {
-      // The in-memory guard still keeps the prompt one-time for this tab
-    }
     setArenaConversionQueued(true);
   }
 
@@ -3481,6 +3489,7 @@ export function Arena() {
       <ArenaAccountPrompt
         open={arenaConversionOpen}
         onDismiss={() => setArenaConversionOpen(false)}
+        onShown={markArenaConversionSeen}
       />
     </div>
   );

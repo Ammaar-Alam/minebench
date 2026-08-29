@@ -54,6 +54,7 @@ function effectBodyTextContaining(marker: string): string {
 const voteBody = functionBodyText("handleVote");
 const skipBody = functionBodyText("handleSkip");
 const conversionBody = functionBodyText("recordAnonymousVoteForConversion");
+const markConversionSeenBody = functionBodyText("markArenaConversionSeen");
 const promptBody = functionBodyText("ArenaAccountPrompt");
 const promptTimingEffect = effectBodyTextContaining("arenaConversionQueued");
 const submitIndex = voteBody.indexOf("await submitArenaAction");
@@ -69,7 +70,11 @@ assert.ok(
   conversionBody.includes("hasSupabaseAuthCookie(document.cookie)") &&
     conversionBody.includes("window.localStorage.getItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY)") &&
     conversionBody.includes("window.localStorage.setItem(ANONYMOUS_VOTE_COUNT_KEY") &&
-    conversionBody.includes("window.localStorage.setItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY"),
+    !conversionBody.includes("window.localStorage.setItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY") &&
+    markConversionSeenBody.includes("arenaConversionSeenRef.current = true") &&
+    markConversionSeenBody.includes(
+      "window.localStorage.setItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY",
+    ),
   "the Arena conversion should remain anonymous-only and appear once per browser",
 );
 assert.ok(
@@ -81,6 +86,7 @@ assert.ok(
 );
 assert.ok(
   promptBody.includes("dialog.showModal()") &&
+    promptBody.indexOf("dialog.showModal()") < promptBody.indexOf("onShown()") &&
     promptBody.includes("dialog.close()") &&
     promptBody.includes("onCancel") &&
     promptBody.includes("event.target !== dialog") &&
@@ -100,6 +106,7 @@ assert.ok(
     promptTimingEffect.includes("transitioning") &&
     promptTimingEffect.includes("setArenaConversionQueued(false)") &&
     promptTimingEffect.includes("setArenaConversionOpen(true)") &&
+    sourceText.includes("onShown={markArenaConversionSeen}") &&
     sourceText.includes("<ArenaAccountPrompt") &&
     !sourceText.includes("Keep your 8 votes"),
   "the modal should wait until the eighth vote reveal and transition have finished",
