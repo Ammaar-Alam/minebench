@@ -66,7 +66,12 @@ type ModelResult = {
   rawText?: string;
   attempt?: number;
   retryReason?: string;
-  metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
+  metrics?: {
+    blockCount: number;
+    warnings: string[];
+    generationTimeMs: number;
+    jsonBytes?: number;
+  };
   startedAt?: number;
   customBuildId?: string;
   customBuildPageUrl?: string;
@@ -406,16 +411,7 @@ function getResultJsonBytes(result: ModelResult): number | undefined {
   ) {
     return result.customBuildExpandedBytes;
   }
-  let source: string | undefined;
-  if (result.voxelBuild != null) {
-    try {
-      source = JSON.stringify(result.voxelBuild);
-    } catch {
-      source = undefined;
-    }
-  }
-  source ??= result.rawText;
-  return source ? new Blob([source]).size : undefined;
+  return result.metrics?.jsonBytes;
 }
 
 function customBuildStageLabel(status: SavedGenerationPayload): string {

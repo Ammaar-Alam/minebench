@@ -255,6 +255,7 @@ export async function POST(req: Request) {
                   blockCount: r.blockCount,
                   warnings: r.warnings,
                   generationTimeMs: r.generationTimeMs,
+                  jsonBytes: Buffer.byteLength(r.rawText),
                 },
               });
             } else {

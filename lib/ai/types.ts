@@ -80,5 +80,15 @@ export type GenerateEvent =
   | { type: "start"; modelKey: string }
   | { type: "retry"; modelKey: string; attempt: number; reason?: string }
   | { type: "delta"; modelKey: string; delta: string }
-  | { type: "result"; modelKey: string; voxelBuild: VoxelBuild; metrics: { blockCount: number; warnings: string[]; generationTimeMs: number } }
+  | {
+      type: "result";
+      modelKey: string;
+      voxelBuild: VoxelBuild;
+      metrics: {
+        blockCount: number;
+        warnings: string[];
+        generationTimeMs: number;
+        jsonBytes: number;
+      };
+    }
   | { type: "error"; modelKey: string; message: string; rawText?: string };

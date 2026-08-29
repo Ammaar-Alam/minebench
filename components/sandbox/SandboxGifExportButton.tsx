@@ -395,8 +395,9 @@ function buildExportLayout(
     socialSafe ? promptY + 24 : 104,
     promptY + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24,
   );
-  const panelAreaLeft = safeInsets?.left ?? EXPORT_MARGIN_X;
-  const panelAreaRight = safeInsets ? width - safeInsets.right : width - EXPORT_MARGIN_X;
+  const panelInsets = grid.columns > 1 ? safeInsets : null;
+  const panelAreaLeft = panelInsets?.left ?? EXPORT_MARGIN_X;
+  const panelAreaRight = panelInsets ? width - panelInsets.right : width - EXPORT_MARGIN_X;
   const panelAreaWidth = Math.max(1, panelAreaRight - panelAreaLeft);
   const panelWidth =
     (panelAreaWidth - panelGap * (grid.columns - 1)) / grid.columns;
