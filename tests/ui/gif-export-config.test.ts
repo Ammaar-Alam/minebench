@@ -7,6 +7,8 @@ const SOURCE_PATH = "components/sandbox/SandboxGifExportButton.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
 const benchmarkSourceText = readFileSync("components/sandbox/SandboxBenchmark.tsx", "utf8");
 const viewerSourceText = readFileSync("components/voxel/VoxelViewer.tsx", "utf8");
+const accountSourceText = readFileSync("app/account/page.tsx", "utf8");
+const settingsSourceText = readFileSync("app/account/MediaExportSettings.tsx", "utf8");
 const sourceFile = ts.createSourceFile(SOURCE_PATH, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
 function readNumericConst(name: string): number {
@@ -133,6 +135,9 @@ const comparisonFrameCount = readNumericConst("COMPARISON_FRAME_COUNT");
 const singleFrameCount = readNumericConst("SINGLE_FRAME_COUNT");
 const comparisonFrameDelayMs = readNumericConst("COMPARISON_FRAME_DELAY_MS");
 const singleFrameDelayMs = readNumericConst("SINGLE_FRAME_DELAY_MS");
+const creatorFrameRate = readNumericConst("CREATOR_FRAME_RATE");
+const creatorFrameCount = readNumericConst("CREATOR_FRAME_COUNT");
+const creatorDurationMs = readNumericConst("CREATOR_DURATION_MS");
 
 assert.equal(comparisonFrameCount, 108);
 assert.equal(singleFrameCount, 135);
@@ -140,6 +145,10 @@ assert.equal(comparisonFrameDelayMs, 40);
 assert.equal(singleFrameDelayMs, 40);
 assert.equal(comparisonFrameCount * comparisonFrameDelayMs, 4320);
 assert.equal(singleFrameCount * singleFrameDelayMs, 5400);
+assert.equal(creatorFrameRate, 30);
+assert.equal(creatorFrameCount, 180);
+assert.equal(creatorDurationMs, 6000);
+assert.equal(creatorFrameCount / creatorFrameRate, creatorDurationMs / 1000);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_COUNT"), 12);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_LONG_EDGE"), 640);
 
@@ -152,6 +161,14 @@ for (const profile of multiRowWideProfiles) {
   const panelHeight = (profile.height - 107 - 22 - 16) / 2;
   assert.ok(panelHeight >= 220, "multi-row wide profiles should preserve usable panel height");
 }
+const creatorProfiles = readRenderProfiles("CREATOR_EXPORT_RENDER_PROFILES");
+assert.deepEqual(creatorProfiles.single?.[0], { width: 1080, height: 1920 });
+assert.deepEqual(creatorProfiles.wide?.[0], { width: 1920, height: 1080 });
+assert.deepEqual(creatorProfiles.vertical?.[0], { width: 1080, height: 1920 });
+assert.deepEqual(readProfileArray("CREATOR_MULTI_ROW_WIDE_RENDER_PROFILES")[0], {
+  width: 1920,
+  height: 1440,
+});
 assert.deepEqual(getSandboxGifExportPanelGrid(1, "single"), {
   columns: 1,
   rows: 1,
@@ -215,6 +232,29 @@ assert.ok(
   sourceText.includes("aria-describedby={iconOnly && !embedded ? tooltipId : undefined}") &&
     sourceText.includes("title={iconOnly && !embedded ? undefined : buttonTitle}"),
   "embedded icon exports should expose a native tooltip without referencing an omitted tooltip node",
+);
+assert.ok(
+  sourceText.includes('await import("mediabunny")') &&
+    sourceText.includes('codec: "avc"') &&
+    sourceText.includes('new Quality("very-high")') &&
+    sourceText.includes("frame / runtime.frameRate") &&
+    sourceText.includes('type: "video/mp4"'),
+  "Creator MP4 should be a lazily loaded, deterministic, very-high-quality H.264 export",
+);
+assert.ok(
+  sourceText.includes('exportPreference.quality === "standard"') &&
+    sourceText.includes("enforceSizeTarget && blob.size > GIF_TARGET_MAX_BYTES"),
+  "only Standard GIFs should fall back to the sharing-size target",
+);
+assert.ok(
+  accountSourceText.includes("<MediaExportSettings />") &&
+    settingsSourceText.includes('value: "standard"') &&
+    settingsSourceText.includes('value: "creator"') &&
+    settingsSourceText.includes('value: "mp4"') &&
+    settingsSourceText.includes('value: "gif"') &&
+    settingsSourceText.includes("grid-rows-[1fr]") &&
+    settingsSourceText.includes("motion-reduce:transition-none"),
+  "Account should expose accessible Standard and Creator choices with a reduced-motion format reveal",
 );
 
 console.log("gif export config checks passed");

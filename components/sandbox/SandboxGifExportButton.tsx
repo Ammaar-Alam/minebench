@@ -7,6 +7,13 @@ import {
   getSandboxGifExportPanelGrid,
   type SandboxGifExportLayoutFormat,
 } from "@/lib/sandbox/gifExportLayout";
+import {
+  DEFAULT_MEDIA_EXPORT_PREFERENCE,
+  getEffectiveMediaExportFileType,
+  type MediaExportFileType,
+  type MediaExportQuality,
+  readMediaExportPreference,
+} from "@/lib/sandbox/mediaExportPreference";
 
 export type SandboxGifExportTarget = {
   viewerRef: RefObject<VoxelViewerHandle | null>;
@@ -35,6 +42,9 @@ const COMPARISON_FRAME_COUNT = 108;
 const SINGLE_FRAME_COUNT = 135;
 const COMPARISON_FRAME_DELAY_MS = 40;
 const SINGLE_FRAME_DELAY_MS = 40;
+const CREATOR_FRAME_RATE = 30;
+const CREATOR_FRAME_COUNT = 180;
+const CREATOR_DURATION_MS = 6000;
 const COMPARISON_PALETTE_SAMPLE_COUNT = 12;
 const SINGLE_PALETTE_SAMPLE_COUNT = 16;
 const COMPARISON_PALETTE_SAMPLE_LONG_EDGE = 640;
@@ -68,11 +78,36 @@ const EXPORT_RENDER_PROFILES: Record<
     { width: 540, height: 960 },
   ],
 };
+const CREATOR_EXPORT_RENDER_PROFILES: Record<
+  GifExportLayoutFormat,
+  ReadonlyArray<{ width: number; height: number }>
+> = {
+  single: [
+    { width: 1080, height: 1920 },
+    { width: 900, height: 1600 },
+    { width: 810, height: 1440 },
+  ],
+  wide: [
+    { width: 1920, height: 1080 },
+    { width: 1600, height: 900 },
+    { width: 1440, height: 810 },
+  ],
+  vertical: [
+    { width: 1080, height: 1920 },
+    { width: 900, height: 1600 },
+    { width: 810, height: 1440 },
+  ],
+};
 const MULTI_ROW_WIDE_RENDER_PROFILES = [
   { width: 1440, height: 1080 },
   { width: 1280, height: 960 },
   { width: 960, height: 720 },
   { width: 800, height: 600 },
+] as const;
+const CREATOR_MULTI_ROW_WIDE_RENDER_PROFILES = [
+  { width: 1920, height: 1440 },
+  { width: 1600, height: 1200 },
+  { width: 1440, height: 1080 },
 ] as const;
 
 const EXPORT_MARGIN_X = 22;
@@ -99,9 +134,10 @@ type ExportLayout = {
 };
 type ExportRect = ExportLayout["panelRects"][number];
 
-type GifRenderProfile = (typeof EXPORT_RENDER_PROFILES)[GifExportLayoutFormat][number];
+type GifRenderProfile = { width: number; height: number };
 type GifExportRuntime = {
   frameCount: number;
+  frameRate: number;
   frameDelayMs: number;
   frameDelaysMs: number[];
   paletteSampleCount: number;
@@ -112,24 +148,46 @@ type GifExportRotationBases = number[];
 function getExportRenderProfiles(
   format: GifExportLayoutFormat,
   targetCount: number,
+  quality: MediaExportQuality,
 ): ReadonlyArray<GifRenderProfile> {
   if (format === "wide" && targetCount > 2) {
-    return MULTI_ROW_WIDE_RENDER_PROFILES;
+    return quality === "creator"
+      ? CREATOR_MULTI_ROW_WIDE_RENDER_PROFILES
+      : MULTI_ROW_WIDE_RENDER_PROFILES;
   }
-  return EXPORT_RENDER_PROFILES[format];
+  return quality === "creator"
+    ? CREATOR_EXPORT_RENDER_PROFILES[format]
+    : EXPORT_RENDER_PROFILES[format];
 }
 
 function buildFrameDelaySchedule(frameCount: number, frameDelayMs: number): number[] {
-  const delayTicks = Math.max(1, Math.round(frameDelayMs / GIF_DELAY_TICK_MS));
-  return Array.from({ length: frameCount }, () => delayTicks * GIF_DELAY_TICK_MS);
+  let elapsedTicks = 0;
+  return Array.from({ length: frameCount }, (_, frame) => {
+    const nextElapsedTicks = Math.round(((frame + 1) * frameDelayMs) / GIF_DELAY_TICK_MS);
+    const delayTicks = Math.max(1, nextElapsedTicks - elapsedTicks);
+    elapsedTicks = nextElapsedTicks;
+    return delayTicks * GIF_DELAY_TICK_MS;
+  });
 }
 
-function getExportRuntime(format: GifExportLayoutFormat): GifExportRuntime {
+function getExportRuntime(
+  format: GifExportLayoutFormat,
+  quality: MediaExportQuality,
+): GifExportRuntime {
   const single = format === "single";
-  const frameCount = single ? SINGLE_FRAME_COUNT : COMPARISON_FRAME_COUNT;
-  const frameDelayMs = single ? SINGLE_FRAME_DELAY_MS : COMPARISON_FRAME_DELAY_MS;
+  const creator = quality === "creator";
+  const frameCount = creator
+    ? CREATOR_FRAME_COUNT
+    : single
+      ? SINGLE_FRAME_COUNT
+      : COMPARISON_FRAME_COUNT;
+  const frameRate = creator
+    ? CREATOR_FRAME_RATE
+    : 1000 / (single ? SINGLE_FRAME_DELAY_MS : COMPARISON_FRAME_DELAY_MS);
+  const frameDelayMs = creator ? CREATOR_DURATION_MS / CREATOR_FRAME_COUNT : 1000 / frameRate;
   return {
     frameCount,
+    frameRate,
     frameDelayMs,
     frameDelaysMs: buildFrameDelaySchedule(frameCount, frameDelayMs),
     paletteSampleCount: single ? SINGLE_PALETTE_SAMPLE_COUNT : COMPARISON_PALETTE_SAMPLE_COUNT,
@@ -749,6 +807,84 @@ async function buildGifBlob(
   }
 }
 
+async function buildMp4Blob(
+  targets: SandboxGifExportTarget[],
+  promptText: string,
+  format: GifExportLayoutFormat,
+  profile: GifRenderProfile,
+  runtime: GifExportRuntime,
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
+) {
+  throwIfAborted(signal);
+  const { BufferTarget, CanvasSource, Mp4OutputFormat, Output, Quality, canEncodeVideo } =
+    await import("mediabunny");
+  throwIfAborted(signal);
+
+  const { width, height } = profile;
+  const quality = new Quality("very-high");
+  const supported = await canEncodeVideo("avc", {
+    width,
+    height,
+    quality,
+    latencyMode: "quality",
+  });
+  if (!supported) {
+    throw new Error("MP4 export isn’t supported in this browser. Choose GIF in Account settings.");
+  }
+
+  const frameCanvas = document.createElement("canvas");
+  frameCanvas.width = width;
+  frameCanvas.height = height;
+  const frameCtx = frameCanvas.getContext("2d", { willReadFrequently: false });
+  if (!frameCtx) throw new Error("Unable to initialize MP4 export canvas");
+  frameCtx.imageSmoothingEnabled = true;
+  frameCtx.imageSmoothingQuality = "high";
+
+  const output = new Output({
+    format: new Mp4OutputFormat(),
+    target: new BufferTarget(),
+  });
+  const videoSource = new CanvasSource(frameCanvas, {
+    codec: "avc",
+    quality,
+    latencyMode: "quality",
+    keyFrameInterval: 2,
+  });
+  output.addVideoTrack(videoSource, { frameRate: runtime.frameRate });
+  const rotationBases = getExportRotationBases(targets);
+  const layout = buildExportLayout(frameCtx, targets.length, width, height, promptText, format);
+  const frameDuration = 1 / runtime.frameRate;
+
+  try {
+    await output.start();
+    for (let frame = 0; frame < runtime.frameCount; frame += 1) {
+      throwIfAborted(signal);
+      const t = frame / runtime.frameCount;
+      renderCompositeFrame(frameCtx, layout, targets, rotationBases, t * Math.PI * 2);
+      await videoSource.add(frame / runtime.frameRate, frameDuration);
+      onProgress?.(frame + 1, runtime.frameCount);
+
+      if (frame > 0 && frame % YIELD_EVERY_FRAMES === 0) {
+        await waitForNextPaint();
+        throwIfAborted(signal);
+      }
+    }
+
+    videoSource.close();
+    await output.finalize();
+    throwIfAborted(signal);
+    const buffer = output.target.buffer;
+    if (!buffer) throw new Error("MP4 export finished without video data");
+    return new Blob([buffer], { type: "video/mp4" });
+  } catch (error) {
+    if (output.state !== "finalized" && output.state !== "canceled") {
+      await output.cancel().catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
 function triggerDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -808,7 +944,7 @@ function GifFormatSelector({
   return (
     <div
       role="group"
-      aria-label="GIF format"
+      aria-label="Export layout"
       className={`inline-flex shrink-0 items-center rounded-full text-muted ${
         embedded
           ? "p-0"
@@ -819,7 +955,7 @@ function GifFormatSelector({
     >
       {GIF_FORMATS.map((value) => {
         const active = format === value;
-        const label = value === "wide" ? "Wide GIF" : "Vertical GIF";
+        const label = value === "wide" ? "Wide" : "Vertical";
         return (
           <button
             key={value}
@@ -829,7 +965,7 @@ function GifFormatSelector({
             aria-pressed={active}
             title={label}
             onClick={() => onChange(value)}
-            className={`grid place-items-center rounded-full transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/55 disabled:cursor-not-allowed disabled:opacity-45 ${
+            className={`grid place-items-center rounded-full transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/55 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-45 ${
               compact ? "h-7 w-7" : "h-8 w-8"
             } ${
               active
@@ -852,11 +988,19 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [format, setFormat] = useState<GifExportFormat>("wide");
+  const [preference, setPreference] = useState(DEFAULT_MEDIA_EXPORT_PREFERENCE);
+  const [activeFileType, setActiveFileType] = useState<MediaExportFileType | null>(null);
   const exportAbortRef = useRef<AbortController | null>(null);
 
   const hasTargets = targets.length > 0;
   const canChooseFormat = targets.length > 1;
   const exportFormat: GifExportLayoutFormat = canChooseFormat ? format : "single";
+
+  useEffect(() => {
+    const saved = readMediaExportPreference();
+    setPreference(saved);
+    if (saved.quality === "creator") setFormat("vertical");
+  }, []);
 
   useEffect(() => {
     exportAbortRef.current?.abort();
@@ -869,6 +1013,10 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
       setError("Viewer is still loading. Try again in a second.");
       return;
     }
+    const exportPreference = readMediaExportPreference();
+    const fileType = getEffectiveMediaExportFileType(exportPreference);
+    setPreference(exportPreference);
+    setActiveFileType(fileType);
     setExporting(true);
     setOptimizing(false);
     setError(null);
@@ -876,70 +1024,102 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
     exportAbortRef.current = abortController;
     await waitForNextPaint();
     try {
-      const profiles = getExportRenderProfiles(exportFormat, targets.length);
-      const runtime = getExportRuntime(exportFormat);
+      const profiles = getExportRenderProfiles(
+        exportFormat,
+        targets.length,
+        exportPreference.quality,
+      );
+      const runtime = getExportRuntime(exportFormat, exportPreference.quality);
       setProgress({ done: 0, total: runtime.frameCount });
       let finalBlob: Blob | null = null;
-      let smallestBlob: Blob | null = null;
 
-      for (let idx = 0; idx < profiles.length; idx += 1) {
-        const profile = profiles[idx] ?? profiles[profiles.length - 1];
-        setOptimizing(false);
-        setProgress({ done: 0, total: runtime.frameCount });
+      if (fileType === "mp4") {
+        for (let idx = 0; idx < profiles.length; idx += 1) {
+          const profile = profiles[idx] ?? profiles[profiles.length - 1];
+          setProgress({ done: 0, total: runtime.frameCount });
+          try {
+            finalBlob = await buildMp4Blob(
+              targets,
+              promptText ?? "",
+              exportFormat,
+              profile,
+              runtime,
+              (done, total) => {
+                if (done === total || done % 2 === 0) setProgress({ done, total });
+              },
+              abortController.signal,
+            );
+            break;
+          } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") throw err;
+            if (idx === profiles.length - 1) throw err;
+            console.warn("[media-export] MP4 profile skipped", profile, err);
+            await waitForNextPaint();
+            throwIfAborted(abortController.signal);
+          }
+        }
+      } else {
+        let smallestBlob: Blob | null = null;
+        const enforceSizeTarget = exportPreference.quality === "standard";
 
-        let blob: Blob;
-        try {
-          blob = await buildGifBlob(
-            targets,
-            promptText ?? "",
-            exportFormat,
-            profile,
-            runtime,
-            (done, total) => {
-              if (done === total || done % 2 === 0) setProgress({ done, total });
-            },
-            abortController.signal,
-          );
-        } catch (err) {
-          if (err instanceof Error && err.name === "AbortError") throw err;
-          if (idx === profiles.length - 1) throw err;
-          console.warn("[gif-export] render profile skipped", profile, err);
-          await waitForNextPaint();
-          throwIfAborted(abortController.signal);
-          continue;
+        for (let idx = 0; idx < profiles.length; idx += 1) {
+          const profile = profiles[idx] ?? profiles[profiles.length - 1];
+          setOptimizing(false);
+          setProgress({ done: 0, total: runtime.frameCount });
+
+          let blob: Blob;
+          try {
+            blob = await buildGifBlob(
+              targets,
+              promptText ?? "",
+              exportFormat,
+              profile,
+              runtime,
+              (done, total) => {
+                if (done === total || done % 2 === 0) setProgress({ done, total });
+              },
+              abortController.signal,
+            );
+          } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") throw err;
+            if (idx === profiles.length - 1) throw err;
+            console.warn("[media-export] GIF profile skipped", profile, err);
+            await waitForNextPaint();
+            throwIfAborted(abortController.signal);
+            continue;
+          }
+
+          if (
+            enforceSizeTarget &&
+            blob.size > GIF_TARGET_MAX_BYTES &&
+            idx < profiles.length - 1
+          ) {
+            await waitForNextPaint();
+            throwIfAborted(abortController.signal);
+            continue;
+          }
+
+          smallestBlob = blob;
+          const enforceTarget =
+            enforceSizeTarget && blob.size > GIF_TARGET_MAX_BYTES && idx === profiles.length - 1;
+          const shouldOptimize = shouldTryGifOptimization(blob, enforceTarget);
+          if (shouldOptimize) {
+            setOptimizing(true);
+            setProgress(null);
+          }
+
+          const optimizedBlob = await optimizeGifBlobForDownload(blob, abortController.signal, {
+            enforceTarget,
+          });
+          if (optimizedBlob.size < smallestBlob.size) smallestBlob = optimizedBlob;
+          finalBlob = optimizedBlob;
+          break;
         }
 
-        if (blob.size > GIF_TARGET_MAX_BYTES && idx < profiles.length - 1) {
-          await waitForNextPaint();
-          throwIfAborted(abortController.signal);
-          continue;
-        }
-
-        smallestBlob = blob;
-
-        const enforceTarget = blob.size > GIF_TARGET_MAX_BYTES && idx === profiles.length - 1;
-        const shouldOptimize = shouldTryGifOptimization(blob, enforceTarget);
-        if (shouldOptimize) {
-          setOptimizing(true);
-          setProgress(null);
-        }
-
-        const optimizedBlob = await optimizeGifBlobForDownload(blob, abortController.signal, {
-          enforceTarget,
-        });
-        if (!smallestBlob || optimizedBlob.size < smallestBlob.size) {
-          smallestBlob = optimizedBlob;
-        }
-
-        finalBlob = optimizedBlob;
-        break;
+        if (!finalBlob) finalBlob = smallestBlob;
       }
-
       if (!finalBlob) {
-        finalBlob = smallestBlob;
-      }
-      if (!finalBlob) {
-        throw new Error("GIF export failed");
+        throw new Error(`${fileType.toUpperCase()} export failed`);
       }
 
       const modelToken = targets
@@ -951,15 +1131,20 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const typeToken = targets.length > 1 ? "compare" : "build";
       const formatToken =
-        exportFormat === "vertical" ? "vertical" : exportFormat === "single" ? "viewer" : "wide";
-      const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.gif`;
+        exportFormat === "vertical" ||
+        (exportFormat === "single" && exportPreference.quality === "creator")
+          ? "vertical"
+          : exportFormat === "single"
+            ? "viewer"
+            : "wide";
+      const fileName = `minebench-${typeToken}-${formatToken}-${modelToken}-${promptToken}-${stamp}.${fileType}`;
       throwIfAborted(abortController.signal);
       triggerDownload(finalBlob, fileName);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") return;
-      const message = err instanceof Error ? err.message : "GIF export failed";
+      const message = err instanceof Error ? err.message : "Export failed";
       setError(message);
-      console.error("[gif-export]", err);
+      console.error("[media-export]", err);
     } finally {
       if (exportAbortRef.current === abortController) {
         exportAbortRef.current = null;
@@ -967,16 +1152,24 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
       setOptimizing(false);
       setExporting(false);
       setProgress(null);
+      setActiveFileType(null);
     }
   }
 
+  const preferredFileType = getEffectiveMediaExportFileType(preference);
+  const displayedFileType = activeFileType ?? preferredFileType;
+  const idleLabel = label ?? (targets.length > 1 ? "Export comparison GIF" : "Export GIF");
+  const fileTypeLabel =
+    displayedFileType === "mp4" ? idleLabel.replace(/\bGIF\b/g, "MP4") : idleLabel;
   const displayLabel = exporting
     ? optimizing
       ? "Optimizing..."
       : progress
-        ? `Rendering ${Math.max(0, progress.done)}/${progress.total}`
-        : "Rendering..."
-    : (label ?? (targets.length > 1 ? "Export comparison GIF" : "Export GIF"));
+        ? `${displayedFileType === "mp4" ? "Encoding" : "Rendering"} ${Math.max(0, progress.done)}/${progress.total}`
+        : displayedFileType === "mp4"
+          ? "Encoding..."
+          : "Rendering..."
+    : fileTypeLabel;
   const buttonTitle = error ?? displayLabel;
   const busy = exporting || optimizing;
   const isUnavailable = !hasTargets;
@@ -1001,7 +1194,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
       title={iconOnly && !embedded ? undefined : buttonTitle}
       onClick={() => void handleExport()}
       disabled={isUnavailable}
-      className={`inline-flex select-none items-center justify-center font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 ${
+      className={`inline-flex select-none items-center justify-center font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 motion-reduce:transition-none ${
         embedded ? "mb-btn mb-btn-ghost rounded-md border border-border/70 bg-bg/55" : "rounded-full"
       } ${
         iconOnly
@@ -1013,7 +1206,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
         <svg
           aria-hidden="true"
           viewBox="0 0 24 24"
-          className={`h-4 w-4 ${exporting ? "animate-pulse" : ""}`}
+          className={`h-4 w-4 ${exporting ? "animate-pulse motion-reduce:animate-none" : ""}`}
         >
           <path
             d="M4 8a3 3 0 0 1 3-3h1.4l1.1-1.6A2 2 0 0 1 11.2 2h1.6a2 2 0 0 1 1.7.9L15.6 5H17a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V8Z"
@@ -1046,7 +1239,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
         id={tooltipId}
         role="status"
         aria-live={busy ? "polite" : undefined}
-        className={`pointer-events-none absolute right-[calc(100%+0.55rem)] top-1/2 z-[40] w-max max-w-[min(16rem,calc(100vw-8rem))] -translate-y-1/2 rounded-full border border-border/80 bg-[linear-gradient(180deg,rgba(8,13,30,0.98),rgba(5,9,22,0.96))] px-3 py-1.5 text-right text-[11px] text-fg shadow-[0_18px_44px_-24px_rgba(4,11,31,0.9)] backdrop-blur-md transition duration-150 ${shouldKeepTooltipVisible ? "translate-x-0 opacity-100" : "translate-x-1 opacity-0 group-hover/gif-export:translate-x-0 group-hover/gif-export:opacity-100 group-focus-within/gif-export:translate-x-0 group-focus-within/gif-export:opacity-100"}`}
+        className={`pointer-events-none absolute right-[calc(100%+0.55rem)] top-1/2 z-[40] w-max max-w-[min(16rem,calc(100vw-8rem))] -translate-y-1/2 rounded-full border border-border/80 bg-[linear-gradient(180deg,rgba(8,13,30,0.98),rgba(5,9,22,0.96))] px-3 py-1.5 text-right text-[11px] text-fg shadow-[0_18px_44px_-24px_rgba(4,11,31,0.9)] backdrop-blur-md transition duration-150 motion-reduce:transition-none ${shouldKeepTooltipVisible ? "translate-x-0 opacity-100" : "translate-x-1 opacity-0 group-hover/gif-export:translate-x-0 group-hover/gif-export:opacity-100 group-focus-within/gif-export:translate-x-0 group-focus-within/gif-export:opacity-100"}`}
       >
         <span className="block truncate">{buttonTitle}</span>
       </div>
