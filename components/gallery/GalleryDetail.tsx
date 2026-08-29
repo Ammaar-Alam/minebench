@@ -169,6 +169,33 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   const [reportOpen, setReportOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const examplesScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollUp, setCanScrollUp] = useState(false);
+  const [canScrollDown, setCanScrollDown] = useState(false);
+
+  const updateScrollState = useCallback(() => {
+    const el = examplesScrollRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    setCanScrollUp(scrollTop > 4);
+    setCanScrollDown(scrollTop + clientHeight < scrollHeight - 4);
+  }, []);
+
+  useEffect(() => {
+    updateScrollState();
+    const el = examplesScrollRef.current;
+    if (!el) return;
+    const handleResize = () => updateScrollState();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [examples, updateScrollState]);
+
+  function scrollExamples(direction: "up" | "down") {
+    const el = examplesScrollRef.current;
+    if (!el) return;
+    const delta = direction === "up" ? -240 : 240;
+    el.scrollBy({ top: delta, behavior: "smooth" });
+  }
   const selectedExamples = selectedIds
     .map((id) => examples.find((example) => example.id === id))
     .filter((example): example is GalleryExamplePayload => Boolean(example));
@@ -418,9 +445,9 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       {actionError ? <p role="alert" className="mt-5 text-sm text-danger">{actionError}</p> : null}
 
       {selected ? (
-        <section className="mt-10 grid gap-6 sm:mt-12 lg:grid-cols-[minmax(0,1fr)_18rem]" aria-labelledby="viewer-title">
+        <section className="mt-10 grid gap-6 sm:mt-12 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start" aria-labelledby="viewer-title">
           {selectedExamples.length > 1 ? (
-            <div className="min-w-0">
+            <div className="min-w-0 self-start">
               <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">
                 <p className="mb-eyebrow">Compare</p>
                 <SandboxGifExportButton
@@ -438,46 +465,138 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
                 ))}
               </div>
             </div>
-          ) : renderViewerCard(selected, false)}
-          <div>
+          ) : (
+            <div className="min-w-0 self-start">
+              {renderViewerCard(selected, false)}
+            </div>
+          )}
+          <div className="min-w-0 self-start lg:sticky lg:top-4">
             <div className="flex min-h-9 items-center justify-between gap-3">
-              <h2 id="viewer-title" className="mb-eyebrow">Examples</h2>
-              {examples.length > 1 ? (
-                <button
-                  type="button"
-                  aria-pressed={compareMode}
-                  className="min-h-9 rounded px-2 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 motion-reduce:transition-none"
-                  onClick={() => {
-                    if (compareMode) {
-                      setCompareMode(false);
-                      setSelectedIds(selectedIds.slice(0, 1));
-                    } else {
-                      setCompareMode(true);
-                    }
-                  }}
-                >
-                  {compareMode ? "Single" : "Compare"}
-                </button>
-              ) : null}
+              <div className="flex items-center gap-2">
+                <h2 id="viewer-title" className="mb-eyebrow">Examples</h2>
+                {examples.length > 1 ? (
+                  <span className="rounded-full border border-border/70 bg-card/20 px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                    {examples.length}
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-1">
+                {examples.length > 2 ? (
+                  <div className="hidden items-center gap-1 lg:flex">
+                    <button
+                      type="button"
+                      aria-label="Previous example"
+                      disabled={!canScrollUp}
+                      onClick={() => scrollExamples("up")}
+                      className="grid h-7 w-7 place-items-center rounded border border-border/70 bg-card/20 text-muted transition-[background-color,color,opacity] hover:bg-card/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:pointer-events-none disabled:opacity-20 motion-reduce:transition-none"
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+                        <path d="M3.5 10L8 5.5L12.5 10" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Next example"
+                      disabled={!canScrollDown}
+                      onClick={() => scrollExamples("down")}
+                      className="grid h-7 w-7 place-items-center rounded border border-border/70 bg-card/20 text-muted transition-[background-color,color,opacity] hover:bg-card/60 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 disabled:pointer-events-none disabled:opacity-20 motion-reduce:transition-none"
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+                        <path d="M3.5 6L8 10.5L12.5 6" />
+                      </svg>
+                    </button>
+                  </div>
+                ) : null}
+                {examples.length > 1 ? (
+                  <button
+                    type="button"
+                    aria-pressed={compareMode}
+                    className="min-h-8 rounded px-2 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45 motion-reduce:transition-none"
+                    onClick={() => {
+                      if (compareMode) {
+                        setCompareMode(false);
+                        setSelectedIds(selectedIds.slice(0, 1));
+                      } else {
+                        setCompareMode(true);
+                      }
+                    }}
+                  >
+                    {compareMode ? "Single" : "Compare"}
+                  </button>
+                ) : null}
+              </div>
             </div>
-            <div className="mt-3 grid grid-cols-2 gap-2 lg:grid-cols-1">
-              {examples.map((example) => {
-                const selectedOrder = selectedIds.indexOf(example.id);
-                const atLimit = compareMode && selectedOrder < 0 && selectedIds.length >= MAX_COMPARISON_EXAMPLES;
-                return (
-                <button key={example.id} type="button" aria-pressed={selectedOrder >= 0} aria-disabled={atLimit || undefined} onClick={(event) => selectExample(event, example.id)} className={`group/example relative min-w-0 overflow-hidden rounded-md border text-left transition-[transform,border-color,background-color,opacity] duration-200 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none ${selectedOrder >= 0 ? "border-accent/65 bg-accent/5" : "border-border bg-card/10 hover:border-muted"} ${atLimit ? "opacity-50" : ""}`}>
-                  {compareMode && selectedOrder >= 0 ? <span aria-hidden="true" className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-full bg-accent text-xs font-semibold text-bg shadow-soft">{selectedOrder + 1}</span> : null}
-                  {example.previewUrl ? <div className="relative aspect-[16/9] bg-bg"><Image src={example.previewUrl} alt="" fill unoptimized sizes="18rem" className="object-contain p-1.5 transition-transform duration-300 ease-out group-hover/example:scale-[1.025] motion-reduce:transition-none" /></div> : null}
-                  <div className="p-3"><p className="truncate text-sm font-medium text-fg">{example.model.label}</p><p className="mt-1 truncate text-xs text-muted">{example.attribution}</p><p className="mt-2 flex flex-wrap gap-x-2 font-mono text-[10px] text-muted">{example.blockCount != null ? <span>{example.blockCount.toLocaleString()} blocks</span> : null}{formatBuildJsonSize(example.jsonBytes) ? <span>{formatBuildJsonSize(example.jsonBytes)} JSON</span> : null}{formatBuildDuration(example.generationTimeMs) ? <span>{formatBuildDuration(example.generationTimeMs)}</span> : null}</p></div>
-                </button>
-                );
-              })}
+            <div className="relative mt-3">
+              <div
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-x-0 top-0 z-10 hidden h-8 bg-gradient-to-b from-bg to-transparent transition-opacity duration-200 lg:block ${canScrollUp ? "opacity-100" : "opacity-0"}`}
+              />
+              <div
+                ref={examplesScrollRef}
+                onScroll={updateScrollState}
+                className="grid grid-cols-2 gap-2 lg:max-h-[520px] xl:max-h-[560px] lg:flex lg:flex-col lg:overflow-y-auto lg:overscroll-contain lg:scroll-smooth lg:snap-y lg:snap-proximity [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              >
+                {examples.map((example) => {
+                  const selectedOrder = selectedIds.indexOf(example.id);
+                  const atLimit = compareMode && selectedOrder < 0 && selectedIds.length >= MAX_COMPARISON_EXAMPLES;
+                  return (
+                    <button
+                      key={example.id}
+                      type="button"
+                      aria-pressed={selectedOrder >= 0}
+                      aria-disabled={atLimit || undefined}
+                      onClick={(event) => selectExample(event, example.id)}
+                      className={`group/example relative min-w-0 shrink-0 snap-start overflow-hidden rounded-md border text-left transition-[transform,border-color,background-color,opacity,box-shadow] duration-200 ease-out hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none ${
+                        selectedOrder >= 0
+                          ? "border-accent/65 bg-accent/5 shadow-soft"
+                          : "border-border bg-card/10 hover:border-muted hover:bg-card/20"
+                      } ${atLimit ? "opacity-50" : ""}`}
+                    >
+                      {compareMode && selectedOrder >= 0 ? (
+                        <span aria-hidden="true" className="absolute right-2 top-2 z-10 grid h-6 w-6 place-items-center rounded-full bg-accent text-xs font-semibold text-bg shadow-soft">
+                          {selectedOrder + 1}
+                        </span>
+                      ) : null}
+                      {example.previewUrl ? (
+                        <div className="relative aspect-[16/9] bg-bg">
+                          <Image
+                            src={example.previewUrl}
+                            alt=""
+                            fill
+                            unoptimized
+                            sizes="18rem"
+                            className="object-contain p-1.5 transition-transform duration-300 ease-out group-hover/example:scale-[1.025] motion-reduce:transition-none"
+                          />
+                        </div>
+                      ) : null}
+                      <div className="p-3">
+                        <p className="truncate text-sm font-medium text-fg">{example.model.label}</p>
+                        <p className="mt-1 truncate text-xs text-muted">{example.attribution}</p>
+                        <p className="mt-2 flex flex-wrap gap-x-2 font-mono text-[10px] text-muted">
+                          {example.blockCount != null ? <span>{example.blockCount.toLocaleString()} blocks</span> : null}
+                          {formatBuildJsonSize(example.jsonBytes) ? <span>{formatBuildJsonSize(example.jsonBytes)} JSON</span> : null}
+                          {formatBuildDuration(example.generationTimeMs) ? <span>{formatBuildDuration(example.generationTimeMs)}</span> : null}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+                {nextExamplesCursor ? (
+                  <button
+                    type="button"
+                    className="mb-btn mt-1 h-10 w-full shrink-0"
+                    disabled={loadingMore}
+                    onClick={() => void loadMoreExamples()}
+                  >
+                    {loadingMore ? "Loading…" : "More examples"}
+                  </button>
+                ) : null}
+              </div>
+              <div
+                aria-hidden="true"
+                className={`pointer-events-none absolute inset-x-0 bottom-0 z-10 hidden h-6 bg-gradient-to-t from-bg to-transparent transition-opacity duration-200 lg:block ${canScrollDown ? "opacity-100" : "opacity-0"}`}
+              />
             </div>
-            {nextExamplesCursor ? (
-              <button type="button" className="mb-btn mt-3 h-10 w-full" disabled={loadingMore} onClick={() => void loadMoreExamples()}>
-                {loadingMore ? "Loading…" : "More examples"}
-              </button>
-            ) : null}
             {examplesError ? <p className="mt-2 text-xs text-danger">{examplesError}</p> : null}
           </div>
         </section>

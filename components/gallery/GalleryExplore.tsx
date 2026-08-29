@@ -3,11 +3,55 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useDeferredValue, useMemo, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
+
+export function GalleryCardSkeleton({ delayed = false }: { delayed?: boolean }) {
+  return (
+    <article
+      aria-hidden="true"
+      className={`flex min-w-0 flex-col overflow-hidden rounded-md border border-border/70 bg-card/10 ${delayed ? "mb-card-enter-delay" : ""}`}
+    >
+      <div className="relative aspect-[4/3] overflow-hidden bg-bg/40">
+        <div className="absolute inset-0 animate-pulse bg-card/25" />
+      </div>
+      <div className="flex flex-1 flex-col gap-3 p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="h-3 w-20 animate-pulse rounded bg-border/50" />
+          <div className="h-3 w-12 animate-pulse rounded bg-border/30" />
+        </div>
+        <div className="space-y-2">
+          <div className="h-5 w-4/5 animate-pulse rounded bg-border/45" />
+          <div className="h-5 w-3/5 animate-pulse rounded bg-border/35" />
+        </div>
+        <div className="mt-auto flex items-center gap-2 pt-3">
+          <div className="h-3.5 w-32 animate-pulse rounded bg-border/30" />
+        </div>
+        <div className="flex flex-wrap gap-x-3 gap-y-1">
+          <div className="h-3 w-16 animate-pulse rounded bg-border/25" />
+          <div className="h-3 w-14 animate-pulse rounded bg-border/25" />
+        </div>
+      </div>
+      <div className="flex items-center justify-between border-t border-border/40 px-3 py-2">
+        <div className="h-7 w-12 animate-pulse rounded bg-border/30" />
+        <div className="h-7 w-20 animate-pulse rounded bg-border/30" />
+      </div>
+    </article>
+  );
+}
+
+export function GallerySkeletonGrid({ count = 8 }: { count?: number }) {
+  return (
+    <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" aria-busy="true" aria-label="Loading gallery prompts">
+      {Array.from({ length: count }, (_, i) => (
+        <GalleryCardSkeleton key={i} delayed={i % 2 === 1} />
+      ))}
+    </div>
+  );
+}
 
 function SubmissionDialog({
   open,
@@ -159,14 +203,53 @@ export function GalleryExplore({
   const [cursor, setCursor] = useState(initialCursor);
   const [activeSort, setActiveSort] = useState(sort);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const deferredQuery = useDeferredValue(searchQuery);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const normalizedQuery = deferredQuery.trim().toLowerCase();
+  const visibleItems = useMemo(() => {
+    if (!normalizedQuery) return items;
+    return items.filter((item) => {
+      if (item.prompt.toLowerCase().includes(normalizedQuery)) return true;
+      if (item.attribution.toLowerCase().includes(normalizedQuery)) return true;
+      if (item.cover?.model.label.toLowerCase().includes(normalizedQuery)) return true;
+      if (item.alternate?.model.label.toLowerCase().includes(normalizedQuery)) return true;
+      return false;
+    });
+  }, [items, normalizedQuery]);
 
   useEffect(() => {
     setItems(initialItems);
     setCursor(initialCursor);
     setActiveSort(sort);
   }, [initialCursor, initialItems, sort]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.defaultPrevented || event.repeat || event.isComposing) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || target.closest("input, textarea, select, dialog, [contenteditable='true']"))
+      ) {
+        if (event.key === "Escape" && target === searchInputRef.current) {
+          setSearchQuery("");
+          searchInputRef.current?.blur();
+        }
+        return;
+      }
+      if (event.key === "/" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   async function changeSort(nextSort: "top" | "new") {
     if (nextSort === activeSort || loading) return;
@@ -188,8 +271,8 @@ export function GalleryExplore({
   }
 
   async function loadMore() {
-    if (!cursor || loading) return;
-    setLoading(true);
+    if (!cursor || loading || loadingMore) return;
+    setLoadingMore(true);
     setLoadError(null);
     try {
       const response = await fetch(`/api/gallery/candidates?sort=${activeSort}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
@@ -200,7 +283,7 @@ export function GalleryExplore({
     } catch {
       setLoadError("Gallery unavailable");
     } finally {
-      setLoading(false);
+      setLoadingMore(false);
     }
   }
 
@@ -223,34 +306,97 @@ export function GalleryExplore({
         </div>
       </header>
 
-      <nav className="mt-10 flex items-center gap-7" aria-label="Gallery sorting">
-        {(["top", "new"] as const).map((option) => (
-          <button
-            key={option}
-            type="button"
-            disabled={loading}
-            aria-current={activeSort === option ? "page" : undefined}
-            className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
-            onClick={() => void changeSort(option)}
-          >
-            {option}
-          </button>
-        ))}
-      </nav>
+      <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <nav className="flex items-center gap-7" aria-label="Gallery sorting">
+          {(["top", "new"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              disabled={loading}
+              aria-current={activeSort === option ? "page" : undefined}
+              className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
+              onClick={() => void changeSort(option)}
+            >
+              {option}
+            </button>
+          ))}
+        </nav>
+
+        <div className="relative w-full sm:w-64 md:w-72">
+          <span aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted">
+            <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.5 10.5L14 14" />
+            </svg>
+          </span>
+          <input
+            ref={searchInputRef}
+            type="search"
+            placeholder="Search prompts…"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            aria-label="Search prompts"
+            className="mb-field h-10 w-full pl-9 pr-9 text-sm placeholder:text-muted/60 focus-visible:ring-2 focus-visible:ring-accent/50"
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                setSearchQuery("");
+                searchInputRef.current?.focus();
+              }}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45"
+            >
+              <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
+                <path d="M4 4L12 12M12 4L4 12" />
+              </svg>
+            </button>
+          ) : (
+            <span aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 hidden rounded border border-border/70 bg-card/40 px-1.5 py-0.5 font-mono text-[10px] text-muted sm:inline-block">
+              /
+            </span>
+          )}
+        </div>
+      </div>
 
       <div key={activeSort} className="mb-fade-in">
-        {items.length ? (
+        {loading ? (
+          <GallerySkeletonGrid count={8} />
+        ) : visibleItems.length ? (
           <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} sort={activeSort} />)}
+            {visibleItems.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} sort={activeSort} />)}
+            {loadingMore ? (
+              Array.from({ length: 4 }, (_, i) => (
+                <GalleryCardSkeleton key={`loading-more-${i}`} delayed={i % 2 === 1} />
+              ))
+            ) : null}
           </div>
         ) : (
-          <section className="mt-14 py-10 sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">
-            <h2 id="empty-gallery-title" className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">No prompts yet.</h2>
+          <section className="mt-14 py-10 text-center sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">
+            <h2 id="empty-gallery-title" className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">
+              {searchQuery ? "No matching prompts." : "No prompts yet."}
+            </h2>
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="mb-btn mt-4 h-10 text-sm"
+              >
+                Clear search
+              </button>
+            ) : null}
           </section>
         )}
       </div>
 
-      {cursor ? <div className="mt-12 flex justify-center"><button type="button" className="mb-btn h-11 min-w-36" disabled={loading} onClick={() => void loadMore()}>{loading ? "Loading…" : "More"}</button></div> : null}
+      {cursor && !searchQuery && !loading ? (
+        <div className="mt-12 flex justify-center">
+          <button type="button" className="mb-btn h-11 min-w-36" disabled={loadingMore} onClick={() => void loadMore()}>
+            {loadingMore ? "Loading…" : "More"}
+          </button>
+        </div>
+      ) : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
       <SubmissionDialog open={submitOpen} hasNickname={hasNickname} onClose={() => setSubmitOpen(false)} />
     </div>
