@@ -593,3 +593,10 @@ export function getAverageBenchmarkCostPerBuildUsd(modelKey: string): number | n
   if (!profile?.totalCost || !profile.buildCount || profile.buildCount <= 0) return null;
   return profile.totalCost.usd / profile.buildCount;
 }
+
+export function getAverageBenchmarkInferenceTimeMs(modelKey: string): number | null {
+  const milliseconds = getModelBenchmarkProfile(modelKey)?.averageInference?.milliseconds;
+  return typeof milliseconds === "number" && Number.isFinite(milliseconds) && milliseconds > 0
+    ? milliseconds
+    : null;
+}

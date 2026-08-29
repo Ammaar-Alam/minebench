@@ -9,6 +9,7 @@ import {
 const SOURCE_PATH = "components/sandbox/SandboxGifExportButton.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
 const benchmarkSourceText = readFileSync("components/sandbox/SandboxBenchmark.tsx", "utf8");
+const benchmarkRouteSourceText = readFileSync("app/api/sandbox/benchmark/route.ts", "utf8");
 const viewerSourceText = readFileSync("components/voxel/VoxelViewer.tsx", "utf8");
 const accountSourceText = readFileSync("app/account/page.tsx", "utf8");
 const settingsSourceText = readFileSync("app/account/MediaExportSettings.tsx", "utf8");
@@ -159,7 +160,7 @@ assert.equal(readNumericConst("CREATOR_MP4_METADATA_FONT_SIZE"), 14);
 assert.equal(creatorFrameCount / creatorFrameRate, creatorDurationMs / 1000);
 assert.equal(readNumericConst("SOCIAL_SAFE_CAMERA_DISTANCE_SCALE"), 1.18);
 assert.equal(readNumericConst("SOCIAL_SAFE_WATERMARK_FONT_SIZE"), 16);
-assert.equal(readNumericConst("PANEL_META_HEIGHT"), 88);
+assert.equal(readNumericConst("PANEL_META_HEIGHT"), 48);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_COUNT"), 12);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_LONG_EDGE"), 640);
 
@@ -268,13 +269,19 @@ assert.ok(
 assert.ok(
   sourceText.includes('label: "BLOCKS"') &&
     sourceText.includes('label: "AVG COST"') &&
-    sourceText.includes('label: "TIME"') &&
+    sourceText.includes('generationTime ? "TIME" : "AVG TIME"') &&
     sourceText.includes('label: "JSON"') &&
+    sourceText.includes("const statsLeft = metaLeft + identityWidth + 12") &&
     sourceText.includes("averageCostPerBuildUsd?: number | null") &&
+    sourceText.includes("averageInferenceTimeMs?: number | null") &&
     benchmarkSourceText.includes("averageCostPerBuildUsd: build.metrics.averageCostPerBuildUsd") &&
     benchmarkSourceText.includes("generationTimeMs: build.metrics.generationTimeMs") &&
+    benchmarkSourceText.includes("averageInferenceTimeMs: build.metrics.averageInferenceTimeMs") &&
+    benchmarkRouteSourceText.includes(
+      "averageInferenceTimeMs: getAverageBenchmarkInferenceTimeMs(build.model.key)",
+    ) &&
     benchmarkSourceText.includes("jsonBytes: build.metrics.jsonBytes"),
-  "export panels should use a structured metric rail backed by benchmark metadata",
+  "export panels should use a compact metric rail with benchmark timing fallback",
 );
 assert.ok(
   accountSourceText.includes("<MediaExportSettings />") &&

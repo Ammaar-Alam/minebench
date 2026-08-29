@@ -18,7 +18,10 @@ import {
 } from "@/lib/sandbox/benchmarkComparison";
 import { prisma } from "@/lib/prisma";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
-import { getAverageBenchmarkCostPerBuildUsd } from "@/lib/ai/modelBenchmarkProfiles";
+import {
+  getAverageBenchmarkCostPerBuildUsd,
+  getAverageBenchmarkInferenceTimeMs,
+} from "@/lib/ai/modelBenchmarkProfiles";
 
 export const runtime = "nodejs";
 
@@ -56,6 +59,7 @@ type BenchmarkBuild = {
     blockCount: number;
     generationTimeMs: number;
     averageCostPerBuildUsd: number | null;
+    averageInferenceTimeMs: number | null;
     jsonBytes: number | null;
   };
 };
@@ -359,6 +363,7 @@ export async function GET(req: Request) {
           blockCount: build.blockCount,
           generationTimeMs: build.generationTimeMs,
           averageCostPerBuildUsd: getAverageBenchmarkCostPerBuildUsd(build.model.key),
+          averageInferenceTimeMs: getAverageBenchmarkInferenceTimeMs(build.model.key),
           jsonBytes: build.voxelByteSize,
         },
       };

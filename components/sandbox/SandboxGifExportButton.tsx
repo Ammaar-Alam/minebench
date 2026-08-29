@@ -26,6 +26,7 @@ export type SandboxGifExportTarget = {
   blockCount: number;
   averageCostPerBuildUsd?: number | null;
   generationTimeMs?: number | null;
+  averageInferenceTimeMs?: number | null;
   jsonBytes?: number | null;
 };
 
@@ -126,7 +127,7 @@ const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
 const PANEL_GAP = 16;
 const PANEL_PAD = 12;
-const PANEL_META_HEIGHT = 88;
+const PANEL_META_HEIGHT = 48;
 const PANEL_RADIUS = 18;
 const CAPTURE_RADIUS = 14;
 const MIN_EXPORT_PANEL_HEIGHT = 220;
@@ -311,12 +312,16 @@ function formatAverageCostPerBuild(value?: number | null): string | null {
 
 function getPanelStats(target: SandboxGifExportTarget) {
   const cost = formatAverageCostPerBuild(target.averageCostPerBuildUsd);
-  const duration = formatBuildDuration(target.generationTimeMs);
+  const generationTime = formatBuildDuration(target.generationTimeMs);
+  const averageInferenceTime = generationTime
+    ? null
+    : formatBuildDuration(target.averageInferenceTimeMs);
+  const duration = generationTime ?? averageInferenceTime;
   const jsonSize = formatBuildJsonSize(target.jsonBytes);
   return [
     { label: "BLOCKS", value: target.blockCount.toLocaleString() },
     ...(cost ? [{ label: "AVG COST", value: cost }] : []),
-    ...(duration ? [{ label: "TIME", value: duration }] : []),
+    ...(duration ? [{ label: generationTime ? "TIME" : "AVG TIME", value: duration }] : []),
     ...(jsonSize ? [{ label: "JSON", value: jsonSize }] : []),
   ];
 }
@@ -599,6 +604,11 @@ function drawPanel(
   const metaRight = Math.min(x + width - PANEL_PAD, contentBounds?.right ?? x + width - PANEL_PAD);
   const stats = getPanelStats(target);
   const metadataFontSize = highFidelityMetadata ? CREATOR_MP4_METADATA_FONT_SIZE : 12;
+  const metadataWidth = Math.max(1, metaRight - metaLeft);
+  const identityFraction = stats.length >= 4 ? 0.34 : stats.length === 3 ? 0.4 : 0.5;
+  const identityWidth = Math.min(260, metadataWidth * identityFraction);
+  const statsLeft = metaLeft + identityWidth + 12;
+  const statsWidth = Math.max(1, metaRight - statsLeft);
 
   ctx.save();
   roundedRectPath(ctx, x, y, width, height, PANEL_RADIUS);
@@ -613,9 +623,9 @@ function drawPanel(
   ctx.font = `700 ${highFidelityMetadata ? 12 : 10}px "IBM Plex Sans", "Segoe UI", sans-serif`;
   ctx.textBaseline = "top";
   ctx.fillText(
-    fitTextWithEllipsis(ctx, target.company.toUpperCase(), Math.max(1, metaRight - metaLeft)),
+    fitTextWithEllipsis(ctx, target.company.toUpperCase(), identityWidth),
     metaLeft,
-    y + 11,
+    y + 9,
   );
 
   ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
@@ -623,37 +633,41 @@ function drawPanel(
   const modelLine = fitTextWithEllipsis(
     ctx,
     target.modelName,
-    Math.max(1, metaRight - metaLeft),
+    identityWidth,
   );
-  ctx.fillText(modelLine, metaLeft, y + 25);
+  ctx.fillText(modelLine, metaLeft, y + 22);
 
-  ctx.strokeStyle = "rgba(148, 163, 184, 0.24)";
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.2)";
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(metaLeft, y + 56.5);
-  ctx.lineTo(metaRight, y + 56.5);
+  ctx.moveTo(statsLeft - 6.5, y + 10);
+  ctx.lineTo(statsLeft - 6.5, y + 47);
   ctx.stroke();
 
-  const statsWidth = Math.max(1, metaRight - metaLeft);
   const statWidth = statsWidth / stats.length;
   for (let idx = 0; idx < stats.length; idx += 1) {
     const stat = stats[idx];
     if (!stat) continue;
-    const columnX = metaLeft + idx * statWidth;
+    const columnX = statsLeft + idx * statWidth;
     const textX = columnX + (idx > 0 ? 10 : 0);
     const textWidth = Math.max(1, statWidth - (idx > 0 ? 10 : 0) - 8);
 
     if (idx > 0) {
       ctx.strokeStyle = "rgba(148, 163, 184, 0.18)";
       ctx.beginPath();
-      ctx.moveTo(columnX + 0.5, y + 62);
-      ctx.lineTo(columnX + 0.5, y + 87);
+      ctx.moveTo(columnX + 0.5, y + 10);
+      ctx.lineTo(columnX + 0.5, y + 47);
       ctx.stroke();
     }
 
     ctx.fillStyle = "rgba(100, 116, 139, 0.95)";
-    ctx.font = `700 ${highFidelityMetadata ? 10 : 9}px "IBM Plex Sans", "Segoe UI", sans-serif`;
-    ctx.fillText(stat.label, textX, y + 62);
+    let labelFontSize = highFidelityMetadata ? 10 : 9;
+    ctx.font = `700 ${labelFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+    while (labelFontSize > 8 && ctx.measureText(stat.label).width > textWidth) {
+      labelFontSize -= 1;
+      ctx.font = `700 ${labelFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+    }
+    ctx.fillText(fitTextWithEllipsis(ctx, stat.label, textWidth), textX, y + 11);
     ctx.fillStyle = "rgba(226, 232, 240, 0.98)";
     let valueFontSize = metadataFontSize;
     ctx.font = `600 ${valueFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
@@ -661,7 +675,7 @@ function drawPanel(
       valueFontSize -= 1;
       ctx.font = `600 ${valueFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
     }
-    ctx.fillText(fitTextWithEllipsis(ctx, stat.value, textWidth), textX, y + 74);
+    ctx.fillText(fitTextWithEllipsis(ctx, stat.value, textWidth), textX, y + 25);
   }
 
   ctx.save();

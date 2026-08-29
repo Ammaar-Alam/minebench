@@ -82,6 +82,7 @@ type BenchmarkBuild = {
     blockCount: number;
     generationTimeMs: number;
     averageCostPerBuildUsd: number | null;
+    averageInferenceTimeMs: number | null;
     jsonBytes: number | null;
   };
 };
@@ -990,6 +991,7 @@ export function SandboxBenchmark() {
             blockCount: build.metrics.blockCount,
             averageCostPerBuildUsd: build.metrics.averageCostPerBuildUsd,
             generationTimeMs: build.metrics.generationTimeMs,
+            averageInferenceTimeMs: build.metrics.averageInferenceTimeMs,
             jsonBytes: build.metrics.jsonBytes,
           };
         })
@@ -1078,6 +1080,7 @@ export function SandboxBenchmark() {
                       blockCount: build.metrics.blockCount,
                       averageCostPerBuildUsd: build.metrics.averageCostPerBuildUsd,
                       generationTimeMs: build.metrics.generationTimeMs,
+                      averageInferenceTimeMs: build.metrics.averageInferenceTimeMs,
                       jsonBytes: build.metrics.jsonBytes,
                     },
                   ]}
