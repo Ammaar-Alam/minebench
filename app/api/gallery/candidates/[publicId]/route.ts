@@ -1,4 +1,4 @@
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { readArenaSessionId } from "@/lib/arena/session";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import { GalleryServiceError, getGalleryCandidate, removeGalleryCandidate } from "@/lib/gallery/service";
@@ -9,8 +9,9 @@ export async function GET(request: Request, context: { params: Promise<{ publicI
   const url = new URL(request.url);
   const candidate = await getGalleryCandidate((await context.params).publicId, {
     sessionId: readArenaSessionId(request.headers.get("cookie")),
-    userId: await getAuthenticatedUserId(request.headers.get("cookie")),
+    userId: await getAuthenticatedUserId(request),
     examplesCursor: url.searchParams.get("examplesCursor"),
+    navigationSort: url.searchParams.get("sort") === "new" ? "new" : "top",
   });
   return candidate
     ? apiJson({ candidate })
@@ -18,7 +19,7 @@ export async function GET(request: Request, context: { params: Promise<{ publicI
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ publicId: string }> }) {
-  const userId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const userId = await getAuthenticatedUserId(request);
   if (!userId) return apiJson({ error: { code: "authentication_required", message: "Sign in to remove this prompt." } }, 401);
   try {
     return apiJson(await removeGalleryCandidate(userId, (await context.params).publicId));

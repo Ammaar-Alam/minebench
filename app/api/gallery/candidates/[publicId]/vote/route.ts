@@ -1,8 +1,7 @@
 import { z } from "zod";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import {
-  ARENA_SESSION_COOKIE,
-  ARENA_SESSION_COOKIE_OPTIONS,
+  appendArenaSessionCookie,
   readArenaSessionId,
 } from "@/lib/arena/session";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
@@ -18,7 +17,7 @@ export async function PUT(request: Request, context: { params: Promise<{ publicI
   if (!parsed.success) return apiJson({ error: { code: "invalid_request", message: "Check the vote." } }, 400);
   const existing = readArenaSessionId(request.headers.get("cookie"));
   const sessionId = existing ?? crypto.randomUUID();
-  const userId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const userId = await getAuthenticatedUserId(request);
   try {
     const blocked = await isVoteWriteBlocked({
       userId,
@@ -33,12 +32,7 @@ export async function PUT(request: Request, context: { params: Promise<{ publicI
       blocked,
     });
     const response = apiJson(result);
-    if (!existing) {
-      response.headers.append(
-        "Set-Cookie",
-        `${ARENA_SESSION_COOKIE}=${sessionId}; Path=/; Max-Age=${ARENA_SESSION_COOKIE_OPTIONS.maxAge}; HttpOnly; SameSite=Lax${ARENA_SESSION_COOKIE_OPTIONS.secure ? "; Secure" : ""}`,
-      );
-    }
+    if (!existing) appendArenaSessionCookie(response, sessionId);
     return response;
   } catch (error) {
     return apiServiceError(error);

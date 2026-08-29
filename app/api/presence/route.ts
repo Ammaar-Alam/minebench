@@ -1,6 +1,6 @@
 import { geolocation } from "@vercel/functions";
 import { NextResponse } from "next/server";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import {
   ARENA_SESSION_COOKIE,
   ARENA_SESSION_COOKIE_OPTIONS,
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const geo = geolocation(request);
     await touchPublicSessionActivity({
       sessionId,
-      userId: await getAuthenticatedUserId(request.headers.get("cookie")),
+      userId: await getAuthenticatedUserId(request),
       ipHmac: hashVoteIp(trustedClientIp(request.headers)),
       location: {
         city: geo.city,

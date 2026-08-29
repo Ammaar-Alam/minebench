@@ -117,7 +117,7 @@ const exampleSelect = {
       modelId: true,
       modelDisplayName: true,
       artifacts: {
-        where: { kind: { in: ["preview_svg", "viewer_mbv4", "viewer_mbf1"] } },
+        where: { kind: { in: ["preview_svg", "preview_mbv4", "viewer_mbv4", "viewer_mbf1"] } },
         select: { kind: true },
       },
     },
@@ -150,6 +150,7 @@ function publicExample(example: ExampleRow) {
         : "catalog";
   return {
     id: example.id,
+    buildId: example.customBuild.publicId,
     attribution: galleryAttribution({
       postAnonymously: example.postAnonymously,
       publicNickname: example.contributor.publicNickname,
@@ -171,6 +172,9 @@ function publicExample(example: ExampleRow) {
     checksum: example.customBuild.buildSha256,
     previewUrl: kinds.has("preview_svg")
       ? `/api/gallery/examples/${example.id}/preview`
+      : null,
+    thumbnailUrl: kinds.has("preview_mbv4")
+      ? `/api/gallery/examples/${example.id}/thumbnail`
       : null,
     viewerUrl: kinds.has("viewer_mbv4") || kinds.has("viewer_mbf1")
       ? `/api/gallery/examples/${example.id}/viewer`
@@ -1124,7 +1128,7 @@ export async function submitGalleryReport(input: {
 
 export async function getPublicGalleryExampleArtifact(
   exampleId: string,
-  kinds: Array<"preview_svg" | "viewer_mbv4" | "viewer_mbf1">,
+  kinds: Array<"preview_svg" | "preview_mbv4" | "viewer_mbv4" | "viewer_mbf1">,
 ) {
   return prisma.customBuildArtifact.findFirst({
     where: {

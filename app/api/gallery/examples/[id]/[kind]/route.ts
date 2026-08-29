@@ -8,6 +8,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   const { id, kind } = await context.params;
   const kinds = kind === "preview"
     ? (["preview_svg"] as const)
+    : kind === "thumbnail"
+      ? (["preview_mbv4"] as const)
     : kind === "viewer"
       ? (["viewer_mbf1", "viewer_mbv4"] as const)
       : null;

@@ -1,4 +1,4 @@
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import {
   GenerationServiceError,
@@ -9,7 +9,7 @@ import {
 export const runtime = "nodejs";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  const ownerId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const ownerId = await getAuthenticatedUserId(request);
   if (!ownerId) return apiJson({ error: { code: "authentication_required", message: "Sign in to view this generation." } }, 401);
   const generation = await getSavedGeneration(ownerId, (await context.params).id);
   return generation
@@ -18,7 +18,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
 }
 
 export async function DELETE(request: Request, context: { params: Promise<{ id: string }> }) {
-  const ownerId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const ownerId = await getAuthenticatedUserId(request);
   if (!ownerId) return apiJson({ error: { code: "authentication_required", message: "Sign in to remove this generation." } }, 401);
   const body = (await request.json().catch(() => null)) as { acknowledgePublicExamples?: unknown } | null;
   try {

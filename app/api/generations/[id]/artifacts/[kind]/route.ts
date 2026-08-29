@@ -1,4 +1,4 @@
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { createCustomBuildArtifactSignedUrl, downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import { GenerationServiceError, getOwnedGenerationArtifact } from "@/lib/generations/service";
@@ -6,7 +6,7 @@ import { GenerationServiceError, getOwnedGenerationArtifact } from "@/lib/genera
 export const runtime = "nodejs";
 
 export async function GET(request: Request, context: { params: Promise<{ id: string; kind: string }> }) {
-  const ownerId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const ownerId = await getAuthenticatedUserId(request);
   if (!ownerId) return apiJson({ error: { code: "authentication_required", message: "Sign in to view this generation." } }, 401);
   const { id, kind } = await context.params;
   const kinds = kind === "preview"

@@ -95,6 +95,18 @@ async function main() {
               byteSize: 60,
               storedByteSize: 60,
             },
+            {
+              kind: "preview_mbv4",
+              format: "mbv4",
+              bucket: "builds",
+              path: `test/${suffix}/preview.mbv4`,
+              contentType: "application/octet-stream",
+              fileName: "preview.mbv4",
+              sha256: "e".repeat(64),
+              sourceBuildSha256: "b".repeat(64),
+              byteSize: 80,
+              storedByteSize: 80,
+            },
           ],
         },
       },
@@ -111,6 +123,11 @@ async function main() {
     assert.equal(created.candidate.cover?.blockCount, 4);
     assert.equal(created.candidate.cover?.jsonBytes, 100);
     assert.equal(created.candidate.cover?.generationTimeMs, 125_000);
+    assert.equal(created.candidate.cover?.buildId, buildPublicId);
+    assert.equal(
+      created.candidate.cover?.thumbnailUrl,
+      `/api/gallery/examples/${created.candidate.cover?.id}/thumbnail`,
+    );
     assert.equal(
       (await getGalleryCandidate(created.candidate.id, { userId: uploaderId }))?.canRemove,
       true,
@@ -279,7 +296,10 @@ async function main() {
     await hideGalleryExample(adminId, firstExamples!.cover!.id, async ({ path }) => {
       deletedArtifacts.push(path);
     });
-    assert.deepEqual(deletedArtifacts, [`test/${suffix}/build.json.gz`]);
+    assert.deepEqual(deletedArtifacts, [
+      `test/${suffix}/build.json.gz`,
+      `test/${suffix}/preview.mbv4`,
+    ]);
     assert.equal(await db.customBuildArtifact.count({
       where: { customBuildId: buildId, kind: "preview_svg" },
     }), 1);

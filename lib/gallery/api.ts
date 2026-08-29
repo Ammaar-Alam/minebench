@@ -1,3 +1,4 @@
+import { AccountServiceError } from "@/lib/account/service";
 import { GalleryServiceError } from "@/lib/gallery/service";
 import { GenerationServiceError } from "@/lib/generations/service";
 
@@ -31,7 +32,11 @@ export function apiJson(body: unknown, status = 200): Response {
 }
 
 export function apiServiceError(error: unknown): Response {
-  if (error instanceof GalleryServiceError || error instanceof GenerationServiceError) {
+  if (
+    error instanceof AccountServiceError ||
+    error instanceof GalleryServiceError ||
+    error instanceof GenerationServiceError
+  ) {
     return apiJson(
       { error: { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) } },
       STATUS_BY_CODE[error.code] ?? 400,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { readArenaSessionId } from "@/lib/arena/session";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import { listGalleryCandidates, submitGalleryCandidate } from "@/lib/gallery/service";
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
       cursor: url.searchParams.get("cursor"),
       limit: Number.isFinite(limit) ? limit : 24,
       sessionId: readArenaSessionId(request.headers.get("cookie")),
-      userId: await getAuthenticatedUserId(request.headers.get("cookie")),
+      userId: await getAuthenticatedUserId(request),
     }));
   } catch (error) {
     return apiServiceError(error);
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const userId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const userId = await getAuthenticatedUserId(request);
   if (!userId) return apiJson({ error: { code: "authentication_required", message: "Sign in to submit." } }, 401);
   const parsed = submission.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return apiJson({ error: { code: "invalid_request", message: "Check the submission." } }, 400);
