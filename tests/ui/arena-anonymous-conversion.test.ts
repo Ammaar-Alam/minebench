@@ -26,9 +26,36 @@ function functionBodyText(name: string): string {
   return body;
 }
 
+function effectBodyTextContaining(marker: string): string {
+  let body = "";
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isCallExpression(node) &&
+      node.expression.getText(sourceFile) === "useEffect" &&
+      node.arguments.length > 0
+    ) {
+      const callback = node.arguments[0];
+      if (
+        callback &&
+        (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+        callback.body.getText(sourceFile).includes(marker)
+      ) {
+        body = callback.body.getText(sourceFile);
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (!body) throw new Error(`useEffect containing ${marker} should be declared`);
+  return body;
+}
+
 const voteBody = functionBodyText("handleVote");
 const skipBody = functionBodyText("handleSkip");
 const conversionBody = functionBodyText("recordAnonymousVoteForConversion");
+const promptBody = functionBodyText("ArenaAccountPrompt");
+const promptTimingEffect = effectBodyTextContaining("arenaConversionQueued");
 const submitIndex = voteBody.indexOf("await submitArenaAction");
 const conversionIndex = voteBody.indexOf("recordAnonymousVoteForConversion()");
 
@@ -53,11 +80,29 @@ assert.ok(
   "only a durable vote should advance the anonymous conversion counter",
 );
 assert.ok(
-  sourceText.includes("Keep your 8 votes") &&
-    sourceText.includes("Generate free with Gemini 3.7 Flash.") &&
+  promptBody.includes("dialog.showModal()") &&
+    promptBody.includes("dialog.close()") &&
+    promptBody.includes("onCancel") &&
+    promptBody.includes("event.target !== dialog") &&
+    sourceText.includes("For a limited time") &&
+    sourceText.includes("Unlimited Gemini 3.7 Flash generations") &&
+    sourceText.includes("Sign in to generate free, save your builds, and keep your votes.") &&
+    sourceText.includes("No API key needed.") &&
     sourceText.includes("/sign-in?next=/sandbox%3Fmode%3Dlive") &&
+    sourceText.includes("Start free") &&
     sourceText.includes("Not now"),
-  "the conversion should connect saved votes to the free Generate flow without blocking Arena",
+  "the conversion should use a restrained, dismissible account modal with the full offer",
+);
+assert.ok(
+  conversionBody.includes("setArenaConversionQueued(true)") &&
+    !conversionBody.includes("setArenaConversionOpen(true)") &&
+    promptTimingEffect.includes('reveal.kind !== "none"') &&
+    promptTimingEffect.includes("transitioning") &&
+    promptTimingEffect.includes("setArenaConversionQueued(false)") &&
+    promptTimingEffect.includes("setArenaConversionOpen(true)") &&
+    sourceText.includes("<ArenaAccountPrompt") &&
+    !sourceText.includes("Keep your 8 votes"),
+  "the modal should wait until the eighth vote reveal and transition have finished",
 );
 
 console.log("arena anonymous conversion contract checks passed");

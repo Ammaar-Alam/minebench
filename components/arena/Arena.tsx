@@ -1158,6 +1158,80 @@ function RevealLane({
   );
 }
 
+function ArenaAccountPrompt({
+  open,
+  onDismiss,
+}: {
+  open: boolean;
+  onDismiss: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="arena-account-prompt-title"
+      aria-describedby="arena-account-prompt-description"
+      className="mb-dialog m-auto w-[min(30rem,calc(100%-2rem))] rounded-md border-0 bg-card p-0 text-fg ring-1 ring-border-xl backdrop:bg-bg/60 backdrop:backdrop-blur-sm"
+      onCancel={(event) => {
+        event.preventDefault();
+        onDismiss();
+      }}
+      onClose={onDismiss}
+      onClick={(event) => {
+        const dialog = event.currentTarget;
+        if (event.target !== dialog) return;
+        const bounds = dialog.getBoundingClientRect();
+        if (
+          event.clientX < bounds.left ||
+          event.clientX > bounds.right ||
+          event.clientY < bounds.top ||
+          event.clientY > bounds.bottom
+        ) {
+          onDismiss();
+        }
+      }}
+    >
+      <div className="space-y-6 p-6 sm:p-7">
+        <div>
+          <p className="mb-eyebrow text-accent">For a limited time</p>
+          <h2
+            id="arena-account-prompt-title"
+            className="mt-2 font-display text-2xl font-semibold tracking-tight"
+          >
+            Unlimited Gemini 3.7 Flash generations
+          </h2>
+          <p
+            id="arena-account-prompt-description"
+            className="mt-3 text-sm leading-6 text-muted"
+          >
+            Sign in to generate free, save your builds, and keep your votes.
+          </p>
+          <p className="mt-2 text-sm font-medium text-fg">No API key needed.</p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Link
+            href="/sign-in?next=/sandbox%3Fmode%3Dlive"
+            className="mb-btn mb-btn-primary h-11"
+          >
+            Start free
+          </Link>
+          <button type="button" className="mb-btn h-11" onClick={onDismiss}>
+            Not now
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
 function PipelineArrow() {
   return (
     <div
@@ -1212,6 +1286,7 @@ export function Arena() {
   const [slowInitialLoad, setSlowInitialLoad] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [arenaConversionOpen, setArenaConversionOpen] = useState(false);
+  const [arenaConversionQueued, setArenaConversionQueued] = useState(false);
   const [voteConfirming, setVoteConfirming] = useState<VoteConfirmTarget | null>(null);
   const voteConfirmTimerRef = useRef<number | null>(null);
   const [voteWarning, setVoteWarning] = useState<string | null>(null);
@@ -1446,6 +1521,12 @@ export function Arena() {
   useEffect(() => {
     revealRef.current = reveal;
   }, [reveal]);
+
+  useEffect(() => {
+    if (!arenaConversionQueued || reveal.kind !== "none" || transitioning) return;
+    setArenaConversionQueued(false);
+    setArenaConversionOpen(true);
+  }, [arenaConversionQueued, reveal.kind, transitioning]);
 
   useEffect(() => {
     sideLoadStateRef.current = sideLoadState;
@@ -2576,7 +2657,7 @@ export function Arena() {
     } catch {
       // The in-memory guard still keeps the prompt one-time for this tab
     }
-    setArenaConversionOpen(true);
+    setArenaConversionQueued(true);
   }
 
   async function handleVote(choice: VoteChoice) {
@@ -3262,37 +3343,6 @@ export function Arena() {
             </div>
           </div>
 
-          {arenaConversionOpen ? (
-            <aside
-              role="status"
-              className="flex flex-col gap-4 border-t border-accent/30 bg-accent/[0.06] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="min-w-0">
-                <span className="mb-eyebrow text-accent">8 votes in</span>
-                <p className="mt-1 font-display text-lg font-semibold tracking-tight text-fg">
-                  Keep your 8 votes
-                </p>
-                <p className="mt-1 text-sm text-muted">
-                  Generate free with Gemini 3.7 Flash.
-                </p>
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Link
-                  href="/sign-in?next=/sandbox%3Fmode%3Dlive"
-                  className="mb-btn mb-btn-primary h-11 px-4 text-sm"
-                >
-                  Sign in
-                </Link>
-                <button
-                  type="button"
-                  className="mb-btn mb-btn-ghost h-11 px-3 text-sm"
-                  onClick={() => setArenaConversionOpen(false)}
-                >
-                  Not now
-                </button>
-              </div>
-            </aside>
-          ) : null}
       </div>
 
       {/* how it works — pipeline diagram */}
@@ -3427,6 +3477,11 @@ export function Arena() {
           </a>
         </form>
       </section>
+
+      <ArenaAccountPrompt
+        open={arenaConversionOpen}
+        onDismiss={() => setArenaConversionOpen(false)}
+      />
     </div>
   );
 }
