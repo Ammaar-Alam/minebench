@@ -12,23 +12,22 @@ export type ResolvedCustomApiTarget = {
   family: 4 | 6;
 };
 
-function normalizeBaseUrl(raw?: string): string {
+function buildChatCompletionsUrl(raw?: string): URL {
   const candidate = raw ?? process.env.CUSTOM_API_BASE_URL;
-  if (!candidate) {
+  if (!candidate?.trim()) {
     throw new Error("Missing custom API server URL");
   }
-  const base = candidate
-    .trim()
-    .replace(/\/+$/, "");
-  if (base.endsWith("/chat/completions")) {
-    return base.slice(0, -"/chat/completions".length);
-  }
-  return base;
-}
+  const url = new URL(candidate.trim());
+  const pathname = url.pathname.replace(/\/+$/, "");
 
-function buildChatCompletionsUrl(raw?: string): URL {
-  const base = normalizeBaseUrl(raw);
-  return new URL(base.endsWith("/v1") ? `${base}/chat/completions` : `${base}/v1/chat/completions`);
+  if (pathname.endsWith("/chat/completions")) {
+    url.pathname = pathname;
+  } else if (!pathname || pathname === "") {
+    url.pathname = "/v1/chat/completions";
+  } else {
+    url.pathname = `${pathname}/chat/completions`;
+  }
+  return url;
 }
 
 function normalizeIpAddress(address: string): string {
