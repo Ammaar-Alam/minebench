@@ -159,6 +159,7 @@ assert.equal(readNumericConst("CREATOR_MP4_METADATA_FONT_SIZE"), 14);
 assert.equal(creatorFrameCount / creatorFrameRate, creatorDurationMs / 1000);
 assert.equal(readNumericConst("SOCIAL_SAFE_CAMERA_DISTANCE_SCALE"), 1.18);
 assert.equal(readNumericConst("SOCIAL_SAFE_WATERMARK_FONT_SIZE"), 16);
+assert.equal(readNumericConst("PANEL_META_HEIGHT"), 88);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_COUNT"), 12);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_LONG_EDGE"), 640);
 
@@ -263,6 +264,17 @@ assert.ok(
   sourceText.includes('exportPreference.quality === "standard"') &&
     sourceText.includes("enforceSizeTarget && blob.size > GIF_TARGET_MAX_BYTES"),
   "only Standard GIFs should fall back to the sharing-size target",
+);
+assert.ok(
+  sourceText.includes('label: "BLOCKS"') &&
+    sourceText.includes('label: "AVG COST"') &&
+    sourceText.includes('label: "TIME"') &&
+    sourceText.includes('label: "JSON"') &&
+    sourceText.includes("averageCostPerBuildUsd?: number | null") &&
+    benchmarkSourceText.includes("averageCostPerBuildUsd: build.metrics.averageCostPerBuildUsd") &&
+    benchmarkSourceText.includes("generationTimeMs: build.metrics.generationTimeMs") &&
+    benchmarkSourceText.includes("jsonBytes: build.metrics.jsonBytes"),
+  "export panels should use a structured metric rail backed by benchmark metadata",
 );
 assert.ok(
   accountSourceText.includes("<MediaExportSettings />") &&

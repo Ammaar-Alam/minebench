@@ -398,6 +398,18 @@ function getRawBuildJsonForExport(args: {
   }
 }
 
+function getResultJsonBytes(result: ModelResult): number | undefined {
+  if (
+    typeof result.customBuildExpandedBytes === "number" &&
+    Number.isFinite(result.customBuildExpandedBytes) &&
+    result.customBuildExpandedBytes >= 0
+  ) {
+    return result.customBuildExpandedBytes;
+  }
+  const source = result.rawText;
+  return source ? new Blob([source]).size : undefined;
+}
+
 function customBuildStageLabel(status: SavedGenerationPayload): string {
   if (status.status === "succeeded") return "Ready";
   if (status.status === "failed") return "Failed";
@@ -1411,9 +1423,11 @@ export function SandboxLive({
         modelName: model.displayName,
         company: model.providerLabel,
         blockCount: result.metrics?.blockCount ?? 0,
+        generationTimeMs: result.metrics?.generationTimeMs,
+        jsonBytes: getResultJsonBytes(result),
       };
     })
-    .filter((target): target is SandboxGifExportTarget => Boolean(target));
+    .filter((target) => target !== null);
   const comparePrompt = selectedModels
     .map((model) => results.get(model.id)?.submittedPrompt)
     .find((value): value is string => Boolean(value)) ?? prompt;
@@ -1440,6 +1454,8 @@ export function SandboxLive({
               modelName,
               company: providerName,
               blockCount: r.metrics?.blockCount ?? 0,
+              generationTimeMs: r.metrics?.generationTimeMs,
+              jsonBytes: getResultJsonBytes(r),
             },
           ]
         : [];

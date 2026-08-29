@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   HISTORICAL_BENCHMARK_OUTPUT_CAPS,
   MODEL_BENCHMARK_PROFILES,
+  getAverageBenchmarkCostPerBuildUsd,
   getModelBenchmarkProfile,
   resolveBenchmarkOutputCap,
   resolveCurrentGeneratedBenchmarkMetrics,
@@ -59,6 +60,8 @@ assert.ok(
 );
 assert.deepEqual(gpt56.totalCost, { usd: 710.82 });
 assert.equal(gpt56.buildCount, 15);
+assert.equal(getAverageBenchmarkCostPerBuildUsd("openai_gpt_5_6_sol"), 710.82 / 15);
+assert.equal(getAverageBenchmarkCostPerBuildUsd("openai_gpt_5_4"), null);
 
 assert.equal(
   resolveBenchmarkOutputCap("openai_gpt_5_6_sol", {

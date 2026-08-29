@@ -3,6 +3,7 @@
 import type { RefObject } from "react";
 import { useEffect, useId, useRef, useState } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
+import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 import {
   getSandboxGifExportPanelGrid,
   getSandboxSocialSafeInsets,
@@ -23,6 +24,9 @@ export type SandboxGifExportTarget = {
   modelName: string;
   company: string;
   blockCount: number;
+  averageCostPerBuildUsd?: number | null;
+  generationTimeMs?: number | null;
+  jsonBytes?: number | null;
 };
 
 type Props = {
@@ -122,7 +126,7 @@ const EXPORT_MARGIN_X = 22;
 const EXPORT_MARGIN_BOTTOM = 22;
 const PANEL_GAP = 16;
 const PANEL_PAD = 12;
-const PANEL_META_HEIGHT = 62;
+const PANEL_META_HEIGHT = 88;
 const PANEL_RADIUS = 18;
 const CAPTURE_RADIUS = 14;
 const MIN_EXPORT_PANEL_HEIGHT = 220;
@@ -297,6 +301,24 @@ function fitTextWithEllipsis(ctx: CanvasRenderingContext2D, text: string, maxWid
   }
 
   return `${clean.slice(0, lo).replace(/\s+$/g, "")}${suffix}`;
+}
+
+function formatAverageCostPerBuild(value?: number | null): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  const digits = value >= 0.1 ? 2 : value >= 0.01 ? 3 : 4;
+  return `$${value.toFixed(digits)}`;
+}
+
+function getPanelStats(target: SandboxGifExportTarget) {
+  const cost = formatAverageCostPerBuild(target.averageCostPerBuildUsd);
+  const duration = formatBuildDuration(target.generationTimeMs);
+  const jsonSize = formatBuildJsonSize(target.jsonBytes);
+  return [
+    { label: "BLOCKS", value: target.blockCount.toLocaleString() },
+    ...(cost ? [{ label: "AVG COST", value: cost }] : []),
+    ...(duration ? [{ label: "TIME", value: duration }] : []),
+    ...(jsonSize ? [{ label: "JSON", value: jsonSize }] : []),
+  ];
 }
 
 function capPromptLines(
@@ -575,7 +597,8 @@ function drawPanel(
   const { x: captureX, y: captureY, width: captureWidth, height: captureHeight } = captureRect;
   const metaLeft = Math.max(x + PANEL_PAD, contentBounds?.left ?? x + PANEL_PAD);
   const metaRight = Math.min(x + width - PANEL_PAD, contentBounds?.right ?? x + width - PANEL_PAD);
-  const metadataFontSize = highFidelityMetadata ? CREATOR_MP4_METADATA_FONT_SIZE : 11;
+  const stats = getPanelStats(target);
+  const metadataFontSize = highFidelityMetadata ? CREATOR_MP4_METADATA_FONT_SIZE : 12;
 
   ctx.save();
   roundedRectPath(ctx, x, y, width, height, PANEL_RADIUS);
@@ -587,28 +610,12 @@ function drawPanel(
   ctx.restore();
 
   ctx.fillStyle = "rgba(125, 211, 252, 0.96)";
-  ctx.font = `700 ${metadataFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+  ctx.font = `700 ${highFidelityMetadata ? 12 : 10}px "IBM Plex Sans", "Segoe UI", sans-serif`;
   ctx.textBaseline = "top";
-  ctx.fillText(target.company.toUpperCase(), metaLeft, y + 12);
-
-  const blockLabel = `${target.blockCount.toLocaleString()} blocks`;
-  ctx.font = `600 ${metadataFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
-  const badgePaddingX = highFidelityMetadata ? 10 : 8;
-  const badgeHeight = highFidelityMetadata ? 26 : 22;
-  const badgeWidth = Math.ceil(ctx.measureText(blockLabel).width + badgePaddingX * 2);
-  const badgeX = metaRight - badgeWidth;
-  const badgeY = y + (highFidelityMetadata ? 12 : 14);
-  roundedRectPath(ctx, badgeX, badgeY, badgeWidth, badgeHeight, badgeHeight / 2);
-  ctx.fillStyle = "rgba(30, 41, 59, 0.9)";
-  ctx.fill();
-  ctx.strokeStyle = "rgba(148, 163, 184, 0.34)";
-  ctx.lineWidth = 1;
-  ctx.stroke();
-  ctx.fillStyle = "rgba(226, 232, 240, 0.96)";
   ctx.fillText(
-    blockLabel,
-    badgeX + badgePaddingX,
-    badgeY + Math.floor((badgeHeight - metadataFontSize) / 2),
+    fitTextWithEllipsis(ctx, target.company.toUpperCase(), Math.max(1, metaRight - metaLeft)),
+    metaLeft,
+    y + 11,
   );
 
   ctx.fillStyle = "rgba(241, 245, 249, 0.98)";
@@ -616,9 +623,46 @@ function drawPanel(
   const modelLine = fitTextWithEllipsis(
     ctx,
     target.modelName,
-    Math.max(1, metaRight - metaLeft - badgeWidth - 8),
+    Math.max(1, metaRight - metaLeft),
   );
-  ctx.fillText(modelLine, metaLeft, y + 27);
+  ctx.fillText(modelLine, metaLeft, y + 25);
+
+  ctx.strokeStyle = "rgba(148, 163, 184, 0.24)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(metaLeft, y + 56.5);
+  ctx.lineTo(metaRight, y + 56.5);
+  ctx.stroke();
+
+  const statsWidth = Math.max(1, metaRight - metaLeft);
+  const statWidth = statsWidth / stats.length;
+  for (let idx = 0; idx < stats.length; idx += 1) {
+    const stat = stats[idx];
+    if (!stat) continue;
+    const columnX = metaLeft + idx * statWidth;
+    const textX = columnX + (idx > 0 ? 10 : 0);
+    const textWidth = Math.max(1, statWidth - (idx > 0 ? 10 : 0) - 8);
+
+    if (idx > 0) {
+      ctx.strokeStyle = "rgba(148, 163, 184, 0.18)";
+      ctx.beginPath();
+      ctx.moveTo(columnX + 0.5, y + 62);
+      ctx.lineTo(columnX + 0.5, y + 87);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(100, 116, 139, 0.95)";
+    ctx.font = `700 ${highFidelityMetadata ? 10 : 9}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+    ctx.fillText(stat.label, textX, y + 62);
+    ctx.fillStyle = "rgba(226, 232, 240, 0.98)";
+    let valueFontSize = metadataFontSize;
+    ctx.font = `600 ${valueFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+    while (valueFontSize > 9 && ctx.measureText(stat.value).width > textWidth) {
+      valueFontSize -= 1;
+      ctx.font = `600 ${valueFontSize}px "IBM Plex Sans", "Segoe UI", sans-serif`;
+    }
+    ctx.fillText(fitTextWithEllipsis(ctx, stat.value, textWidth), textX, y + 74);
+  }
 
   ctx.save();
   roundedRectPath(ctx, captureX, captureY, captureWidth, captureHeight, CAPTURE_RADIUS);
