@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import { addGalleryExample } from "@/lib/gallery/service";
 
@@ -11,7 +11,7 @@ const requestSchema = z.object({
 });
 
 export async function POST(request: Request, context: { params: Promise<{ publicId: string }> }) {
-  const userId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const userId = await getAuthenticatedUserId(request);
   if (!userId) return apiJson({ error: { code: "authentication_required", message: "Sign in to add an example." } }, 401);
   const parsed = requestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return apiJson({ error: { code: "invalid_request", message: "Check the saved generation." } }, 400);

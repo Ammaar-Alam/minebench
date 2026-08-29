@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import {
   ARENA_SESSION_COOKIE,
   ARENA_SESSION_COOKIE_OPTIONS,
@@ -42,7 +42,7 @@ export async function POST(request: Request) {
       exampleId: parsed.data.exampleId,
       reason: parsed.data.reason,
       note: parsed.data.note,
-      actorUserId: await getAuthenticatedUserId(request.headers.get("cookie")),
+      actorUserId: await getAuthenticatedUserId(request),
       sessionHash: hashVoteSession(sessionId),
       ipHmac: hashVoteIp(trustedClientIp(request.headers)),
     });

@@ -14,3 +14,10 @@ export function readArenaSessionId(cookieHeader: string | null): string | null {
   );
   return match?.[1]?.trim() || null;
 }
+
+export function appendArenaSessionCookie(response: Response, sessionId: string): void {
+  response.headers.append(
+    "Set-Cookie",
+    `${ARENA_SESSION_COOKIE}=${sessionId}; Path=/; Max-Age=${ARENA_SESSION_COOKIE_OPTIONS.maxAge}; HttpOnly; SameSite=Lax${ARENA_SESSION_COOKIE_OPTIONS.secure ? "; Secure" : ""}`,
+  );
+}

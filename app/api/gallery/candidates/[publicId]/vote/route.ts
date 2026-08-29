@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import {
   ARENA_SESSION_COOKIE,
   ARENA_SESSION_COOKIE_OPTIONS,
@@ -18,7 +18,7 @@ export async function PUT(request: Request, context: { params: Promise<{ publicI
   if (!parsed.success) return apiJson({ error: { code: "invalid_request", message: "Check the vote." } }, 400);
   const existing = readArenaSessionId(request.headers.get("cookie"));
   const sessionId = existing ?? crypto.randomUUID();
-  const userId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const userId = await getAuthenticatedUserId(request);
   try {
     const blocked = await isVoteWriteBlocked({
       userId,

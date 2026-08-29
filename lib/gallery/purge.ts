@@ -1,4 +1,5 @@
 import type { CustomBuildArtifact } from "@prisma/client";
+import { retryPendingAuthDeletions } from "@/lib/account/service";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { prisma } from "@/lib/prisma";
@@ -15,12 +16,19 @@ export async function purgeDueGalleryRecords(
     now?: Date;
     limit?: number;
     deleteArtifact?: DeleteArtifact;
+    deleteAuthUser?: (userId: string) => Promise<void>;
   } = {},
 ) {
   if (authorization.minebenchAdmin !== true) throw new Error("Gallery purge authorization is required");
   const now = options.now ?? new Date();
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_BATCH_SIZE, 500));
   const removeObject = options.deleteArtifact ?? deleteCustomBuildArtifact;
+
+  const authUsers = await retryPendingAuthDeletions({
+    now,
+    limit,
+    ...(options.deleteAuthUser ? { deleteAuthUser: options.deleteAuthUser } : {}),
+  });
 
   const expiredSecrets = await prisma.customBuildSecret.deleteMany({
     where: { expiresAt: { lte: now } },
@@ -154,6 +162,8 @@ export async function purgeDueGalleryRecords(
   });
 
   return {
+    authUsersDeleted: authUsers.deleted,
+    authDeletionFailures: authUsers.failures,
     expiredSecrets: expiredSecrets.count,
     objectsDeleted,
     objectDeletionFailures,

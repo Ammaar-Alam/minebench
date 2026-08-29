@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
 import { createSavedGenerations, listSavedGenerations } from "@/lib/generations/service";
 
@@ -53,7 +53,7 @@ const createRequest = z.object({
 });
 
 export async function POST(request: Request) {
-  const ownerId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const ownerId = await getAuthenticatedUserId(request);
   if (!ownerId) return apiJson({ error: { code: "authentication_required", message: "Sign in to save generations." } }, 401);
   const parsed = createRequest.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return apiJson({ error: { code: "invalid_request", message: "Check the generation settings." } }, 400);
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const ownerId = await getAuthenticatedUserId(request.headers.get("cookie"));
+  const ownerId = await getAuthenticatedUserId(request);
   if (!ownerId) return apiJson({ error: { code: "authentication_required", message: "Sign in to view saved generations." } }, 401);
   const url = new URL(request.url);
   const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);

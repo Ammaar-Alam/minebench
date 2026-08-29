@@ -1,4 +1,5 @@
 import type { User as SupabaseAuthUser } from "@supabase/supabase-js";
+import { Prisma } from "@prisma/client";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
@@ -30,6 +31,19 @@ type AccountSecurity = {
   signedInWithPassword: boolean;
 };
 
+const publicAccountSelect = {
+  id: true,
+  email: true,
+  displayName: true,
+  publicNickname: true,
+  isMineBenchAdmin: true,
+  gallerySuspendedAt: true,
+  gallerySuspensionReason: true,
+  hostedGenerationCount: true,
+  hostedGenerationLimit: true,
+  createdAt: true,
+} as const;
+
 function authDisplayName(authUser: SupabaseAuthUser): string | null {
   for (const key of ["name", "full_name", "preferred_username", "user_name"]) {
     const value = authUser.user_metadata?.[key];
@@ -54,32 +68,35 @@ export async function syncAuthUser(authUser: SupabaseAuthUser): Promise<PublicAc
   const email = authUser.email?.trim().toLowerCase();
   if (!email) return null;
   const displayName = authDisplayName(authUser);
+  const now = new Date();
+  const [account] = await prisma.$queryRaw<PublicAccount[]>(Prisma.sql`
+    INSERT INTO "User" (id, email, "displayName", "lastSeenAt", "createdAt", "updatedAt")
+    VALUES (${authUser.id}::uuid, ${email}, ${displayName}, ${now}, ${now}, ${now})
+    ON CONFLICT (id) DO UPDATE
+    SET email = EXCLUDED.email,
+        "displayName" = COALESCE(EXCLUDED."displayName", "User"."displayName"),
+        "lastSeenAt" = EXCLUDED."lastSeenAt",
+        "updatedAt" = EXCLUDED."updatedAt"
+    WHERE "User"."deletedAt" IS NULL
+    RETURNING
+      id,
+      email,
+      "displayName",
+      "publicNickname",
+      "isMineBenchAdmin",
+      "gallerySuspendedAt",
+      "gallerySuspensionReason",
+      "hostedGenerationCount",
+      "hostedGenerationLimit",
+      "createdAt"
+  `);
+  return account ?? null;
+}
 
-  return prisma.user.upsert({
-    where: { id: authUser.id },
-    create: {
-      id: authUser.id,
-      email,
-      displayName,
-      lastSeenAt: new Date(),
-    },
-    update: {
-      email,
-      lastSeenAt: new Date(),
-      ...(displayName ? { displayName } : {}),
-    },
-    select: {
-      id: true,
-      email: true,
-      displayName: true,
-      publicNickname: true,
-      isMineBenchAdmin: true,
-      gallerySuspendedAt: true,
-      gallerySuspensionReason: true,
-      hostedGenerationCount: true,
-      hostedGenerationLimit: true,
-      createdAt: true,
-    },
+export async function getPublicAccount(userId: string): Promise<PublicAccount | null> {
+  return prisma.user.findFirst({
+    where: { id: userId, deletedAt: null },
+    select: publicAccountSelect,
   });
 }
 
@@ -109,20 +126,6 @@ export async function getCurrentAccountSecurity(): Promise<AccountSecurity | nul
     isPasswordRecovery: isPasswordRecoveryMethod(amr),
     signedInWithPassword: hasAuthenticationMethod(amr, "password"),
   };
-}
-
-export async function getAuthenticatedUserId(cookieHeader: string | null): Promise<string | null> {
-  if (!hasSupabaseAuthCookie(cookieHeader)) return null;
-  try {
-    const supabase = await createSupabaseServerClient();
-    const { data, error } = await supabase.auth.getClaims();
-    const subject = data?.claims.sub;
-    return !error && typeof subject === "string" && /^[0-9a-f-]{36}$/i.test(subject)
-      ? subject
-      : null;
-  } catch {
-    return null;
-  }
 }
 
 export async function claimAnonymousPublicVotes(

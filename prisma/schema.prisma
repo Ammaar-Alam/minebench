@@ -70,6 +70,8 @@ model User {
   totalGenerationCount     Int       @default(0)
   hostedGenerationCount    Int       @default(0)
   hostedGenerationLimit    Int       @default(100)
+  deletedAt                DateTime?
+  authDeletedAt            DateTime?
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
@@ -92,6 +94,7 @@ model User {
   galleryVoteBlocksReversed GalleryVoteBlock[]       @relation("GalleryVoteBlockReverser")
 
   @@index([gallerySuspendedById])
+  @@index([deletedAt, authDeletedAt])
 }
 
 model Organization {

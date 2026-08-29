@@ -11,7 +11,7 @@ import { isArenaCapacityError, withArenaWriteRetry } from "@/lib/arena/writeRetr
 import { ServerTiming } from "@/lib/serverTiming";
 import { resolveModelDisplayName } from "@/lib/ai/modelCatalog";
 import { invalidateStealthSamplingCache } from "@/lib/stealth/sampling";
-import { getAuthenticatedUserId } from "@/lib/auth/account";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import {
   ARENA_SESSION_COOKIE,
   ARENA_SESSION_COOKIE_OPTIONS,
@@ -157,7 +157,7 @@ export async function POST(req: Request) {
     }
     const session = getOrCreateSessionId(req);
     const sessionId = session.id;
-    const authUserId = await getAuthenticatedUserId(req.headers.get("cookie"));
+    const authUserId = await getAuthenticatedUserId(req);
     const blocked = await isVoteWriteBlocked({
       userId: authUserId,
       sessionId,
