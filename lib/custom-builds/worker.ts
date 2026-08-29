@@ -9,13 +9,16 @@ import {
   failCustomBuildJob,
   getCustomBuildJobLeaseSeconds,
   recoverStaleCustomBuildJobLeases,
+  releaseCustomBuildJob,
   renewCustomBuildJobLease,
 } from "@/lib/custom-builds/jobs";
 import { runCustomBuildExportJob } from "@/lib/custom-builds/exportJob";
 import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
 import {
   CustomBuildLeaseLostError,
+  CustomBuildWorkerShutdownError,
   isCustomBuildLeaseLostError,
+  isCustomBuildWorkerShutdownError,
   throwIfCustomBuildLeaseLost,
 } from "@/lib/custom-builds/lease";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
@@ -43,6 +46,10 @@ export function getCustomBuildWorkerPollMs(): number {
 
 export function getCustomBuildWorkerConcurrency(): number {
   return readIntEnv("CUSTOM_BUILD_WORKER_CONCURRENCY", 10, 1, 20);
+}
+
+export function getCustomBuildWorkerShutdownGraceMs(): number {
+  return readIntEnv("CUSTOM_BUILD_WORKER_SHUTDOWN_GRACE_MS", 15_000, 1_000, 120_000);
 }
 
 export function getCustomBuildWorkerId(): string {
@@ -193,12 +200,12 @@ async function processClaimedJob(
   job: CustomBuildJob,
   workerId: string,
   processingGate: ReturnType<typeof createCustomBuildProcessingGate>,
+  leaseAbort = new AbortController(),
 ): Promise<{
   processed: boolean;
   jobId?: string;
   jobType?: string;
 }> {
-  const leaseAbort = new AbortController();
   const heartbeat = startCustomBuildJobHeartbeat(job, workerId, leaseAbort);
 
   try {
@@ -207,6 +214,11 @@ async function processClaimedJob(
     await completeCustomBuildJob(job.id, workerId);
     return { processed: true, jobId: job.id, jobType: job.type };
   } catch (error) {
+    if (isCustomBuildWorkerShutdownError(error)) {
+      console.warn(`custom build job ${job.id} releasing for worker shutdown`);
+      await releaseCustomBuildJob(job.id, workerId);
+      return { processed: false, jobId: job.id, jobType: job.type };
+    }
     if (isCustomBuildLeaseLostError(error)) {
       console.warn(`custom build job ${job.id} stopped: ${redactSensitiveText(error)}`);
       return { processed: true, jobId: job.id, jobType: job.type };
@@ -267,7 +279,9 @@ async function checkAndReportQueueHealth(): Promise<void> {
 export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId()): Promise<void> {
   let shutdownRequested = false;
   const concurrency = getCustomBuildWorkerConcurrency();
+  const shutdownGraceMs = getCustomBuildWorkerShutdownGraceMs();
   const processingGate = createCustomBuildProcessingGate();
+  const activeControllers = new Set<AbortController>();
   const activeJobs = new Set<Promise<unknown>>();
   const heartbeat = startActiveGenerationsHeartbeat(
     () => activeJobs.size,
@@ -279,10 +293,22 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   const queueHeartbeat = setInterval(() => {
     void checkAndReportQueueHealth();
   }, 30_000);
+  let shutdownTimer: NodeJS.Timeout | null = null;
+  const triggerShutdownAbort = () => {
+    for (const controller of activeControllers) {
+      if (!controller.signal.aborted) {
+        controller.abort(new CustomBuildWorkerShutdownError());
+      }
+    }
+  };
   const stop = () => {
     if (shutdownRequested) return;
     shutdownRequested = true;
     recordActiveGenerations(activeJobs.size, "worker", undefined, false);
+    if (activeJobs.size > 0 && !shutdownTimer) {
+      shutdownTimer = setTimeout(triggerShutdownAbort, shutdownGraceMs);
+      shutdownTimer.unref?.();
+    }
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
@@ -295,11 +321,19 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
         const job = await claimNextCustomBuildJob(workerId);
         if (!job) break;
         claimed = true;
-        const active = processClaimedJob(job, workerId, processingGate);
+        const controller = new AbortController();
+        activeControllers.add(controller);
+        const active = processClaimedJob(job, workerId, processingGate, controller);
         activeJobs.add(active);
         void active.then(
-          () => activeJobs.delete(active),
-          () => activeJobs.delete(active),
+          () => {
+            activeControllers.delete(controller);
+            activeJobs.delete(active);
+          },
+          () => {
+            activeControllers.delete(controller);
+            activeJobs.delete(active);
+          },
         );
       }
 
@@ -311,8 +345,14 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
       }
     }
 
+    if (shutdownRequested && activeJobs.size > 0 && !shutdownTimer) {
+      shutdownTimer = setTimeout(triggerShutdownAbort, shutdownGraceMs);
+      shutdownTimer.unref?.();
+    }
+
     await Promise.all(activeJobs);
   } finally {
+    if (shutdownTimer) clearTimeout(shutdownTimer);
     clearInterval(heartbeat);
     clearInterval(queueHeartbeat);
     await prisma.$disconnect();

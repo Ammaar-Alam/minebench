@@ -216,6 +216,42 @@ export async function completeCustomBuildJob(
   });
 }
 
+export async function releaseCustomBuildJob(
+  jobId: string,
+  workerId: string,
+  client: PrismaClient | PrismaTx = prisma,
+): Promise<boolean> {
+  const rows = await client.$queryRaw<Array<{ id: string; customBuildId: string; type: string }>>`
+    UPDATE "CustomBuildJob"
+    SET status = 'queued'::"CustomBuildJobStatus",
+        "lockedBy" = NULL,
+        "lockedAt" = NULL,
+        "leaseExpiresAt" = NULL,
+        "runAfter" = now(),
+        attempts = GREATEST(0, attempts - 1),
+        "updatedAt" = now()
+    WHERE id = ${jobId}
+      AND status = 'running'::"CustomBuildJobStatus"
+      AND "lockedBy" = ${workerId}
+    RETURNING id, "customBuildId", type::text;
+  `;
+  if (rows.length !== 1) return false;
+  const row = rows[0];
+  if (row?.type === "generate" && row.customBuildId) {
+    await client.customBuild.updateMany({
+      where: {
+        id: row.customBuildId,
+        status: "running",
+      },
+      data: {
+        status: "queued",
+        currentStage: "queued",
+      },
+    });
+  }
+  return true;
+}
+
 export async function failCustomBuildJob(
   jobId: string,
   workerId: string,

@@ -18,6 +18,7 @@ async function main() {
     getCustomBuildWorkerConcurrency,
     getCustomBuildWorkerHeartbeatMs,
     getCustomBuildWorkerId,
+    getCustomBuildWorkerShutdownGraceMs,
     isTerminalCustomBuildJobFailure,
   } = await import("../../../lib/custom-builds/worker");
 
@@ -26,6 +27,16 @@ async function main() {
     true,
     "a terminally failed build must not leave its job runnable",
   );
+
+  assert.equal(
+    getCustomBuildWorkerShutdownGraceMs(),
+    15_000,
+    "worker shutdown grace period should default to 15s",
+  );
+
+  process.env.CUSTOM_BUILD_WORKER_SHUTDOWN_GRACE_MS = "5000";
+  assert.equal(getCustomBuildWorkerShutdownGraceMs(), 5_000);
+  delete process.env.CUSTOM_BUILD_WORKER_SHUTDOWN_GRACE_MS;
 
   assert.equal(
     getCustomBuildWorkerConcurrency(),
@@ -135,6 +146,11 @@ async function main() {
     workerSource.includes("isCustomBuildLeaseLostError(error)") &&
       workerSource.includes("return { processed: true, jobId: job.id, jobType: job.type };"),
     "lost leases should stop the worker path without failing a job it may no longer own",
+  );
+  assert.ok(
+    workerSource.includes("isCustomBuildWorkerShutdownError(error)") &&
+      workerSource.includes("await releaseCustomBuildJob(job.id, workerId);"),
+    "worker shutdown should cleanly release claimed jobs back to queued status",
   );
   assert.ok(
     workerSource.includes("const queueHeartbeat = setInterval") &&

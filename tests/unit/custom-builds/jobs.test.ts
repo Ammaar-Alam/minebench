@@ -6,6 +6,7 @@ async function main() {
   const {
     failCustomBuildJob,
     recoverStaleCustomBuildJobLeases,
+    releaseCustomBuildJob,
     renewCustomBuildJobLease,
   } = await import("../../../lib/custom-builds/jobs");
 
@@ -144,6 +145,28 @@ async function main() {
   assert.equal(parentFailure?.status, "failed");
   assert.equal(parentFailure?.errorRetryable, false);
   assert.ok(parentFailure?.deletionPendingAt instanceof Date);
+
+  let releaseQuery = "";
+  const releaseUpdates: Array<Record<string, unknown>> = [];
+  const releaseClient = {
+    $queryRaw: async (strings: TemplateStringsArray) => {
+      releaseQuery = strings.join("?");
+      return [{ id: "released-job-row", customBuildId: "released-build-row", type: "generate" }];
+    },
+    customBuild: {
+      updateMany: async (args: { data: Record<string, unknown> }) => {
+        releaseUpdates.push(args.data);
+        return { count: 1 };
+      },
+    },
+  };
+  const released = await releaseCustomBuildJob("released-job-row", "worker-row", releaseClient as never);
+  assert.equal(released, true);
+  assert.match(releaseQuery, /status = 'queued'/);
+  assert.match(releaseQuery, /attempts = GREATEST\(0, attempts - 1\)/);
+  assert.equal(releaseUpdates.length, 1);
+  assert.equal(releaseUpdates[0]?.status, "queued");
+  assert.equal(releaseUpdates[0]?.currentStage, "queued");
 
   console.log("custom build stale job recovery checks passed");
 }
