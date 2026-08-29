@@ -33,6 +33,7 @@ type SelectedModelValue =
   | ModelKey
   | typeof OPENROUTER_MODEL_VALUE
   | typeof CUSTOM_MODEL_VALUE;
+type GenerationPreflightMode = "free" | "save" | "key";
 
 type CustomSandboxModel = {
   displayName: string;
@@ -111,6 +112,7 @@ const OPENROUTER_MODEL_VALUE = "__openrouter__";
 const CUSTOM_MODEL_VALUE = "__custom_api__";
 const HOSTED_GEMINI_MODEL_KEY = "gemini_3_7_flash";
 const HOSTED_GEMINI_NOTICE_KEY = "mb_hosted_gemini_3_7_notice_v1";
+let anonymousHostedGeminiNoticeShown = false;
 const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
   displayName: "OpenAI-compatible model",
   modelId: "",
@@ -135,9 +137,13 @@ const DEFAULT_MODEL_B: ModelKey =
 
 function HostedGeminiAnnouncement({
   open,
+  signedIn,
+  signInHref,
   onDismiss,
 }: {
   open: boolean;
+  signedIn: boolean;
+  signInHref: string;
   onDismiss: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -165,12 +171,21 @@ function HostedGeminiAnnouncement({
             Gemini 3.7 Flash is free
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">
-            Signed-in users can generate without a Gemini or OpenRouter API key for a limited time.
+            {signedIn
+              ? "No API key needed for a limited time."
+              : "Sign in. No API key needed."}
           </p>
         </div>
-        <button type="button" className="mb-btn mb-btn-primary h-11 w-full" onClick={onDismiss}>
-          Got it
-        </button>
+        {signedIn ? (
+          <button type="button" className="mb-btn mb-btn-primary h-11 w-full" onClick={onDismiss}>
+            Start building
+          </button>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            <Link href={signInHref} className="mb-btn mb-btn-primary h-11">Start free</Link>
+            <button type="button" className="mb-btn h-11" onClick={onDismiss}>Not now</button>
+          </div>
+        )}
       </div>
     </dialog>
   );
@@ -535,12 +550,14 @@ function customBuildRetryProvider(status: SavedGenerationPayload): keyof Provide
 export function SandboxLive({
   initialPrompt,
   signedIn,
+  hostedGeminiEnabled,
   hostedGeminiAvailable,
   hasPublicNickname,
   gallerySuspended,
 }: {
   initialPrompt?: string;
   signedIn: boolean;
+  hostedGeminiEnabled: boolean;
   hostedGeminiAvailable: boolean;
   hasPublicNickname: boolean;
   gallerySuspended: boolean;
@@ -567,14 +584,21 @@ export function SandboxLive({
   );
   const [running, setRunning] = useState(false);
   const [requestError, setRequestError] = useState<string | null>(null);
-  const [showGenerationPreflight, setShowGenerationPreflight] = useState(false);
+  const [generationPreflight, setGenerationPreflight] =
+    useState<GenerationPreflightMode | null>(null);
+  const [generationPreflightMessage, setGenerationPreflightMessage] = useState<string>();
   const [showHostedGeminiAnnouncement, setShowHostedGeminiAnnouncement] = useState(false);
   const savedKeyCount = Object.values(providerKeys).filter((value) => Boolean(value?.trim())).length;
-  const canUseHostedGemini = Boolean(
-    hostedGeminiAvailable &&
-    !providerKeys.gemini?.trim() &&
-    !providerKeys.openrouter?.trim(),
+  const showHostedGeminiOffer = Boolean(
+    hostedGeminiEnabled &&
+    (!signedIn ||
+      (hostedGeminiAvailable &&
+        !providerKeys.gemini?.trim() &&
+        !providerKeys.openrouter?.trim())),
   );
+  const signInHref = `/sign-in?next=${encodeURIComponent(
+    `/sandbox?mode=live&prompt=${encodeURIComponent(prompt)}`,
+  )}`;
   const [apiKeysOpen, setApiKeysOpen] = useState(false);
   const [providerKeysOpen, setProviderKeysOpen] = useState(false);
   const [, forceRender] = useState(0);
@@ -588,6 +612,7 @@ export function SandboxLive({
   );
   const viewerARef = useRef<VoxelViewerHandle | null>(null);
   const viewerBRef = useRef<VoxelViewerHandle | null>(null);
+  const apiKeysSectionRef = useRef<HTMLElement | null>(null);
 
   const modelGroups = useMemo(() => {
     const groups = new Map<string, (typeof ENABLED_MODELS)[number][]>();
@@ -674,7 +699,17 @@ export function SandboxLive({
   }, [providerKeys]);
 
   useEffect(() => {
-    if (!signedIn || !hostedGeminiAvailable) return;
+    if (!hostedGeminiEnabled || (signedIn && !hostedGeminiAvailable)) {
+      setShowHostedGeminiAnnouncement(false);
+      return;
+    }
+    if (!signedIn) {
+      if (!anonymousHostedGeminiNoticeShown) {
+        anonymousHostedGeminiNoticeShown = true;
+        setShowHostedGeminiAnnouncement(true);
+      }
+      return;
+    }
     try {
       if (!window.localStorage.getItem(HOSTED_GEMINI_NOTICE_KEY)) {
         setShowHostedGeminiAnnouncement(true);
@@ -682,17 +717,19 @@ export function SandboxLive({
     } catch {
       setShowHostedGeminiAnnouncement(true);
     }
-  }, [hostedGeminiAvailable, signedIn]);
+  }, [hostedGeminiAvailable, hostedGeminiEnabled, signedIn]);
 
   function dismissHostedGeminiAnnouncement() {
-    try {
-      window.localStorage.setItem(HOSTED_GEMINI_NOTICE_KEY, "1");
-    } catch {}
+    if (signedIn) {
+      try {
+        window.localStorage.setItem(HOSTED_GEMINI_NOTICE_KEY, "1");
+      } catch {}
+    }
     setShowHostedGeminiAnnouncement(false);
   }
 
   function modelOptionLabel(model: (typeof ENABLED_MODELS)[number]): string {
-    return model.key === HOSTED_GEMINI_MODEL_KEY && canUseHostedGemini
+    return model.key === HOSTED_GEMINI_MODEL_KEY && showHostedGeminiOffer
       ? `${model.displayName} · Free`
       : model.displayName;
   }
@@ -869,6 +906,44 @@ export function SandboxLive({
       displayName: model.displayName,
       modelId: model.modelId,
     };
+  }
+
+  function hasProviderKey(model: SelectedLiveModel): boolean {
+    return Object.values(
+      selectGenerationProviderKeys([customBuildRequestModel(model)], providerKeys),
+    ).some((value) => Boolean(value?.trim()));
+  }
+
+  function missingProviderKeyMessage(models: SelectedLiveModel[]): string {
+    if (models.length !== 1) {
+      return "Add the required API keys for the selected models.";
+    }
+    const [model] = models;
+    if (model.kind === "custom") {
+      return model.provider === "openrouter"
+        ? `Add an OpenRouter key to generate with ${model.displayName}.`
+        : `Add an API key to generate with ${model.displayName}.`;
+    }
+    const catalogModel = ENABLED_MODELS.find((entry) => entry.key === model.modelKey);
+    if (!catalogModel || catalogModel.forceOpenRouter) {
+      return `Add an OpenRouter key to generate with ${model.displayName}.`;
+    }
+    const directLabel =
+      DIRECT_PROVIDER_KEYS.find(([provider]) => provider === catalogModel.provider)?.[1] ??
+      providerLabel(catalogModel.provider);
+    const article = /^[aeiou]/i.test(directLabel) ? "an" : "a";
+    return catalogModel.openRouterModelId
+      ? `Add ${article} ${directLabel} or OpenRouter key to generate with ${model.displayName}.`
+      : `Add ${article} ${directLabel} key to generate with ${model.displayName}.`;
+  }
+
+  function openApiKeys() {
+    setGenerationPreflight(null);
+    setApiKeysOpen(true);
+    setProviderKeysOpen(true);
+    window.requestAnimationFrame(() => {
+      apiKeysSectionRef.current?.scrollIntoView({ block: "start" });
+    });
   }
 
   function applyCustomBuildStatus(args: {
@@ -1179,8 +1254,40 @@ export function SandboxLive({
       setRequestError("Enter a chat completions URL for the OpenAI-compatible model.");
       return;
     }
+    const requestModels = selectedModels.map(customBuildRequestModel);
+    const missingProviderModels = selectedModels.filter((model) => {
+      if (
+        signedIn &&
+        hostedGeminiAvailable &&
+        model.kind === "catalog" &&
+        model.modelKey === HOSTED_GEMINI_MODEL_KEY
+      ) {
+        return false;
+      }
+      return !hasProviderKey(model);
+    });
+    const selectedFreeHostedGemini = Boolean(
+      hostedGeminiEnabled &&
+      missingProviderModels.length === 1 &&
+      missingProviderModels[0]?.kind === "catalog" &&
+      missingProviderModels[0].modelKey === HOSTED_GEMINI_MODEL_KEY,
+    );
     if (!signedIn && !continueTransient) {
-      setShowGenerationPreflight(true);
+      if (selectedFreeHostedGemini) {
+        setGenerationPreflightMessage(undefined);
+        setGenerationPreflight("free");
+      } else if (missingProviderModels.length > 0) {
+        setGenerationPreflightMessage(missingProviderKeyMessage(missingProviderModels));
+        setGenerationPreflight("key");
+      } else {
+        setGenerationPreflightMessage(undefined);
+        setGenerationPreflight("save");
+      }
+      return;
+    }
+    if (missingProviderModels.length > 0) {
+      setRequestError(missingProviderKeyMessage(missingProviderModels));
+      openApiKeys();
       return;
     }
     const durableRunId = signedIn ? durableRunSequenceRef.current + 1 : null;
@@ -1214,7 +1321,6 @@ export function SandboxLive({
     const abortController = new AbortController();
     generateAbortRef.current = abortController;
     try {
-      const requestModels = selectedModels.map(customBuildRequestModel);
       const sanitizedKeys = selectGenerationProviderKeys(requestModels, providerKeys);
 
       if (signedIn) {
@@ -1607,6 +1713,23 @@ export function SandboxLive({
           <div className="text-sm text-muted">Build from your own prompt.</div>
         </div>
 
+        {showHostedGeminiOffer ? (
+          <div className="-mx-4 flex flex-col gap-3 border-y border-accent/20 bg-accent/[0.06] px-4 py-3 sm:-mx-5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+            <div className="min-w-0">
+              <div className="mb-eyebrow text-accent">Free right now</div>
+              <div className="mt-1 text-sm font-semibold text-fg">Gemini 3.7 Flash</div>
+              <div className="mt-0.5 text-xs text-muted">
+                {signedIn ? "No API key needed." : "Sign in. No API key needed."}
+              </div>
+            </div>
+            {!signedIn ? (
+              <Link href={signInHref} className="mb-btn mb-btn-primary h-11 shrink-0 px-4">
+                Start free
+              </Link>
+            ) : null}
+          </div>
+        ) : null}
+
         <label className="flex flex-col gap-2">
           <span className="mb-eyebrow">Prompt</span>
           <textarea
@@ -1793,7 +1916,7 @@ export function SandboxLive({
         </section>
 
         {requestError ? (
-          <div className="rounded-md border border-danger/30 bg-danger/[0.08] px-3 py-2 text-xs text-danger">
+          <div role="alert" className="rounded-md border border-danger/30 bg-danger/[0.08] px-3 py-2 text-xs text-danger">
             {requestError}
           </div>
         ) : null}
@@ -1832,7 +1955,7 @@ export function SandboxLive({
         {resultCards}
       </div>
 
-      <section className="border-t border-border/70 xl:col-span-2">
+      <section ref={apiKeysSectionRef} className="scroll-mt-24 border-t border-border/70 xl:col-span-2">
         <button
           type="button"
           aria-expanded={apiKeysOpen}
@@ -1973,16 +2096,21 @@ export function SandboxLive({
       </section>
 
       <GenerationPreflightDialog
-        open={showGenerationPreflight}
-        signInHref={`/sign-in?next=${encodeURIComponent(`/sandbox?mode=live&prompt=${encodeURIComponent(prompt)}`)}`}
-        onClose={() => setShowGenerationPreflight(false)}
+        open={generationPreflight !== null}
+        mode={generationPreflight ?? "save"}
+        message={generationPreflightMessage}
+        signInHref={signInHref}
+        onClose={() => setGenerationPreflight(null)}
         onContinue={() => {
-          setShowGenerationPreflight(false);
+          setGenerationPreflight(null);
           void runGenerate(true);
         }}
+        onUseKey={openApiKeys}
       />
       <HostedGeminiAnnouncement
         open={showHostedGeminiAnnouncement}
+        signedIn={signedIn}
+        signInHref={signInHref}
         onDismiss={dismissHostedGeminiAnnouncement}
       />
     </div>

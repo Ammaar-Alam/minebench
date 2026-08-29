@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ARENA_MESH_FACTS_MIN_BLOCKS,
@@ -41,6 +42,7 @@ import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
 import { ErrorState } from "@/components/ErrorState";
 import { trackEvent } from "@/lib/analytics";
+import { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
 import {
   getArenaBlockCountBucket,
   getArenaLatencyBucket,
@@ -1191,6 +1193,9 @@ function isInteractiveTarget(target: EventTarget | null) {
 }
 
 const ARENA_PREMESH_MAX_BLOCK_COUNT = 150_000;
+const ANONYMOUS_VOTE_CONVERSION_THRESHOLD = 8;
+const ANONYMOUS_VOTE_COUNT_KEY = "mb_arena_anonymous_vote_count_v1";
+const ANONYMOUS_VOTE_CONVERSION_SEEN_KEY = "mb_arena_conversion_seen_v1";
 
 function getArenaPremeshedMeshKey(
   matchupId: string,
@@ -1206,6 +1211,7 @@ export function Arena() {
   const [retrying, setRetrying] = useState(false);
   const [slowInitialLoad, setSlowInitialLoad] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [arenaConversionOpen, setArenaConversionOpen] = useState(false);
   const [voteConfirming, setVoteConfirming] = useState<VoteConfirmTarget | null>(null);
   const voteConfirmTimerRef = useRef<number | null>(null);
   const [voteWarning, setVoteWarning] = useState<string | null>(null);
@@ -1252,6 +1258,8 @@ export function Arena() {
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
   const advanceNowRequestedAtRef = useRef<number | null>(null);
   const nextMatchupLoadingRef = useRef(false);
+  const anonymousVoteCountRef = useRef(0);
+  const arenaConversionSeenRef = useRef(false);
   const handleVoteRef = useRef<(choice: VoteChoice) => Promise<void>>(
     async () => undefined
   );
@@ -2536,6 +2544,41 @@ export function Arena() {
     }
   }
 
+  function recordAnonymousVoteForConversion() {
+    if (hasSupabaseAuthCookie(document.cookie) || arenaConversionSeenRef.current) return;
+
+    let voteCount = anonymousVoteCountRef.current + 1;
+    try {
+      if (window.localStorage.getItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY)) {
+        arenaConversionSeenRef.current = true;
+        return;
+      }
+      const storedVoteCount = Number.parseInt(
+        window.localStorage.getItem(ANONYMOUS_VOTE_COUNT_KEY) ?? "0",
+        10,
+      );
+      voteCount =
+        Math.max(
+          Number.isFinite(storedVoteCount) ? storedVoteCount : 0,
+          voteCount - 1,
+        ) + 1;
+      window.localStorage.setItem(ANONYMOUS_VOTE_COUNT_KEY, String(voteCount));
+    } catch {
+      // Keep counting in this tab when storage is unavailable
+    }
+
+    anonymousVoteCountRef.current = voteCount;
+    if (voteCount < ANONYMOUS_VOTE_CONVERSION_THRESHOLD) return;
+
+    arenaConversionSeenRef.current = true;
+    try {
+      window.localStorage.setItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY, "1");
+    } catch {
+      // The in-memory guard still keeps the prompt one-time for this tab
+    }
+    setArenaConversionOpen(true);
+  }
+
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     if (isMatchupVoteBlocked(matchup, sideLoadStateRef.current)) return;
@@ -2551,6 +2594,7 @@ export function Arena() {
     try {
       const response = await submitArenaAction(matchup.id, choice);
       advanceAt = completeReveal(matchup.id, response, REVEAL_MS_AFTER_VOTE);
+      recordAnonymousVoteForConversion();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Couldn't record your vote.";
       flashVoteWarning(msg);
@@ -3217,6 +3261,38 @@ export function Arena() {
               </div>
             </div>
           </div>
+
+          {arenaConversionOpen ? (
+            <aside
+              role="status"
+              className="flex flex-col gap-4 border-t border-accent/30 bg-accent/[0.06] px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <span className="mb-eyebrow text-accent">8 votes in</span>
+                <p className="mt-1 font-display text-lg font-semibold tracking-tight text-fg">
+                  Keep your 8 votes
+                </p>
+                <p className="mt-1 text-sm text-muted">
+                  Generate free with Gemini 3.7 Flash.
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Link
+                  href="/sign-in?next=/sandbox%3Fmode%3Dlive"
+                  className="mb-btn mb-btn-primary h-11 px-4 text-sm"
+                >
+                  Sign in
+                </Link>
+                <button
+                  type="button"
+                  className="mb-btn mb-btn-ghost h-11 px-3 text-sm"
+                  onClick={() => setArenaConversionOpen(false)}
+                >
+                  Not now
+                </button>
+              </div>
+            </aside>
+          ) : null}
       </div>
 
       {/* how it works — pipeline diagram */}

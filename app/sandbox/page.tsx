@@ -49,6 +49,9 @@ export default async function SandboxPage({
   const prompt =
     !hasComparisonState && typeof promptParam === "string" ? promptParam : undefined;
   const account = await getCurrentAccount().catch(() => null);
+  const hostedGeminiEnabled = Boolean(
+    process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim(),
+  );
   return (
     <>
       <script
@@ -59,9 +62,10 @@ export default async function SandboxPage({
       <Sandbox
         initialPrompt={prompt}
         signedIn={Boolean(account)}
+        hostedGeminiEnabled={hostedGeminiEnabled}
         hostedGeminiAvailable={Boolean(
           account &&
-          process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim() &&
+          hostedGeminiEnabled &&
           account.hostedGenerationCount < account.hostedGenerationLimit
         )}
         hasPublicNickname={Boolean(account?.publicNickname)}
