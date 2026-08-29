@@ -249,6 +249,7 @@ export async function listGalleryCandidates(options: {
 }) {
   const limit = Math.max(1, Math.min(options.limit ?? 24, 48));
   const query = options.query?.trim().slice(0, 100);
+  const matchesCustomPrefix = Boolean(query && "custom".includes(query.toLowerCase()));
   const cursor = decodeGalleryCursor(options.cursor);
   const cursorWhere: Prisma.GalleryCandidateWhereInput = cursor
     ? options.sort === "top"
@@ -280,6 +281,7 @@ export async function listGalleryCandidates(options: {
           OR: [
             { modelDisplayName: { contains: query, mode: "insensitive" as const } },
             { modelId: { contains: query, mode: "insensitive" as const } },
+            ...(matchesCustomPrefix ? [{ modelKind: "custom" }] : []),
           ],
         },
       } satisfies Prisma.GalleryExampleWhereInput
@@ -333,7 +335,8 @@ export async function listGalleryCandidates(options: {
       const matchedModels = modelQuery
         ? models.filter((model) =>
             model.modelDisplayName.toLowerCase().includes(modelQuery)
-            || model.modelId.toLowerCase().includes(modelQuery),
+            || model.modelId.toLowerCase().includes(modelQuery)
+            || (matchesCustomPrefix && model.modelKind === "custom"),
           )
         : [];
       return publicCandidate(
