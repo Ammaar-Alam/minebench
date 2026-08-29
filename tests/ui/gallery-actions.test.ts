@@ -18,6 +18,7 @@ const sandboxLive = readFileSync("components/sandbox/SandboxLive.tsx", "utf8");
 const adminActions = readFileSync("app/admin/gallery/actions.ts", "utf8");
 const adminDashboard = readFileSync("components/gallery/GalleryAdminDashboard.tsx", "utf8");
 const galleryService = readFileSync("lib/gallery/service.ts", "utf8");
+const galleryRoute = readFileSync("app/api/gallery/candidates/route.ts", "utf8");
 
 assert.ok(
   detail.includes("candidate.canRemove") &&
@@ -129,6 +130,15 @@ assert.ok(
     explore.includes("candidate.exampleCount - 2") &&
     !explore.includes("featured"),
   "Gallery cards should keep a clear media frame and reveal additional model builds without extra requests",
+);
+assert.ok(
+  explore.includes("candidate.matchedModelLabels") &&
+    explore.includes('params.set("q", query)') &&
+    explore.includes('placeholder="Search prompts or models…"') &&
+    galleryRoute.includes('query: url.searchParams.get("q")') &&
+    galleryService.includes('modelDisplayName: { contains: query') &&
+    galleryService.includes('modelId: { contains: query'),
+  "Gallery search should cover every visible example and surface hidden model matches",
 );
 assert.ok(
   !page.includes("key={sort}") &&

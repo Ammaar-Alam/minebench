@@ -22,6 +22,7 @@ export async function GET(request: Request) {
       sort: url.searchParams.get("sort") === "new" ? "new" : "top",
       cursor: url.searchParams.get("cursor"),
       limit: Number.isFinite(limit) ? limit : 24,
+      query: url.searchParams.get("q"),
       sessionId: readArenaSessionId(request.headers.get("cookie")),
       userId: await getAuthenticatedUserId(request),
     }));

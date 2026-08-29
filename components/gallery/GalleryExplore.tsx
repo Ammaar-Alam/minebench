@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useDeferredValue, useMemo, useRef, useState } from "react";
+import { useEffect, useDeferredValue, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
@@ -51,6 +51,13 @@ export function GallerySkeletonGrid({ count = 8 }: { count?: number }) {
       ))}
     </div>
   );
+}
+
+function galleryCandidatesUrl(sort: "top" | "new", query: string, cursor?: string) {
+  const params = new URLSearchParams({ sort });
+  if (query) params.set("q", query);
+  if (cursor) params.set("cursor", cursor);
+  return `/api/gallery/candidates?${params}`;
 }
 
 function SubmissionDialog({
@@ -141,13 +148,18 @@ function GalleryCard({
   sort: "top" | "new";
 }) {
   const modelLabels = [...new Set(
-    [candidate.cover?.model.label, candidate.alternate?.model.label]
+    [
+      ...candidate.matchedModelLabels,
+      candidate.cover?.model.label,
+      candidate.alternate?.model.label,
+    ]
       .filter((label): label is string => Boolean(label)),
   )];
+  const visibleModelLabels = modelLabels.slice(0, 2);
   const jsonSize = formatBuildJsonSize(candidate.cover?.jsonBytes);
   const duration = formatBuildDuration(candidate.cover?.generationTimeMs);
   return (
-    <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[transform,border-color,background-color,box-shadow] duration-200 ease-out hover:-translate-y-0.5 hover:border-accent/35 hover:bg-card/20 hover:shadow-soft active:translate-y-0 motion-reduce:transform-none motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
+    <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] duration-200 ease-out hover:border-accent/35 hover:bg-card/20 motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
       <Link href={`/gallery/${candidate.id}${sort === "new" ? "?sort=new" : ""}`} className="flex flex-1 flex-col focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
           <div className="relative aspect-[4/3] overflow-hidden bg-bg/45">
@@ -172,11 +184,13 @@ function GalleryCard({
             {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
           </div>
           <h2 className="line-clamp-3 text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none">{candidate.prompt}</h2>
-          {modelLabels.length ? <p className="mt-auto flex min-w-0 items-center gap-2 pt-3 text-sm text-muted" title={modelLabels.join(", ")}><span className="truncate">{modelLabels.join(" · ")}</span>{candidate.exampleCount > 2 ? <span className="shrink-0">+{candidate.exampleCount - 2}</span> : null}</p> : null}
-          {candidate.cover ? <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted">{candidate.cover.blockCount != null ? <span>{candidate.cover.blockCount.toLocaleString()} blocks</span> : null}{jsonSize ? <span>{jsonSize} JSON</span> : null}{duration ? <span>{duration}</span> : null}</p> : null}
+          <div className="mt-auto flex flex-col gap-2 pt-3">
+            {visibleModelLabels.length ? <p className="flex min-w-0 items-center gap-2 text-sm text-muted" title={modelLabels.join(", ")}><span className="truncate">{visibleModelLabels.join(" · ")}</span>{candidate.exampleCount > 2 ? <span className="shrink-0">+{candidate.exampleCount - 2}</span> : null}</p> : null}
+            {candidate.cover ? <p className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[11px] text-muted/80">{candidate.cover.blockCount != null ? <span>{candidate.cover.blockCount.toLocaleString()} blocks</span> : null}{jsonSize ? <span>{jsonSize} JSON</span> : null}{duration ? <span>{duration}</span> : null}</p> : null}
+          </div>
         </div>
       </Link>
-      <div className="flex items-center justify-between px-3 pb-2">
+      <div className="flex items-center justify-between border-t border-border/40 px-3 py-1">
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
         <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
       </div>
@@ -209,20 +223,11 @@ export function GalleryExplore({
   const [searchQuery, setSearchQuery] = useState("");
   const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
-
-  const normalizedQuery = deferredQuery.trim().toLowerCase();
-  const visibleItems = useMemo(() => {
-    if (!normalizedQuery) return items;
-    return items.filter((item) => {
-      if (item.prompt.toLowerCase().includes(normalizedQuery)) return true;
-      if (item.attribution.toLowerCase().includes(normalizedQuery)) return true;
-      if (item.cover?.model.label.toLowerCase().includes(normalizedQuery)) return true;
-      if (item.alternate?.model.label.toLowerCase().includes(normalizedQuery)) return true;
-      return false;
-    });
-  }, [items, normalizedQuery]);
-
   const activeSortRef = useRef(activeSort);
+  const loadedQueryRef = useRef("");
+  const firstPageRequestRef = useRef(0);
+  const normalizedQuery = deferredQuery.trim();
+  const searchPending = searchQuery.trim() !== loadedQueryRef.current;
   activeSortRef.current = activeSort;
 
   useEffect(() => {
@@ -231,6 +236,39 @@ export function GalleryExplore({
     setActiveSort(sort);
     activeSortRef.current = sort;
   }, [initialCursor, initialItems, sort]);
+
+  useEffect(() => {
+    if (normalizedQuery === loadedQueryRef.current) return;
+    const requestId = ++firstPageRequestRef.current;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      if (requestId !== firstPageRequestRef.current) return;
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const response = await fetch(
+          galleryCandidatesUrl(activeSortRef.current, normalizedQuery),
+          { cache: "no-store", signal: controller.signal },
+        );
+        const page = (await response.json()) as { items: GalleryCandidatePayload[]; nextCursor: string | null };
+        if (!response.ok) throw new Error("Gallery unavailable");
+        if (requestId !== firstPageRequestRef.current) return;
+        setItems(page.items);
+        setCursor(page.nextCursor);
+        loadedQueryRef.current = normalizedQuery;
+      } catch {
+        if (!controller.signal.aborted && requestId === firstPageRequestRef.current) {
+          setLoadError("Gallery unavailable");
+        }
+      } finally {
+        if (requestId === firstPageRequestRef.current) setLoading(false);
+      }
+    }, 180);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [normalizedQuery]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -257,44 +295,47 @@ export function GalleryExplore({
 
   async function changeSort(nextSort: "top" | "new") {
     if (nextSort === activeSort || loading || loadingMore) return;
+    const requestId = ++firstPageRequestRef.current;
+    const query = searchQuery.trim();
     setLoading(true);
     setLoadError(null);
     try {
-      const response = await fetch(`/api/gallery/candidates?sort=${nextSort}`, { cache: "no-store" });
+      const response = await fetch(galleryCandidatesUrl(nextSort, query), { cache: "no-store" });
       const page = (await response.json()) as { items: GalleryCandidatePayload[]; nextCursor: string | null };
       if (!response.ok) throw new Error("Gallery unavailable");
+      if (requestId !== firstPageRequestRef.current) return;
       setItems(page.items);
       setCursor(page.nextCursor);
       setActiveSort(nextSort);
       activeSortRef.current = nextSort;
+      loadedQueryRef.current = query;
       window.history.replaceState(window.history.state, "", nextSort === "new" ? "/gallery?sort=new" : "/gallery");
     } catch {
-      setLoadError("Gallery unavailable");
+      if (requestId === firstPageRequestRef.current) setLoadError("Gallery unavailable");
     } finally {
-      setLoading(false);
+      if (requestId === firstPageRequestRef.current) setLoading(false);
     }
   }
 
   async function loadMore() {
-    if (!cursor || loading || loadingMore) return;
+    if (!cursor || loading || loadingMore || searchQuery.trim() !== loadedQueryRef.current) return;
     const requestSort = activeSort;
+    const requestQuery = loadedQueryRef.current;
     setLoadingMore(true);
     setLoadError(null);
     try {
-      const response = await fetch(`/api/gallery/candidates?sort=${requestSort}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
+      const response = await fetch(galleryCandidatesUrl(requestSort, requestQuery, cursor), { cache: "no-store" });
       const page = (await response.json()) as { items: GalleryCandidatePayload[]; nextCursor: string | null };
       if (!response.ok) throw new Error("Gallery unavailable");
-      if (activeSortRef.current !== requestSort) return;
+      if (activeSortRef.current !== requestSort || loadedQueryRef.current !== requestQuery) return;
       setItems((current) => [...current, ...page.items]);
       setCursor(page.nextCursor);
     } catch {
-      if (activeSortRef.current === requestSort) {
+      if (activeSortRef.current === requestSort && loadedQueryRef.current === requestQuery) {
         setLoadError("Gallery unavailable");
       }
     } finally {
-      if (activeSortRef.current === requestSort) {
-        setLoadingMore(false);
-      }
+      setLoadingMore(false);
     }
   }
 
@@ -333,7 +374,7 @@ export function GalleryExplore({
           ))}
         </nav>
 
-        <div className="relative w-full sm:w-64 md:w-72">
+        <div className="relative w-full sm:w-80 lg:w-96">
           <span aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted">
             <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
               <circle cx="7" cy="7" r="4.5" />
@@ -343,11 +384,14 @@ export function GalleryExplore({
           <input
             ref={searchInputRef}
             type="search"
-            placeholder="Search prompts…"
+            placeholder="Search prompts or models…"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
-            aria-label="Search prompts"
-            className="mb-field h-10 w-full pl-9 pr-9 text-sm placeholder:text-muted/60 focus-visible:ring-2 focus-visible:ring-accent/50"
+            maxLength={100}
+            aria-label="Search prompts or models"
+            aria-keyshortcuts="/"
+            aria-controls="gallery-results"
+            className="mb-field h-11 w-full pl-9 pr-11 text-sm placeholder:text-muted/60 [&::-webkit-search-cancel-button]:hidden [&::-webkit-search-decoration]:hidden"
           />
           {searchQuery ? (
             <button
@@ -357,7 +401,7 @@ export function GalleryExplore({
                 setSearchQuery("");
                 searchInputRef.current?.focus();
               }}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/45"
+              className="absolute right-0 top-0 inline-flex h-11 w-11 items-center justify-center rounded-md text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/45"
             >
               <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5">
                 <path d="M4 4L12 12M12 4L4 12" />
@@ -371,12 +415,17 @@ export function GalleryExplore({
         </div>
       </div>
 
-      <div key={activeSort} className="mb-fade-in">
-        {loading ? (
-          <GallerySkeletonGrid count={8} />
-        ) : visibleItems.length ? (
+      <div
+        key={activeSort}
+        id="gallery-results"
+        role="region"
+        aria-label="Gallery results"
+        aria-busy={loading || searchPending}
+        className={`mb-fade-in transition-opacity duration-200 motion-reduce:transition-none ${loading ? "opacity-60" : "opacity-100"}`}
+      >
+        {items.length ? (
           <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {visibleItems.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} sort={activeSort} />)}
+            {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} sort={activeSort} />)}
             {loadingMore ? (
               Array.from({ length: 4 }, (_, i) => (
                 <GalleryCardSkeleton key={`loading-more-${i}`} delayed={i % 2 === 1} />
@@ -386,10 +435,10 @@ export function GalleryExplore({
         ) : (
           <section className="mt-14 py-10 text-center sm:mt-20 sm:py-14" aria-labelledby="empty-gallery-title">
             <h2 id="empty-gallery-title" className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">
-              {searchQuery ? "No matching prompts." : "No prompts yet."}
+              {searchQuery.trim() ? "No matches." : "No prompts yet."}
             </h2>
             <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
-              {searchQuery ? (
+              {searchQuery.trim() ? (
                 <button
                   type="button"
                   onClick={() => setSearchQuery("")}
@@ -398,25 +447,15 @@ export function GalleryExplore({
                   Clear search
                 </button>
               ) : null}
-              {cursor && searchQuery ? (
-                <button
-                  type="button"
-                  disabled={loadingMore}
-                  onClick={() => void loadMore()}
-                  className="mb-btn mb-btn-primary h-10 text-sm"
-                >
-                  {loadingMore ? "Loading…" : "Load more prompts"}
-                </button>
-              ) : null}
             </div>
           </section>
         )}
       </div>
 
-      {cursor && !loading ? (
+      {cursor && !loading && !searchPending ? (
         <div className="mt-12 flex justify-center">
           <button type="button" className="mb-btn h-11 min-w-36" disabled={loadingMore} onClick={() => void loadMore()}>
-            {loadingMore ? "Loading…" : searchQuery ? "Load more prompts" : "More"}
+            {loadingMore ? "Loading…" : "More"}
           </button>
         </div>
       ) : null}

@@ -239,6 +239,7 @@ async function main() {
     for (let index = 0; index < 3; index += 1) {
       const extraId = randomUUID();
       const extraPublicId = `cb_${suffix}extra${index}`;
+      const hiddenSearchModel = index === 2;
       await db.customBuild.create({
         data: {
           id: extraId,
@@ -251,9 +252,10 @@ async function main() {
           gridSize: 64,
           palette: "simple",
           modelKind: "catalog",
+          modelKey: hiddenSearchModel ? "openai_gpt_5_6_sol" : "openai_gpt_5_4_mini",
           modelProvider: "openai",
-          modelId: "gpt-5.4-mini",
-          modelDisplayName: "GPT 5.4 Mini",
+          modelId: hiddenSearchModel ? "gpt-5.6-sol" : "gpt-5.4-mini",
+          modelDisplayName: hiddenSearchModel ? "GPT 5.6 Sol Pro" : "GPT 5.4 Mini",
           storedByteSize: 10,
           artifacts: {
             create: {
@@ -281,6 +283,9 @@ async function main() {
     assert.equal(newest.items[0]?.id, created.candidate.id, "a new example should refresh New order");
     assert.equal(newest.items[0]?.cover?.id, created.candidate.cover?.id, "the original cover should stay fixed");
     assert.ok(newest.items[0]?.alternate, "browse cards should include another visible example");
+    const hiddenModelSearch = await listGalleryCandidates({ sort: "top", limit: 10, query: "sol pro" });
+    assert.equal(hiddenModelSearch.items[0]?.id, created.candidate.id, "search should include models beyond the card previews");
+    assert.deepEqual(hiddenModelSearch.items[0]?.matchedModelLabels, ["GPT 5.6 Sol Pro"]);
     const firstExamples = await getGalleryCandidate(created.candidate.id, { examplesLimit: 2 });
     assert.equal(firstExamples?.exampleCount, 4);
     assert.equal(firstExamples?.examples.length, 3, "the fixed cover should precede the first page");
