@@ -99,3 +99,8 @@ export function buildGalleryPreviewSvg(build: VoxelBuild): string {
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${WIDTH} ${HEIGHT}" aria-hidden="true"><g opacity="0.98">${paths.join("")}</g></svg>`;
 }
+
+export async function rasterizeGalleryPreview(svg: Uint8Array): Promise<Uint8Array> {
+  const { default: sharp } = await import("sharp");
+  return sharp(svg).png({ compressionLevel: 9 }).toBuffer();
+}
