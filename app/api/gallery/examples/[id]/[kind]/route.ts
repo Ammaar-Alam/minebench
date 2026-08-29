@@ -24,7 +24,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
         bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
         {
           headers: {
-            "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
+            "Cache-Control": "public, max-age=300, s-maxage=3600",
             "Content-Type": "image/png",
           },
         },
