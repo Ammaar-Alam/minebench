@@ -49,6 +49,7 @@ const CREATOR_FRAME_RATE = 30;
 const CREATOR_FRAME_COUNT = 180;
 const CREATOR_DURATION_MS = 6000;
 const SOCIAL_SAFE_CAMERA_DISTANCE_SCALE = 1.18;
+const SOCIAL_SAFE_WATERMARK_FONT_SIZE = 16;
 const COMPARISON_PALETTE_SAMPLE_COUNT = 12;
 const SINGLE_PALETTE_SAMPLE_COUNT = 16;
 const COMPARISON_PALETTE_SAMPLE_LONG_EDGE = 640;
@@ -138,6 +139,7 @@ type ExportLayout = {
     right: number;
     titleY: number;
     promptY: number;
+    socialSafe: boolean;
   };
   safeInsets: SandboxSocialSafeInsets | null;
   cameraDistanceScale: number;
@@ -396,6 +398,7 @@ function buildExportLayout(
       right: headerRight,
       titleY,
       promptY,
+      socialSafe,
     },
     safeInsets,
     cameraDistanceScale: socialSafe ? SOCIAL_SAFE_CAMERA_DISTANCE_SCALE : 1,
@@ -499,6 +502,7 @@ function drawBaseBackdrop(
     right: number;
     titleY: number;
     promptY: number;
+    socialSafe: boolean;
   },
 ) {
   ctx.fillStyle = "#0b1220";
@@ -540,8 +544,12 @@ function drawBaseBackdrop(
     );
   }
 
-  ctx.fillStyle = "rgba(100, 116, 139, 0.85)";
-  ctx.font = '500 11px "IBM Plex Sans", "Segoe UI", sans-serif';
+  ctx.fillStyle = opts.socialSafe
+    ? "rgba(148, 163, 184, 0.9)"
+    : "rgba(100, 116, 139, 0.85)";
+  ctx.font = `${opts.socialSafe ? 600 : 500} ${
+    opts.socialSafe ? SOCIAL_SAFE_WATERMARK_FONT_SIZE : 11
+  }px "IBM Plex Sans", "Segoe UI", sans-serif`;
   const urlW = ctx.measureText(opts.urlText).width;
   ctx.fillText(opts.urlText, Math.max(opts.x, opts.right - urlW), opts.titleY + 4);
 }

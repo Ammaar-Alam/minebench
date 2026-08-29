@@ -153,6 +153,7 @@ assert.equal(creatorFrameCount, 180);
 assert.equal(creatorDurationMs, 6000);
 assert.equal(creatorFrameCount / creatorFrameRate, creatorDurationMs / 1000);
 assert.equal(readNumericConst("SOCIAL_SAFE_CAMERA_DISTANCE_SCALE"), 1.18);
+assert.equal(readNumericConst("SOCIAL_SAFE_WATERMARK_FONT_SIZE"), 16);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_COUNT"), 12);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_LONG_EDGE"), 640);
 
@@ -270,8 +271,9 @@ assert.ok(
 assert.ok(
   sourceText.includes('runtime.socialSafe ? "social-safe" : "full"') &&
     sourceText.includes("distanceScale: layout.cameraDistanceScale") &&
+    sourceText.includes("opts.socialSafe ? SOCIAL_SAFE_WATERMARK_FONT_SIZE : 11") &&
     viewerSourceText.includes("opts?.distanceScale"),
-  "Creator social framing should protect compositor metadata and widen camera framing",
+  "Creator social framing should protect metadata, widen camera framing, and strengthen the watermark",
 );
 
 console.log("gif export config checks passed");
