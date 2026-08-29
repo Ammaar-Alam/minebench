@@ -10,6 +10,7 @@ const SOURCE_PATH = "components/sandbox/SandboxGifExportButton.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
 const benchmarkSourceText = readFileSync("components/sandbox/SandboxBenchmark.tsx", "utf8");
 const benchmarkRouteSourceText = readFileSync("app/api/sandbox/benchmark/route.ts", "utf8");
+const liveSourceText = readFileSync("components/sandbox/SandboxLive.tsx", "utf8");
 const viewerSourceText = readFileSync("components/voxel/VoxelViewer.tsx", "utf8");
 const accountSourceText = readFileSync("app/account/page.tsx", "utf8");
 const settingsSourceText = readFileSync("app/account/MediaExportSettings.tsx", "utf8");
@@ -297,10 +298,18 @@ assert.ok(
 );
 assert.ok(
   sourceText.includes('runtime.socialSafe ? "social-safe" : "full"') &&
+    sourceText.includes("const panelAreaLeft = safeInsets?.left ?? EXPORT_MARGIN_X") &&
+    sourceText.includes("const panelAreaRight = safeInsets ? width - safeInsets.right : width - EXPORT_MARGIN_X") &&
+    sourceText.includes("const rowX = panelAreaLeft + (panelAreaWidth - rowWidth) / 2") &&
     sourceText.includes("distanceScale: layout.cameraDistanceScale") &&
     sourceText.includes("opts.socialSafe ? SOCIAL_SAFE_WATERMARK_FONT_SIZE : 11") &&
     viewerSourceText.includes("opts?.distanceScale"),
-  "Creator social framing should protect metadata, widen camera framing, and strengthen the watermark",
+  "Creator social framing should protect panels and metadata, widen camera framing, and strengthen the watermark",
+);
+assert.ok(
+  liveSourceText.includes("source = JSON.stringify(result.voxelBuild)") &&
+    liveSourceText.includes("source ??= result.rawText"),
+  "live sandbox export metrics should measure parsed build JSON before falling back to stream text",
 );
 
 console.log("gif export config checks passed");

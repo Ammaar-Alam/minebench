@@ -406,7 +406,15 @@ function getResultJsonBytes(result: ModelResult): number | undefined {
   ) {
     return result.customBuildExpandedBytes;
   }
-  const source = result.rawText;
+  let source: string | undefined;
+  if (result.voxelBuild != null) {
+    try {
+      source = JSON.stringify(result.voxelBuild);
+    } catch {
+      source = undefined;
+    }
+  }
+  source ??= result.rawText;
   return source ? new Blob([source]).size : undefined;
 }
 

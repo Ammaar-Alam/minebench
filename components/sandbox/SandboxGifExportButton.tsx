@@ -395,8 +395,11 @@ function buildExportLayout(
     socialSafe ? promptY + 24 : 104,
     promptY + promptLines.length * HEADER_PROMPT_LINE_HEIGHT + 24,
   );
+  const panelAreaLeft = safeInsets?.left ?? EXPORT_MARGIN_X;
+  const panelAreaRight = safeInsets ? width - safeInsets.right : width - EXPORT_MARGIN_X;
+  const panelAreaWidth = Math.max(1, panelAreaRight - panelAreaLeft);
   const panelWidth =
-    (width - EXPORT_MARGIN_X * 2 - panelGap * (grid.columns - 1)) / grid.columns;
+    (panelAreaWidth - panelGap * (grid.columns - 1)) / grid.columns;
   const panelHeight =
     (height - panelTop - EXPORT_MARGIN_BOTTOM - panelGap * (grid.rows - 1)) / grid.rows;
   const panelRects: ExportLayout["panelRects"] = [];
@@ -404,7 +407,7 @@ function buildExportLayout(
   for (let row = 0; row < grid.rows; row += 1) {
     const columnsInRow = grid.rowColumns[row] ?? grid.columns;
     const rowWidth = panelWidth * columnsInRow + panelGap * Math.max(0, columnsInRow - 1);
-    const rowX = EXPORT_MARGIN_X + (width - EXPORT_MARGIN_X * 2 - rowWidth) / 2;
+    const rowX = panelAreaLeft + (panelAreaWidth - rowWidth) / 2;
 
     for (let column = 0; column < columnsInRow && panelRects.length < safeCount; column += 1) {
       panelRects.push({
