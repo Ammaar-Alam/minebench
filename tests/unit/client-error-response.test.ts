@@ -41,6 +41,20 @@ async function main() {
     "Prompt is required.",
   );
 
+  const missingKeyError = new Response(
+    JSON.stringify({
+      error: "Add an OpenRouter or provider API key in Generate settings.",
+    }),
+    {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+  assert.equal(
+    await readClientErrorResponse(missingKeyError, "Request failed"),
+    "Add an OpenRouter or provider API key in Generate settings.",
+  );
+
   const htmlError = new Response("<html>Internal Server Error</html>", {
     status: 400,
     headers: { "Content-Type": "text/html" },

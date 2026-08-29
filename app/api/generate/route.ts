@@ -127,10 +127,9 @@ export async function POST(req: Request) {
   if (!allowServerKeys && (!providerKeys || Object.values(providerKeys).every((v) => !v))) {
     return NextResponse.json(
       {
-        error:
-          "No API keys provided. Add an OpenRouter key or a provider key (OpenAI/Anthropic/Gemini/Moonshot/DeepSeek/MiniMax/xAI/Meta/Z.AI/etc.) in Sandbox settings.",
+        error: "Add an OpenRouter or provider API key in Generate settings.",
       },
-      { status: 401 }
+      { status: 400 }
     );
   }
 

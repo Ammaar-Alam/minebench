@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ARENA_MESH_FACTS_MIN_BLOCKS,
@@ -41,6 +42,7 @@ import { AnimatedPrompt } from "@/components/arena/AnimatedPrompt";
 import { ModelReveal } from "@/components/arena/ModelReveal";
 import { ErrorState } from "@/components/ErrorState";
 import { trackEvent } from "@/lib/analytics";
+import { hasSupabaseAuthCookie } from "@/lib/auth/cookies";
 import {
   getArenaBlockCountBucket,
   getArenaLatencyBucket,
@@ -1156,6 +1158,85 @@ function RevealLane({
   );
 }
 
+function ArenaAccountPrompt({
+  open,
+  onDismiss,
+  onShown,
+}: {
+  open: boolean;
+  onDismiss: () => void;
+  onShown: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) {
+      dialog.showModal();
+      onShown();
+    }
+    if (!open && dialog.open) dialog.close();
+  }, [onShown, open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="arena-account-prompt-title"
+      aria-describedby="arena-account-prompt-description"
+      className="mb-dialog m-auto w-[min(30rem,calc(100%-2rem))] rounded-md border-0 bg-card p-0 text-fg ring-1 ring-border-xl backdrop:bg-bg/60 backdrop:backdrop-blur-sm"
+      onCancel={(event) => {
+        event.preventDefault();
+        onDismiss();
+      }}
+      onClose={onDismiss}
+      onClick={(event) => {
+        const dialog = event.currentTarget;
+        if (event.target !== dialog) return;
+        const bounds = dialog.getBoundingClientRect();
+        if (
+          event.clientX < bounds.left ||
+          event.clientX > bounds.right ||
+          event.clientY < bounds.top ||
+          event.clientY > bounds.bottom
+        ) {
+          onDismiss();
+        }
+      }}
+    >
+      <div className="space-y-6 p-6 sm:p-7">
+        <div>
+          <p className="mb-eyebrow text-accent">For a limited time</p>
+          <h2
+            id="arena-account-prompt-title"
+            className="mt-2 font-display text-2xl font-semibold tracking-tight"
+          >
+            Unlimited Gemini 3.7 Flash generations
+          </h2>
+          <p
+            id="arena-account-prompt-description"
+            className="mt-3 text-sm leading-6 text-muted"
+          >
+            Sign in to generate free, save your builds, and keep your votes.
+          </p>
+          <p className="mt-2 text-sm font-medium text-fg">No API key needed.</p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Link
+            href="/sign-in?next=/sandbox%3Fmode%3Dlive"
+            className="mb-btn mb-btn-primary h-11"
+          >
+            Start free
+          </Link>
+          <button type="button" className="mb-btn h-11" onClick={onDismiss}>
+            Not now
+          </button>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
 function PipelineArrow() {
   return (
     <div
@@ -1191,6 +1272,9 @@ function isInteractiveTarget(target: EventTarget | null) {
 }
 
 const ARENA_PREMESH_MAX_BLOCK_COUNT = 150_000;
+const ANONYMOUS_VOTE_CONVERSION_THRESHOLD = 8;
+const ANONYMOUS_VOTE_COUNT_KEY = "mb_arena_anonymous_vote_count_v1";
+const ANONYMOUS_VOTE_CONVERSION_SEEN_KEY = "mb_arena_conversion_seen_v1";
 
 function getArenaPremeshedMeshKey(
   matchupId: string,
@@ -1206,6 +1290,8 @@ export function Arena() {
   const [retrying, setRetrying] = useState(false);
   const [slowInitialLoad, setSlowInitialLoad] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [arenaConversionOpen, setArenaConversionOpen] = useState(false);
+  const [arenaConversionQueued, setArenaConversionQueued] = useState(false);
   const [voteConfirming, setVoteConfirming] = useState<VoteConfirmTarget | null>(null);
   const voteConfirmTimerRef = useRef<number | null>(null);
   const [voteWarning, setVoteWarning] = useState<string | null>(null);
@@ -1252,6 +1338,8 @@ export function Arena() {
   const stuckAutoSkipTimeoutRef = useRef<number | null>(null);
   const advanceNowRequestedAtRef = useRef<number | null>(null);
   const nextMatchupLoadingRef = useRef(false);
+  const anonymousVoteCountRef = useRef(0);
+  const arenaConversionSeenRef = useRef(false);
   const handleVoteRef = useRef<(choice: VoteChoice) => Promise<void>>(
     async () => undefined
   );
@@ -1438,6 +1526,12 @@ export function Arena() {
   useEffect(() => {
     revealRef.current = reveal;
   }, [reveal]);
+
+  useEffect(() => {
+    if (!arenaConversionQueued || reveal.kind !== "none" || transitioning) return;
+    setArenaConversionQueued(false);
+    setArenaConversionOpen(true);
+  }, [arenaConversionQueued, reveal.kind, transitioning]);
 
   useEffect(() => {
     sideLoadStateRef.current = sideLoadState;
@@ -2536,6 +2630,44 @@ export function Arena() {
     }
   }
 
+  function markArenaConversionSeen() {
+    arenaConversionSeenRef.current = true;
+    try {
+      window.localStorage.setItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY, "1");
+    } catch {
+      // The in-memory guard still keeps the prompt one-time for this tab
+    }
+  }
+
+  function recordAnonymousVoteForConversion() {
+    if (hasSupabaseAuthCookie(document.cookie) || arenaConversionSeenRef.current) return;
+
+    let voteCount = anonymousVoteCountRef.current + 1;
+    try {
+      if (window.localStorage.getItem(ANONYMOUS_VOTE_CONVERSION_SEEN_KEY)) {
+        arenaConversionSeenRef.current = true;
+        return;
+      }
+      const storedVoteCount = Number.parseInt(
+        window.localStorage.getItem(ANONYMOUS_VOTE_COUNT_KEY) ?? "0",
+        10,
+      );
+      voteCount =
+        Math.max(
+          Number.isFinite(storedVoteCount) ? storedVoteCount : 0,
+          voteCount - 1,
+        ) + 1;
+      window.localStorage.setItem(ANONYMOUS_VOTE_COUNT_KEY, String(voteCount));
+    } catch {
+      // Keep counting in this tab when storage is unavailable
+    }
+
+    anonymousVoteCountRef.current = voteCount;
+    if (voteCount < ANONYMOUS_VOTE_CONVERSION_THRESHOLD) return;
+
+    setArenaConversionQueued(true);
+  }
+
   async function handleVote(choice: VoteChoice) {
     if (!matchup || submitting) return;
     if (isMatchupVoteBlocked(matchup, sideLoadStateRef.current)) return;
@@ -2551,6 +2683,7 @@ export function Arena() {
     try {
       const response = await submitArenaAction(matchup.id, choice);
       advanceAt = completeReveal(matchup.id, response, REVEAL_MS_AFTER_VOTE);
+      recordAnonymousVoteForConversion();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Couldn't record your vote.";
       flashVoteWarning(msg);
@@ -3217,6 +3350,7 @@ export function Arena() {
               </div>
             </div>
           </div>
+
       </div>
 
       {/* how it works — pipeline diagram */}
@@ -3351,6 +3485,12 @@ export function Arena() {
           </a>
         </form>
       </section>
+
+      <ArenaAccountPrompt
+        open={arenaConversionOpen}
+        onDismiss={() => setArenaConversionOpen(false)}
+        onShown={markArenaConversionSeen}
+      />
     </div>
   );
 }

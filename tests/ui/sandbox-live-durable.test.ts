@@ -4,6 +4,10 @@ import ts from "typescript";
 
 const SOURCE_PATH = "components/sandbox/SandboxLive.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
+const sandboxPageText = readFileSync("app/sandbox/page.tsx", "utf8");
+const sandboxShellText = readFileSync("components/sandbox/Sandbox.tsx", "utf8");
+const preflightText = readFileSync("components/sandbox/GenerationPreflightDialog.tsx", "utf8");
+const generateRouteText = readFileSync("app/api/generate/route.ts", "utf8");
 const sourceFile = ts.createSourceFile(SOURCE_PATH, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
 function functionBodyText(name: string): string {
@@ -52,7 +56,9 @@ const stopBody = functionBodyText("stopGenerate");
 const watchBody = functionBodyText("watchCustomBuild");
 const retryBody = functionBodyText("retryCustomBuild");
 const completedBuildBody = functionBodyText("readCustomBuildViewer");
+const dismissHostedGeminiBody = functionBodyText("dismissHostedGeminiAnnouncement");
 const inputResetEffect = effectBodyTextContaining("lastGenerateInputRef.current === inputSignature");
+const hostedGeminiEffect = effectBodyTextContaining("HOSTED_GEMINI_NOTICE_KEY");
 const assignIndex = durableBody.indexOf("customBuildAbortRef.current = args.abortController");
 assert.ok(assignIndex >= 0, "durable generation should store the active abort controller");
 assert.equal(
@@ -163,15 +169,30 @@ assert.ok(
 );
 assert.ok(
   runBody.includes("if (!signedIn && !continueTransient)") &&
-    runBody.includes("setShowGenerationPreflight(true)") &&
+    runBody.includes('setGenerationPreflight("free")') &&
+    runBody.includes('setGenerationPreflight("key")') &&
+    runBody.includes('setGenerationPreflight("save")') &&
     runBody.includes("if (signedIn)") &&
     runBody.includes("await runGenerateDurable") &&
     runBody.includes('fetch("/api/generate"'),
-  "every signed-out attempt should stop at preflight while signed-in attempts use durable generation",
+  "signed-out generation should distinguish the free, missing-key, and save preflight paths",
+);
+assert.ok(
+  sandboxPageText.includes('process.env.NODE_ENV !== "production"') &&
+    sandboxPageText.includes('process.env.MINEBENCH_ALLOW_SERVER_KEYS === "1"') &&
+    sandboxPageText.includes("anonymousServerKeysEnabled={anonymousServerKeysEnabled}") &&
+    sandboxShellText.includes("anonymousServerKeysEnabled={anonymousServerKeysEnabled}") &&
+    runBody.includes("if (!signedIn && anonymousServerKeysEnabled)"),
+  "signed-out generation should still continue when the Generate route permits server keys",
 );
 assert.ok(
   sourceText.includes("<GenerationPreflightDialog") &&
     sourceText.includes("void runGenerate(true)") &&
+    sourceText.includes("openApiKeys") &&
+    preflightText.includes('mode: "free" | "save" | "key"') &&
+    preflightText.includes("Generate for free") &&
+    preflightText.includes("Connect this model") &&
+    preflightText.includes("Add key") &&
     sourceText.includes("customBuildPageUrl") &&
     sourceText.includes("<GenerationGalleryButton") &&
     sourceText.includes('label="Export GIF"') &&
@@ -180,6 +201,14 @@ assert.ok(
     !sourceText.includes('"Generating…"') &&
     !sourceText.includes("DURABLE_CUSTOM_BUILDS_ENABLED"),
   "preflight continuation and renderer-owned saved build actions should remain visible without duplicate page controls",
+);
+const missingKeyErrorIndex = generateRouteText.indexOf(
+  "Add an OpenRouter or provider API key in Generate settings.",
+);
+assert.ok(
+  missingKeyErrorIndex >= 0 &&
+    generateRouteText.slice(missingKeyErrorIndex, missingKeyErrorIndex + 200).includes("status: 400"),
+  "missing Generate credentials should remain a readable validation error instead of an access denial",
 );
 assert.ok(
   sourceText.includes("downloadSavedGenerationJson") &&
@@ -208,16 +237,26 @@ assert.ok(
 assert.ok(
   sourceText.includes("HOSTED_GEMINI_NOTICE_KEY") &&
     sourceText.includes("Gemini 3.7 Flash is free") &&
-    sourceText.includes("if (!signedIn || !hostedGeminiAvailable) return") &&
-    sourceText.includes("window.localStorage.getItem(HOSTED_GEMINI_NOTICE_KEY)") &&
-    sourceText.includes("window.localStorage.setItem(HOSTED_GEMINI_NOTICE_KEY") &&
+    sourceText.includes("Free right now") &&
+    sourceText.includes("No API key needed.") &&
+    sourceText.includes("Start free") &&
+    sourceText.includes("let anonymousHostedGeminiNoticeShown = false") &&
+    sandboxPageText.includes("const hostedGeminiEnabled = Boolean(") &&
+    sandboxPageText.includes("hostedGeminiEnabled={hostedGeminiEnabled}") &&
+    hostedGeminiEffect.includes("!hostedGeminiEnabled") &&
+    hostedGeminiEffect.includes("if (!signedIn)") &&
+    hostedGeminiEffect.includes("anonymousHostedGeminiNoticeShown = true") &&
+    hostedGeminiEffect.indexOf("if (!signedIn)") <
+      hostedGeminiEffect.indexOf("window.localStorage.getItem(HOSTED_GEMINI_NOTICE_KEY)") &&
+    dismissHostedGeminiBody.includes("if (signedIn)") &&
+    dismissHostedGeminiBody.includes("window.localStorage.setItem(HOSTED_GEMINI_NOTICE_KEY") &&
     sourceText.includes("!providerKeys.gemini?.trim()") &&
     sourceText.includes("!providerKeys.openrouter?.trim()") &&
     sourceText.includes("`${model.displayName} · Free`") &&
     retryBody.includes("...(providerKey ? { providerKey } : {})") &&
     !retryBody.includes("Add the required API key") &&
     !sourceText.includes("hostedGenerationCount"),
-  "the signed-in Gemini offer should announce once, defer to user keys, support hosted retries, and avoid a live usage counter",
+  "the free Gemini offer should appear on every anonymous page load, persist in Generate, defer to user keys, and remain one-time for signed-in users",
 );
 
 console.log("sandbox saved-generation contract checks passed");
