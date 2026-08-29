@@ -188,6 +188,8 @@ export type ModelPromptBreakdown = {
     palette: "simple" | "advanced";
     mode: string;
     blockCount: number;
+    generationTimeMs: number;
+    jsonBytes: number | null;
   } | null;
 };
 
@@ -1215,6 +1217,8 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
         palette: true,
         mode: true,
         blockCount: true,
+        generationTimeMs: true,
+        voxelByteSize: true,
         voxelSha256: true,
         prompt: {
           select: { text: true },
@@ -1288,6 +1292,8 @@ async function queryModelDetailStats(modelKeyOrSlug: string): Promise<ModelDetai
         palette,
         mode: build.mode,
         blockCount: build.blockCount,
+        generationTimeMs: build.generationTimeMs,
+        jsonBytes: build.voxelByteSize,
       },
     });
   }

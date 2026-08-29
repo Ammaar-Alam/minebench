@@ -299,6 +299,8 @@ function SavedBuildDialog({
                     modelName: generation.model.label,
                     company: "MineBench",
                     blockCount: generation.blockCount ?? 0,
+                    generationTimeMs: generation.generationTimeMs,
+                    jsonBytes: generation.expandedBytes,
                   }]}
                   promptText={generation.prompt}
                   cancelKey={`${generation.id}:${generation.sha256 ?? ""}`}

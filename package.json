@@ -76,6 +76,7 @@
     "fflate": "^0.8.3",
     "gifenc": "^1.0.3",
     "gifsicle-wasm-browser": "^1.5.19",
+    "mediabunny": "1.55.3",
     "next": "^15.0.0",
     "nodemailer": "^9.0.5",
     "obscenity": "0.4.6",

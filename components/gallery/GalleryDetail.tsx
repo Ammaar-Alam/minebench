@@ -367,6 +367,8 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
               modelName: example.model.label,
               company: example.attribution,
               blockCount: example.blockCount ?? 0,
+              generationTimeMs: example.generationTimeMs,
+              jsonBytes: example.jsonBytes,
             }]}
             promptText={candidate.prompt}
             cancelKey={`${example.id}:${example.checksum ?? ""}`}
@@ -384,6 +386,8 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         modelName: example.model.label,
         company: example.attribution,
         blockCount: example.blockCount ?? 0,
+        generationTimeMs: example.generationTimeMs,
+        jsonBytes: example.jsonBytes,
       }))
     : [];
 

@@ -49,6 +49,10 @@ import {
 import { getConsistencyBand, getConsistencyLabel } from "@/lib/arena/consistencyBands";
 import { ModelBenchmarkDetails } from "@/components/leaderboard/ModelBenchmarkDetails";
 import { buildLeaderboardBuildPath } from "@/lib/deepLinks";
+import {
+  getAverageBenchmarkCostPerBuildUsd,
+  getAverageBenchmarkInferenceTimeMs,
+} from "@/lib/ai/modelBenchmarkProfiles";
 
 const CHART_WIDTH = 900;
 const CHART_HEIGHT = 304;
@@ -1097,9 +1101,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
         modelName: data.model.displayName,
         company: data.model.provider,
         blockCount: activePrompt.build.blockCount,
+        averageCostPerBuildUsd: getAverageBenchmarkCostPerBuildUsd(data.model.key),
+        generationTimeMs: activePrompt.build.generationTimeMs,
+        averageInferenceTimeMs: getAverageBenchmarkInferenceTimeMs(data.model.key),
+        jsonBytes: activePrompt.build.jsonBytes,
       },
     ];
-  }, [activePrompt, data.model.displayName, data.model.provider]);
+  }, [activePrompt, data.model.displayName, data.model.key, data.model.provider]);
 
   const handlePromptPrev = useCallback(() => {
     if (activePromptIndex <= 0) return;

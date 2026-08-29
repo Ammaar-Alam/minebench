@@ -81,6 +81,9 @@ type BenchmarkBuild = {
   metrics: {
     blockCount: number;
     generationTimeMs: number;
+    averageCostPerBuildUsd: number | null;
+    averageInferenceTimeMs: number | null;
+    jsonBytes: number | null;
   };
 };
 
@@ -986,9 +989,13 @@ export function SandboxBenchmark() {
             modelName: build.model.displayName,
             company: providerLabel(build.model.provider),
             blockCount: build.metrics.blockCount,
+            averageCostPerBuildUsd: build.metrics.averageCostPerBuildUsd,
+            generationTimeMs: build.metrics.generationTimeMs,
+            averageInferenceTimeMs: build.metrics.averageInferenceTimeMs,
+            jsonBytes: build.metrics.jsonBytes,
           };
         })
-        .filter((target): target is SandboxGifExportTarget => Boolean(target))
+        .filter((target) => target !== null)
     : [];
   const compareTargets =
     readyCompareTargets.length === activeSlots.length ? readyCompareTargets : [];
@@ -1071,6 +1078,10 @@ export function SandboxBenchmark() {
                       modelName: model.displayName,
                       company: providerLabel(model.provider),
                       blockCount: build.metrics.blockCount,
+                      averageCostPerBuildUsd: build.metrics.averageCostPerBuildUsd,
+                      generationTimeMs: build.metrics.generationTimeMs,
+                      averageInferenceTimeMs: build.metrics.averageInferenceTimeMs,
+                      jsonBytes: build.metrics.jsonBytes,
                     },
                   ]}
                   promptText={selectedPromptText}

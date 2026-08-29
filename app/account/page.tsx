@@ -8,6 +8,7 @@ import { getCurrentAccount } from "@/lib/auth/account";
 import { listSavedGenerations } from "@/lib/generations/service";
 import { PersonalRanking, PersonalRankingSkeleton } from "./PersonalRanking";
 import { GalleryAccountSettings } from "./GalleryAccountSettings";
+import { MediaExportSettings } from "./MediaExportSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +79,8 @@ export default async function AccountPage({
             suspendedAt={account.gallerySuspendedAt?.toISOString() ?? null}
             suspensionReason={account.gallerySuspensionReason}
           />
+
+          <MediaExportSettings />
 
           <section className="rounded-md border border-border/80 bg-card/10 p-5" aria-labelledby="security-title">
             <p className="mb-eyebrow">Account</p>

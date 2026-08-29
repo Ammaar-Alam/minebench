@@ -66,7 +66,12 @@ type ModelResult = {
   rawText?: string;
   attempt?: number;
   retryReason?: string;
-  metrics?: { blockCount: number; warnings: string[]; generationTimeMs: number };
+  metrics?: {
+    blockCount: number;
+    warnings: string[];
+    generationTimeMs: number;
+    jsonBytes?: number;
+  };
   startedAt?: number;
   customBuildId?: string;
   customBuildPageUrl?: string;
@@ -396,6 +401,17 @@ function getRawBuildJsonForExport(args: {
   } catch {
     return null;
   }
+}
+
+function getResultJsonBytes(result: ModelResult): number | undefined {
+  if (
+    typeof result.customBuildExpandedBytes === "number" &&
+    Number.isFinite(result.customBuildExpandedBytes) &&
+    result.customBuildExpandedBytes >= 0
+  ) {
+    return result.customBuildExpandedBytes;
+  }
+  return result.metrics?.jsonBytes;
 }
 
 function customBuildStageLabel(status: SavedGenerationPayload): string {
@@ -1411,9 +1427,11 @@ export function SandboxLive({
         modelName: model.displayName,
         company: model.providerLabel,
         blockCount: result.metrics?.blockCount ?? 0,
+        generationTimeMs: result.metrics?.generationTimeMs,
+        jsonBytes: getResultJsonBytes(result),
       };
     })
-    .filter((target): target is SandboxGifExportTarget => Boolean(target));
+    .filter((target) => target !== null);
   const comparePrompt = selectedModels
     .map((model) => results.get(model.id)?.submittedPrompt)
     .find((value): value is string => Boolean(value)) ?? prompt;
@@ -1440,6 +1458,8 @@ export function SandboxLive({
               modelName,
               company: providerName,
               blockCount: r.metrics?.blockCount ?? 0,
+              generationTimeMs: r.metrics?.generationTimeMs,
+              jsonBytes: getResultJsonBytes(r),
             },
           ]
         : [];

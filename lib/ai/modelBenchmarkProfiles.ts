@@ -587,3 +587,16 @@ export const MODEL_BENCHMARK_PROFILES = Object.fromEntries(
 export function getModelBenchmarkProfile(modelKey: string): ModelBenchmarkProfile | null {
   return MODEL_BENCHMARK_PROFILES[modelKey as ModelKey] ?? null;
 }
+
+export function getAverageBenchmarkCostPerBuildUsd(modelKey: string): number | null {
+  const profile = getModelBenchmarkProfile(modelKey);
+  if (!profile?.totalCost || !profile.buildCount || profile.buildCount <= 0) return null;
+  return profile.totalCost.usd / profile.buildCount;
+}
+
+export function getAverageBenchmarkInferenceTimeMs(modelKey: string): number | null {
+  const milliseconds = getModelBenchmarkProfile(modelKey)?.averageInference?.milliseconds;
+  return typeof milliseconds === "number" && Number.isFinite(milliseconds) && milliseconds > 0
+    ? milliseconds
+    : null;
+}
