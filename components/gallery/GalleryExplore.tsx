@@ -160,12 +160,19 @@ function GalleryCard({
   const hiddenModelLabels = modelLabels.slice(2);
   const jsonSize = formatBuildJsonSize(candidate.cover?.jsonBytes);
   const duration = formatBuildDuration(candidate.cover?.generationTimeMs);
+  const previewsReady = !candidate.cover?.previewUrl || (
+    coverLoaded && (!candidate.alternate?.previewUrl || alternateLoaded)
+  );
   return (
-    <article className={`group flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] duration-200 ease-out hover:border-accent/35 hover:bg-card/20 motion-reduce:transition-none mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}`}>
+    <div className="grid min-w-0">
+      {!previewsReady ? <div className="[grid-area:1/1] [&>article]:h-full"><GalleryCardSkeleton /></div> : null}
+      <article
+        aria-hidden={!previewsReady || undefined}
+        className={`group [grid-area:1/1] flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] duration-200 ease-out hover:border-accent/35 hover:bg-card/20 motion-reduce:transition-none ${previewsReady ? `mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}` : "invisible pointer-events-none"}`}
+      >
       <Link href={`/gallery/${candidate.id}${sort === "new" ? "?sort=new" : ""}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
           <div className="relative aspect-[4/3] overflow-hidden bg-bg/45">
-            <div aria-hidden="true" className={`absolute inset-0 bg-card/25 transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none motion-reduce:transition-none ${coverLoaded ? "pointer-events-none opacity-0" : "animate-pulse opacity-100"}`} />
             <Image
               src={candidate.cover.previewUrl}
               alt=""
@@ -174,12 +181,11 @@ function GalleryCard({
               sizes="(min-width: 1536px) 25vw, (min-width: 1280px) 33vw, (min-width: 768px) 50vw, 100vw"
               onLoad={() => setCoverLoaded(true)}
               onError={() => setCoverLoaded(true)}
-              className={`object-contain p-2 transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.025] motion-reduce:transition-none ${coverLoaded ? "opacity-100" : "opacity-0"}`}
+              className="object-contain p-2 transition-transform duration-300 ease-out group-hover:scale-[1.025] motion-reduce:transition-none"
             />
             {candidate.alternate?.previewUrl ? (
               <span aria-hidden="true" className="absolute bottom-3 right-3 aspect-square w-[28%] overflow-hidden rounded-sm border border-border/90 bg-bg ring-2 ring-bg transition-transform duration-300 ease-out group-hover:-translate-y-0.5 group-hover:scale-[1.03] motion-reduce:transform-none motion-reduce:transition-none">
-                <span className={`absolute inset-0 bg-card/25 transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none motion-reduce:transition-none ${alternateLoaded ? "pointer-events-none opacity-0" : "animate-pulse opacity-100"}`} />
-                <Image src={candidate.alternate.previewUrl} alt="" fill unoptimized sizes="8rem" onLoad={() => setAlternateLoaded(true)} onError={() => setAlternateLoaded(true)} className={`object-contain p-1 transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${alternateLoaded ? "opacity-100" : "opacity-0"}`} />
+                <Image src={candidate.alternate.previewUrl} alt="" fill unoptimized sizes="8rem" onLoad={() => setAlternateLoaded(true)} onError={() => setAlternateLoaded(true)} className="object-contain p-1" />
               </span>
             ) : null}
           </div>
@@ -225,7 +231,8 @@ function GalleryCard({
         <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
         <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="inline-flex min-h-11 items-center px-2 text-sm text-muted transition-colors hover:text-fg motion-reduce:transition-none">Use prompt</Link>
       </div>
-    </article>
+      </article>
+    </div>
   );
 }
 

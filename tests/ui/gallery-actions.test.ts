@@ -134,10 +134,14 @@ assert.ok(
   "Gallery cards should keep a clear media frame and disclose distinct hidden models without extra client requests",
 );
 assert.ok(
-  explore.includes("onLoad={() => setCoverLoaded(true)}") &&
-    explore.includes('coverLoaded ? "opacity-100" : "opacity-0"') &&
+  explore.includes("const previewsReady =") &&
+    explore.includes("!candidate.alternate?.previewUrl || alternateLoaded") &&
+    explore.includes("!previewsReady ?") &&
+    explore.includes("<GalleryCardSkeleton />") &&
+    explore.includes('"invisible pointer-events-none"') &&
+    explore.includes("onLoad={() => setCoverLoaded(true)}") &&
     explore.includes("onLoad={() => setAlternateLoaded(true)}"),
-  "Gallery cards should retain their media skeletons until each preview is ready",
+  "Gallery cards should remain skeletons until their previews are ready, then reveal as a complete unit",
 );
 assert.ok(
   explore.includes("candidate.matchedModelLabels") &&
