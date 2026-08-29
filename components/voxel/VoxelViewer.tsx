@@ -71,6 +71,7 @@ export type VoxelViewerHandle = {
     rotationY?: number;
     width?: number;
     height?: number;
+    distanceScale?: number;
   }) => HTMLCanvasElement | null;
 };
 
@@ -984,6 +985,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const width = Math.max(1, Math.floor(opts?.width ?? source.width));
         const height = Math.max(1, Math.floor(opts?.height ?? source.height));
         const targetAspect = width / height;
+        const distanceScale =
+          typeof opts?.distanceScale === "number" && Number.isFinite(opts.distanceScale)
+            ? Math.max(1, opts.distanceScale)
+            : 1;
         const cameraOffset = camera.position.clone().sub(controls.target);
         const distance = cameraOffset.length();
         const exportRenderer = getExportRenderer();
@@ -991,14 +996,19 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         try {
           if (rotationY !== null) vg.group.rotation.y = rotationY;
 
-          if (distance > 0 && targetAspect !== previousAspect) {
-            const targetDistance = retargetDistanceForAspect({
-              ...getRotatingBoundsFraming(camera, bounds, cameraOffset.y / distance),
-              distance,
-              sourceAspect: previousAspect,
-              targetAspect,
-            });
-            camera.position.copy(controls.target).addScaledVector(cameraOffset, targetDistance / distance);
+          if (distance > 0 && (targetAspect !== previousAspect || distanceScale !== 1)) {
+            const targetDistance =
+              targetAspect === previousAspect
+                ? distance
+                : retargetDistanceForAspect({
+                    ...getRotatingBoundsFraming(camera, bounds, cameraOffset.y / distance),
+                    distance,
+                    sourceAspect: previousAspect,
+                    targetAspect,
+                  });
+            camera.position
+              .copy(controls.target)
+              .addScaledVector(cameraOffset, (targetDistance * distanceScale) / distance);
           }
           camera.aspect = targetAspect;
           camera.updateProjectionMatrix();

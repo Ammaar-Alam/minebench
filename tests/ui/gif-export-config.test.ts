@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { getSandboxGifExportPanelGrid } from "../../lib/sandbox/gifExportLayout";
+import {
+  getSandboxGifExportPanelGrid,
+  getSandboxSocialSafeInsets,
+} from "../../lib/sandbox/gifExportLayout";
 
 const SOURCE_PATH = "components/sandbox/SandboxGifExportButton.tsx";
 const sourceText = readFileSync(SOURCE_PATH, "utf8");
@@ -149,6 +152,7 @@ assert.equal(creatorFrameRate, 30);
 assert.equal(creatorFrameCount, 180);
 assert.equal(creatorDurationMs, 6000);
 assert.equal(creatorFrameCount / creatorFrameRate, creatorDurationMs / 1000);
+assert.equal(readNumericConst("SOCIAL_SAFE_CAMERA_DISTANCE_SCALE"), 1.18);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_COUNT"), 12);
 assert.equal(readNumericConst("COMPARISON_PALETTE_SAMPLE_LONG_EDGE"), 640);
 
@@ -168,6 +172,11 @@ assert.deepEqual(creatorProfiles.vertical?.[0], { width: 1080, height: 1920 });
 assert.deepEqual(readProfileArray("CREATOR_MULTI_ROW_WIDE_RENDER_PROFILES")[0], {
   width: 1920,
   height: 1440,
+});
+assert.deepEqual(getSandboxSocialSafeInsets(1080, 1920), {
+  left: 108,
+  right: 216,
+  top: 192,
 });
 assert.deepEqual(getSandboxGifExportPanelGrid(1, "single"), {
   columns: 1,
@@ -252,9 +261,17 @@ assert.ok(
     settingsSourceText.includes('value: "creator"') &&
     settingsSourceText.includes('value: "mp4"') &&
     settingsSourceText.includes('value: "gif"') &&
+    settingsSourceText.includes('value: "social-safe"') &&
+    settingsSourceText.includes('value: "full"') &&
     settingsSourceText.includes("grid-rows-[1fr]") &&
     settingsSourceText.includes("motion-reduce:transition-none"),
   "Account should expose accessible Standard and Creator choices with a reduced-motion format reveal",
+);
+assert.ok(
+  sourceText.includes('runtime.socialSafe ? "social-safe" : "full"') &&
+    sourceText.includes("distanceScale: layout.cameraDistanceScale") &&
+    viewerSourceText.includes("opts?.distanceScale"),
+  "Creator social framing should protect compositor metadata and widen camera framing",
 );
 
 console.log("gif export config checks passed");

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   DEFAULT_MEDIA_EXPORT_PREFERENCE,
   type MediaExportFileType,
+  type MediaExportFraming,
   type MediaExportPreference,
   type MediaExportQuality,
   readMediaExportPreference,
@@ -27,6 +28,64 @@ const FILE_TYPE_OPTIONS: ReadonlyArray<{
   { value: "mp4", label: "MP4", detail: "Best quality" },
   { value: "gif", label: "GIF", detail: "Compatibility" },
 ];
+
+const FRAMING_OPTIONS: ReadonlyArray<{
+  value: MediaExportFraming;
+  label: string;
+  detail: string;
+}> = [
+  { value: "social-safe", label: "Social safe", detail: "TikTok & Reels" },
+  { value: "full", label: "Full frame", detail: "Every pixel" },
+];
+
+function CreatorOptionGroup<T extends string>({
+  legend,
+  name,
+  value,
+  options,
+  disabled,
+  onChange,
+}: {
+  legend: string;
+  name: string;
+  value: T;
+  options: ReadonlyArray<{ value: T; label: string; detail: string }>;
+  disabled: boolean;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <fieldset disabled={disabled}>
+      <legend className="mb-2 text-xs font-medium text-muted">{legend}</legend>
+      <div className="grid grid-cols-2 overflow-hidden rounded-md border border-border/75">
+        {options.map((option, index) => {
+          const selected = value === option.value;
+          return (
+            <label key={option.value} className="cursor-pointer">
+              <input
+                type="radio"
+                name={name}
+                value={option.value}
+                checked={selected}
+                onChange={() => onChange(option.value)}
+                className="peer sr-only"
+              />
+              <span
+                className={`flex min-h-14 flex-col justify-center px-3 py-2 text-center transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-accent/45 motion-reduce:transition-none ${
+                  index > 0 ? "border-l border-border/75" : ""
+                } ${selected ? "bg-fg text-bg" : "bg-transparent text-muted hover:text-fg"}`}
+              >
+                <span className="text-xs font-semibold">{option.label}</span>
+                <span className={`mt-0.5 text-[10px] ${selected ? "text-bg/70" : "text-muted"}`}>
+                  {option.detail}
+                </span>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
 
 export function MediaExportSettings() {
   const [preference, setPreference] = useState<MediaExportPreference>(
@@ -121,36 +180,24 @@ export function MediaExportSettings() {
         }`}
       >
         <div className="overflow-hidden">
-          <fieldset className="pt-4" disabled={!creator}>
-            <legend className="mb-2 text-xs font-medium text-muted">Creator format</legend>
-            <div className="grid grid-cols-2 overflow-hidden rounded-md border border-border/75">
-              {FILE_TYPE_OPTIONS.map((option, index) => {
-                const selected = preference.fileType === option.value;
-                return (
-                  <label key={option.value} className="cursor-pointer">
-                    <input
-                      type="radio"
-                      name="media-export-file-type"
-                      value={option.value}
-                      checked={selected}
-                      onChange={() => save({ ...preference, fileType: option.value })}
-                      className="peer sr-only"
-                    />
-                    <span
-                      className={`flex min-h-14 flex-col justify-center px-3 py-2 text-center transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-accent/45 motion-reduce:transition-none ${
-                        index > 0 ? "border-l border-border/75" : ""
-                      } ${selected ? "bg-fg text-bg" : "bg-transparent text-muted hover:text-fg"}`}
-                    >
-                      <span className="text-xs font-semibold">{option.label}</span>
-                      <span className={`mt-0.5 text-[10px] ${selected ? "text-bg/70" : "text-muted"}`}>
-                        {option.detail}
-                      </span>
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </fieldset>
+          <div className="space-y-4 pt-4">
+            <CreatorOptionGroup
+              legend="Format"
+              name="media-export-file-type"
+              value={preference.fileType}
+              options={FILE_TYPE_OPTIONS}
+              disabled={!creator}
+              onChange={(fileType) => save({ ...preference, fileType })}
+            />
+            <CreatorOptionGroup
+              legend="Framing"
+              name="media-export-framing"
+              value={preference.framing}
+              options={FRAMING_OPTIONS}
+              disabled={!creator}
+              onChange={(framing) => save({ ...preference, framing })}
+            />
+          </div>
         </div>
       </div>
 

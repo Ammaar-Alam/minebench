@@ -6,6 +6,23 @@ export type SandboxGifExportPanelGrid = {
   rowColumns: number[];
 };
 
+export type SandboxSocialSafeInsets = {
+  left: number;
+  right: number;
+  top: number;
+};
+
+export function getSandboxSocialSafeInsets(
+  width: number,
+  height: number,
+): SandboxSocialSafeInsets {
+  return {
+    left: Math.round(width * 0.1),
+    right: Math.round(width * 0.2),
+    top: Math.round(height * 0.1),
+  };
+}
+
 export function getSandboxGifExportPanelGrid(
   count: number,
   format: SandboxGifExportLayoutFormat,
