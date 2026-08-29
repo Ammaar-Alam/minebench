@@ -222,10 +222,14 @@ export function GalleryExplore({
     });
   }, [items, normalizedQuery]);
 
+  const activeSortRef = useRef(activeSort);
+  activeSortRef.current = activeSort;
+
   useEffect(() => {
     setItems(initialItems);
     setCursor(initialCursor);
     setActiveSort(sort);
+    activeSortRef.current = sort;
   }, [initialCursor, initialItems, sort]);
 
   useEffect(() => {
@@ -252,7 +256,7 @@ export function GalleryExplore({
   }, []);
 
   async function changeSort(nextSort: "top" | "new") {
-    if (nextSort === activeSort || loading) return;
+    if (nextSort === activeSort || loading || loadingMore) return;
     setLoading(true);
     setLoadError(null);
     try {
@@ -262,6 +266,7 @@ export function GalleryExplore({
       setItems(page.items);
       setCursor(page.nextCursor);
       setActiveSort(nextSort);
+      activeSortRef.current = nextSort;
       window.history.replaceState(window.history.state, "", nextSort === "new" ? "/gallery?sort=new" : "/gallery");
     } catch {
       setLoadError("Gallery unavailable");
@@ -272,18 +277,24 @@ export function GalleryExplore({
 
   async function loadMore() {
     if (!cursor || loading || loadingMore) return;
+    const requestSort = activeSort;
     setLoadingMore(true);
     setLoadError(null);
     try {
-      const response = await fetch(`/api/gallery/candidates?sort=${activeSort}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
+      const response = await fetch(`/api/gallery/candidates?sort=${requestSort}&cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
       const page = (await response.json()) as { items: GalleryCandidatePayload[]; nextCursor: string | null };
       if (!response.ok) throw new Error("Gallery unavailable");
+      if (activeSortRef.current !== requestSort) return;
       setItems((current) => [...current, ...page.items]);
       setCursor(page.nextCursor);
     } catch {
-      setLoadError("Gallery unavailable");
+      if (activeSortRef.current === requestSort) {
+        setLoadError("Gallery unavailable");
+      }
     } finally {
-      setLoadingMore(false);
+      if (activeSortRef.current === requestSort) {
+        setLoadingMore(false);
+      }
     }
   }
 
@@ -312,7 +323,7 @@ export function GalleryExplore({
             <button
               key={option}
               type="button"
-              disabled={loading}
+              disabled={loading || loadingMore}
               aria-current={activeSort === option ? "page" : undefined}
               className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
               onClick={() => void changeSort(option)}
@@ -377,23 +388,35 @@ export function GalleryExplore({
             <h2 id="empty-gallery-title" className="font-display text-xl font-semibold tracking-tight text-muted sm:text-2xl">
               {searchQuery ? "No matching prompts." : "No prompts yet."}
             </h2>
-            {searchQuery ? (
-              <button
-                type="button"
-                onClick={() => setSearchQuery("")}
-                className="mb-btn mt-4 h-10 text-sm"
-              >
-                Clear search
-              </button>
-            ) : null}
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+              {searchQuery ? (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  className="mb-btn h-10 text-sm"
+                >
+                  Clear search
+                </button>
+              ) : null}
+              {cursor && searchQuery ? (
+                <button
+                  type="button"
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                  className="mb-btn mb-btn-primary h-10 text-sm"
+                >
+                  {loadingMore ? "Loading…" : "Load more prompts"}
+                </button>
+              ) : null}
+            </div>
           </section>
         )}
       </div>
 
-      {cursor && !searchQuery && !loading ? (
+      {cursor && !loading ? (
         <div className="mt-12 flex justify-center">
           <button type="button" className="mb-btn h-11 min-w-36" disabled={loadingMore} onClick={() => void loadMore()}>
-            {loadingMore ? "Loading…" : "More"}
+            {loadingMore ? "Loading…" : searchQuery ? "Load more prompts" : "More"}
           </button>
         </div>
       ) : null}
