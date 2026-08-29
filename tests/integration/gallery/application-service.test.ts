@@ -46,6 +46,14 @@ async function main() {
     });
     assert.equal(created.length, 2);
     assert.notEqual(created[0]?.id, created[1]?.id);
+    assert.equal(created[0]?.status, "queued");
+    assert.equal(created[0]?.stage, "queued");
+    assert.equal(created[0]?.prompt, "A tiny observatory");
+    assert.equal(created[0]?.gridSize, 64);
+    assert.equal(created[0]?.palette, "simple");
+    assert.equal(created[0]?.model.label, "GPT 5.4 Mini");
+    assert.deepEqual(created[0]?.warnings, []);
+    assert.match(created[0]?.createdAt ?? "", /^\d{4}-\d{2}-\d{2}T/);
 
     const rows = await db.customBuild.findMany({
       where: { ownerId },
@@ -274,6 +282,9 @@ async function main() {
     });
     const canceled = await cancelSavedGeneration(ownerId, created[1]!.id);
     assert.equal(canceled.status, "canceled");
+    assert.equal(canceled.stage, "canceled");
+    assert.equal(canceled.prompt, "A tiny observatory");
+    assert.ok(canceled.completedAt);
     assert.equal(
       await db.customBuildSecret.count({ where: { customBuildId: rows[1]!.id } }),
       0,

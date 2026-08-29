@@ -8,7 +8,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const ownerId = await getAuthenticatedUserId(request);
   if (!ownerId) return apiJson({ error: { code: "authentication_required", message: "Sign in to stop this generation." } }, 401);
   try {
-    return apiJson(await cancelSavedGeneration(ownerId, (await context.params).id));
+    return apiJson({ generation: await cancelSavedGeneration(ownerId, (await context.params).id) });
   } catch (error) {
     return apiServiceError(error);
   }

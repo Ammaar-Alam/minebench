@@ -238,7 +238,8 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
     return { id, publicId, model, credential, endpoint, usesHostedGeneration };
   });
 
-  await prisma.$transaction(async (tx) => {
+  const rows = await prisma.$transaction(async (tx) => {
+    const createdRows: GenerationRow[] = [];
     const hostedGenerationCount = prepared.filter((item) => item.usesHostedGeneration).length;
     const account = await tx.$queryRaw<Array<{ id: string }>>`
       UPDATE "User"
@@ -263,7 +264,7 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
     }
 
     for (const item of prepared) {
-      await tx.customBuild.create({
+      createdRows.push(await tx.customBuild.create({
         data: {
           id: item.id,
           publicId: item.publicId,
@@ -313,16 +314,18 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
             },
           },
         },
-      });
+        select: generationSelect,
+      }));
     }
     await tx.customBuildStatsDaily.upsert({
       where: { day: dayKey(now) },
       create: { day: dayKey(now), created: prepared.length },
       update: { created: { increment: prepared.length } },
     });
+    return createdRows;
   }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
 
-  return prepared.map((item) => ({ id: item.publicId, status: "queued" as const }));
+  return rows.map(serializeGeneration);
 }
 
 type GenerationCursor = { createdAt: Date; id: string };
@@ -558,7 +561,9 @@ export async function cancelSavedGeneration(ownerId: string, publicId: string) {
       update: { canceled: { increment: 1 } },
     });
   });
-  return { id: publicId, status: "canceled" as const };
+  const generation = await getSavedGeneration(ownerId, publicId);
+  if (!generation) throw new GenerationServiceError("not_found", "Saved generation not found.");
+  return generation;
 }
 
 export async function getOwnedGenerationArtifact(

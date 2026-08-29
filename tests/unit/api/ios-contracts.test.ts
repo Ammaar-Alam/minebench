@@ -128,6 +128,8 @@ async function main() {
   const galleryArtifact = readFileSync("app/api/gallery/examples/[id]/[kind]/route.ts", "utf8");
   assert.match(galleryArtifact, /kind === "thumbnail"/);
   assert.match(galleryArtifact, /preview_mbv4/);
+  const cancelGeneration = readFileSync("app/api/generations/[id]/cancel/route.ts", "utf8");
+  assert.match(cancelGeneration, /apiJson\(\{ generation: await cancelSavedGeneration/);
   for (const path of [
     "app/api/account/route.ts",
     "app/api/account/session/route.ts",

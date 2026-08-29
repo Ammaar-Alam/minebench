@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { getAuthenticatedUserId } from "@/lib/auth/request";
 import {
-  ARENA_SESSION_COOKIE,
-  ARENA_SESSION_COOKIE_OPTIONS,
+  appendArenaSessionCookie,
   readArenaSessionId,
 } from "@/lib/arena/session";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
@@ -22,12 +21,7 @@ const report = z.object({
 
 function submittedResponse(existingSessionId: string | null, sessionId: string) {
   const response = apiJson({ submitted: true });
-  if (!existingSessionId) {
-    response.headers.append(
-      "Set-Cookie",
-      `${ARENA_SESSION_COOKIE}=${sessionId}; Path=/; Max-Age=${ARENA_SESSION_COOKIE_OPTIONS.maxAge}; HttpOnly; SameSite=Lax${ARENA_SESSION_COOKIE_OPTIONS.secure ? "; Secure" : ""}`,
-    );
-  }
+  if (!existingSessionId) appendArenaSessionCookie(response, sessionId);
   return response;
 }
 
