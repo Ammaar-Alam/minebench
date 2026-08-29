@@ -18,6 +18,7 @@ const sandboxLive = readFileSync("components/sandbox/SandboxLive.tsx", "utf8");
 const adminActions = readFileSync("app/admin/gallery/actions.ts", "utf8");
 const adminDashboard = readFileSync("components/gallery/GalleryAdminDashboard.tsx", "utf8");
 const galleryService = readFileSync("lib/gallery/service.ts", "utf8");
+const galleryRoute = readFileSync("app/api/gallery/candidates/route.ts", "utf8");
 
 assert.ok(
   detail.includes("candidate.canRemove") &&
@@ -123,16 +124,39 @@ assert.ok(
   explore.includes("VoxelEmptyState") &&
     explore.includes("candidate.cover?.previewUrl") &&
     explore.includes("candidate.alternate?.previewUrl") &&
-    explore.includes("modelLabels.join") &&
+    explore.includes("visibleModelLabels.join") &&
     explore.includes("candidate.cover?.jsonBytes") &&
     explore.includes("candidate.cover?.generationTimeMs") &&
-    explore.includes("candidate.exampleCount - 2") &&
+    explore.includes("candidate.modelLabels") &&
+    explore.includes("hiddenModelLabels.length") &&
+    explore.includes('role="tooltip"') &&
     !explore.includes("featured"),
-  "Gallery cards should keep a clear media frame and reveal additional model builds without extra requests",
+  "Gallery cards should keep a clear media frame and disclose distinct hidden models without extra client requests",
+);
+assert.ok(
+  explore.includes("const previewsReady =") &&
+    explore.includes("!candidate.alternate?.previewUrl || alternateLoaded") &&
+    explore.includes("!previewsReady ?") &&
+    explore.includes("<GalleryCardSkeleton />") &&
+    explore.includes('"invisible pointer-events-none"') &&
+    explore.includes("onLoad={() => setCoverLoaded(true)}") &&
+    explore.includes("onLoad={() => setAlternateLoaded(true)}"),
+  "Gallery cards should remain skeletons until their previews are ready, then reveal as a complete unit",
+);
+assert.ok(
+  explore.includes("candidate.matchedModelLabels") &&
+    explore.includes('params.set("q", query)') &&
+    explore.includes('placeholder="Search prompts or models…"') &&
+    galleryRoute.includes('query: url.searchParams.get("q")') &&
+    galleryService.includes('modelDisplayName: { contains: query') &&
+    galleryService.includes('modelId: { contains: query'),
+  "Gallery search should cover every visible example and surface hidden model matches",
 );
 assert.ok(
   !page.includes("key={sort}") &&
     explore.includes("changeSort") &&
+    explore.includes("requestedSortRef.current = nextSort") &&
+    explore.includes("const requestSort = requestedSortRef.current") &&
     explore.includes("window.history.replaceState") &&
     explore.includes("key={activeSort}"),
   "Top and New should replace only the Gallery results and animate the new grid",

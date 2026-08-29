@@ -98,6 +98,12 @@ const candidateSelect = {
   },
 } satisfies Prisma.GalleryCandidateSelect;
 
+const galleryModelSelect = {
+  modelKind: true,
+  modelId: true,
+  modelDisplayName: true,
+} satisfies Prisma.CustomBuildSelect;
+
 const exampleSelect = {
   id: true,
   candidateId: true,
@@ -113,9 +119,7 @@ const exampleSelect = {
       buildByteSize: true,
       generationTimeMs: true,
       buildSha256: true,
-      modelKind: true,
-      modelId: true,
-      modelDisplayName: true,
+      ...galleryModelSelect,
       artifacts: {
         where: { kind: { in: ["preview_svg", "preview_mbv4", "viewer_mbv4", "viewer_mbf1"] } },
         select: { kind: true },
@@ -126,6 +130,7 @@ const exampleSelect = {
 
 type CandidateRow = Prisma.GalleryCandidateGetPayload<{ select: typeof candidateSelect }>;
 type ExampleRow = Prisma.GalleryExampleGetPayload<{ select: typeof exampleSelect }>;
+type GalleryModelRow = Prisma.CustomBuildGetPayload<{ select: typeof galleryModelSelect }>;
 
 const candidateListSelect = {
   ...candidateSelect,
@@ -140,14 +145,25 @@ const candidateListSelect = {
   },
 } satisfies Prisma.GalleryCandidateSelect;
 
-function publicExample(example: ExampleRow) {
-  const kinds = new Set(example.customBuild.artifacts.map((artifact) => artifact.kind));
+function publicGalleryModel(model: GalleryModelRow) {
   const kind =
-    example.customBuild.modelKind === "openrouter"
+    model.modelKind === "openrouter"
       ? "openrouter"
-      : example.customBuild.modelKind === "custom"
+      : model.modelKind === "custom"
         ? "custom"
         : "catalog";
+  return {
+    kind,
+    label: resolveGalleryModelLabel({
+      kind,
+      displayName: model.modelDisplayName,
+      modelId: model.modelId,
+    }),
+  };
+}
+
+function publicExample(example: ExampleRow) {
+  const kinds = new Set(example.customBuild.artifacts.map((artifact) => artifact.kind));
   return {
     id: example.id,
     buildId: example.customBuild.publicId,
@@ -156,14 +172,7 @@ function publicExample(example: ExampleRow) {
       publicNickname: example.contributor.publicNickname,
     }),
     createdAt: example.createdAt.toISOString(),
-    model: {
-      kind,
-      label: resolveGalleryModelLabel({
-        kind,
-        displayName: example.customBuild.modelDisplayName,
-        modelId: example.customBuild.modelId,
-      }),
-    },
+    model: publicGalleryModel(example.customBuild),
     gridSize: example.customBuild.gridSize,
     palette: example.customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
     blockCount: example.customBuild.blockCount,
@@ -189,7 +198,14 @@ function publicCandidate(
   upvoted = false,
   viewerUserId?: string | null,
   alternate?: ExampleRow | null,
+  matchedModels: GalleryModelRow[] = [],
+  models: GalleryModelRow[] = [],
 ) {
+  const modelLabels = [...new Set(
+    [cover?.customBuild, alternate?.customBuild, ...models]
+      .filter((model): model is GalleryModelRow => Boolean(model))
+      .map((model) => publicGalleryModel(model).label),
+  )];
   return {
     id: candidate.publicId,
     prompt: candidate.promptText,
@@ -207,6 +223,8 @@ function publicCandidate(
     exampleCount,
     cover: cover ? publicExample(cover) : null,
     alternate: alternate ? publicExample(alternate) : null,
+    modelLabels,
+    matchedModelLabels: [...new Set(matchedModels.map((model) => publicGalleryModel(model).label))],
   };
 }
 
@@ -227,8 +245,11 @@ export async function listGalleryCandidates(options: {
   limit?: number;
   sessionId?: string | null;
   userId?: string | null;
+  query?: string | null;
 }) {
   const limit = Math.max(1, Math.min(options.limit ?? 24, 48));
+  const query = options.query?.trim().slice(0, 100);
+  const matchesCustomPrefix = Boolean(query && "custom".includes(query.toLowerCase()));
   const cursor = decodeGalleryCursor(options.cursor);
   const cursorWhere: Prisma.GalleryCandidateWhereInput = cursor
     ? options.sort === "top"
@@ -251,8 +272,30 @@ export async function listGalleryCandidates(options: {
           ],
         }
     : {};
+  // ponytail: add indexed search when Gallery volume makes contains queries measurable
+  const searchExampleWhere = query
+    ? {
+        ...publicExampleWhere,
+        customBuild: {
+          ...publicExampleWhere.customBuild,
+          OR: [
+            { modelDisplayName: { contains: query, mode: "insensitive" as const } },
+            { modelId: { contains: query, mode: "insensitive" as const } },
+            ...(matchesCustomPrefix ? [{ modelKind: "custom" }] : []),
+          ],
+        },
+      } satisfies Prisma.GalleryExampleWhereInput
+    : null;
+  const queryWhere: Prisma.GalleryCandidateWhereInput = query
+    ? {
+        OR: [
+          { promptText: { contains: query, mode: "insensitive" } },
+          { examples: { some: searchExampleWhere! } },
+        ],
+      }
+    : {};
   const rows = await prisma.galleryCandidate.findMany({
-    where: { AND: [publicCandidateWhere, cursorWhere] },
+    where: { AND: [publicCandidateWhere, cursorWhere, queryWhere] },
     select: candidateListSelect,
     orderBy: galleryCandidateOrder(options.sort),
     take: limit + 1,
@@ -262,25 +305,51 @@ export async function listGalleryCandidates(options: {
     options.sessionId ? { sessionId: options.sessionId } : null,
     options.userId ? { userId: options.userId } : null,
   ].filter((value): value is NonNullable<typeof value> => Boolean(value));
-  const votes = voteIdentities.length > 0
-    ? await prisma.galleryVote.findMany({
-        where: { OR: voteIdentities, candidateId: { in: page.map((row) => row.id) } },
-        select: { candidateId: true },
-      })
-    : [];
+  const [votes, modelExamples] = await Promise.all([
+    voteIdentities.length > 0
+      ? prisma.galleryVote.findMany({
+          where: { OR: voteIdentities, candidateId: { in: page.map((row) => row.id) } },
+          select: { candidateId: true },
+        })
+      : [],
+    page.length > 0
+      ? prisma.galleryExample.findMany({
+          where: { candidateId: { in: page.map((row) => row.id) }, ...publicExampleWhere },
+          select: { candidateId: true, customBuild: { select: galleryModelSelect } },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        })
+      : [],
+  ]);
   const upvoted = new Set(votes.map((vote) => vote.candidateId));
+  const modelsByCandidate = new Map<string, GalleryModelRow[]>();
+  for (const example of modelExamples) {
+    const models = modelsByCandidate.get(example.candidateId) ?? [];
+    models.push(example.customBuild);
+    modelsByCandidate.set(example.candidateId, models);
+  }
+  const modelQuery = query?.toLowerCase();
   const last = page.at(-1);
   return {
-    items: page.map((candidate) =>
-      publicCandidate(
+    items: page.map((candidate) => {
+      const models = modelsByCandidate.get(candidate.id) ?? [];
+      const matchedModels = modelQuery
+        ? models.filter((model) =>
+            model.modelDisplayName.toLowerCase().includes(modelQuery)
+            || model.modelId.toLowerCase().includes(modelQuery)
+            || (matchesCustomPrefix && model.modelKind === "custom"),
+          )
+        : [];
+      return publicCandidate(
         candidate,
         candidate.examples[0] ?? null,
         candidate._count.examples,
         upvoted.has(candidate.id),
         options.userId,
         candidate.examples[1] ?? null,
-      ),
-    ),
+        matchedModels,
+        models,
+      );
+    }),
     nextCursor: rows.length > limit && last
       ? encodeGalleryCursor({
           score: options.sort === "top" ? last.upvoteCount : 0,

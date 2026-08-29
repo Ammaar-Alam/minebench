@@ -31,7 +31,7 @@ export default function GalleryLoading() {
           </span>
         </nav>
 
-        <div className="relative w-full sm:w-64 md:w-72">
+        <div className="relative w-full sm:w-80 lg:w-96">
           <span aria-hidden="true" className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-muted">
             <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
               <circle cx="7" cy="7" r="4.5" />
@@ -41,9 +41,9 @@ export default function GalleryLoading() {
           <input
             type="search"
             disabled
-            placeholder="Search prompts…"
-            aria-label="Search prompts"
-            className="mb-field h-10 w-full pl-9 pr-9 text-sm placeholder:text-muted/60"
+            placeholder="Search prompts or models…"
+            aria-label="Search prompts or models"
+            className="mb-field h-11 w-full pl-9 pr-11 text-sm placeholder:text-muted/60"
           />
           <span aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 hidden rounded border border-border/70 bg-card/40 px-1.5 py-0.5 font-mono text-[10px] text-muted sm:inline-block">
             /
