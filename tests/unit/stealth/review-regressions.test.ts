@@ -251,6 +251,7 @@ assert.match(generation, /promptSlug}-\$\{params\.sha256}\.json\.gz/);
 const stagingRunner = read("scripts/with-staging-env.mjs");
 assert.match(stagingRunner, /required\("STAGING_SUPABASE_PUBLISHABLE_KEY"\)/);
 assert.match(stagingRunner, /required\("STAGING_STEALTH_CONFIG_ENCRYPTION_KEY"\)/);
+assert.match(stagingRunner, /required\("STAGING_CUSTOM_BUILD_KEY_ENCRYPTION_SECRET"\)/);
 assert.doesNotMatch(stagingRunner, /STAGING_SUPABASE_PUBLISHABLE_KEY\?\.trim\(\) \|\| ""/);
 
 console.log("private evaluation review regression checks passed");
