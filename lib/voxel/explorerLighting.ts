@@ -2,6 +2,9 @@ export type ExplorerLightCluster = {
   x: number;
   y: number;
   z: number;
+  nx: number;
+  ny: number;
+  nz: number;
   faces: number;
 };
 
@@ -30,7 +33,21 @@ export function clusterExplorerEmissiveFaces(
     const y = (positions[i + 1] + positions[i + 4] + positions[i + 7] + positions[i + 10]) / 4;
     const z = (positions[i + 2] + positions[i + 5] + positions[i + 8] + positions[i + 11]) / 4;
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-    const key = `${Math.floor(x / cellSize)},${Math.floor(y / cellSize)},${Math.floor(z / cellSize)}`;
+    const ax = positions[i + 3] - positions[i];
+    const ay = positions[i + 4] - positions[i + 1];
+    const az = positions[i + 5] - positions[i + 2];
+    const bx = positions[i + 6] - positions[i];
+    const by = positions[i + 7] - positions[i + 1];
+    const bz = positions[i + 8] - positions[i + 2];
+    const normalX = ay * bz - az * by;
+    const normalY = az * bx - ax * bz;
+    const normalZ = ax * by - ay * bx;
+    const normalLength = Math.hypot(normalX, normalY, normalZ);
+    if (normalLength < 1e-6) continue;
+    const nx = Math.round(normalX / normalLength);
+    const ny = Math.round(normalY / normalLength);
+    const nz = Math.round(normalZ / normalLength);
+    const key = `${Math.floor(x / cellSize)},${Math.floor(y / cellSize)},${Math.floor(z / cellSize)},${nx},${ny},${nz}`;
     const cluster = clusters.get(key);
     if (cluster) {
       cluster.x += x;
@@ -38,7 +55,7 @@ export function clusterExplorerEmissiveFaces(
       cluster.z += z;
       cluster.faces += 1;
     } else {
-      clusters.set(key, { x, y, z, faces: 1 });
+      clusters.set(key, { x, y, z, nx, ny, nz, faces: 1 });
     }
   }
 
@@ -46,6 +63,9 @@ export function clusterExplorerEmissiveFaces(
     x: cluster.x / cluster.faces,
     y: cluster.y / cluster.faces,
     z: cluster.z / cluster.faces,
+    nx: cluster.nx,
+    ny: cluster.ny,
+    nz: cluster.nz,
     faces: cluster.faces,
   }));
 }

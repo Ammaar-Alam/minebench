@@ -59,10 +59,11 @@ const VIEW_BOB_RUN_AMOUNT = 0.1;
 const SSAO_RENDER_SCALE = 0.5;
 const BLOOM_RENDER_SCALE = 0.25;
 const EMISSIVE_LAYER = 1;
-const EMISSIVE_LIGHT_COUNT = 6;
-const EMISSIVE_LIGHT_DISTANCE = 18;
-const EMISSIVE_LIGHT_SELECTION_RADIUS = 32;
-const EMISSIVE_LIGHT_INTENSITY = 42;
+const EMISSIVE_LIGHT_COUNT = 2;
+const EMISSIVE_LIGHT_DISTANCE = 14;
+const EMISSIVE_LIGHT_SELECTION_RADIUS = 28;
+const EMISSIVE_LIGHT_INTENSITY = 24;
+const EMISSIVE_LIGHT_SURFACE_OFFSET = 0.55;
 const EMISSIVE_LIGHT_UPDATE_MS = 180;
 const MAX_FRAME_SECONDS = 0.05;
 const MAX_PHYSICS_STEP_SECONDS = 1 / 60;
@@ -337,14 +338,15 @@ function configureDaylight(
   sky.material.uniforms.sunPosition.value.copy(SUN_DIRECTION);
   scene.add(sky);
 
-  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x39452f, 0.78));
-  scene.add(new THREE.AmbientLight(0xffffff, 0.08));
+  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x4d5548, 0.98));
+  scene.add(new THREE.AmbientLight(0xf4f8ff, 0.14));
 
   const sun = new THREE.DirectionalLight(0xffe2b3, 3.2);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -0.00015;
   sun.shadow.normalBias = 0.025;
+  sun.shadow.autoUpdate = false;
   scene.add(sun, sun.target);
 
   const sunFlare = new Lensflare();
@@ -487,7 +489,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
     const bloomPass = new BloomPass(1, 13, 2);
     const bloomOverlayUniforms = THREE.UniformsUtils.clone(CopyShader.uniforms);
     bloomOverlayUniforms.tDiffuse.value = bloomTarget.texture;
-    bloomOverlayUniforms.opacity.value = 0.78;
+    bloomOverlayUniforms.opacity.value = 0.62;
     const bloomOverlayMaterial = new THREE.ShaderMaterial({
       uniforms: bloomOverlayUniforms,
       vertexShader: CopyShader.vertexShader,
@@ -499,6 +501,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       toneMapped: false,
     });
     const bloomOverlay = new FullScreenQuad(bloomOverlayMaterial);
+    const bloomDepthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
     const emissiveLights = Array.from({ length: EMISSIVE_LIGHT_COUNT }, () => {
       const light = new THREE.PointLight(
         0xffb45c,
@@ -507,6 +510,15 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         2,
       );
       light.visible = false;
+      light.castShadow = true;
+      light.shadow.mapSize.set(256, 256);
+      light.shadow.camera.near = 0.1;
+      light.shadow.camera.far = EMISSIVE_LIGHT_DISTANCE;
+      light.shadow.camera.updateProjectionMatrix();
+      light.shadow.bias = -0.0005;
+      light.shadow.normalBias = 0.035;
+      light.shadow.radius = 2;
+      light.shadow.autoUpdate = false;
       scene.add(light);
       return light;
     });
@@ -598,38 +610,60 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         EMISSIVE_LIGHT_COUNT,
         EMISSIVE_LIGHT_SELECTION_RADIUS,
       );
-      const active = selected.length > 0;
+      let shadowChanged = false;
       for (let i = 0; i < emissiveLights.length; i += 1) {
         const light = emissiveLights[i];
         const cluster = selected[i];
-        light.visible = active;
         if (!cluster) {
+          light.visible = false;
           light.intensity = 0;
           continue;
         }
-        light.position.set(cluster.x, cluster.y, cluster.z);
+        const x = cluster.x + cluster.nx * EMISSIVE_LIGHT_SURFACE_OFFSET;
+        const y = cluster.y + cluster.ny * EMISSIVE_LIGHT_SURFACE_OFFSET;
+        const z = cluster.z + cluster.nz * EMISSIVE_LIGHT_SURFACE_OFFSET;
+        const moved =
+          !light.visible ||
+          Math.abs(light.position.x - x) > 1e-4 ||
+          Math.abs(light.position.y - y) > 1e-4 ||
+          Math.abs(light.position.z - z) > 1e-4;
+        light.visible = true;
+        light.position.set(x, y, z);
         light.intensity =
-          EMISSIVE_LIGHT_INTENSITY * Math.min(1.45, 0.65 + Math.sqrt(cluster.faces) * 0.16);
+          EMISSIVE_LIGHT_INTENSITY * Math.min(1.25, 0.7 + Math.sqrt(cluster.faces) * 0.12);
+        if (moved) {
+          light.shadow.needsUpdate = true;
+          shadowChanged = true;
+        }
       }
+      if (shadowChanged) renderer.shadowMap.needsUpdate = true;
     };
     const renderEmissiveBloom = (seconds: number) => {
       const background = scene.background;
       const fog = scene.fog;
+      const overrideMaterial = scene.overrideMaterial;
+      const skyVisible = sky.visible;
       const layerMask = camera.layers.mask;
       renderer.getClearColor(bloomClearColor);
       const clearAlpha = renderer.getClearAlpha();
       try {
-        camera.layers.set(EMISSIVE_LAYER);
         scene.background = null;
         scene.fog = null;
+        sky.visible = false;
         renderer.setClearColor(0x000000, 0);
         renderer.setRenderTarget(bloomTarget);
-        renderer.clear();
+        camera.layers.set(0);
+        scene.overrideMaterial = bloomDepthMaterial;
         renderer.render(scene, camera);
+        camera.layers.set(EMISSIVE_LAYER);
+        scene.overrideMaterial = null;
+        renderExplorerBloomOverlay(renderer, () => renderer.render(scene, camera));
       } finally {
         camera.layers.mask = layerMask;
         scene.background = background;
         scene.fog = fog;
+        scene.overrideMaterial = overrideMaterial;
+        sky.visible = skyVisible;
         renderer.setClearColor(bloomClearColor, clearAlpha);
         renderer.setRenderTarget(null);
       }
@@ -841,7 +875,11 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       }
       scene.remove(sunFlare);
       sunFlare.dispose();
-      for (const light of emissiveLights) scene.remove(light);
+      for (const light of emissiveLights) {
+        scene.remove(light);
+        light.shadow.dispose();
+      }
+      bloomDepthMaterial.dispose();
       bloomOverlayMaterial.dispose();
       bloomOverlay.dispose();
       bloomPass.dispose();
