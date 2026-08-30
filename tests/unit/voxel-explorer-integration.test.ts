@@ -9,6 +9,7 @@ const leaderboard = read("components/leaderboard/ModelDetail.tsx");
 assert.match(read("app/layout.tsx"), /<VoxelExplorerProvider>/);
 assert.match(launcher, /Explore this build\?/);
 assert.match(launcher, /Step inside at block scale with keyboard and mouse\./);
+assert.match(launcher, /onKeyDown=\{\(event\) => event\.stopPropagation\(\)\}/);
 assert.match(viewerCard, /showBuildView && !explorerActive/);
 
 for (const path of [

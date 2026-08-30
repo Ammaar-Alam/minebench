@@ -93,6 +93,7 @@ export function VoxelExplorerProvider({ children }: { children: ReactNode }) {
             event.preventDefault();
             setPending(null);
           }}
+          onKeyDown={(event) => event.stopPropagation()}
           onClose={() => setPending(null)}
         >
           <div className="space-y-6 p-6 sm:p-7">
