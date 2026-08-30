@@ -7,7 +7,10 @@ import * as THREE from "three";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { Lensflare, LensflareElement } from "three/examples/jsm/objects/Lensflare.js";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
+import { BloomPass } from "three/examples/jsm/postprocessing/BloomPass.js";
+import { FullScreenQuad } from "three/examples/jsm/postprocessing/Pass.js";
 import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js";
+import { CopyShader } from "three/examples/jsm/shaders/CopyShader.js";
 import {
   readBuildVariantPayload,
   readBuildVariantStream,
@@ -23,6 +26,11 @@ import {
   setExplorerMoveDirection,
   type ExplorerCollisionWorld,
 } from "@/lib/voxel/explorerCollision";
+import {
+  clusterExplorerEmissiveFaces,
+  selectNearestExplorerLightClusters,
+  type ExplorerLightCluster,
+} from "@/lib/voxel/explorerLighting";
 import { createVoxelGroupAsync, type VoxelGroup } from "@/lib/voxel/mesh";
 import {
   voxelBuildBlockCount,
@@ -47,17 +55,25 @@ const VIEW_BOB_DISTANCE_SCALE = 0.8;
 const VIEW_BOB_WALK_AMOUNT = 0.075;
 const VIEW_BOB_RUN_AMOUNT = 0.1;
 const SSAO_RENDER_SCALE = 0.5;
+const BLOOM_RENDER_SCALE = 0.25;
+const EMISSIVE_LAYER = 1;
+const EMISSIVE_LIGHT_COUNT = 6;
+const EMISSIVE_LIGHT_DISTANCE = 18;
+const EMISSIVE_LIGHT_SELECTION_RADIUS = 32;
+const EMISSIVE_LIGHT_INTENSITY = 42;
+const EMISSIVE_LIGHT_UPDATE_MS = 180;
 const MAX_FRAME_SECONDS = 0.05;
 const MAX_PHYSICS_STEP_SECONDS = 1 / 60;
 const DAYLIGHT_COLOR = 0xaed4ef;
-const SIMPLE_PALETTE = getPalette("simple");
-const SUN_DIRECTION = new THREE.Vector3(0.55, 0.78, 0.3).normalize();
+const GALLERY_BUILD_PREFIX = "gallery:";
+const SUN_DIRECTION = new THREE.Vector3(-0.46, 0.72, -0.52).normalize();
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
 let explorerBuildCatalog: ExplorerBuildOption[] | null = null;
 
 type LoadedBuild = {
   checksum: string | null;
+  palette: "simple" | "advanced";
   voxelBuild: RenderableVoxelBuild;
 };
 
@@ -66,6 +82,7 @@ type ExplorerBuildOption = {
   model: string;
   prompt: string;
   blockCount: number;
+  source: "benchmark" | "gallery";
 };
 
 function loadAtlasTexture(): Promise<THREE.Texture> {
@@ -100,6 +117,25 @@ async function fetchStreamBuild(
 }
 
 async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise<LoadedBuild> {
+  const galleryExampleId = buildId.startsWith(GALLERY_BUILD_PREFIX)
+    ? buildId.slice(GALLERY_BUILD_PREFIX.length)
+    : null;
+  if (galleryExampleId) {
+    const response = await fetch(
+      `/api/gallery/examples/${encodeURIComponent(galleryExampleId)}/viewer`,
+      { signal },
+    );
+    if (!response.ok) {
+      throw new Error(await readClientErrorResponse(response, "Failed to load build"));
+    }
+    const payload = (
+      await readBuildVariantPayload(response, {
+        fallbackIdentity: { buildId, variant: "full", checksum: null },
+      })
+    ).payload;
+    return { checksum: payload.checksum, palette: "advanced", voxelBuild: payload.voxelBuild };
+  }
+
   const url = new URL(
     `/api/arena/builds/${encodeURIComponent(buildId)}`,
     window.location.origin,
@@ -119,7 +155,7 @@ async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise
   } else {
     throw new Error(await readClientErrorResponse(response, "Failed to load build"));
   }
-  return { checksum: payload.checksum, voxelBuild: payload.voxelBuild };
+  return { checksum: payload.checksum, palette: "simple", voxelBuild: payload.voxelBuild };
 }
 
 async function fetchExplorerBuildCatalog(signal: AbortSignal): Promise<ExplorerBuildOption[]> {
@@ -138,17 +174,19 @@ async function fetchExplorerBuildCatalog(signal: AbortSignal): Promise<ExplorerB
 
 function createSunHaloTexture(): THREE.Texture {
   const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 128;
+  canvas.width = 256;
+  canvas.height = 256;
   const context = canvas.getContext("2d");
   if (context) {
-    const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
-    gradient.addColorStop(0, "rgba(255, 250, 224, 0.95)");
-    gradient.addColorStop(0.12, "rgba(255, 235, 178, 0.65)");
-    gradient.addColorStop(0.38, "rgba(255, 213, 128, 0.18)");
-    gradient.addColorStop(1, "rgba(255, 203, 112, 0)");
+    const gradient = context.createRadialGradient(128, 128, 0, 128, 128, 128);
+    gradient.addColorStop(0, "rgba(255, 253, 235, 1)");
+    gradient.addColorStop(0.055, "rgba(255, 245, 201, 0.98)");
+    gradient.addColorStop(0.14, "rgba(255, 224, 151, 0.68)");
+    gradient.addColorStop(0.34, "rgba(255, 193, 102, 0.24)");
+    gradient.addColorStop(0.68, "rgba(255, 174, 76, 0.07)");
+    gradient.addColorStop(1, "rgba(255, 165, 64, 0)");
     context.fillStyle = gradient;
-    context.fillRect(0, 0, 128, 128);
+    context.fillRect(0, 0, 256, 256);
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -196,7 +234,7 @@ function ExplorerBuildMenu({
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (tokens.length === 0) return builds;
     return builds.filter((build) => {
-      const searchable = `${build.model} ${build.prompt}`.toLowerCase();
+      const searchable = `${build.source} ${build.model} ${build.prompt}`.toLowerCase();
       return tokens.every((token) => searchable.includes(token));
     });
   }, [builds, query]);
@@ -269,6 +307,7 @@ function ExplorerBuildMenu({
               <span className="flex items-center justify-between gap-3 text-[11px] font-semibold text-white/80">
                 <span className="truncate">{build.model}</span>
                 <span className="shrink-0 tabular-nums text-white/40">
+                  {build.source === "gallery" ? "Gallery · " : ""}
                   {build.blockCount.toLocaleString()} blocks
                 </span>
               </span>
@@ -299,10 +338,10 @@ function configureDaylight(
   sky.material.uniforms.sunPosition.value.copy(SUN_DIRECTION);
   scene.add(sky);
 
-  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x39452f, 0.72));
+  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x39452f, 0.78));
   scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
-  const sun = new THREE.DirectionalLight(0xffedc2, 3);
+  const sun = new THREE.DirectionalLight(0xffe2b3, 3.2);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -0.00015;
@@ -311,7 +350,7 @@ function configureDaylight(
 
   const sunFlare = new Lensflare();
   sunFlare.addElement(
-    new LensflareElement(createSunHaloTexture(), 220, 0, new THREE.Color(0xffe8b8)),
+    new LensflareElement(createSunHaloTexture(), 360, 0, new THREE.Color(0xffd18a)),
   );
   scene.add(sunFlare);
 
@@ -319,7 +358,7 @@ function configureDaylight(
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = 1.1;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   return { sky, sun, sunFlare };
 }
@@ -378,7 +417,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       createPublicMeshCacheKey({
         checksum: build.checksum,
         variant: "full",
-        palette: "simple",
+        palette: build.palette,
         blockCount: voxelBuildBlockCount(build.voxelBuild),
       }),
     [build],
@@ -440,6 +479,41 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
     ssaoPass.kernelRadius = 12;
     ssaoPass.minDistance = 0.001;
     ssaoPass.maxDistance = 0.1;
+    const bloomTarget = new THREE.WebGLRenderTarget(1, 1, {
+      type: THREE.HalfFloatType,
+      depthBuffer: true,
+    });
+    bloomTarget.texture.name = "Explorer.emissiveBloom";
+    bloomTarget.texture.generateMipmaps = false;
+    const bloomPass = new BloomPass(1, 13, 2);
+    const bloomOverlayUniforms = THREE.UniformsUtils.clone(CopyShader.uniforms);
+    bloomOverlayUniforms.tDiffuse.value = bloomTarget.texture;
+    bloomOverlayUniforms.opacity.value = 0.78;
+    const bloomOverlayMaterial = new THREE.ShaderMaterial({
+      uniforms: bloomOverlayUniforms,
+      vertexShader: CopyShader.vertexShader,
+      fragmentShader: CopyShader.fragmentShader,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const bloomOverlay = new FullScreenQuad(bloomOverlayMaterial);
+    const emissiveLights = Array.from({ length: EMISSIVE_LIGHT_COUNT }, () => {
+      const light = new THREE.PointLight(
+        0xffb45c,
+        0,
+        EMISSIVE_LIGHT_DISTANCE,
+        2,
+      );
+      light.visible = false;
+      scene.add(light);
+      return light;
+    });
+    let emissiveClusters: ExplorerLightCluster[] = [];
+    let hasEmissiveMeshes = false;
+    let nextEmissiveLightUpdateAt = 0;
 
     const controls = new PointerLockControls(camera, renderer.domElement);
     controls.pointerSpeed = 0.9;
@@ -502,6 +576,10 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         Math.max(1, Math.round(width * pixelRatio * SSAO_RENDER_SCALE)),
         Math.max(1, Math.round(height * pixelRatio * SSAO_RENDER_SCALE)),
       );
+      const bloomWidth = Math.max(1, Math.round(width * pixelRatio * BLOOM_RENDER_SCALE));
+      const bloomHeight = Math.max(1, Math.round(height * pixelRatio * BLOOM_RENDER_SCALE));
+      bloomTarget.setSize(bloomWidth, bloomHeight);
+      bloomPass.setSize(bloomWidth, bloomHeight);
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(mount);
@@ -513,6 +591,53 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
     const bobUp = new THREE.Vector3();
     const baseQuaternion = new THREE.Quaternion();
     const viewBob: ExplorerViewBobTransform = { x: 0, y: 0, roll: 0, pitch: 0 };
+    const bloomClearColor = new THREE.Color();
+    const updateEmissiveLights = () => {
+      const selected = selectNearestExplorerLightClusters(
+        emissiveClusters,
+        camera.position,
+        EMISSIVE_LIGHT_COUNT,
+        EMISSIVE_LIGHT_SELECTION_RADIUS,
+      );
+      const active = selected.length > 0;
+      for (let i = 0; i < emissiveLights.length; i += 1) {
+        const light = emissiveLights[i];
+        const cluster = selected[i];
+        light.visible = active;
+        if (!cluster) {
+          light.intensity = 0;
+          continue;
+        }
+        light.position.set(cluster.x, cluster.y, cluster.z);
+        light.intensity =
+          EMISSIVE_LIGHT_INTENSITY * Math.min(1.45, 0.65 + Math.sqrt(cluster.faces) * 0.16);
+      }
+    };
+    const renderEmissiveBloom = (seconds: number) => {
+      const background = scene.background;
+      const fog = scene.fog;
+      const layerMask = camera.layers.mask;
+      renderer.getClearColor(bloomClearColor);
+      const clearAlpha = renderer.getClearAlpha();
+      try {
+        camera.layers.set(EMISSIVE_LAYER);
+        scene.background = null;
+        scene.fog = null;
+        renderer.setClearColor(0x000000, 0);
+        renderer.setRenderTarget(bloomTarget);
+        renderer.clear();
+        renderer.render(scene, camera);
+      } finally {
+        camera.layers.mask = layerMask;
+        scene.background = background;
+        scene.fog = fog;
+        renderer.setClearColor(bloomClearColor, clearAlpha);
+        renderer.setRenderTarget(null);
+      }
+      bloomPass.render(renderer, bloomTarget, bloomTarget, seconds, false);
+      renderer.setRenderTarget(null);
+      bloomOverlay.render(renderer);
+    };
     const updatePlayer = (seconds: number) => {
       if (!controls.isLocked || !collisionWorld) {
         bobWalking = false;
@@ -591,6 +716,10 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       const seconds = Math.min(MAX_FRAME_SECONDS, Math.max(0, (now - lastFrameAt) / 1_000));
       lastFrameAt = now;
       updatePlayer(seconds);
+      if (hasEmissiveMeshes && now >= nextEmissiveLightUpdateAt) {
+        updateEmissiveLights();
+        nextEmissiveLightUpdateAt = now + EMISSIVE_LIGHT_UPDATE_MS;
+      }
 
       if (reducedMotion) {
         bobBlend = 0;
@@ -614,6 +743,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         renderer.render(scene, camera);
         sunFlare.visible = false;
         ssaoPass.render(renderer, null!, null!, seconds, false);
+        if (hasEmissiveMeshes) renderEmissiveBloom(seconds);
       } finally {
         sunFlare.visible = true;
         camera.quaternion.copy(baseQuaternion);
@@ -640,7 +770,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
           },
         });
         const atlas = await atlasPromise;
-        const groupPromise = createVoxelGroupAsync(build.voxelBuild, SIMPLE_PALETTE, atlas, {
+        const groupPromise = createVoxelGroupAsync(build.voxelBuild, getPalette(build.palette), atlas, {
           signal: abortController.signal,
           cacheKey: meshCacheKey,
           onProgress(progress) {
@@ -663,6 +793,14 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
           const materials = Array.isArray(child.material) ? child.material : [child.material];
           child.castShadow = materials.every((material) => !material.transparent);
           child.receiveShadow = true;
+          if (!materials.some((material) => material instanceof THREE.MeshBasicMaterial)) return;
+          hasEmissiveMeshes = true;
+          child.layers.enable(EMISSIVE_LAYER);
+          const positions = child.geometry.getAttribute("position");
+          if (positions?.itemSize !== 3) return;
+          for (const cluster of clusterExplorerEmissiveFaces(positions.array)) {
+            emissiveClusters.push(cluster);
+          }
         });
         scene.add(voxelGroup.group);
         frameDaylight(camera, scene, sky, sun, voxelGroup.bounds);
@@ -670,6 +808,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
 
         camera.position.set(0, collisionWorld.height + 8, 0);
         camera.lookAt(0, Math.max(0, collisionWorld.height - 4), -12);
+        updateEmissiveLights();
         renderer.shadowMap.needsUpdate = true;
         worldReady = true;
         setLoading("");
@@ -703,6 +842,11 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       }
       scene.remove(sunFlare);
       sunFlare.dispose();
+      for (const light of emissiveLights) scene.remove(light);
+      bloomOverlayMaterial.dispose();
+      bloomOverlay.dispose();
+      bloomPass.dispose();
+      bloomTarget.dispose();
       ssaoPass.noiseTexture.dispose();
       ssaoPass.dispose();
       sky.geometry.dispose();
