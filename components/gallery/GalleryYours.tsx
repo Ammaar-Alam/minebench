@@ -205,9 +205,11 @@ function GenerationActions({
 function SavedBuildDialog({
   generation,
   onClose,
+  onExplorerExit,
 }: {
   generation: SavedGenerationPayload;
   onClose: () => void;
+  onExplorerExit: () => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const viewerRef = useRef<VoxelViewerHandle>(null);
@@ -283,6 +285,15 @@ function SavedBuildDialog({
             enableBuildExport={Boolean(build)}
             exportLabel={generation.model.label}
             exportPrompt={generation.prompt}
+            explorer={build && !loading ? {
+              id: `current:${generation.id}`,
+              model: generation.model.label,
+              prompt: generation.prompt,
+              source: "current",
+              checksum: null,
+              onContinue: onClose,
+              onExit: onExplorerExit,
+            } : undefined}
             viewerRef={viewerRef}
             jsonBytes={generation.expandedBytes}
             metrics={generation.blockCount != null ? {
@@ -441,7 +452,13 @@ export function GalleryYours({
       </div>
       {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-btn h-11 min-w-36" onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "More"}</button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
-      {selected ? <SavedBuildDialog generation={selected} onClose={() => setSelectedId(null)} /> : null}
+      {selected ? (
+        <SavedBuildDialog
+          generation={selected}
+          onClose={() => setSelectedId(null)}
+          onExplorerExit={() => setSelectedId(selected.id)}
+        />
+      ) : null}
     </section>
   );
 }

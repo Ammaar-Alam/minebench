@@ -929,6 +929,16 @@
     background-color: hsl(var(--fg) / 0.09);
   }
 
+  .mb-explorer-launch {
+    display: none;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    .mb-explorer-launch {
+      display: inline-flex;
+    }
+  }
+
   .mb-btn-danger {
     @apply ring-1 ring-danger/45;
     background-color: hsl(var(--danger) / 0.12);

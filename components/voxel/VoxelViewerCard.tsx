@@ -14,6 +14,11 @@ import {
 } from "@/components/voxel/VoxelViewer";
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
+import {
+  VoxelExplorerLaunchButton,
+  useVoxelExplorerActive,
+  type VoxelExplorerBuild,
+} from "@/components/voxel/VoxelExplorerLauncher";
 import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { getPalette } from "@/lib/blocks/palettes";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
@@ -60,6 +65,7 @@ export function VoxelViewerCard({
   exportPrompt,
   exportDisabled,
   exportDisabledReason,
+  explorer,
   actions,
   jsonBytes,
   viewerRef,
@@ -100,6 +106,10 @@ export function VoxelViewerCard({
   exportPrompt?: string;
   exportDisabled?: boolean;
   exportDisabledReason?: string;
+  explorer?: Omit<VoxelExplorerBuild, "blockCount" | "palette" | "voxelBuild"> & {
+    onContinue?: () => void;
+    onExit?: () => void;
+  };
   actions?: ReactNode;
   jsonBytes?: number | null;
   viewerRef?: RefObject<VoxelViewerHandle | null>;
@@ -148,6 +158,10 @@ export function VoxelViewerCard({
   const buildBlocksRef = build ? voxelBuildBlocksRef(build) : null;
   const warnings = metrics?.warnings ?? rendered.warnings;
   const blockCount = metrics?.blockCount ?? voxelBuildBlockCount(build);
+  const explorerActive = useVoxelExplorerActive();
+  const explorerBuild = explorer && build
+    ? { ...explorer, blockCount, palette, voxelBuild: build }
+    : null;
   const isThinking = Boolean(isLoading && attempt && attempt > 0 && !debugRawText);
   const [preferredView, setPreferredView] = useState<"build" | "json">("build");
   const [showRawBuildJson, setShowRawBuildJson] = useState(false);
@@ -369,8 +383,15 @@ export function VoxelViewerCard({
                   </button>
                 </div>
               ) : null}
-              {enableBuildExport || actions ? (
+              {enableBuildExport || explorerBuild || actions ? (
                 <div className="flex items-center gap-1.5">
+                  {explorerBuild ? (
+                    <VoxelExplorerLaunchButton
+                      build={explorerBuild}
+                      onContinue={explorer?.onContinue}
+                      onExit={explorer?.onExit}
+                    />
+                  ) : null}
                   {enableBuildExport ? (
                     <VoxelBuildExportButton
                       build={build}
@@ -389,7 +410,7 @@ export function VoxelViewerCard({
         </div>
 
         <div className={viewerHeightClass}>
-          {showBuildView ? (
+          {showBuildView && !explorerActive ? (
             <VoxelViewer
               ref={viewerRef}
               voxelBuild={build}

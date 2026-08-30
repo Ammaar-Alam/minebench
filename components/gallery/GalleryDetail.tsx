@@ -381,6 +381,13 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         enableBuildExport={Boolean(build)}
         exportLabel={example.model.label}
         exportPrompt={candidate.prompt}
+        explorer={build && !loading ? {
+          id: `gallery:${example.id}`,
+          model: example.model.label,
+          prompt: candidate.prompt,
+          source: "gallery",
+          checksum: example.checksum ?? null,
+        } : undefined}
         viewerRef={getViewerRef(example.id)}
         metrics={example.blockCount != null ? {
           blockCount: example.blockCount,
