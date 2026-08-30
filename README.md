@@ -49,7 +49,7 @@ MineBench, unlike other benchmarks, gives an easy way to visually determine (at 
 * **Sandbox** — compare existing builds, generate new ones, or import output from any model
 * **Gallery** — explore community prompts and keep signed-in generations
 * **Leaderboard** — live rankings with win/loss/draw stats across all models
-* **Exports** — save builds as GLB, STL, or WorldEdit `.schem` for Blender, 3D printing, and Minecraft
+* **Exports** — save builds as GLB, STL, MagicaVoxel `.vox`, or WorldEdit `.schem`
 
 ## Documentation
 

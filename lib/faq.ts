@@ -198,7 +198,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
         navLabel: "Exporting builds",
         answer: [
           "Yes.",
-          "MineBench supports WorldEdit .schem for Minecraft-compatible workflows, GLB for general 3D workflows, and STL for applications such as 3D printing.",
+          "MineBench supports GLB for general 3D workflows, STL for 3D printing, MagicaVoxel .vox for voxel-art tools, and WorldEdit .schem for Minecraft.",
           "Older comments stating that export support was still planned are outdated.",
         ],
         links: [

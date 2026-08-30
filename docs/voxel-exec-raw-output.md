@@ -212,6 +212,7 @@ Arena and Sandbox build cards can export the rendered build to these formats:
 - GLB (`.glb`) for Blender and other glTF tools. MineBench writes one glTF material per block type, with `extras.minebenchBlockId` and `extras.minecraftBlockState` metadata so downstream tools can inspect the original block mapping.
 - STL (`.stl`) for mesh and print workflows. STL is geometry-only, so block colors and material names are not part of the file.
 - Sponge schematic (`.schem`) for Minecraft. MineBench writes gzip-compressed Sponge v3 NBT, with `Width`, `Height`, `Length`, `Offset`, `Blocks.Palette`, and varint-packed `Blocks.Data` indexed as `x + z * Width + y * Width * Length`.
+- MagicaVoxel (`.vox`) for voxel-art tools. MineBench writes a single VOX 150 model with `SIZE`, `XYZI`, and `RGBA` chunks. Each block type becomes one palette color using the same representative colors as the GLB materials; original block IDs are not stored.
 
 Exporting uses the same validated `VoxelBuild` shape that the viewer receives. The exporter deduplicates positions, crops the schematic to the occupied bounds, and greedily merges visible faces per block type before writing GLB/STL geometry. This keeps large solid builds small and keeps conversion off the render path by running it in a browser worker.
 
@@ -235,16 +236,21 @@ Typical WorldEdit flow:
 
 For detailed client/server setup, FAWE guidance, Blender import notes, and troubleshooting, see `docs/build-export-import.md`.
 
+### MagicaVoxel
+
+Use the build card Export menu and choose MagicaVoxel, then open the downloaded `.vox` in MagicaVoxel or another VOX reader. Blocks keep their per-type RGBA palette colors, but original block IDs, textures, and emissive behavior are not preserved. A single model supports up to 256 blocks per axis and 255 block types.
+
 Vanilla structure-block `.nbt` export is intentionally not the primary path. It is useful for small structures, but it is a poor default for MineBench's larger grids and would not replace the existing WorldEdit import path.
 
 Reference docs:
 
 - Sponge schematic v3 specification: https://github.com/SpongePowered/Schematic-Specification
 - WorldEdit clipboard and schematic storage docs: https://worldedit.enginehub.org/en/latest/usage/clipboard/
+- MagicaVoxel VOX format specification: https://github.com/ephtracy/voxel-model/blob/master/MagicaVoxel-file-format-vox.txt
 
 ### Adding formats
 
-Add new export formats under `lib/voxel/export/`, wire them through `components/voxel/voxelBuildExport.worker.ts`, and extend `tests/integration/voxel-export.test.ts`. Format code should not run on viewer mount, and it should preserve the block ID mapping either as materials, metadata, or the native block-state representation.
+Add new export formats under `lib/voxel/export/`, wire them through `components/voxel/voxelBuildExport.worker.ts`, and extend `tests/integration/voxel-export.test.ts`. Format code should not run on viewer mount. Preserve block IDs through materials, metadata, or native block states when the target format supports them; otherwise document the loss explicitly.
 
 ## 9) Related docs
 

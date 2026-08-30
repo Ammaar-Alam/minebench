@@ -6,6 +6,7 @@ MineBench can export completed voxel builds to files that are useful outside the
 - GLB for Blender and other glTF tools.
 - STL for mesh-only and 3D-print preparation workflows.
 - Sponge schematic (`.schem`) for Minecraft through WorldEdit or FAWE.
+- MagicaVoxel (`.vox`) for voxel-art tools.
 
 This guide covers the export options, import workflows, and common failure modes.
 
@@ -35,6 +36,7 @@ Choose the format based on where the build is going:
 | Blender or 3D scene tools | GLB | Visual review, materials, editing, renders | Not a Minecraft world format |
 | Mesh tools and slicers | STL | Geometry repair, slicers, 3D-print prep | No colors, block names, or materials |
 | Minecraft | `.schem` | WorldEdit/FAWE import | Requires a mod/plugin and can be large |
+| MagicaVoxel and voxel-art tools | `.vox` | Voxel editing, palette tweaks, voxel renders | No block IDs; 256 blocks per axis |
 
 ## Example Imports
 
@@ -98,6 +100,17 @@ MineBench schematic details:
 - Empty cells inside the cropped bounding box are exported as air.
 
 WorldEdit may report the affected count as the full rectangular schematic volume, not only the MineBench `blockCount`. For example, a `217 x 91 x 217` schematic can report `4,285,099 blocks affected` even when the source build contains `345,434` non-air blocks.
+
+### MagicaVoxel `.vox`
+
+MagicaVoxel export writes a single VOX 150 model with `SIZE`, `XYZI`, and `RGBA` chunks.
+
+- Dimensions are cropped to occupied bounds and limited to 256 blocks per axis.
+- Each block type gets one RGBA palette color from the GLB material table, up to 255 block types.
+- Original MineBench block IDs are not stored; keep the source JSON when exact block identity matters.
+- Textures and emissive behavior are not preserved.
+
+Open the file directly in [MagicaVoxel](https://ephtracy.github.io/) via `File -> Open`, or use another VOX reader.
 
 ## Recommended Minecraft Path
 

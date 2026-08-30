@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import {
   buildVoxelExportGeometry,
   buildVoxelGlb,
   buildVoxelStl,
+  buildVoxelVox,
 } from "../../lib/voxel/export";
 import type { VoxelBuild } from "../../lib/voxel/types";
 
@@ -104,6 +106,38 @@ function validateSchem(bytes: Uint8Array, opts: { expectLeaves?: boolean } = {})
   }
 }
 
+function validateVox(
+  bytes: Uint8Array,
+  expectedBlockCount: number,
+  expectedPaletteSize: number,
+  expectedSize: [number, number, number],
+) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const readId = (offset: number) => new TextDecoder().decode(bytes.subarray(offset, offset + 4));
+  assert(readId(0) === "VOX ", "VOX magic mismatch");
+  assert(view.getUint32(4, true) === 150, "VOX version mismatch");
+  assert(readId(8) === "MAIN", "VOX MAIN chunk missing");
+  assert(view.getUint32(16, true) === bytes.byteLength - 20, "VOX MAIN children size mismatch");
+  assert(readId(20) === "SIZE", "VOX SIZE chunk missing");
+  const sizeX = view.getUint32(32, true);
+  const sizeY = view.getUint32(36, true);
+  const sizeZ = view.getUint32(40, true);
+  assert(sizeX > 0 && sizeY > 0 && sizeZ > 0, "VOX dimensions should be positive");
+  assert(sizeX <= 256 && sizeY <= 256 && sizeZ <= 256, "VOX dimensions exceed format limit");
+  deepStrictEqual([sizeX, sizeY, sizeZ], expectedSize, "VOX dimensions mismatch");
+  assert(readId(44) === "XYZI", "VOX XYZI chunk missing");
+  const voxelCount = view.getUint32(56, true);
+  assert(voxelCount === expectedBlockCount, "VOX voxel count mismatch");
+  const rgbaOffset = 60 + voxelCount * 4;
+  for (let i = 0; i < voxelCount; i += 1) {
+    const colorIndex = bytes[60 + i * 4 + 3] ?? 0;
+    assert(colorIndex >= 1 && colorIndex <= expectedPaletteSize, "VOX voxel color index out of range");
+  }
+  assert(readId(rgbaOffset) === "RGBA", "VOX RGBA chunk missing");
+  assert(view.getUint32(rgbaOffset + 4, true) === 1024, "VOX RGBA content size mismatch");
+  assert(bytes.byteLength === rgbaOffset + 12 + 1024, "VOX byte length mismatch");
+}
+
 async function main() {
   const palette = getPalette("advanced");
   const fixture = makeFixtureBuild();
@@ -112,15 +146,25 @@ async function main() {
   const stl = buildVoxelStl(geometry);
   const schemRaw = buildSpongeSchematic(fixture, palette);
   const schem = gzipSync(schemRaw.bytes);
+  const voxRaw = buildVoxelVox(fixture, palette);
 
   validateGlb(glb);
   validateStl(stl);
   validateSchem(schem, { expectLeaves: true });
+  validateVox(voxRaw.bytes, fixture.blocks.length, 6, [14, 14, 11]);
+  deepStrictEqual(Array.from(voxRaw.bytes.subarray(60, 63)), [0, 13, 0], "VOX coordinate transform mismatch");
+  const firstColorOffset = 60 + fixture.blocks.length * 4 + 12 + ((voxRaw.bytes[63] ?? 0) - 1) * 4;
+  deepStrictEqual(
+    Array.from(voxRaw.bytes.subarray(firstColorOffset, firstColorOffset + 4)),
+    [0x87, 0x8c, 0x90, 0xff],
+    "VOX stone palette mismatch",
+  );
 
   await mkdir(OUT_DIR, { recursive: true });
   await writeFile(`${OUT_DIR}/fixture.glb`, glb);
   await writeFile(`${OUT_DIR}/fixture.stl`, stl);
   await writeFile(`${OUT_DIR}/fixture.schem`, schem);
+  await writeFile(`${OUT_DIR}/fixture.vox`, voxRaw.bytes);
 
   const largeBuild = makeHundredThousandBlockBuild();
   const t0 = performance.now();
@@ -140,6 +184,9 @@ async function main() {
   assert(largeGlb.byteLength > 1000, "large GLB should not be empty");
   assert(largeStl.byteLength > 1000, "large STL should not be empty");
   validateSchem(largeSchem);
+
+  const largeVox = buildVoxelVox(largeBuild, palette);
+  validateVox(largeVox.bytes, largeBuild.blocks.length, 2, [50, 50, 40]);
 
   console.log(
     JSON.stringify(
