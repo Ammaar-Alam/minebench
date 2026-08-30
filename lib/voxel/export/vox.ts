@@ -17,7 +17,6 @@ export type VoxelVoxExport = {
 };
 
 const VOX_VERSION = 150;
-// MagicaVoxel refuses models larger than 256 on any axis
 const MAX_VOX_DIMENSION = 256;
 // palette slot 0 is reserved, leaving 255 usable color indices
 const MAX_VOX_COLORS = 255;
