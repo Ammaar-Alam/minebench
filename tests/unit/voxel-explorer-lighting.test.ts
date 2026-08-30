@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   clusterExplorerEmissiveFaces,
+  renderExplorerBloomOverlay,
   selectNearestExplorerLightClusters,
 } from "@/lib/voxel/explorerLighting";
 
@@ -20,3 +21,9 @@ assert.deepEqual(
   [clusters[1]],
 );
 assert.deepEqual(selectNearestExplorerLightClusters(clusters, { x: 40, y: 0, z: 0 }, 2, 8), []);
+
+const renderer = { autoClear: true };
+renderExplorerBloomOverlay(renderer, () => assert.equal(renderer.autoClear, false));
+assert.equal(renderer.autoClear, true);
+assert.throws(() => renderExplorerBloomOverlay(renderer, () => { throw new Error("draw failed"); }));
+assert.equal(renderer.autoClear, true);
