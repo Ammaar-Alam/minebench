@@ -3,9 +3,10 @@ import { buildVoxelExportGeometry } from "@/lib/voxel/export/geometry";
 import { buildVoxelGlb } from "@/lib/voxel/export/glb";
 import { buildSpongeSchematic } from "@/lib/voxel/export/schematic";
 import { buildVoxelStl } from "@/lib/voxel/export/stl";
+import { buildVoxelVox } from "@/lib/voxel/export/vox";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
-export type VoxelBuildExportFormat = "glb" | "stl" | "schem";
+export type VoxelBuildExportFormat = "glb" | "stl" | "schem" | "vox";
 
 export type VoxelBuildExportStats = {
   inputBlockCount: number;
@@ -22,7 +23,7 @@ export type VoxelBuildExportStats = {
 
 export type VoxelBuildExportArtifact = {
   bytes: Uint8Array;
-  extension: "glb" | "stl" | "schem";
+  extension: "glb" | "stl" | "schem" | "vox";
   mimeType: string;
   stats: VoxelBuildExportStats;
 };
@@ -32,6 +33,20 @@ export function exportVoxelBuild(
   palette: BlockDefinition[],
   format: VoxelBuildExportFormat,
 ): VoxelBuildExportArtifact {
+  if (format === "vox") {
+    const vox = buildVoxelVox(build, palette);
+    return {
+      bytes: vox.bytes,
+      extension: "vox",
+      mimeType: "application/octet-stream",
+      stats: {
+        inputBlockCount: build.blocks.length,
+        exportedBlockCount: vox.stats.blockCount,
+        ...vox.stats,
+      },
+    };
+  }
+
   if (format === "schem") {
     const schematic = buildSpongeSchematic(build, palette);
     return {
@@ -67,3 +82,4 @@ export { buildVoxelExportGeometry } from "@/lib/voxel/export/geometry";
 export { buildVoxelGlb } from "@/lib/voxel/export/glb";
 export { buildSpongeSchematic } from "@/lib/voxel/export/schematic";
 export { buildVoxelStl } from "@/lib/voxel/export/stl";
+export { buildVoxelVox } from "@/lib/voxel/export/vox";

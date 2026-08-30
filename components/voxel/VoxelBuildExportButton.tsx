@@ -22,7 +22,7 @@ type WorkerResponse =
   | {
       type: "complete";
       requestId: string;
-      extension: "glb" | "stl" | "schem";
+      extension: "glb" | "stl" | "schem" | "vox";
       mimeType: string;
       stats: VoxelBuildExportStats;
       bytes: ArrayBuffer;
@@ -43,6 +43,7 @@ const EXPORT_OPTIONS: Array<{
   { format: "glb", label: "Blender", detail: "GLB" },
   { format: "stl", label: "STL", detail: "Mesh" },
   { format: "schem", label: "Minecraft", detail: "WorldEdit" },
+  { format: "vox", label: "MagicaVoxel", detail: "VOX" },
 ];
 
 function sanitizeFilePart(value: string | undefined): string {

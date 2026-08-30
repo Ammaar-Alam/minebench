@@ -35,6 +35,7 @@ Choose the format based on where the build is going:
 | Blender or 3D scene tools | GLB | Visual review, materials, editing, renders | Not a Minecraft world format |
 | Mesh tools and slicers | STL | Geometry repair, slicers, 3D-print prep | No colors, block names, or materials |
 | Minecraft | `.schem` | WorldEdit/FAWE import | Requires a mod/plugin and can be large |
+| MagicaVoxel and voxel-art tools | `.vox` | Voxel editing, palette tweaks, voxel renders | 256 blocks per axis, flat colors only |
 
 ## Example Imports
 
@@ -98,6 +99,20 @@ MineBench schematic details:
 - Empty cells inside the cropped bounding box are exported as air.
 
 WorldEdit may report the affected count as the full rectangular schematic volume, not only the MineBench `blockCount`. For example, a `217 x 91 x 217` schematic can report `4,285,099 blocks affected` even when the source build contains `345,434` non-air blocks.
+
+### MagicaVoxel `.vox`
+
+MagicaVoxel export writes a single VOX 150 model with `SIZE`, `XYZI`, and `RGBA` chunks.
+
+MineBench VOX details:
+
+- File extension: `.vox`.
+- Dimensions: cropped to the occupied MineBench build bounds.
+- Palette: one VOX palette color per block type, using the same representative colors as GLB materials.
+- Format limits: 256 blocks per axis and 255 block types per export; larger builds are rejected with an explanatory error.
+- Textures, transparency, and emissive materials are not part of the format; every block renders as a flat color.
+
+Open the file directly in [MagicaVoxel](https://ephtracy.github.io/) via `File -> Open`, or import it into tools that read VOX models (Blender voxel add-ons, Goxel, Avoyd, and similar).
 
 ## Recommended Minecraft Path
 
