@@ -1,5 +1,6 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getMinecraftBlockState } from "@/lib/voxel/export/blockStates";
+import { collectVoxelExportBlocks } from "@/lib/voxel/export/blocks";
 import { NBT_TAG, NbtWriter } from "@/lib/voxel/export/nbt";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
@@ -44,33 +45,9 @@ function encodePaletteData(indices: Uint32Array, paletteSize: number): Uint8Arra
 }
 
 export function buildSpongeSchematic(build: VoxelBuild, palette: BlockDefinition[]): VoxelSchematicExport {
-  const allowed = new Set(palette.map((block) => block.id));
-  const blocksByPosition = new Map<string, { x: number; y: number; z: number; type: string }>();
-  let minX = Infinity;
-  let minY = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let maxZ = -Infinity;
-
-  for (const block of build.blocks) {
-    if (!allowed.has(block.type)) continue;
-    const key = `${block.x},${block.y},${block.z}`;
-    blocksByPosition.set(key, block);
-    minX = Math.min(minX, block.x);
-    minY = Math.min(minY, block.y);
-    minZ = Math.min(minZ, block.z);
-    maxX = Math.max(maxX, block.x);
-    maxY = Math.max(maxY, block.y);
-    maxZ = Math.max(maxZ, block.z);
-  }
-
-  const blocks = Array.from(blocksByPosition.values());
-  if (blocks.length === 0) throw new Error("No blocks to export");
-
-  const width = maxX - minX + 1;
-  const height = maxY - minY + 1;
-  const length = maxZ - minZ + 1;
+  const { blocks, min, size } = collectVoxelExportBlocks(build, palette);
+  const [minX, minY, minZ] = min;
+  const [width, height, length] = size;
   const volume = width * height * length;
   if (!Number.isFinite(volume) || volume <= 0) throw new Error("Invalid schematic bounds");
   if (volume > MAX_SCHEMATIC_VOLUME) {

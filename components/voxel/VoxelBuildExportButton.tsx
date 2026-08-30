@@ -22,7 +22,7 @@ type WorkerResponse =
   | {
       type: "complete";
       requestId: string;
-      extension: "glb" | "stl" | "schem" | "vox";
+      extension: VoxelBuildExportFormat;
       mimeType: string;
       stats: VoxelBuildExportStats;
       bytes: ArrayBuffer;

@@ -23,7 +23,7 @@ export type VoxelBuildExportStats = {
 
 export type VoxelBuildExportArtifact = {
   bytes: Uint8Array;
-  extension: "glb" | "stl" | "schem" | "vox";
+  extension: VoxelBuildExportFormat;
   mimeType: string;
   stats: VoxelBuildExportStats;
 };

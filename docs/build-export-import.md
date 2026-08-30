@@ -6,6 +6,7 @@ MineBench can export completed voxel builds to files that are useful outside the
 - GLB for Blender and other glTF tools.
 - STL for mesh-only and 3D-print preparation workflows.
 - Sponge schematic (`.schem`) for Minecraft through WorldEdit or FAWE.
+- MagicaVoxel (`.vox`) for voxel-art tools.
 
 This guide covers the export options, import workflows, and common failure modes.
 
@@ -35,7 +36,7 @@ Choose the format based on where the build is going:
 | Blender or 3D scene tools | GLB | Visual review, materials, editing, renders | Not a Minecraft world format |
 | Mesh tools and slicers | STL | Geometry repair, slicers, 3D-print prep | No colors, block names, or materials |
 | Minecraft | `.schem` | WorldEdit/FAWE import | Requires a mod/plugin and can be large |
-| MagicaVoxel and voxel-art tools | `.vox` | Voxel editing, palette tweaks, voxel renders | 256 blocks per axis, flat colors only |
+| MagicaVoxel and voxel-art tools | `.vox` | Voxel editing, palette tweaks, voxel renders | No block IDs; 256 blocks per axis |
 
 ## Example Imports
 
@@ -104,15 +105,12 @@ WorldEdit may report the affected count as the full rectangular schematic volume
 
 MagicaVoxel export writes a single VOX 150 model with `SIZE`, `XYZI`, and `RGBA` chunks.
 
-MineBench VOX details:
+- Dimensions are cropped to occupied bounds and limited to 256 blocks per axis.
+- Each block type gets one RGBA palette color from the GLB material table, up to 255 block types.
+- Original MineBench block IDs are not stored; keep the source JSON when exact block identity matters.
+- Textures and emissive behavior are not preserved.
 
-- File extension: `.vox`.
-- Dimensions: cropped to the occupied MineBench build bounds.
-- Palette: one VOX palette color per block type, using the same representative colors as GLB materials.
-- Format limits: 256 blocks per axis and 255 block types per export; larger builds are rejected with an explanatory error.
-- Textures, transparency, and emissive materials are not part of the format; every block renders as a flat color.
-
-Open the file directly in [MagicaVoxel](https://ephtracy.github.io/) via `File -> Open`, or import it into tools that read VOX models (Blender voxel add-ons, Goxel, Avoyd, and similar).
+Open the file directly in [MagicaVoxel](https://ephtracy.github.io/) via `File -> Open`, or use another VOX reader.
 
 ## Recommended Minecraft Path
 
