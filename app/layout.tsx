@@ -8,6 +8,7 @@ import { PublicPresence } from "@/components/PublicPresence";
 import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 import { SiteHealthBanner } from "@/components/SiteHealthBanner";
+import { VoxelExplorerProvider } from "@/components/voxel/VoxelExplorerLauncher";
 import {
   DEFAULT_OG_IMAGE,
   SEO_KEYWORDS,
@@ -136,21 +137,23 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
         />
 
-        <OfflineBanner />
-        <SiteHealthBanner />
+        <VoxelExplorerProvider>
+          <OfflineBanner />
+          <SiteHealthBanner />
 
-        <div id="mb-shell" className="relative z-10 flex min-h-dvh flex-col">
-          <SiteHeader />
-          <div id="mb-container" className="mx-auto flex w-full max-w-[92rem] flex-1 flex-col px-4 sm:px-6 lg:px-8">
-            <main id="main" className="flex-1 py-4 sm:py-6">
-              {children}
-            </main>
-            <SiteFooter />
+          <div id="mb-shell" className="relative z-10 flex min-h-dvh flex-col">
+            <SiteHeader />
+            <div id="mb-container" className="mx-auto flex w-full max-w-[92rem] flex-1 flex-col px-4 sm:px-6 lg:px-8">
+              <main id="main" className="flex-1 py-4 sm:py-6">
+                {children}
+              </main>
+              <SiteFooter />
+            </div>
           </div>
-        </div>
-        <Analytics />
-        <SpeedInsights />
-        <PublicPresence />
+          <Analytics />
+          <SpeedInsights />
+          <PublicPresence />
+        </VoxelExplorerProvider>
       </body>
     </html>
   );

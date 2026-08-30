@@ -854,6 +854,13 @@ export function LocalLab() {
             loadingProgress={rendered.kind === "loading" ? rendered.progress ?? undefined : undefined}
             skipValidation={rendered.kind === "loading"}
             viewerRef={previewViewerRef}
+            explorer={rendered.kind === "ready" ? {
+              id: "current:imported",
+              model: "Imported build",
+              prompt: taskPrompt,
+              source: "current",
+              checksum: null,
+            } : undefined}
             actions={
               <SandboxGifExportButton
                 targets={previewExportTargets}

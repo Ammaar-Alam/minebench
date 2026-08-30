@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
@@ -35,13 +34,13 @@ import {
 import { createVoxelGroupAsync, type VoxelGroup } from "@/lib/voxel/mesh";
 import {
   voxelBuildBlockCount,
-  type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 import {
   setExplorerViewBob,
   type ExplorerViewBobTransform,
 } from "@/lib/voxel/explorerViewBob";
+import type { VoxelExplorerBuild } from "@/components/voxel/VoxelExplorerLauncher";
 
 const WALK_SPEED = 4.3;
 const RUN_SPEED = 7.5;
@@ -81,19 +80,11 @@ const STARS_PER_LAYER = 560;
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
 let explorerBuildCatalog: ExplorerBuildOption[] | null = null;
 
-type LoadedBuild = {
-  checksum: string | null;
-  palette: "simple" | "advanced";
-  voxelBuild: RenderableVoxelBuild;
-};
-
-type ExplorerBuildOption = {
-  id: string;
-  model: string;
-  prompt: string;
-  blockCount: number;
-  source: "benchmark" | "gallery";
-};
+type LoadedBuild = Pick<VoxelExplorerBuild, "checksum" | "palette" | "voxelBuild">;
+type ExplorerBuildOption = Pick<
+  VoxelExplorerBuild,
+  "id" | "model" | "prompt" | "blockCount" | "source"
+>;
 
 function loadAtlasTexture(): Promise<THREE.Texture> {
   if (explorerAtlasPromise) return explorerAtlasPromise;
@@ -292,10 +283,12 @@ function deterministicUnit(index: number, salt: number): number {
 
 function ExplorerBuildMenu({
   currentBuildId,
+  pinnedBuild,
   onClose,
   onSelect,
 }: {
   currentBuildId: string;
+  pinnedBuild?: ExplorerBuildOption;
   onClose: () => void;
   onSelect: (buildId: string) => void;
 }) {
@@ -326,25 +319,30 @@ function ExplorerBuildMenu({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  const availableBuilds = useMemo(() => {
+    if (!pinnedBuild || builds?.some((build) => build.id === pinnedBuild.id)) return builds;
+    return [pinnedBuild, ...(builds ?? [])];
+  }, [builds, pinnedBuild]);
+
   const filteredBuilds = useMemo(() => {
-    if (!builds) return [];
+    if (!availableBuilds) return [];
     const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    if (tokens.length === 0) return builds;
-    return builds.filter((build) => {
+    if (tokens.length === 0) return availableBuilds;
+    return availableBuilds.filter((build) => {
       const searchable = `${build.source} ${build.model} ${build.prompt}`.toLowerCase();
       return tokens.every((token) => searchable.includes(token));
     });
-  }, [builds, query]);
+  }, [availableBuilds, query]);
 
   return (
     <aside className="absolute inset-y-3 right-3 flex w-[min(28rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-md border border-white/10 bg-slate-950/90 text-white shadow-2xl backdrop-blur-md">
       <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold">Builds</h2>
-          {builds ? (
+          {availableBuilds ? (
             <p className="mt-0.5 text-[11px] text-white/50">
-              {filteredBuilds.length === builds.length
-                ? `${builds.length.toLocaleString()} available`
+              {filteredBuilds.length === availableBuilds.length
+                ? `${availableBuilds.length.toLocaleString()} available`
                 : `${filteredBuilds.length.toLocaleString()} matches`}
             </p>
           ) : null}
@@ -386,7 +384,7 @@ function ExplorerBuildMenu({
             </button>
           </div>
         ) : null}
-        {builds && filteredBuilds.length === 0 ? (
+        {availableBuilds && filteredBuilds.length === 0 ? (
           <p className="px-3 py-8 text-center text-xs text-white/50">No matches</p>
         ) : null}
         {filteredBuilds.map((build) => {
@@ -404,7 +402,11 @@ function ExplorerBuildMenu({
               <span className="flex items-center justify-between gap-3 text-[11px] font-semibold text-white/80">
                 <span className="truncate">{build.model}</span>
                 <span className="shrink-0 tabular-nums text-white/40">
-                  {build.source === "gallery" ? "Gallery · " : ""}
+                  {build.source === "gallery"
+                    ? "Gallery · "
+                    : build.source === "current"
+                      ? "Current · "
+                      : ""}
                   {build.blockCount.toLocaleString()} blocks
                 </span>
               </span>
@@ -659,8 +661,19 @@ function hasKey(keys: Set<string>, left: string, right?: string): boolean {
   return keys.has(left) || Boolean(right && keys.has(right));
 }
 
-function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string }) {
-  const router = useRouter();
+function ExplorerScene({
+  build,
+  buildId,
+  pinnedBuild,
+  onSelectBuild,
+  onExit,
+}: {
+  build: LoadedBuild;
+  buildId: string;
+  pinnedBuild?: ExplorerBuildOption;
+  onSelectBuild: (buildId: string) => void;
+  onExit: () => void;
+}) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const startRef = useRef<(() => void) | null>(null);
   const browseButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -691,8 +704,8 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
   }, []);
   const selectBuild = useCallback((nextBuildId: string) => {
     setBuildMenuOpen(false);
-    router.push(`/sandbox/explore/${encodeURIComponent(nextBuildId)}`);
-  }, [router]);
+    onSelectBuild(nextBuildId);
+  }, [onSelectBuild]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -1352,6 +1365,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
           {buildMenuOpen ? (
             <ExplorerBuildMenu
               currentBuildId={buildId}
+              pinnedBuild={pinnedBuild}
               onClose={closeBuildMenu}
               onSelect={selectBuild}
             />
@@ -1378,9 +1392,13 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
                 >
                   Builds
                 </button>
-                <Link href="/sandbox" className="text-xs font-medium text-white/65 hover:text-white">
+                <button
+                  type="button"
+                  onClick={onExit}
+                  className="text-xs font-medium text-white/65 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65"
+                >
                   Exit
-                </Link>
+                </button>
               </div>
             </div>
           )}
@@ -1390,11 +1408,17 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
   );
 }
 
-export function VoxelExplorer({ buildId }: { buildId: string }) {
-  const [build, setBuild] = useState<LoadedBuild | null>(null);
+function useExplorerBuild(buildId: string, initialBuild?: VoxelExplorerBuild) {
+  const [build, setBuild] = useState<LoadedBuild | null>(
+    buildId === initialBuild?.id ? initialBuild : null,
+  );
   const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
+    if (buildId === initialBuild?.id) {
+      setBuild(initialBuild);
+      setError(null);
+      return;
+    }
     const controller = new AbortController();
     setBuild(null);
     setError(null);
@@ -1406,17 +1430,80 @@ export function VoxelExplorer({ buildId }: { buildId: string }) {
       },
     );
     return () => controller.abort();
-  }, [buildId]);
+  }, [buildId, initialBuild]);
+  return { build, error };
+}
+
+export function VoxelExplorer({ buildId }: { buildId: string }) {
+  const router = useRouter();
+  const { build, error } = useExplorerBuild(buildId);
+  const selectBuild = useCallback(
+    (nextBuildId: string) => router.push(`/sandbox/explore/${encodeURIComponent(nextBuildId)}`),
+    [router],
+  );
+  const exit = useCallback(() => router.push("/sandbox"), [router]);
 
   return (
-    <main className="fixed inset-0 z-[100] bg-[oklch(0.86_0.055_235)]">
+    <div className="fixed inset-0 z-[100] bg-[oklch(0.86_0.055_235)]">
       {build ? (
-        <ExplorerScene build={build} buildId={buildId} />
+        <ExplorerScene
+          build={build}
+          buildId={buildId}
+          onSelectBuild={selectBuild}
+          onExit={exit}
+        />
       ) : (
         <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-800">
           {error ?? "Loading"}
         </div>
       )}
-    </main>
+    </div>
+  );
+}
+
+export function VoxelExplorerOverlay({
+  initialBuild,
+  onExit,
+}: {
+  initialBuild: VoxelExplorerBuild;
+  onExit: () => void;
+}) {
+  const [buildId, setBuildId] = useState(initialBuild.id);
+  const { build, error } = useExplorerBuild(buildId, initialBuild);
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-[oklch(0.86_0.055_235)]">
+      {build ? (
+        <ExplorerScene
+          build={build}
+          buildId={buildId}
+          pinnedBuild={initialBuild}
+          onSelectBuild={setBuildId}
+          onExit={onExit}
+        />
+      ) : (
+        <div className="flex h-full flex-col items-center justify-center gap-4 text-sm font-semibold text-slate-800">
+          <p>{error ?? "Loading"}</p>
+          {error ? (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="rounded bg-slate-900 px-4 py-2 text-xs text-white"
+                onClick={() => setBuildId(initialBuild.id)}
+              >
+                Current build
+              </button>
+              <button
+                type="button"
+                className="rounded border border-slate-400 px-4 py-2 text-xs"
+                onClick={onExit}
+              >
+                Exit
+              </button>
+            </div>
+          ) : null}
+        </div>
+      )}
+    </div>
   );
 }

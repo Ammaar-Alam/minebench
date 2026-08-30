@@ -31,6 +31,10 @@ import type {
   VoxelViewerHandle,
 } from "@/components/voxel/VoxelViewer";
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
+import {
+  VoxelExplorerLaunchButton,
+  useVoxelExplorerActive,
+} from "@/components/voxel/VoxelExplorerLauncher";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 import {
@@ -747,6 +751,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
 
   const [viewerReady, setViewerReady] = useState(false);
   const [placementProgress, setPlacementProgress] = useState<PlacementProgressState | null>(null);
+  const explorerActive = useVoxelExplorerActive();
   useEffect(() => {
     setViewerReady(false);
     setPlacementProgress(null);
@@ -815,20 +820,22 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
 
   return (
     <div className={`relative w-full overflow-hidden rounded-md bg-bg/32 ring-1 ring-border/65 ${heightClass}`}>
-      <LazyVoxelViewer
-        ref={viewerRef}
-        voxelBuild={build.voxelBuild}
-        palette={build.palette}
-        meshCacheKey={meshCacheKey}
-        autoRotate
-        showControls={false}
-        onBuildReadyChange={handleBuildReadyChange}
-        onBuildProgressChange={handleBuildProgressChange}
-        onBuildMetrics={(metrics) => {
-          if (!build?.checksum) return;
-          enqueueVoxelMetric("leaderboard", build.variant, metrics);
-        }}
-      />
+      {!explorerActive ? (
+        <LazyVoxelViewer
+          ref={viewerRef}
+          voxelBuild={build.voxelBuild}
+          palette={build.palette}
+          meshCacheKey={meshCacheKey}
+          autoRotate
+          showControls={false}
+          onBuildReadyChange={handleBuildReadyChange}
+          onBuildProgressChange={handleBuildProgressChange}
+          onBuildMetrics={(metrics) => {
+            if (!build?.checksum) return;
+            enqueueVoxelMetric("leaderboard", build.variant, metrics);
+          }}
+        />
+      ) : null}
       {loading || placementLoading ? (
         <VoxelLoadingHud
           label={overlayLabel}
@@ -2009,6 +2016,18 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   actions={
                     activeLoadedBuild ? (
                       <>
+                        <VoxelExplorerLaunchButton
+                          build={{
+                            id: activeLoadedBuild.buildId,
+                            model: data.model.displayName,
+                            prompt: activePrompt.promptText,
+                            blockCount: activeLoadedBuild.blockCount,
+                            source: "benchmark",
+                            checksum: activeLoadedBuild.checksum ?? null,
+                            palette: activeLoadedBuild.palette,
+                            voxelBuild: activeLoadedBuild.voxelBuild,
+                          }}
+                        />
                         <VoxelBuildExportButton
                           build={activeLoadedBuild.voxelBuild}
                           palette={activeLoadedBuild.palette}
