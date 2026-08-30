@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 const read = (path: string) => readFileSync(path, "utf8");
 const launcher = read("components/voxel/VoxelExplorerLauncher.tsx");
 const viewerCard = read("components/voxel/VoxelViewerCard.tsx");
+const leaderboard = read("components/leaderboard/ModelDetail.tsx");
 
 assert.match(read("app/layout.tsx"), /<VoxelExplorerProvider>/);
 assert.match(launcher, /Explore this build\?/);
@@ -20,6 +21,7 @@ for (const path of [
   assert.match(read(path), /explorer=/, `${path} must offer Explorer`);
 }
 
-assert.match(read("components/leaderboard/ModelDetail.tsx"), /VoxelExplorerLaunchButton/);
+assert.match(leaderboard, /activeFullCachedBuild \? \(\s*<VoxelExplorerLaunchButton/);
+assert.match(leaderboard, /event\.key !== "Escape" \|\| explorerActive/);
 assert.doesNotMatch(read("components/arena/Arena.tsx"), /explorer=|VoxelExplorerLaunchButton/);
 assert.doesNotMatch(read("components/lab/ProtectedBuildInspector.tsx"), /explorer=|VoxelExplorerLaunchButton/);

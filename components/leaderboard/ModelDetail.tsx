@@ -937,6 +937,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const requestedBuildId = searchParams.get("build");
+  const explorerActive = useVoxelExplorerActive();
   const [hoveredCurveIndex, setHoveredCurveIndex] = useState<number | null>(null);
   const [showAllOpponents, setShowAllOpponents] = useState(false);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
@@ -1087,13 +1088,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   useEffect(() => {
     if (!activePrompt) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || explorerActive) return;
       event.preventDefault();
       setPromptWithUrl(null);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activePrompt, setPromptWithUrl]);
+  }, [activePrompt, explorerActive, setPromptWithUrl]);
 
   const activePromptIndex = useMemo(() => {
     if (!activePrompt) return -1;
@@ -2016,18 +2017,20 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   actions={
                     activeLoadedBuild ? (
                       <>
-                        <VoxelExplorerLaunchButton
-                          build={{
-                            id: activeLoadedBuild.buildId,
-                            model: data.model.displayName,
-                            prompt: activePrompt.promptText,
-                            blockCount: activeLoadedBuild.blockCount,
-                            source: "benchmark",
-                            checksum: activeLoadedBuild.checksum ?? null,
-                            palette: activeLoadedBuild.palette,
-                            voxelBuild: activeLoadedBuild.voxelBuild,
-                          }}
-                        />
+                        {activeFullCachedBuild ? (
+                          <VoxelExplorerLaunchButton
+                            build={{
+                              id: activeFullCachedBuild.buildId,
+                              model: data.model.displayName,
+                              prompt: activePrompt.promptText,
+                              blockCount: activeFullCachedBuild.blockCount,
+                              source: "benchmark",
+                              checksum: activeFullCachedBuild.checksum ?? null,
+                              palette: activeFullCachedBuild.palette,
+                              voxelBuild: activeFullCachedBuild.voxelBuild,
+                            }}
+                          />
+                        ) : null}
                         <VoxelBuildExportButton
                           build={activeLoadedBuild.voxelBuild}
                           palette={activeLoadedBuild.palette}
