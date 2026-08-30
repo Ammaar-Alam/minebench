@@ -15,6 +15,25 @@ const YIELD_EVERY_BLOCKS = 262_144;
 export type ExplorerPosition = { x: number; y: number; z: number };
 export type ExplorerAxis = "x" | "y" | "z";
 
+export function setExplorerMoveDirection(
+  target: ExplorerPosition,
+  forward: ExplorerPosition,
+  right: ExplorerPosition,
+  forwardInput: number,
+  rightInput: number,
+  verticalInput: number,
+) {
+  target.x = forward.x * forwardInput + right.x * rightInput;
+  target.y = forward.y * forwardInput + right.y * rightInput + verticalInput;
+  target.z = forward.z * forwardInput + right.z * rightInput;
+  const lengthSquared = target.x ** 2 + target.y ** 2 + target.z ** 2;
+  if (lengthSquared <= 1) return;
+  const scale = 1 / Math.sqrt(lengthSquared);
+  target.x *= scale;
+  target.y *= scale;
+  target.z *= scale;
+}
+
 export type ExplorerCollisionWorld = {
   height: number;
   collides: (position: ExplorerPosition) => boolean;

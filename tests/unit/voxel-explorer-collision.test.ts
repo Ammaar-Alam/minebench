@@ -3,6 +3,7 @@ import {
   EXPLORER_EYE_HEIGHT,
   createExplorerCollisionWorld,
   moveExplorerPlayerAxis,
+  setExplorerMoveDirection,
 } from "@/lib/voxel/explorerCollision";
 import {
   packVoxelBlocks,
@@ -19,6 +20,15 @@ const build: RenderableVoxelBuild = {
 };
 
 async function main() {
+  const movement = { x: 0, y: 0, z: 0 };
+  const pitchedForward = { x: 0, y: 0.6, z: -0.8 };
+  setExplorerMoveDirection(movement, pitchedForward, { x: 1, y: 0, z: 0 }, 1, 0, 0);
+  assert.deepEqual(movement, pitchedForward);
+
+  setExplorerMoveDirection(movement, pitchedForward, { x: 1, y: 0, z: 0 }, 1, 0, 1);
+  assert.ok(Math.abs(Math.hypot(movement.x, movement.y, movement.z) - 1) < 1e-12);
+  assert.ok(movement.y > pitchedForward.y);
+
   const world = await createExplorerCollisionWorld(build);
 
   assert.equal(world.collides({ x: -1, y: EXPLORER_EYE_HEIGHT, z: 0 }), true);

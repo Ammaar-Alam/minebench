@@ -17,6 +17,7 @@ import {
   EXPLORER_EYE_HEIGHT,
   createExplorerCollisionWorld,
   moveExplorerPlayerAxis,
+  setExplorerMoveDirection,
   type ExplorerCollisionWorld,
 } from "@/lib/voxel/explorerCollision";
 import { createVoxelGroupAsync, type VoxelGroup } from "@/lib/voxel/mesh";
@@ -27,14 +28,19 @@ import {
 import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 
 const WALK_SPEED = 4.3;
-const RUN_SPEED = 5.6;
+const RUN_SPEED = 7.5;
 const FLY_SPEED = 10.9;
+const FLY_RUN_SPEED = 21.8;
 const GRAVITY = 32;
 const JUMP_VELOCITY = Math.sqrt(GRAVITY * 2 * 1.25);
 const WATER_SPEED_MULTIPLIER = 0.8;
+const WATER_ASCENT_SPEED = 3.5;
+const WATER_SINK_SPEED = 1;
+const VIEW_BOB_VERTICAL = 0.045;
+const VIEW_BOB_LATERAL = 0.018;
 const MAX_FRAME_SECONDS = 0.05;
 const MAX_PHYSICS_STEP_SECONDS = 1 / 60;
-const DAYLIGHT_COLOR = 0xbfdcf2;
+const DAYLIGHT_COLOR = 0xaed4ef;
 const SIMPLE_PALETTE = getPalette("simple");
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
@@ -107,18 +113,18 @@ function configureDaylight(
 
   const sky = new Sky();
   sky.scale.setScalar(1_000);
-  sky.material.uniforms.turbidity.value = 6;
-  sky.material.uniforms.rayleigh.value = 2.2;
-  sky.material.uniforms.mieCoefficient.value = 0.004;
-  sky.material.uniforms.mieDirectionalG.value = 0.8;
+  sky.material.uniforms.turbidity.value = 4.5;
+  sky.material.uniforms.rayleigh.value = 1.8;
+  sky.material.uniforms.mieCoefficient.value = 0.0035;
+  sky.material.uniforms.mieDirectionalG.value = 0.86;
   const sunDirection = new THREE.Vector3(0.55, 0.78, 0.3).normalize();
   sky.material.uniforms.sunPosition.value.copy(sunDirection);
   scene.add(sky);
 
-  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x65724d, 1.15));
-  scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x39452f, 0.72));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.08));
 
-  const sun = new THREE.DirectionalLight(0xfff3d6, 2.1);
+  const sun = new THREE.DirectionalLight(0xffedc2, 3);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -0.00015;
@@ -129,7 +135,7 @@ function configureDaylight(
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1;
+  renderer.toneMappingExposure = 1.08;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   return { sky, sun };
 }
@@ -205,7 +211,10 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
     let isNoclip = true;
     let verticalVelocity = 0;
     let grounded = false;
-    let jumpQueued = false;
+    let bobWalking = false;
+    let bobRunning = false;
+    let bobPhase = 0;
+    let bobBlend = 0;
     const keys = new Set<string>();
 
     setReady(false);
@@ -235,10 +244,7 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
 
     const controls = new PointerLockControls(camera, renderer.domElement);
     controls.pointerSpeed = 0.9;
-    const clearKeys = () => {
-      keys.clear();
-      jumpQueued = false;
-    };
+    const clearKeys = () => keys.clear();
     const onLock = () => {
       clearKeys();
       setLocked(true);
@@ -266,7 +272,6 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
         event.preventDefault();
       }
       keys.add(event.code);
-      if (event.code === "Space" && !event.repeat) jumpQueued = true;
       if (event.code === "KeyF" && !event.repeat) {
         isNoclip = !isNoclip;
         verticalVelocity = 0;
@@ -278,6 +283,12 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", clearKeys);
+    const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let reducedMotion = reducedMotionQuery.matches;
+    const onReducedMotionChange = (event: MediaQueryListEvent) => {
+      reducedMotion = event.matches;
+    };
+    reducedMotionQuery.addEventListener("change", onReducedMotionChange);
 
     const resize = () => {
       const width = mount.clientWidth;
@@ -296,48 +307,58 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
     const right = new THREE.Vector3();
     const movement = new THREE.Vector3();
     const updatePlayer = (seconds: number) => {
-      if (!controls.isLocked || !collisionWorld) return;
-      const stepCount = Math.max(1, Math.ceil(seconds / MAX_PHYSICS_STEP_SECONDS));
-      const stepSeconds = seconds / stepCount;
+      if (!controls.isLocked || !collisionWorld) {
+        bobWalking = false;
+        return;
+      }
 
       controls.getDirection(forward);
-      forward.y = 0;
-      if (forward.lengthSq() < 1e-8) forward.set(0, 0, -1);
-      else forward.normalize();
-      right.crossVectors(forward, camera.up).normalize();
-      movement.set(0, 0, 0);
-      if (keys.has("KeyW")) movement.add(forward);
-      if (keys.has("KeyS")) movement.sub(forward);
-      if (keys.has("KeyD")) movement.add(right);
-      if (keys.has("KeyA")) movement.sub(right);
-      if (movement.lengthSq() > 1) movement.normalize();
+      right.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+      if (!isNoclip) {
+        forward.y = 0;
+        if (forward.lengthSq() < 1e-8) forward.set(0, 0, -1);
+        else forward.normalize();
+      }
+      setExplorerMoveDirection(
+        movement,
+        forward,
+        right,
+        Number(keys.has("KeyW")) - Number(keys.has("KeyS")),
+        Number(keys.has("KeyD")) - Number(keys.has("KeyA")),
+        isNoclip
+          ? Number(keys.has("Space")) - Number(hasKey(keys, "ControlLeft", "ControlRight"))
+          : 0,
+      );
 
+      const running = hasKey(keys, "ShiftLeft", "ShiftRight");
+      if (isNoclip) {
+        camera.position.addScaledVector(movement, (running ? FLY_RUN_SPEED : FLY_SPEED) * seconds);
+        bobWalking = false;
+        return;
+      }
+
+      const stepCount = Math.max(1, Math.ceil(seconds / MAX_PHYSICS_STEP_SECONDS));
+      const stepSeconds = seconds / stepCount;
       for (let step = 0; step < stepCount; step += 1) {
-        const running = hasKey(keys, "ShiftLeft", "ShiftRight");
-        if (isNoclip) {
-          const speed = FLY_SPEED * (running ? RUN_SPEED / WALK_SPEED : 1);
-          camera.position.addScaledVector(movement, speed * stepSeconds);
-          const verticalInput = Number(keys.has("Space")) - Number(
-            hasKey(keys, "ControlLeft", "ControlRight"),
-          );
-          camera.position.y += verticalInput * speed * stepSeconds;
-          jumpQueued = false;
-          continue;
-        }
-
-        const waterMultiplier = collisionWorld.isInWater(camera.position)
+        let inWater = collisionWorld.isInWater(camera.position);
+        const waterMultiplier = inWater
           ? WATER_SPEED_MULTIPLIER
           : 1;
         const speed = (running ? RUN_SPEED : WALK_SPEED) * waterMultiplier;
         moveExplorerPlayerAxis(collisionWorld, camera.position, "x", movement.x * speed * stepSeconds);
         moveExplorerPlayerAxis(collisionWorld, camera.position, "z", movement.z * speed * stepSeconds);
 
-        if (jumpQueued && grounded) {
-          verticalVelocity = JUMP_VELOCITY;
+        inWater = collisionWorld.isInWater(camera.position);
+        if (inWater) {
+          verticalVelocity = keys.has("Space") ? WATER_ASCENT_SPEED : -WATER_SINK_SPEED;
           grounded = false;
+        } else {
+          if (keys.has("Space") && grounded) {
+            verticalVelocity = JUMP_VELOCITY;
+            grounded = false;
+          }
+          verticalVelocity -= GRAVITY * stepSeconds;
         }
-        jumpQueued = false;
-        verticalVelocity -= GRAVITY * stepSeconds;
         const verticalCollision = moveExplorerPlayerAxis(
           collisionWorld,
           camera.position,
@@ -347,6 +368,8 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
         grounded = verticalCollision && verticalVelocity < 0;
         if (verticalCollision) verticalVelocity = 0;
       }
+      bobWalking = grounded && movement.lengthSq() > 0 && !collisionWorld.isInWater(camera.position);
+      bobRunning = running;
     };
 
     let animationFrame = 0;
@@ -357,7 +380,20 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
       const seconds = Math.min(MAX_FRAME_SECONDS, Math.max(0, (now - lastFrameAt) / 1_000));
       lastFrameAt = now;
       updatePlayer(seconds);
+
+      if (reducedMotion) {
+        bobBlend = 0;
+      } else {
+        bobBlend = THREE.MathUtils.damp(bobBlend, bobWalking ? (bobRunning ? 1 : 0.55) : 0, 14, seconds);
+        if (bobWalking) bobPhase += seconds * (bobRunning ? 13 : 9);
+      }
+      const bobY = Math.sin(bobPhase * 2) * VIEW_BOB_VERTICAL * bobBlend;
+      const bobX = Math.cos(bobPhase) * VIEW_BOB_LATERAL * bobBlend;
+      camera.position.y += bobY;
+      camera.position.addScaledVector(right, bobX);
       renderer.render(scene, camera);
+      camera.position.addScaledVector(right, -bobX);
+      camera.position.y -= bobY;
       fpsFrames += 1;
       if (now - fpsWindowAt >= 750) {
         setFps(Math.round((fpsFrames * 1_000) / (now - fpsWindowAt)));
@@ -428,6 +464,7 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", clearKeys);
+      reducedMotionQuery.removeEventListener("change", onReducedMotionChange);
       controls.removeEventListener("lock", onLock);
       controls.removeEventListener("unlock", onUnlock);
       if (controls.isLocked) controls.unlock();
@@ -469,7 +506,7 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
       {ready && locked ? (
         <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
           <div className="rounded bg-slate-950/55 px-3 py-1.5 text-[10px] font-medium text-white/75 backdrop-blur-sm">
-            WASD Move · Shift Run · Space {noclip ? "Rise" : "Jump"} · Control Descend · F Noclip · Esc Exit
+            WASD Move · Shift Run · Space {noclip ? "Rise · Control Descend" : "Jump / Swim"} · F Noclip · Esc Exit
           </div>
         </div>
       ) : null}
