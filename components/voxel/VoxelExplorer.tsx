@@ -1,10 +1,13 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
+import { Lensflare, LensflareElement } from "three/examples/jsm/objects/Lensflare.js";
 import { Sky } from "three/examples/jsm/objects/Sky.js";
+import { SSAOPass } from "three/examples/jsm/postprocessing/SSAOPass.js";
 import {
   readBuildVariantPayload,
   readBuildVariantStream,
@@ -26,6 +29,10 @@ import {
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
+import {
+  setExplorerViewBob,
+  type ExplorerViewBobTransform,
+} from "@/lib/voxel/explorerViewBob";
 
 const WALK_SPEED = 4.3;
 const RUN_SPEED = 7.5;
@@ -36,18 +43,29 @@ const JUMP_VELOCITY = Math.sqrt(GRAVITY * 2 * 1.25);
 const WATER_SPEED_MULTIPLIER = 0.8;
 const WATER_ASCENT_SPEED = 3.5;
 const WATER_SINK_SPEED = 1;
-const VIEW_BOB_VERTICAL = 0.045;
-const VIEW_BOB_LATERAL = 0.018;
+const VIEW_BOB_DISTANCE_SCALE = 0.8;
+const VIEW_BOB_WALK_AMOUNT = 0.075;
+const VIEW_BOB_RUN_AMOUNT = 0.1;
+const SSAO_RENDER_SCALE = 0.5;
 const MAX_FRAME_SECONDS = 0.05;
 const MAX_PHYSICS_STEP_SECONDS = 1 / 60;
 const DAYLIGHT_COLOR = 0xaed4ef;
 const SIMPLE_PALETTE = getPalette("simple");
+const SUN_DIRECTION = new THREE.Vector3(0.55, 0.78, 0.3).normalize();
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
+let explorerBuildCatalog: ExplorerBuildOption[] | null = null;
 
 type LoadedBuild = {
   checksum: string | null;
   voxelBuild: RenderableVoxelBuild;
+};
+
+type ExplorerBuildOption = {
+  id: string;
+  model: string;
+  prompt: string;
+  blockCount: number;
 };
 
 function loadAtlasTexture(): Promise<THREE.Texture> {
@@ -104,10 +122,171 @@ async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise
   return { checksum: payload.checksum, voxelBuild: payload.voxelBuild };
 }
 
+async function fetchExplorerBuildCatalog(signal: AbortSignal): Promise<ExplorerBuildOption[]> {
+  if (explorerBuildCatalog) return explorerBuildCatalog;
+  const response = await fetch("/api/sandbox/explorer-builds", { signal });
+  const body = (await response.json()) as {
+    builds?: ExplorerBuildOption[];
+    error?: string;
+  };
+  if (!response.ok || !Array.isArray(body.builds)) {
+    throw new Error(body.error ?? "Builds unavailable");
+  }
+  explorerBuildCatalog = body.builds;
+  return body.builds;
+}
+
+function createSunHaloTexture(): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext("2d");
+  if (context) {
+    const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
+    gradient.addColorStop(0, "rgba(255, 250, 224, 0.95)");
+    gradient.addColorStop(0.12, "rgba(255, 235, 178, 0.65)");
+    gradient.addColorStop(0.38, "rgba(255, 213, 128, 0.18)");
+    gradient.addColorStop(1, "rgba(255, 203, 112, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 128, 128);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function ExplorerBuildMenu({
+  currentBuildId,
+  onClose,
+  onSelect,
+}: {
+  currentBuildId: string;
+  onClose: () => void;
+  onSelect: (buildId: string) => void;
+}) {
+  const [builds, setBuilds] = useState<ExplorerBuildOption[] | null>(explorerBuildCatalog);
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (builds) return;
+    const controller = new AbortController();
+    setError(null);
+    void fetchExplorerBuildCatalog(controller.signal).then(
+      setBuilds,
+      (loadError: unknown) => {
+        if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+        setError(loadError instanceof Error ? loadError.message : "Builds unavailable");
+      },
+    );
+    return () => controller.abort();
+  }, [attempt, builds]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const filteredBuilds = useMemo(() => {
+    if (!builds) return [];
+    const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return builds;
+    return builds.filter((build) => {
+      const searchable = `${build.model} ${build.prompt}`.toLowerCase();
+      return tokens.every((token) => searchable.includes(token));
+    });
+  }, [builds, query]);
+
+  return (
+    <aside className="absolute inset-y-3 right-3 flex w-[min(28rem,calc(100%-1.5rem))] flex-col overflow-hidden rounded-md border border-white/10 bg-slate-950/90 text-white shadow-2xl backdrop-blur-md">
+      <div className="flex items-center justify-between gap-4 border-b border-white/10 px-4 py-3">
+        <div>
+          <h2 className="text-sm font-semibold">Builds</h2>
+          {builds ? (
+            <p className="mt-0.5 text-[11px] text-white/50">
+              {filteredBuilds.length === builds.length
+                ? `${builds.length.toLocaleString()} available`
+                : `${filteredBuilds.length.toLocaleString()} matches`}
+            </p>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="min-h-10 rounded px-3 text-xs font-medium text-white/65 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 motion-reduce:transition-none"
+        >
+          Close
+        </button>
+      </div>
+
+      <div className="border-b border-white/10 p-3">
+        <input
+          autoFocus
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search builds…"
+          aria-label="Search builds"
+          className="h-10 w-full rounded border border-white/15 bg-white/[0.08] px-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-white/40 focus:ring-2 focus:ring-white/15"
+        />
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2">
+        {!builds && !error ? (
+          <p className="px-3 py-8 text-center text-xs text-white/50">Loading</p>
+        ) : null}
+        {error ? (
+          <div className="flex flex-col items-center gap-3 px-3 py-8 text-center">
+            <p className="text-xs text-white/60">{error}</p>
+            <button
+              type="button"
+              onClick={() => setAttempt((value) => value + 1)}
+              className="min-h-10 rounded bg-white/10 px-4 text-xs font-semibold text-white hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65"
+            >
+              Retry
+            </button>
+          </div>
+        ) : null}
+        {builds && filteredBuilds.length === 0 ? (
+          <p className="px-3 py-8 text-center text-xs text-white/50">No matches</p>
+        ) : null}
+        {filteredBuilds.map((build) => {
+          const current = build.id === currentBuildId;
+          return (
+            <button
+              key={build.id}
+              type="button"
+              aria-current={current ? "page" : undefined}
+              onClick={() => current ? onClose() : onSelect(build.id)}
+              className={`mb-1 block w-full rounded px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white/65 motion-reduce:transition-none ${
+                current ? "bg-white/15" : "hover:bg-white/[0.08]"
+              }`}
+            >
+              <span className="flex items-center justify-between gap-3 text-[11px] font-semibold text-white/80">
+                <span className="truncate">{build.model}</span>
+                <span className="shrink-0 tabular-nums text-white/40">
+                  {build.blockCount.toLocaleString()} blocks
+                </span>
+              </span>
+              <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-white/55">
+                {build.prompt}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
 function configureDaylight(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
-): { sky: Sky; sun: THREE.DirectionalLight } {
+): { sky: Sky; sun: THREE.DirectionalLight; sunFlare: Lensflare } {
   scene.background = new THREE.Color(DAYLIGHT_COLOR);
   scene.fog = new THREE.Fog(DAYLIGHT_COLOR, 72, 320);
 
@@ -117,8 +296,7 @@ function configureDaylight(
   sky.material.uniforms.rayleigh.value = 1.8;
   sky.material.uniforms.mieCoefficient.value = 0.0035;
   sky.material.uniforms.mieDirectionalG.value = 0.86;
-  const sunDirection = new THREE.Vector3(0.55, 0.78, 0.3).normalize();
-  sky.material.uniforms.sunPosition.value.copy(sunDirection);
+  sky.material.uniforms.sunPosition.value.copy(SUN_DIRECTION);
   scene.add(sky);
 
   scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x39452f, 0.72));
@@ -131,13 +309,19 @@ function configureDaylight(
   sun.shadow.normalBias = 0.025;
   scene.add(sun, sun.target);
 
+  const sunFlare = new Lensflare();
+  sunFlare.addElement(
+    new LensflareElement(createSunHaloTexture(), 220, 0, new THREE.Color(0xffe8b8)),
+  );
+  scene.add(sunFlare);
+
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.08;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  return { sky, sun };
+  return { sky, sun, sunFlare };
 }
 
 function frameDaylight(
@@ -156,10 +340,9 @@ function frameDaylight(
   camera.updateProjectionMatrix();
   sky.scale.setScalar(camera.far * 0.8);
 
-  const sunDirection = new THREE.Vector3(0.55, 0.78, 0.3).normalize();
   const lightDistance = Math.max(80, radius * 2.2);
   sun.target.position.copy(bounds.center);
-  sun.position.copy(bounds.center).addScaledVector(sunDirection, lightDistance);
+  sun.position.copy(bounds.center).addScaledVector(SUN_DIRECTION, lightDistance);
   const shadowCamera = sun.shadow.camera;
   const shadowRadius = radius * 1.1;
   shadowCamera.left = -shadowRadius;
@@ -177,9 +360,11 @@ function hasKey(keys: Set<string>, left: string, right?: string): boolean {
   return keys.has(left) || Boolean(right && keys.has(right));
 }
 
-function ExplorerScene({ build }: { build: LoadedBuild }) {
+function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string }) {
+  const router = useRouter();
   const mountRef = useRef<HTMLDivElement | null>(null);
   const startRef = useRef<(() => void) | null>(null);
+  const browseButtonRef = useRef<HTMLButtonElement | null>(null);
   const [ready, setReady] = useState(false);
   const [locked, setLocked] = useState(false);
   const [entered, setEntered] = useState(false);
@@ -187,6 +372,7 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
   const [fps, setFps] = useState(0);
   const [loading, setLoading] = useState("Building");
   const [error, setError] = useState<string | null>(null);
+  const [buildMenuOpen, setBuildMenuOpen] = useState(false);
   const meshCacheKey = useMemo(
     () =>
       createPublicMeshCacheKey({
@@ -199,6 +385,14 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
   );
 
   const enter = useCallback(() => startRef.current?.(), []);
+  const closeBuildMenu = useCallback(() => {
+    setBuildMenuOpen(false);
+    window.requestAnimationFrame(() => browseButtonRef.current?.focus());
+  }, []);
+  const selectBuild = useCallback((nextBuildId: string) => {
+    setBuildMenuOpen(false);
+    router.push(`/sandbox/explore/${encodeURIComponent(nextBuildId)}`);
+  }, [router]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -213,7 +407,7 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
     let grounded = false;
     let bobWalking = false;
     let bobRunning = false;
-    let bobPhase = 0;
+    let bobDistance = 0;
     let bobBlend = 0;
     const keys = new Set<string>();
 
@@ -240,7 +434,12 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(Math.max(1, mount.clientWidth), Math.max(1, mount.clientHeight), true);
     mount.appendChild(renderer.domElement);
-    const { sky, sun } = configureDaylight(scene, renderer);
+    const { sky, sun, sunFlare } = configureDaylight(scene, renderer);
+    const ssaoPass = new SSAOPass(scene, camera, 1, 1, 16);
+    ssaoPass.renderToScreen = true;
+    ssaoPass.kernelRadius = 12;
+    ssaoPass.minDistance = 0.001;
+    ssaoPass.maxDistance = 0.1;
 
     const controls = new PointerLockControls(camera, renderer.domElement);
     controls.pointerSpeed = 0.9;
@@ -294,10 +493,15 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
       const width = mount.clientWidth;
       const height = mount.clientHeight;
       if (width <= 0 || height <= 0) return;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      renderer.setPixelRatio(pixelRatio);
       renderer.setSize(width, height, true);
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
+      ssaoPass.setSize(
+        Math.max(1, Math.round(width * pixelRatio * SSAO_RENDER_SCALE)),
+        Math.max(1, Math.round(height * pixelRatio * SSAO_RENDER_SCALE)),
+      );
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(mount);
@@ -306,6 +510,9 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
     const forward = new THREE.Vector3();
     const right = new THREE.Vector3();
     const movement = new THREE.Vector3();
+    const bobUp = new THREE.Vector3();
+    const baseQuaternion = new THREE.Quaternion();
+    const viewBob: ExplorerViewBobTransform = { x: 0, y: 0, roll: 0, pitch: 0 };
     const updatePlayer = (seconds: number) => {
       if (!controls.isLocked || !collisionWorld) {
         bobWalking = false;
@@ -337,6 +544,8 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
         return;
       }
 
+      const startX = camera.position.x;
+      const startZ = camera.position.z;
       const stepCount = Math.max(1, Math.ceil(seconds / MAX_PHYSICS_STEP_SECONDS));
       const stepSeconds = seconds / stepCount;
       for (let step = 0; step < stepCount; step += 1) {
@@ -368,8 +577,10 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
         grounded = verticalCollision && verticalVelocity < 0;
         if (verticalCollision) verticalVelocity = 0;
       }
-      bobWalking = grounded && movement.lengthSq() > 0 && !collisionWorld.isInWater(camera.position);
+      const traveled = Math.hypot(camera.position.x - startX, camera.position.z - startZ);
+      bobWalking = grounded && traveled > 1e-6 && !collisionWorld.isInWater(camera.position);
       bobRunning = running;
+      if (bobWalking) bobDistance += traveled * VIEW_BOB_DISTANCE_SCALE;
     };
 
     let animationFrame = 0;
@@ -384,16 +595,31 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
       if (reducedMotion) {
         bobBlend = 0;
       } else {
-        bobBlend = THREE.MathUtils.damp(bobBlend, bobWalking ? (bobRunning ? 1 : 0.55) : 0, 14, seconds);
-        if (bobWalking) bobPhase += seconds * (bobRunning ? 13 : 9);
+        bobBlend = THREE.MathUtils.damp(
+          bobBlend,
+          bobWalking ? (bobRunning ? VIEW_BOB_RUN_AMOUNT : VIEW_BOB_WALK_AMOUNT) : 0,
+          14,
+          seconds,
+        );
       }
-      const bobY = Math.sin(bobPhase * 2) * VIEW_BOB_VERTICAL * bobBlend;
-      const bobX = Math.cos(bobPhase) * VIEW_BOB_LATERAL * bobBlend;
-      camera.position.y += bobY;
-      camera.position.addScaledVector(right, bobX);
-      renderer.render(scene, camera);
-      camera.position.addScaledVector(right, -bobX);
-      camera.position.y -= bobY;
+      setExplorerViewBob(viewBob, bobDistance, bobBlend);
+      baseQuaternion.copy(camera.quaternion);
+      bobUp.set(0, 1, 0).applyQuaternion(baseQuaternion);
+      camera.position.addScaledVector(right, viewBob.x);
+      camera.position.addScaledVector(bobUp, viewBob.y);
+      camera.rotateZ(viewBob.roll);
+      camera.rotateX(viewBob.pitch);
+      sunFlare.position.copy(camera.position).addScaledVector(SUN_DIRECTION, camera.far * 0.8);
+      try {
+        renderer.render(scene, camera);
+        sunFlare.visible = false;
+        ssaoPass.render(renderer, null!, null!, seconds, false);
+      } finally {
+        sunFlare.visible = true;
+        camera.quaternion.copy(baseQuaternion);
+        camera.position.addScaledVector(bobUp, -viewBob.y);
+        camera.position.addScaledVector(right, -viewBob.x);
+      }
       fpsFrames += 1;
       if (now - fpsWindowAt >= 750) {
         setFps(Math.round((fpsFrames * 1_000) / (now - fpsWindowAt)));
@@ -440,6 +666,7 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
         });
         scene.add(voxelGroup.group);
         frameDaylight(camera, scene, sky, sun, voxelGroup.bounds);
+        resize();
 
         camera.position.set(0, collisionWorld.height + 8, 0);
         camera.lookAt(0, Math.max(0, collisionWorld.height - 4), -12);
@@ -474,6 +701,10 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
         scene.remove(voxelGroup.group);
         voxelGroup.dispose();
       }
+      scene.remove(sunFlare);
+      sunFlare.dispose();
+      ssaoPass.noiseTexture.dispose();
+      ssaoPass.dispose();
       sky.geometry.dispose();
       sky.material.dispose();
       try {
@@ -506,30 +737,48 @@ function ExplorerScene({ build }: { build: LoadedBuild }) {
       {ready && locked ? (
         <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
           <div className="rounded bg-slate-950/55 px-3 py-1.5 text-[10px] font-medium text-white/75 backdrop-blur-sm">
-            WASD Move · Shift Run · Space {noclip ? "Rise · Control Descend" : "Jump / Swim"} · F Noclip · Esc Exit
+            WASD Move · Shift Run · Space {noclip ? "Rise · Control Descend" : "Jump / Swim"} · F Noclip · Esc Menu
           </div>
         </div>
       ) : null}
 
       {!locked ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-slate-950/20">
-          <div className="flex flex-col items-center gap-3 rounded-md bg-slate-950/70 px-6 py-5 text-white backdrop-blur-sm">
-            {error ? (
-              <p className="max-w-sm text-center text-sm text-white/85">{error}</p>
-            ) : (
-              <button
-                type="button"
-                disabled={!ready}
-                onClick={enter}
-                className="rounded bg-white/90 px-5 py-2 text-sm font-semibold text-slate-950 transition-colors hover:bg-white disabled:cursor-wait disabled:bg-white/20 disabled:text-white/65"
-              >
-                {ready ? (entered ? "Resume" : "Enter") : loading}
-              </button>
-            )}
-            <Link href="/sandbox" className="text-xs font-medium text-white/65 hover:text-white">
-              Exit
-            </Link>
-          </div>
+        <div className="absolute inset-0 bg-slate-950/20">
+          {buildMenuOpen ? (
+            <ExplorerBuildMenu
+              currentBuildId={buildId}
+              onClose={closeBuildMenu}
+              onSelect={selectBuild}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <div className="flex flex-col items-center gap-3 rounded-md bg-slate-950/70 px-6 py-5 text-white backdrop-blur-sm">
+                {error ? (
+                  <p className="max-w-sm text-center text-sm text-white/85">{error}</p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!ready}
+                    onClick={enter}
+                    className="rounded bg-white/90 px-5 py-2 text-sm font-semibold text-slate-950 transition-colors hover:bg-white disabled:cursor-wait disabled:bg-white/20 disabled:text-white/65"
+                  >
+                    {ready ? (entered ? "Resume" : "Enter") : loading}
+                  </button>
+                )}
+                <button
+                  ref={browseButtonRef}
+                  type="button"
+                  onClick={() => setBuildMenuOpen(true)}
+                  className="text-xs font-medium text-white/65 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65"
+                >
+                  Builds
+                </button>
+                <Link href="/sandbox" className="text-xs font-medium text-white/65 hover:text-white">
+                  Exit
+                </Link>
+              </div>
+            </div>
+          )}
         </div>
       ) : null}
     </div>
@@ -557,7 +806,7 @@ export function VoxelExplorer({ buildId }: { buildId: string }) {
   return (
     <main className="fixed inset-0 z-[100] bg-[oklch(0.86_0.055_235)]">
       {build ? (
-        <ExplorerScene build={build} />
+        <ExplorerScene build={build} buildId={buildId} />
       ) : (
         <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-800">
           {error ?? "Loading"}
