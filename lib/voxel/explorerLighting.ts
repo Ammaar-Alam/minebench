@@ -320,6 +320,16 @@ export function renderExplorerBloomOverlay(
   }
 }
 
+export function getExplorerMeteorOpacity(
+  elapsed: number,
+  delay: number,
+  duration: number,
+): number {
+  if (![elapsed, delay, duration].every(Number.isFinite) || duration <= 0) return 0;
+  const progress = (elapsed - delay) / duration;
+  return progress > 0 && progress < 1 ? Math.sin(Math.PI * progress) : 0;
+}
+
 export function isExplorerSunRayVisible(
   x: number,
   y: number,

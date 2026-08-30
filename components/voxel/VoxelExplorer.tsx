@@ -28,6 +28,7 @@ import {
 import {
   applyExplorerBlockLighting,
   createExplorerBlockLightGrid,
+  getExplorerMeteorOpacity,
   isExplorerSunRayVisible,
   renderExplorerBloomOverlay,
 } from "@/lib/voxel/explorerLighting";
@@ -62,6 +63,20 @@ const MAX_FRAME_SECONDS = 0.05;
 const MAX_PHYSICS_STEP_SECONDS = 1 / 60;
 const DAYLIGHT_COLOR = 0xaed4ef;
 const SUN_DIRECTION = new THREE.Vector3(-0.46, 0.72, -0.52).normalize();
+const MOON_DIRECTION = new THREE.Vector3(0.48, 0.6, -0.64).normalize();
+const DAY_SUN_COLOR = new THREE.Color(0xffe2b3);
+const NIGHT_MOONLIGHT_COLOR = new THREE.Color(0xa9c8ff);
+const DAY_HEMISPHERE_COLOR = new THREE.Color(0xeaf6ff);
+const NIGHT_HEMISPHERE_COLOR = new THREE.Color(0x547bb3);
+const DAY_GROUND_COLOR = new THREE.Color(0x4d5548);
+const NIGHT_GROUND_COLOR = new THREE.Color(0x111b31);
+const DAY_AMBIENT_COLOR = new THREE.Color(0xf4f8ff);
+const NIGHT_AMBIENT_COLOR = new THREE.Color(0x263c68);
+const DAY_FOG_COLOR = new THREE.Color(DAYLIGHT_COLOR);
+const NIGHT_FOG_COLOR = new THREE.Color(0x0b1830);
+const SUN_FLARE_COLOR = new THREE.Color(0xffdf9f);
+const STAR_LAYER_COUNT = 3;
+const STARS_PER_LAYER = 560;
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
 let explorerBuildCatalog: ExplorerBuildOption[] | null = null;
@@ -186,16 +201,16 @@ function createSunHaloTexture(): THREE.Texture {
   return texture;
 }
 
-function createSkyGradientTexture(): THREE.Texture {
+function createSkyGradientTexture(
+  stops: ReadonlyArray<readonly [number, string]>,
+): THREE.Texture {
   const canvas = document.createElement("canvas");
   canvas.width = 4;
   canvas.height = 256;
   const context = canvas.getContext("2d");
   if (context) {
     const gradient = context.createLinearGradient(0, 0, 0, 256);
-    gradient.addColorStop(0, "#4f97cb");
-    gradient.addColorStop(0.55, "#78add3");
-    gradient.addColorStop(1, "#bfdbea");
+    for (const [offset, color] of stops) gradient.addColorStop(offset, color);
     context.fillStyle = gradient;
     context.fillRect(0, 0, 4, 256);
   }
@@ -204,6 +219,75 @@ function createSkyGradientTexture(): THREE.Texture {
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   return texture;
+}
+
+function createMoonTexture(): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 512;
+  const context = canvas.getContext("2d");
+  if (context) {
+    const halo = context.createRadialGradient(256, 256, 118, 256, 256, 256);
+    halo.addColorStop(0, "rgba(226,238,255,0.38)");
+    halo.addColorStop(0.5, "rgba(154,188,236,0.1)");
+    halo.addColorStop(1, "rgba(120,164,224,0)");
+    context.fillStyle = halo;
+    context.fillRect(0, 0, 512, 512);
+
+    const disc = context.createRadialGradient(214, 204, 24, 256, 256, 132);
+    disc.addColorStop(0, "#fffdf0");
+    disc.addColorStop(0.68, "#e8eef0");
+    disc.addColorStop(1, "#aebed0");
+    context.fillStyle = disc;
+    context.beginPath();
+    context.arc(256, 256, 132, 0, Math.PI * 2);
+    context.fill();
+
+    context.save();
+    context.beginPath();
+    context.arc(256, 256, 130, 0, Math.PI * 2);
+    context.clip();
+    context.fillStyle = "rgba(83,104,128,0.17)";
+    for (const [x, y, radius] of [
+      [205, 204, 25], [306, 225, 18], [276, 302, 29], [191, 284, 14], [330, 278, 11],
+    ] as const) {
+      context.beginPath();
+      context.ellipse(x, y, radius, radius * 0.76, -0.25, 0, Math.PI * 2);
+      context.fill();
+    }
+    context.restore();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
+}
+
+function createMeteorTexture(): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 32;
+  const context = canvas.getContext("2d");
+  if (context) {
+    const streak = context.createLinearGradient(0, 0, 256, 0);
+    streak.addColorStop(0, "rgba(119,171,255,0)");
+    streak.addColorStop(0.72, "rgba(169,207,255,0.38)");
+    streak.addColorStop(0.94, "rgba(240,247,255,0.96)");
+    streak.addColorStop(1, "rgba(255,255,255,0)");
+    context.fillStyle = streak;
+    context.fillRect(0, 10, 256, 12);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
+}
+
+function deterministicUnit(index: number, salt: number): number {
+  const value = Math.sin(index * 12.9898 + salt * 78.233) * 43_758.5453;
+  return value - Math.floor(value);
 }
 
 function ExplorerBuildMenu({
@@ -335,21 +419,30 @@ function ExplorerBuildMenu({
   );
 }
 
-function configureDaylight(
+type ExplorerMeteor = {
+  sprite: THREE.Sprite;
+  material: THREE.SpriteMaterial;
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  delay: number;
+  duration: number;
+};
+
+function configureAtmosphere(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
-): {
-  sky: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
-  sun: THREE.DirectionalLight;
-  sunFlare: Lensflare;
-} {
+) {
   scene.background = new THREE.Color(DAYLIGHT_COLOR);
   scene.fog = new THREE.Fog(DAYLIGHT_COLOR, 72, 320);
 
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(1, 32, 16),
     new THREE.MeshBasicMaterial({
-      map: createSkyGradientTexture(),
+      map: createSkyGradientTexture([
+        [0, "#4f97cb"],
+        [0.55, "#78add3"],
+        [1, "#bfdbea"],
+      ]),
       side: THREE.BackSide,
       depthWrite: false,
       fog: false,
@@ -358,12 +451,132 @@ function configureDaylight(
   );
   sky.scale.setScalar(800);
   sky.frustumCulled = false;
-  scene.add(sky);
+  sky.renderOrder = -100;
 
-  scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x4d5548, 0.98));
-  scene.add(new THREE.AmbientLight(0xf4f8ff, 0.14));
+  const nightSky = new THREE.Mesh(
+    sky.geometry,
+    new THREE.MeshBasicMaterial({
+      map: createSkyGradientTexture([
+        [0, "#020513"],
+        [0.52, "#07132d"],
+        [1, "#172c53"],
+      ]),
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+      transparent: true,
+      opacity: 0,
+    }),
+  );
+  nightSky.scale.copy(sky.scale);
+  nightSky.frustumCulled = false;
+  nightSky.renderOrder = -99;
+  nightSky.visible = false;
 
-  const sun = new THREE.DirectionalLight(0xffe2b3, 3.5);
+  const starMaterials: THREE.PointsMaterial[] = [];
+  const stars = new THREE.Group();
+  const starColors = [
+    new THREE.Color(0xffffff),
+    new THREE.Color(0xbfd7ff),
+    new THREE.Color(0xffe2bf),
+  ];
+  for (let layer = 0; layer < STAR_LAYER_COUNT; layer += 1) {
+    const positions = new Float32Array(STARS_PER_LAYER * 3);
+    const colors = new Float32Array(STARS_PER_LAYER * 3);
+    for (let star = 0; star < STARS_PER_LAYER; star += 1) {
+      const index = layer * STARS_PER_LAYER + star;
+      const y = THREE.MathUtils.lerp(-0.18, 1, deterministicUnit(index, 1));
+      const radius = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = deterministicUnit(index, 2) * Math.PI * 2;
+      const offset = star * 3;
+      positions[offset] = Math.cos(theta) * radius;
+      positions[offset + 1] = y;
+      positions[offset + 2] = Math.sin(theta) * radius;
+      starColors[Math.floor(deterministicUnit(index, 3) * starColors.length)]
+        .toArray(colors, offset);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    const material = new THREE.PointsMaterial({
+      size: 0.85 + layer * 0.42,
+      sizeAttenuation: false,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const points = new THREE.Points(geometry, material);
+    points.frustumCulled = false;
+    points.renderOrder = -80;
+    stars.add(points);
+    starMaterials.push(material);
+  }
+
+  const moonTexture = createMoonTexture();
+  const moonMaterial = new THREE.SpriteMaterial({
+    map: moonTexture,
+    color: 0xe4efff,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    fog: false,
+    toneMapped: false,
+  });
+  const moon = new THREE.Sprite(moonMaterial);
+  moon.renderOrder = -60;
+
+  const meteorTexture = createMeteorTexture();
+  const meteorGroup = new THREE.Group();
+  const meteorConfigs = [
+    [[-0.72, 0.65, -0.24], [-0.2, 0.32, -0.68], 0, -0.55],
+    [[0.02, 0.9, -0.36], [0.48, 0.54, -0.7], 0.42, -0.48],
+    [[0.56, 0.72, -0.18], [0.82, 0.38, -0.42], 0.86, -0.62],
+  ] as const;
+  const meteors: ExplorerMeteor[] = meteorConfigs.map(([start, end, delay, rotation]) => {
+    const material = new THREE.SpriteMaterial({
+      map: meteorTexture,
+      color: 0xcfe4ff,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+      rotation,
+      blending: THREE.AdditiveBlending,
+    });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(0.18, 0.012, 1);
+    sprite.visible = false;
+    sprite.renderOrder = -50;
+    meteorGroup.add(sprite);
+    return {
+      sprite,
+      material,
+      start: new THREE.Vector3(...start).normalize(),
+      end: new THREE.Vector3(...end).normalize(),
+      delay,
+      duration: 1.15,
+    };
+  });
+
+  const atmosphereRoot = new THREE.Group();
+  atmosphereRoot.add(sky, nightSky, stars, moon, meteorGroup);
+  scene.add(atmosphereRoot);
+
+  const hemisphere = new THREE.HemisphereLight(
+    DAY_HEMISPHERE_COLOR,
+    DAY_GROUND_COLOR,
+    0.98,
+  );
+  const ambient = new THREE.AmbientLight(DAY_AMBIENT_COLOR, 0.14);
+  scene.add(hemisphere, ambient);
+
+  const sun = new THREE.DirectionalLight(DAY_SUN_COLOR, 3.5);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.bias = -0.00015;
@@ -372,10 +585,14 @@ function configureDaylight(
   scene.add(sun, sun.target);
 
   const sunFlare = new Lensflare();
-  sunFlare.addElement(
-    new LensflareElement(createSunHaloTexture(), 440, 0, new THREE.Color(0xffdf9f)),
+  const sunFlareElement = new LensflareElement(
+    createSunHaloTexture(),
+    440,
+    0,
+    SUN_FLARE_COLOR,
   );
-  scene.add(sunFlare);
+  sunFlare.addElement(sunFlareElement);
+  atmosphereRoot.add(sunFlare);
 
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -383,15 +600,32 @@ function configureDaylight(
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.1;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  return { sky, sun, sunFlare };
+  return {
+    root: atmosphereRoot,
+    sky,
+    nightSky,
+    stars,
+    starMaterials,
+    moon,
+    moonMaterial,
+    moonTexture,
+    meteorGroup,
+    meteors,
+    meteorTexture,
+    hemisphere,
+    ambient,
+    sun,
+    sunFlare,
+    sunFlareElement,
+  };
 }
 
-function frameDaylight(
+function frameAtmosphere(
   camera: THREE.PerspectiveCamera,
   scene: THREE.Scene,
-  sky: THREE.Mesh,
-  sun: THREE.DirectionalLight,
+  atmosphere: ReturnType<typeof configureAtmosphere>,
   bounds: VoxelGroup["bounds"],
+  lightDirection: THREE.Vector3,
 ) {
   const size = bounds.box.getSize(new THREE.Vector3());
   const radius = Math.max(8, bounds.radius);
@@ -400,12 +634,15 @@ function frameDaylight(
   fog.far = THREE.MathUtils.clamp(Math.max(size.x, size.z) * 1.5, 160, 512);
   camera.far = Math.max(1_000, fog.far * 3);
   camera.updateProjectionMatrix();
-  sky.scale.setScalar(camera.far * 0.8);
+  atmosphere.sky.scale.setScalar(camera.far * 0.96);
+  atmosphere.nightSky.scale.copy(atmosphere.sky.scale);
+  atmosphere.stars.scale.setScalar(camera.far * 0.88);
+  atmosphere.meteorGroup.scale.setScalar(camera.far * 0.84);
 
   const lightDistance = Math.max(80, radius * 2.2);
-  sun.target.position.copy(bounds.center);
-  sun.position.copy(bounds.center).addScaledVector(SUN_DIRECTION, lightDistance);
-  const shadowCamera = sun.shadow.camera;
+  atmosphere.sun.target.position.copy(bounds.center);
+  atmosphere.sun.position.copy(bounds.center).addScaledVector(lightDirection, lightDistance);
+  const shadowCamera = atmosphere.sun.shadow.camera;
   const shadowRadius = radius * 1.1;
   shadowCamera.left = -shadowRadius;
   shadowCamera.right = shadowRadius;
@@ -414,8 +651,8 @@ function frameDaylight(
   shadowCamera.near = 0.1;
   shadowCamera.far = lightDistance + radius * 2;
   shadowCamera.updateProjectionMatrix();
-  sun.target.updateMatrixWorld();
-  sun.shadow.needsUpdate = true;
+  atmosphere.sun.target.updateMatrixWorld();
+  atmosphere.sun.shadow.needsUpdate = true;
 }
 
 function hasKey(keys: Set<string>, left: string, right?: string): boolean {
@@ -431,6 +668,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
   const [locked, setLocked] = useState(false);
   const [entered, setEntered] = useState(false);
   const [noclip, setNoclip] = useState(true);
+  const [night, setNight] = useState(false);
   const [fps, setFps] = useState(0);
   const [loading, setLoading] = useState("Building");
   const [error, setError] = useState<string | null>(null);
@@ -471,12 +709,22 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
     let bobRunning = false;
     let bobDistance = 0;
     let bobBlend = 0;
+    let nightTarget = false;
+    let nightBlend = 0;
+    let moonLightActive = false;
+    let atmosphereTime = 0;
+    let nightElapsed = 0;
+    let nextShowerAt = 10;
+    let showerStartedAt = -1;
+    let showerCount = 0;
+    let sunVisibility = 1;
     const keys = new Set<string>();
 
     setReady(false);
     setLocked(false);
     setEntered(false);
     setNoclip(true);
+    setNight(false);
     setFps(0);
     setLoading("Building");
     setError(null);
@@ -496,7 +744,8 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(Math.max(1, mount.clientWidth), Math.max(1, mount.clientHeight), true);
     mount.appendChild(renderer.domElement);
-    const { sky, sun, sunFlare } = configureDaylight(scene, renderer);
+    const atmosphere = configureAtmosphere(scene, renderer);
+    const { sun, sunFlare } = atmosphere;
     const bloomTarget = new THREE.WebGLRenderTarget(1, 1, {
       type: THREE.HalfFloatType,
       depthBuffer: true,
@@ -599,7 +848,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         event.code === "KeyD" || event.code === "Space" ||
         event.code === "ShiftLeft" || event.code === "ShiftRight" ||
         event.code === "ControlLeft" || event.code === "ControlRight" ||
-        event.code === "KeyF"
+        event.code === "KeyF" || event.code === "KeyT"
       ) {
         event.preventDefault();
       }
@@ -609,6 +858,16 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         verticalVelocity = 0;
         grounded = false;
         setNoclip(isNoclip);
+      }
+      if (event.code === "KeyT" && !event.repeat) {
+        nightTarget = !nightTarget;
+        setNight(nightTarget);
+        if (nightTarget) {
+          nightElapsed = 0;
+          nextShowerAt = 10;
+          showerStartedAt = -1;
+          showerCount = 0;
+        }
       }
     };
     const onKeyUp = (event: KeyboardEvent) => keys.delete(event.code);
@@ -650,7 +909,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
     const sunRayScreenPosition = new THREE.Vector3();
     const renderPostEffects = (seconds: number) => {
       sunRayScreenPosition.copy(sunRaySprite.position).project(camera);
-      const hasSunRays = isExplorerSunRayVisible(
+      const hasSunRays = sunVisibility > 0.01 && isExplorerSunRayVisible(
         sunRayScreenPosition.x,
         sunRayScreenPosition.y,
         sunRayScreenPosition.z,
@@ -660,16 +919,14 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       const background = scene.background;
       const fog = scene.fog;
       const overrideMaterial = scene.overrideMaterial;
-      const skyVisible = sky.visible;
-      const sunFlareVisible = sunFlare.visible;
+      const atmosphereVisible = atmosphere.root.visible;
       const layerMask = camera.layers.mask;
       renderer.getClearColor(bloomClearColor);
       const clearAlpha = renderer.getClearAlpha();
       try {
         scene.background = null;
         scene.fog = null;
-        sky.visible = false;
-        sunFlare.visible = false;
+        atmosphere.root.visible = false;
         renderer.setClearColor(0x000000, 0);
         renderer.setRenderTarget(bloomTarget);
         camera.layers.set(0);
@@ -699,8 +956,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         scene.background = background;
         scene.fog = fog;
         scene.overrideMaterial = overrideMaterial;
-        sky.visible = skyVisible;
-        sunFlare.visible = sunFlareVisible;
+        atmosphere.root.visible = atmosphereVisible;
         renderer.setClearColor(bloomClearColor, clearAlpha);
         renderer.setRenderTarget(null);
       }
@@ -708,6 +964,105 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       bloomPass.render(renderer, bloomTarget, bloomTarget, seconds, false);
       renderer.setRenderTarget(null);
       renderExplorerBloomOverlay(renderer, () => bloomOverlay.render(renderer));
+    };
+    const updateAtmosphere = (seconds: number) => {
+      nightBlend = reducedMotion
+        ? Number(nightTarget)
+        : THREE.MathUtils.damp(nightBlend, Number(nightTarget), 2.4, seconds);
+      if (Math.abs(nightBlend - Number(nightTarget)) < 0.001) {
+        nightBlend = Number(nightTarget);
+      }
+
+      const dayLight = 1 - THREE.MathUtils.smoothstep(nightBlend, 0, 0.54);
+      const moonLight = THREE.MathUtils.smoothstep(nightBlend, 0.46, 1);
+      sunVisibility = 1 - THREE.MathUtils.smoothstep(nightBlend, 0, 0.72);
+      atmosphere.sky.visible = nightBlend < 0.999;
+      atmosphere.nightSky.visible = nightBlend > 0.001;
+      atmosphere.nightSky.material.opacity = nightBlend;
+      atmosphere.hemisphere.color.lerpColors(
+        DAY_HEMISPHERE_COLOR,
+        NIGHT_HEMISPHERE_COLOR,
+        nightBlend,
+      );
+      atmosphere.hemisphere.groundColor.lerpColors(
+        DAY_GROUND_COLOR,
+        NIGHT_GROUND_COLOR,
+        nightBlend,
+      );
+      atmosphere.hemisphere.intensity = THREE.MathUtils.lerp(0.98, 0.42, nightBlend);
+      atmosphere.ambient.color.lerpColors(DAY_AMBIENT_COLOR, NIGHT_AMBIENT_COLOR, nightBlend);
+      atmosphere.ambient.intensity = THREE.MathUtils.lerp(0.14, 0.11, nightBlend);
+      sun.color.lerpColors(DAY_SUN_COLOR, NIGHT_MOONLIGHT_COLOR, moonLight);
+      sun.intensity = 3.5 * dayLight + 0.42 * moonLight;
+      (scene.background as THREE.Color).lerpColors(DAY_FOG_COLOR, NIGHT_FOG_COLOR, nightBlend);
+      (scene.fog as THREE.Fog).color.lerpColors(DAY_FOG_COLOR, NIGHT_FOG_COLOR, nightBlend);
+      renderer.toneMappingExposure = THREE.MathUtils.lerp(1.1, 1.04, nightBlend);
+
+      atmosphere.moonMaterial.opacity =
+        THREE.MathUtils.smoothstep(nightBlend, 0.22, 0.86) * 0.96;
+      atmosphere.sunFlareElement.color
+        .copy(SUN_FLARE_COLOR)
+        .multiplyScalar(sunVisibility);
+      sunFlare.visible = sunVisibility > 0.01;
+      sunRaySpriteMaterial.opacity = sunVisibility;
+
+      if (!reducedMotion) {
+        atmosphereTime += seconds;
+        atmosphere.stars.rotation.y += seconds * 0.00045;
+      }
+      for (let layer = 0; layer < atmosphere.starMaterials.length; layer += 1) {
+        const twinkle = 0.65 + Math.sin(atmosphereTime * (0.72 + layer * 0.17) + layer * 2.1) * 0.13;
+        atmosphere.starMaterials[layer].opacity = nightBlend * twinkle;
+      }
+
+      const shouldUseMoonLight = nightBlend >= 0.5;
+      if (shouldUseMoonLight !== moonLightActive && voxelGroup) {
+        moonLightActive = shouldUseMoonLight;
+        frameAtmosphere(
+          camera,
+          scene,
+          atmosphere,
+          voxelGroup.bounds,
+          moonLightActive ? MOON_DIRECTION : SUN_DIRECTION,
+        );
+      }
+
+      if (reducedMotion || !nightTarget || nightBlend < 0.9) {
+        atmosphere.meteorGroup.visible = false;
+        for (const meteor of atmosphere.meteors) meteor.sprite.visible = false;
+        return;
+      }
+      nightElapsed += seconds;
+      if (showerStartedAt < 0 && nightElapsed >= nextShowerAt) {
+        showerStartedAt = nightElapsed;
+      }
+      let meteorVisible = false;
+      if (showerStartedAt >= 0) {
+        const showerAge = nightElapsed - showerStartedAt;
+        for (const meteor of atmosphere.meteors) {
+          const opacity = getExplorerMeteorOpacity(
+            showerAge,
+            meteor.delay,
+            meteor.duration,
+          );
+          const progress = THREE.MathUtils.clamp(
+            (showerAge - meteor.delay) / meteor.duration,
+            0,
+            1,
+          );
+          meteor.sprite.position.lerpVectors(meteor.start, meteor.end, progress).normalize();
+          meteor.material.opacity = opacity * 0.88 * nightBlend;
+          meteor.sprite.visible = opacity > 0;
+          meteorVisible ||= meteor.sprite.visible;
+        }
+        const lastMeteor = atmosphere.meteors[atmosphere.meteors.length - 1];
+        if (showerAge > lastMeteor.delay + lastMeteor.duration) {
+          showerStartedAt = -1;
+          showerCount += 1;
+          nextShowerAt = nightElapsed + 38 + (showerCount % 3) * 9;
+        }
+      }
+      atmosphere.meteorGroup.visible = meteorVisible;
     };
     const updatePlayer = (seconds: number) => {
       if (!controls.isLocked || !collisionWorld) {
@@ -790,6 +1145,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       const seconds = Math.min(MAX_FRAME_SECONDS, Math.max(0, (now - lastFrameAt) / 1_000));
       lastFrameAt = now;
       updatePlayer(seconds);
+      updateAtmosphere(seconds);
 
       if (reducedMotion) {
         bobBlend = 0;
@@ -808,19 +1164,21 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       camera.position.addScaledVector(bobUp, viewBob.y);
       camera.rotateZ(viewBob.roll);
       camera.rotateX(viewBob.pitch);
-      const sunDistance = camera.far * 0.45;
-      sky.position.copy(camera.position);
-      sunFlare.position.copy(camera.position).addScaledVector(SUN_DIRECTION, sunDistance);
-      sunRaySprite.position.copy(sunFlare.position);
+      const sunDistance = camera.far * 0.9;
+      atmosphere.root.position.copy(camera.position);
+      sunFlare.position.copy(SUN_DIRECTION).multiplyScalar(sunDistance);
+      atmosphere.moon.position.copy(MOON_DIRECTION).multiplyScalar(sunDistance);
+      sunRaySprite.position.copy(camera.position).addScaledVector(SUN_DIRECTION, sunDistance);
       const sunRaySize =
         2 * sunDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 0.18;
       sunRaySprite.scale.set(sunRaySize, sunRaySize, 1);
+      const moonSize =
+        2 * sunDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 0.075;
+      atmosphere.moon.scale.set(moonSize, moonSize, 1);
       try {
         renderer.render(scene, camera);
         renderPostEffects(seconds);
-        sunFlare.visible = false;
       } finally {
-        sunFlare.visible = true;
         camera.quaternion.copy(baseQuaternion);
         camera.position.addScaledVector(bobUp, -viewBob.y);
         camera.position.addScaledVector(right, -viewBob.x);
@@ -893,7 +1251,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
           child.layers.enable(EMISSIVE_LAYER);
         });
         scene.add(voxelGroup.group);
-        frameDaylight(camera, scene, sky, sun, voxelGroup.bounds);
+        frameAtmosphere(camera, scene, atmosphere, voxelGroup.bounds, SUN_DIRECTION);
         resize();
 
         camera.position.set(0, collisionWorld.height + 8, 0);
@@ -929,7 +1287,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
         scene.remove(voxelGroup.group);
         voxelGroup.dispose();
       }
-      scene.remove(sunFlare);
+      scene.remove(atmosphere.root);
       sunFlare.dispose();
       scene.remove(sunRaySprite);
       sunRayTexture.dispose();
@@ -941,9 +1299,19 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       bloomOverlay.dispose();
       bloomPass.dispose();
       bloomTarget.dispose();
-      sky.material.map?.dispose();
-      sky.geometry.dispose();
-      sky.material.dispose();
+      atmosphere.sky.material.map?.dispose();
+      atmosphere.nightSky.material.map?.dispose();
+      atmosphere.sky.geometry.dispose();
+      atmosphere.sky.material.dispose();
+      atmosphere.nightSky.material.dispose();
+      atmosphere.stars.traverse((child) => {
+        if (child instanceof THREE.Points) child.geometry.dispose();
+      });
+      for (const material of atmosphere.starMaterials) material.dispose();
+      atmosphere.moonTexture.dispose();
+      atmosphere.moonMaterial.dispose();
+      atmosphere.meteorTexture.dispose();
+      for (const meteor of atmosphere.meteors) meteor.material.dispose();
       try {
         renderer.forceContextLoss();
       } catch {}
@@ -974,7 +1342,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       {ready && locked ? (
         <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
           <div className="rounded bg-slate-950/55 px-3 py-1.5 text-[10px] font-medium text-white/75 backdrop-blur-sm">
-            WASD Move · Shift Run · Space {noclip ? "Rise · Control Descend" : "Jump / Swim"} · F Noclip · Esc Menu
+            WASD Move · Shift Run · Space {noclip ? "Rise · Control Descend" : "Jump / Swim"} · F Noclip · T {night ? "Day" : "Night"} · Esc Menu
           </div>
         </div>
       ) : null}

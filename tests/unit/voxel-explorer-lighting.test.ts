@@ -3,6 +3,7 @@ import * as THREE from "three";
 import {
   applyExplorerBlockLighting,
   createExplorerBlockLightGrid,
+  getExplorerMeteorOpacity,
   getExplorerBlockLight,
   isExplorerSunRayVisible,
   renderExplorerBloomOverlay,
@@ -62,6 +63,10 @@ async function main() {
   assert.equal(isExplorerSunRayVisible(0, 0, 0), true);
   assert.equal(isExplorerSunRayVisible(1.3, 0, 0), false);
   assert.equal(isExplorerSunRayVisible(0, 0, 2), false);
+  assert.equal(getExplorerMeteorOpacity(0, 0, 1), 0);
+  assert.equal(getExplorerMeteorOpacity(0.5, 0, 1), 1);
+  assert.equal(getExplorerMeteorOpacity(1, 0, 1), 0);
+  assert.equal(getExplorerMeteorOpacity(1, 0, 0), 0);
 
   const renderer = { autoClear: true };
   renderExplorerBloomOverlay(renderer, () => assert.equal(renderer.autoClear, false));
