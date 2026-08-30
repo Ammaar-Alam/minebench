@@ -10,6 +10,7 @@ const BLOCK_LIGHT_MAX_LEVEL = 15;
 const BLOCK_LIGHT_OCCLUDER = 0x80;
 const BLOCK_LIGHT_SOURCE = 0x40;
 const BLOCK_LIGHT_PADDING = BLOCK_LIGHT_MAX_LEVEL;
+const BLOCK_LIGHT_BYTE_SCALE = 255 / BLOCK_LIGHT_MAX_LEVEL;
 const MAX_BLOCK_LIGHT_CELLS = 32_000_000;
 const QUEUE_CHUNK_SIZE = 65_536;
 const YIELD_EVERY = 262_144;
@@ -260,7 +261,8 @@ export async function applyExplorerBlockLighting(
   const worldMinX = bounds.min.x - grid.padding;
   const worldMinY = bounds.min.y - grid.padding;
   const worldMinZ = bounds.min.z - grid.padding;
-  const plane = grid.width * grid.depth;
+  const { cells, width, height, depth } = grid;
+  const plane = width * depth;
   let processed = 0;
 
   for (const mesh of meshes) {
@@ -273,25 +275,26 @@ export async function applyExplorerBlockLighting(
 
     for (let vertex = 0; vertex + 3 < positions.count; vertex += 4) {
       const offset = vertex * 3;
-      const centerX =
-        (positionArray[offset] + positionArray[offset + 3] +
-          positionArray[offset + 6] + positionArray[offset + 9]) / 4;
-      const centerY =
-        (positionArray[offset + 1] + positionArray[offset + 4] +
-          positionArray[offset + 7] + positionArray[offset + 10]) / 4;
-      const centerZ =
-        (positionArray[offset + 2] + positionArray[offset + 5] +
-          positionArray[offset + 8] + positionArray[offset + 11]) / 4;
-      const x = Math.floor(centerX + Math.sign(normalArray[offset]) * 0.01 - worldMinX);
-      const y = Math.floor(centerY + Math.sign(normalArray[offset + 1]) * 0.01 - worldMinY);
-      const z = Math.floor(centerZ + Math.sign(normalArray[offset + 2]) * 0.01 - worldMinZ);
-      const level =
-        x >= 0 && x < grid.width &&
-        y >= 0 && y < grid.height &&
-        z >= 0 && z < grid.depth
-          ? grid.cells[x + grid.width * (z + grid.depth * y)] & BLOCK_LIGHT_MAX_LEVEL
-          : 0;
-      values.fill(Math.round((level / BLOCK_LIGHT_MAX_LEVEL) * 255), vertex, vertex + 4);
+      const normalX = Math.sign(normalArray[offset]);
+      const normalY = Math.sign(normalArray[offset + 1]);
+      const normalZ = Math.sign(normalArray[offset + 2]);
+      const sampleOffsetX = normalX === 0 ? -0.001 : normalX * 0.01;
+      const sampleOffsetY = normalY === 0 ? -0.001 : normalY * 0.01;
+      const sampleOffsetZ = normalZ === 0 ? -0.001 : normalZ * 0.01;
+
+      for (let corner = 0; corner < 4; corner += 1) {
+        const cornerOffset = offset + corner * 3;
+        const x = Math.floor(positionArray[cornerOffset] + sampleOffsetX - worldMinX);
+        const y = Math.floor(positionArray[cornerOffset + 1] + sampleOffsetY - worldMinY);
+        const z = Math.floor(positionArray[cornerOffset + 2] + sampleOffsetZ - worldMinZ);
+        const level =
+          x >= 0 && x < width &&
+          y >= 0 && y < height &&
+          z >= 0 && z < depth
+            ? cells[x + width * z + plane * y] & BLOCK_LIGHT_MAX_LEVEL
+            : 0;
+        values[vertex + corner] = level * BLOCK_LIGHT_BYTE_SCALE;
+      }
       processed += 4;
       if (processed % YIELD_EVERY === 0) await yieldToMainThread(opts?.signal);
     }
