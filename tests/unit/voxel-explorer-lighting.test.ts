@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import * as THREE from "three";
 import {
+  applyExplorerBlockLighting,
   createExplorerBlockLightGrid,
   getExplorerBlockLight,
   isExplorerSunRayVisible,
@@ -66,6 +68,32 @@ async function main() {
   assert.equal(renderer.autoClear, true);
   assert.throws(() => renderExplorerBloomOverlay(renderer, () => { throw new Error("draw failed"); }));
   assert.equal(renderer.autoClear, true);
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute([
+    2.5, -0.5, 0.5,
+    3.5, -0.5, 0.5,
+    3.5, 0.5, 0.5,
+    2.5, 0.5, 0.5,
+  ], 3));
+  geometry.setAttribute("normal", new THREE.Float32BufferAttribute([
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+  ], 3));
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial());
+  await applyExplorerBlockLighting(
+    mesh,
+    new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(20.5, 0.5, 0.5)),
+    open,
+  );
+  assert.deepEqual(
+    Array.from(mesh.geometry.getAttribute("explorerBlockLight").array),
+    [187, 170, 187, 204],
+  );
+  geometry.dispose();
+  mesh.material.dispose();
 }
 
 main().catch((error) => {

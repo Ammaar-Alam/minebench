@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { PointerLockControls } from "three/examples/jsm/controls/PointerLockControls.js";
 import { Lensflare, LensflareElement } from "three/examples/jsm/objects/Lensflare.js";
-import { Sky } from "three/examples/jsm/objects/Sky.js";
 import { BloomPass } from "three/examples/jsm/postprocessing/BloomPass.js";
 import { FullScreenQuad } from "three/examples/jsm/postprocessing/Pass.js";
 import { CopyShader } from "three/examples/jsm/shaders/CopyShader.js";
@@ -173,10 +172,10 @@ function createSunHaloTexture(): THREE.Texture {
   const context = canvas.getContext("2d");
   if (context) {
     const gradient = context.createRadialGradient(128, 128, 0, 128, 128, 128);
-    gradient.addColorStop(0, "rgba(255, 253, 235, 1)");
-    gradient.addColorStop(0.085, "rgba(255, 249, 220, 1)");
-    gradient.addColorStop(0.13, "rgba(255, 231, 168, 0.9)");
-    gradient.addColorStop(0.3, "rgba(255, 199, 108, 0.3)");
+    gradient.addColorStop(0, "rgba(255, 254, 240, 1)");
+    gradient.addColorStop(0.16, "rgba(255, 251, 222, 1)");
+    gradient.addColorStop(0.2, "rgba(255, 225, 155, 0.95)");
+    gradient.addColorStop(0.34, "rgba(255, 196, 99, 0.3)");
     gradient.addColorStop(0.68, "rgba(255, 174, 76, 0.06)");
     gradient.addColorStop(1, "rgba(255, 165, 64, 0)");
     context.fillStyle = gradient;
@@ -184,6 +183,26 @@ function createSunHaloTexture(): THREE.Texture {
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+function createSkyGradientTexture(): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 256;
+  const context = canvas.getContext("2d");
+  if (context) {
+    const gradient = context.createLinearGradient(0, 0, 0, 256);
+    gradient.addColorStop(0, "#4f97cb");
+    gradient.addColorStop(0.55, "#78add3");
+    gradient.addColorStop(1, "#bfdbea");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 4, 256);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter;
   return texture;
 }
 
@@ -319,17 +338,26 @@ function ExplorerBuildMenu({
 function configureDaylight(
   scene: THREE.Scene,
   renderer: THREE.WebGLRenderer,
-): { sky: Sky; sun: THREE.DirectionalLight; sunFlare: Lensflare } {
+): {
+  sky: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  sun: THREE.DirectionalLight;
+  sunFlare: Lensflare;
+} {
   scene.background = new THREE.Color(DAYLIGHT_COLOR);
   scene.fog = new THREE.Fog(DAYLIGHT_COLOR, 72, 320);
 
-  const sky = new Sky();
-  sky.scale.setScalar(1_000);
-  sky.material.uniforms.turbidity.value = 3.2;
-  sky.material.uniforms.rayleigh.value = 2.1;
-  sky.material.uniforms.mieCoefficient.value = 0.006;
-  sky.material.uniforms.mieDirectionalG.value = 0.9;
-  sky.material.uniforms.sunPosition.value.copy(SUN_DIRECTION);
+  const sky = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 32, 16),
+    new THREE.MeshBasicMaterial({
+      map: createSkyGradientTexture(),
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      toneMapped: false,
+    }),
+  );
+  sky.scale.setScalar(800);
+  sky.frustumCulled = false;
   scene.add(sky);
 
   scene.add(new THREE.HemisphereLight(0xeaf6ff, 0x4d5548, 0.98));
@@ -361,7 +389,7 @@ function configureDaylight(
 function frameDaylight(
   camera: THREE.PerspectiveCamera,
   scene: THREE.Scene,
-  sky: Sky,
+  sky: THREE.Mesh,
   sun: THREE.DirectionalLight,
   bounds: VoxelGroup["bounds"],
 ) {
@@ -781,6 +809,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       camera.rotateZ(viewBob.roll);
       camera.rotateX(viewBob.pitch);
       const sunDistance = camera.far * 0.45;
+      sky.position.copy(camera.position);
       sunFlare.position.copy(camera.position).addScaledVector(SUN_DIRECTION, sunDistance);
       sunRaySprite.position.copy(sunFlare.position);
       const sunRaySize =
@@ -912,6 +941,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       bloomOverlay.dispose();
       bloomPass.dispose();
       bloomTarget.dispose();
+      sky.material.map?.dispose();
       sky.geometry.dispose();
       sky.material.dispose();
       try {
