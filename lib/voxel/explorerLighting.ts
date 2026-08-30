@@ -5,6 +5,19 @@ export type ExplorerLightCluster = {
   faces: number;
 };
 
+export function renderExplorerBloomOverlay(
+  renderer: { autoClear: boolean },
+  render: () => void,
+): void {
+  const autoClear = renderer.autoClear;
+  renderer.autoClear = false;
+  try {
+    render();
+  } finally {
+    renderer.autoClear = autoClear;
+  }
+}
+
 export function clusterExplorerEmissiveFaces(
   positions: ArrayLike<number>,
   cellSize = 8,

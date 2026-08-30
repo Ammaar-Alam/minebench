@@ -19,6 +19,7 @@ import {
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import { getPalette } from "@/lib/blocks/palettes";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
+import { parseExplorerBuildId } from "@/lib/voxel/explorerBuildId";
 import {
   EXPLORER_EYE_HEIGHT,
   createExplorerCollisionWorld,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/voxel/explorerCollision";
 import {
   clusterExplorerEmissiveFaces,
+  renderExplorerBloomOverlay,
   selectNearestExplorerLightClusters,
   type ExplorerLightCluster,
 } from "@/lib/voxel/explorerLighting";
@@ -65,7 +67,6 @@ const EMISSIVE_LIGHT_UPDATE_MS = 180;
 const MAX_FRAME_SECONDS = 0.05;
 const MAX_PHYSICS_STEP_SECONDS = 1 / 60;
 const DAYLIGHT_COLOR = 0xaed4ef;
-const GALLERY_BUILD_PREFIX = "gallery:";
 const SUN_DIRECTION = new THREE.Vector3(-0.46, 0.72, -0.52).normalize();
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
@@ -117,12 +118,10 @@ async function fetchStreamBuild(
 }
 
 async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise<LoadedBuild> {
-  const galleryExampleId = buildId.startsWith(GALLERY_BUILD_PREFIX)
-    ? buildId.slice(GALLERY_BUILD_PREFIX.length)
-    : null;
-  if (galleryExampleId) {
+  const target = parseExplorerBuildId(buildId);
+  if (target.source === "gallery") {
     const response = await fetch(
-      `/api/gallery/examples/${encodeURIComponent(galleryExampleId)}/viewer`,
+      `/api/gallery/examples/${encodeURIComponent(target.id)}/viewer`,
       { signal },
     );
     if (!response.ok) {
@@ -137,7 +136,7 @@ async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise
   }
 
   const url = new URL(
-    `/api/arena/builds/${encodeURIComponent(buildId)}`,
+    `/api/arena/builds/${encodeURIComponent(target.id)}`,
     window.location.origin,
   );
   url.searchParams.set("variant", "full");
@@ -151,7 +150,7 @@ async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise
       })
     ).payload;
   } else if (response.status === 503) {
-    payload = await fetchStreamBuild(buildId, signal);
+    payload = await fetchStreamBuild(target.id, signal);
   } else {
     throw new Error(await readClientErrorResponse(response, "Failed to load build"));
   }
@@ -636,7 +635,7 @@ function ExplorerScene({ build, buildId }: { build: LoadedBuild; buildId: string
       }
       bloomPass.render(renderer, bloomTarget, bloomTarget, seconds, false);
       renderer.setRenderTarget(null);
-      bloomOverlay.render(renderer);
+      renderExplorerBloomOverlay(renderer, () => bloomOverlay.render(renderer));
     };
     const updatePlayer = (seconds: number) => {
       if (!controls.isLocked || !collisionWorld) {
