@@ -208,6 +208,32 @@ async function main() {
       { sort: "top", previousId: navigationIds.highest, nextId: navigationIds.newest },
       "Top navigation should follow visible vote order",
     );
+    await setGalleryCandidateSelected(adminId, navigationIds.middle, true);
+    await setGalleryCandidateSelected(adminId, navigationIds.highest, true);
+    await db.galleryCandidate.update({
+      where: { publicId: navigationIds.middle },
+      data: { selectedAt: new Date("2035-01-02T00:00:00.000Z") },
+    });
+    await db.galleryCandidate.update({
+      where: { publicId: navigationIds.highest },
+      data: { selectedAt: new Date("2035-01-03T00:00:00.000Z") },
+    });
+    const official = await listGalleryCandidates({ sort: "official", limit: 10 });
+    assert.deepEqual(
+      official.items.map((item) => item.id).filter((id) => Object.values(navigationIds).includes(id)),
+      [navigationIds.highest, navigationIds.middle],
+      "Official sorting should include only selected prompts in selection order",
+    );
+    assert.deepEqual(
+      (await getGalleryCandidate(navigationIds.highest, { navigationSort: "official" }))?.navigation,
+      { sort: "official", previousId: null, nextId: navigationIds.middle },
+      "Official navigation should stay within selected prompts",
+    );
+    assert.equal(
+      (await getGalleryCandidate(navigationIds.newest, { navigationSort: "official" }))?.navigation,
+      null,
+      "Non-official prompts should ignore official navigation",
+    );
     await db.galleryCandidate.deleteMany({
       where: { publicId: { in: Object.values(navigationIds) } },
     });

@@ -47,7 +47,11 @@ assert.ok(
     detail.includes('event.key === "ArrowRight"') &&
     detail.includes("event.repeat || event.isComposing") &&
     detail.includes("motion-reduce:transform-none") &&
-    explore.includes('sort === "new" ? "?sort=new" : ""') &&
+    explore.includes('sort === "top" ? "" : `?sort=${sort}`') &&
+    explore.includes('["top", "new", "official"]') &&
+    detail.includes("gallerySortHref") &&
+    detail.includes("longPrompt") &&
+    detail.includes("text-2xl sm:text-3xl lg:text-4xl") &&
     galleryDetailPage.includes("navigationSort: sort"),
   "Gallery details should preserve their ordering and expose polished pointer and keyboard navigation",
 );

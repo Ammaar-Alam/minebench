@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { notFound } from "next/navigation";
 import { GalleryDetail } from "@/components/gallery/GalleryDetail";
 import { ARENA_SESSION_COOKIE } from "@/lib/arena/session";
-import { getGalleryCandidate } from "@/lib/gallery/service";
+import { getGalleryCandidate, normalizeGallerySort } from "@/lib/gallery/service";
 import { getCurrentAccount } from "@/lib/auth/account";
 
 export const dynamic = "force-dynamic";
@@ -33,7 +33,7 @@ export default async function GalleryDetailPage({
     cookies(),
     getCurrentAccount().catch(() => null),
   ]);
-  const sort = query.sort === "new" ? "new" : "top";
+  const sort = normalizeGallerySort(query.sort);
   const candidate = await getGalleryCandidate(route.publicId, {
     sessionId: cookieStore.get(ARENA_SESSION_COOKIE)?.value ?? null,
     userId: account?.id,

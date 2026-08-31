@@ -14,6 +14,8 @@ import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import type { GalleryCandidatePayload, GalleryExamplePayload } from "@/lib/gallery/service";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
+type GallerySort = "top" | "new" | "official";
+
 const SandboxGifExportButton = dynamic(
   () => import("@/components/sandbox/SandboxGifExportButton").then((module) => module.SandboxGifExportButton),
   {
@@ -26,7 +28,7 @@ type GalleryDetailPayload = GalleryCandidatePayload & {
   examples: GalleryExamplePayload[];
   nextExamplesCursor: string | null;
   navigation: {
-    sort: "top" | "new";
+    sort: GallerySort;
     previousId: string | null;
     nextId: string | null;
   } | null;
@@ -44,8 +46,12 @@ const RUN_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "UTC",
 });
 
-function galleryDetailHref(publicId: string, sort: "top" | "new") {
-  return `/gallery/${publicId}${sort === "new" ? "?sort=new" : ""}`;
+function gallerySortHref(sort?: GallerySort) {
+  return sort === "top" || !sort ? "/gallery" : `/gallery?sort=${sort}`;
+}
+
+function galleryDetailHref(publicId: string, sort: GallerySort) {
+  return `/gallery/${publicId}${sort === "top" ? "" : `?sort=${sort}`}`;
 }
 
 function GalleryNavigationArrow({
@@ -55,7 +61,7 @@ function GalleryNavigationArrow({
 }: {
   direction: "previous" | "next";
   publicId: string | null;
-  sort: "top" | "new";
+  sort: GallerySort;
 }) {
   const previous = direction === "previous";
   const label = previous ? "Previous build" : "Next build";
@@ -428,11 +434,12 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         jsonBytes: example.jsonBytes,
       }))
     : [];
+  const longPrompt = candidate.prompt.length > 140;
 
   return (
     <article className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
       <nav aria-label="Gallery navigation" className="flex items-center justify-between gap-4">
-        <Link href={navigation?.sort === "new" ? "/gallery?sort=new" : "/gallery"} className="group inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-fg motion-reduce:transition-none">
+        <Link href={gallerySortHref(navigation?.sort)} className="group inline-flex min-h-11 items-center gap-2 text-sm font-medium text-muted transition-colors hover:text-fg motion-reduce:transition-none">
           <span aria-hidden="true" className="transition-transform duration-200 group-hover:-translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">←</span>
           Gallery
         </Link>
@@ -444,9 +451,9 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         ) : null}
       </nav>
 
-      <header className="mt-6 max-w-5xl sm:mt-8">
+      <header className="mt-6 max-w-4xl sm:mt-8">
         <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Official prompt</span> : null}</div>
-        <h1 className="mt-3 text-balance font-display text-3xl font-semibold leading-tight tracking-tight text-fg sm:text-4xl lg:text-5xl">{candidate.prompt}</h1>
+        <h1 className={`mt-3 text-balance font-display font-semibold leading-tight tracking-tight text-fg ${longPrompt ? "text-2xl sm:text-3xl lg:text-4xl" : "text-3xl sm:text-4xl lg:text-5xl"}`}>{candidate.prompt}</h1>
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
           <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
@@ -456,7 +463,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       {actionError ? <p role="alert" className="mt-5 text-sm text-danger">{actionError}</p> : null}
 
       {selected ? (
-        <section className="mt-10 grid gap-6 sm:mt-12 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start" aria-labelledby="viewer-title">
+        <section className="mt-8 grid gap-6 sm:mt-10 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start" aria-labelledby="viewer-title">
           {selectedExamples.length > 1 ? (
             <div className="min-w-0 self-start">
               <div className="mb-3 flex min-h-9 flex-wrap items-center justify-between gap-3">

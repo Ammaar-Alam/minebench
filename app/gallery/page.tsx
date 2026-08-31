@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { GalleryExplore } from "@/components/gallery/GalleryExplore";
 import { ARENA_SESSION_COOKIE } from "@/lib/arena/session";
 import { getCurrentAccount } from "@/lib/auth/account";
-import { listGalleryCandidates } from "@/lib/gallery/service";
+import { listGalleryCandidates, normalizeGallerySort } from "@/lib/gallery/service";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
 };
 
 export default async function GalleryPage({ searchParams }: { searchParams: Promise<{ sort?: string }> }) {
-  const sort = (await searchParams).sort === "new" ? "new" : "top";
+  const sort = normalizeGallerySort((await searchParams).sort);
   const [cookieStore, account] = await Promise.all([
     cookies(),
     getCurrentAccount().catch(() => null),

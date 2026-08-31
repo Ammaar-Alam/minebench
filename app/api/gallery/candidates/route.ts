@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { readArenaSessionId } from "@/lib/arena/session";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
-import { listGalleryCandidates, submitGalleryCandidate } from "@/lib/gallery/service";
+import { listGalleryCandidates, normalizeGallerySort, submitGalleryCandidate } from "@/lib/gallery/service";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   const limit = Number.parseInt(url.searchParams.get("limit") ?? "24", 10);
   try {
     return apiJson(await listGalleryCandidates({
-      sort: url.searchParams.get("sort") === "new" ? "new" : "top",
+      sort: normalizeGallerySort(url.searchParams.get("sort")),
       cursor: url.searchParams.get("cursor"),
       limit: Number.isFinite(limit) ? limit : 24,
       query: url.searchParams.get("q"),

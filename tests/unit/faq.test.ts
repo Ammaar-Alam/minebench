@@ -35,7 +35,8 @@ const nondeterminismAnswer = nondeterminism?.answer.join(" ") ?? "";
 assert.ok(
   nondeterminismAnswer.includes("three times") &&
     nondeterminismAnswer.includes("provider API costs") &&
-    nondeterminismAnswer.includes("official Gallery prompt"),
+    nondeterminismAnswer.includes("official Gallery prompt") &&
+    nondeterminism?.links?.some((link) => link.href === "/gallery?sort=official"),
   "FAQ should explain the ideal repeat protocol, cost constraint, and community reruns",
 );
 

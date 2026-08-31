@@ -29,6 +29,9 @@ export default function GalleryLoading() {
           <span className="relative inline-flex min-h-11 items-center text-sm capitalize text-muted">
             New
           </span>
+          <span className="relative inline-flex min-h-11 items-center text-sm capitalize text-muted">
+            Official
+          </span>
         </nav>
 
         <div className="relative w-full sm:w-80 lg:w-96">

@@ -140,7 +140,7 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
           "MineBench currently evaluates one accepted generation for each model and prompt. With a larger evaluation budget, MineBench would run every model-prompt pair three times and publish the strongest result, but doing that across the full benchmark would roughly triple provider API costs.",
           "For now, the Gallery makes this variation visible. MineBench publishes dated reruns of official prompts. Anyone can use an official Gallery prompt in Sandbox, and signed-in users can add successful builds as new examples. These reruns add evidence without silently replacing the benchmark result or changing Arena rankings.",
         ],
-        links: [{ label: "Explore official prompts", href: "/gallery" }],
+        links: [{ label: "Explore official prompts", href: "/gallery?sort=official" }],
       },
       {
         id: "how-does-the-gallery-shape-the-benchmark",

@@ -9,6 +9,8 @@ import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
+type GallerySort = "top" | "new" | "official";
+
 export function GalleryCardSkeleton({ delayed = false }: { delayed?: boolean }) {
   return (
     <article
@@ -53,7 +55,7 @@ export function GallerySkeletonGrid({ count = 8 }: { count?: number }) {
   );
 }
 
-function galleryCandidatesUrl(sort: "top" | "new", query: string, cursor?: string) {
+function galleryCandidatesUrl(sort: GallerySort, query: string, cursor?: string) {
   const params = new URLSearchParams({ sort });
   if (query) params.set("q", query);
   if (cursor) params.set("cursor", cursor);
@@ -145,7 +147,7 @@ function GalleryCard({
 }: {
   candidate: GalleryCandidatePayload;
   delayed: boolean;
-  sort: "top" | "new";
+  sort: GallerySort;
 }) {
   const modelsTooltipId = useId();
   const [coverLoaded, setCoverLoaded] = useState(false);
@@ -170,7 +172,7 @@ function GalleryCard({
         aria-hidden={!previewsReady || undefined}
         className={`group [grid-area:1/1] flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] duration-200 ease-out hover:border-accent/35 hover:bg-card/20 motion-reduce:transition-none ${previewsReady ? `mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}` : "invisible pointer-events-none"}`}
       >
-      <Link href={`/gallery/${candidate.id}${sort === "new" ? "?sort=new" : ""}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+      <Link href={`/gallery/${candidate.id}${sort === "top" ? "" : `?sort=${sort}`}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
           <div className="relative aspect-[4/3] overflow-hidden bg-bg/45">
             <Image
@@ -246,7 +248,7 @@ export function GalleryExplore({
 }: {
   initialItems: GalleryCandidatePayload[];
   initialCursor: string | null;
-  sort: "top" | "new";
+  sort: GallerySort;
   signedIn: boolean;
   hasNickname: boolean;
   suspended: boolean;
@@ -304,7 +306,7 @@ export function GalleryExplore({
         loadedSortRef.current = requestSort;
         loadedQueryRef.current = normalizedQuery;
         if (sortChanged) {
-          window.history.replaceState(window.history.state, "", requestSort === "new" ? "/gallery?sort=new" : "/gallery");
+          window.history.replaceState(window.history.state, "", requestSort === "top" ? "/gallery" : `/gallery?sort=${requestSort}`);
         }
       } catch {
         if (!controller.signal.aborted && requestId === firstPageRequestRef.current) {
@@ -343,7 +345,7 @@ export function GalleryExplore({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  async function changeSort(nextSort: "top" | "new") {
+  async function changeSort(nextSort: GallerySort) {
     if (nextSort === activeSort || loading || loadingMore) return;
     requestedSortRef.current = nextSort;
     const requestId = ++firstPageRequestRef.current;
@@ -361,7 +363,7 @@ export function GalleryExplore({
       activeSortRef.current = nextSort;
       loadedSortRef.current = nextSort;
       loadedQueryRef.current = query;
-      window.history.replaceState(window.history.state, "", nextSort === "new" ? "/gallery?sort=new" : "/gallery");
+      window.history.replaceState(window.history.state, "", nextSort === "top" ? "/gallery" : `/gallery?sort=${nextSort}`);
     } catch {
       if (requestId === firstPageRequestRef.current) {
         requestedSortRef.current = activeSortRef.current;
@@ -415,7 +417,7 @@ export function GalleryExplore({
 
       <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <nav className="flex items-center gap-7" aria-label="Gallery sorting">
-          {(["top", "new"] as const).map((option) => (
+          {(["top", "new", "official"] as const).map((option) => (
             <button
               key={option}
               type="button"
