@@ -39,6 +39,10 @@ type ExampleViewerState = {
 };
 
 const MAX_COMPARISON_EXAMPLES = 4;
+const RUN_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeZone: "UTC",
+});
 
 function galleryDetailHref(publicId: string, sort: "top" | "new") {
   return `/gallery/${publicId}${sort === "new" ? "?sort=new" : ""}`;
@@ -368,7 +372,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
     return (
       <VoxelViewerCard
         title={example.model.label}
-        subtitle={`By ${example.attribution}`}
+        subtitle={`${example.attribution} · ${RUN_DATE_FORMAT.format(new Date(example.runAt))}`}
         voxelBuild={build}
         expectedBlockCount={example.blockCount ?? undefined}
         jsonBytes={example.jsonBytes}
@@ -441,7 +445,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       </nav>
 
       <header className="mt-6 max-w-5xl sm:mt-8">
-        <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Selected</span> : null}</div>
+        <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Official prompt</span> : null}</div>
         <h1 className="mt-3 text-balance font-display text-3xl font-semibold leading-tight tracking-tight text-fg sm:text-4xl lg:text-5xl">{candidate.prompt}</h1>
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
@@ -578,7 +582,9 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
                       ) : null}
                       <div className="p-3">
                         <p className="truncate text-sm font-medium text-fg">{example.model.label}</p>
-                        <p className="mt-1 truncate text-xs text-muted">{example.attribution}</p>
+                        <p className="mt-1 truncate text-xs text-muted">
+                          {example.attribution} · <time dateTime={example.runAt}>{RUN_DATE_FORMAT.format(new Date(example.runAt))}</time>
+                        </p>
                         <p className="mt-2 flex flex-wrap gap-x-2 font-mono text-[10px] text-muted">
                           {example.blockCount != null ? <span>{example.blockCount.toLocaleString()} blocks</span> : null}
                           {formatBuildJsonSize(example.jsonBytes) ? <span>{formatBuildJsonSize(example.jsonBytes)} JSON</span> : null}

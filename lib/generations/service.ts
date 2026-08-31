@@ -169,18 +169,10 @@ function dayKey(now: Date): Date {
   return new Date(now.toISOString().slice(0, 10));
 }
 
-export async function createSavedGenerations(input: CreateSavedGenerationsInput) {
-  const prompt = input.prompt.trim();
-  if (!prompt || prompt.length > 800 || input.models.length < 1 || input.models.length > 8) {
-    throw new GenerationServiceError("invalid_request", "Check the prompt and model selection.");
-  }
-  if (new Set(input.models.map((model) => model.id)).size !== input.models.length) {
-    throw new GenerationServiceError("invalid_request", "Model selections must be unique.");
-  }
-
+export async function assertSavedGenerationStorageAvailable(ownerId: string): Promise<void> {
   const retained = await prisma.customBuild.aggregate({
     where: {
-      ownerId: input.ownerId,
+      ownerId,
       storedByteSize: { gt: 0 },
     },
     _sum: { storedByteSize: true },
@@ -191,6 +183,18 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
       "Remove a saved generation before starting another.",
     );
   }
+}
+
+export async function createSavedGenerations(input: CreateSavedGenerationsInput) {
+  const prompt = input.prompt.trim();
+  if (!prompt || prompt.length > 800 || input.models.length < 1 || input.models.length > 8) {
+    throw new GenerationServiceError("invalid_request", "Check the prompt and model selection.");
+  }
+  if (new Set(input.models.map((model) => model.id)).size !== input.models.length) {
+    throw new GenerationServiceError("invalid_request", "Model selections must be unique.");
+  }
+
+  await assertSavedGenerationStorageAvailable(input.ownerId);
 
   const hostedOpenRouterKey = process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim();
   const hasUserGeminiCredential = Boolean(

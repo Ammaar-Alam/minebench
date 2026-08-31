@@ -193,7 +193,7 @@ function GalleryCard({
         <div className="flex flex-col gap-3 p-5 pb-0">
           <div className="flex items-center justify-between gap-3 text-xs text-muted">
             <span>{candidate.attribution}</span>
-            {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
+            {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Official prompt</span> : null}
           </div>
           <h2 className="line-clamp-3 text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none">{candidate.prompt}</h2>
         </div>

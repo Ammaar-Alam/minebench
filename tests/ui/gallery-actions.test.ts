@@ -134,6 +134,14 @@ assert.ok(
   "Gallery cards should keep a clear media frame and disclose distinct hidden models without extra client requests",
 );
 assert.ok(
+  detail.includes("Official prompt") &&
+    explore.includes("Official prompt") &&
+    detail.includes("example.runAt") &&
+    detail.includes("<time dateTime={example.runAt}") &&
+    galleryService.includes("customBuild.completedAt ?? example.createdAt"),
+  "official prompts should identify themselves and date each model run",
+);
+assert.ok(
   explore.includes("const previewsReady =") &&
     explore.includes("!candidate.alternate?.previewUrl || alternateLoaded") &&
     explore.includes("!previewsReady ?") &&

@@ -19,6 +19,15 @@ for (const item of FAQ_ITEMS) {
   assert.ok(item.answer.every((paragraph) => paragraph.trim().length > 0));
 }
 
+const galleryMethodology = FAQ_ITEMS.find(
+  (item) => item.id === "how-does-the-gallery-shape-the-benchmark",
+);
+assert.ok(
+  galleryMethodology?.answer.join(" ").includes("highest-voted prompts") &&
+    galleryMethodology.answer.join(" ").includes("run-to-run variation"),
+  "FAQ should explain manual prompt promotion and official retests",
+);
+
 const readme = readFileSync("README.md", "utf8");
 for (const item of FAQ_ITEMS) {
   // Private evaluations stay discoverable without README promotion

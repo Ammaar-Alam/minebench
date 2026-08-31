@@ -15,6 +15,7 @@ async function main() {
   const buildId = randomUUID();
   const buildPublicId = `cb_${suffix}saved`;
   const prompt = "A lantern-lit cliff observatory";
+  const runAt = new Date("2026-08-31T04:35:00.000Z");
   const legacyPrompt = `A legacy-key Gallery prompt ${suffix}`;
   const racePrompt = `A selection and removal race ${suffix}`;
   const {
@@ -52,6 +53,7 @@ async function main() {
         ownerId: uploaderId,
         status: "succeeded",
         currentStage: "complete",
+        completedAt: runAt,
         promptText: prompt,
         promptSha256: "a".repeat(64),
         gridSize: 64,
@@ -123,6 +125,7 @@ async function main() {
     assert.equal(created.candidate.cover?.blockCount, 4);
     assert.equal(created.candidate.cover?.jsonBytes, 100);
     assert.equal(created.candidate.cover?.generationTimeMs, 125_000);
+    assert.equal(created.candidate.cover?.runAt, runAt.toISOString());
     assert.equal(created.candidate.cover?.buildId, buildPublicId);
     assert.equal(
       created.candidate.cover?.thumbnailUrl,

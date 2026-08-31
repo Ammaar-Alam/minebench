@@ -190,6 +190,17 @@ Saved generations are private, account-owned Sandbox results. Gallery metadata a
 
 `GET /api/admin/status` includes queue age, failed jobs, stored bytes, pending object deletions, purge backlog, and email delivery failures. `GET /api/admin/gallery/purge` accepts `ADMIN_TOKEN` or `CRON_SECRET` and is scheduled daily.
 
+To publish an existing finalized official-prompt rerun under the MineBench
+account, validate the local artifact and benchmark ledger first:
+
+```bash
+pnpm gallery:import --prompt steampunk --model gemini-3-1-pro
+```
+
+The command is read-only unless `--yes` is added. A confirmed import creates or
+reuses a saved generation, publishes it as a dated Gallery example, and marks
+the candidate as an official prompt. It does not replace the benchmark build.
+
 ### Admin Routes
 
 Bearer `ADMIN_TOKEN` required.

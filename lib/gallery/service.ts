@@ -113,6 +113,7 @@ const exampleSelect = {
   customBuild: {
     select: {
       publicId: true,
+      completedAt: true,
       gridSize: true,
       palette: true,
       blockCount: true,
@@ -172,6 +173,7 @@ function publicExample(example: ExampleRow) {
       publicNickname: example.contributor.publicNickname,
     }),
     createdAt: example.createdAt.toISOString(),
+    runAt: (example.customBuild.completedAt ?? example.createdAt).toISOString(),
     model: publicGalleryModel(example.customBuild),
     gridSize: example.customBuild.gridSize,
     palette: example.customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
