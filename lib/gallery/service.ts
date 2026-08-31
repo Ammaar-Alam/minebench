@@ -113,6 +113,7 @@ const exampleSelect = {
   customBuild: {
     select: {
       publicId: true,
+      completedAt: true,
       gridSize: true,
       palette: true,
       blockCount: true,
@@ -172,6 +173,7 @@ function publicExample(example: ExampleRow) {
       publicNickname: example.contributor.publicNickname,
     }),
     createdAt: example.createdAt.toISOString(),
+    runAt: (example.customBuild.completedAt ?? example.createdAt).toISOString(),
     model: publicGalleryModel(example.customBuild),
     gridSize: example.customBuild.gridSize,
     palette: example.customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
@@ -231,12 +233,20 @@ function publicCandidate(
 export type GalleryCandidatePayload = ReturnType<typeof publicCandidate>;
 export type GalleryExamplePayload = ReturnType<typeof publicExample>;
 
-type GallerySort = "top" | "new";
+export type GallerySort = "top" | "new" | "official";
+
+export function normalizeGallerySort(sort?: string | null): GallerySort {
+  return sort === "new" || sort === "official" ? sort : "top";
+}
 
 function galleryCandidateOrder(sort: GallerySort): Prisma.GalleryCandidateOrderByWithRelationInput[] {
-  return sort === "top"
-    ? [{ upvoteCount: "desc" }, { publishedAt: "desc" }, { id: "desc" }]
-    : [{ publishedAt: "desc" }, { id: "desc" }];
+  if (sort === "top") return [{ upvoteCount: "desc" }, { publishedAt: "desc" }, { id: "desc" }];
+  if (sort === "official") return [{ selectedAt: "desc" }, { id: "desc" }];
+  return [{ publishedAt: "desc" }, { id: "desc" }];
+}
+
+function galleryCandidateScope(sort: GallerySort): Prisma.GalleryCandidateWhereInput {
+  return sort === "official" ? { AND: [publicCandidateWhere, { selectedAt: { not: null } }] } : publicCandidateWhere;
 }
 
 export async function listGalleryCandidates(options: {
@@ -265,6 +275,13 @@ export async function listGalleryCandidates(options: {
             },
           ],
         }
+      : options.sort === "official"
+        ? {
+            OR: [
+              { selectedAt: { lt: cursor.publishedAt } },
+              { selectedAt: cursor.publishedAt, id: { lt: cursor.id } },
+            ],
+          }
       : {
           OR: [
             { publishedAt: { lt: cursor.publishedAt } },
@@ -295,7 +312,7 @@ export async function listGalleryCandidates(options: {
       }
     : {};
   const rows = await prisma.galleryCandidate.findMany({
-    where: { AND: [publicCandidateWhere, cursorWhere, queryWhere] },
+    where: { AND: [galleryCandidateScope(options.sort), cursorWhere, queryWhere] },
     select: candidateListSelect,
     orderBy: galleryCandidateOrder(options.sort),
     take: limit + 1,
@@ -353,7 +370,7 @@ export async function listGalleryCandidates(options: {
     nextCursor: rows.length > limit && last
       ? encodeGalleryCursor({
           score: options.sort === "top" ? last.upvoteCount : 0,
-          publishedAt: last.publishedAt,
+          publishedAt: options.sort === "official" ? last.selectedAt ?? last.publishedAt : last.publishedAt,
           id: last.id,
         })
       : null,
@@ -377,6 +394,9 @@ export async function getGalleryCandidate(
   if (!candidate) return null;
   const limit = Math.max(1, Math.min(options.examplesLimit ?? 24, 48));
   const cursor = decodeGalleryCursor(options.examplesCursor);
+  const navigationSort = options.navigationSort === "official" && !candidate.selectedAt
+    ? null
+    : options.navigationSort;
   const [cover, exampleCount, upvoted, previousCandidates, nextCandidates] = await Promise.all([
     prisma.galleryExample.findFirst({
       where: { candidateId: candidate.id, ...publicExampleWhere },
@@ -396,24 +416,24 @@ export async function getGalleryCandidate(
         select: { id: true },
       })
       : null,
-    options.navigationSort
+    navigationSort
       ? prisma.galleryCandidate.findMany({
-          where: publicCandidateWhere,
+          where: galleryCandidateScope(navigationSort),
           cursor: { id: candidate.id },
           skip: 1,
           take: -1,
           select: { publicId: true },
-          orderBy: galleryCandidateOrder(options.navigationSort),
+          orderBy: galleryCandidateOrder(navigationSort),
         })
       : [],
-    options.navigationSort
+    navigationSort
       ? prisma.galleryCandidate.findMany({
-          where: publicCandidateWhere,
+          where: galleryCandidateScope(navigationSort),
           cursor: { id: candidate.id },
           skip: 1,
           take: 1,
           select: { publicId: true },
-          orderBy: galleryCandidateOrder(options.navigationSort),
+          orderBy: galleryCandidateOrder(navigationSort),
         })
       : [],
   ]);
@@ -445,9 +465,9 @@ export async function getGalleryCandidate(
     nextExamplesCursor: additional.length > limit && last
       ? encodeGalleryCursor({ score: 0, publishedAt: last.createdAt, id: last.id })
       : null,
-    navigation: options.navigationSort
+    navigation: navigationSort
       ? {
-          sort: options.navigationSort,
+          sort: navigationSort,
           previousId: previousCandidates[0]?.publicId ?? null,
           nextId: nextCandidates[0]?.publicId ?? null,
         }
@@ -863,6 +883,7 @@ export async function setGalleryCandidateSelected(adminId: string, publicId: str
       return {
         promptId: candidate.officialPromptId,
         promptText: candidate.promptText,
+        uploaderId: candidate.uploaderId,
         uploaderEmail: candidate.uploader.email,
         transitioned: false,
       };
@@ -902,11 +923,12 @@ export async function setGalleryCandidateSelected(adminId: string, publicId: str
     return {
       promptId: prompt?.id ?? null,
       promptText: candidate.promptText,
+      uploaderId: candidate.uploaderId,
       uploaderEmail: candidate.uploader.email,
       transitioned: true,
     };
   });
-  if (selected && result.transitioned) {
+  if (selected && result.transitioned && result.uploaderId !== adminId) {
     await deliverGalleryEmail(
       sendGalleryAccountNotification(result.uploaderEmail, {
         heading: "Your prompt was selected",

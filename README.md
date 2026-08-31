@@ -77,6 +77,8 @@ The full FAQ is available at **[minebench.ai/faq](https://minebench.ai/faq)**. E
 * [How do grid size, block limits, and different leaderboard settings work?](https://minebench.ai/faq#how-do-grid-size-block-limits-and-leaderboard-settings-work)
 * [Why not add more prompts, grid sizes, block-limited settings, and other evaluation modes?](https://minebench.ai/faq#why-not-add-more-evaluation-modes)
 * [Are generations one-shot?](https://minebench.ai/faq#are-generations-one-shot)
+* [How does MineBench account for nondeterminism?](https://minebench.ai/faq#how-does-minebench-account-for-nondeterminism)
+* [How does the Gallery shape the benchmark?](https://minebench.ai/faq#how-does-the-gallery-shape-the-benchmark)
 
 ### Using MineBench
 

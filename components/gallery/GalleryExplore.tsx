@@ -3,11 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useDeferredValue, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useDeferredValue, useId, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
+
+type GallerySort = "top" | "new" | "official";
 
 export function GalleryCardSkeleton({ delayed = false }: { delayed?: boolean }) {
   return (
@@ -53,7 +55,7 @@ export function GallerySkeletonGrid({ count = 8 }: { count?: number }) {
   );
 }
 
-function galleryCandidatesUrl(sort: "top" | "new", query: string, cursor?: string) {
+function galleryCandidatesUrl(sort: GallerySort, query: string, cursor?: string) {
   const params = new URLSearchParams({ sort });
   if (query) params.set("q", query);
   if (cursor) params.set("cursor", cursor);
@@ -145,7 +147,7 @@ function GalleryCard({
 }: {
   candidate: GalleryCandidatePayload;
   delayed: boolean;
-  sort: "top" | "new";
+  sort: GallerySort;
 }) {
   const modelsTooltipId = useId();
   const [coverLoaded, setCoverLoaded] = useState(false);
@@ -170,7 +172,7 @@ function GalleryCard({
         aria-hidden={!previewsReady || undefined}
         className={`group [grid-area:1/1] flex min-w-0 flex-col overflow-hidden rounded-md border border-border/80 bg-card/10 transition-[border-color,background-color] duration-200 ease-out hover:border-accent/35 hover:bg-card/20 motion-reduce:transition-none ${previewsReady ? `mb-card-enter ${delayed ? "mb-card-enter-delay" : ""}` : "invisible pointer-events-none"}`}
       >
-      <Link href={`/gallery/${candidate.id}${sort === "new" ? "?sort=new" : ""}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
+      <Link href={`/gallery/${candidate.id}${sort === "top" ? "" : `?sort=${sort}`}`} className="block focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50">
         {candidate.cover?.previewUrl ? (
           <div className="relative aspect-[4/3] overflow-hidden bg-bg/45">
             <Image
@@ -193,7 +195,7 @@ function GalleryCard({
         <div className="flex flex-col gap-3 p-5 pb-0">
           <div className="flex items-center justify-between gap-3 text-xs text-muted">
             <span>{candidate.attribution}</span>
-            {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Selected</span> : null}
+            {candidate.selected ? <span className="font-medium uppercase tracking-[0.12em] text-accent">Official prompt</span> : null}
           </div>
           <h2 className="line-clamp-3 text-balance text-xl font-semibold leading-snug tracking-tight text-fg transition-colors group-hover:text-accent motion-reduce:transition-none">{candidate.prompt}</h2>
         </div>
@@ -246,7 +248,7 @@ export function GalleryExplore({
 }: {
   initialItems: GalleryCandidatePayload[];
   initialCursor: string | null;
-  sort: "top" | "new";
+  sort: GallerySort;
   signedIn: boolean;
   hasNickname: boolean;
   suspended: boolean;
@@ -304,7 +306,7 @@ export function GalleryExplore({
         loadedSortRef.current = requestSort;
         loadedQueryRef.current = normalizedQuery;
         if (sortChanged) {
-          window.history.replaceState(window.history.state, "", requestSort === "new" ? "/gallery?sort=new" : "/gallery");
+          window.history.replaceState(window.history.state, "", requestSort === "top" ? "/gallery" : `/gallery?sort=${requestSort}`);
         }
       } catch {
         if (!controller.signal.aborted && requestId === firstPageRequestRef.current) {
@@ -343,7 +345,7 @@ export function GalleryExplore({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  async function changeSort(nextSort: "top" | "new") {
+  async function changeSort(nextSort: GallerySort) {
     if (nextSort === activeSort || loading || loadingMore) return;
     requestedSortRef.current = nextSort;
     const requestId = ++firstPageRequestRef.current;
@@ -361,7 +363,7 @@ export function GalleryExplore({
       activeSortRef.current = nextSort;
       loadedSortRef.current = nextSort;
       loadedQueryRef.current = query;
-      window.history.replaceState(window.history.state, "", nextSort === "new" ? "/gallery?sort=new" : "/gallery");
+      window.history.replaceState(window.history.state, "", nextSort === "top" ? "/gallery" : `/gallery?sort=${nextSort}`);
     } catch {
       if (requestId === firstPageRequestRef.current) {
         requestedSortRef.current = activeSortRef.current;
@@ -414,18 +416,20 @@ export function GalleryExplore({
       </header>
 
       <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <nav className="flex items-center gap-7" aria-label="Gallery sorting">
-          {(["top", "new"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              disabled={loading || loadingMore}
-              aria-current={activeSort === option ? "page" : undefined}
-              className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
-              onClick={() => void changeSort(option)}
-            >
-              {option}
-            </button>
+        <nav className="flex items-center gap-7" aria-label="Gallery views">
+          {(["official", "top", "new"] as const).map((option) => (
+            <Fragment key={option}>
+              {option === "top" ? <span aria-hidden="true" className="h-5 w-px bg-border" /> : null}
+              <button
+                type="button"
+                disabled={loading || loadingMore}
+                aria-current={activeSort === option ? "page" : undefined}
+                className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
+                onClick={() => void changeSort(option)}
+              >
+                {option}
+              </button>
+            </Fragment>
           ))}
         </nav>
 
@@ -469,6 +473,15 @@ export function GalleryExplore({
           )}
         </div>
       </div>
+
+      {activeSort === "official" ? (
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-muted">
+          Official prompts are part of the benchmark. Rerun one and share the result to reveal run-to-run variation and track how models change over time.{" "}
+          <Link href="/faq#how-does-minebench-account-for-nondeterminism" className="font-medium text-fg underline decoration-border underline-offset-4 transition-colors hover:decoration-fg motion-reduce:transition-none">
+            Why reruns matter
+          </Link>
+        </p>
+      ) : null}
 
       <div
         key={activeSort}

@@ -42,6 +42,11 @@ export type BenchmarkSample = {
   configuration?: BenchmarkRunConfiguration;
 };
 
+export type SucceededBenchmarkSample = {
+  sample: BenchmarkSample;
+  completedAt: Date;
+};
+
 type BenchmarkJobState = "running" | "finalizing" | "succeeded" | "failed" | "interrupted";
 
 // Counters accumulating across every invocation of a job, including runs that
@@ -554,6 +559,17 @@ export class BenchmarkMetricsStore {
   getSample(job: BenchmarkMetricJob): BenchmarkSample | undefined {
     const sample = this.readLedger().jobs[jobKey(job)]?.sample;
     return isBenchmarkSample(sample) ? sample : undefined;
+  }
+
+  getSucceededSample(job: BenchmarkMetricJob): SucceededBenchmarkSample | undefined {
+    const record = this.readLedger().jobs[jobKey(job)];
+    const completedAt = record?.endedAt ? new Date(record.endedAt) : null;
+    return record?.state === "succeeded" &&
+      isBenchmarkSample(record.sample) &&
+      completedAt &&
+      !Number.isNaN(completedAt.getTime())
+      ? { sample: record.sample, completedAt }
+      : undefined;
   }
 
   private updateRecord(

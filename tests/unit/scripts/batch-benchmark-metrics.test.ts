@@ -87,6 +87,10 @@ assert.equal(
 );
 assert.equal(readLedger().jobs["openai_gpt_5_6_sol/castle"]?.state, "succeeded");
 assert.equal(
+  store.getSucceededSample(castle)?.completedAt.toISOString(),
+  "2026-07-22T18:17:26.000Z",
+);
+assert.equal(
   store.reconcile([castle], new Date(), { verifySucceededArtifacts: false }).refreshRequired,
   true,
   "a finalized sample must remain pending until generated metrics refresh",

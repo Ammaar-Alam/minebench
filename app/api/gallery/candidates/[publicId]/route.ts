@@ -1,7 +1,7 @@
 import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { readArenaSessionId } from "@/lib/arena/session";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
-import { GalleryServiceError, getGalleryCandidate, removeGalleryCandidate } from "@/lib/gallery/service";
+import { GalleryServiceError, getGalleryCandidate, normalizeGallerySort, removeGalleryCandidate } from "@/lib/gallery/service";
 
 export const runtime = "nodejs";
 
@@ -11,7 +11,7 @@ export async function GET(request: Request, context: { params: Promise<{ publicI
     sessionId: readArenaSessionId(request.headers.get("cookie")),
     userId: await getAuthenticatedUserId(request),
     examplesCursor: url.searchParams.get("examplesCursor"),
-    navigationSort: url.searchParams.get("sort") === "new" ? "new" : "top",
+    navigationSort: normalizeGallerySort(url.searchParams.get("sort")),
   });
   return candidate
     ? apiJson({ candidate })

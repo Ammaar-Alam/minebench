@@ -47,7 +47,14 @@ assert.ok(
     detail.includes('event.key === "ArrowRight"') &&
     detail.includes("event.repeat || event.isComposing") &&
     detail.includes("motion-reduce:transform-none") &&
-    explore.includes('sort === "new" ? "?sort=new" : ""') &&
+    explore.includes('sort === "top" ? "" : `?sort=${sort}`') &&
+    explore.includes('["official", "top", "new"]') &&
+    explore.includes('aria-label="Gallery views"') &&
+    explore.includes("Official prompts are part of the benchmark.") &&
+    explore.includes('/faq#how-does-minebench-account-for-nondeterminism') &&
+    detail.includes("gallerySortHref") &&
+    detail.includes("longPrompt") &&
+    detail.includes("text-2xl sm:text-3xl lg:text-4xl") &&
     galleryDetailPage.includes("navigationSort: sort"),
   "Gallery details should preserve their ordering and expose polished pointer and keyboard navigation",
 );
@@ -132,6 +139,14 @@ assert.ok(
     explore.includes('role="tooltip"') &&
     !explore.includes("featured"),
   "Gallery cards should keep a clear media frame and disclose distinct hidden models without extra client requests",
+);
+assert.ok(
+  detail.includes("Official prompt") &&
+    explore.includes("Official prompt") &&
+    detail.includes("example.runAt") &&
+    detail.includes("<time dateTime={example.runAt}") &&
+    galleryService.includes("customBuild.completedAt ?? example.createdAt"),
+  "official prompts should identify themselves and date each model run",
 );
 assert.ok(
   explore.includes("const previewsReady =") &&

@@ -19,6 +19,27 @@ for (const item of FAQ_ITEMS) {
   assert.ok(item.answer.every((paragraph) => paragraph.trim().length > 0));
 }
 
+const galleryMethodology = FAQ_ITEMS.find(
+  (item) => item.id === "how-does-the-gallery-shape-the-benchmark",
+);
+assert.ok(
+  galleryMethodology?.answer.join(" ").includes("highest-voted prompts") &&
+    galleryMethodology.answer.join(" ").includes("run-to-run variation"),
+  "FAQ should explain manual prompt promotion and official retests",
+);
+
+const nondeterminism = FAQ_ITEMS.find(
+  (item) => item.id === "how-does-minebench-account-for-nondeterminism",
+);
+const nondeterminismAnswer = nondeterminism?.answer.join(" ") ?? "";
+assert.ok(
+  nondeterminismAnswer.includes("three times") &&
+    nondeterminismAnswer.includes("provider API costs") &&
+    nondeterminismAnswer.includes("official Gallery prompt") &&
+    nondeterminism?.links?.some((link) => link.href === "/gallery?sort=official"),
+  "FAQ should explain the ideal repeat protocol, cost constraint, and community reruns",
+);
+
 const readme = readFileSync("README.md", "utf8");
 for (const item of FAQ_ITEMS) {
   // Private evaluations stay discoverable without README promotion

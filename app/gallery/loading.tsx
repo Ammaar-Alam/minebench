@@ -22,7 +22,11 @@ export default function GalleryLoading() {
       </header>
 
       <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <nav className="flex items-center gap-7" aria-label="Gallery sorting">
+        <nav className="flex items-center gap-7" aria-label="Gallery views">
+          <span className="relative inline-flex min-h-11 items-center text-sm capitalize text-muted">
+            Official
+          </span>
+          <span aria-hidden="true" className="h-5 w-px bg-border" />
           <span className="relative inline-flex min-h-11 items-center text-sm font-semibold capitalize text-fg after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:bg-fg">
             Top
           </span>

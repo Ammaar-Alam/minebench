@@ -15,8 +15,13 @@ async function main() {
   const buildId = randomUUID();
   const buildPublicId = `cb_${suffix}saved`;
   const prompt = "A lantern-lit cliff observatory";
+  const runAt = new Date("2026-08-31T04:35:00.000Z");
   const legacyPrompt = `A legacy-key Gallery prompt ${suffix}`;
   const racePrompt = `A selection and removal race ${suffix}`;
+  const officialSeedPrompts = {
+    [`official-seed-one-${suffix}`]: `Official Gallery seed one ${suffix}`,
+    [`official-seed-two-${suffix}`]: `Official Gallery seed two ${suffix}`,
+  };
   const {
     addGalleryExample,
     claimAnonymousGalleryVotes,
@@ -31,6 +36,7 @@ async function main() {
     submitGalleryAppeal,
     submitGalleryCandidate,
   } = await import("../../../lib/gallery/service");
+  const { seedGalleryOfficialPrompts } = await import("../../../scripts/seed-gallery-official-prompts");
 
   try {
     await db.user.createMany({
@@ -42,7 +48,13 @@ async function main() {
           publicNicknameNormalized: "cliff builder",
         },
         { id: visitorId, email: `gallery-visitor-${suffix}@example.test` },
-        { id: adminId, email: `gallery-admin-${suffix}@example.test`, isMineBenchAdmin: true },
+        {
+          id: adminId,
+          email: `gallery-admin-${suffix}@example.test`,
+          publicNickname: `MineBench ${suffix}`,
+          publicNicknameNormalized: `minebench ${suffix}`,
+          isMineBenchAdmin: true,
+        },
       ],
     });
     await db.customBuild.create({
@@ -52,6 +64,7 @@ async function main() {
         ownerId: uploaderId,
         status: "succeeded",
         currentStage: "complete",
+        completedAt: runAt,
         promptText: prompt,
         promptSha256: "a".repeat(64),
         gridSize: 64,
@@ -123,6 +136,7 @@ async function main() {
     assert.equal(created.candidate.cover?.blockCount, 4);
     assert.equal(created.candidate.cover?.jsonBytes, 100);
     assert.equal(created.candidate.cover?.generationTimeMs, 125_000);
+    assert.equal(created.candidate.cover?.runAt, runAt.toISOString());
     assert.equal(created.candidate.cover?.buildId, buildPublicId);
     assert.equal(
       created.candidate.cover?.thumbnailUrl,
@@ -205,9 +219,45 @@ async function main() {
       { sort: "top", previousId: navigationIds.highest, nextId: navigationIds.newest },
       "Top navigation should follow visible vote order",
     );
+    await setGalleryCandidateSelected(adminId, navigationIds.middle, true);
+    await setGalleryCandidateSelected(adminId, navigationIds.highest, true);
+    await db.galleryCandidate.update({
+      where: { publicId: navigationIds.middle },
+      data: { selectedAt: new Date("2035-01-02T00:00:00.000Z") },
+    });
+    await db.galleryCandidate.update({
+      where: { publicId: navigationIds.highest },
+      data: { selectedAt: new Date("2035-01-03T00:00:00.000Z") },
+    });
+    const official = await listGalleryCandidates({ sort: "official", limit: 10 });
+    assert.deepEqual(
+      official.items.map((item) => item.id).filter((id) => Object.values(navigationIds).includes(id)),
+      [navigationIds.highest, navigationIds.middle],
+      "Official sorting should include only selected prompts in selection order",
+    );
+    assert.deepEqual(
+      (await getGalleryCandidate(navigationIds.highest, { navigationSort: "official" }))?.navigation,
+      { sort: "official", previousId: null, nextId: navigationIds.middle },
+      "Official navigation should stay within selected prompts",
+    );
+    assert.equal(
+      (await getGalleryCandidate(navigationIds.newest, { navigationSort: "official" }))?.navigation,
+      null,
+      "Non-official prompts should ignore official navigation",
+    );
     await db.galleryCandidate.deleteMany({
       where: { publicId: { in: Object.values(navigationIds) } },
     });
+
+    const firstSeed = await seedGalleryOfficialPrompts(adminId, officialSeedPrompts);
+    assert.deepEqual(firstSeed.map((result) => result.status), ["created", "created"]);
+    const repeatedSeed = await seedGalleryOfficialPrompts(adminId, officialSeedPrompts);
+    assert.deepEqual(repeatedSeed.map((result) => result.status), ["already_official", "already_official"]);
+    const seededIds = new Set(firstSeed.map((result) => result.candidateId));
+    const seededCandidates = (await listGalleryCandidates({ sort: "official", limit: 10 })).items
+      .filter((candidate) => seededIds.has(candidate.id));
+    assert.equal(seededCandidates.length, 2);
+    assert.equal(seededCandidates.every((candidate) => candidate.exampleCount === 0), true);
 
     const legacyCandidate = await db.galleryCandidate.create({
       data: {
@@ -461,8 +511,10 @@ async function main() {
 
     console.log("Gallery application-service checks passed");
   } finally {
-    await db.galleryCandidate.deleteMany({ where: { uploaderId } });
-    await db.prompt.deleteMany({ where: { text: { in: [prompt, legacyPrompt, racePrompt] } } });
+    await db.galleryCandidate.deleteMany({ where: { uploaderId: { in: [uploaderId, adminId] } } });
+    await db.prompt.deleteMany({
+      where: { text: { in: [prompt, legacyPrompt, racePrompt, ...Object.values(officialSeedPrompts)] } },
+    });
     await db.customBuild.deleteMany({ where: { ownerId: uploaderId } });
     await db.user.deleteMany({ where: { id: { in: [uploaderId, visitorId, adminId] } } });
     await db.$disconnect();

@@ -45,7 +45,14 @@ type GeneratedBuildResult = {
   warnings: string[];
   blockCount: number;
   generationTimeMs: number | null;
+  completedAt?: Date;
+  sourceArtifactSha256?: string;
 };
+
+export type ImportedCustomBuildResult = Required<Pick<
+  GeneratedBuildResult,
+  "build" | "warnings" | "blockCount" | "generationTimeMs" | "completedAt" | "sourceArtifactSha256"
+>>;
 
 const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2;
 const CUSTOM_BUILD_PROVIDER_TIMEOUT_MS = 90 * 60 * 1000;
@@ -397,6 +404,7 @@ export async function runCustomBuildGenerateJob(
     signal?: AbortSignal;
     acquireBuildProcessing?: () => Promise<() => void>;
     beforeSynchronousArtifactPackaging?: () => Promise<void> | void;
+    importedBuild?: ImportedCustomBuildResult;
   } = {},
 ): Promise<void> {
   const customBuild = await prisma.customBuild.findUnique({
@@ -415,11 +423,13 @@ export async function runCustomBuildGenerateJob(
     data: {
       status: "running",
       startedAt: customBuild.startedAt ?? new Date(),
-      currentStage: "generating",
+      currentStage: opts.importedBuild ? "finalizing" : "generating",
     },
   });
   if (started.count !== 1) throw new CustomBuildLeaseLostError();
-  emitCustomBuildEvent(customBuild.id, "started", { stage: "generating" });
+  emitCustomBuildEvent(customBuild.id, "started", {
+    stage: opts.importedBuild ? "finalizing" : "generating",
+  });
 
   let artifactsPersisted = false;
   try {
@@ -428,8 +438,8 @@ export async function runCustomBuildGenerateJob(
     } catch (error) {
       throw new CustomBuildArtifactPersistenceError(error);
     }
-    const recovered = await recoverStoredBuild(customBuild, opts);
-    const generated = recovered ?? await generateBuild(customBuild, job, opts);
+    const recovered = opts.importedBuild ? null : await recoverStoredBuild(customBuild, opts);
+    const generated = opts.importedBuild ?? recovered ?? await generateBuild(customBuild, job, opts);
     if (recovered) emitCustomBuildEvent(customBuild.id, "recovered", { stage: "finalizing" });
     throwIfCustomBuildLeaseLost(opts.signal);
     await opts.beforeSynchronousArtifactPackaging?.();
@@ -551,7 +561,7 @@ export async function runCustomBuildGenerateJob(
         data: {
           status: "succeeded",
           currentStage: "complete",
-          completedAt: new Date(),
+          completedAt: generated.completedAt ?? new Date(),
           blockCount: generated.blockCount,
           generationTimeMs: generated.generationTimeMs,
           warnings: generated.warnings,
@@ -559,6 +569,9 @@ export async function runCustomBuildGenerateJob(
             blockCount: generated.blockCount,
             generationTimeMs: generated.generationTimeMs,
             warnings: generated.warnings,
+            ...(generated.sourceArtifactSha256
+              ? { sourceArtifactSha256: generated.sourceArtifactSha256 }
+              : {}),
           },
           buildSha256: fullSha,
           buildByteSize,
@@ -585,11 +598,13 @@ export async function runCustomBuildGenerateJob(
     throwIfCustomBuildLeaseLost(opts.signal);
     throwIfCustomBuildLeaseLost(opts.signal);
     emitCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
-    recordGenerationSuccess({
-      jobType: "worker",
-      model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
-      durationMs: generated.generationTimeMs ?? (Date.now() - (customBuild.startedAt?.getTime() ?? Date.now())),
-    });
+    if (!opts.importedBuild) {
+      recordGenerationSuccess({
+        jobType: "worker",
+        model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
+        durationMs: generated.generationTimeMs ?? (Date.now() - (customBuild.startedAt?.getTime() ?? Date.now())),
+      });
+    }
   } catch (error) {
     if (isCustomBuildLeaseLostError(error)) throw error;
     const effectiveError =
@@ -597,11 +612,13 @@ export async function runCustomBuildGenerateJob(
         ? new CustomBuildArtifactBookkeepingError(error)
         : error;
     const message = redactSensitiveText(effectiveError);
-    recordGenerationError({
-      jobType: "worker",
-      model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
-      errorType: message,
-    });
+    if (!opts.importedBuild) {
+      recordGenerationError({
+        jobType: "worker",
+        model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
+        errorType: message,
+      });
+    }
     const manuallyRetryable =
       effectiveError instanceof CustomBuildGenerationFailedError &&
       !isTerminalCustomBuildGenerateError(message);

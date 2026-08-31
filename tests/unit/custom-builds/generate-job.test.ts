@@ -333,6 +333,49 @@ async function main() {
   eventSeq = 0;
   txSeq = 0;
   currentCustomBuild = queuedCustomBuild;
+  const importedCompletedAt = new Date("2026-08-31T04:35:00.445Z");
+  await runCustomBuildGenerateJob({
+    id: "imported-job-row",
+    customBuildId,
+    type: "generate",
+    status: "running",
+    attempts: 1,
+    maxAttempts: 1,
+    payload: {},
+  } as never, {
+    importedBuild: {
+      build: {
+        version: "1.0",
+        blocks: [{ x: 8, y: 1, z: 3, type: "bricks" }],
+      },
+      warnings: [],
+      blockCount: 1,
+      generationTimeMs: 178_462,
+      completedAt: importedCompletedAt,
+      sourceArtifactSha256: "f".repeat(64),
+    },
+  });
+  const importedSuccess = updates.find((update) => update.data.status === "succeeded");
+  assert.ok(importedSuccess, "imports should finalize as successful saved generations");
+  assert.equal(importedSuccess.data.completedAt, importedCompletedAt);
+  assert.equal(importedSuccess.data.generationTimeMs, 178_462);
+  assert.deepEqual(importedSuccess.data.metrics, {
+    blockCount: 1,
+    generationTimeMs: 178_462,
+    warnings: [],
+    sourceArtifactSha256: "f".repeat(64),
+  });
+  assert.deepEqual(
+    artifactCreates.map((artifact) => artifact.kind).sort(),
+    ["build_json", "preview_mbv4", "preview_svg", "viewer_mbv4"],
+  );
+
+  updates.length = 0;
+  operations.length = 0;
+  artifactCreates.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
+  currentCustomBuild = queuedCustomBuild;
   const previousWarn = console.warn;
   console.warn = () => {};
   try {
