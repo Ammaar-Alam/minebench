@@ -1609,6 +1609,13 @@ export function SandboxLive({
         enableBuildExport={r?.status === "success" && !isDurableResult}
         exportLabel={modelName}
         exportPrompt={resultPrompt}
+        explorer={r?.status === "success" ? {
+          id: r.customBuildId ?? `generation:${model.id}`,
+          model: modelName,
+          prompt: resultPrompt,
+          source: "current",
+          checksum: null,
+        } : undefined}
         actions={
           <>
             {r?.status === "error" && r.customBuildRetryable ? (

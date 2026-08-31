@@ -1225,6 +1225,41 @@ export async function getPublicGalleryExampleArtifact(
   });
 }
 
+export async function listPublicGalleryExplorerBuilds() {
+  const examples = await prisma.galleryExample.findMany({
+    where: {
+      AND: [
+        publicExampleWhere,
+        {
+          candidate: publicCandidateWhere,
+          customBuild: {
+            blockCount: { gt: 0 },
+            artifacts: { some: { kind: { in: ["viewer_mbf1", "viewer_mbv4"] } } },
+          },
+        },
+      ],
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+      candidate: { select: { promptText: true } },
+      customBuild: {
+        select: {
+          blockCount: true,
+          ...galleryModelSelect,
+        },
+      },
+    },
+  });
+
+  return examples.map((example) => ({
+    id: example.id,
+    model: publicGalleryModel(example.customBuild).label,
+    prompt: example.candidate.promptText,
+    blockCount: example.customBuild.blockCount ?? 0,
+  }));
+}
+
 export async function setGalleryCandidateHidden(
   adminId: string,
   publicId: string,

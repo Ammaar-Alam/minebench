@@ -1069,6 +1069,13 @@ export function SandboxBenchmark() {
             enableBuildExport={hasRenderableBuild && laneState.phase === "ready" && Boolean(build && model)}
             exportLabel={title}
             exportPrompt={selectedPromptText}
+            explorer={hasRenderableBuild && laneState.phase === "ready" && build && model ? {
+              id: build.buildId,
+              model: model.displayName,
+              prompt: selectedPromptText,
+              source: "benchmark",
+              checksum: build.checksum ?? build.buildRef.checksum ?? null,
+            } : undefined}
             actions={
               hasRenderableBuild && build && model ? (
                 <SandboxGifExportButton

@@ -31,6 +31,10 @@ import type {
   VoxelViewerHandle,
 } from "@/components/voxel/VoxelViewer";
 import { VoxelBuildExportButton } from "@/components/voxel/VoxelBuildExportButton";
+import {
+  VoxelExplorerLaunchButton,
+  useVoxelExplorerActive,
+} from "@/components/voxel/VoxelExplorerLauncher";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 import {
@@ -747,6 +751,7 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
 
   const [viewerReady, setViewerReady] = useState(false);
   const [placementProgress, setPlacementProgress] = useState<PlacementProgressState | null>(null);
+  const explorerActive = useVoxelExplorerActive();
   useEffect(() => {
     setViewerReady(false);
     setPlacementProgress(null);
@@ -815,20 +820,22 @@ const PromptBuildPreview = memo(function PromptBuildPreview({
 
   return (
     <div className={`relative w-full overflow-hidden rounded-md bg-bg/32 ring-1 ring-border/65 ${heightClass}`}>
-      <LazyVoxelViewer
-        ref={viewerRef}
-        voxelBuild={build.voxelBuild}
-        palette={build.palette}
-        meshCacheKey={meshCacheKey}
-        autoRotate
-        showControls={false}
-        onBuildReadyChange={handleBuildReadyChange}
-        onBuildProgressChange={handleBuildProgressChange}
-        onBuildMetrics={(metrics) => {
-          if (!build?.checksum) return;
-          enqueueVoxelMetric("leaderboard", build.variant, metrics);
-        }}
-      />
+      {!explorerActive ? (
+        <LazyVoxelViewer
+          ref={viewerRef}
+          voxelBuild={build.voxelBuild}
+          palette={build.palette}
+          meshCacheKey={meshCacheKey}
+          autoRotate
+          showControls={false}
+          onBuildReadyChange={handleBuildReadyChange}
+          onBuildProgressChange={handleBuildProgressChange}
+          onBuildMetrics={(metrics) => {
+            if (!build?.checksum) return;
+            enqueueVoxelMetric("leaderboard", build.variant, metrics);
+          }}
+        />
+      ) : null}
       {loading || placementLoading ? (
         <VoxelLoadingHud
           label={overlayLabel}
@@ -930,6 +937,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const requestedBuildId = searchParams.get("build");
+  const explorerActive = useVoxelExplorerActive();
   const [hoveredCurveIndex, setHoveredCurveIndex] = useState<number | null>(null);
   const [showAllOpponents, setShowAllOpponents] = useState(false);
   const [showAllPrompts, setShowAllPrompts] = useState(false);
@@ -1080,13 +1088,13 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
   useEffect(() => {
     if (!activePrompt) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || explorerActive) return;
       event.preventDefault();
       setPromptWithUrl(null);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activePrompt, setPromptWithUrl]);
+  }, [activePrompt, explorerActive, setPromptWithUrl]);
 
   const activePromptIndex = useMemo(() => {
     if (!activePrompt) return -1;
@@ -2009,6 +2017,20 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
                   actions={
                     activeLoadedBuild ? (
                       <>
+                        {activeFullCachedBuild ? (
+                          <VoxelExplorerLaunchButton
+                            build={{
+                              id: activeFullCachedBuild.buildId,
+                              model: data.model.displayName,
+                              prompt: activePrompt.promptText,
+                              blockCount: activeFullCachedBuild.blockCount,
+                              source: "benchmark",
+                              checksum: activeFullCachedBuild.checksum ?? null,
+                              palette: activeFullCachedBuild.palette,
+                              voxelBuild: activeFullCachedBuild.voxelBuild,
+                            }}
+                          />
+                        ) : null}
                         <VoxelBuildExportButton
                           build={activeLoadedBuild.voxelBuild}
                           palette={activeLoadedBuild.palette}
