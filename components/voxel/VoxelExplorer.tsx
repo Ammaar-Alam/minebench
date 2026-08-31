@@ -78,7 +78,6 @@ const STAR_LAYER_COUNT = 3;
 const STARS_PER_LAYER = 560;
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
-let explorerBuildCatalog: ExplorerBuildOption[] | null = null;
 
 type LoadedBuild = Pick<VoxelExplorerBuild, "checksum" | "palette" | "voxelBuild">;
 type ExplorerBuildOption = Pick<
@@ -162,7 +161,6 @@ async function fetchExplorerBuild(buildId: string, signal: AbortSignal): Promise
 }
 
 async function fetchExplorerBuildCatalog(signal: AbortSignal): Promise<ExplorerBuildOption[]> {
-  if (explorerBuildCatalog) return explorerBuildCatalog;
   const response = await fetch("/api/sandbox/explorer-builds", { signal });
   const body = (await response.json()) as {
     builds?: ExplorerBuildOption[];
@@ -171,7 +169,6 @@ async function fetchExplorerBuildCatalog(signal: AbortSignal): Promise<ExplorerB
   if (!response.ok || !Array.isArray(body.builds)) {
     throw new Error(body.error ?? "Builds unavailable");
   }
-  explorerBuildCatalog = body.builds;
   return body.builds;
 }
 
@@ -296,7 +293,7 @@ function ExplorerBuildMenu({
   onClose: () => void;
   onSelect: (buildId: string) => void;
 }) {
-  const [builds, setBuilds] = useState<ExplorerBuildOption[] | null>(explorerBuildCatalog);
+  const [builds, setBuilds] = useState<ExplorerBuildOption[] | null>(null);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
