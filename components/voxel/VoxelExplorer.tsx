@@ -1454,8 +1454,17 @@ export function VoxelExplorer({ buildId }: { buildId: string }) {
           onExit={exit}
         />
       ) : (
-        <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-800">
-          {error ?? "Loading"}
+        <div className="flex h-full flex-col items-center justify-center gap-4 text-sm font-semibold text-slate-800">
+          <p>{error ?? "Loading"}</p>
+          {error ? (
+            <button
+              type="button"
+              className="rounded border border-slate-400 px-4 py-2 text-xs"
+              onClick={exit}
+            >
+              Exit
+            </button>
+          ) : null}
         </div>
       )}
     </div>
