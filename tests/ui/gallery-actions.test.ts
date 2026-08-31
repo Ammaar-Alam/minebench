@@ -48,7 +48,10 @@ assert.ok(
     detail.includes("event.repeat || event.isComposing") &&
     detail.includes("motion-reduce:transform-none") &&
     explore.includes('sort === "top" ? "" : `?sort=${sort}`') &&
-    explore.includes('["top", "new", "official"]') &&
+    explore.includes('["official", "top", "new"]') &&
+    explore.includes('aria-label="Gallery views"') &&
+    explore.includes("Official prompts are part of the benchmark.") &&
+    explore.includes('/faq#how-does-minebench-account-for-nondeterminism') &&
     detail.includes("gallerySortHref") &&
     detail.includes("longPrompt") &&
     detail.includes("text-2xl sm:text-3xl lg:text-4xl") &&

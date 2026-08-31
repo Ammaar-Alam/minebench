@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useDeferredValue, useId, useRef, useState } from "react";
+import { Fragment, useEffect, useDeferredValue, useId, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
@@ -416,18 +416,20 @@ export function GalleryExplore({
       </header>
 
       <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <nav className="flex items-center gap-7" aria-label="Gallery sorting">
-          {(["top", "new", "official"] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              disabled={loading || loadingMore}
-              aria-current={activeSort === option ? "page" : undefined}
-              className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
-              onClick={() => void changeSort(option)}
-            >
-              {option}
-            </button>
+        <nav className="flex items-center gap-7" aria-label="Gallery views">
+          {(["official", "top", "new"] as const).map((option) => (
+            <Fragment key={option}>
+              {option === "top" ? <span aria-hidden="true" className="h-5 w-px bg-border" /> : null}
+              <button
+                type="button"
+                disabled={loading || loadingMore}
+                aria-current={activeSort === option ? "page" : undefined}
+                className={`relative inline-flex min-h-11 items-center text-sm capitalize transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:origin-left after:bg-fg after:transition-transform after:duration-200 after:ease-out motion-reduce:transition-none motion-reduce:after:transition-none ${activeSort === option ? "font-semibold text-fg after:scale-x-100" : "text-muted after:scale-x-0 hover:text-fg"}`}
+                onClick={() => void changeSort(option)}
+              >
+                {option}
+              </button>
+            </Fragment>
           ))}
         </nav>
 
@@ -471,6 +473,15 @@ export function GalleryExplore({
           )}
         </div>
       </div>
+
+      {activeSort === "official" ? (
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-muted">
+          Official prompts are part of the benchmark. Rerun one and share the result to reveal run-to-run variation and track how models change over time.{" "}
+          <Link href="/faq#how-does-minebench-account-for-nondeterminism" className="font-medium text-fg underline decoration-border underline-offset-4 transition-colors hover:decoration-fg motion-reduce:transition-none">
+            Why reruns matter
+          </Link>
+        </p>
+      ) : null}
 
       <div
         key={activeSort}
