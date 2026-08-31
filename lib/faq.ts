@@ -132,6 +132,17 @@ export const FAQ_SECTIONS: readonly FaqSection[] = [
         ],
       },
       {
+        id: "how-does-minebench-account-for-nondeterminism",
+        question: "How does MineBench account for nondeterminism?",
+        navLabel: "Nondeterminism",
+        answer: [
+          "Generative models are nondeterministic, so the same model and prompt can produce different builds.",
+          "MineBench currently evaluates one accepted generation for each model and prompt. With a larger evaluation budget, MineBench would run every model-prompt pair three times and publish the strongest result, but doing that across the full benchmark would roughly triple provider API costs.",
+          "For now, the Gallery makes this variation visible. MineBench publishes dated reruns of official prompts. Anyone can use an official Gallery prompt in Sandbox, and signed-in users can add successful builds as new examples. These reruns add evidence without silently replacing the benchmark result or changing Arena rankings.",
+        ],
+        links: [{ label: "Explore official prompts", href: "/gallery" }],
+      },
+      {
         id: "how-does-the-gallery-shape-the-benchmark",
         question: "How does the Gallery shape the benchmark?",
         navLabel: "Gallery & official prompts",

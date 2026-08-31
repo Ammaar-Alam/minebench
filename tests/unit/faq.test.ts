@@ -28,6 +28,17 @@ assert.ok(
   "FAQ should explain manual prompt promotion and official retests",
 );
 
+const nondeterminism = FAQ_ITEMS.find(
+  (item) => item.id === "how-does-minebench-account-for-nondeterminism",
+);
+const nondeterminismAnswer = nondeterminism?.answer.join(" ") ?? "";
+assert.ok(
+  nondeterminismAnswer.includes("three times") &&
+    nondeterminismAnswer.includes("provider API costs") &&
+    nondeterminismAnswer.includes("official Gallery prompt"),
+  "FAQ should explain the ideal repeat protocol, cost constraint, and community reruns",
+);
+
 const readme = readFileSync("README.md", "utf8");
 for (const item of FAQ_ITEMS) {
   // Private evaluations stay discoverable without README promotion
