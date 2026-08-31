@@ -1,4 +1,8 @@
 import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
+import {
+  deserializeCustomProviderRequestConfig,
+  type CustomProviderRequestConfig,
+} from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
 import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
@@ -121,7 +125,7 @@ function customBuildProviderForGeneration(provider: string): Provider | "custom"
 
 export function customBuildModelForGeneration(
   customBuild: CustomBuild,
-  customBaseUrl?: string,
+  customConfig?: CustomProviderRequestConfig,
 ): GenerateVoxelBuildModel {
   return {
     key: customBuild.modelKind === "catalog" && customBuild.modelKey ? customBuild.modelKey : customBuild.publicId,
@@ -130,7 +134,9 @@ export function customBuildModelForGeneration(
     displayName: customBuild.modelDisplayName,
     openRouterModelId: customBuild.openRouterModelId ?? undefined,
     forceOpenRouter: customBuild.modelKind === "openrouter",
-    baseUrl: customBaseUrl,
+    baseUrl: customConfig?.baseUrl,
+    customHeaders: customConfig?.headers,
+    customBody: customConfig?.body,
   };
 }
 
@@ -274,16 +280,18 @@ async function generateBuild(
     keyAuthTag: secret.keyAuthTag ?? "",
     keyVersion: secret.keyVersion,
   }, customBuild.id);
-  const customBaseUrl =
+  const customConfig =
     secret.endpointCiphertext && secret.endpointIv && secret.endpointAuthTag
-      ? decryptSecretValue(
-          {
-            ciphertext: secret.endpointCiphertext,
-            iv: secret.endpointIv,
-            authTag: secret.endpointAuthTag,
-            keyVersion: secret.keyVersion,
-          },
-          customBuild.id,
+      ? deserializeCustomProviderRequestConfig(
+          decryptSecretValue(
+            {
+              ciphertext: secret.endpointCiphertext,
+              iv: secret.endpointIv,
+              authTag: secret.endpointAuthTag,
+              keyVersion: secret.keyVersion,
+            },
+            customBuild.id,
+          ),
         )
       : undefined;
   const gridSize = assertGridSize(customBuild.gridSize);
@@ -295,7 +303,7 @@ async function generateBuild(
   throwIfCustomBuildLeaseLost(opts.signal);
   const result = await generateVoxelBuild(
     {
-      model: customBuildModelForGeneration(customBuild, customBaseUrl),
+      model: customBuildModelForGeneration(customBuild, customConfig),
       prompt: customBuild.promptText,
       gridSize,
       palette,

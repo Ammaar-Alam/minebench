@@ -1,4 +1,10 @@
 import { extractChatCompletionText, withMaxOutputTokens } from "@/lib/ai/providers/shared";
+import {
+  customProviderMaxOutputTokens,
+  normalizeCustomProviderRequestConfig,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 import dns from "node:dns/promises";
 import http from "node:http";
 import https from "node:https";
@@ -119,6 +125,7 @@ async function postToResolvedApi(params: {
   body: string;
   signal: AbortSignal;
   stream: boolean;
+  customHeaders?: CustomRequestHeaders;
   onProviderRequest?: () => void;
 }): Promise<NodeHttpResponse> {
   return await new Promise<NodeHttpResponse>((resolve, reject) => {
@@ -135,19 +142,23 @@ async function postToResolvedApi(params: {
       : isHttps
         ? 443
         : 80;
+    const headers = new Headers({
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json",
+      Accept: params.stream ? "text/event-stream" : "application/json",
+    });
+    for (const [name, value] of Object.entries(params.customHeaders ?? {})) {
+      headers.set(name, value);
+    }
+    headers.set("Host", params.target.url.host);
+    headers.set("Content-Length", Buffer.byteLength(params.body).toString());
     const options: RequestOptions = {
       method: "POST",
       hostname: params.target.address,
       family: params.target.family,
       port,
       path: `${params.target.url.pathname}${params.target.url.search}`,
-      headers: {
-        Authorization: `Bearer ${params.apiKey}`,
-        "Content-Type": "application/json",
-        Accept: params.stream ? "text/event-stream" : "application/json",
-        Host: params.target.url.host,
-        "Content-Length": Buffer.byteLength(params.body).toString(),
-      },
+      headers: Object.fromEntries(headers.entries()),
     };
 
     const cleanup = (abort: () => void) => {
@@ -225,6 +236,8 @@ export async function openAiCompatibleGenerateText(params: {
   modelId: string;
   apiKey?: string;
   baseUrl?: string;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
   system: string;
   user: string;
   maxOutputTokens?: number;
@@ -245,7 +258,12 @@ export async function openAiCompatibleGenerateText(params: {
 
   const rawBaseUrl = params.baseUrl ?? process.env.CUSTOM_API_BASE_URL;
   if (!rawBaseUrl) throw new Error(`Missing ${serviceLabel} API server URL`);
-  const target = await resolveCustomApiTarget(rawBaseUrl);
+  const customConfig = normalizeCustomProviderRequestConfig({
+    baseUrl: rawBaseUrl,
+    headers: params.customHeaders,
+    body: params.customBody,
+  });
+  const target = await resolveCustomApiTarget(customConfig.baseUrl);
   const controller = new AbortController();
   const detachAbort = attachAbortSignal(controller, params.signal);
   const timeout: ReturnType<typeof setTimeout> | null = null;
@@ -253,27 +271,35 @@ export async function openAiCompatibleGenerateText(params: {
   let res: NodeHttpResponse | null = null;
   let lastBody = "";
   const maxTokens = params.maxOutputTokens ?? 65_536;
+  const customMaxTokens = customProviderMaxOutputTokens(customConfig.body);
   let selectedTokenBudget: number | null = null;
   let useStructuredOutput = Boolean(params.jsonSchema);
 
   try {
-    for (const tok of tokenBudgetCandidates(maxTokens)) {
+    const tokenBudgets = customMaxTokens
+      ? [customMaxTokens, customMaxTokens]
+      : tokenBudgetCandidates(maxTokens);
+    for (const tok of tokenBudgets) {
       res = await postToResolvedApi({
         target,
         apiKey,
         signal: controller.signal,
         stream: Boolean(params.onDelta),
+        customHeaders: customConfig.headers,
         onProviderRequest: params.onProviderRequest,
         body: JSON.stringify({
+          ...(params.temperature === undefined ? {} : { temperature: params.temperature }),
+          ...(customMaxTokens
+            ? {}
+            : { [params.maxTokensParameter ?? "max_tokens"]: tok }),
+          ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
+          ...customConfig.body,
           model: params.modelId,
           messages: [
             { role: "system", content: params.system },
             { role: "user", content: params.user },
           ],
           stream: Boolean(params.onDelta),
-          ...(params.temperature === undefined ? {} : { temperature: params.temperature }),
-          [params.maxTokensParameter ?? "max_tokens"]: tok,
-          ...(params.reasoningEffort ? { reasoning_effort: params.reasoningEffort } : {}),
           ...(useStructuredOutput && params.jsonSchema
             ? {
                 response_format: {
@@ -289,10 +315,10 @@ export async function openAiCompatibleGenerateText(params: {
         }),
       });
       if (res.status >= 200 && res.status < 300) {
-        selectedTokenBudget = tok;
+        selectedTokenBudget = customMaxTokens ?? tok;
         break;
       }
-      selectedTokenBudget = tok;
+      selectedTokenBudget = customMaxTokens ?? tok;
       lastBody = await readResponseText(res.body).catch(() => "");
       if (res.status === 400 && useStructuredOutput && looksLikeStructuredOutputUnsupportedError(lastBody)) {
         if (params.requireStructuredOutput) break;
@@ -300,7 +326,10 @@ export async function openAiCompatibleGenerateText(params: {
         params.onTrace?.("Custom API structured output rejected; falling back to plain text output for this request.");
         continue;
       }
-      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) continue;
+      if (res.status === 400 && looksLikeTokenLimitError(lastBody)) {
+        if (customMaxTokens) break;
+        continue;
+      }
       break;
     }
   } catch (err) {
@@ -330,10 +359,16 @@ export async function openAiCompatibleGenerateText(params: {
   params.onAcceptedRequestConfiguration?.({
     apiMode: "chat_completions",
     maxOutputTokens: budget,
-    thinkingMode: params.reasoningEffort
-      ? `reasoning=${params.reasoningEffort}`
-      : "default",
-    temperature: params.temperature ?? "default",
+    thinkingMode: typeof customConfig.body?.reasoning_effort === "string"
+      ? `reasoning=${customConfig.body.reasoning_effort}`
+      : Object.hasOwn(customConfig.body ?? {}, "thinking")
+        ? "custom"
+        : params.reasoningEffort
+          ? `reasoning=${params.reasoningEffort}`
+          : "default",
+    temperature: typeof customConfig.body?.temperature === "number"
+      ? customConfig.body.temperature
+      : params.temperature ?? "default",
     textVerbosity: "default",
     responseFormat: useStructuredOutput ? "json_schema" : "text",
   });

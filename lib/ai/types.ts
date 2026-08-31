@@ -1,4 +1,8 @@
 import type { ModelKey } from "@/lib/ai/modelCatalog";
+import type {
+  CustomRequestBody,
+  CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 export type PaletteMode = "simple" | "advanced";
@@ -56,6 +60,8 @@ export type GenerateModelRequest =
       displayName: string;
       modelId: string;
       baseUrl: string;
+      headers?: CustomRequestHeaders;
+      body?: CustomRequestBody;
     }
   | {
       id: string;
