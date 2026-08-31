@@ -88,10 +88,14 @@ type ExplorerBuildOption = Pick<
 
 function loadAtlasTexture(): Promise<THREE.Texture> {
   if (explorerAtlasPromise) return explorerAtlasPromise;
-  explorerAtlasPromise = new Promise((resolve, reject) => {
+  const promise = new Promise<THREE.Texture>((resolve, reject) => {
     new THREE.TextureLoader().load("/textures/atlas.png", resolve, undefined, reject);
+  }).catch((error) => {
+    explorerAtlasPromise = null;
+    throw error;
   });
-  return explorerAtlasPromise;
+  explorerAtlasPromise = promise;
+  return promise;
 }
 
 async function fetchStreamBuild(

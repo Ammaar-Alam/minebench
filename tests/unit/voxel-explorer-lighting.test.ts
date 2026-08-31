@@ -60,6 +60,16 @@ async function main() {
     }),
     null,
   );
+  assert.equal(
+    await createExplorerBlockLightGrid({
+      version: "1.0",
+      blocks: [
+        { x: 0, y: 0, z: 0, type: "glowstone" },
+        { x: 511, y: 511, z: 511, type: "glowstone" },
+      ],
+    }),
+    null,
+  );
   assert.equal(isExplorerSunRayVisible(0, 0, 0), true);
   assert.equal(isExplorerSunRayVisible(1.3, 0, 0), false);
   assert.equal(isExplorerSunRayVisible(0, 0, 2), false);

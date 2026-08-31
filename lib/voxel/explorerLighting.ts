@@ -110,7 +110,9 @@ export async function createExplorerBlockLightGrid(
   const width = buildWidth + padding * 2;
   const height = buildHeight + padding * 2;
   const depth = buildDepth + padding * 2;
-  const cells = new Uint8Array(width * height * depth);
+  const cellCount = width * height * depth;
+  if (cellCount > MAX_BLOCK_LIGHT_CELLS) return null;
+  const cells = new Uint8Array(cellCount);
   const plane = width * depth;
   const queue: Array<Uint32Array | null> = [new Uint32Array(QUEUE_CHUNK_SIZE)];
   let readChunk = 0;
