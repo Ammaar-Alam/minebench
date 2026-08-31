@@ -883,6 +883,7 @@ export async function setGalleryCandidateSelected(adminId: string, publicId: str
       return {
         promptId: candidate.officialPromptId,
         promptText: candidate.promptText,
+        uploaderId: candidate.uploaderId,
         uploaderEmail: candidate.uploader.email,
         transitioned: false,
       };
@@ -922,11 +923,12 @@ export async function setGalleryCandidateSelected(adminId: string, publicId: str
     return {
       promptId: prompt?.id ?? null,
       promptText: candidate.promptText,
+      uploaderId: candidate.uploaderId,
       uploaderEmail: candidate.uploader.email,
       transitioned: true,
     };
   });
-  if (selected && result.transitioned) {
+  if (selected && result.transitioned && result.uploaderId !== adminId) {
     await deliverGalleryEmail(
       sendGalleryAccountNotification(result.uploaderEmail, {
         heading: "Your prompt was selected",

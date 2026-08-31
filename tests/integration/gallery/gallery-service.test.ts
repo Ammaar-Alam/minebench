@@ -18,6 +18,10 @@ async function main() {
   const runAt = new Date("2026-08-31T04:35:00.000Z");
   const legacyPrompt = `A legacy-key Gallery prompt ${suffix}`;
   const racePrompt = `A selection and removal race ${suffix}`;
+  const officialSeedPrompts = {
+    [`official-seed-one-${suffix}`]: `Official Gallery seed one ${suffix}`,
+    [`official-seed-two-${suffix}`]: `Official Gallery seed two ${suffix}`,
+  };
   const {
     addGalleryExample,
     claimAnonymousGalleryVotes,
@@ -32,6 +36,7 @@ async function main() {
     submitGalleryAppeal,
     submitGalleryCandidate,
   } = await import("../../../lib/gallery/service");
+  const { seedGalleryOfficialPrompts } = await import("../../../scripts/seed-gallery-official-prompts");
 
   try {
     await db.user.createMany({
@@ -43,7 +48,13 @@ async function main() {
           publicNicknameNormalized: "cliff builder",
         },
         { id: visitorId, email: `gallery-visitor-${suffix}@example.test` },
-        { id: adminId, email: `gallery-admin-${suffix}@example.test`, isMineBenchAdmin: true },
+        {
+          id: adminId,
+          email: `gallery-admin-${suffix}@example.test`,
+          publicNickname: `MineBench ${suffix}`,
+          publicNicknameNormalized: `minebench ${suffix}`,
+          isMineBenchAdmin: true,
+        },
       ],
     });
     await db.customBuild.create({
@@ -237,6 +248,16 @@ async function main() {
     await db.galleryCandidate.deleteMany({
       where: { publicId: { in: Object.values(navigationIds) } },
     });
+
+    const firstSeed = await seedGalleryOfficialPrompts(adminId, officialSeedPrompts);
+    assert.deepEqual(firstSeed.map((result) => result.status), ["created", "created"]);
+    const repeatedSeed = await seedGalleryOfficialPrompts(adminId, officialSeedPrompts);
+    assert.deepEqual(repeatedSeed.map((result) => result.status), ["already_official", "already_official"]);
+    const seededIds = new Set(firstSeed.map((result) => result.candidateId));
+    const seededCandidates = (await listGalleryCandidates({ sort: "official", limit: 10 })).items
+      .filter((candidate) => seededIds.has(candidate.id));
+    assert.equal(seededCandidates.length, 2);
+    assert.equal(seededCandidates.every((candidate) => candidate.exampleCount === 0), true);
 
     const legacyCandidate = await db.galleryCandidate.create({
       data: {
@@ -490,8 +511,10 @@ async function main() {
 
     console.log("Gallery application-service checks passed");
   } finally {
-    await db.galleryCandidate.deleteMany({ where: { uploaderId } });
-    await db.prompt.deleteMany({ where: { text: { in: [prompt, legacyPrompt, racePrompt] } } });
+    await db.galleryCandidate.deleteMany({ where: { uploaderId: { in: [uploaderId, adminId] } } });
+    await db.prompt.deleteMany({
+      where: { text: { in: [prompt, legacyPrompt, racePrompt, ...Object.values(officialSeedPrompts)] } },
+    });
     await db.customBuild.deleteMany({ where: { ownerId: uploaderId } });
     await db.user.deleteMany({ where: { id: { in: [uploaderId, visitorId, adminId] } } });
     await db.$disconnect();

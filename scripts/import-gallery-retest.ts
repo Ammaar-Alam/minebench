@@ -19,15 +19,14 @@ import {
   setGalleryCandidateSelected,
   submitGalleryCandidate,
 } from "../lib/gallery/service";
-import { normalizeGalleryNickname } from "../lib/gallery/policy";
 import { prisma } from "../lib/prisma";
 import { sha256Hex } from "../lib/custom-builds/hash";
 import { BenchmarkMetricsStore, type BenchmarkMetricJob } from "./benchmarkMetrics";
+import { galleryDatabaseTarget, loadMineBenchGalleryPublisher } from "./gallery-cli";
 import { BENCHMARK_PROMPT_MAP, UPLOADS_DIR } from "./uploadsCatalog";
 
 const GRID_SIZE = 256;
 const PALETTE = "simple";
-const MINEBENCH_NICKNAME = "minebench";
 const IMPORT_LEASE_MS = 60 * 60 * 1000;
 
 export type GalleryImportArgs = {
@@ -116,15 +115,6 @@ export function galleryRetestPublicId(parts: {
   return `cb_${digest.slice(0, 24)}`;
 }
 
-function databaseTarget(): string {
-  try {
-    const url = new URL(process.env.DATABASE_URL ?? "");
-    return `${url.hostname}${url.pathname}`;
-  } catch {
-    return "unconfigured";
-  }
-}
-
 function readPreparedBuild(spec: ReturnType<typeof resolveGalleryImportSpec>): {
   importedBuild: ImportedCustomBuildResult;
   sourceBytes: number;
@@ -183,31 +173,6 @@ function readPreparedBuild(spec: ReturnType<typeof resolveGalleryImportSpec>): {
     providerRoute: configuration.providerRoute,
     reasoning: configuration.reasoningOverride,
   };
-}
-
-async function loadMineBenchPublisher() {
-  const publisher = await prisma.user.findUnique({
-    where: { publicNicknameNormalized: MINEBENCH_NICKNAME },
-    select: {
-      id: true,
-      publicNickname: true,
-      isMineBenchAdmin: true,
-      gallerySuspendedAt: true,
-      deletedAt: true,
-      authDeletedAt: true,
-    },
-  });
-  if (
-    !publisher?.publicNickname ||
-    !publisher.isMineBenchAdmin ||
-    publisher.gallerySuspendedAt ||
-    publisher.deletedAt ||
-    publisher.authDeletedAt ||
-    normalizeGalleryNickname(publisher.publicNickname).normalized !== MINEBENCH_NICKNAME
-  ) {
-    throw new Error("An active MineBench Gallery admin account is required.");
-  }
-  return publisher;
 }
 
 async function createOrReuseGeneration(args: {
@@ -368,7 +333,7 @@ async function main(): Promise<void> {
   }
   const spec = resolveGalleryImportSpec(parsed);
   const prepared = readPreparedBuild(spec);
-  const publisher = await loadMineBenchPublisher();
+  const publisher = await loadMineBenchGalleryPublisher();
   assertCustomBuildStorageConfigured();
   const publicId = galleryRetestPublicId({
     publisherId: publisher.id,
@@ -386,7 +351,7 @@ async function main(): Promise<void> {
   console.log(`- source bytes: ${prepared.sourceBytes.toLocaleString()}`);
   console.log(`- source sha256: ${prepared.importedBuild.sourceArtifactSha256}`);
   console.log(`- saved generation: ${publicId}`);
-  console.log(`- database: ${databaseTarget()}`);
+  console.log(`- database: ${galleryDatabaseTarget()}`);
   console.log(`- storage bucket: ${getCustomBuildStorageBucket()}`);
 
   if (!parsed.confirmed) {
