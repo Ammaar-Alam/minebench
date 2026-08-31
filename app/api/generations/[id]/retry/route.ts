@@ -8,6 +8,14 @@ export const runtime = "nodejs";
 const retryRequest = z.object({
   providerKey: z.string().trim().min(1).max(4000).optional(),
   customBaseUrl: z.string().trim().url().max(4000).optional(),
+  customHeaders: z
+    .record(z.string().trim().min(1).max(128), z.string().max(16_384))
+    .refine((value) => Object.keys(value).length <= 32, "Too many custom headers.")
+    .optional(),
+  customBody: z
+    .record(z.string().trim().min(1).max(128), z.unknown())
+    .refine((value) => JSON.stringify(value).length <= 65_536, "Custom body is too large.")
+    .optional(),
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {

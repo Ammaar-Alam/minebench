@@ -59,6 +59,7 @@ const completedBuildBody = functionBodyText("readCustomBuildViewer");
 const dismissHostedGeminiBody = functionBodyText("dismissHostedGeminiAnnouncement");
 const inputResetEffect = effectBodyTextContaining("lastGenerateInputRef.current === inputSignature");
 const hostedGeminiEffect = effectBodyTextContaining("HOSTED_GEMINI_NOTICE_KEY");
+const customProviderStorageEffect = effectBodyTextContaining("saveCustomProviderProfile");
 const assignIndex = durableBody.indexOf("customBuildAbortRef.current = args.abortController");
 assert.ok(assignIndex >= 0, "durable generation should store the active abort controller");
 assert.equal(
@@ -93,7 +94,8 @@ assert.ok(
 
 assert.ok(
   durableBody.includes('fetch("/api/generations"') &&
-    durableBody.includes("models: selectedModels.map(customBuildRequestModel)") &&
+    durableBody.includes("models: args.models") &&
+    runBody.includes("models: requestModels") &&
     durableBody.includes("created.generations.length !== selectedModels.length") &&
     durableBody.includes("await Promise.all(") &&
     durableBody.includes("selectedModels.map((model, index)"),
@@ -106,8 +108,10 @@ assert.ok(
   "saved generation requests should send only credentials selected by their model routes",
 );
 assert.ok(
-  requestModelBody.includes("id: model.id"),
-  "saved-generation requests should include the selected model identity required by the API",
+  requestModelBody.includes("id: model.id") &&
+    requestModelBody.includes("headers: config.headers") &&
+    requestModelBody.includes("body: config.body"),
+  "saved-generation requests should include custom model identity and request configuration",
 );
 assert.ok(
   stopBody.includes("if (signedIn)") &&
@@ -257,6 +261,19 @@ assert.ok(
     !retryBody.includes("Add the required API key") &&
     !sourceText.includes("hostedGenerationCount"),
   "the free Gemini offer should appear on every anonymous page load, persist in Generate, defer to user keys, and remain one-time for signed-in users",
+);
+assert.ok(
+  sourceText.includes("loadCustomProviderProfile") &&
+    customProviderStorageEffect.includes("saveCustomProviderProfile(customModel)") &&
+    sourceText.includes("Provider profile") &&
+    sourceText.includes("Saved in this browser") &&
+    sourceText.includes('label="Headers"') &&
+    sourceText.includes('label="Body parameters"') &&
+    sourceText.includes("customHeaders: customConfig.headers") &&
+    sourceText.includes("customBody: customConfig.body") &&
+    !sourceText.includes("value={customModel.displayName}") &&
+    !sourceText.includes('className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3"'),
+  "custom providers should persist one flat profile and disclose request fields without a nested card",
 );
 
 console.log("sandbox saved-generation contract checks passed");

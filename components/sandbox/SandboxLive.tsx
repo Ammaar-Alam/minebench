@@ -5,6 +5,14 @@ import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent, GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
 import {
+  customProviderRequestConfigFromProfile,
+  loadCustomProviderProfile,
+  MAX_CUSTOM_REQUEST_ENTRIES,
+  saveCustomProviderProfile,
+  type CustomProviderProfile,
+  type CustomRequestEntry,
+} from "@/lib/ai/customProviderConfig";
+import {
   SandboxGifExportButton,
   type SandboxGifExportTarget,
 } from "@/components/sandbox/SandboxGifExportButton";
@@ -35,12 +43,6 @@ type SelectedModelValue =
   | typeof CUSTOM_MODEL_VALUE;
 type GenerationPreflightMode = "free" | "save" | "key";
 
-type CustomSandboxModel = {
-  displayName: string;
-  modelId: string;
-  baseUrl: string;
-};
-
 type SelectedLiveModel =
   | {
       id: string;
@@ -57,6 +59,7 @@ type SelectedLiveModel =
       providerLabel: string;
       modelId: string;
       baseUrl?: string;
+      profile?: CustomProviderProfile;
     };
 
 type ModelResult = {
@@ -113,11 +116,6 @@ const CUSTOM_MODEL_VALUE = "__custom_api__";
 const HOSTED_GEMINI_MODEL_KEY = "gemini_3_7_flash";
 const HOSTED_GEMINI_NOTICE_KEY = "mb_hosted_gemini_3_7_notice_v1";
 let anonymousHostedGeminiNoticeShown = false;
-const DEFAULT_CUSTOM_MODEL: CustomSandboxModel = {
-  displayName: "OpenAI-compatible model",
-  modelId: "",
-  baseUrl: "",
-};
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
 const DEFAULT_MODEL_A: ModelKey =
@@ -134,6 +132,94 @@ const DEFAULT_MODEL_B: ModelKey =
   )?.key ??
   ENABLED_MODELS.find((model) => model.key !== DEFAULT_MODEL_A)?.key ??
   DEFAULT_MODEL_A;
+
+function RequestEntriesEditor({
+  label,
+  addLabel,
+  entries,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  addLabel: string;
+  entries: CustomRequestEntry[];
+  onChange: (entries: CustomRequestEntry[]) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex min-h-11 items-center justify-between gap-3">
+        <div className="text-xs font-medium text-muted">{label}</div>
+        <button
+          type="button"
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-sm px-1 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+          disabled={disabled || entries.length >= MAX_CUSTOM_REQUEST_ENTRIES}
+          onClick={() => onChange([...entries, { name: "", value: "" }])}
+        >
+          <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5">
+            <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+          </svg>
+          {addLabel}
+        </button>
+      </div>
+
+      {entries.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <div className="hidden grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)_2.75rem] gap-2 px-0.5 text-[11px] font-medium text-muted sm:grid">
+            <div>Name</div>
+            <div>Value</div>
+            <span aria-hidden="true" />
+          </div>
+          {entries.map((entry, index) => (
+            <div
+              key={index}
+              className="grid grid-cols-[minmax(0,1fr)_2.75rem] items-center gap-2 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)_2.75rem]"
+            >
+              <input
+                aria-label={`${label} ${index + 1} name`}
+                className="mb-field col-start-1 row-start-1 h-10 min-w-0"
+                value={entry.name}
+                placeholder="Name"
+                maxLength={128}
+                disabled={disabled}
+                spellCheck={false}
+                autoCapitalize="none"
+                onChange={(event) => onChange(entries.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, name: event.target.value } : item
+                ))}
+              />
+              <input
+                aria-label={`${label} ${index + 1} value`}
+                className="mb-field col-start-1 row-start-2 h-10 min-w-0 sm:col-start-2 sm:row-start-1"
+                value={entry.value}
+                placeholder="Value"
+                maxLength={16_384}
+                disabled={disabled}
+                spellCheck={false}
+                autoCapitalize="none"
+                onChange={(event) => onChange(entries.map((item, itemIndex) =>
+                  itemIndex === index ? { ...item, value: event.target.value } : item
+                ))}
+              />
+              <button
+                type="button"
+                aria-label={`Remove ${label.toLowerCase()} ${index + 1}`}
+                title="Remove"
+                className="col-start-2 row-span-2 row-start-1 inline-flex h-11 w-11 items-center justify-center rounded-sm text-muted transition-colors hover:bg-fg/[0.05] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none sm:col-start-3 sm:row-span-1"
+                disabled={disabled}
+                onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}
+              >
+                <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4">
+                  <path d="M3.5 4.5h9M6 2.75h4M5 6.5v5.25m3-5.25v5.25m3-5.25v5.25M4.25 4.5l.5 9h6.5l.5-9" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.25" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function HostedGeminiAnnouncement({
   open,
@@ -568,8 +654,11 @@ export function SandboxLive({
   const [gridSize, setGridSize] = useState<GridSize>(256);
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
-  const [customModel, setCustomModel] = useState<CustomSandboxModel>(DEFAULT_CUSTOM_MODEL);
+  const [customModel, setCustomModel] = useState<CustomProviderProfile>(() => loadCustomProviderProfile());
+  const [customProfileReady, setCustomProfileReady] = useState(false);
+  const [openRouterModelId, setOpenRouterModelId] = useState("");
   const [showKeys, setShowKeys] = useState(false);
+  const [customRequestOpen, setCustomRequestOpen] = useState(false);
   const [modelPair, setModelPair] = useState<{ a: SelectedModelValue; b: SelectedModelValue | null }>({
     a: DEFAULT_MODEL_A,
     b: DEFAULT_MODEL_B !== DEFAULT_MODEL_A ? DEFAULT_MODEL_B : null,
@@ -590,7 +679,16 @@ export function SandboxLive({
     useState<GenerationPreflightMode | null>(null);
   const [generationPreflightMessage, setGenerationPreflightMessage] = useState<string>();
   const [showHostedGeminiAnnouncement, setShowHostedGeminiAnnouncement] = useState(false);
-  const savedKeyCount = Object.values(providerKeys).filter((value) => Boolean(value?.trim())).length;
+  const savedKeyCount = Object.entries(providerKeys).filter(
+    ([provider, value]) => provider !== "custom" && Boolean(value?.trim()),
+  ).length;
+  const customRequestCount = [...customModel.headers, ...customModel.body].filter(
+    (entry) => Boolean(entry.name.trim() || entry.value.trim()),
+  ).length;
+  const customProviderOptionLabel =
+    customProfileReady && customModel.providerName.trim()
+      ? customModel.providerName.trim()
+      : "OpenAI-compatible model";
   const showHostedGeminiOffer = Boolean(
     hostedGeminiEnabled &&
     (!signedIn ||
@@ -615,6 +713,8 @@ export function SandboxLive({
   const viewerARef = useRef<VoxelViewerHandle | null>(null);
   const viewerBRef = useRef<VoxelViewerHandle | null>(null);
   const apiKeysSectionRef = useRef<HTMLElement | null>(null);
+  const customProviderSectionRef = useRef<HTMLDivElement | null>(null);
+  const customApiKeyRef = useRef<HTMLInputElement | null>(null);
 
   const modelGroups = useMemo(() => {
     const groups = new Map<string, (typeof ENABLED_MODELS)[number][]>();
@@ -634,7 +734,6 @@ export function SandboxLive({
     : compareEnabled && isAdHocModelValue(modelPair.b)
       ? modelPair.b
       : null;
-  const usesAdHocModel = adHocModelValue !== null;
   const usesOpenRouterModel = adHocModelValue === OPENROUTER_MODEL_VALUE;
   const usesOpenAiCompatibleModel = adHocModelValue === CUSTOM_MODEL_VALUE;
   const selectedModels = useMemo(() => {
@@ -648,11 +747,15 @@ export function SandboxLive({
           kind: "custom",
           provider: usesOpenRouter ? "openrouter" : "custom",
           displayName: usesOpenRouter
-            ? customModel.modelId.trim() || "OpenRouter model"
-            : customModel.displayName.trim() || "OpenAI-compatible model",
-          providerLabel: usesOpenRouter ? "OpenRouter" : "OpenAI-compatible",
-          modelId: customModel.modelId.trim(),
-          ...(usesOpenRouter ? {} : { baseUrl: customModel.baseUrl.trim() }),
+            ? openRouterModelId.trim() || "OpenRouter model"
+            : customModel.modelId.trim() || "OpenAI-compatible model",
+          providerLabel: usesOpenRouter
+            ? "OpenRouter"
+            : customModel.providerName.trim() || "Custom provider",
+          modelId: usesOpenRouter ? openRouterModelId.trim() : customModel.modelId.trim(),
+          ...(usesOpenRouter
+            ? {}
+            : { baseUrl: customModel.baseUrl.trim(), profile: customModel }),
         });
         return;
       }
@@ -671,7 +774,7 @@ export function SandboxLive({
       pushValue(modelPair.b);
     }
     return picked;
-  }, [compareEnabled, customModel, modelPair.a, modelPair.b]);
+  }, [compareEnabled, customModel, modelPair.a, modelPair.b, openRouterModelId]);
   const inputSignature = useMemo(
     () =>
       [
@@ -682,7 +785,7 @@ export function SandboxLive({
           .map((model) =>
             model.kind === "catalog"
               ? model.modelKey
-              : `${model.provider}:${model.displayName}:${model.modelId}:${model.baseUrl ?? ""}`,
+              : `${model.provider}:${model.displayName}:${model.modelId}:${JSON.stringify(model.profile ?? {})}`,
           )
           .join("|"),
       ].join("\0"),
@@ -699,6 +802,14 @@ export function SandboxLive({
   useEffect(() => {
     saveProviderKeysToStorage(providerKeys);
   }, [providerKeys]);
+
+  useEffect(() => {
+    setCustomProfileReady(true);
+  }, []);
+
+  useEffect(() => {
+    saveCustomProviderProfile(customModel);
+  }, [customModel]);
 
   useEffect(() => {
     if (!hostedGeminiEnabled || (signedIn && !hostedGeminiAvailable)) {
@@ -807,7 +918,7 @@ export function SandboxLive({
     });
   }
 
-  function updateCustomModel(patch: Partial<CustomSandboxModel>) {
+  function updateCustomModel(patch: Partial<CustomProviderProfile>) {
     setCustomModel((prev) => ({ ...prev, ...patch }));
   }
 
@@ -892,13 +1003,18 @@ export function SandboxLive({
       };
     }
     if (model.provider === "custom") {
+      const config = customProviderRequestConfigFromProfile(
+        model.profile ?? customModel,
+      );
       return {
         id: model.id,
         kind: "custom",
         provider: "custom",
         displayName: model.displayName,
         modelId: model.modelId,
-        baseUrl: model.baseUrl ?? "",
+        baseUrl: config.baseUrl,
+        headers: config.headers,
+        body: config.body,
       };
     }
     return {
@@ -911,6 +1027,10 @@ export function SandboxLive({
   }
 
   function hasProviderKey(model: SelectedLiveModel): boolean {
+    if (model.kind === "custom") {
+      const provider = model.provider === "custom" ? "custom" : "openrouter";
+      return Boolean(providerKeys[provider]?.trim());
+    }
     return Object.values(
       selectGenerationProviderKeys([customBuildRequestModel(model)], providerKeys),
     ).some((value) => Boolean(value?.trim()));
@@ -941,6 +1061,13 @@ export function SandboxLive({
 
   function openApiKeys() {
     setGenerationPreflight(null);
+    if (usesOpenAiCompatibleModel) {
+      window.requestAnimationFrame(() => {
+        customProviderSectionRef.current?.scrollIntoView({ block: "center" });
+        customApiKeyRef.current?.focus();
+      });
+      return;
+    }
     setApiKeysOpen(true);
     setProviderKeysOpen(true);
     window.requestAnimationFrame(() => {
@@ -1095,6 +1222,9 @@ export function SandboxLive({
     setRunning(true);
     setRequestError(null);
     try {
+      const customConfig = model.kind === "custom" && model.provider === "custom"
+        ? customProviderRequestConfigFromProfile(model.profile ?? customModel)
+        : null;
       const response = await fetch(
         `/api/generations/${encodeURIComponent(existing.customBuildId)}/retry`,
         {
@@ -1103,8 +1233,12 @@ export function SandboxLive({
           signal: abortController.signal,
           body: JSON.stringify({
             ...(providerKey ? { providerKey } : {}),
-            ...(model.kind === "custom" && model.provider === "custom"
-              ? { customBaseUrl: model.baseUrl }
+            ...(customConfig
+              ? {
+                  customBaseUrl: customConfig.baseUrl,
+                  customHeaders: customConfig.headers,
+                  customBody: customConfig.body,
+                }
               : {}),
           }),
         },
@@ -1146,6 +1280,7 @@ export function SandboxLive({
   async function runGenerateDurable(args: {
     abortController: AbortController;
     providerKeys: ProviderApiKeys;
+    models: GenerateModelRequest[];
     prompt: string;
     runId: number;
   }) {
@@ -1158,7 +1293,7 @@ export function SandboxLive({
         prompt: args.prompt,
         gridSize,
         palette,
-        models: selectedModels.map(customBuildRequestModel),
+        models: args.models,
         providerKeys: args.providerKeys,
       }),
     });
@@ -1256,7 +1391,13 @@ export function SandboxLive({
       setRequestError("Enter a chat completions URL for the OpenAI-compatible model.");
       return;
     }
-    const requestModels = selectedModels.map(customBuildRequestModel);
+    let requestModels: GenerateModelRequest[];
+    try {
+      requestModels = selectedModels.map(customBuildRequestModel);
+    } catch (error) {
+      setRequestError(error instanceof Error ? error.message : "Check the custom request settings.");
+      return;
+    }
     const missingProviderModels = selectedModels.filter((model) => {
       if (!signedIn && anonymousServerKeysEnabled) return false;
       if (
@@ -1330,6 +1471,7 @@ export function SandboxLive({
         await runGenerateDurable({
           abortController,
           providerKeys: sanitizedKeys,
+          models: requestModels,
           prompt: submittedPrompt,
           runId: durableRunId!,
         });
@@ -1834,7 +1976,7 @@ export function SandboxLive({
                     value={CUSTOM_MODEL_VALUE}
                     disabled={compareEnabled && isAdHocModelValue(modelPair.b)}
                   >
-                    OpenAI-compatible model
+                    {customProviderOptionLabel}
                   </option>
                 </optgroup>
               </select>
@@ -1872,7 +2014,7 @@ export function SandboxLive({
                   </optgroup>
                   <optgroup label="Custom">
                     <option value={CUSTOM_MODEL_VALUE} disabled={isAdHocModelValue(modelPair.a)}>
-                      OpenAI-compatible model
+                      {customProviderOptionLabel}
                     </option>
                   </optgroup>
                 </select>
@@ -1880,45 +2022,148 @@ export function SandboxLive({
             ) : null}
           </div>
 
-          {usesAdHocModel ? (
-            <div className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3">
-              <div className="text-xs font-medium text-muted">
-                {usesOpenRouterModel ? "OpenRouter model" : "OpenAI-compatible model"}
+          {usesOpenRouterModel ? (
+            <label className="mt-4 flex flex-col gap-1 border-t border-border/70 pt-4">
+              <div className="text-xs font-medium text-muted">Model ID</div>
+              <input
+                className="mb-field h-10 w-full"
+                value={openRouterModelId}
+                onChange={(event) => setOpenRouterModelId(event.target.value)}
+                disabled={running}
+                placeholder="stealth/ox-alpha"
+                maxLength={240}
+                spellCheck={false}
+                autoCapitalize="none"
+              />
+            </label>
+          ) : null}
+
+          {usesOpenAiCompatibleModel ? (
+            <div
+              ref={customProviderSectionRef}
+              className="mt-4 flex scroll-mt-24 flex-col gap-4 border-t border-border/70 pt-4"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-medium text-muted">Provider profile</div>
+                <div className="text-[11px] text-muted">Saved in this browser</div>
               </div>
-              <div className="mt-3 grid grid-cols-1 gap-3">
-                {usesOpenAiCompatibleModel ? (
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Display name</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      value={customModel.displayName}
-                      onChange={(e) => updateCustomModel({ displayName: e.target.value })}
-                      disabled={running}
-                      placeholder="My model"
-                    />
-                  </label>
-                ) : null}
-                <label className="flex flex-col gap-1">
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <label className="flex min-w-0 flex-col gap-1">
+                  <div className="text-xs font-medium text-muted">Provider name</div>
+                  <input
+                    className="mb-field h-10 w-full"
+                    value={customModel.providerName}
+                    onChange={(event) => updateCustomModel({ providerName: event.target.value })}
+                    disabled={running}
+                    maxLength={120}
+                  />
+                </label>
+                <label className="flex min-w-0 flex-col gap-1">
                   <div className="text-xs font-medium text-muted">Model ID</div>
                   <input
                     className="mb-field h-10 w-full"
                     value={customModel.modelId}
-                    onChange={(e) => updateCustomModel({ modelId: e.target.value })}
+                    onChange={(event) => updateCustomModel({ modelId: event.target.value })}
                     disabled={running}
-                    placeholder={usesOpenRouterModel ? "stealth/ox-alpha" : undefined}
+                    maxLength={240}
+                    spellCheck={false}
+                    autoCapitalize="none"
                   />
                 </label>
-                {usesOpenAiCompatibleModel ? (
-                  <label className="flex flex-col gap-1">
-                    <div className="text-xs font-medium text-muted">Chat completions URL</div>
-                    <input
-                      className="mb-field h-10 w-full"
-                      value={customModel.baseUrl}
-                      onChange={(e) => updateCustomModel({ baseUrl: e.target.value })}
-                      disabled={running}
-                      type="url"
-                    />
+              </div>
+
+              <label className="flex flex-col gap-1">
+                <div className="text-xs font-medium text-muted">Chat completions URL</div>
+                <input
+                  className="mb-field h-10 w-full"
+                  value={customModel.baseUrl}
+                  onChange={(event) => updateCustomModel({ baseUrl: event.target.value })}
+                  disabled={running}
+                  type="url"
+                  inputMode="url"
+                  maxLength={4_000}
+                  spellCheck={false}
+                  autoCapitalize="none"
+                />
+              </label>
+
+              <div className="flex flex-col gap-1">
+                <div className="flex min-h-11 items-center justify-between gap-3">
+                  <label htmlFor="sandbox-custom-api-key" className="text-xs font-medium text-muted">
+                    API key
                   </label>
+                  <button
+                    type="button"
+                    aria-pressed={showKeys}
+                    className="inline-flex min-h-11 items-center rounded-sm px-1 text-[11px] font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
+                    onClick={() => setShowKeys((visible) => !visible)}
+                    disabled={running}
+                  >
+                    {showKeys ? "Hide" : "Show"}
+                  </button>
+                </div>
+                <input
+                  ref={customApiKeyRef}
+                  id="sandbox-custom-api-key"
+                  className="mb-field h-10 w-full"
+                  type={showKeys ? "text" : "password"}
+                  value={providerKeys.custom ?? ""}
+                  onChange={(event) =>
+                    setProviderKeys((current) => ({ ...current, custom: event.target.value }))
+                  }
+                  disabled={running}
+                  autoComplete="off"
+                  maxLength={4_000}
+                  spellCheck={false}
+                />
+              </div>
+
+              <div className="border-t border-border/70 pt-2">
+                <button
+                  type="button"
+                  aria-expanded={customRequestOpen}
+                  aria-controls="sandbox-custom-request"
+                  className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  onClick={() => setCustomRequestOpen((open) => !open)}
+                >
+                  <span className="flex min-w-0 items-baseline gap-2">
+                    <span className="text-xs font-medium text-fg">Headers &amp; body</span>
+                    <span className="truncate text-[11px] text-muted">
+                      {customRequestCount ? `${customRequestCount} set` : "Optional"}
+                    </span>
+                  </span>
+                  <svg
+                    aria-hidden="true"
+                    className={`mb-disclosure-chevron h-3 w-3 shrink-0 text-muted ${customRequestOpen ? "is-open" : ""}`}
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M4 6.5L8 10.5L12 6.5" />
+                  </svg>
+                </button>
+
+                {customRequestOpen ? (
+                  <div id="sandbox-custom-request" className="mb-fade-in flex flex-col gap-5 pt-3">
+                    <RequestEntriesEditor
+                      label="Headers"
+                      addLabel="Add header"
+                      entries={customModel.headers}
+                      onChange={(headers) => updateCustomModel({ headers })}
+                      disabled={running}
+                    />
+                    <RequestEntriesEditor
+                      label="Body parameters"
+                      addLabel="Add parameter"
+                      entries={customModel.body}
+                      onChange={(body) => updateCustomModel({ body })}
+                      disabled={running}
+                    />
+                  </div>
                 ) : null}
               </div>
             </div>
@@ -2001,7 +2246,7 @@ export function SandboxLive({
                   type="button"
                   className="inline-flex min-h-11 items-center rounded-sm px-1 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
                   onClick={() => {
-                    setProviderKeys({});
+                    setProviderKeys((current) => ({ custom: current.custom }));
                     setRequestError(null);
                   }}
                   disabled={running}
@@ -2020,39 +2265,20 @@ export function SandboxLive({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <label className="flex flex-col gap-1">
-                <div className="text-xs font-medium text-muted">OpenRouter</div>
-                <input
-                  className="mb-field h-10 w-full"
-                  type={showKeys ? "text" : "password"}
-                  value={providerKeys.openrouter ?? ""}
-                  onChange={(event) =>
-                    setProviderKeys((current) => ({ ...current, openrouter: event.target.value }))
-                  }
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="Paste key"
-                />
-              </label>
-
-              {usesOpenAiCompatibleModel ? (
-                <label className="flex flex-col gap-1">
-                  <div className="text-xs font-medium text-muted">OpenAI-compatible</div>
-                  <input
-                    className="mb-field h-10 w-full"
-                    type={showKeys ? "text" : "password"}
-                    value={providerKeys.custom ?? ""}
-                    onChange={(event) =>
-                      setProviderKeys((current) => ({ ...current, custom: event.target.value }))
-                    }
-                    autoComplete="off"
-                    spellCheck={false}
-                    placeholder="Paste key"
-                  />
-                </label>
-              ) : null}
-            </div>
+            <label className="flex max-w-xl flex-col gap-1">
+              <div className="text-xs font-medium text-muted">OpenRouter</div>
+              <input
+                className="mb-field h-10 w-full"
+                type={showKeys ? "text" : "password"}
+                value={providerKeys.openrouter ?? ""}
+                onChange={(event) =>
+                  setProviderKeys((current) => ({ ...current, openrouter: event.target.value }))
+                }
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="Paste key"
+              />
+            </label>
 
             <div className="mt-5 border-t border-border/70 pt-2">
               <button

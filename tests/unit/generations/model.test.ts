@@ -25,6 +25,8 @@ const custom = await resolveSavedGenerationModel(
     displayName: "Local model",
     modelId: "local-1",
     baseUrl: "https://models.example.test/v1/chat/completions",
+    headers: { "User-Agent": "claude-cli/2.1.179" },
+    body: { thinking: { type: "enabled" }, max_tokens: 128_000 },
   },
   { custom: "custom-key", openrouter: "unused-key" },
   { assertSafeCustomApiUrl: async () => undefined },
@@ -32,6 +34,11 @@ const custom = await resolveSavedGenerationModel(
 assert.equal(custom.modelKind, "custom");
 assert.equal(custom.credential.provider, "custom");
 assert.equal(custom.customBaseUrl, "https://models.example.test/v1/chat/completions");
+assert.deepEqual(custom.customHeaders, { "User-Agent": "claude-cli/2.1.179" });
+assert.deepEqual(custom.customBody, {
+  thinking: { type: "enabled" },
+  max_tokens: 128_000,
+});
 
 const openRouter = await resolveSavedGenerationModel(
   {

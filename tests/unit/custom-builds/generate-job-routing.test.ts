@@ -36,7 +36,7 @@ assert.ok(
 );
 
 assert.ok(
-  generateBody.includes("model: customBuildModelForGeneration(customBuild, customBaseUrl)") &&
+  generateBody.includes("model: customBuildModelForGeneration(customBuild, customConfig)") &&
     !generateBody.includes("modelKey: customBuild.modelKey"),
   "custom generate jobs should not re-resolve queued catalog rows through the mutable model catalog",
 );
@@ -53,6 +53,22 @@ const openRouterModel = customBuildModelForGeneration({
 assert.equal(openRouterModel.provider, "custom");
 assert.equal(openRouterModel.forceOpenRouter, true);
 assert.equal(openRouterModel.openRouterModelId, "vendor/model");
+const customModel = customBuildModelForGeneration({
+  modelKind: "custom",
+  modelKey: null,
+  modelProvider: "custom",
+  modelId: "vendor-model",
+  modelDisplayName: "Vendor model",
+  openRouterModelId: null,
+  publicId: "cb_123456789012345678901234",
+} as never, {
+  baseUrl: "https://models.example.test/v1/chat/completions",
+  headers: { "User-Agent": "minebench-test" },
+  body: { reasoning_effort: "max" },
+});
+assert.equal(customModel.baseUrl, "https://models.example.test/v1/chat/completions");
+assert.deepEqual(customModel.customHeaders, { "User-Agent": "minebench-test" });
+assert.deepEqual(customModel.customBody, { reasoning_effort: "max" });
 assert.deepEqual(providerKeysForSecret("openrouter", "router-key"), { openrouter: "router-key" });
 assert.deepEqual(providerKeysForSecret("meta", "meta-key"), { meta: "meta-key" });
 assert.deepEqual(providerKeysForSecret("zai", "zai-key"), { zai: "zai-key" });

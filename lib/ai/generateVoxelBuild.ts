@@ -1,5 +1,10 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
+import {
+  customProviderMaxOutputTokens,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 import { extractBestVoxelBuildJson, extractFirstJsonObject } from "@/lib/ai/jsonExtract";
 import { modelOutputCeiling, modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
@@ -271,6 +276,8 @@ type ResolvedModel = {
   forceOpenRouter?: boolean;
   importOnly?: boolean;
   baseUrl?: string;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
   requireStructuredOutput?: boolean;
 };
 
@@ -475,6 +482,8 @@ export type GenerateVoxelBuildParams = {
     forceOpenRouter?: boolean;
     importOnly?: boolean;
     baseUrl?: string;
+    customHeaders?: CustomRequestHeaders;
+    customBody?: CustomRequestBody;
     requireStructuredOutput?: boolean;
   };
   prompt: string;
@@ -540,6 +549,8 @@ async function callDirectProvider(args: {
   modelId: string;
   apiKey?: string;
   baseUrl?: string;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
   requireStructuredOutput?: boolean;
   system: string;
   user: string;
@@ -657,6 +668,8 @@ async function callDirectProvider(args: {
       modelId: args.modelId,
       apiKey: args.apiKey,
       baseUrl: args.baseUrl,
+      customHeaders: args.customHeaders,
+      customBody: args.customBody,
       system: args.system,
       user: args.user,
       maxOutputTokens: args.maxOutputTokens,
@@ -899,6 +912,8 @@ async function providerGenerateText(args: {
         modelId: model.modelId,
         apiKey: directKey ?? undefined,
         baseUrl: model.baseUrl,
+        customHeaders: model.customHeaders,
+        customBody: model.customBody,
         requireStructuredOutput: model.requireStructuredOutput,
         system: args.system,
         user: args.user,
@@ -1099,7 +1114,7 @@ export async function generateVoxelBuild(
   const maxOutputTokens = defaultMaxOutputTokens(
     params.gridSize,
     model.modelId,
-    params.maxOutputTokens,
+    customProviderMaxOutputTokens(model.customBody) ?? params.maxOutputTokens,
   );
   const reasoningMaxTokens = defaultMaxReasoningTokens(model.modelId, maxOutputTokens);
   const schemaMaxBlocks = approxMaxBlocksForTokenBudget({

@@ -1,4 +1,9 @@
 import { getModelByKey } from "@/lib/ai/modelCatalog";
+import {
+  normalizeCustomProviderRequestConfig,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import type { GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
 
@@ -10,6 +15,8 @@ export type ResolvedSavedGenerationModel = {
   modelDisplayName: string;
   openRouterModelId?: string;
   customBaseUrl?: string;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
   preferOpenRouter: boolean;
   credential: {
     provider: keyof ProviderApiKeys;
@@ -29,7 +36,12 @@ export async function resolveSavedGenerationModel(
   },
 ): Promise<ResolvedSavedGenerationModel> {
   if (request.kind === "custom" && request.provider === "custom") {
-    await deps.assertSafeCustomApiUrl(request.baseUrl);
+    const config = normalizeCustomProviderRequestConfig({
+      baseUrl: request.baseUrl,
+      headers: request.headers,
+      body: request.body,
+    });
+    await deps.assertSafeCustomApiUrl(config.baseUrl);
     const value = providerKeys.custom?.trim();
     if (!value) throw new Error("missing_provider_key");
     return {
@@ -37,7 +49,9 @@ export async function resolveSavedGenerationModel(
       modelProvider: "custom",
       modelId: request.modelId,
       modelDisplayName: request.displayName,
-      customBaseUrl: request.baseUrl,
+      customBaseUrl: config.baseUrl,
+      customHeaders: config.headers,
+      customBody: config.body,
       preferOpenRouter: false,
       credential: { provider: "custom", value },
     };

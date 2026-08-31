@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
+import { normalizeCustomProviderRequestConfig } from "@/lib/ai/customProviderConfig";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
@@ -25,6 +26,15 @@ const providerKeysSchema = z
   })
   .optional();
 
+const customHeadersSchema = z
+  .record(z.string().trim().min(1).max(128), z.string().max(16_384))
+  .refine((value) => Object.keys(value).length <= 32, "Too many custom headers.")
+  .optional();
+const customBodySchema = z
+  .record(z.string().trim().min(1).max(128), z.unknown())
+  .refine((value) => JSON.stringify(value).length <= 65_536, "Custom body is too large.")
+  .optional();
+
 const modelRequestSchema = z.union([
   z.object({
     id: z.string().trim().min(1).max(200),
@@ -38,6 +48,8 @@ const modelRequestSchema = z.union([
     displayName: z.string().trim().min(1).max(120),
     modelId: z.string().trim().min(1).max(240),
     baseUrl: z.string().trim().url().max(4000),
+    headers: customHeadersSchema,
+    body: customBodySchema,
   }),
   z.object({
     id: z.string().trim().min(1).max(200),
@@ -114,7 +126,12 @@ export async function POST(req: Request) {
   for (const model of models) {
     if (model.kind !== "custom" || model.provider !== "custom") continue;
     try {
-      await assertSafeCustomApiUrl(model.baseUrl);
+      const config = normalizeCustomProviderRequestConfig({
+        baseUrl: model.baseUrl,
+        headers: model.headers,
+        body: model.body,
+      });
+      await assertSafeCustomApiUrl(config.baseUrl);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid custom API server URL";
       return NextResponse.json({ error: message }, { status: 400 });
@@ -226,6 +243,8 @@ export async function POST(req: Request) {
                         modelId: model.modelId,
                         displayName: model.displayName,
                         baseUrl: model.baseUrl,
+                        customHeaders: model.headers,
+                        customBody: model.body,
                       },
                 prompt: body.prompt,
                 gridSize: body.gridSize,
