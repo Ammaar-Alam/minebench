@@ -102,6 +102,7 @@ Copy `.env.example` to `.env` and set what you need.
 ### Optional Provider and Runtime Tuning
 
 - `MINEBENCH_ALLOW_SERVER_KEYS=1` (production opt-in for server env keys in `/api/generate`)
+- `ANTHROPIC_FABLE_5_1_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_FABLE_5_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_OPUS_5_EFFORT=low|medium|high|xhigh|max`
 - `ANTHROPIC_SONNET_5_EFFORT=low|medium|high|xhigh|max`
@@ -118,6 +119,7 @@ Copy `.env.example` to `.env` and set what you need.
 - GPT 5.6 Sol uses the native OpenAI model ID `gpt-5.6-sol` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses the model's 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-sol-pro` with max effort and strict structured output.
 - GPT 5.6 Luna uses the native OpenAI model ID `gpt-5.6-luna` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses its 1050000-token context window and 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-luna-pro` with max effort and strict structured output.
 - Kimi K3 uses the native Moonshot model ID `kimi-k3`, always reasons with `reasoning_effort=max`, uses its 1048576-token completion ceiling, and omits its fixed sampling parameters. Its OpenRouter fallback uses `moonshotai/kimi-k3` with max effort and fails closed if that effort is rejected.
+- Claude Fable 5.1 uses the native Anthropic model ID `claude-fable-5-1`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with its 1M-token context window and 128000-token output cap. It omits sampling controls and uses native structured output without forced tool choice. Its OpenRouter fallback is `anthropic/claude-fable-5.1` with the same cap and effort ladder.
 - Claude Fable 5 uses the native Anthropic model ID `claude-fable-5`, supports always-on adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude Opus 5 uses the native Anthropic model ID `claude-opus-5`, reaches its 1M-token context window without a beta header, supports adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap. Its OpenRouter fallback uses `anthropic/claude-opus-5` with the same cap and effort ladder.
 - Claude Sonnet 5 uses the native Anthropic model ID `claude-sonnet-5`, supports adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
