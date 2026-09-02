@@ -326,6 +326,9 @@ const MODEL_BENCHMARK_METADATA: Partial<
   zai_glm_5_3: {
     totalCost: { usd: 6.42, attemptCount: 24 },
   },
+  gemini_3_8_flash: {
+    totalCost: { usd: 1.18 },
+  },
   gemini_3_7_flash: {
     totalCost: { usd: 1.46 },
   },

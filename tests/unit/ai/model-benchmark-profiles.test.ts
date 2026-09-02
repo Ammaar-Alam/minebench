@@ -171,6 +171,9 @@ assert.deepEqual(gemini36Flash?.averageInference, { milliseconds: 101_900 });
 assert.deepEqual(gemini36Flash?.totalCost, { usd: 3.22 });
 assert.equal(gemini36Flash?.buildCount, 15);
 
+const gemini38Flash = getModelBenchmarkProfile("gemini_3_8_flash");
+assert.deepEqual(gemini38Flash?.totalCost, { usd: 1.18 });
+
 const gemini37Flash = getModelBenchmarkProfile("gemini_3_7_flash");
 assert.ok(gemini37Flash, "Gemini 3.7 Flash should have verified benchmark details");
 assert.deepEqual(gemini37Flash.parameters, [
