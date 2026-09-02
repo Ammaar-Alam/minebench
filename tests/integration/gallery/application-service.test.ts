@@ -199,6 +199,7 @@ async function main() {
     await db.customBuild.update({
       where: { id: hostedRow.id },
       data: {
+        modelKey: "gemini_3_7_flash",
         status: "failed",
         currentStage: "failed",
         completedAt: new Date(),
@@ -212,7 +213,11 @@ async function main() {
       data: { status: "failed", completedAt: new Date() },
     });
     await db.customBuildSecret.deleteMany({ where: { customBuildId: hostedRow.id } });
-    assert.equal((await retrySavedGeneration(ownerId, hosted[0]!.id, {})).status, "queued");
+    assert.equal(
+      (await retrySavedGeneration(ownerId, hosted[0]!.id, {})).status,
+      "queued",
+      "previously hosted Gemini models should remain retryable",
+    );
     const hostedRetrySecret = await db.customBuildSecret.findUniqueOrThrow({
       where: { customBuildId: hostedRow.id },
     });
