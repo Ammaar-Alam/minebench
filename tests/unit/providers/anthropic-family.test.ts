@@ -21,6 +21,14 @@ const FULL_LADDER = ["max", "xhigh", "high", "medium", "low"];
 
 const EXPECTATIONS: ExpectedCatalogEntry[] = [
   {
+    key: "anthropic_claude_fable_5_1",
+    provider: "anthropic",
+    modelId: "claude-fable-5-1",
+    displayName: "Claude Fable 5.1",
+    openRouterModelId: "anthropic/claude-fable-5.1",
+    slug: "claude-fable-5-1",
+  },
+  {
     key: "anthropic_claude_fable_5",
     provider: "anthropic",
     modelId: "claude-fable-5",
@@ -93,6 +101,7 @@ runProviderConfigTest(
   "anthropic family",
   {
     ANTHROPIC_STREAM_RESPONSES: "0",
+    ANTHROPIC_FABLE_5_1_EFFORT: "max",
     ANTHROPIC_OPUS_5_EFFORT: "max",
     ANTHROPIC_SONNET_5_EFFORT: "max",
   },
@@ -162,6 +171,9 @@ runProviderConfigTest(
         (directRequest.body.output_config as { effort?: unknown })?.effort,
         "max",
       );
+      if (expected.key === "anthropic_claude_fable_5_1") {
+        assert.equal(Object.hasOwn(directRequest.body, "tool_choice"), false);
+      }
       assertTraceLine(
         direct.traces,
         [
@@ -186,6 +198,9 @@ runProviderConfigTest(
       assert.equal(Object.hasOwn(openRouterRequest, "temperature"), false);
       assert.equal(Object.hasOwn(openRouterRequest, "top_p"), false);
       assert.equal(Object.hasOwn(openRouterRequest, "top_k"), false);
+      if (expected.key === "anthropic_claude_fable_5_1") {
+        assert.equal(Object.hasOwn(openRouterRequest, "tool_choice"), false);
+      }
       assert.deepEqual(openRouterRequest.reasoning, { effort: "max" });
       assert.deepEqual(openRouterRequest.provider, { require_parameters: true });
       const responseFormat = openRouterRequest.response_format as {

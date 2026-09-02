@@ -47,6 +47,12 @@ const MESSAGES_API_OUTPUT_MAX = 128_000;
 // Keyed by family and version
 // A release named without a minor, such as claude-opus-5, keys at minor 0
 const CLAUDE_RELEASES: Record<string, ClaudeRelease> = {
+  "fable-5.1": {
+    effortLadder: FULL_EFFORT_LADDER,
+    defaultSamplingOnly: true,
+    maxOutputTokens: MESSAGES_API_OUTPUT_MAX,
+    effortEnvVar: "ANTHROPIC_FABLE_5_1_EFFORT",
+  },
   "opus-5.0": {
     effortLadder: FULL_EFFORT_LADDER,
     defaultSamplingOnly: true,
