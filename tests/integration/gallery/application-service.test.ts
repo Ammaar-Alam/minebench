@@ -83,7 +83,7 @@ async function main() {
       prompt: "A hosted observatory",
       gridSize: 64,
       palette: "simple",
-      models: [{ id: "hosted", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+      models: [{ id: "hosted", kind: "catalog", modelKey: "gemini_3_8_flash" }],
       providerKeys: {},
     });
     const hostedRow = await db.customBuild.findUniqueOrThrow({
@@ -92,7 +92,7 @@ async function main() {
     });
     assert.equal(hostedRow.usesHostedGeneration, true);
     assert.equal(hostedRow.preferOpenRouter, true);
-    assert.equal(hostedRow.openRouterModelId, "google/gemini-3.7-flash");
+    assert.equal(hostedRow.openRouterModelId, "google/gemini-3.8-flash");
     assert.equal(hostedRow.secret?.provider, "openrouter");
     assert.notEqual(hostedRow.secret?.keyCiphertext, "hosted-openrouter-secret");
     assert.deepEqual(
@@ -108,7 +108,7 @@ async function main() {
       prompt: "A user-funded observatory",
       gridSize: 64,
       palette: "simple",
-      models: [{ id: "user-funded", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+      models: [{ id: "user-funded", kind: "catalog", modelKey: "gemini_3_8_flash" }],
       providerKeys: { openrouter: "user-openrouter-secret" },
     });
     assert.equal(
@@ -129,7 +129,7 @@ async function main() {
         prompt: "An ineligible hosted model",
         gridSize: 64,
         palette: "simple",
-        models: [{ id: "ineligible", kind: "catalog", modelKey: "openai_gpt_5_4_mini" }],
+        models: [{ id: "ineligible", kind: "catalog", modelKey: "gemini_3_7_flash" }],
         providerKeys: {},
       }),
       (error: unknown) => error instanceof GenerationServiceError && error.code === "missing_provider_key",
@@ -145,7 +145,7 @@ async function main() {
         prompt: "First concurrent hosted build",
         gridSize: 64,
         palette: "simple",
-        models: [{ id: "concurrent-one", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+        models: [{ id: "concurrent-one", kind: "catalog", modelKey: "gemini_3_8_flash" }],
         providerKeys: {},
       }),
       createSavedGenerations({
@@ -153,7 +153,7 @@ async function main() {
         prompt: "Second concurrent hosted build",
         gridSize: 64,
         palette: "simple",
-        models: [{ id: "concurrent-two", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+        models: [{ id: "concurrent-two", kind: "catalog", modelKey: "gemini_3_8_flash" }],
         providerKeys: {},
       }),
     ]);
@@ -181,7 +181,7 @@ async function main() {
       prompt: "A build after the hosted limit",
       gridSize: 64,
       palette: "simple",
-      models: [{ id: "byok-at-limit", kind: "catalog", modelKey: "gemini_3_7_flash" }],
+      models: [{ id: "byok-at-limit", kind: "catalog", modelKey: "gemini_3_8_flash" }],
       providerKeys: { gemini: "user-gemini-secret" },
     });
     assert.equal(
@@ -199,6 +199,7 @@ async function main() {
     await db.customBuild.update({
       where: { id: hostedRow.id },
       data: {
+        modelKey: "gemini_3_7_flash",
         status: "failed",
         currentStage: "failed",
         completedAt: new Date(),
@@ -212,7 +213,11 @@ async function main() {
       data: { status: "failed", completedAt: new Date() },
     });
     await db.customBuildSecret.deleteMany({ where: { customBuildId: hostedRow.id } });
-    assert.equal((await retrySavedGeneration(ownerId, hosted[0]!.id, {})).status, "queued");
+    assert.equal(
+      (await retrySavedGeneration(ownerId, hosted[0]!.id, {})).status,
+      "queued",
+      "previously hosted Gemini models should remain retryable",
+    );
     const hostedRetrySecret = await db.customBuildSecret.findUniqueOrThrow({
       where: { customBuildId: hostedRow.id },
     });

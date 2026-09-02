@@ -43,15 +43,19 @@ async function main() {
   assert.equal(new Set(options.models.map((model) => model.key)).size, options.models.length);
   assert.equal(options.models.some((model) => model.key === "openai_gpt_4_5_web_harness"), false);
   assert.deepEqual(
-    options.models.find((model) => model.key === "gemini_3_7_flash"),
+    options.models.find((model) => model.key === "gemini_3_8_flash"),
     {
-      key: "gemini_3_7_flash",
+      key: "gemini_3_8_flash",
       provider: "gemini",
-      displayName: "Gemini 3.7 Flash",
+      displayName: "Gemini 3.8 Flash",
       directKey: "gemini",
       openRouter: true,
       hostedEligible: true,
     },
+  );
+  assert.equal(
+    options.models.find((model) => model.key === "gemini_3_7_flash")?.hostedEligible,
+    false,
   );
   assert.equal(
     options.models.find((model) => model.key === "qwen_qwen3_8_max")?.directKey,

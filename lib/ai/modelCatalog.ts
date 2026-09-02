@@ -281,6 +281,15 @@ const CATALOG = [
     openRouterModelId: "anthropic/claude-opus-4.8",
   },
   {
+    key: "gemini_3_8_flash",
+    slug: "gemini-3-8-flash",
+    provider: "gemini",
+    modelId: "gemini-3.8-flash",
+    displayName: "Gemini 3.8 Flash",
+    enabled: true,
+    openRouterModelId: "google/gemini-3.8-flash",
+  },
+  {
     key: "gemini_3_7_flash",
     slug: "gemini-3-7-flash",
     provider: "gemini",

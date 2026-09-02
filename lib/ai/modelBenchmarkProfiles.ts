@@ -148,6 +148,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Adaptive" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  gemini_3_8_flash: [
+    { label: "Thinking level", value: "High" },
+    { label: "Sampling", value: "Provider default" },
+  ],
   gemini_3_7_flash: [
     { label: "Thinking level", value: "High" },
     { label: "Sampling", value: "Provider default" },
@@ -272,6 +276,7 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
   anthropic_claude_4_6_opus: exactOutputCap(131_072),
   anthropic_claude_4_7_opus: exactOutputCap(128_000),
   anthropic_claude_4_8_opus: exactOutputCap(128_000),
+  gemini_3_8_flash: exactOutputCap(65_536),
   gemini_3_7_flash: exactOutputCap(65_536),
   gemini_3_6_flash: exactOutputCap(65_536),
   gemini_3_5_flash_lite: exactOutputCap(65_536),
@@ -313,29 +318,32 @@ const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
   anthropic_claude_fable_5_1: {
-    totalCost: { usd: 147.55 },
+    totalCost: { usd: 147.55, attemptCount: 23 },
   },
   zai_glm_5_3_flash: {
-    totalCost: { usd: 0.74 },
+    totalCost: { usd: 0.74, attemptCount: 37 },
   },
   zai_glm_5_3: {
     totalCost: { usd: 6.42, attemptCount: 24 },
   },
+  gemini_3_8_flash: {
+    totalCost: { usd: 1.18, attemptCount: 20 },
+  },
   gemini_3_7_flash: {
-    totalCost: { usd: 1.46 },
+    totalCost: { usd: 1.46, attemptCount: 19 },
   },
   xai_grok_4_6: {
     sourceRelease: "3.13.0",
-    totalCost: { usd: 11.22 },
+    totalCost: { usd: 11.22, attemptCount: 20 },
   },
   openai_gpt_5_6_luna: {
     sourceRelease: "3.12.0",
-    totalCost: { usd: 1.15 },
+    totalCost: { usd: 1.15, attemptCount: 24 },
   },
   qwen_qwen3_8_max: {
     sourceRelease: "3.12.0",
     averageInference: { milliseconds: 1_463_039 },
-    totalCost: { usd: 11.53 },
+    totalCost: { usd: 11.53, attemptCount: 40 },
   },
   openai_gpt_5_6_sol: {
     sourceRelease: "3.9.0",

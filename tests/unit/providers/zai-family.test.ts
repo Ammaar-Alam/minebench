@@ -179,7 +179,10 @@ runProviderConfigTest("zai family", {
     { label: "Reasoning effort", value: "Max" },
     { label: "Sampling", value: "Temperature 1 · Top P 0.95" },
   ]);
-  assert.deepEqual(getModelBenchmarkProfile(flash.key)?.totalCost, { usd: 0.74 });
+  assert.deepEqual(getModelBenchmarkProfile(flash.key)?.totalCost, {
+    usd: 0.74,
+    attemptCount: 37,
+  });
   assert.deepEqual(getModelBenchmarkProfile(flash.key)?.averageInference, {
     milliseconds: 2_239_861,
   });

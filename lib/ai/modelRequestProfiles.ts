@@ -37,6 +37,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
   {
     tokens: 65_536,
     ids: [
+      "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.6-flash",
       "gemini-3.5-flash-lite",
@@ -68,6 +69,7 @@ const DEFAULT_SAMPLING_IDS: readonly string[] = [
   "grok-4.6",
   "kimi-k3",
   "qwen3.8-max",
+  "gemini-3.8-flash",
   "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash-lite",

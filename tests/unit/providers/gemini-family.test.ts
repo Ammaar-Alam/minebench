@@ -31,6 +31,21 @@ type GeminiExpectation = {
 const EXPECTATIONS: GeminiExpectation[] = [
   {
     catalog: {
+      key: "gemini_3_8_flash",
+      provider: "gemini",
+      modelId: "gemini-3.8-flash",
+      displayName: "Gemini 3.8 Flash",
+      openRouterModelId: "google/gemini-3.8-flash",
+      slug: "gemini-3-8-flash",
+    },
+    effortAttempts: ["high", "medium", "low"],
+    unsupportedEffort: { value: "minimal", message: /Supported values: high, medium, low/ },
+    minimalSupported: false,
+    requiresReasoning: true,
+    effortFallbackTrace: "effort_fallback=high->medium->low",
+  },
+  {
+    catalog: {
       key: "gemini_3_7_flash",
       provider: "gemini",
       modelId: "gemini-3.7-flash",

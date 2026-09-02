@@ -232,15 +232,15 @@ assert.ok(
   "API keys should use a flat full-width disclosure with literal labels and shared motion",
 );
 assert.ok(
-  sourceText.includes('model.key === "gemini_3_7_flash"') &&
+  sourceText.includes('model.key === "gemini_3_8_flash"') &&
     !sourceText.includes('model.key === "openai_gpt_5_6_luna"') &&
     sourceText.includes('useState(() => initialPrompt ?? "")') &&
     !sourceText.includes("a pirate ship with sails"),
-  "Generate should start blank with Gemini 3.7 Flash selected",
+  "Generate should start blank with Gemini 3.8 Flash selected",
 );
 assert.ok(
   sourceText.includes("HOSTED_GEMINI_NOTICE_KEY") &&
-    sourceText.includes("Gemini 3.7 Flash is free") &&
+    sourceText.includes("Gemini 3.8 Flash is free") &&
     sourceText.includes("Free right now") &&
     sourceText.includes("No API key needed.") &&
     sourceText.includes("Start free") &&

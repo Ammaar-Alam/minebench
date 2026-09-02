@@ -630,6 +630,28 @@
       "interruptedRunCount": 3,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "gemini_3_8_flash": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 31907429,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 110860,
+      "finalizedAttemptCount": 20,
+      "outputCapTokens": 65536,
+      "providerCallCount": 20,
+      "completedAttemptCount": 20,
+      "rejectedResponseCount": 5,
+      "failedAttemptCount": 5,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

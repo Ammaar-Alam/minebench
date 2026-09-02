@@ -22,5 +22,11 @@ assert.ok(
     generateJob.includes("if (requeued.count !== 1) throw new CustomBuildLeaseLostError()"),
   "failure and retry writes should yield to cancellation or removal",
 );
+assert.ok(
+  generationService.includes("HOSTED_GEMINI_RETRY_MODEL_KEYS") &&
+    generationService.includes('"gemini_3_7_flash"') &&
+    generationService.includes('HOSTED_GEMINI_RETRY_MODEL_KEYS.has(build.modelKey ?? "")'),
+  "historical hosted Gemini retries should still restore the hosted key",
+);
 
 console.log("saved-generation transition checks passed");

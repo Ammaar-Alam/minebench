@@ -27,7 +27,7 @@ assert.deepEqual(gpt56Luna.outputCap, { kind: "exact", tokens: 128_000 });
 assert.equal(gpt56Luna.sourceRelease, "3.12.0");
 assert.deepEqual(gpt56Luna.averageInference, { milliseconds: 804_533 });
 assert.equal(gpt56Luna.averageJsonSizeBytes, 59_966_032);
-assert.deepEqual(gpt56Luna.totalCost, { usd: 1.15 });
+assert.deepEqual(gpt56Luna.totalCost, { usd: 1.15, attemptCount: 24 });
 assert.equal(gpt56Luna.totalAttempts, 24);
 assert.equal(gpt56Luna.buildCount, 15);
 
@@ -41,7 +41,7 @@ assert.deepEqual(grok46.outputCap, { kind: "exact", tokens: 496_000 });
 assert.equal(grok46.sourceRelease, "3.13.0");
 assert.deepEqual(grok46.averageInference, { milliseconds: 623_697 });
 assert.equal(grok46.averageJsonSizeBytes, 103_678_079);
-assert.deepEqual(grok46.totalCost, { usd: 11.22 });
+assert.deepEqual(grok46.totalCost, { usd: 11.22, attemptCount: 20 });
 assert.equal(grok46.totalAttempts, 20);
 assert.equal(grok46.buildCount, 15);
 
@@ -171,6 +171,9 @@ assert.deepEqual(gemini36Flash?.averageInference, { milliseconds: 101_900 });
 assert.deepEqual(gemini36Flash?.totalCost, { usd: 3.22 });
 assert.equal(gemini36Flash?.buildCount, 15);
 
+const gemini38Flash = getModelBenchmarkProfile("gemini_3_8_flash");
+assert.deepEqual(gemini38Flash?.totalCost, { usd: 1.18, attemptCount: 20 });
+
 const gemini37Flash = getModelBenchmarkProfile("gemini_3_7_flash");
 assert.ok(gemini37Flash, "Gemini 3.7 Flash should have verified benchmark details");
 assert.deepEqual(gemini37Flash.parameters, [
@@ -180,7 +183,7 @@ assert.deepEqual(gemini37Flash.parameters, [
 assert.deepEqual(gemini37Flash.outputCap, { kind: "exact", tokens: 65_536 });
 assert.deepEqual(gemini37Flash.averageInference, { milliseconds: 65_219 });
 assert.equal(gemini37Flash.averageJsonSizeBytes, 51_459_756);
-assert.deepEqual(gemini37Flash.totalCost, { usd: 1.46 });
+assert.deepEqual(gemini37Flash.totalCost, { usd: 1.46, attemptCount: 19 });
 assert.equal(gemini37Flash.totalAttempts, 19);
 assert.equal(gemini37Flash.buildCount, 15);
 
@@ -194,7 +197,7 @@ const gemini30Flash = getModelBenchmarkProfile("gemini_3_0_flash");
 assert.deepEqual(gemini30Flash?.outputCap, { kind: "exact", tokens: 65_536 });
 
 const fable51 = getModelBenchmarkProfile("anthropic_claude_fable_5_1");
-assert.deepEqual(fable51?.totalCost, { usd: 147.55 });
+assert.deepEqual(fable51?.totalCost, { usd: 147.55, attemptCount: 23 });
 
 const fable5 = getModelBenchmarkProfile("anthropic_claude_fable_5");
 assert.deepEqual(fable5?.averageInference, { milliseconds: 1_084_400 });
@@ -330,7 +333,7 @@ assert.deepEqual(qwen38?.parameters, [
 assert.equal(qwen38?.sourceRelease, "3.12.0");
 assert.deepEqual(qwen38?.averageInference, { milliseconds: 1_463_039 });
 assert.equal(qwen38?.averageJsonSizeBytes, 15_361_898);
-assert.deepEqual(qwen38?.totalCost, { usd: 11.53 });
+assert.deepEqual(qwen38?.totalCost, { usd: 11.53, attemptCount: 40 });
 assert.equal(qwen38?.totalAttempts, 40);
 assert.deepEqual(
   qwen38?.outputCap,
