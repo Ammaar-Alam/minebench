@@ -68,31 +68,32 @@ assert.ok(
   "a fully tracked Gemini model should render every normalized statistic row",
 );
 
-const lunaMarkup = renderToStaticMarkup(
-  React.createElement(ModelBenchmarkDetailsInline, {
-    id: "gpt-5-6-luna-details",
-    modelKey: "openai_gpt_5_6_luna",
-    displayName: "GPT 5.6 Luna Pro",
-    open: true,
-  }),
-);
-assert.ok(
-  lunaMarkup.includes("$1.15") && lunaMarkup.includes("$0.08 per build"),
-  "GPT 5.6 Luna Pro should render its canonical benchmark total and finalized-build rate",
-);
+const attemptCostSnapshots = [
+  ["openai_gpt_5_6_luna", "GPT 5.6 Luna Pro", "$1.15", "$0.05 per attempt"],
+  ["anthropic_claude_fable_5_1", "Claude Fable 5.1", "$147.55", "$6.42 per attempt"],
+  ["gemini_3_8_flash", "Gemini 3.8 Flash", "$1.18", "$0.06 per attempt"],
+  ["gemini_3_7_flash", "Gemini 3.7 Flash", "$1.46", "$0.08 per attempt"],
+  ["xai_grok_4_6", "Grok 4.6", "$11.22", "$0.56 per attempt"],
+  ["zai_glm_5_3_flash", "Z.AI GLM 5.3 Flash", "$0.74", "$0.02 per attempt"],
+  ["qwen_qwen3_8_max", "Qwen 3.8 Max", "$11.53", "$0.29 per attempt"],
+] as const;
 
-const qwenMarkup = renderToStaticMarkup(
-  React.createElement(ModelBenchmarkDetailsInline, {
-    id: "qwen-details",
-    modelKey: "qwen_qwen3_8_max",
-    displayName: "Qwen 3.8 Max",
-    open: true,
-  }),
-);
-assert.ok(
-  qwenMarkup.includes("$11.53") && qwenMarkup.includes("$0.77 per build"),
-  "Qwen 3.8 Max should render its canonical benchmark total and finalized-build rate",
-);
+for (const [modelKey, displayName, totalCost, averageCost] of attemptCostSnapshots) {
+  const markup = renderToStaticMarkup(
+    React.createElement(ModelBenchmarkDetailsInline, {
+      id: `${modelKey}-details`,
+      modelKey,
+      displayName,
+      open: true,
+    }),
+  );
+  assert.ok(
+    markup.includes(totalCost) &&
+      markup.includes(averageCost) &&
+      !markup.includes("per build"),
+    `${displayName} should divide its cost snapshot by covered attempts`,
+  );
+}
 
 const gemini30Markup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {
