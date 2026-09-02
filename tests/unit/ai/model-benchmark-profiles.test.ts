@@ -277,6 +277,21 @@ assert.equal(
   "release workflow state should not appear in user-facing version metadata",
 );
 
+const museSpark13 = getModelBenchmarkProfile("meta_muse_spark_1_3");
+assert.deepEqual(museSpark13?.parameters, [
+  { label: "Reasoning effort", value: "XHigh" },
+]);
+assert.deepEqual(
+  museSpark13?.outputCap,
+  { kind: "exact", tokens: 131_072 },
+);
+assert.equal(museSpark13?.sourceRelease, undefined);
+assert.deepEqual(museSpark13?.averageInference, { milliseconds: 336_363 });
+assert.equal(museSpark13?.averageJsonSizeBytes, 31_467_747);
+assert.deepEqual(museSpark13?.totalCost, { usd: 6.57, attemptCount: 28 });
+assert.equal(museSpark13?.totalAttempts, 28);
+assert.equal(museSpark13?.buildCount, 15);
+
 const museSpark12 = getModelBenchmarkProfile("meta_muse_spark_1_2");
 assert.deepEqual(museSpark12?.parameters, [
   { label: "Reasoning effort", value: "XHigh" },
