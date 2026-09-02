@@ -32,7 +32,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
   // MiniMax M2.7 rejects the larger MineBench default on its OpenAI-compatible route
   {
     tokens: 131_072,
-    ids: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5", "minimax-m2.7", "muse-spark-1.2"],
+    ids: ["glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5", "minimax-m2.7", "muse-spark-1.3", "muse-spark-1.2"],
   },
   {
     tokens: 65_536,
