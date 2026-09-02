@@ -22,7 +22,7 @@ import { prisma } from "@/lib/prisma";
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
 const GENERATE_JOB_MAX_ATTEMPTS = 2;
-const HOSTED_GEMINI_MODEL_KEY = "gemini_3_7_flash";
+const HOSTED_GEMINI_MODEL_KEY = "gemini_3_8_flash";
 
 export class GenerationServiceError extends Error {
   constructor(
@@ -273,7 +273,7 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
       throw new GenerationServiceError(
         hostedGenerationCount > 0 ? "hosted_generation_limit_reached" : "invalid_request",
         hostedGenerationCount > 0
-          ? "Free Gemini 3.7 Flash limit reached. Add a Gemini or OpenRouter key to continue."
+          ? "Free Gemini 3.8 Flash limit reached. Add a Gemini or OpenRouter key to continue."
           : "Account not found.",
       );
     }

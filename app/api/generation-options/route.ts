@@ -3,7 +3,7 @@ import { isProviderApiKeyName } from "@/lib/ai/providerKeys";
 
 export const runtime = "nodejs";
 
-const HOSTED_GEMINI_MODEL_KEY = "gemini_3_7_flash";
+const HOSTED_GEMINI_MODEL_KEY = "gemini_3_8_flash";
 
 export async function GET() {
   const hostedGeminiAvailable = Boolean(process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim());

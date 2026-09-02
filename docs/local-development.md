@@ -97,7 +97,7 @@ Copy `.env.example` to `.env` and set what you need.
 - `META_MODEL_API_KEY`
 - `ZAI_API_KEY`
 - `OPENROUTER_API_KEY`
-- `MINEBENCH_FREE_OPENROUTER_API_KEY` (server-only key for the signed-in Gemini 3.7 Flash promotion)
+- `MINEBENCH_FREE_OPENROUTER_API_KEY` (server-only key for the signed-in Gemini 3.8 Flash promotion)
 
 ### Optional Provider and Runtime Tuning
 
@@ -124,6 +124,7 @@ Copy `.env.example` to `.env` and set what you need.
 - Claude Opus 5 uses the native Anthropic model ID `claude-opus-5`, reaches its 1M-token context window without a beta header, supports adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap. Its OpenRouter fallback uses `anthropic/claude-opus-5` with the same cap and effort ladder.
 - Claude Sonnet 5 uses the native Anthropic model ID `claude-sonnet-5`, supports adaptive thinking with effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
 - Claude 4.8 Opus uses the native Anthropic model ID `claude-opus-4-8`, supports adaptive effort `low|medium|high|xhigh|max`, and MineBench defaults it to `max` with a 128000-token output cap.
+- Gemini 3.8 Flash uses the native Google AI model ID `gemini-3.8-flash`, supports `thinking_level=high|medium|low`, and MineBench defaults it to `high` with a 65536-token output cap. OpenRouter fallback uses `google/gemini-3.8-flash` with the same cap and mandatory reasoning.
 - Gemini 3.7 Flash uses the native Google AI model ID `gemini-3.7-flash`, supports `thinking_level=high|medium|low`, and MineBench defaults it to `high` with a 65536-token output cap. OpenRouter fallback uses `google/gemini-3.7-flash` with the same cap and mandatory reasoning.
 - Gemini 3.6 Flash uses the native Google AI model ID `gemini-3.6-flash`, supports `thinking_level=high|medium|low|minimal`, and MineBench defaults it to `high` with a 65536-token output cap. OpenRouter fallback uses `google/gemini-3.6-flash` with the same cap and highest reasoning effort.
 - Gemini 3.5 Flash-Lite uses the native Google AI model ID `gemini-3.5-flash-lite`, supports `thinking_level=high|medium|low|minimal`, and MineBench defaults it to `high` with a 65536-token output cap. OpenRouter fallback uses `google/gemini-3.5-flash-lite` with the same cap and highest reasoning effort.

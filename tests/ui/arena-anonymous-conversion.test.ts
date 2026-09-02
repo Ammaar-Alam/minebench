@@ -91,7 +91,7 @@ assert.ok(
     promptBody.includes("onCancel") &&
     promptBody.includes("event.target !== dialog") &&
     sourceText.includes("For a limited time") &&
-    sourceText.includes("Unlimited Gemini 3.7 Flash generations") &&
+    sourceText.includes("Unlimited Gemini 3.8 Flash generations") &&
     sourceText.includes("Sign in to generate free, save your builds, and keep your votes.") &&
     sourceText.includes("No API key needed.") &&
     sourceText.includes("/sign-in?next=/sandbox%3Fmode%3Dlive") &&

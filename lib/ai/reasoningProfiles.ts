@@ -28,7 +28,7 @@ function isGemini3FlashFamily(modelId: string): boolean {
 }
 
 function gemini3FlashThinkingLevels(modelId: string): readonly GeminiThinkingLevel[] {
-  return modelId.endsWith("gemini-3.7-flash")
+  return modelId.endsWith("gemini-3.8-flash") || modelId.endsWith("gemini-3.7-flash")
     ? ["high", "medium", "low"]
     : ["high", "medium", "low", "minimal"];
 }
@@ -232,6 +232,7 @@ export function modelRequiresReasoning(modelId: string): boolean {
     normalized === "z-ai/glm-5.3" ||
     normalized === "glm-5.3-flash" ||
     normalized === "z-ai/glm-5.3-flash" ||
+    normalized === "google/gemini-3.8-flash" ||
     normalized === "google/gemini-3.7-flash" ||
     normalized === "muse-spark-1.2" ||
     normalized === "meta/muse-spark-1.2"

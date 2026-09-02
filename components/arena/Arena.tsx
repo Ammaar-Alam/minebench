@@ -1211,7 +1211,7 @@ function ArenaAccountPrompt({
             id="arena-account-prompt-title"
             className="mt-2 font-display text-2xl font-semibold tracking-tight"
           >
-            Unlimited Gemini 3.7 Flash generations
+            Unlimited Gemini 3.8 Flash generations
           </h2>
           <p
             id="arena-account-prompt-description"

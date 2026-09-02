@@ -113,13 +113,13 @@ const DIRECT_PROVIDER_KEYS = [
 ] as const satisfies ReadonlyArray<readonly [keyof ProviderApiKeys, string]>;
 const OPENROUTER_MODEL_VALUE = "__openrouter__";
 const CUSTOM_MODEL_VALUE = "__custom_api__";
-const HOSTED_GEMINI_MODEL_KEY = "gemini_3_7_flash";
-const HOSTED_GEMINI_NOTICE_KEY = "mb_hosted_gemini_3_7_notice_v1";
+const HOSTED_GEMINI_MODEL_KEY = "gemini_3_8_flash";
+const HOSTED_GEMINI_NOTICE_KEY = "mb_hosted_gemini_3_8_notice_v1";
 let anonymousHostedGeminiNoticeShown = false;
 const ENABLED_MODELS = MODEL_CATALOG.filter((model) => model.enabled);
 const FALLBACK_MODEL_A: ModelKey = ENABLED_MODELS[0]?.key ?? "openai_gpt_5_4_mini";
 const DEFAULT_MODEL_A: ModelKey =
-  ENABLED_MODELS.find((model) => model.key === "gemini_3_7_flash")?.key ?? FALLBACK_MODEL_A;
+  ENABLED_MODELS.find((model) => model.key === "gemini_3_8_flash")?.key ?? FALLBACK_MODEL_A;
 const DEFAULT_MODEL_B: ModelKey =
   ENABLED_MODELS.find(
     (model) => model.key === "openai_gpt_5_4_nano" && model.key !== DEFAULT_MODEL_A
@@ -254,7 +254,7 @@ function HostedGeminiAnnouncement({
         <div>
           <p className="mb-eyebrow">Generate</p>
           <h2 id="hosted-gemini-title" className="mt-2 text-2xl font-semibold tracking-tight">
-            Gemini 3.7 Flash is free
+            Gemini 3.8 Flash is free
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted">
             {signedIn
@@ -1869,7 +1869,7 @@ export function SandboxLive({
           <div className="-mx-4 flex flex-col gap-3 border-y border-accent/20 bg-accent/[0.06] px-4 py-3 sm:-mx-5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
             <div className="min-w-0">
               <div className="mb-eyebrow text-accent">Free right now</div>
-              <div className="mt-1 text-sm font-semibold text-fg">Gemini 3.7 Flash</div>
+              <div className="mt-1 text-sm font-semibold text-fg">Gemini 3.8 Flash</div>
               <div className="mt-0.5 text-xs text-muted">
                 {signedIn ? "No API key needed." : "Sign in. No API key needed."}
               </div>
