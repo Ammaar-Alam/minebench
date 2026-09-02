@@ -89,37 +89,54 @@ runProviderConfigTest(
       assert.ok(address && typeof address !== "string");
       process.env.META_MODEL_API_BASE_URL = `https://meta.test:${address.port}/v1`;
 
-      const model = assertCatalogEntry({
-        key: "meta_muse_spark_1_2",
-        provider: "meta",
-        modelId: "muse-spark-1.2",
-        displayName: "Muse Spark 1.2",
-        openRouterModelId: "meta/muse-spark-1.2",
-        slug: "muse-spark-1-2",
-      });
-      assert.equal(modelRequiresReasoning(model.modelId), true);
-      assert.equal(modelRequiresReasoning(model.openRouterModelId!), true);
+      const expectedModels = [
+        {
+          key: "meta_muse_spark_1_3",
+          provider: "meta",
+          modelId: "muse-spark-1.3",
+          displayName: "Muse Spark 1.3",
+          openRouterModelId: "meta/muse-spark-1.3",
+          slug: "muse-spark-1-3",
+        },
+        {
+          key: "meta_muse_spark_1_2",
+          provider: "meta",
+          modelId: "muse-spark-1.2",
+          displayName: "Muse Spark 1.2",
+          openRouterModelId: "meta/muse-spark-1.2",
+          slug: "muse-spark-1-2",
+        },
+      ] as const;
 
+      for (const expected of expectedModels) {
+        const entry = assertCatalogEntry(expected);
+        assert.equal(modelRequiresReasoning(entry.modelId), true);
+        assert.equal(modelRequiresReasoning(entry.openRouterModelId!), true);
+
+        const effortLadder = ["xhigh", "high", "medium", "low", "minimal"];
+        assert.deepEqual(metaReasoningEffortAttempts(entry.modelId), effortLadder);
+        assert.deepEqual(metaReasoningEffortAttempts(entry.modelId, "medium"), [
+          "medium",
+          "low",
+          "minimal",
+        ]);
+        assert.deepEqual(metaReasoningEffortAttempts(entry.modelId, "minimal"), ["minimal"]);
+        assert.throws(
+          () => metaReasoningEffortAttempts(entry.modelId, "none"),
+          /Supported values: xhigh, high, medium, low, minimal\./,
+        );
+        assert.deepEqual(openRouterReasoningEffortAttempts(entry.openRouterModelId!), effortLadder);
+        assert.throws(
+          () => openRouterReasoningEffortAttempts(entry.openRouterModelId!, "none"),
+          /Supported values: xhigh, high, medium, low, minimal\./,
+        );
+
+        const profile = getModelBenchmarkProfile(entry.key);
+        assert.deepEqual(profile?.parameters, [{ label: "Reasoning effort", value: "XHigh" }]);
+      }
+
+      const model = assertCatalogEntry(expectedModels[0]);
       const effortLadder = ["xhigh", "high", "medium", "low", "minimal"];
-      assert.deepEqual(metaReasoningEffortAttempts(model.modelId), effortLadder);
-      assert.deepEqual(metaReasoningEffortAttempts(model.modelId, "medium"), [
-        "medium",
-        "low",
-        "minimal",
-      ]);
-      assert.deepEqual(metaReasoningEffortAttempts(model.modelId, "minimal"), ["minimal"]);
-      assert.throws(
-        () => metaReasoningEffortAttempts(model.modelId, "none"),
-        /Supported values: xhigh, high, medium, low, minimal\./,
-      );
-      assert.deepEqual(openRouterReasoningEffortAttempts(model.openRouterModelId!), effortLadder);
-      assert.throws(
-        () => openRouterReasoningEffortAttempts(model.openRouterModelId!, "none"),
-        /Supported values: xhigh, high, medium, low, minimal\./,
-      );
-
-      const profile = getModelBenchmarkProfile(model.key);
-      assert.deepEqual(profile?.parameters, [{ label: "Reasoning effort", value: "XHigh" }]);
 
       const direct = await runGeneration(capture, {
         modelKey: model.key,
@@ -134,7 +151,7 @@ runProviderConfigTest(
       assert.ok(directRequest, "Direct Meta Model API request should be captured");
       assert.equal(directRequest.url, `https://meta.test:${address.port}/v1/chat/completions`);
       assert.equal(directRequest.headers.authorization, "Bearer test-meta-key");
-      assert.equal(directRequest.body.model, "muse-spark-1.2");
+      assert.equal(directRequest.body.model, model.modelId);
       assert.equal(directRequest.body.max_completion_tokens, 131_072);
       assert.equal("max_tokens" in directRequest.body, false);
       assert.equal(directRequest.body.reasoning_effort, "xhigh");
@@ -143,7 +160,7 @@ runProviderConfigTest(
       assertTraceLine(
         direct.traces,
         [
-          "Routing via direct meta provider (muse-spark-1.2)",
+          `Routing via direct meta provider (${model.modelId})`,
           "max_output_tokens=131072",
           "thinking_mode=reasoning_effort=xhigh",
           "temperature=1",
@@ -190,7 +207,7 @@ runProviderConfigTest(
       );
       assert.ok(explicitRequest, "Explicit OpenRouter request should be captured");
       assert.equal(explicitRequest.headers.authorization, "Bearer test-openrouter-key");
-      assert.equal(explicitRequest.body.model, "meta/muse-spark-1.2");
+      assert.equal(explicitRequest.body.model, model.openRouterModelId!);
       assert.deepEqual(explicitRequest.body.reasoning, { effort: "xhigh" });
       assertStructuredOutput(explicitRequest.body);
 
@@ -215,7 +232,7 @@ runProviderConfigTest(
       assertTraceLine(
         fallback.traces,
         [
-          "Routing via OpenRouter (meta/muse-spark-1.2)",
+          `Routing via OpenRouter (${model.openRouterModelId!})`,
           "effort_fallback=xhigh->high->medium->low->minimal",
         ],
         "OpenRouter trace should expose the mandatory-reasoning fallback ladder",
