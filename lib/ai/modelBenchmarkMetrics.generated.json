@@ -608,6 +608,28 @@
       "interruptedRunCount": 20,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "anthropic_claude_fable_5_1": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 35728278,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 2411510,
+      "finalizedAttemptCount": 29,
+      "outputCapTokens": 128000,
+      "providerCallCount": 184,
+      "completedAttemptCount": 23,
+      "rejectedResponseCount": 8,
+      "failedAttemptCount": 166,
+      "failedRunCount": 25,
+      "interruptedRunCount": 3,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

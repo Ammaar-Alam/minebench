@@ -312,6 +312,9 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  anthropic_claude_fable_5_1: {
+    totalCost: { usd: 147.55 },
+  },
   zai_glm_5_3_flash: {
     totalCost: { usd: 0.74 },
   },

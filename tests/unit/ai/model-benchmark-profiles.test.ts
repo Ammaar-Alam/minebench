@@ -193,6 +193,9 @@ assert.equal(gemini35FlashLite?.buildCount, 15);
 const gemini30Flash = getModelBenchmarkProfile("gemini_3_0_flash");
 assert.deepEqual(gemini30Flash?.outputCap, { kind: "exact", tokens: 65_536 });
 
+const fable51 = getModelBenchmarkProfile("anthropic_claude_fable_5_1");
+assert.deepEqual(fable51?.totalCost, { usd: 147.55 });
+
 const fable5 = getModelBenchmarkProfile("anthropic_claude_fable_5");
 assert.deepEqual(fable5?.averageInference, { milliseconds: 1_084_400 });
 assert.deepEqual(fable5?.totalCost, { usd: 54.93 });
