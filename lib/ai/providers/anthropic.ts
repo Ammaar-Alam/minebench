@@ -4,6 +4,12 @@ import { attachAbortSignal } from "@/lib/ai/providers/abort";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import {
+  mergeCustomRequestBody,
+  mergeCustomRequestHeaders,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 
 type AnthropicMessageResponse = {
   content?: {
@@ -173,6 +179,8 @@ export async function anthropicGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("Missing ANTHROPIC_API_KEY");
@@ -263,15 +271,15 @@ export async function anthropicGenerateText(params: {
           params.onProviderRequest?.();
           res = await fetch("https://api.anthropic.com/v1/messages", {
             method: "POST",
-            headers: {
+            headers: mergeCustomRequestHeaders({
               "Content-Type": "application/json",
               "x-api-key": apiKey,
               "anthropic-version": "2023-06-01",
               ...(streamResponses ? { Accept: "text/event-stream" } : {}),
               ...(betaHeader ? { "anthropic-beta": betaHeader } : {}),
-            },
+            }, params.customHeaders),
             signal: controller.signal,
-            body: JSON.stringify({
+            body: JSON.stringify(mergeCustomRequestBody({
               model: params.modelId,
               max_tokens: tok,
               ...sampling,
@@ -290,7 +298,7 @@ export async function anthropicGenerateText(params: {
                     },
                   }
                 : {}),
-            }),
+            }, params.customBody, ["output_config.format"])),
           });
           didUseStreaming = streamResponses;
 

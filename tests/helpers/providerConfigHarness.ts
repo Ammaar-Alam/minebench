@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { generateVoxelBuild } from "../../lib/ai/generateVoxelBuild";
 import { getModelByKey, type ModelKey, type Provider } from "../../lib/ai/modelCatalog";
 import { MODEL_KEY_BY_SLUG, MODEL_SLUG } from "../../scripts/uploadsCatalog";
+import type { CustomRequestBody, CustomRequestHeaders } from "../../lib/ai/customProviderConfig";
 
 export type CapturedRequest = {
   url: string;
@@ -179,12 +180,24 @@ export async function runGeneration(
     prompt?: string;
     reasoning?: string;
     preferOpenRouter?: boolean;
+    customHeaders?: CustomRequestHeaders;
+    customBody?: CustomRequestBody;
   },
 ): Promise<GenerationRun> {
   const traces: string[] = [];
   const start = capture.requests.length;
+  const catalogModel = getModelByKey(options.modelKey);
+  const hasOverrides = Boolean(options.customHeaders || options.customBody);
   const result = await generateVoxelBuild({
-    modelKey: options.modelKey,
+    ...(hasOverrides
+      ? {
+          model: {
+            ...catalogModel,
+            customHeaders: options.customHeaders,
+            customBody: options.customBody,
+          },
+        }
+      : { modelKey: options.modelKey }),
     prompt: options.prompt ?? "small tower",
     gridSize: options.gridSize ?? 64,
     palette: "simple",

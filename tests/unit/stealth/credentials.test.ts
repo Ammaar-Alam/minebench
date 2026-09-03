@@ -22,10 +22,13 @@ try {
     requireStructuredOutput: true,
     enableTools: true,
     reasoning: "high",
+    headers: { "X-Tenant": "private-tenant" },
+    body: { reasoning: { effort: "low" }, temperature: 0.4 },
   });
   assert.match(encrypted.encryptedConfig, /^v1\./);
   assert.match(encrypted.fingerprint, /^[a-f0-9]{64}$/);
   assert.equal(encrypted.encryptedConfig.includes("private-lab-key"), false);
+  assert.equal(encrypted.encryptedConfig.includes("private-tenant"), false);
   assert.deepEqual(decryptStealthEndpointConfig(encrypted.encryptedConfig), {
     protocol: "openai-compatible",
     endpointUrl: "https://checkpoints.example.ai/v1",
@@ -35,6 +38,8 @@ try {
     requireStructuredOutput: true,
     enableTools: true,
     reasoning: "high",
+    headers: { "X-Tenant": "private-tenant" },
+    body: { reasoning: { effort: "low" }, temperature: 0.4 },
   });
   assert.deepEqual(
     stealthEndpointConfigToGenerateVoxelBuildArgs(
@@ -48,6 +53,8 @@ try {
         modelId: "checkpoint-2026-08-21",
         displayName: "Ox Alpha",
         baseUrl: "https://checkpoints.example.ai/v1",
+        customHeaders: { "X-Tenant": "private-tenant" },
+        customBody: { reasoning: { effort: "low" }, temperature: 0.4 },
         requireStructuredOutput: true,
       },
       providerKeys: { custom: "private-lab-key" },
@@ -108,6 +115,7 @@ try {
           protocol: "anthropic",
           apiKey: "anthropic-key",
           modelId: "claude-checkpoint",
+          body: { output_config: { effort: "low" } },
         }).encryptedConfig,
       ),
       { key: "stealth_anthropic", displayName: "Ox Anthropic" },
@@ -117,6 +125,7 @@ try {
       provider: "anthropic",
       modelId: "claude-checkpoint",
       displayName: "Ox Anthropic",
+      customBody: { output_config: { effort: "low" } },
     },
   );
   assert.deepEqual(
@@ -136,6 +145,15 @@ try {
 
   const tampered = `${encrypted.encryptedConfig.slice(0, -1)}${encrypted.encryptedConfig.endsWith("a") ? "b" : "a"}`;
   assert.throws(() => decryptStealthEndpointConfig(tampered), /could not be decrypted/);
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "anthropic",
+      apiKey: "key",
+      modelId: "checkpoint",
+      body: { messages: [] },
+    }),
+    /messages is managed by MineBench/,
+  );
   assert.throws(
     () => decryptStealthEndpointConfig(encrypted.encryptedConfig, generateStealthConfigEncryptionKey()),
     /could not be decrypted/,

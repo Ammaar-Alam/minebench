@@ -98,6 +98,21 @@ runProviderConfigTest(
       "Direct DeepSeek trace should report the maximum output and reasoning settings",
     );
 
+    const overridden = await runGeneration(capture, {
+      modelKey: model.key,
+      providerKeys: { deepseek: "test-deepseek-key" },
+      customHeaders: { "X-Request-Profile": "custom" },
+      customBody: { reasoning_effort: "low", thinking: { type: "disabled" } },
+    });
+    const overriddenRequest = overridden.requests.find((request) =>
+      request.url.includes("deepseek.test"),
+    );
+    assert.ok(overriddenRequest);
+    assert.equal(overriddenRequest.headers["x-request-profile"], "custom");
+    assert.equal(overriddenRequest.body.reasoning_effort, "low");
+    assert.deepEqual(overriddenRequest.body.thinking, { type: "disabled" });
+    assert.deepEqual(overriddenRequest.body.response_format, { type: "json_object" });
+
     const openRouter = await runGeneration(capture, {
       modelKey: model.key,
       providerKeys: { openrouter: "test-openrouter-key" },

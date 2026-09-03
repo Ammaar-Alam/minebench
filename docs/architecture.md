@@ -87,15 +87,18 @@ unreferenced artifacts without guessing from path names.
 
 ## Saved generations
 
-Signed-in Sandbox requests enqueue one durable Postgres job per model. The AWS
-worker claims those jobs with renewable leases, calls the selected providers,
-and writes canonical JSON plus derived viewer and thumbnail artifacts to private
-Storage. Persisted progress lets account and Gallery views survive navigation,
-browser closure, and worker restarts.
+Signed-in Sandbox requests enqueue one durable Postgres job per model. Private
+checkpoint runs enqueue one result per benchmark prompt into the same AWS worker.
+Renewable leases, bounded concurrency, and a shared local finalization gate let
+both workloads survive navigation, web deploys, and worker restarts without
+running provider calls inside Vercel Functions.
 
 Provider credentials are encrypted for one job and removed at terminal state.
-Provider calls are bounded so a broken endpoint cannot occupy a worker lane
-forever. Downloads use short-lived private object access.
+Optional request headers and body parameters are validated and encrypted with
+the credential; MineBench-owned prompts, model identity, tools, streaming, and
+output schemas cannot be replaced. Provider calls are bounded so a broken
+endpoint cannot occupy a worker lane forever. Downloads use short-lived private
+object access.
 
 ## Arena delivery and rendering
 

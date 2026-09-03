@@ -142,6 +142,12 @@ async function main() {
     "queue health reporting should continue while the worker drains active jobs",
   );
   assert.ok(
+    workerSource.includes("claimNextStealthGenerationJob") &&
+      workerSource.includes("processClaimedStealthJob") &&
+      workerSource.includes("activeJobs.add(active)"),
+    "private generations should share the persistent worker's global concurrency limit",
+  );
+  assert.ok(
     workerSource.includes('recordActiveGenerations(activeJobs.size, "worker", undefined, false);'),
     "shutdown should report the non-accepting state before a short drain can finish",
   );

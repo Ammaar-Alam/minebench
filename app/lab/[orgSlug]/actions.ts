@@ -3,7 +3,6 @@
 import type { OrganizationRole } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { start as startWorkflow } from "workflow/api";
 import { getLabOrganizationContext } from "@/lib/stealth/auth";
 import type { StealthEndpointProtocol } from "@/lib/stealth/credentials";
 import {
@@ -24,7 +23,10 @@ import {
   type StealthActor,
 } from "@/lib/stealth/service";
 import { startStealthGeneration } from "@/lib/stealth/generationRun";
-import { generateStealthCohortWorkflow } from "@/workflows/stealth-generation";
+import {
+  parseRequestEntries,
+  providerRequestOverridesFromEntries,
+} from "@/lib/ai/customProviderConfig";
 
 type OrganizationActionContext = {
   actor: StealthActor;
@@ -136,6 +138,10 @@ export async function configureEndpointAction(
   formData: FormData,
 ) {
   const context = await organizationContext(orgSlug);
+  const requestOverrides = providerRequestOverridesFromEntries(
+    parseRequestEntries(text(formData, "requestHeaders") || "[]"),
+    parseRequestEntries(text(formData, "requestBody") || "[]"),
+  );
   await configureStealthEndpoint(context.actor, context.organizationId, experimentId, {
     variantId: text(formData, "variantId") || undefined,
     codename: text(formData, "codename"),
@@ -149,6 +155,7 @@ export async function configureEndpointAction(
       requireStructuredOutput: checked(formData, "requireStructuredOutput"),
       enableTools: checked(formData, "enableTools"),
       reasoning: text(formData, "reasoning") || undefined,
+      ...requestOverrides,
     },
   });
   revalidateEvaluation(orgSlug, experimentId);
@@ -195,7 +202,6 @@ export async function startGenerationAction(
       maxAttempts: requiredPositiveInt(formData, "maxAttempts", 3, 10),
       concurrency: requiredPositiveInt(formData, "concurrency", 1, 15),
     },
-    async (runId) => (await startWorkflow(generateStealthCohortWorkflow, [runId])).runId,
   );
   revalidateEvaluation(orgSlug, experimentId);
 }

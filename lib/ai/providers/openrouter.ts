@@ -8,6 +8,12 @@ import { sanitizeGeminiJsonSchema } from "@/lib/ai/providers/gemini";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import {
+  mergeCustomRequestBody,
+  mergeCustomRequestHeaders,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 
 type OpenRouterChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -201,6 +207,8 @@ export async function openrouterGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("Missing OPENROUTER_API_KEY");
@@ -277,15 +285,15 @@ export async function openrouterGenerateText(params: {
             `${baseUrl}/v1/chat/completions`,
             {
               method: "POST",
-              headers: {
+              headers: mergeCustomRequestHeaders({
                 Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://minebench.dev",
                 "X-Title": "MineBench",
                 ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
-              },
+              }, params.customHeaders),
               signal: controller.signal,
-              body: JSON.stringify({
+              body: JSON.stringify(mergeCustomRequestBody({
                 model: params.modelId,
                 messages: [
                   { role: "system", content: params.system },
@@ -305,7 +313,7 @@ export async function openrouterGenerateText(params: {
                 reasoning: reasoningConfig,
                 ...(textVerbosity ? { text: { verbosity: textVerbosity } } : {}),
                 ...(responseFormat ? { response_format: responseFormat } : {}),
-              }),
+              }, params.customBody, ["provider.require_parameters"])),
             },
             {
               tries: 3,

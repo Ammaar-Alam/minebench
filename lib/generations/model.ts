@@ -1,6 +1,7 @@
 import { getModelByKey } from "@/lib/ai/modelCatalog";
 import {
   normalizeCustomProviderRequestConfig,
+  normalizeProviderRequestOverrides,
   type CustomRequestBody,
   type CustomRequestHeaders,
 } from "@/lib/ai/customProviderConfig";
@@ -35,6 +36,7 @@ export async function resolveSavedGenerationModel(
     assertSafeCustomApiUrl,
   },
 ): Promise<ResolvedSavedGenerationModel> {
+  const overrides = normalizeProviderRequestOverrides(request);
   if (request.kind === "custom" && request.provider === "custom") {
     const config = normalizeCustomProviderRequestConfig({
       baseUrl: request.baseUrl,
@@ -50,8 +52,8 @@ export async function resolveSavedGenerationModel(
       modelId: request.modelId,
       modelDisplayName: request.displayName,
       customBaseUrl: config.baseUrl,
-      customHeaders: config.headers,
-      customBody: config.body,
+      customHeaders: overrides.headers,
+      customBody: overrides.body,
       preferOpenRouter: false,
       credential: { provider: "custom", value },
     };
@@ -66,6 +68,8 @@ export async function resolveSavedGenerationModel(
       modelId: request.modelId,
       modelDisplayName: request.displayName,
       openRouterModelId: request.modelId,
+      customHeaders: overrides.headers,
+      customBody: overrides.body,
       preferOpenRouter: false,
       credential: { provider: "openrouter", value },
     };
@@ -82,6 +86,8 @@ export async function resolveSavedGenerationModel(
       modelId: model.modelId,
       modelDisplayName: model.displayName,
       openRouterModelId: model.openRouterModelId,
+      customHeaders: overrides.headers,
+      customBody: overrides.body,
       preferOpenRouter: false,
       credential: {
         provider: model.provider as keyof ProviderApiKeys,
@@ -97,6 +103,8 @@ export async function resolveSavedGenerationModel(
       modelId: model.modelId,
       modelDisplayName: model.displayName,
       openRouterModelId: model.openRouterModelId,
+      customHeaders: overrides.headers,
+      customBody: overrides.body,
       preferOpenRouter: true,
       credential: { provider: "openrouter", value: openRouterKey },
     };

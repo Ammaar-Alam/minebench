@@ -7,11 +7,16 @@ import type { GenerateEvent, GenerateModelRequest, ProviderApiKeys } from "@/lib
 import {
   customProviderRequestConfigFromProfile,
   loadCustomProviderProfile,
-  MAX_CUSTOM_REQUEST_ENTRIES,
+  loadModelRequestOverrideProfiles,
+  providerRequestOverridesFromEntries,
   saveCustomProviderProfile,
+  saveModelRequestOverrideProfiles,
   type CustomProviderProfile,
-  type CustomRequestEntry,
 } from "@/lib/ai/customProviderConfig";
+import {
+  RequestOverridesEditor,
+  type RequestOverridesProfile,
+} from "@/components/generation/RequestOverridesEditor";
 import {
   SandboxGifExportButton,
   type SandboxGifExportTarget,
@@ -43,7 +48,7 @@ type SelectedModelValue =
   | typeof CUSTOM_MODEL_VALUE;
 type GenerationPreflightMode = "free" | "save" | "key";
 
-type SelectedLiveModel =
+type SelectedLiveModel = (
   | {
       id: string;
       kind: "catalog";
@@ -60,6 +65,9 @@ type SelectedLiveModel =
       modelId: string;
       baseUrl?: string;
       profile?: CustomProviderProfile;
+    }) & {
+      requestProfileKey: string;
+      requestProfile: RequestOverridesProfile;
     };
 
 type ModelResult = {
@@ -133,93 +141,7 @@ const DEFAULT_MODEL_B: ModelKey =
   ENABLED_MODELS.find((model) => model.key !== DEFAULT_MODEL_A)?.key ??
   DEFAULT_MODEL_A;
 
-function RequestEntriesEditor({
-  label,
-  addLabel,
-  entries,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  addLabel: string;
-  entries: CustomRequestEntry[];
-  onChange: (entries: CustomRequestEntry[]) => void;
-  disabled: boolean;
-}) {
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex min-h-11 items-center justify-between gap-3">
-        <div className="text-xs font-medium text-muted">{label}</div>
-        <button
-          type="button"
-          className="inline-flex min-h-11 items-center gap-1.5 rounded-sm px-1 text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none"
-          disabled={disabled || entries.length >= MAX_CUSTOM_REQUEST_ENTRIES}
-          onClick={() => onChange([...entries, { name: "", value: "" }])}
-        >
-          <svg aria-hidden="true" viewBox="0 0 16 16" className="h-3.5 w-3.5">
-            <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
-          </svg>
-          {addLabel}
-        </button>
-      </div>
-
-      {entries.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <div className="hidden grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)_2.75rem] gap-2 px-0.5 text-[11px] font-medium text-muted sm:grid">
-            <div>Name</div>
-            <div>Value</div>
-            <span aria-hidden="true" />
-          </div>
-          {entries.map((entry, index) => (
-            <div
-              key={index}
-              className="grid grid-cols-[minmax(0,1fr)_2.75rem] items-center gap-2 sm:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)_2.75rem]"
-            >
-              <input
-                aria-label={`${label} ${index + 1} name`}
-                className="mb-field col-start-1 row-start-1 h-10 min-w-0"
-                value={entry.name}
-                placeholder="Name"
-                maxLength={128}
-                disabled={disabled}
-                spellCheck={false}
-                autoCapitalize="none"
-                onChange={(event) => onChange(entries.map((item, itemIndex) =>
-                  itemIndex === index ? { ...item, name: event.target.value } : item
-                ))}
-              />
-              <input
-                aria-label={`${label} ${index + 1} value`}
-                className="mb-field col-start-1 row-start-2 h-10 min-w-0 sm:col-start-2 sm:row-start-1"
-                value={entry.value}
-                placeholder="Value"
-                maxLength={16_384}
-                disabled={disabled}
-                spellCheck={false}
-                autoCapitalize="none"
-                onChange={(event) => onChange(entries.map((item, itemIndex) =>
-                  itemIndex === index ? { ...item, value: event.target.value } : item
-                ))}
-              />
-              <button
-                type="button"
-                aria-label={`Remove ${label.toLowerCase()} ${index + 1}`}
-                title="Remove"
-                className="col-start-2 row-span-2 row-start-1 inline-flex h-11 w-11 items-center justify-center rounded-sm text-muted transition-colors hover:bg-fg/[0.05] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 motion-reduce:transition-none sm:col-start-3 sm:row-span-1"
-                disabled={disabled}
-                onClick={() => onChange(entries.filter((_, itemIndex) => itemIndex !== index))}
-              >
-                <svg aria-hidden="true" viewBox="0 0 16 16" className="h-4 w-4">
-                  <path d="M3.5 4.5h9M6 2.75h4M5 6.5v5.25m3-5.25v5.25m3-5.25v5.25M4.25 4.5l.5 9h6.5l.5-9" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.25" />
-                </svg>
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </div>
-  );
-}
+const EMPTY_REQUEST_PROFILE: RequestOverridesProfile = { headers: [], body: [] };
 
 function HostedGeminiAnnouncement({
   open,
@@ -655,10 +577,12 @@ export function SandboxLive({
   const [palette, setPalette] = useState<Palette>("simple");
   const [providerKeys, setProviderKeys] = useState<ProviderApiKeys>(() => loadProviderKeysFromStorage());
   const [customModel, setCustomModel] = useState<CustomProviderProfile>(() => loadCustomProviderProfile());
+  const [modelRequestProfiles, setModelRequestProfiles] = useState<Record<string, RequestOverridesProfile>>(
+    () => loadModelRequestOverrideProfiles(),
+  );
   const [customProfileReady, setCustomProfileReady] = useState(false);
   const [openRouterModelId, setOpenRouterModelId] = useState("");
   const [showKeys, setShowKeys] = useState(false);
-  const [customRequestOpen, setCustomRequestOpen] = useState(false);
   const [modelPair, setModelPair] = useState<{ a: SelectedModelValue; b: SelectedModelValue | null }>({
     a: DEFAULT_MODEL_A,
     b: DEFAULT_MODEL_B !== DEFAULT_MODEL_A ? DEFAULT_MODEL_B : null,
@@ -681,9 +605,6 @@ export function SandboxLive({
   const [showHostedGeminiAnnouncement, setShowHostedGeminiAnnouncement] = useState(false);
   const savedKeyCount = Object.entries(providerKeys).filter(
     ([provider, value]) => provider !== "custom" && Boolean(value?.trim()),
-  ).length;
-  const customRequestCount = [...customModel.headers, ...customModel.body].filter(
-    (entry) => Boolean(entry.name.trim() || entry.value.trim()),
   ).length;
   const customProviderOptionLabel =
     customProfileReady && customModel.providerName.trim()
@@ -756,6 +677,12 @@ export function SandboxLive({
           ...(usesOpenRouter
             ? {}
             : { baseUrl: customModel.baseUrl.trim(), profile: customModel }),
+          requestProfileKey: usesOpenRouter
+            ? `openrouter:${openRouterModelId.trim()}`
+            : "custom",
+          requestProfile: usesOpenRouter
+            ? modelRequestProfiles[`openrouter:${openRouterModelId.trim()}`] ?? EMPTY_REQUEST_PROFILE
+            : customModel,
         });
         return;
       }
@@ -767,6 +694,9 @@ export function SandboxLive({
         modelKey: model.key,
         displayName: model.displayName,
         providerLabel: providerLabel(model.provider),
+        requestProfileKey: `catalog:${model.key}`,
+        requestProfile:
+          modelRequestProfiles[`catalog:${model.key}`] ?? EMPTY_REQUEST_PROFILE,
       });
     };
     pushValue(modelPair.a);
@@ -774,7 +704,7 @@ export function SandboxLive({
       pushValue(modelPair.b);
     }
     return picked;
-  }, [compareEnabled, customModel, modelPair.a, modelPair.b, openRouterModelId]);
+  }, [compareEnabled, customModel, modelPair.a, modelPair.b, modelRequestProfiles, openRouterModelId]);
   const inputSignature = useMemo(
     () =>
       [
@@ -784,8 +714,8 @@ export function SandboxLive({
         selectedModels
           .map((model) =>
             model.kind === "catalog"
-              ? model.modelKey
-              : `${model.provider}:${model.displayName}:${model.modelId}:${JSON.stringify(model.profile ?? {})}`,
+              ? `${model.modelKey}:${JSON.stringify(model.requestProfile)}`
+              : `${model.provider}:${model.displayName}:${model.modelId}:${JSON.stringify(model.requestProfile)}`,
           )
           .join("|"),
       ].join("\0"),
@@ -810,6 +740,10 @@ export function SandboxLive({
   useEffect(() => {
     saveCustomProviderProfile(customModel);
   }, [customModel]);
+
+  useEffect(() => {
+    saveModelRequestOverrideProfiles(modelRequestProfiles);
+  }, [modelRequestProfiles]);
 
   useEffect(() => {
     if (!hostedGeminiEnabled || (signedIn && !hostedGeminiAvailable)) {
@@ -922,6 +856,20 @@ export function SandboxLive({
     setCustomModel((prev) => ({ ...prev, ...patch }));
   }
 
+  function updateModelRequestProfile(
+    model: SelectedLiveModel,
+    profile: RequestOverridesProfile,
+  ) {
+    if (model.kind === "custom" && model.provider === "custom") {
+      updateCustomModel(profile);
+      return;
+    }
+    setModelRequestProfiles((current) => ({
+      ...current,
+      [model.requestProfileKey]: profile,
+    }));
+  }
+
   function stopGenerate() {
     if (signedIn) {
       const runId = activeDurableRunRef.current;
@@ -996,10 +944,15 @@ export function SandboxLive({
 
   function customBuildRequestModel(model: SelectedLiveModel): GenerateModelRequest {
     if (model.kind === "catalog") {
+      const overrides = providerRequestOverridesFromEntries(
+        model.requestProfile.headers,
+        model.requestProfile.body,
+      );
       return {
         id: model.id,
         kind: "catalog" as const,
         modelKey: model.modelKey,
+        ...overrides,
       };
     }
     if (model.provider === "custom") {
@@ -1023,6 +976,10 @@ export function SandboxLive({
       provider: "openrouter",
       displayName: model.displayName,
       modelId: model.modelId,
+      ...providerRequestOverridesFromEntries(
+        model.requestProfile.headers,
+        model.requestProfile.body,
+      ),
     };
   }
 
@@ -1222,9 +1179,7 @@ export function SandboxLive({
     setRunning(true);
     setRequestError(null);
     try {
-      const customConfig = model.kind === "custom" && model.provider === "custom"
-        ? customProviderRequestConfigFromProfile(model.profile ?? customModel)
-        : null;
+      const requestModel = customBuildRequestModel(model);
       const response = await fetch(
         `/api/generations/${encodeURIComponent(existing.customBuildId)}/retry`,
         {
@@ -1233,13 +1188,11 @@ export function SandboxLive({
           signal: abortController.signal,
           body: JSON.stringify({
             ...(providerKey ? { providerKey } : {}),
-            ...(customConfig
-              ? {
-                  customBaseUrl: customConfig.baseUrl,
-                  customHeaders: customConfig.headers,
-                  customBody: customConfig.body,
-                }
+            ...(requestModel.kind === "custom" && requestModel.provider === "custom"
+              ? { customBaseUrl: requestModel.baseUrl }
               : {}),
+            customHeaders: requestModel.headers,
+            customBody: requestModel.body,
           }),
         },
       );
@@ -2119,55 +2072,26 @@ export function SandboxLive({
                 />
               </div>
 
-              <div className="border-t border-border/70 pt-2">
-                <button
-                  type="button"
-                  aria-expanded={customRequestOpen}
-                  aria-controls="sandbox-custom-request"
-                  className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                  onClick={() => setCustomRequestOpen((open) => !open)}
-                >
-                  <span className="flex min-w-0 items-baseline gap-2">
-                    <span className="text-xs font-medium text-fg">Headers &amp; body</span>
-                    <span className="truncate text-[11px] text-muted">
-                      {customRequestCount ? `${customRequestCount} set` : "Optional"}
-                    </span>
-                  </span>
-                  <svg
-                    aria-hidden="true"
-                    className={`mb-disclosure-chevron h-3 w-3 shrink-0 text-muted ${customRequestOpen ? "is-open" : ""}`}
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.75"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M4 6.5L8 10.5L12 6.5" />
-                  </svg>
-                </button>
-
-                {customRequestOpen ? (
-                  <div id="sandbox-custom-request" className="mb-fade-in flex flex-col gap-5 pt-3">
-                    <RequestEntriesEditor
-                      label="Headers"
-                      addLabel="Add header"
-                      entries={customModel.headers}
-                      onChange={(headers) => updateCustomModel({ headers })}
-                      disabled={running}
-                    />
-                    <RequestEntriesEditor
-                      label="Body parameters"
-                      addLabel="Add parameter"
-                      entries={customModel.body}
-                      onChange={(body) => updateCustomModel({ body })}
-                      disabled={running}
-                    />
-                  </div>
-                ) : null}
-              </div>
             </div>
           ) : null}
+
+          {selectedModels.map((model) => (
+            <div
+              key={model.requestProfileKey}
+              className="mt-4 border-t border-border/70 pt-2"
+            >
+              {selectedModels.length > 1 ? (
+                <div className="px-1 pt-2 text-[11px] font-medium text-muted">
+                  {model.displayName}
+                </div>
+              ) : null}
+              <RequestOverridesEditor
+                profile={model.requestProfile}
+                onChange={(profile) => updateModelRequestProfile(model, profile)}
+                disabled={running}
+              />
+            </div>
+          ))}
         </section>
 
         {requestError ? (

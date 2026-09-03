@@ -4,6 +4,12 @@ import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { GeminiThinkingConfig } from "@/lib/ai/reasoningProfiles";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import {
+  mergeCustomRequestBody,
+  mergeCustomRequestHeaders,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 
 type JsonSchema = Record<string, unknown>;
 
@@ -102,6 +108,8 @@ export async function geminiGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.GOOGLE_AI_API_KEY;
   if (!apiKey) throw new Error("Missing GOOGLE_AI_API_KEY");
@@ -148,7 +156,10 @@ export async function geminiGenerateText(params: {
           responseJsonSchema,
         },
       };
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      const headers = mergeCustomRequestHeaders(
+        { "Content-Type": "application/json" },
+        params.customHeaders,
+      );
       if (params.onDelta) headers.Accept = "text/event-stream";
       controller.signal.throwIfAborted();
       params.onProviderRequest?.();
@@ -156,7 +167,12 @@ export async function geminiGenerateText(params: {
         method: "POST",
         headers,
         signal: controller.signal,
-        body: JSON.stringify(payload),
+        body: JSON.stringify(
+          mergeCustomRequestBody(payload, params.customBody, [
+            "generationConfig.responseMimeType",
+            "generationConfig.responseJsonSchema",
+          ]),
+        ),
       });
       if (res.ok) {
         successBudget = tok;

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import type { Prisma } from "@prisma/client";
 
 const generateJobSource = readFileSync("lib/custom-builds/generateJob.ts", "utf8");
+const providerSignalSource = readFileSync("lib/generation-worker/providerSignal.ts", "utf8");
 
 const publicId = "cb_123456789012345678901234";
 const customBuildId = "custom-build-row";
@@ -219,7 +220,8 @@ async function main() {
     "durable generations should make at most one automatic repair request",
   );
   assert.ok(
-    generateJobSource.includes("const CUSTOM_BUILD_PROVIDER_TIMEOUT_MS = 90 * 60 * 1000") &&
+    providerSignalSource.includes("const GENERATION_PROVIDER_TIMEOUT_MS = 90 * 60 * 1000") &&
+      generateJobSource.includes("return generationProviderSignal(signal, timeoutMs)") &&
       generateJobSource.includes("customBuildProviderSignal(opts.signal)") &&
       !generateJobSource.includes("if (!manuallyRetryable)"),
     "provider waits should have a 90-minute deadline and terminal failures should always delete credentials",

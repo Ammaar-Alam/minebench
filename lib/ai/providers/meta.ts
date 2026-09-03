@@ -1,5 +1,6 @@
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatible";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import type { CustomRequestBody, CustomRequestHeaders } from "@/lib/ai/customProviderConfig";
 
 const DEFAULT_META_MODEL_API_BASE_URL = "https://api.meta.ai/v1";
 
@@ -16,6 +17,8 @@ export async function metaGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.META_MODEL_API_KEY;
   if (!apiKey) throw new Error("Missing META_MODEL_API_KEY");
@@ -24,6 +27,8 @@ export async function metaGenerateText(params: {
     modelId: params.modelId,
     apiKey,
     baseUrl: process.env.META_MODEL_API_BASE_URL ?? DEFAULT_META_MODEL_API_BASE_URL,
+    customHeaders: params.customHeaders,
+    customBody: params.customBody,
     system: params.system,
     user: params.user,
     maxOutputTokens: params.maxOutputTokens,

@@ -1,7 +1,8 @@
 import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
 import {
-  deserializeCustomProviderRequestConfig,
-  type CustomProviderRequestConfig,
+  deserializeSavedGenerationRequestConfig,
+  requestOverrideSecretValues,
+  type SavedGenerationRequestConfig,
 } from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
@@ -37,6 +38,7 @@ import { packVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "@/lib/voxel/meshFacts";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { generationProviderSignal } from "@/lib/generation-worker/providerSignal";
 
 type GenerateJobPayload = {
   stubBuild?: unknown;
@@ -59,14 +61,12 @@ export type ImportedCustomBuildResult = Required<Pick<
 >>;
 
 const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2;
-const CUSTOM_BUILD_PROVIDER_TIMEOUT_MS = 90 * 60 * 1000;
 
 export function customBuildProviderSignal(
   signal?: AbortSignal,
-  timeoutMs = CUSTOM_BUILD_PROVIDER_TIMEOUT_MS,
+  timeoutMs?: number,
 ): AbortSignal {
-  const deadline = AbortSignal.timeout(timeoutMs);
-  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+  return generationProviderSignal(signal, timeoutMs);
 }
 
 class CustomBuildGenerationFailedError extends Error {
@@ -125,7 +125,7 @@ function customBuildProviderForGeneration(provider: string): Provider | "custom"
 
 export function customBuildModelForGeneration(
   customBuild: CustomBuild,
-  customConfig?: CustomProviderRequestConfig,
+  customConfig?: SavedGenerationRequestConfig,
 ): GenerateVoxelBuildModel {
   return {
     key: customBuild.modelKind === "catalog" && customBuild.modelKey ? customBuild.modelKey : customBuild.publicId,
@@ -282,7 +282,7 @@ async function generateBuild(
   }, customBuild.id);
   const customConfig =
     secret.endpointCiphertext && secret.endpointIv && secret.endpointAuthTag
-      ? deserializeCustomProviderRequestConfig(
+      ? deserializeSavedGenerationRequestConfig(
           decryptSecretValue(
             {
               ciphertext: secret.endpointCiphertext,
@@ -297,6 +297,10 @@ async function generateBuild(
   const gridSize = assertGridSize(customBuild.gridSize);
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
   const providerKeys = providerKeysForSecret(secret.provider, providerKey);
+  const configuredSecrets = [
+    providerKey,
+    ...requestOverrideSecretValues(customConfig ?? {}),
+  ];
   let providerAttempts = 0;
   const providerSignal = customBuildProviderSignal(opts.signal);
 
@@ -317,7 +321,7 @@ async function generateBuild(
         providerAttempts = Math.max(providerAttempts, attempt);
       },
       onRetry: async (attempt, reason) => {
-        const safeReason = safeCustomBuildRetryReason(reason);
+        const safeReason = safeCustomBuildRetryReason(reason, configuredSecrets);
         const retrying = await prisma.customBuild.updateMany({
           where: { id: customBuild.id, removedAt: null, status: "running" },
           data: {
@@ -336,7 +340,8 @@ async function generateBuild(
   throwIfCustomBuildLeaseLost(opts.signal);
   if (!result.ok) {
     throw new CustomBuildGenerationFailedError(
-      redactSensitiveText(result.error, 1_000) || "The model response could not be used.",
+      redactSensitiveText(result.error, 1_000, configuredSecrets) ||
+        "The model response could not be used.",
       Math.max(1, providerAttempts),
     );
   }

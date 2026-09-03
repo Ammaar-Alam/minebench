@@ -3,12 +3,18 @@ import { resolveSavedGenerationModel } from "../../../lib/generations/model";
 
 async function main() {
 const direct = await resolveSavedGenerationModel(
-  { id: "one", kind: "catalog", modelKey: "openai_gpt_5_4_mini" },
+  {
+    id: "one",
+    kind: "catalog",
+    modelKey: "openai_gpt_5_4_mini",
+    body: { reasoning: { effort: "low" } },
+  },
   { openai: "direct-key", openrouter: "router-key" },
 );
 assert.equal(direct.credential.provider, "openai");
 assert.equal(direct.credential.value, "direct-key");
 assert.equal(direct.modelKind, "catalog");
+assert.deepEqual(direct.customBody, { reasoning: { effort: "low" } });
 
 const routed = await resolveSavedGenerationModel(
   { id: "one", kind: "catalog", modelKey: "openai_gpt_5_4_mini" },
@@ -47,12 +53,14 @@ const openRouter = await resolveSavedGenerationModel(
     provider: "openrouter",
     displayName: "Vendor model",
     modelId: "vendor/model",
+    headers: { "X-Provider-Option": "test" },
   },
   { openrouter: "router-key" },
 );
 assert.equal(openRouter.modelKind, "openrouter");
 assert.equal(openRouter.openRouterModelId, "vendor/model");
 assert.equal(openRouter.preferOpenRouter, false);
+assert.deepEqual(openRouter.customHeaders, { "X-Provider-Option": "test" });
 
 const meta = await resolveSavedGenerationModel(
   { id: "meta", kind: "catalog", modelKey: "meta_muse_spark_1_2" },

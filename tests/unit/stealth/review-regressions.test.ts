@@ -91,9 +91,11 @@ for (const functionName of ["disableStealthEndpoint", "recordStealthReleaseMappi
 }
 
 const generationRun = read("lib/stealth/generationRun.ts");
+const providerSignal = read("lib/generation-worker/providerSignal.ts");
 assert.match(generationRun, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
 assert.match(generationRun, /abortSignal:/);
-assert.match(generationRun, /process\.env\.OPENAI_REQUEST_TIMEOUT_MS/);
+assert.match(generationRun, /generationProviderSignal\(params\.signal\)/);
+assert.match(providerSignal, /90 \* 60 \* 1000/);
 for (const functionName of [
   "failStealthGenerationRun",
   "refreshStealthGenerationProgress",
@@ -126,7 +128,7 @@ assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);
 assert.match(generationRun, /deleteUnacceptedStealthBuild\(existing\.id\)/);
 assert.match(generationRun, /select: \{ id: true, generationTimeMs: true \}/);
 assert.match(generationRun, /generationTimeMs: existing\.generationTimeMs/);
-assert.match(generationRun, /sanitizeOperationalError\([\s\S]*configuredApiKey/);
+assert.match(generationRun, /sanitizeOperationalError\([\s\S]*configuredSecrets/);
 assert.match(generationRun, /complete \? "SUCCEEDED"/);
 const protectedBuildRoute = read("app/api/lab/organizations/[orgSlug]/builds/[resultId]/route.ts");
 assert.match(protectedBuildRoute, /generationTimeMs: result\.generationTimeMs \|\| fallbackGenerationTimeMs \|\| 0/);

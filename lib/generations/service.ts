@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Prisma, type CustomBuildArtifactKind } from "@prisma/client";
 import {
   normalizeCustomProviderRequestConfig,
-  serializeCustomProviderRequestConfig,
-  type CustomProviderRequestConfig,
+  normalizeProviderRequestOverrides,
+  serializeSavedGenerationRequestConfig,
+  type SavedGenerationRequestConfig,
   type CustomRequestBody,
   type CustomRequestHeaders,
 } from "@/lib/ai/customProviderConfig";
@@ -247,12 +248,14 @@ export async function createSavedGenerations(input: CreateSavedGenerationsInput)
       provider: model.credential.provider,
       binding: id,
     });
-    const endpoint = model.customBaseUrl
-      ? encryptSecretValue(serializeCustomProviderRequestConfig({
-          baseUrl: model.customBaseUrl,
-          headers: model.customHeaders,
-          body: model.customBody,
-        }), id)
+    const requestConfig = {
+      baseUrl: model.customBaseUrl,
+      headers: model.customHeaders,
+      body: model.customBody,
+    };
+    const endpoint =
+      requestConfig.baseUrl || requestConfig.headers || requestConfig.body
+      ? encryptSecretValue(serializeSavedGenerationRequestConfig(requestConfig), id)
       : null;
     return { id, publicId, model, credential, endpoint, usesHostedGeneration };
   });
@@ -454,25 +457,34 @@ export async function retrySavedGeneration(
   if (!provider || !providerKey) {
     throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
   }
-  let customConfig: CustomProviderRequestConfig | undefined;
+  let requestConfig: SavedGenerationRequestConfig | undefined;
   if (provider === "custom") {
     if (!input.customBaseUrl?.trim()) {
       throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
     }
     try {
-      customConfig = normalizeCustomProviderRequestConfig({
+      requestConfig = normalizeCustomProviderRequestConfig({
         baseUrl: input.customBaseUrl,
         headers: input.customHeaders,
         body: input.customBody,
       });
-      await assertSafeCustomApiUrl(customConfig.baseUrl);
+      await assertSafeCustomApiUrl(requestConfig.baseUrl!);
     } catch {
       throw new GenerationServiceError("invalid_model", "Check the custom model endpoint.");
     }
+  } else {
+    try {
+      requestConfig = normalizeProviderRequestOverrides({
+        headers: input.customHeaders,
+        body: input.customBody,
+      });
+    } catch {
+      throw new GenerationServiceError("invalid_model", "Check the request overrides.");
+    }
   }
   const credential = encryptProviderKey(providerKey, { provider, binding: build.id });
-  const endpoint = customConfig
-    ? encryptSecretValue(serializeCustomProviderRequestConfig(customConfig), build.id)
+  const endpoint = requestConfig && (requestConfig.baseUrl || requestConfig.headers || requestConfig.body)
+    ? encryptSecretValue(serializeSavedGenerationRequestConfig(requestConfig), build.id)
     : null;
 
   await prisma.$transaction(async (tx) => {

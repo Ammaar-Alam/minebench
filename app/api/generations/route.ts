@@ -34,6 +34,8 @@ const model = z.union([
     id: z.string().trim().min(1).max(200),
     kind: z.literal("catalog"),
     modelKey: z.string().trim().min(1).max(200),
+    headers: customHeaders,
+    body: customBody,
   }),
   z.object({
     id: z.string().trim().min(1).max(200),
@@ -51,6 +53,8 @@ const model = z.union([
     provider: z.literal("openrouter"),
     displayName: z.string().trim().min(1).max(120),
     modelId: z.string().trim().min(1).max(240),
+    headers: customHeaders,
+    body: customBody,
   }),
 ]);
 

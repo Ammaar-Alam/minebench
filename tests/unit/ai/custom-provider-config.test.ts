@@ -7,9 +7,13 @@ import {
   customProviderMaxOutputTokens,
   customProviderRequestConfigFromProfile,
   deserializeCustomProviderRequestConfig,
+  deserializeSavedGenerationRequestConfig,
+  mergeCustomRequestBody,
   normalizeCustomProviderRequestConfig,
+  normalizeProviderRequestOverrides,
   parseCustomProviderProfile,
   serializeCustomProviderRequestConfig,
+  serializeSavedGenerationRequestConfig,
 } from "../../../lib/ai/customProviderConfig";
 import { openAiCompatibleGenerateText } from "../../../lib/ai/providers/openaiCompatible";
 
@@ -39,6 +43,33 @@ assert.deepEqual(
   deserializeCustomProviderRequestConfig(serializeCustomProviderRequestConfig(config)),
   config,
 );
+const catalogOverrides = normalizeProviderRequestOverrides({
+  headers: { "X-Request-Mode": "benchmark" },
+  body: {
+    max_output_tokens: 32_768,
+    reasoning: { effort: "low" },
+    text: { verbosity: "low", format: { type: "unsafe" } },
+  },
+});
+assert.equal(customProviderMaxOutputTokens(catalogOverrides.body), 32_768);
+assert.deepEqual(
+  deserializeSavedGenerationRequestConfig(
+    serializeSavedGenerationRequestConfig(catalogOverrides),
+  ),
+  catalogOverrides,
+);
+assert.deepEqual(
+  mergeCustomRequestBody(
+    { text: { format: { type: "json_schema" }, verbosity: "medium" } },
+    catalogOverrides.body,
+    ["text.format"],
+  ),
+  {
+    max_output_tokens: 32_768,
+    reasoning: { effort: "low" },
+    text: { format: { type: "json_schema" }, verbosity: "low" },
+  },
+);
 assert.deepEqual(
   deserializeCustomProviderRequestConfig("https://legacy.example.test/v1/chat/completions"),
   { baseUrl: "https://legacy.example.test/v1/chat/completions" },
@@ -57,6 +88,14 @@ assert.throws(
     body: [{ name: "messages", value: "[]" }],
   }),
   /messages is managed by MineBench/,
+);
+assert.throws(
+  () => normalizeProviderRequestOverrides({ body: { input: "replacement" } }),
+  /input is managed by MineBench/,
+);
+assert.throws(
+  () => normalizeProviderRequestOverrides({ body: { reasoning: { constructor: {} } } }),
+  /constructor cannot be customized/,
 );
 assert.throws(
   () => customProviderRequestConfigFromProfile({

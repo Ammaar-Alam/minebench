@@ -20,11 +20,29 @@ import {
 } from "@/lib/custom-builds/lease";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import {
+  GenerationWorkerLeaseLostError,
+  isGenerationWorkerLeaseLostError,
+  throwIfGenerationWorkerLeaseLost,
+} from "@/lib/generation-worker/lease";
+import {
   recordActiveGenerations,
   recordQueueHeartbeat,
   startActiveGenerationsHeartbeat,
 } from "@/lib/observability/cloudwatch";
 import { prisma } from "@/lib/prisma";
+import {
+  finishStealthGenerationRun,
+  generateStealthPromptForRun,
+} from "@/lib/stealth/generationRun";
+import {
+  claimNextStealthGenerationJob,
+  extendStealthGenerationJobLease,
+  failStealthGenerationJob,
+  getStealthGenerationQueueStats,
+  recoverStaleStealthGenerationJobLeases,
+  renewStealthGenerationJobLease,
+  type StealthGenerationJob,
+} from "@/lib/stealth/jobs";
 
 function readIntEnv(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -123,6 +141,32 @@ function startCustomBuildJobHeartbeat(
   }, getCustomBuildWorkerHeartbeatMs());
 }
 
+function startStealthGenerationJobHeartbeat(
+  job: StealthGenerationJob,
+  workerId: string,
+  controller: AbortController,
+): NodeJS.Timeout {
+  let renewalInFlight = false;
+  return setInterval(() => {
+    if (renewalInFlight || controller.signal.aborted) return;
+    renewalInFlight = true;
+    void renewStealthGenerationJobLease(
+      job.id,
+      workerId,
+      getCustomBuildJobLeaseSeconds(),
+    )
+      .then((renewed) => {
+        if (!renewed) abortLease(controller, "Private generation lease is no longer owned by this worker.");
+      })
+      .catch((error) => {
+        abortLease(controller, `Private generation lease renewal failed: ${redactSensitiveText(error)}`);
+      })
+      .finally(() => {
+        renewalInFlight = false;
+      });
+  }, getCustomBuildWorkerHeartbeatMs());
+}
+
 async function extendLeaseForSynchronousWork(job: CustomBuildJob, workerId: string): Promise<void> {
   let extended = false;
   try {
@@ -138,6 +182,29 @@ async function extendLeaseForSynchronousWork(job: CustomBuildJob, workerId: stri
   }
   if (!extended) {
     throw new CustomBuildLeaseLostError("Custom build job lease is no longer owned by this worker.");
+  }
+}
+
+async function extendStealthLeaseForSynchronousWork(
+  job: StealthGenerationJob,
+  workerId: string,
+): Promise<void> {
+  let extended = false;
+  try {
+    extended = await extendStealthGenerationJobLease(
+      job.id,
+      workerId,
+      getCustomBuildSynchronousExportLeaseMs(),
+    );
+  } catch (error) {
+    throw new GenerationWorkerLeaseLostError(
+      `Private generation lease extension failed: ${redactSensitiveText(error)}`,
+    );
+  }
+  if (!extended) {
+    throw new GenerationWorkerLeaseLostError(
+      "Private generation lease is no longer owned by this worker.",
+    );
   }
 }
 
@@ -225,6 +292,55 @@ async function processClaimedJob(
   }
 }
 
+async function processClaimedStealthJob(
+  job: StealthGenerationJob,
+  workerId: string,
+  processingGate: ReturnType<typeof createCustomBuildProcessingGate>,
+): Promise<void> {
+  const leaseAbort = new AbortController();
+  const heartbeat = startStealthGenerationJobHeartbeat(job, workerId, leaseAbort);
+  let releaseProcessing: (() => void) | undefined;
+  const acquireProcessing = async () => {
+    const release = await processingGate.acquire(leaseAbort.signal);
+    try {
+      throwIfGenerationWorkerLeaseLost(leaseAbort.signal);
+      await extendStealthLeaseForSynchronousWork(job, workerId);
+      throwIfGenerationWorkerLeaseLost(leaseAbort.signal);
+      releaseProcessing = release;
+      return release;
+    } catch (error) {
+      release();
+      throw error;
+    }
+  };
+
+  try {
+    await generateStealthPromptForRun({
+      runId: job.runId,
+      promptId: job.promptId,
+      workerId,
+      signal: leaseAbort.signal,
+      acquireBuildProcessing: acquireProcessing,
+    });
+    throwIfGenerationWorkerLeaseLost(leaseAbort.signal);
+    await finishStealthGenerationRun(job.runId);
+  } catch (error) {
+    if (isGenerationWorkerLeaseLostError(error)) {
+      console.warn(`private generation ${job.id} stopped: ${redactSensitiveText(error)}`);
+      return;
+    }
+    const failed = await failStealthGenerationJob(
+      job.id,
+      workerId,
+      redactSensitiveText(error),
+    );
+    if (failed.runId && !failed.requeued) await finishStealthGenerationRun(failed.runId);
+  } finally {
+    clearInterval(heartbeat);
+    releaseProcessing?.();
+  }
+}
+
 export function isTerminalCustomBuildJobFailure(message: string): boolean {
   return isTerminalCustomBuildGenerateError(message) || [
     "artifact_persistence_failed",
@@ -247,18 +363,28 @@ export async function runCustomBuildWorkerOnce(workerId = getCustomBuildWorkerId
 
 async function checkAndReportQueueHealth(): Promise<void> {
   try {
-    const oldest = await prisma.customBuildJob.findFirst({
-      where: { status: "queued", runAfter: { lte: new Date() } },
-      orderBy: { runAfter: "asc" },
-      select: { runAfter: true },
-    });
-    const queuedCount = await prisma.customBuildJob.count({
-      where: { status: "queued", runAfter: { lte: new Date() } },
-    });
-    const oldestAgeSeconds = oldest
-      ? Math.max(0, (Date.now() - oldest.runAfter.getTime()) / 1000)
+    const now = new Date();
+    const [oldestCustomBuild, customBuildCount, stealth] = await Promise.all([
+      prisma.customBuildJob.findFirst({
+        where: { status: "queued", runAfter: { lte: now } },
+        orderBy: { runAfter: "asc" },
+        select: { runAfter: true },
+      }),
+      prisma.customBuildJob.count({
+        where: { status: "queued", runAfter: { lte: now } },
+      }),
+      getStealthGenerationQueueStats(),
+    ]);
+    const oldestRunAfter = [oldestCustomBuild?.runAfter, stealth.oldestRunAfter]
+      .filter((value): value is Date => Boolean(value))
+      .sort((a, b) => a.getTime() - b.getTime())[0];
+    const oldestAgeSeconds = oldestRunAfter
+      ? Math.max(0, (Date.now() - oldestRunAfter.getTime()) / 1000)
       : 0;
-    recordQueueHeartbeat({ queuedCount, oldestAgeSeconds });
+    recordQueueHeartbeat({
+      queuedCount: customBuildCount + stealth.queuedCount,
+      oldestAgeSeconds,
+    });
   } catch {
     // Non-blocking telemetry
   }
@@ -269,6 +395,7 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   const concurrency = getCustomBuildWorkerConcurrency();
   const processingGate = createCustomBuildProcessingGate();
   const activeJobs = new Set<Promise<unknown>>();
+  let preferStealth = true;
   const heartbeat = startActiveGenerationsHeartbeat(
     () => activeJobs.size,
     () => !shutdownRequested,
@@ -290,12 +417,34 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   try {
     while (!shutdownRequested) {
       await recoverStaleCustomBuildJobLeases();
+      const recovered = await recoverStaleStealthGenerationJobLeases(
+        getCustomBuildJobLeaseSeconds(),
+      );
+      await Promise.all(recovered.failedRunIds.map(finishStealthGenerationRun));
       let claimed = false;
       while (!shutdownRequested && activeJobs.size < concurrency) {
-        const job = await claimNextCustomBuildJob(workerId);
-        if (!job) break;
+        const stealthFirst = preferStealth;
+        preferStealth = !preferStealth;
+        const stealthJob = stealthFirst
+          ? await claimNextStealthGenerationJob(
+              workerId,
+              getCustomBuildJobLeaseSeconds(),
+            )
+          : null;
+        const customJob = stealthJob ? null : await claimNextCustomBuildJob(workerId);
+        const fallbackStealthJob =
+          !stealthJob && !customJob && !stealthFirst
+            ? await claimNextStealthGenerationJob(
+                workerId,
+                getCustomBuildJobLeaseSeconds(),
+              )
+            : null;
+        if (!customJob && !stealthJob && !fallbackStealthJob) break;
         claimed = true;
-        const active = processClaimedJob(job, workerId, processingGate);
+        const privateJob = stealthJob ?? fallbackStealthJob;
+        const active = privateJob
+          ? processClaimedStealthJob(privateJob, workerId, processingGate)
+          : processClaimedJob(customJob!, workerId, processingGate);
         activeJobs.add(active);
         void active.then(
           () => activeJobs.delete(active),

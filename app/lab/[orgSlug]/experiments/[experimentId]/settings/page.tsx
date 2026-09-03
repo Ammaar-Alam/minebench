@@ -4,6 +4,7 @@ import { CohortUploadForm } from "@/components/lab/CohortUploadForm";
 import { formatDate, titleCase } from "@/components/lab/format";
 import { LabDisclosure } from "@/components/lab/LabDisclosure";
 import { LifecycleActionButton } from "@/components/lab/LifecycleActionButton";
+import { EndpointRequestOverrides } from "@/components/lab/EndpointRequestOverrides";
 import {
   closeEvaluationAction,
   configureEndpointAction,
@@ -338,6 +339,7 @@ export default async function EvaluationSettingsPage({
                   Tool support
                 </label>
               </fieldset>
+              <EndpointRequestOverrides />
             </div>
             <div className="flex items-center justify-end gap-3">
               {refreshEndpoint ? (

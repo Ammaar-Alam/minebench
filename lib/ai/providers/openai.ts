@@ -5,6 +5,12 @@ import { VOXEL_BUILD_JSON_SCHEMA_NAME } from "@/lib/ai/voxelBuildJsonSchema";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import {
+  mergeCustomRequestBody,
+  mergeCustomRequestHeaders,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 
 type OpenAIChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -261,6 +267,7 @@ async function pollBackgroundResponse(opts: {
   signal: AbortSignal;
   pollIntervalMs: number;
   onTrace?: (message: string) => void;
+  customHeaders?: CustomRequestHeaders;
 }): Promise<OpenAIResponsesBackgroundResponse> {
   let current: OpenAIResponsesBackgroundResponse = { id: opts.responseId, status: "queued" };
   let status = backgroundStatusOf(current.status);
@@ -275,10 +282,10 @@ async function pollBackgroundResponse(opts: {
         `https://api.openai.com/v1/responses/${encodeURIComponent(opts.responseId)}`,
         {
           method: "GET",
-          headers: {
+          headers: mergeCustomRequestHeaders({
             Authorization: `Bearer ${opts.apiKey}`,
             "Content-Type": "application/json",
-          },
+          }, opts.customHeaders),
           signal: opts.signal,
         },
         { tries: 5, minDelayMs: 1_000, maxDelayMs: 8_000, retryOnHeadersTimeout: true },
@@ -431,6 +438,8 @@ export async function openaiGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
@@ -548,13 +557,15 @@ export async function openaiGenerateText(params: {
             "https://api.openai.com/v1/responses",
             {
               method: "POST",
-              headers: {
+              headers: mergeCustomRequestHeaders({
                 Authorization: `Bearer ${apiKey}`,
                 "Content-Type": "application/json",
                 ...(streamForRequest ? { Accept: "text/event-stream" } : {}),
-              },
+              }, params.customHeaders),
               signal: controller.signal,
-              body: JSON.stringify(payload),
+              body: JSON.stringify(
+                mergeCustomRequestBody(payload, params.customBody, ["text.format"]),
+              ),
             },
             {
               tries: 3,
@@ -635,6 +646,7 @@ export async function openaiGenerateText(params: {
                   signal: controller.signal,
                   pollIntervalMs: backgroundPollIntervalMs,
                   onTrace: params.onTrace,
+                  customHeaders: params.customHeaders,
                 });
               }
             }
@@ -761,12 +773,12 @@ export async function openaiGenerateText(params: {
           "https://api.openai.com/v1/chat/completions",
           {
             method: "POST",
-            headers: {
+            headers: mergeCustomRequestHeaders({
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
               ...(streamResponses ? { Accept: "text/event-stream" } : {}),
-            },
-            body: JSON.stringify({
+            }, params.customHeaders),
+            body: JSON.stringify(mergeCustomRequestBody({
               model: params.modelId,
               temperature,
               max_completion_tokens: tok,
@@ -785,7 +797,7 @@ export async function openaiGenerateText(params: {
                 { role: "system", content: params.system },
                 { role: "user", content: params.user },
               ],
-            }),
+            }, params.customBody)),
           },
           {
             tries: 3,
@@ -886,11 +898,11 @@ export async function openaiGenerateText(params: {
         "https://api.openai.com/v1/chat/completions",
         {
           method: "POST",
-          headers: {
+          headers: mergeCustomRequestHeaders({
             Authorization: `Bearer ${apiKey}`,
             "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
+          }, params.customHeaders),
+          body: JSON.stringify(mergeCustomRequestBody({
             model: params.modelId,
             temperature,
             max_completion_tokens: maxOutputTokens,
@@ -902,7 +914,7 @@ export async function openaiGenerateText(params: {
               { role: "system", content: params.system },
               { role: "user", content: params.user },
             ],
-          }),
+          }, params.customBody)),
         },
         {
           tries: 3,

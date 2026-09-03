@@ -9,6 +9,10 @@ import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { loadProviderKeysFromStorage } from "@/lib/ai/providerKeys";
+import {
+  loadModelRequestOverrideProfiles,
+  providerRequestOverridesFromEntries,
+} from "@/lib/ai/customProviderConfig";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { publishGenerationToGallery } from "@/lib/gallery/client";
 import { downloadSavedGenerationJson } from "@/lib/generations/download";
@@ -121,12 +125,22 @@ function GenerationActions({
         throw new Error("Reconnect this model in Generate.");
       }
       const providerKey = loadProviderKeysFromStorage()[retryProvider]?.trim();
+      const profileKey = generation.model.key
+        ? `catalog:${generation.model.key}`
+        : `openrouter:${generation.model.id}`;
+      const profile = loadModelRequestOverrideProfiles()[profileKey];
+      const overrides = profile
+        ? providerRequestOverridesFromEntries(profile.headers, profile.body)
+        : {};
       const response = await fetch(
         `/api/generations/${encodeURIComponent(generation.id)}/retry`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(providerKey ? { providerKey } : {}),
+          body: JSON.stringify({ ...(providerKey ? { providerKey } : {}),
+            customHeaders: overrides.headers,
+            customBody: overrides.body,
+          }),
         },
       );
       const body = (await response.json().catch(() => null)) as {
