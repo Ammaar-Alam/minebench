@@ -7,6 +7,7 @@ const sourceText = readFileSync(SOURCE_PATH, "utf8");
 const sandboxPageText = readFileSync("app/sandbox/page.tsx", "utf8");
 const sandboxShellText = readFileSync("components/sandbox/Sandbox.tsx", "utf8");
 const preflightText = readFileSync("components/sandbox/GenerationPreflightDialog.tsx", "utf8");
+const requestOverridesText = readFileSync("components/generation/RequestOverridesEditor.tsx", "utf8");
 const generateRouteText = readFileSync("app/api/generate/route.ts", "utf8");
 const sourceFile = ts.createSourceFile(SOURCE_PATH, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 
@@ -265,15 +266,19 @@ assert.ok(
 assert.ok(
   sourceText.includes("loadCustomProviderProfile") &&
     customProviderStorageEffect.includes("saveCustomProviderProfile(customModel)") &&
+    sourceText.includes("loadModelRequestOverrideProfiles") &&
+    sourceText.includes("saveModelRequestOverrideProfiles(modelRequestProfiles)") &&
     sourceText.includes("Provider profile") &&
     sourceText.includes("Saved in this browser") &&
-    sourceText.includes('label="Headers"') &&
-    sourceText.includes('label="Body parameters"') &&
-    sourceText.includes("customHeaders: customConfig.headers") &&
-    sourceText.includes("customBody: customConfig.body") &&
+    sourceText.includes("<RequestOverridesEditor") &&
+    requestOverridesText.includes('label="Headers"') &&
+    requestOverridesText.includes('label="Body parameters"') &&
+    requestModelBody.includes("providerRequestOverridesFromEntries") &&
+    requestModelBody.includes("model.requestProfile.headers") &&
+    requestModelBody.includes("model.requestProfile.body") &&
     !sourceText.includes("value={customModel.displayName}") &&
     !sourceText.includes('className="mt-3 rounded-md border border-border/70 bg-bg/35 p-3"'),
-  "custom providers should persist one flat profile and disclose request fields without a nested card",
+  "every selected model should expose browser-persisted request fields while custom provider identity stays flat",
 );
 
 console.log("sandbox saved-generation contract checks passed");
