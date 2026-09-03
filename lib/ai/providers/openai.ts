@@ -564,7 +564,11 @@ export async function openaiGenerateText(params: {
               }, params.customHeaders),
               signal: controller.signal,
               body: JSON.stringify(
-                mergeCustomRequestBody(payload, params.customBody, ["text.format"]),
+                mergeCustomRequestBody(payload, params.customBody, [
+                  "background",
+                  "store",
+                  "text.format",
+                ]),
               ),
             },
             {

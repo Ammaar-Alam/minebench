@@ -149,7 +149,9 @@ runProviderConfigTest(
       providerKeys: { openai: "test-openai-key" },
       customHeaders: { "X-Request-Profile": "low-effort" },
       customBody: {
+        background: true,
         reasoning: { effort: "low" },
+        store: true,
         text: { verbosity: "low", format: { type: "text" } },
       },
     });
@@ -158,6 +160,8 @@ runProviderConfigTest(
     );
     assert.ok(overriddenRequest);
     assert.equal(overriddenRequest.headers["x-request-profile"], "low-effort");
+    assert.equal(Object.hasOwn(overriddenRequest.body, "background"), false);
+    assert.equal(Object.hasOwn(overriddenRequest.body, "store"), false);
     assert.deepEqual(overriddenRequest.body.reasoning, { effort: "low", mode: "pro" });
     assert.equal(
       (overriddenRequest.body.text as { verbosity?: unknown }).verbosity,
