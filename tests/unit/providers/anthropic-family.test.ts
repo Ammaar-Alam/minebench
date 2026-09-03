@@ -220,6 +220,30 @@ runProviderConfigTest(
       );
     }
 
+    const overridden = await runGeneration(capture, {
+      modelKey: "anthropic_claude_fable_5_1",
+      maxAttempts: 1,
+      providerKeys: { anthropic: "test-anthropic-key" },
+      customHeaders: { "X-Request-Profile": "medium-effort" },
+      customBody: {
+        output_config: { effort: "medium", format: { type: "text" } },
+      },
+    });
+    const overriddenRequest = overridden.requests.find((request) =>
+      request.url.includes("api.anthropic.com"),
+    );
+    assert.ok(overriddenRequest);
+    assert.equal(overriddenRequest.headers["x-request-profile"], "medium-effort");
+    assert.equal(
+      (overriddenRequest.body.output_config as { effort?: unknown }).effort,
+      "medium",
+    );
+    assert.equal(
+      (overriddenRequest.body.output_config as { format?: { type?: unknown } }).format?.type,
+      "json_schema",
+      "custom tuning must not replace MineBench's output schema",
+    );
+
     // Opus 5 benchmark profile pins the published cohort facts
     const opusProfile = getModelBenchmarkProfile("anthropic_claude_opus_5");
     assert.ok(opusProfile, "Claude Opus 5 should have benchmark details");

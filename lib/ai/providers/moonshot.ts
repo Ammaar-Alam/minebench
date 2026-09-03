@@ -6,6 +6,7 @@ import {
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import type { MoonshotThinkingConfig } from "@/lib/ai/reasoningProfiles";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import type { CustomRequestBody, CustomRequestHeaders } from "@/lib/ai/customProviderConfig";
 
 type MoonshotChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -67,6 +68,8 @@ export async function moonshotGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.MOONSHOT_API_KEY;
   if (!apiKey) throw new Error("Missing MOONSHOT_API_KEY");
@@ -90,6 +93,8 @@ export async function moonshotGenerateText(params: {
     looksLikeTokenLimitError,
     signal: params.signal,
     onProviderRequest: params.onProviderRequest,
+    customHeaders: params.customHeaders,
+    customBody: params.customBody,
     buildBody: (tok) => ({
       model: params.modelId,
       messages: [

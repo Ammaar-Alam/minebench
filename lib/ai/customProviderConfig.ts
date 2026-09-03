@@ -6,6 +6,11 @@ export type CustomRequestEntry = {
 export type CustomRequestHeaders = Record<string, string>;
 export type CustomRequestBody = Record<string, unknown>;
 
+export type ProviderRequestOverrides = {
+  headers?: CustomRequestHeaders;
+  body?: CustomRequestBody;
+};
+
 export type CustomProviderProfile = {
   providerName: string;
   modelId: string;
@@ -14,13 +19,16 @@ export type CustomProviderProfile = {
   body: CustomRequestEntry[];
 };
 
-export type CustomProviderRequestConfig = {
+export type CustomProviderRequestConfig = ProviderRequestOverrides & {
   baseUrl: string;
-  headers?: CustomRequestHeaders;
-  body?: CustomRequestBody;
+};
+
+export type SavedGenerationRequestConfig = ProviderRequestOverrides & {
+  baseUrl?: string;
 };
 
 const CUSTOM_PROVIDER_STORAGE_KEY = "mb_custom_provider_profile_v1";
+const MODEL_REQUEST_OVERRIDES_STORAGE_KEY = "mb_model_request_overrides_v1";
 export const MAX_CUSTOM_REQUEST_ENTRIES = 32;
 const MAX_CUSTOM_REQUEST_VALUE_LENGTH = 16_384;
 const MAX_CUSTOM_REQUEST_BYTES = 65_536;
@@ -40,12 +48,20 @@ const BLOCKED_HEADERS = new Set([
 ]);
 const BLOCKED_BODY_FIELDS = new Set([
   "__proto__",
+  "contents",
   "constructor",
+  "input",
+  "instructions",
   "messages",
   "model",
+  "prompt",
   "prototype",
   "response_format",
   "stream",
+  "system",
+  "systeminstruction",
+  "tool_choice",
+  "tools",
 ]);
 
 export function emptyCustomProviderProfile(): CustomProviderProfile {
@@ -72,6 +88,28 @@ function storedEntries(value: unknown): CustomRequestEntry[] {
       name: source.name.slice(0, 128),
       value: source.value.slice(0, MAX_CUSTOM_REQUEST_VALUE_LENGTH),
     }];
+  });
+}
+
+export function parseRequestEntries(value: string): CustomRequestEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("Check the request overrides.");
+  }
+  if (!Array.isArray(parsed) || parsed.length > MAX_CUSTOM_REQUEST_ENTRIES) {
+    throw new Error("Check the request overrides.");
+  }
+  return parsed.map((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error("Check the request overrides.");
+    }
+    const source = entry as Record<string, unknown>;
+    if (typeof source.name !== "string" || typeof source.value !== "string") {
+      throw new Error("Check the request overrides.");
+    }
+    return { name: source.name, value: source.value };
   });
 }
 
@@ -112,6 +150,47 @@ export function saveCustomProviderProfile(profile: CustomProviderProfile): void 
   }
 }
 
+export function loadModelRequestOverrideProfiles(): Record<
+  string,
+  { headers: CustomRequestEntry[]; body: CustomRequestEntry[] }
+> {
+  if (typeof window === "undefined") return {};
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(MODEL_REQUEST_OVERRIDES_STORAGE_KEY) ?? "null",
+    ) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>)
+        .slice(0, 64)
+        .flatMap(([key, value]) => {
+          if (!key || key.length > 512 || !value || typeof value !== "object") return [];
+          const profile = value as Record<string, unknown>;
+          return [[key, {
+            headers: storedEntries(profile.headers),
+            body: storedEntries(profile.body),
+          }]];
+        }),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function saveModelRequestOverrideProfiles(
+  profiles: Record<string, { headers: CustomRequestEntry[]; body: CustomRequestEntry[] }>,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      MODEL_REQUEST_OVERRIDES_STORAGE_KEY,
+      JSON.stringify(Object.fromEntries(Object.entries(profiles).slice(-64))),
+    );
+  } catch {
+    // Local storage can be unavailable in restricted browser contexts
+  }
+}
+
 function assertEntryCount(entries: Array<[string, unknown]>, label: string): void {
   if (entries.length > MAX_CUSTOM_REQUEST_ENTRIES) {
     throw new Error(`Use no more than ${MAX_CUSTOM_REQUEST_ENTRIES} custom ${label}.`);
@@ -143,6 +222,24 @@ function normalizeHeaders(headers: CustomRequestHeaders | undefined): CustomRequ
   return Object.fromEntries(normalized);
 }
 
+function assertSafeJsonValue(value: unknown): void {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number" && Number.isFinite(value)) return;
+  if (Array.isArray(value)) {
+    for (const item of value) assertSafeJsonValue(item);
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    throw new Error("Custom body parameters must be valid JSON values.");
+  }
+  for (const [name, item] of Object.entries(value as Record<string, unknown>)) {
+    if (["__proto__", "constructor", "prototype"].includes(name.toLowerCase())) {
+      throw new Error(`${name} cannot be customized.`);
+    }
+    assertSafeJsonValue(item);
+  }
+}
+
 function normalizeBody(body: CustomRequestBody | undefined): CustomRequestBody {
   const entries = Object.entries(body ?? {});
   assertEntryCount(entries, "body parameters");
@@ -153,13 +250,17 @@ function normalizeBody(body: CustomRequestBody | undefined): CustomRequestBody {
     if (BLOCKED_BODY_FIELDS.has(name.toLowerCase())) {
       throw new Error(`${name} is managed by MineBench and cannot be customized.`);
     }
+    assertSafeJsonValue(value);
     normalized.push([name, value]);
   }
   const result = Object.fromEntries(normalized);
-  if (Object.hasOwn(result, "max_tokens") && Object.hasOwn(result, "max_completion_tokens")) {
-    throw new Error("Use either max_tokens or max_completion_tokens, not both.");
+  const tokenFields = ["max_tokens", "max_completion_tokens", "max_output_tokens"].filter(
+    (name) => Object.hasOwn(result, name),
+  );
+  if (tokenFields.length > 1) {
+    throw new Error("Use only one output token parameter.");
   }
-  for (const name of ["max_tokens", "max_completion_tokens"] as const) {
+  for (const name of ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const) {
     if (!Object.hasOwn(result, name)) continue;
     const value = result[name];
     if (
@@ -184,16 +285,25 @@ function normalizeBody(body: CustomRequestBody | undefined): CustomRequestBody {
   return result;
 }
 
+export function normalizeProviderRequestOverrides(
+  overrides: ProviderRequestOverrides,
+): ProviderRequestOverrides {
+  const headers = normalizeHeaders(overrides.headers);
+  const body = normalizeBody(overrides.body);
+  return {
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    ...(Object.keys(body).length > 0 ? { body } : {}),
+  };
+}
+
 export function normalizeCustomProviderRequestConfig(
   config: CustomProviderRequestConfig,
 ): CustomProviderRequestConfig {
   const baseUrl = config.baseUrl.trim();
-  const headers = normalizeHeaders(config.headers);
-  const body = normalizeBody(config.body);
+  const overrides = normalizeProviderRequestOverrides(config);
   return {
     baseUrl,
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-    ...(Object.keys(body).length > 0 ? { body } : {}),
+    ...overrides,
   };
 }
 
@@ -248,6 +358,54 @@ export function customProviderRequestConfigFromProfile(
   });
 }
 
+export function providerRequestOverridesFromEntries(
+  headers: CustomRequestEntry[],
+  body: CustomRequestEntry[],
+): ProviderRequestOverrides {
+  return normalizeProviderRequestOverrides({
+    headers: entriesToHeaders(headers),
+    body: entriesToBody(body),
+  });
+}
+
+export function serializeSavedGenerationRequestConfig(
+  config: SavedGenerationRequestConfig,
+): string {
+  const baseUrl = config.baseUrl?.trim() || undefined;
+  return JSON.stringify({
+    version: 2,
+    ...(baseUrl ? { baseUrl } : {}),
+    ...normalizeProviderRequestOverrides(config),
+  });
+}
+
+export function deserializeSavedGenerationRequestConfig(
+  value: string,
+): SavedGenerationRequestConfig {
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    parsed = JSON.parse(value) as Record<string, unknown>;
+  } catch {
+    return deserializeCustomProviderRequestConfig(value);
+  }
+  if (parsed.version === 2) {
+    if (parsed.baseUrl !== undefined && typeof parsed.baseUrl !== "string") {
+      throw new Error("Invalid saved generation endpoint URL");
+    }
+    return {
+      ...(typeof parsed.baseUrl === "string" && parsed.baseUrl.trim()
+        ? { baseUrl: parsed.baseUrl.trim() }
+        : {}),
+      ...normalizeProviderRequestOverrides({
+        headers: parsed.headers as CustomRequestHeaders | undefined,
+        body: parsed.body as CustomRequestBody | undefined,
+      }),
+    };
+  }
+  const legacy = deserializeCustomProviderRequestConfig(value);
+  return legacy;
+}
+
 export function serializeCustomProviderRequestConfig(
   config: CustomProviderRequestConfig,
 ): string {
@@ -284,8 +442,116 @@ export function deserializeCustomProviderRequestConfig(
 export function customProviderMaxOutputTokens(
   body: CustomRequestBody | undefined,
 ): number | undefined {
-  const value = body?.max_tokens ?? body?.max_completion_tokens;
+  const value = body?.max_tokens ?? body?.max_completion_tokens ?? body?.max_output_tokens;
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
+}
+
+function mergeJsonObjects(
+  base: Record<string, unknown>,
+  custom: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = { ...base };
+  for (const [name, value] of Object.entries(custom)) {
+    const current = merged[name];
+    merged[name] =
+      current &&
+      value &&
+      typeof current === "object" &&
+      typeof value === "object" &&
+      !Array.isArray(current) &&
+      !Array.isArray(value)
+        ? mergeJsonObjects(
+            current as Record<string, unknown>,
+            value as Record<string, unknown>,
+          )
+        : value;
+  }
+  return merged;
+}
+
+function ownValueAtPath(
+  value: Record<string, unknown>,
+  path: string,
+): { found: boolean; value?: unknown } {
+  let current: unknown = value;
+  for (const part of path.split(".")) {
+    if (
+      !current ||
+      typeof current !== "object" ||
+      Array.isArray(current) ||
+      !Object.hasOwn(current, part)
+    ) {
+      return { found: false };
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return { found: true, value: current };
+}
+
+function setValueAtPath(value: Record<string, unknown>, path: string, next: unknown): void {
+  const parts = path.split(".");
+  let current = value;
+  for (const part of parts.slice(0, -1)) {
+    const child = current[part];
+    if (!child || typeof child !== "object" || Array.isArray(child)) current[part] = {};
+    current = current[part] as Record<string, unknown>;
+  }
+  current[parts.at(-1)!] = next;
+}
+
+function deleteValueAtPath(value: Record<string, unknown>, path: string): void {
+  const parts = path.split(".");
+  const parents: Array<[Record<string, unknown>, string]> = [];
+  let current = value;
+  for (const part of parts.slice(0, -1)) {
+    const child = current[part];
+    if (!child || typeof child !== "object" || Array.isArray(child)) return;
+    parents.push([current, part]);
+    current = child as Record<string, unknown>;
+  }
+  delete current[parts.at(-1)!];
+  for (const [parent, part] of parents.reverse()) {
+    const child = parent[part];
+    if (!child || typeof child !== "object" || Object.keys(child).length > 0) break;
+    delete parent[part];
+  }
+}
+
+export function mergeCustomRequestBody(
+  base: Record<string, unknown>,
+  customBody: CustomRequestBody | undefined,
+  protectedPaths: readonly string[] = [],
+): Record<string, unknown> {
+  const custom = normalizeProviderRequestOverrides({ body: customBody }).body ?? {};
+  const merged = mergeJsonObjects(base, custom);
+  for (const path of protectedPaths) {
+    const managed = ownValueAtPath(base, path);
+    if (managed.found) setValueAtPath(merged, path, managed.value);
+    else deleteValueAtPath(merged, path);
+  }
+  return merged;
+}
+
+export function mergeCustomRequestHeaders(
+  base: CustomRequestHeaders,
+  customHeaders: CustomRequestHeaders | undefined,
+): CustomRequestHeaders {
+  return {
+    ...base,
+    ...(normalizeProviderRequestOverrides({ headers: customHeaders }).headers ?? {}),
+  };
+}
+
+export function requestOverrideSecretValues(overrides: ProviderRequestOverrides): string[] {
+  const values = new Set<string>();
+  const collect = (value: unknown) => {
+    if (typeof value === "string" && value) values.add(value);
+    else if (Array.isArray(value)) value.forEach(collect);
+    else if (value && typeof value === "object") Object.values(value).forEach(collect);
+  };
+  collect(overrides.headers);
+  collect(overrides.body);
+  return [...values];
 }

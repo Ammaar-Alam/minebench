@@ -554,7 +554,9 @@ export async function reclaimStaleStealthGenerationRuns(
       variantId,
       status: "RUNNING",
       startedAt: { lte: cutoff },
-      results: { none: { updatedAt: { gt: cutoff } } },
+      results: {
+        none: { status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
+      },
     },
     select: {
       id: true,
@@ -567,7 +569,13 @@ export async function reclaimStaleStealthGenerationRuns(
   for (const run of staleRuns) {
     await db.stealthGenerationResult.updateMany({
       where: { runId: run.id, status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
-      data: { status: "FAILED", error: "Generation reservation expired" },
+      data: {
+        status: "FAILED",
+        error: "Generation reservation expired",
+        lockedBy: null,
+        lockedAt: null,
+        leaseExpiresAt: null,
+      },
     });
     const completedBuildCount = await db.stealthGenerationResult.count({
       where: { runId: run.id, status: "READY" },

@@ -271,6 +271,11 @@ model StealthGenerationResult {
   generationTimeMs     Int                           @default(0)
   requestConfiguration String?
   error                String?
+  workerAttempts       Int                           @default(0)
+  runAfter             DateTime                      @default(now())
+  lockedBy             String?
+  lockedAt             DateTime?
+  leaseExpiresAt       DateTime?
   createdAt            DateTime                      @default(now())
   updatedAt            DateTime                      @updatedAt
 
@@ -279,6 +284,8 @@ model StealthGenerationResult {
   build  Build?               @relation(fields: [buildId], references: [id], onDelete: SetNull)
 
   @@unique([runId, promptId])
+  @@index([status, runAfter, createdAt])
+  @@index([leaseExpiresAt])
   @@index([promptId])
   @@index([buildId])
 }

@@ -6,6 +6,7 @@ import {
 import { modelRecommendedTopP } from "@/lib/ai/modelRequestProfiles";
 import { consumeSseStream } from "@/lib/ai/providers/sse";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import type { CustomRequestBody, CustomRequestHeaders } from "@/lib/ai/customProviderConfig";
 
 type ZaiChatResponse = {
   choices?: { message?: { content?: unknown } }[];
@@ -51,6 +52,8 @@ export async function zaiGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.ZAI_API_KEY;
   if (!apiKey) throw new Error("Missing ZAI_API_KEY");
@@ -83,6 +86,8 @@ export async function zaiGenerateText(params: {
         looksLikeTokenLimitError,
         signal: params.signal,
         onProviderRequest: params.onProviderRequest,
+        customHeaders: params.customHeaders,
+        customBody: params.customBody,
         buildBody: (tok) => ({
           model: params.modelId,
           messages: [

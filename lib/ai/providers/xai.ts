@@ -1,6 +1,7 @@
 import { modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatible";
 import type { ProviderTelemetryCallbacks } from "@/lib/ai/types";
+import type { CustomRequestBody, CustomRequestHeaders } from "@/lib/ai/customProviderConfig";
 
 export function xaiRequestConfigForModel(
   modelId: string,
@@ -45,6 +46,8 @@ export async function xaiGenerateText(params: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
 } & ProviderTelemetryCallbacks): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.XAI_API_KEY;
   if (!apiKey) throw new Error("Missing XAI_API_KEY");
@@ -61,6 +64,8 @@ export async function xaiGenerateText(params: {
         modelId: params.modelId,
         apiKey,
         baseUrl,
+        customHeaders: params.customHeaders,
+        customBody: params.customBody,
         system: params.system,
         user: params.user,
         maxOutputTokens: params.maxOutputTokens,

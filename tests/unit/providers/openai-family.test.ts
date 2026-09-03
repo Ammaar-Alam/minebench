@@ -143,6 +143,56 @@ runProviderConfigTest(
       );
     }
 
+    const overridden = await runGeneration(capture, {
+      modelKey: "openai_gpt_5_6_sol",
+      maxAttempts: 1,
+      providerKeys: { openai: "test-openai-key" },
+      customHeaders: { "X-Request-Profile": "low-effort" },
+      customBody: {
+        background: true,
+        reasoning: { effort: "low" },
+        store: true,
+        text: { verbosity: "low", format: { type: "text" } },
+      },
+    });
+    const overriddenRequest = overridden.requests.find((request) =>
+      request.url.includes("api.openai.com/v1/responses"),
+    );
+    assert.ok(overriddenRequest);
+    assert.equal(overriddenRequest.headers["x-request-profile"], "low-effort");
+    assert.equal(Object.hasOwn(overriddenRequest.body, "background"), false);
+    assert.equal(Object.hasOwn(overriddenRequest.body, "store"), false);
+    assert.deepEqual(overriddenRequest.body.reasoning, { effort: "low", mode: "pro" });
+    assert.equal(
+      (overriddenRequest.body.text as { verbosity?: unknown }).verbosity,
+      "low",
+    );
+    assert.equal(
+      (overriddenRequest.body.text as { format?: { type?: unknown } }).format?.type,
+      "json_schema",
+      "custom tuning must not replace MineBench's output schema",
+    );
+    const routedOverride = await runGeneration(capture, {
+      modelKey: "openai_gpt_5_6_sol",
+      maxAttempts: 1,
+      providerKeys: { openrouter: "test-openrouter-key" },
+      customHeaders: { "X-Request-Profile": "router-low" },
+      customBody: {
+        reasoning: { effort: "low" },
+        provider: { order: ["OpenAI"], require_parameters: false },
+      },
+    });
+    const routedOverrideRequest = routedOverride.requests.find((request) =>
+      request.url.includes("/chat/completions"),
+    );
+    assert.ok(routedOverrideRequest);
+    assert.equal(routedOverrideRequest.headers["x-request-profile"], "router-low");
+    assert.deepEqual(routedOverrideRequest.body.reasoning, { effort: "low" });
+    assert.deepEqual(routedOverrideRequest.body.provider, {
+      order: ["OpenAI"],
+      require_parameters: true,
+    });
+
     // Background and streamed Responses runs record distinct execution modes
     const syncResult = await generateVoxelBuild({
       modelKey: "openai_gpt_5_6_sol",

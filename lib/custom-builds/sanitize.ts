@@ -5,9 +5,13 @@ const API_KEY_RE =
   /\b(?:sk-or-v1-[A-Za-z0-9_-]+|sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|xai-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9_-]{20,})\b/g;
 const URL_RE = /\bhttps?:\/\/[^\s"'<>]+/gi;
 
-export function redactSensitiveText(value: unknown, maxLength = 2_000): string {
+export function redactSensitiveText(
+  value: unknown,
+  maxLength = 2_000,
+  exactSecrets: readonly string[] = [],
+): string {
   const input = value instanceof Error ? value.message : String(value ?? "");
-  const redacted = input
+  let redacted = input
     .replace(BEARER_TOKEN_RE, "Bearer [redacted]")
     .replace(KEY_VALUE_SECRET_RE, (_match, prefix: string) => {
       const hasQuote = prefix.includes('"') || prefix.includes("'");
@@ -15,11 +19,17 @@ export function redactSensitiveText(value: unknown, maxLength = 2_000): string {
     })
     .replace(API_KEY_RE, "[redacted]")
     .replace(URL_RE, "[redacted-url]");
+  for (const secret of exactSecrets) {
+    if (secret) redacted = redacted.replaceAll(secret, "[redacted]");
+  }
   return redacted.length > maxLength ? `${redacted.slice(0, maxLength)}...` : redacted;
 }
 
-export function safeCustomBuildRetryReason(reason: unknown): string {
-  const redacted = redactSensitiveText(reason, 2_000).trim();
+export function safeCustomBuildRetryReason(
+  reason: unknown,
+  exactSecrets: readonly string[] = [],
+): string {
+  const redacted = redactSensitiveText(reason, 2_000, exactSecrets).trim();
   if (!redacted) {
     return "The first response could not be used.";
   }

@@ -85,7 +85,6 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "three": "^0.184.0",
-    "workflow": "4.8.4",
     "zod": "^3.24.0"
   },
   "devDependencies": {

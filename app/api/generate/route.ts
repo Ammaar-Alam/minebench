@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
-import { normalizeCustomProviderRequestConfig } from "@/lib/ai/customProviderConfig";
+import {
+  normalizeCustomProviderRequestConfig,
+  normalizeProviderRequestOverrides,
+} from "@/lib/ai/customProviderConfig";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { getModelByKey, ModelKey } from "@/lib/ai/modelCatalog";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
@@ -40,6 +43,8 @@ const modelRequestSchema = z.union([
     id: z.string().trim().min(1).max(200),
     kind: z.literal("catalog"),
     modelKey: z.string().trim().min(1).max(200),
+    headers: customHeadersSchema,
+    body: customBodySchema,
   }),
   z.object({
     id: z.string().trim().min(1).max(200),
@@ -57,6 +62,8 @@ const modelRequestSchema = z.union([
     provider: z.literal("openrouter"),
     displayName: z.string().trim().min(1).max(120),
     modelId: z.string().trim().min(1).max(240),
+    headers: customHeadersSchema,
+    body: customBodySchema,
   }),
 ]);
 
@@ -124,16 +131,14 @@ export async function POST(req: Request) {
   }
 
   for (const model of models) {
-    if (model.kind !== "custom" || model.provider !== "custom") continue;
     try {
-      const config = normalizeCustomProviderRequestConfig({
-        baseUrl: model.baseUrl,
-        headers: model.headers,
-        body: model.body,
-      });
-      await assertSafeCustomApiUrl(config.baseUrl);
+      normalizeProviderRequestOverrides(model);
+      if (model.kind === "custom" && model.provider === "custom") {
+        const config = normalizeCustomProviderRequestConfig(model);
+        await assertSafeCustomApiUrl(config.baseUrl);
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid custom API server URL";
+      const message = error instanceof Error ? error.message : "Invalid request overrides";
       return NextResponse.json({ error: message }, { status: 400 });
     }
   }
@@ -209,55 +214,48 @@ export async function POST(req: Request) {
       let pending = models.length;
       for (const model of models) {
         const requestModelKey = model.id;
-        send({ type: "start", modelKey: requestModelKey });
-
-        void generateVoxelBuild(
+        const generationModel =
           model.kind === "catalog"
             ? {
-                modelKey: model.modelKey,
-                prompt: body.prompt,
-                gridSize: body.gridSize,
-                palette: body.palette,
-                maxAttempts: 2,
-                providerKeys,
-                allowServerKeys,
-                abortSignal: req.signal,
-                onRetry: (attempt, reason) =>
-                  send({ type: "retry", modelKey: requestModelKey, attempt, reason }),
-                onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
+                ...getModelByKey(model.modelKey),
+                customHeaders: model.headers,
+                customBody: model.body,
               }
-            : {
-                model:
-                  model.provider === "openrouter"
-                    ? {
-                        key: model.id,
-                        provider: "custom",
-                        modelId: model.modelId,
-                        displayName: model.displayName,
-                        openRouterModelId: model.modelId,
-                        forceOpenRouter: true,
-                      }
-                    : {
-                        key: model.id,
-                        provider: "custom",
-                        modelId: model.modelId,
-                        displayName: model.displayName,
-                        baseUrl: model.baseUrl,
-                        customHeaders: model.headers,
-                        customBody: model.body,
-                      },
-                prompt: body.prompt,
-                gridSize: body.gridSize,
-                palette: body.palette,
-                maxAttempts: 2,
-                providerKeys,
-                allowServerKeys,
-                abortSignal: req.signal,
-                onRetry: (attempt, reason) =>
-                  send({ type: "retry", modelKey: requestModelKey, attempt, reason }),
-                onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
-              },
-        )
+            : model.provider === "openrouter"
+              ? {
+                  key: model.id,
+                  provider: "custom" as const,
+                  modelId: model.modelId,
+                  displayName: model.displayName,
+                  openRouterModelId: model.modelId,
+                  forceOpenRouter: true,
+                  customHeaders: model.headers,
+                  customBody: model.body,
+                }
+              : {
+                  key: model.id,
+                  provider: "custom" as const,
+                  modelId: model.modelId,
+                  displayName: model.displayName,
+                  baseUrl: model.baseUrl,
+                  customHeaders: model.headers,
+                  customBody: model.body,
+                };
+        send({ type: "start", modelKey: requestModelKey });
+
+        void generateVoxelBuild({
+          model: generationModel,
+          prompt: body.prompt,
+          gridSize: body.gridSize,
+          palette: body.palette,
+          maxAttempts: 2,
+          providerKeys,
+          allowServerKeys,
+          abortSignal: req.signal,
+          onRetry: (attempt, reason) =>
+            send({ type: "retry", modelKey: requestModelKey, attempt, reason }),
+          onDelta: (delta) => send({ type: "delta", modelKey: requestModelKey, delta }),
+        })
           .then((r) => {
             if (r.ok) {
               waitUntil(publishGenerationSuccess({

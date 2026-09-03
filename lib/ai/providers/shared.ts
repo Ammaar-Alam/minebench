@@ -3,6 +3,12 @@
 // rules) stay in their own adapter files
 
 import { tokenBudgetCandidates } from "@/lib/ai/tokenBudgets";
+import {
+  mergeCustomRequestBody,
+  mergeCustomRequestHeaders,
+  type CustomRequestBody,
+  type CustomRequestHeaders,
+} from "@/lib/ai/customProviderConfig";
 
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const FALSE_VALUES = new Set(["0", "false", "no", "off"]);
@@ -48,6 +54,8 @@ export async function postChatCompletionWithTokenBudgetRetry(params: {
   stream: boolean;
   looksLikeTokenLimitError: (body: string) => boolean;
   buildBody: (tokenBudget: number) => Record<string, unknown>;
+  customHeaders?: CustomRequestHeaders;
+  customBody?: CustomRequestBody;
   signal?: AbortSignal;
   onProviderRequest?: () => void;
 }): Promise<{ res: Response; acceptedTokenBudget: number }> {
@@ -61,13 +69,13 @@ export async function postChatCompletionWithTokenBudgetRetry(params: {
       // Fetch keeps this signal attached to the returned response body
       res = await fetch(params.url, {
         method: "POST",
-        headers: {
+        headers: mergeCustomRequestHeaders({
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
           ...(params.stream ? { Accept: "text/event-stream" } : {}),
-        },
+        }, params.customHeaders),
         signal: params.signal,
-        body: JSON.stringify(params.buildBody(tok)),
+        body: JSON.stringify(mergeCustomRequestBody(params.buildBody(tok), params.customBody)),
       });
       if (res.ok) {
         selectedTokenBudget = tok;

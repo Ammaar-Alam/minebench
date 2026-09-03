@@ -52,6 +52,8 @@ export type GenerateModelRequest =
       id: string;
       kind: "catalog";
       modelKey: ModelKey;
+      headers?: CustomRequestHeaders;
+      body?: CustomRequestBody;
     }
   | {
       id: string;
@@ -69,6 +71,8 @@ export type GenerateModelRequest =
       provider: "openrouter";
       displayName: string;
       modelId: string;
+      headers?: CustomRequestHeaders;
+      body?: CustomRequestBody;
     };
 
 export type GenerateRequest = {

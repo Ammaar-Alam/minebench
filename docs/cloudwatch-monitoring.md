@@ -33,8 +33,8 @@ All telemetry is emitted under the `MineBench/Production` namespace.
 | `GenerationDuration` | Milliseconds | Generation latency distribution (p50, p90, p95, p99, Min, Max). |
 | `ActiveGenerations` | Count | In-flight generation concurrency gauge. |
 | `WorkerAcceptingJobs` | Count | `1` while the worker accepts jobs and `0` while it drains. |
-| `QueuedJobsCount` | Count | Count of generation jobs waiting in the queue. |
-| `OldestQueuedJobAgeSeconds` | Seconds | Age of the oldest waiting job in queue. |
+| `QueuedJobsCount` | Count | Count of saved-generation and private-checkpoint jobs waiting in the queue. |
+| `OldestQueuedJobAgeSeconds` | Seconds | Age of the oldest waiting generation job. |
 | `GenerationErrors` | Count | Count of failed generation attempts, tagged by error classification. |
 | `mem_used_percent` | Percent | Host memory utilization percentage. |
 | `disk_used_percent` | Percent | Host disk space utilization percentage. |

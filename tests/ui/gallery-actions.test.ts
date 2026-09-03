@@ -74,7 +74,10 @@ assert.ok(
     yours.includes("<VoxelEmptyState") &&
     yours.includes('generation.error?.retryable') &&
     yours.includes('/retry`') &&
-    yours.includes("JSON.stringify(providerKey ? { providerKey } : {})") &&
+    yours.includes("loadModelRequestOverrideProfiles") &&
+    yours.includes("providerRequestOverridesFromEntries") &&
+    yours.includes("customHeaders: overrides.headers") &&
+    yours.includes("customBody: overrides.body") &&
     !yours.includes("Add the required API key") &&
     yours.includes("embedded"),
   "saved builds should open privately, reuse lifecycle placeholders, support retry, and expose owner verification details",

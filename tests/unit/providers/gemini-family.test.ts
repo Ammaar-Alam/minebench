@@ -182,6 +182,29 @@ runProviderConfigTest("gemini family", {}, async (capture) => {
     );
   }
 
+  const overridden = await runGeneration(capture, {
+    modelKey: "gemini_3_8_flash",
+    maxAttempts: 1,
+    providerKeys: { gemini: "test-google-key" },
+    customHeaders: { "X-Request-Profile": "low-thinking" },
+    customBody: {
+      generationConfig: {
+        thinkingConfig: { thinkingLevel: "low" },
+        responseMimeType: "text/plain",
+        responseJsonSchema: { type: "string" },
+      },
+    },
+  });
+  const overriddenRequest = overridden.requests.find((request) =>
+    request.url.includes("generativelanguage.googleapis.com"),
+  );
+  assert.ok(overriddenRequest);
+  assert.equal(overriddenRequest.headers["x-request-profile"], "low-thinking");
+  const overriddenConfig = overriddenRequest.body.generationConfig as Record<string, unknown>;
+  assert.deepEqual(overriddenConfig.thinkingConfig, { thinkingLevel: "low" });
+  assert.equal(overriddenConfig.responseMimeType, "application/json");
+  assert.notDeepEqual(overriddenConfig.responseJsonSchema, { type: "string" });
+
   // Gemini 3.0 Flash keeps its exact provider output limit
   const gemini30 = await runGeneration(capture, {
     modelKey: "gemini_3_0_flash",

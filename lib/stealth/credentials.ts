@@ -7,6 +7,10 @@ import {
 import net from "node:net";
 import { isDisallowedIpAddress } from "@/lib/ai/providers/customApiGuard";
 import type { GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
+import {
+  normalizeProviderRequestOverrides,
+  requestOverrideSecretValues,
+} from "@/lib/ai/customProviderConfig";
 import { z } from "zod";
 
 const ENVELOPE_VERSION = "v1";
@@ -39,6 +43,8 @@ export const stealthEndpointConfigSchema = z.object({
   requireStructuredOutput: z.boolean().default(true),
   enableTools: z.boolean().default(true),
   reasoning: z.string().trim().min(1).max(64).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
+  body: z.record(z.string(), z.unknown()).optional(),
 }).superRefine((config, ctx) => {
   const endpointUrl = config.endpointUrl.trim();
   const openAiCompatible =
@@ -176,8 +182,10 @@ function canonicalConfig(config: StealthEndpointConfigInput): CanonicalStealthEn
       ? "openai-compatible"
       : parsed.protocol;
   const reasoning = parsed.reasoning?.trim();
+  const { headers: _headers, body: _body, ...withoutOverrides } = parsed;
   const canonical = {
-    ...parsed,
+    ...withoutOverrides,
+    ...normalizeProviderRequestOverrides(parsed),
     protocol,
     endpointUrl:
       protocol === "openai-compatible"
@@ -202,6 +210,10 @@ export function stealthEndpointConfigToGenerateVoxelBuildArgs(
     reasoning: config.reasoning,
     maxOutputTokens: config.maxOutputTokens,
   };
+  const requestOverrides = {
+    ...(config.headers ? { customHeaders: config.headers } : {}),
+    ...(config.body ? { customBody: config.body } : {}),
+  };
 
   if (config.protocol === "openai-compatible") {
     return {
@@ -212,6 +224,7 @@ export function stealthEndpointConfigToGenerateVoxelBuildArgs(
         modelId: config.modelId,
         displayName: identity.displayName,
         baseUrl: config.endpointUrl,
+        ...requestOverrides,
         requireStructuredOutput: config.requireStructuredOutput,
       },
       providerKeys: { custom: config.apiKey },
@@ -228,6 +241,7 @@ export function stealthEndpointConfigToGenerateVoxelBuildArgs(
         displayName: identity.displayName,
         openRouterModelId: config.modelId,
         forceOpenRouter: true,
+        ...requestOverrides,
         requireStructuredOutput: config.requireStructuredOutput,
       },
       providerKeys: { openrouter: config.apiKey },
@@ -241,9 +255,14 @@ export function stealthEndpointConfigToGenerateVoxelBuildArgs(
       provider: config.protocol,
       modelId: config.modelId,
       displayName: identity.displayName,
+      ...requestOverrides,
     },
     providerKeys: { [config.protocol]: config.apiKey },
   };
+}
+
+export function stealthEndpointSecretValues(config: StealthEndpointConfig): string[] {
+  return [config.apiKey, ...requestOverrideSecretValues(config)];
 }
 
 export function generateStealthConfigEncryptionKey(): string {
