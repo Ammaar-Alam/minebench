@@ -4,6 +4,7 @@ import { GenerationPoller } from "@/components/lab/GenerationPoller";
 import { LifecycleActionButton } from "@/components/lab/LifecycleActionButton";
 import { ProgressRail } from "@/components/lab/ProgressRail";
 import { formatDate, titleCase } from "@/components/lab/format";
+import { shouldPollStealthGeneration } from "@/lib/stealth/generationPolling";
 import {
   activateEvaluationAction,
   pauseEvaluationAction,
@@ -37,9 +38,7 @@ export default async function EvaluationOverviewPage({
 }) {
   const { orgSlug, experimentId } = await params;
   const { workspace } = await loadEvaluationWorkspace(orgSlug, experimentId);
-  const generationActive = workspace.checkpoints.some(
-    (checkpoint) => checkpoint.latestGenerationRun?.status === "RUNNING",
-  );
+  const generationActive = workspace.checkpoints.some(shouldPollStealthGeneration);
   const basePath = `/lab/${orgSlug}/experiments/${experimentId}`;
   const activateAction = activateEvaluationAction.bind(null, orgSlug, experimentId);
   const pauseAction = pauseEvaluationAction.bind(null, orgSlug, experimentId);

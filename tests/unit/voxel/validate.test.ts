@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 import { getPalette } from "../../../lib/blocks/palettes";
-import { validateVoxelBuild } from "../../../lib/voxel/validate";
+import { validateOwnedVoxelBuild, validateVoxelBuild } from "../../../lib/voxel/validate";
 
 const MEMORY_CHILD = "MINEBENCH_VALIDATE_MEMORY_CHILD";
 
@@ -85,6 +85,36 @@ async function main() {
   assert.equal(overLimit.ok, false);
   if (overLimit.ok) throw new Error("Expected the max-block check to fail");
   assert.equal(overLimit.error, "Too many blocks (2) > maxBlocks (1)");
+
+  const uploadedInput = {
+    version: "1.0" as const,
+    blocks: [{ x: 1, y: 2, z: 3, type: "stone" }],
+  };
+  const uploaded = validateOwnedVoxelBuild(
+    uploadedInput,
+    { gridSize: 8, palette: getPalette("simple"), maxBlocks: 8 ** 3 },
+  );
+  assert.equal(uploaded.ok && uploaded.value.build.blocks.length, 1);
+  assert.equal(uploadedInput.blocks.length, 0);
+  assert.deepEqual(
+    validateOwnedVoxelBuild(
+      { version: "1.0", blocks: [{ x: 1.5, y: 2, z: 3, type: "stone" }] },
+      { gridSize: 8, palette: getPalette("simple"), maxBlocks: 8 ** 3 },
+    ),
+    { ok: false, error: "Invalid block at index 0" },
+  );
+
+  const oversizedPrimitive = validateOwnedVoxelBuild(
+    {
+      version: "1.0",
+      blocks: [],
+      boxes: [{ x1: 0, y1: 0, z1: 0, x2: 255, y2: 255, z2: 255, type: "stone" }],
+    },
+    { gridSize: 256, palette: getPalette("simple"), maxBlocks: 4_000_000 },
+  );
+  assert.equal(oversizedPrimitive.ok, false);
+  if (oversizedPrimitive.ok) throw new Error("Expected primitive expansion to be bounded");
+  assert.match(oversizedPrimitive.error, /Too many blocks/);
 
   const require = createRequire(import.meta.url);
   const memoryResult = spawnSync(

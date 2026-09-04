@@ -7,6 +7,7 @@ import type {
   CustomBuildArtifactKind,
   CustomBuildStorageEncoding,
 } from "@/lib/custom-builds/types";
+import { uploadSupabaseStorageFile } from "@/lib/storage/buildPayload";
 import { getSupabaseStorageConfig, LOCAL_BUILD_STORAGE_BUCKET } from "@/lib/storage/config";
 
 const DEFAULT_CUSTOM_BUILD_STORAGE_BUCKET = "builds";
@@ -276,26 +277,14 @@ export async function uploadCustomBuildArtifactFile(
     return;
   }
 
-  const config = getSupabaseStorageConfig();
-  const encodedPath = encodeStoragePath(args.path);
-  const url = `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      apikey: config.serviceRoleKey,
-      "x-upsert": "true",
-      "Content-Type": args.contentType,
-      "Content-Length": String(args.byteSize),
-      ...(args.encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}),
-    },
-    body: createReadStream(args.filePath) as unknown as BodyInit,
-    duplex: "half",
-  } as RequestInit & { duplex: "half" });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Custom build artifact upload failed (${resp.status}): ${text || "empty response"}`);
-  }
+  await uploadSupabaseStorageFile({
+    bucket,
+    path: args.path,
+    filePath: args.filePath,
+    byteSize: args.byteSize,
+    contentType: args.contentType,
+    encoding: args.encoding === "gzip" ? "gzip" : undefined,
+  });
 }
 
 export async function createCustomBuildArtifactSignedUrl(args: {

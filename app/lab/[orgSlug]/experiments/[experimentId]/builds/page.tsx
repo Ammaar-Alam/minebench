@@ -5,6 +5,7 @@ import {
   ProtectedBuildInspector,
   type ProtectedBuildOption,
 } from "@/components/lab/ProtectedBuildInspector";
+import { shouldPollStealthGeneration } from "@/lib/stealth/generationPolling";
 import { startGenerationAction } from "../../../actions";
 import { loadEvaluationReport } from "../data";
 
@@ -15,14 +16,13 @@ export default async function EvaluationBuildsPage({
 }) {
   const { orgSlug, experimentId } = await params;
   const { workspace, report } = await loadEvaluationReport(orgSlug, experimentId);
-  const generationActive = workspace.checkpoints.some(
-    (checkpoint) => checkpoint.latestGenerationRun?.status === "RUNNING",
-  );
+  const generationActive = workspace.checkpoints.some(shouldPollStealthGeneration);
   const pendingCheckpoints = workspace.checkpoints.filter(
     (checkpoint) =>
-      checkpoint.latestGenerationRun?.status === "RUNNING" ||
-      !checkpoint.promptCohortCurrent ||
-      checkpoint.currentGeneratedBuildCount < checkpoint.currentExpectedBuildCount,
+      checkpoint.status !== "WITHDRAWN" &&
+      (checkpoint.latestGenerationRun?.status === "RUNNING" ||
+        !checkpoint.promptCohortCurrent ||
+        checkpoint.currentGeneratedBuildCount < checkpoint.currentExpectedBuildCount),
   );
   const builds: ProtectedBuildOption[] = report.variants.flatMap((variant) =>
     variant.builds.map((build) => ({
@@ -30,6 +30,7 @@ export default async function EvaluationBuildsPage({
       resultId: build.resultId,
       checkpointId: variant.id,
       checkpoint: variant.codename,
+      checkpointStatus: variant.status,
       promptId: build.promptId,
       prompt: build.prompt,
       status: build.status,
@@ -48,16 +49,17 @@ export default async function EvaluationBuildsPage({
           {pendingCheckpoints.length > 0 ? (
             <section className="overflow-hidden rounded-md border border-border/70" aria-labelledby="generation-heading">
               <div className="flex items-center justify-between gap-4 bg-card/20 px-4 py-3">
-                <h2 id="generation-heading" className="text-sm font-medium text-fg">Generation</h2>
+                <h2 id="generation-heading" className="text-sm font-medium text-fg">Build progress</h2>
                 <span className="font-mono text-[10px] tabular-nums text-muted">
-                  {pendingCheckpoints.length} pending
+                  {pendingCheckpoints.length} incomplete
                 </span>
               </div>
               <div className="divide-y divide-border/50">
                 {pendingCheckpoints.map((checkpoint) => {
-                  const running = checkpoint.latestGenerationRun?.status === "RUNNING";
+                  const running = shouldPollStealthGeneration(checkpoint);
                   const canStart =
                     workspace.status !== "CLOSED" &&
+                    checkpoint.source === "ENDPOINT" &&
                     checkpoint.credentialConfigured &&
                     !running &&
                     (!checkpoint.promptCohortCurrent ||
@@ -131,6 +133,13 @@ export default async function EvaluationBuildsPage({
                                 : "Generate"}
                           </button>
                         </form>
+                      ) : checkpoint.source === "UPLOAD" ? (
+                        <Link
+                          href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                          className="mb-btn mb-btn-ghost min-h-11 px-4 text-xs"
+                        >
+                          Upload builds
+                        </Link>
                       ) : !checkpoint.promptCohortCurrent && !running ? (
                         <Link
                           href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
@@ -146,14 +155,21 @@ export default async function EvaluationBuildsPage({
                           <span className="min-w-0 break-words">
                             <span className="font-medium">Error:</span> {checkpoint.lastGenerationError}
                           </span>
-                          {checkpoint.status === "DRAFT" && checkpoint.source === "ENDPOINT" ? (
+                          {checkpoint.source === "ENDPOINT" ? (
                             <Link
                               href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
                               className="shrink-0 font-medium text-fg underline hover:text-accent"
                             >
                               Edit endpoint settings
                             </Link>
-                          ) : null}
+                          ) : (
+                            <Link
+                              href={`/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                              className="shrink-0 font-medium text-fg underline hover:text-accent"
+                            >
+                              Review uploads
+                            </Link>
+                          )}
                         </div>
                       ) : null}
                     </article>

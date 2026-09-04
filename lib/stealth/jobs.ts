@@ -23,7 +23,15 @@ export async function claimNextStealthGenerationJob(
       WHERE result.status = 'QUEUED'::"StealthGenerationResultStatus"
         AND result."runAfter" <= now()
         AND run.status = 'RUNNING'::"StealthGenerationRunStatus"
-        AND variant."endpointEnabled" = true
+        AND (
+          (variant.source = 'ENDPOINT'::"StealthVariantSource" AND variant."endpointEnabled" = true)
+          OR (
+            variant.source = 'UPLOAD'::"StealthVariantSource"
+            AND result."uploadQueuedAt" IS NOT NULL
+            AND result."uploadBucket" IS NOT NULL
+            AND result."uploadPath" IS NOT NULL
+          )
+        )
         AND experiment.status IN (
           'DRAFT'::"StealthExperimentStatus",
           'GENERATING'::"StealthExperimentStatus",
@@ -215,10 +223,24 @@ export async function getStealthGenerationQueueStats(
   const now = new Date();
   const [queuedCount, oldest] = await Promise.all([
     client.stealthGenerationResult.count({
-      where: { status: "QUEUED", runAfter: { lte: now } },
+      where: {
+        status: "QUEUED",
+        runAfter: { lte: now },
+        OR: [
+          { run: { variant: { source: "ENDPOINT", endpointEnabled: true } } },
+          { uploadQueuedAt: { not: null }, run: { variant: { source: "UPLOAD" } } },
+        ],
+      },
     }),
     client.stealthGenerationResult.findFirst({
-      where: { status: "QUEUED", runAfter: { lte: now } },
+      where: {
+        status: "QUEUED",
+        runAfter: { lte: now },
+        OR: [
+          { run: { variant: { source: "ENDPOINT", endpointEnabled: true } } },
+          { uploadQueuedAt: { not: null }, run: { variant: { source: "UPLOAD" } } },
+        ],
+      },
       orderBy: { runAfter: "asc" },
       select: { runAfter: true },
     }),

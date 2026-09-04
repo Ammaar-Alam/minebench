@@ -116,6 +116,80 @@ export async function deleteSupabaseStorageObjects(
   }
 }
 
+export async function uploadSupabaseStorageFile(args: {
+  bucket: string;
+  path: string;
+  filePath: string;
+  byteSize: number;
+  contentType: string;
+  encoding?: string;
+}): Promise<void> {
+  const { createReadStream } = await import("node:fs");
+  const config = getSupabaseStorageConfig();
+  const url = `${config.url}/storage/v1/object/${encodeURIComponent(args.bucket)}/${encodePath(args.path)}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.serviceRoleKey}`,
+      apikey: config.serviceRoleKey,
+      "x-upsert": "true",
+      "Content-Type": args.contentType,
+      "Content-Length": String(args.byteSize),
+      ...(args.encoding ? { "Content-Encoding": args.encoding } : {}),
+    },
+    body: createReadStream(args.filePath) as unknown as BodyInit,
+    duplex: "half",
+  } as RequestInit & { duplex: "half" });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Storage upload failed (${response.status}): ${text || "empty response"}`);
+  }
+}
+
+export async function createSupabaseSignedUploadToken(args: {
+  bucket: string;
+  path: string;
+}): Promise<string> {
+  const config = getSupabaseStorageConfig();
+  const response = await fetch(
+    `${config.url}/storage/v1/object/upload/sign/${encodeURIComponent(args.bucket)}/${encodePath(args.path)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+        apikey: config.serviceRoleKey,
+        "Content-Type": "application/json",
+        "x-upsert": "true",
+      },
+      body: "{}",
+    },
+  );
+  if (!response.ok) throw new Error(`Storage upload signing failed (${response.status})`);
+  const body = (await response.json()) as { url?: unknown };
+  if (typeof body.url !== "string") throw new Error("Storage upload signing returned no URL");
+  const token = new URL(body.url, config.url).searchParams.get("token");
+  if (!token) throw new Error("Storage upload signing returned no token");
+  return token;
+}
+
+export async function assertSupabaseStorageObjectExists(args: {
+  bucket: string;
+  path: string;
+}): Promise<void> {
+  const config = getSupabaseStorageConfig();
+  const response = await fetch(
+    `${config.url}/storage/v1/object/info/${encodeURIComponent(args.bucket)}/${encodePath(args.path)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${config.serviceRoleKey}`,
+        apikey: config.serviceRoleKey,
+      },
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) throw new Error("Upload did not finish; try again");
+}
+
 export async function getSupabaseStorageReadiness(): Promise<SupabaseStorageReadiness> {
   const rawUrl = (process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").trim();
   const projectRef = rawUrl ? supabaseProjectRefFromApiUrl(rawUrl) : null;

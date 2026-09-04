@@ -1,4 +1,4 @@
-import type { ArenaBuildSource } from "@/lib/arena/buildArtifacts";
+import type { ArenaBuildSource, PreparedArenaBuild } from "@/lib/arena/buildArtifacts";
 import {
   getPreparedArenaBuildCoreMetadataUpdate,
   pickBuildVariant,
@@ -65,15 +65,22 @@ export async function maybePrecomputeArenaArtifactsForBuild(
   source: ArenaBuildSource,
 ): Promise<{ streamUploaded: number; snapshotUploaded: boolean; streamSkipped: boolean; reason?: string }> {
   const prepared = await prepareArenaBuild(source);
+  return maybePrecomputeArenaArtifactsForPreparedBuild(prepared, resolveSourceBytes(source));
+}
+
+export async function maybePrecomputeArenaArtifactsForPreparedBuild(
+  prepared: PreparedArenaBuild,
+  estimatedBytes: number | null,
+): Promise<{ streamUploaded: number; snapshotUploaded: boolean; streamSkipped: boolean; reason?: string }> {
   const marked = await prisma.build.updateMany({
     where: prepared.payloadIdentity,
     data: getPreparedArenaBuildCoreMetadataUpdate(prepared),
   });
   if (marked.count === 0) {
-    throw new Error(`Build ${source.id} changed during artifact preparation`);
+    throw new Error(`Build ${prepared.buildId} changed during artifact preparation`);
   }
-  invalidateArenaBuildMeta(source.id);
-  const stream = isArtifactEligibleBuild(resolveSourceBytes(source))
+  invalidateArenaBuildMeta(prepared.buildId);
+  const stream = isArtifactEligibleBuild(estimatedBytes)
     ? await maybePrecomputeArenaStreamArtifactsForPrepared(prepared)
     : { uploaded: 0, skipped: true, reason: "below_threshold" as const };
 

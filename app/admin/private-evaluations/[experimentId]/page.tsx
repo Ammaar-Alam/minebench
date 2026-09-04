@@ -64,6 +64,7 @@ export default async function PrivateEvaluationAdminDetail({
       resultId: build.resultId,
       checkpointId: variant.id,
       checkpoint: variant.codename,
+      checkpointStatus: variant.status,
       promptId: build.promptId,
       prompt: build.prompt,
       status: build.status,

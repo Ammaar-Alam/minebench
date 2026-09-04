@@ -8,13 +8,14 @@ import type { StealthEndpointProtocol } from "@/lib/stealth/credentials";
 import {
   activateStealthEvaluation,
   closeStealthEvaluation,
-  completeUploadedStealthCohortFromStorage,
   configureStealthEndpoint,
+  createStealthUploadCheckpoint,
   createStealthEvaluation,
   deleteUnusedDraftEvaluation,
   disableStealthEndpoint,
   inviteOrganizationMember,
   pauseStealthEvaluation,
+  queueStealthBuildUpload,
   removeOrganizationMember,
   resumeStealthEvaluation,
   sanitizeOperationalError,
@@ -162,23 +163,39 @@ export async function configureEndpointAction(
   redirect(`/lab/${orgSlug}/experiments/${experimentId}/settings`);
 }
 
-export async function uploadCohortAction(
+export async function createUploadCheckpointAction(
   orgSlug: string,
   experimentId: string,
   formData: FormData,
+) {
+  const context = await organizationContext(orgSlug);
+  const checkpoint = await createStealthUploadCheckpoint(
+    context.actor,
+    context.organizationId,
+    experimentId,
+    {
+      variantId: text(formData, "variantId") || undefined,
+      codename: text(formData, "codename"),
+    },
+  );
+  revalidateEvaluation(orgSlug, experimentId);
+  redirect(
+    `/lab/${orgSlug}/experiments/${experimentId}/settings?checkpoint=${encodeURIComponent(checkpoint.variantId)}`,
+  );
+}
+
+export async function queueBuildUploadAction(
+  orgSlug: string,
+  experimentId: string,
+  resultId: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const context = await organizationContext(orgSlug);
-    await completeUploadedStealthCohortFromStorage(
+    await queueStealthBuildUpload(
       context.actor,
       context.organizationId,
       experimentId,
-      {
-        variantId: text(formData, "variantId") || undefined,
-        codename: text(formData, "codename"),
-        bucket: text(formData, "cohortUploadBucket"),
-        path: text(formData, "cohortUploadPath"),
-      },
+      resultId,
     );
     revalidateEvaluation(orgSlug, experimentId);
     return { ok: true };

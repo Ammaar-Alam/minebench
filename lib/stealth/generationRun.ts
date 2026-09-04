@@ -1,9 +1,15 @@
 import { Prisma, type StealthGenerationResultStatus } from "@prisma/client";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
 import { BENCHMARK_PROMPT_COHORT_ID } from "@/lib/benchmark/prompts";
+import { getPalette } from "@/lib/blocks/palettes";
 import { prisma } from "@/lib/prisma";
 import { throwIfGenerationWorkerLeaseLost } from "@/lib/generation-worker/lease";
 import { generationProviderSignal } from "@/lib/generation-worker/providerSignal";
+import {
+  decodeStoredBuildText,
+  deleteSupabaseStorageObjects,
+  fetchStoredBuildBytes,
+} from "@/lib/storage/buildPayload";
 import {
   decryptStealthEndpointConfig,
   stealthEndpointSecretValues,
@@ -30,9 +36,12 @@ import {
   withStealthGenerationHeartbeat,
   type StealthActor,
 } from "@/lib/stealth/service";
+import { validateOwnedVoxelBuild } from "@/lib/voxel/validate";
 
 const MAX_GENERATION_ATTEMPTS = 10;
 const MAX_GENERATION_CONCURRENCY = 15;
+const MAX_STEALTH_BUILD_UPLOAD_BYTES = 320 * 1024 * 1024;
+const MAX_STEALTH_BUILD_BLOCKS = 4_000_000;
 const { gridSize: GRID_SIZE, palette: PALETTE, mode: MODE } = STEALTH_COHORT_BUILD;
 
 function positiveInt(value: number, label: string, max: number): number {
@@ -105,6 +114,69 @@ function generationConcurrency(configuration: unknown): number {
   return typeof configured === "number" && Number.isInteger(configured)
     ? Math.max(1, Math.min(MAX_GENERATION_CONCURRENCY, configured))
     : 1;
+}
+
+type StealthBuildUploadRef = { bucket: string; path: string };
+
+class InvalidStealthBuildUploadError extends Error {}
+
+async function loadStealthBuildUpload(
+  ref: StealthBuildUploadRef,
+  signal?: AbortSignal,
+) {
+  let bytes: Uint8Array;
+  try {
+    bytes = await fetchStoredBuildBytes(ref, {
+      signal,
+      maxBytes: MAX_STEALTH_BUILD_UPLOAD_BYTES,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("size limit")) {
+      throw new InvalidStealthBuildUploadError("Build exceeds the 320 MB upload limit");
+    }
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(
+      decodeStoredBuildText(bytes, null, {
+        maxOutputBytes: MAX_STEALTH_BUILD_UPLOAD_BYTES,
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("size limit")) {
+      throw new InvalidStealthBuildUploadError("Build exceeds the 320 MB upload limit");
+    }
+    throw new InvalidStealthBuildUploadError("Build must be valid JSON");
+  }
+  bytes = new Uint8Array();
+  const validated = validateOwnedVoxelBuild(parsed, {
+    gridSize: GRID_SIZE,
+    palette: getPalette(PALETTE),
+    maxBlocks: MAX_STEALTH_BUILD_BLOCKS,
+  });
+  if (!validated.ok) throw new InvalidStealthBuildUploadError(validated.error);
+  return validated.value.build;
+}
+
+async function cleanupStealthBuildUpload(
+  resultId: string,
+  ref: StealthBuildUploadRef,
+): Promise<void> {
+  try {
+    await deleteSupabaseStorageObjects([ref]);
+    await prisma.stealthGenerationResult.updateMany({
+      where: { id: resultId, uploadBucket: ref.bucket, uploadPath: ref.path },
+      data: {
+        uploadBucket: null,
+        uploadPath: null,
+        uploadExpiresAt: null,
+        uploadQueuedAt: null,
+      },
+    });
+  } catch {
+    // Expiry cleanup owns uploads that cannot be deleted here
+  }
 }
 
 async function createStealthGenerationRun(
@@ -382,10 +454,16 @@ async function acceptStealthGenerationBuild(params: {
       where: { id: params.runId },
       select: {
         status: true,
-        variant: { select: { endpointEnabled: true } },
+        variant: { select: { endpointEnabled: true, source: true } },
       },
     });
-    if (!run || run.status !== "RUNNING" || !run.variant.endpointEnabled) return false;
+    if (
+      !run ||
+      run.status !== "RUNNING" ||
+      (run.variant.source !== "UPLOAD" && !run.variant.endpointEnabled)
+    ) {
+      return false;
+    }
     if (!experiment || !isStealthCheckpointSetOpen(experiment.status)) return false;
     const accepted = await tx.stealthGenerationResult.updateMany({
       where: {
@@ -448,20 +526,35 @@ export async function generateStealthPromptForRun(params: {
       },
     });
     if (!currentRun) throw new Error("Generation run not found");
+    const currentResult = await tx.stealthGenerationResult.findUnique({
+      where: resultKey,
+      select: {
+        id: true,
+        status: true,
+        lockedBy: true,
+        uploadBucket: true,
+        uploadPath: true,
+        uploadQueuedAt: true,
+      },
+    });
+    const upload =
+      currentResult?.uploadBucket && currentResult.uploadPath && currentResult.uploadQueuedAt
+        ? { bucket: currentResult.uploadBucket, path: currentResult.uploadPath }
+        : null;
+    const sourceReady =
+      currentRun.variant.source === "UPLOAD"
+        ? Boolean(upload)
+        : currentRun.variant.endpointEnabled;
     if (
       currentRun.status !== "RUNNING" ||
-      !currentRun.variant.endpointEnabled ||
+      !sourceReady ||
       experiment.status === "CLOSED"
     ) {
       return null;
     }
     if (params.workerId) {
-      const claimed = await tx.stealthGenerationResult.findUnique({
-        where: resultKey,
-        select: { status: true, lockedBy: true },
-      });
-      return claimed?.status === "GENERATING" && claimed.lockedBy === params.workerId
-        ? currentRun
+      return currentResult?.status === "GENERATING" && currentResult.lockedBy === params.workerId
+        ? { ...currentRun, upload, resultId: currentResult.id }
         : null;
     }
     const prior = await tx.stealthGenerationResult.upsert({
@@ -482,7 +575,9 @@ export async function generateStealthPromptForRun(params: {
       where: { ...resultIdentity, status: "QUEUED" },
       data: { status: "GENERATING", error: null },
     });
-    return claimed.count === 1 ? currentRun : null;
+    return claimed.count === 1
+      ? { ...currentRun, upload, resultId: currentResult?.id ?? "" }
+      : null;
   });
   if (!run) return;
   const ownedWhere = (status: "GENERATING" | "VALIDATING") => ({
@@ -503,7 +598,7 @@ export async function generateStealthPromptForRun(params: {
     },
     select: { id: true, generationTimeMs: true },
   });
-  if (existing) {
+  if (existing && run.variant.source !== "UPLOAD") {
     try {
       await withStealthGenerationHeartbeat(run.id, entry.prompt.id, async () => {
         await params.acquireBuildProcessing?.();
@@ -522,6 +617,7 @@ export async function generateStealthPromptForRun(params: {
         workerId: params.workerId,
       });
       if (!accepted) return;
+      if (run.upload) await cleanupStealthBuildUpload(run.resultId, run.upload);
       await refreshStealthGenerationProgress(run.id);
       return;
     } catch (error) {
@@ -544,6 +640,65 @@ export async function generateStealthPromptForRun(params: {
         return;
       }
     }
+  }
+
+  if (run.variant.source === "UPLOAD") {
+    if (!run.upload) throw new Error("Uploaded build is unavailable");
+    let uploadedBuild;
+    try {
+      uploadedBuild = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, async () => {
+        await params.acquireBuildProcessing?.();
+        throwIfGenerationWorkerLeaseLost(params.signal);
+        return loadStealthBuildUpload(run.upload!, params.signal);
+      });
+    } catch (error) {
+      throwIfGenerationWorkerLeaseLost(params.signal);
+      if (!(error instanceof InvalidStealthBuildUploadError)) throw error;
+      await prisma.stealthGenerationResult.updateMany({
+        where: ownedWhere("GENERATING"),
+        data: {
+          status: "FAILED",
+          error: sanitizeOperationalError(error),
+          lockedBy: null,
+          lockedAt: null,
+          leaseExpiresAt: null,
+        },
+      });
+      await cleanupStealthBuildUpload(run.resultId, run.upload);
+      await refreshStealthGenerationProgress(run.id);
+      return;
+    }
+
+    const validating = await prisma.stealthGenerationResult.updateMany({
+      where: ownedWhere("GENERATING"),
+      data: { status: "VALIDATING", error: null },
+    });
+    if (validating.count !== 1) return;
+    const build = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, async () => {
+      if (existing) await deleteUnacceptedStealthBuild(existing.id);
+      return persistStealthBuild({
+        variantId: run.variant.id,
+        modelId: run.variant.modelId,
+        promptSlug: entry.slug,
+        promptText: entry.text,
+        build: uploadedBuild,
+        generationTimeMs: 0,
+      });
+    });
+    const accepted = await acceptStealthGenerationBuild({
+      runId: run.id,
+      resultIdentity,
+      fromStatus: "VALIDATING",
+      buildId: build.id,
+      attempts: 0,
+      generationTimeMs: 0,
+      requestConfiguration: "source=upload",
+      workerId: params.workerId,
+    });
+    if (!accepted && build.created) await deleteUnacceptedStealthBuild(build.id);
+    if (accepted) await cleanupStealthBuildUpload(run.resultId, run.upload);
+    await refreshStealthGenerationProgress(run.id);
+    return;
   }
 
   if (!run.variant.credential || !run.variant.endpointEnabled) {
@@ -579,6 +734,7 @@ export async function generateStealthPromptForRun(params: {
         gridSize: GRID_SIZE,
         palette: PALETTE,
         maxAttempts,
+        returnExpandedBuild: true,
         abortSignal: generationProviderSignal(params.signal),
         acquireBuildProcessing: params.acquireBuildProcessing,
         onProviderRequest: (attempt) => {
@@ -786,6 +942,20 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
     }
     const complete =
       progress.completedBuildCount === run.expectedBuildCount && progress.failedBuildCount === 0;
+    if (run.variant.source === "UPLOAD" && !complete) {
+      await tx.stealthGenerationRun.update({ where: { id: run.id }, data: runProgress });
+      if (experiment.status !== "CLOSED") {
+        await tx.stealthVariant.updateMany({
+          where: { id: run.variantId, status: { not: "WITHDRAWN" } },
+          data: {
+            ...variantProgress,
+            status: progress.completedBuildCount > 0 ? "GENERATING" : "DRAFT",
+          },
+        });
+        await syncExperimentReadiness(tx, run.variant.experimentId);
+      }
+      return;
+    }
     await tx.stealthGenerationRun.update({
       where: { id: run.id },
       data: {

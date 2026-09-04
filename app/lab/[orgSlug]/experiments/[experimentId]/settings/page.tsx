@@ -1,17 +1,20 @@
 import Link from "next/link";
+import { CheckpointBuildUploads } from "@/components/lab/CheckpointBuildUploads";
 import { EvaluationStatus } from "@/components/lab/EvaluationStatus";
-import { CohortUploadForm } from "@/components/lab/CohortUploadForm";
 import { formatDate, titleCase } from "@/components/lab/format";
+import { GenerationPoller } from "@/components/lab/GenerationPoller";
 import { LabDisclosure } from "@/components/lab/LabDisclosure";
 import { LifecycleActionButton } from "@/components/lab/LifecycleActionButton";
 import { EndpointRequestOverrides } from "@/components/lab/EndpointRequestOverrides";
+import { shouldPollStealthGeneration } from "@/lib/stealth/generationPolling";
 import {
   closeEvaluationAction,
   configureEndpointAction,
+  createUploadCheckpointAction,
   deleteDraftEvaluationAction,
   disableEndpointAction,
+  queueBuildUploadAction,
   updateEvaluationAction,
-  uploadCohortAction,
 } from "../../../actions";
 import { loadEvaluationWorkspace } from "../data";
 
@@ -50,14 +53,23 @@ export default async function EvaluationSettingsPage({
       (selectedCheckpoint.status === "READY" && !selectedCheckpoint.promptCohortCurrent))
       ? selectedCheckpoint
       : null;
+  const uploadCheckpoint =
+    selectedCheckpoint?.source === "UPLOAD" &&
+    selectedCheckpoint.promptCohortCurrent &&
+    (selectedCheckpoint.status === "DRAFT" || selectedCheckpoint.status === "GENERATING")
+      ? selectedCheckpoint
+      : null;
   const refreshUpload =
     selectedCheckpoint?.source === "UPLOAD" &&
-    selectedCheckpoint.status === "READY" &&
-    !selectedCheckpoint.promptCohortCurrent
+    !selectedCheckpoint.promptCohortCurrent &&
+    (selectedCheckpoint.status === "DRAFT" ||
+      selectedCheckpoint.status === "GENERATING" ||
+      selectedCheckpoint.status === "READY")
       ? selectedCheckpoint
       : null;
   const configureAction = configureEndpointAction.bind(null, orgSlug, experimentId);
-  const uploadAction = uploadCohortAction.bind(null, orgSlug, experimentId);
+  const createUploadAction = createUploadCheckpointAction.bind(null, orgSlug, experimentId);
+  const queueUploadAction = queueBuildUploadAction.bind(null, orgSlug, experimentId);
   const updateAction = updateEvaluationAction.bind(null, orgSlug, experimentId);
   const closeAction = closeEvaluationAction.bind(null, orgSlug, experimentId);
   const deleteAction = deleteDraftEvaluationAction.bind(null, orgSlug, experimentId);
@@ -71,9 +83,13 @@ export default async function EvaluationSettingsPage({
     workspace.checkpoints.every(
       (checkpoint) => checkpoint.persistedBuildCount === 0 && checkpoint.totalVotes === 0,
     );
+  const uploadProcessing = uploadCheckpoint
+    ? shouldPollStealthGeneration(uploadCheckpoint)
+    : false;
 
   return (
     <div className="space-y-8">
+      <GenerationPoller active={uploadProcessing} />
       <section aria-labelledby="settings-heading">
         <h2 id="settings-heading" className="text-2xl font-semibold tracking-tight text-fg">
           Settings
@@ -176,7 +192,8 @@ export default async function EvaluationSettingsPage({
                 <div className="mt-1 text-xs text-muted">
                   {titleCase(checkpoint.source)}
                   {needsEndpointKey(checkpoint) ? " · Needs key" : ""}
-                  {checkpoint.status === "READY" && !checkpoint.promptCohortCurrent
+                  {!checkpoint.promptCohortCurrent &&
+                  (checkpoint.status === "READY" || checkpoint.source === "UPLOAD")
                     ? " · Refresh required"
                     : ""}
                 </div>
@@ -189,12 +206,30 @@ export default async function EvaluationSettingsPage({
                       : checkpoint.status
                   }
                 />
-                {checkpoint.status === "DRAFT" && checkpoint.credentialConfigured ? (
+                {checkpoint.source === "ENDPOINT" &&
+                checkpoint.status === "DRAFT" &&
+                checkpoint.credentialConfigured ? (
                   <Link
                     href={`${basePath}/builds`}
                     className="inline-flex items-center text-xs font-medium text-accent hover:underline"
                   >
                     Generate builds &rarr;
+                  </Link>
+                ) : null}
+                {mutable &&
+                checkpoint.source === "UPLOAD" &&
+                (checkpoint.status === "DRAFT" ||
+                  checkpoint.status === "GENERATING" ||
+                  (checkpoint.status === "READY" && !checkpoint.promptCohortCurrent)) ? (
+                  <Link
+                    href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}
+                    className="inline-flex items-center text-xs font-medium text-accent hover:underline"
+                  >
+                    {!checkpoint.promptCohortCurrent
+                      ? "Refresh"
+                      : checkpoint.generatedBuildCount > 0
+                        ? "Review uploads"
+                        : "Upload builds"}
                   </Link>
                 ) : null}
                 {mutable &&
@@ -243,7 +278,7 @@ export default async function EvaluationSettingsPage({
                     ? refreshEndpoint.status === "READY"
                       ? `Refresh ${refreshEndpoint.codename}`
                       : `Edit ${refreshEndpoint.codename}`
-                    : "Add checkpoint"}
+                    : "Connect endpoint"}
                 </span>
               }
               className="border-b border-border/55"
@@ -356,7 +391,7 @@ export default async function EvaluationSettingsPage({
                     ? refreshEndpoint.status === "READY"
                       ? "Save & refresh"
                       : "Save changes"
-                    : "Add checkpoint"
+                    : "Connect"
                 }
                 pendingLabel="Saving…"
                 tone="primary"
@@ -367,22 +402,60 @@ export default async function EvaluationSettingsPage({
             <LabDisclosure
               title={
                 <span className="text-sm font-medium text-fg">
-                  {refreshUpload ? "Refresh cohort" : "Upload cohort"}
+                  {refreshUpload
+                    ? `Refresh ${refreshUpload.codename}`
+                    : uploadCheckpoint
+                      ? `Upload ${uploadCheckpoint.codename}`
+                      : "Upload builds"}
                 </span>
               }
               buttonClassName="px-4"
               panelClassName="px-4 pb-5 pt-2 sm:px-5"
-              defaultOpen={Boolean(refreshUpload)}
+              defaultOpen={Boolean(uploadCheckpoint || refreshUpload)}
             >
-              <CohortUploadForm
-                action={uploadAction}
-                signUrl={`/api/lab/organizations/${encodeURIComponent(orgSlug)}/experiments/${encodeURIComponent(experimentId)}/cohort-upload`}
-                checkpoint={
-                  refreshUpload
-                    ? { id: refreshUpload.id, codename: refreshUpload.codename }
-                    : undefined
-                }
-              />
+              {uploadCheckpoint?.latestGenerationRun ? (
+                <CheckpointBuildUploads
+                  slots={uploadCheckpoint.latestGenerationRun.results.map((result) => ({
+                    resultId: result.resultId,
+                    prompt: result.prompt,
+                    status: result.status,
+                    error: result.error,
+                    uploadPending: result.uploadPending,
+                  }))}
+                  signUrl={`/api/lab/organizations/${encodeURIComponent(orgSlug)}/experiments/${encodeURIComponent(experimentId)}/build-uploads`}
+                  queueAction={queueUploadAction}
+                />
+              ) : (
+                <form action={createUploadAction} className="space-y-5">
+                  {refreshUpload ? (
+                    <>
+                      <input type="hidden" name="variantId" value={refreshUpload.id} />
+                      <input type="hidden" name="codename" value={refreshUpload.codename} />
+                      <div className="max-w-sm space-y-2 text-sm font-medium text-fg">
+                        <span>Checkpoint</span>
+                        <div className="flex h-11 items-center">{refreshUpload.codename}</div>
+                      </div>
+                    </>
+                  ) : (
+                    <label className="block max-w-sm space-y-2 text-sm font-medium text-fg">
+                      <span>Codename</span>
+                      <input name="codename" required maxLength={80} className="mb-field h-11" />
+                    </label>
+                  )}
+                  <p className="max-w-xl text-sm leading-6 text-muted">
+                    {refreshUpload
+                      ? "Start a new upload for the current prompt set."
+                      : "Create the checkpoint, then upload each prompt as its own JSON file."}
+                  </p>
+                  <div className="flex justify-end">
+                    <LifecycleActionButton
+                      label={refreshUpload ? "Refresh checkpoint" : "Create checkpoint"}
+                      pendingLabel={refreshUpload ? "Refreshing…" : "Creating…"}
+                      tone="primary"
+                    />
+                  </div>
+                </form>
+              )}
             </LabDisclosure>
           </div>
         ) : null}
