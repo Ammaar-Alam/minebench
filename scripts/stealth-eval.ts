@@ -1,7 +1,6 @@
 #!/usr/bin/env -S tsx
 
 import "dotenv/config";
-import { readFile } from "node:fs/promises";
 import type {
   OrganizationRole,
   StealthExportPolicy,
@@ -243,30 +242,6 @@ function endpointConfig(args: CliArgs): StealthEndpointConfig {
   };
 }
 
-function uploadBuildsFromJson(value: unknown): Array<{
-  promptSlug: string;
-  build: unknown;
-  generationTimeMs?: number | null;
-}> {
-  const rows =
-    Array.isArray(value)
-      ? value
-      : value && typeof value === "object" && Array.isArray((value as { builds?: unknown }).builds)
-        ? (value as { builds: unknown[] }).builds
-        : null;
-  if (!rows) throw new Error("Upload file must contain a cohort array or an object with builds");
-  return rows.map((entry) => {
-    if (!entry || typeof entry !== "object") throw new Error("Each upload row must be an object");
-    const row = entry as Record<string, unknown>;
-    return {
-      promptSlug: typeof row.promptSlug === "string" ? row.promptSlug : "",
-      build: row.build,
-      generationTimeMs:
-        typeof row.generationTimeMs === "number" ? row.generationTimeMs : undefined,
-    };
-  });
-}
-
 async function bootstrapAdmin(args: CliArgs): Promise<void> {
   const email = normalizeEmail(requiredOption(args, "--email"));
   const existing = await prisma.user.findUnique({
@@ -381,23 +356,6 @@ async function revokeMember(args: CliArgs): Promise<void> {
   const email = normalizeEmail(requiredOption(args, "--email"));
   await (await service()).removeOrganizationMember(OPERATOR_ACTOR, organization.id, { email });
   console.log(`Member revoked: ${email} -> ${organization.slug}`);
-}
-
-async function uploadCohort(args: CliArgs): Promise<void> {
-  const { organization, evaluationId: experimentId } = await orgAndEvaluation(args);
-  const file = requiredOption(args, "--file");
-  const parsed = JSON.parse(await readFile(file, "utf8")) as unknown;
-  const result = await (await service()).completeUploadedStealthCohort(
-    OPERATOR_ACTOR,
-    organization.id,
-    experimentId,
-    {
-      variantId: option(args, "--variant-id", "--checkpoint-id"),
-      codename: requiredOption(args, "--codename", "--checkpoint"),
-      builds: uploadBuildsFromJson(parsed),
-    },
-  );
-  console.log(`Uploaded cohort accepted: variant=${result.variantId} run=${result.runId}`);
 }
 
 async function startGeneration(args: CliArgs): Promise<void> {
@@ -574,7 +532,6 @@ Commands:
   invite --org SLUG --email EMAIL --role admin|member
   member-role --org SLUG --email EMAIL --role admin|member
   revoke --org SLUG --email EMAIL
-  upload --org SLUG --evaluation SLUG --codename NAME --file cohort.json
   generate --org SLUG --evaluation SLUG --codename NAME [--attempts N] [--concurrency N]
   activate --org SLUG --evaluation SLUG
   pause --org SLUG --evaluation SLUG
@@ -630,9 +587,6 @@ async function main(): Promise<void> {
       return;
     case "revoke":
       await revokeMember(args);
-      return;
-    case "upload":
-      await uploadCohort(args);
       return;
     case "generate":
       await startGeneration(args);

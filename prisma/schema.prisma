@@ -276,6 +276,10 @@ model StealthGenerationResult {
   lockedBy             String?
   lockedAt             DateTime?
   leaseExpiresAt       DateTime?
+  uploadBucket         String?
+  uploadPath           String?                       @unique
+  uploadExpiresAt      DateTime?
+  uploadQueuedAt       DateTime?
   createdAt            DateTime                      @default(now())
   updatedAt            DateTime                      @updatedAt
 
@@ -286,6 +290,7 @@ model StealthGenerationResult {
   @@unique([runId, promptId])
   @@index([status, runAfter, createdAt])
   @@index([leaseExpiresAt])
+  @@index([uploadExpiresAt])
   @@index([promptId])
   @@index([buildId])
 }

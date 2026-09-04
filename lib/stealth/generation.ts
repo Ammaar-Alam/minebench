@@ -1,15 +1,19 @@
-import { createHash } from "node:crypto";
-import { gunzipSync, gzipSync } from "node:zlib";
 import { Prisma } from "@prisma/client";
-import { maybePrecomputeArenaArtifactsForBuild } from "@/lib/arena/artifactMaintenance";
+import {
+  maybePrecomputeArenaArtifactsForBuild,
+  maybePrecomputeArenaArtifactsForPreparedBuild,
+} from "@/lib/arena/artifactMaintenance";
 import { deleteArenaBuildArtifacts } from "@/lib/arena/artifactOwnership";
+import { prepareArenaBuildFromBuild } from "@/lib/arena/buildArtifacts";
 import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
 import { prisma } from "@/lib/prisma";
 import {
   deleteSupabaseStorageObjects,
   getBuildStorageBucketFromEnv,
   getSupabaseStorageConfig,
+  uploadSupabaseStorageFile,
 } from "@/lib/storage/buildPayload";
+import { writeCanonicalBuildArtifact } from "@/lib/voxel/canonicalArtifact";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 const GRID_SIZE = 256;
@@ -66,13 +70,6 @@ function storageConfig(): { url: string; key: string; bucket: string } | null {
   };
 }
 
-function encodedStoragePath(path: string): string {
-  return path
-    .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/");
-}
-
 function preparePayload(params: {
   variantId: string;
   promptSlug: string;
@@ -114,73 +111,17 @@ function preparePayload(params: {
 
 async function uploadPreparedPayload(
   prepared: PreparedPayload,
-  gzip: Buffer,
-  sha256: string,
+  artifact: { filePath: string; storedByteSize: number },
 ): Promise<void> {
   if (!prepared.remote) return;
-  const config = prepared.remote;
-  const response = await fetch(
-    `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodedStoragePath(
-      config.path,
-    )}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.key}`,
-        apikey: config.key,
-        "Content-Type": "application/gzip",
-      },
-      body: new Uint8Array(gzip.buffer as ArrayBuffer, gzip.byteOffset, gzip.byteLength),
-    },
-  );
-  if (!response.ok) {
-    const body = await response.text();
-    if (isExistingObjectUploadError(response.status, body)) {
-      await assertStoredPayloadMatches(config, config.path, sha256);
-    } else {
-      throw new Error(`Stealth build storage upload failed (${response.status}): ${body}`);
-    }
-  }
-}
-
-function isExistingObjectUploadError(status: number, body: string): boolean {
-  const normalized = body.toLowerCase();
-  return (
-    status === 409 ||
-    (status === 400 &&
-      (normalized.includes("already exists") ||
-        normalized.includes("duplicate") ||
-        normalized.includes("resource already exists")))
-  );
-}
-
-async function assertStoredPayloadMatches(
-  config: { url: string; key: string; bucket: string },
-  path: string,
-  expectedSha256: string,
-): Promise<void> {
-  const response = await fetch(
-    `${config.url}/storage/v1/object/${encodeURIComponent(config.bucket)}/${encodedStoragePath(path)}`,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${config.key}`,
-        apikey: config.key,
-      },
-      cache: "no-store",
-    },
-  );
-  if (!response.ok) {
-    throw new Error(`Stealth build storage identity check failed (${response.status})`);
-  }
-  const bytes = Buffer.from(await response.arrayBuffer());
-  const text = bytes[0] === 0x1f && bytes[1] === 0x8b
-    ? gunzipSync(bytes).toString("utf8")
-    : bytes.toString("utf8");
-  const sha256 = createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
-  if (sha256 !== expectedSha256) {
-    throw new Error("Existing stealth build object checksum does not match retry payload");
-  }
+  await uploadSupabaseStorageFile({
+    bucket: prepared.remote.bucket,
+    path: prepared.remote.path,
+    filePath: artifact.filePath,
+    byteSize: artifact.storedByteSize,
+    contentType: "application/gzip",
+    encoding: "gzip",
+  });
 }
 
 function validateExistingBuildIdentity(
@@ -223,10 +164,24 @@ function retryPayloadTarget(build: ExistingBuild): { bucket: string; path: strin
   return { bucket: build.voxelStorageBucket, path: build.voxelStoragePath };
 }
 
-async function maybePrecomputeRemoteArtifacts(build: ExistingBuild): Promise<void> {
+async function maybePrecomputeRemoteArtifacts(
+  build: ExistingBuild,
+  fullBuild?: VoxelBuild,
+): Promise<void> {
   const databaseUrl = process.env.DATABASE_URL ?? process.env.DIRECT_URL ?? "";
   if (!isLoopbackDatabaseUrl(databaseUrl)) {
-    await maybePrecomputeArenaArtifactsForBuild({ ...build, privateAccessOnly: true });
+    const source = { ...build, privateAccessOnly: true };
+    if (fullBuild) {
+      await maybePrecomputeArenaArtifactsForPreparedBuild(
+        prepareArenaBuildFromBuild(source, fullBuild, {
+          payloadEstimatedBytes: build.voxelByteSize,
+          checksum: build.voxelSha256,
+        }),
+        build.voxelByteSize,
+      );
+    } else {
+      await maybePrecomputeArenaArtifactsForBuild(source);
+    }
   }
 }
 
@@ -238,90 +193,79 @@ export async function persistStealthBuild(params: {
   build: VoxelBuild;
   generationTimeMs: number;
 }): Promise<{ id: string; blockCount: number; created: boolean }> {
-  const json = Buffer.from(JSON.stringify(params.build), "utf8");
-  const gzip = gzipSync(json);
-  const sha256 = createHash("sha256").update(json).digest("hex");
+  const artifact = await writeCanonicalBuildArtifact(params.build);
+  const sha256 = artifact.sourceSha256;
   const blockCount = params.build.blocks.length;
-  const prompt = await prisma.prompt.upsert({
-    where: { text: params.promptText },
-    create: { text: params.promptText, active: true },
-    update: {},
-  });
-
-  const buildKey = {
-    promptId_modelId_gridSize_palette_mode: {
-      promptId: prompt.id,
-      modelId: params.modelId,
-      gridSize: GRID_SIZE,
-      palette: PALETTE,
-      mode: MODE,
-    },
-  };
-  const expectedIdentity = {
-    sha256,
-    voxelByteSize: json.byteLength,
-    voxelCompressedByteSize: gzip.byteLength,
-    blockCount,
-  };
-  const existing = await prisma.build.findUnique({
-    where: buildKey,
-    select: BUILD_SOURCE_SELECT,
-  });
-  if (existing) {
-    validateExistingBuildIdentity(existing, expectedIdentity);
-    const target = retryPayloadTarget(existing);
-    try {
-      await maybePrecomputeRemoteArtifacts(existing);
-    } catch (error) {
-      if (!isMissingStealthBuildPayload(error)) throw error;
-      const prepared = preparePayload({
-        variantId: params.variantId,
-        promptSlug: params.promptSlug,
-        build: params.build,
-        sha256,
-        target,
-      });
-      await uploadPreparedPayload(prepared, gzip, sha256);
-      await maybePrecomputeRemoteArtifacts(existing);
-    }
-    return { id: existing.id, blockCount: existing.blockCount, created: false };
-  }
-
-  const payload = preparePayload({
-    variantId: params.variantId,
-    promptSlug: params.promptSlug,
-    build: params.build,
-    sha256,
-  });
-  let build: ExistingBuild;
   try {
-    build = await prisma.build.create({
-      data: {
+    const prompt = await prisma.prompt.upsert({
+      where: { text: params.promptText },
+      create: { text: params.promptText, active: true },
+      update: {},
+    });
+    const buildKey = {
+      promptId_modelId_gridSize_palette_mode: {
         promptId: prompt.id,
         modelId: params.modelId,
         gridSize: GRID_SIZE,
         palette: PALETTE,
         mode: MODE,
-        ...payload.stored,
-        voxelByteSize: json.byteLength,
-        voxelCompressedByteSize: gzip.byteLength,
-        voxelSha256: sha256,
-        blockCount,
-        generationTimeMs: params.generationTimeMs,
       },
-      select: BUILD_SOURCE_SELECT,
-    });
-  } catch (error) {
-    const raced = await prisma.build.findUnique({
+    };
+    const expectedIdentity = {
+      sha256,
+      voxelByteSize: artifact.byteSize,
+      voxelCompressedByteSize: artifact.storedByteSize,
+      blockCount,
+    };
+    const existing = await prisma.build.findUnique({
       where: buildKey,
       select: BUILD_SOURCE_SELECT,
     });
-    if (raced) {
-      validateExistingBuildIdentity(raced, expectedIdentity);
-      try {
-        await maybePrecomputeRemoteArtifacts(raced);
-      } catch (repairError) {
-        if (!isMissingStealthBuildPayload(repairError)) throw repairError;
+    if (existing) {
+      validateExistingBuildIdentity(existing, expectedIdentity);
+      const prepared = preparePayload({
+        variantId: params.variantId,
+        promptSlug: params.promptSlug,
+        build: params.build,
+        sha256,
+        target: retryPayloadTarget(existing),
+      });
+      await uploadPreparedPayload(prepared, artifact);
+      await maybePrecomputeRemoteArtifacts(existing, params.build);
+      return { id: existing.id, blockCount: existing.blockCount, created: false };
+    }
+
+    const payload = preparePayload({
+      variantId: params.variantId,
+      promptSlug: params.promptSlug,
+      build: params.build,
+      sha256,
+    });
+    let build: ExistingBuild;
+    try {
+      build = await prisma.build.create({
+        data: {
+          promptId: prompt.id,
+          modelId: params.modelId,
+          gridSize: GRID_SIZE,
+          palette: PALETTE,
+          mode: MODE,
+          ...payload.stored,
+          voxelByteSize: artifact.byteSize,
+          voxelCompressedByteSize: artifact.storedByteSize,
+          voxelSha256: sha256,
+          blockCount,
+          generationTimeMs: params.generationTimeMs,
+        },
+        select: BUILD_SOURCE_SELECT,
+      });
+    } catch (error) {
+      const raced = await prisma.build.findUnique({
+        where: buildKey,
+        select: BUILD_SOURCE_SELECT,
+      });
+      if (raced) {
+        validateExistingBuildIdentity(raced, expectedIdentity);
         const repair = preparePayload({
           variantId: params.variantId,
           promptSlug: params.promptSlug,
@@ -329,17 +273,19 @@ export async function persistStealthBuild(params: {
           sha256,
           target: retryPayloadTarget(raced),
         });
-        await uploadPreparedPayload(repair, gzip, sha256);
-        await maybePrecomputeRemoteArtifacts(raced);
+        await uploadPreparedPayload(repair, artifact);
+        await maybePrecomputeRemoteArtifacts(raced, params.build);
+        return { id: raced.id, blockCount: raced.blockCount, created: false };
       }
-      return { id: raced.id, blockCount: raced.blockCount, created: false };
+      throw error;
     }
-    throw error;
-  }
 
-  await uploadPreparedPayload(payload, gzip, sha256);
-  await maybePrecomputeRemoteArtifacts(build);
-  return { id: build.id, blockCount, created: true };
+    await uploadPreparedPayload(payload, artifact);
+    await maybePrecomputeRemoteArtifacts(build, params.build);
+    return { id: build.id, blockCount, created: true };
+  } finally {
+    await artifact.cleanup();
+  }
 }
 
 export async function deleteUnacceptedStealthBuild(buildId: string): Promise<boolean> {

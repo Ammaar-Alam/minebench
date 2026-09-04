@@ -306,3 +306,67 @@ export function validateVoxelBuild(
   if (!parsed.success) return { ok: false, error: parsed.error.message };
   return validateVoxelBuildSpec(normalizeParsedBuild(parsed.data), opts);
 }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isPoint(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Number.isInteger(value.x) &&
+    Number.isInteger(value.y) &&
+    Number.isInteger(value.z)
+  );
+}
+
+// Large uploaded builds are already owned by the worker, so avoid Zod's deep copy
+export function validateOwnedVoxelBuild(
+  input: unknown,
+  opts: ValidateVoxelOptions,
+): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+  if (!isRecord(input) || input.version !== "1.0" || !Array.isArray(input.blocks)) {
+    return { ok: false, error: "Build must contain version 1.0 and a blocks list" };
+  }
+  for (let index = 0; index < input.blocks.length; index += 1) {
+    const block = input.blocks[index];
+    if (!isPoint(block) || typeof block.type !== "string" || !block.type) {
+      return { ok: false, error: `Invalid block at index ${index}` };
+    }
+  }
+  if (input.boxes !== undefined) {
+    if (!Array.isArray(input.boxes)) return { ok: false, error: "Boxes must be a list" };
+    for (let index = 0; index < input.boxes.length; index += 1) {
+      const box = input.boxes[index];
+      if (
+        !isRecord(box) ||
+        !Number.isInteger(box.x1) ||
+        !Number.isInteger(box.y1) ||
+        !Number.isInteger(box.z1) ||
+        !Number.isInteger(box.x2) ||
+        !Number.isInteger(box.y2) ||
+        !Number.isInteger(box.z2) ||
+        typeof box.type !== "string" ||
+        !box.type
+      ) {
+        return { ok: false, error: `Invalid box at index ${index}` };
+      }
+    }
+  }
+  if (input.lines !== undefined) {
+    if (!Array.isArray(input.lines)) return { ok: false, error: "Lines must be a list" };
+    for (let index = 0; index < input.lines.length; index += 1) {
+      const line = input.lines[index];
+      if (
+        !isRecord(line) ||
+        !isPoint(line.from) ||
+        !isPoint(line.to) ||
+        typeof line.type !== "string" ||
+        !line.type
+      ) {
+        return { ok: false, error: `Invalid line at index ${index}` };
+      }
+    }
+  }
+  return validateVoxelBuildSpec(input as VoxelBuild, opts);
+}

@@ -10,17 +10,17 @@ assert.match(settings, /\{checkpointSetOpen \? \(/);
 const nextConfig = read("next.config.ts");
 assert.doesNotMatch(nextConfig, /bodySizeLimit/);
 
-const cohortUpload = read("components/lab/CohortUploadForm.tsx");
-assert.match(cohortUpload, /target\.signedUrl/);
-assert.match(cohortUpload, /method: "PUT"/);
-assert.match(cohortUpload, /formData\.delete\("cohortFile"\)/);
-assert.match(cohortUpload, /if \(!result\.ok\)/);
-assert.doesNotMatch(cohortUpload, /from "tus-js-client"/);
+const buildUploads = read("components/lab/CheckpointBuildUploads.tsx");
+assert.match(buildUploads, /from "tus-js-client"/);
+assert.match(buildUploads, /chunkSize: 6 \* 1024 \* 1024/);
+assert.match(buildUploads, /"x-signature": target\.token/);
+assert.match(buildUploads, /upload\.findPreviousUploads\(\)/);
+assert.match(buildUploads, /queueAction\(slot\.resultId\)/);
+assert.doesNotMatch(settings, /CohortUploadForm|Upload cohort/);
 
 const service = read("lib/stealth/service.ts");
-assert.match(service, /createSignedUploadUrl/);
-assert.match(service, /signedUrl: data\.signedUrl/);
-assert.match(service, /expiresAt: \{ gt: new Date\(\) \}/);
+assert.match(service, /createSupabaseSignedUploadToken/);
+assert.doesNotMatch(service, /MAX_COHORT_UPLOAD_BYTES|completeUploadedStealthCohort/);
 const workspaceList = service.slice(
   service.indexOf("export async function listStealthEvaluationWorkspaces"),
   service.indexOf("export async function getStealthEvaluationWorkspace"),
@@ -48,8 +48,8 @@ assertOrder(
   "stealthExperiment.findFirst",
   "workspace reads must reclaim expired generation reservations before reporting status",
 );
-const uploadTarget = functionBody(service, "createStealthCohortUploadTarget");
-assert.match(uploadTarget, /expiresAt: \{ gt: now \}/);
+const uploadTarget = functionBody(service, "createStealthBuildUploadTarget");
+assert.match(uploadTarget, /createSupabaseSignedUploadToken\(\{ bucket, path: prepared\.path \}\)/);
 const activation = functionBody(service, "activateStealthEvaluation");
 assert.match(activation, /generationRuns:[\s\S]*status: "SUCCEEDED"/);
 assert.match(activation, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
@@ -70,9 +70,6 @@ assert.match(closeReservation, /retentionDays/);
 const staleReclaimer = functionBody(service, "reclaimStaleStealthGenerationRuns");
 assert.match(staleReclaimer, /complete[\s\S]*status: "READY"/);
 assert.match(staleReclaimer, /complete[\s\S]*stealthEndpointCredential\.deleteMany/);
-const uploadCompletion = functionBody(service, "completeUploadedStealthCohort");
-assert.match(uploadCompletion, /complete \? "SUCCEEDED"/);
-assert.match(uploadCompletion, /complete \? "READY"/);
 assert.match(functionBody(service, "resumeStealthEvaluation"), /if \(experiment\.endedAt\)/);
 assert.doesNotMatch(service, /for \(let page = 1; page <= 10/);
 assert.match(service, /if \(!data\.nextPage\) break/);
@@ -122,9 +119,15 @@ assert.match(service, /if \(hasSupabaseStorageConfig\(\)\) \{[\s\S]*listStealthB
 const generationSource = read("lib/stealth/generation.ts");
 assert.match(
   generationSource,
-  /isMissingStealthBuildPayload\(error\)[\s\S]*uploadPreparedPayload\(/,
+  /writeCanonicalBuildArtifact\(params\.build\)/,
 );
+assert.match(generationSource, /uploadSupabaseStorageFile\(/);
+assert.doesNotMatch(generationSource, /gzipSync\(|JSON\.stringify\(params\.build\)/);
 assert.match(generationRun, /isMissingStealthBuildPayload\(error\)/);
+assert.match(generationRun, /loadStealthBuildUpload\(run\.upload!/);
+assert.match(generationRun, /run\.variant\.source === "UPLOAD" && !complete/);
+const generationJobs = read("lib/stealth/jobs.ts");
+assert.match(generationJobs, /result\."uploadQueuedAt" IS NOT NULL/);
 assert.match(generationRun, /deleteUnacceptedStealthBuild\(existing\.id\)/);
 assert.match(generationRun, /select: \{ id: true, generationTimeMs: true \}/);
 assert.match(generationRun, /generationTimeMs: existing\.generationTimeMs/);
@@ -175,6 +178,10 @@ assert.match(matchupPicker, /hasReachedStealthVoteGoal/);
 const buildsPage = read("app/lab/[orgSlug]/experiments/[experimentId]/builds/page.tsx");
 assert.match(buildsPage, /promptCohortCurrent/);
 assert.match(buildsPage, /currentExpectedBuildCount/);
+assert.match(buildsPage, /checkpoint\.status !== "WITHDRAWN"/);
+const buildInspector = read("components/lab/ProtectedBuildInspector.tsx");
+assert.match(buildInspector, /<optgroup label="Current">/);
+assert.match(buildInspector, /<optgroup label="Archived">/);
 const overviewPage = read("app/lab/[orgSlug]/experiments/[experimentId]/overview/page.tsx");
 assert.match(overviewPage, /canResume/);
 const adminEvaluationPage = read("app/admin/private-evaluations/[experimentId]/page.tsx");
@@ -227,7 +234,7 @@ assert.doesNotMatch(cli, /for \(let page = 1; page <= 10/);
 assert.match(cli, /if \(!data\.nextPage\) break/);
 
 const actions = read("app/lab/[orgSlug]/actions.ts");
-assert.match(actions, /completeUploadedStealthCohortFromStorage/);
+assert.match(actions, /queueStealthBuildUpload/);
 assert.match(actions, /return \{ ok: false, error: sanitizeOperationalError\(error\) \}/);
 
 const middleware = read("middleware.ts");
@@ -246,8 +253,8 @@ assert.match(settings, /checkpoint\.source === "ENDPOINT"/);
 assert.match(settings, /checkpoint\.status === "DRAFT"/);
 
 const generation = read("lib/stealth/generation.ts");
-assert.match(generation, /isExistingObjectUploadError/);
-assert.match(generation, /assertStoredPayloadMatches/);
+assert.match(generation, /writeCanonicalBuildArtifact/);
+assert.match(generation, /maybePrecomputeArenaArtifactsForPreparedBuild/);
 assert.match(generation, /promptSlug}-\$\{params\.sha256}\.json\.gz/);
 
 const stagingRunner = read("scripts/with-staging-env.mjs");

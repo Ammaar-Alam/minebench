@@ -121,38 +121,6 @@ async function installGenerationResultUpdateFailure(params: {
   };
 }
 
-async function installOneShotReadyFinalizationFailure(params: {
-  name: string;
-  codename: string;
-}) {
-  const sequenceName = `once_${params.name}_sequence`;
-  const functionName = `reject_${params.name}`;
-  const triggerName = `reject_${params.name}_variant`;
-  await prisma.$executeRawUnsafe(`CREATE SEQUENCE "${sequenceName}"`);
-  await prisma.$executeRawUnsafe(`
-    CREATE FUNCTION "${functionName}"() RETURNS trigger
-    LANGUAGE plpgsql AS $$
-    BEGIN
-      IF NEW.codename = '${params.codename}' AND NEW.status = 'READY'
-        AND nextval('"${sequenceName}"') = 1 THEN
-        RAISE EXCEPTION 'forced upload finalization failure';
-      END IF;
-      RETURN NEW;
-    END
-    $$
-  `);
-  await prisma.$executeRawUnsafe(`
-    CREATE TRIGGER "${triggerName}"
-    BEFORE UPDATE ON "StealthVariant"
-    FOR EACH ROW EXECUTE FUNCTION "${functionName}"()
-  `);
-  return async () => {
-    await prisma.$executeRawUnsafe(`DROP TRIGGER "${triggerName}" ON "StealthVariant"`);
-    await prisma.$executeRawUnsafe(`DROP FUNCTION "${functionName}"()`);
-    await prisma.$executeRawUnsafe(`DROP SEQUENCE "${sequenceName}"`);
-  };
-}
-
 async function installDeferredArtifactOwnershipFailure(name: string) {
   const functionName = `reject_${name}`;
   const triggerName = `reject_${name}_artifact`;
@@ -250,11 +218,10 @@ async function main() {
     acceptExactEmailInvitations,
     activateStealthEvaluation,
     closeStealthEvaluation,
-    completeUploadedStealthCohort,
-    completeUploadedStealthCohortFromStorage,
     configureStealthEndpoint,
-    createStealthCohortUploadTarget,
+    createStealthBuildUploadTarget,
     createStealthEvaluation,
+    createStealthUploadCheckpoint,
     deleteUnusedDraftEvaluation,
     disableStealthEndpoint,
     getStealthEvaluationWorkspace,
@@ -263,6 +230,7 @@ async function main() {
     reconcileStealthGoalPause,
     purgeDueStealthEvaluations,
     purgeStealthEvaluationIfDue,
+    queueStealthBuildUpload,
     removeOrganizationMember,
     resumeStealthEvaluation,
     syncExperimentReadiness,
@@ -706,48 +674,32 @@ async function main() {
     await prisma.stealthEndpointCredential.count({ where: { variantId: checkpoint.variantId } }),
     0,
   );
-  const pendingUploadPath = `stealth-cohort-uploads/v1/${organization.id}/${evaluation.id}/${randomUUID()}.json`;
-  const pendingUpload = await prisma.stealthCohortUpload.create({
+  const pendingUploadCheckpoint = await createStealthUploadCheckpoint(
+    memberActor,
+    organization.id,
+    evaluation.id,
+    { codename: "Pending upload" },
+  );
+  const pendingUploadResult = await prisma.stealthGenerationResult.findFirstOrThrow({
+    where: { runId: pendingUploadCheckpoint.runId },
+  });
+  const pendingUploadPath = `stealth-build-uploads/v1/${organization.id}/${evaluation.id}/${pendingUploadCheckpoint.variantId}/${pendingUploadResult.promptId}/${randomUUID()}.json`;
+  await prisma.stealthGenerationResult.update({
+    where: { id: pendingUploadResult.id },
     data: {
-      id: randomUUID(),
-      experimentId: evaluation.id,
-      bucket: "builds",
-      path: pendingUploadPath,
-      expiresAt: new Date(Date.now() + 60_000),
+      uploadBucket: "builds",
+      uploadPath: pendingUploadPath,
+      uploadExpiresAt: new Date(Date.now() + 60_000),
     },
   });
   await assert.rejects(
     deleteUnusedDraftEvaluation(memberActor, organization.id, evaluation.id),
-    /pending cohort upload/i,
+    /pending build upload/i,
   );
-  await prisma.stealthCohortUpload.update({
-    where: { id: pendingUpload.id },
-    data: { expiresAt: new Date(Date.now() - 60_000) },
+  await prisma.stealthGenerationResult.update({
+    where: { id: pendingUploadResult.id },
+    data: { uploadExpiresAt: new Date(Date.now() - 60_000) },
   });
-  const expiredUploadFetch = global.fetch;
-  let expiredUploadRead = false;
-  global.fetch = (async () => {
-    expiredUploadRead = true;
-    throw new Error("Expired uploads must not be read");
-  }) as typeof fetch;
-  try {
-    await assert.rejects(
-      completeUploadedStealthCohortFromStorage(
-        memberActor,
-        organization.id,
-        evaluation.id,
-        {
-          codename: "Expired upload",
-          bucket: pendingUpload.bucket,
-          path: pendingUpload.path,
-        },
-      ),
-      /reference is invalid/i,
-    );
-  } finally {
-    global.fetch = expiredUploadFetch;
-  }
-  assert.equal(expiredUploadRead, false);
   const draftStorageUrl = process.env.SUPABASE_URL;
   const draftStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const draftFetch = global.fetch;
@@ -761,7 +713,12 @@ async function main() {
         "CLOSED",
         "draft deletion must reserve the evaluation before sweeping storage",
       );
-      return Response.json([{ id: "orphan", name: "orphan.json.gz" }]);
+      const body = JSON.parse(String(init.body)) as { prefix: string };
+      return Response.json(
+        body.prefix.includes(checkpoint.variantId)
+          ? [{ id: "orphan", name: "orphan.json.gz" }]
+          : [],
+      );
     }
     const body = JSON.parse(String(init?.body)) as { prefixes: string[] };
     deletedDraftUploads.push(...body.prefixes);
@@ -776,10 +733,13 @@ async function main() {
     if (draftStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
     else process.env.SUPABASE_SERVICE_ROLE_KEY = draftStorageKey;
   }
-  assert.deepEqual(deletedDraftUploads, [
-    pendingUploadPath,
-    `stealth-builds/v1/${checkpoint.variantId}/orphan.json.gz`,
-  ]);
+  assert.deepEqual(
+    deletedDraftUploads.sort(),
+    [
+      pendingUploadPath,
+      `stealth-builds/v1/${checkpoint.variantId}/orphan.json.gz`,
+    ].sort(),
+  );
   assert.equal(await prisma.stealthExperiment.count({ where: { id: evaluation.id } }), 0);
 
   const generationEvaluation = await createStealthEvaluation(memberActor, organization.id, {
@@ -1015,17 +975,6 @@ async function main() {
           requireStructuredOutput: true,
           enableTools: false,
         },
-      }),
-      /still running/,
-    );
-    await assert.rejects(
-      completeUploadedStealthCohort(memberActor, organization.id, generationEvaluation.id, {
-        variantId: generationCheckpoint.variantId,
-        codename: "Generation One",
-        builds: cohortPrompts.map((prompt) => ({
-          promptSlug: prompt.slug,
-          build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
-        })),
       }),
       /still running/,
     );
@@ -1609,127 +1558,6 @@ async function main() {
     0,
   );
 
-  const reservedUploadEvaluation = await createStealthEvaluation(memberActor, organization.id, {
-    name: `Reserved upload ${suffix}`,
-  });
-  const uploadBarrier = await installBuildInsertBarrier({
-    name: `upload_${suffix}`,
-    lockKey: Number.parseInt(suffix, 16) + 1,
-  });
-  const reservedUploadPromise = completeUploadedStealthCohort(
-    memberActor,
-    organization.id,
-    reservedUploadEvaluation.id,
-    {
-      codename: "Reserved upload",
-      builds: cohortPrompts.map((prompt) => ({
-        promptSlug: prompt.slug,
-        build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
-      })),
-    },
-  );
-  let reservedUploadVariant!: { id: string };
-  try {
-    reservedUploadVariant = await waitFor(
-      async () => {
-        const variant = await prisma.stealthVariant.findFirst({
-          where: {
-            experimentId: reservedUploadEvaluation.id,
-            generationRuns: { some: { status: "RUNNING" } },
-          },
-          select: { id: true },
-        });
-        return variant;
-      },
-      "upload reservation",
-    );
-    await assert.rejects(
-      configureStealthEndpoint(memberActor, organization.id, reservedUploadEvaluation.id, {
-        variantId: reservedUploadVariant.id,
-        codename: "Reserved upload",
-        config: {
-          protocol: "openrouter",
-          endpointUrl: "",
-          apiKey: "competing-upload-secret-key",
-          modelId: `competing-upload-${suffix}`,
-          requireStructuredOutput: true,
-          enableTools: false,
-        },
-      }),
-      /still running/,
-    );
-  } finally {
-    await uploadBarrier.release();
-  }
-  let reservedUpload: Awaited<typeof reservedUploadPromise>;
-  try {
-    reservedUpload = await reservedUploadPromise;
-  } finally {
-    await uploadBarrier.uninstall();
-  }
-  assert.equal(reservedUpload.variantId, reservedUploadVariant.id);
-  assert.equal(
-    (await prisma.stealthGenerationRun.findUniqueOrThrow({ where: { id: reservedUpload.runId } }))
-      .status,
-    "SUCCEEDED",
-  );
-
-  const partialUploadEvaluation = await createStealthEvaluation(memberActor, organization.id, {
-    name: `Partial upload ${suffix}`,
-  });
-  const partialUploadModel = await prisma.model.create({
-    data: {
-      key: `partial-upload-${suffix}`,
-      provider: "Stealth",
-      modelId: `partial-upload-${suffix}`,
-      displayName: "Partial upload",
-      enabled: false,
-    },
-  });
-  const partialUploadVariant = await prisma.stealthVariant.create({
-    data: {
-      experimentId: partialUploadEvaluation.id,
-      codename: "Partial upload",
-      source: "UPLOAD",
-      modelId: partialUploadModel.id,
-      expectedBuildCount: cohortPrompts.length,
-    },
-  });
-  const removePartialUploadFailure = await installBuildInsertFailure({
-    name: `partial_upload_${suffix}`,
-    modelId: partialUploadModel.id,
-    promptId: cohortPrompts[1]!.prompt.id,
-    message: "forced partial upload failure",
-  });
-  try {
-    await assert.rejects(
-      completeUploadedStealthCohort(memberActor, organization.id, partialUploadEvaluation.id, {
-        variantId: partialUploadVariant.id,
-        codename: partialUploadVariant.codename,
-        builds: cohortPrompts.map((prompt) => ({
-          promptSlug: prompt.slug,
-          build: { version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "stone" }] },
-        })),
-      }),
-    );
-  } finally {
-    await removePartialUploadFailure();
-  }
-  const partialUploadRun = await prisma.stealthGenerationRun.findFirstOrThrow({
-    where: { variantId: partialUploadVariant.id },
-    orderBy: { startedAt: "desc" },
-  });
-  assert.equal(partialUploadRun.status, "PARTIAL");
-  assert.equal(partialUploadRun.completedBuildCount, 1);
-  const partialUploadWorkspace = await getStealthEvaluationWorkspace(
-    memberActor,
-    organization.id,
-    partialUploadEvaluation.id,
-  );
-  assert.equal(partialUploadWorkspace?.checkpoints[0]?.persistedBuildCount, 1);
-  assert.equal(partialUploadWorkspace?.status, "GENERATING");
-  await closeStealthEvaluation(memberActor, organization.id, partialUploadEvaluation.id);
-
   const failedCreateModel = await prisma.model.create({
     data: {
       key: `failed-create-${suffix}`,
@@ -1914,125 +1742,99 @@ async function main() {
     name: `Uploaded ${suffix}`,
   });
   const prompts = await prepareStealthCohortPrompts();
-  const recoveredUploadEvaluation = await createStealthEvaluation(memberActor, organization.id, {
-    name: `Recovered upload ${suffix}`,
-  });
-  const recoveredUploadCodename = `Recovered upload ${suffix}`;
-  const removeReadyFinalizationFailure = await installOneShotReadyFinalizationFailure({
-    name: `upload_ready_${suffix}`,
-    codename: recoveredUploadCodename,
-  });
-  let recoveredUpload: Awaited<ReturnType<typeof completeUploadedStealthCohort>> | null = null;
-  try {
-    recoveredUpload = await completeUploadedStealthCohort(
+  const uploadStorageUrl = process.env.SUPABASE_URL;
+  const uploadStorageKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const uploadFetch = global.fetch;
+  const uploadedBlocks = new Map<string, number>();
+  process.env.SUPABASE_URL = "https://storage.example.test";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "storage-test-key";
+  global.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (init?.method === "POST" && url.includes("/object/upload/sign/")) {
+      return Response.json({
+        url: `${url.slice(url.indexOf("/object/upload/sign/"))}?token=test-upload-token`,
+      });
+    }
+    if ((!init?.method || init.method === "GET") && url.includes("/object/info/")) {
+      return Response.json({ id: "uploaded-build", name: "build.json" });
+    }
+    if (init?.method === "DELETE") return new Response(null, { status: 200 });
+    const x = uploadedBlocks.get(url);
+    if (x !== undefined) {
+      return Response.json({
+        version: "1.0",
+        blocks: [{ x, y: 0, z: 0, type: "stone" }],
+      });
+    }
+    throw new Error(`Unexpected upload request: ${String(input)}`);
+  }) as typeof fetch;
+
+  async function completeUploadCheckpoint(codename: string, x: number) {
+    const checkpoint = await createStealthUploadCheckpoint(
       memberActor,
       organization.id,
-      recoveredUploadEvaluation.id,
-      {
-        codename: recoveredUploadCodename,
-        builds: prompts.map((prompt) => ({
-          promptSlug: prompt.slug,
-          build: {
-            version: "1.0",
-            blocks: [{ x: 0, y: 0, z: 1, type: "stone" }],
-          },
-        })),
-      },
+      uploadedEvaluation.id,
+      { codename },
     );
-  } finally {
-    await removeReadyFinalizationFailure();
+    const results = await prisma.stealthGenerationResult.findMany({
+      where: { runId: checkpoint.runId },
+      orderBy: { promptId: "asc" },
+    });
+    assert.equal(results.length, prompts.length);
+    assert.equal(await claimNextStealthGenerationJob(`upload-${suffix}`, 30), null);
+    for (const [index, result] of results.entries()) {
+      const target = await createStealthBuildUploadTarget(
+        memberActor,
+        organization.id,
+        uploadedEvaluation.id,
+        result.id,
+      );
+      assert.equal(target.endpoint, "https://storage.example.test/storage/v1/upload/resumable");
+      uploadedBlocks.set(
+        `https://storage.example.test/storage/v1/object/builds/${target.path}`,
+        x + index,
+      );
+      await queueStealthBuildUpload(
+        memberActor,
+        organization.id,
+        uploadedEvaluation.id,
+        result.id,
+      );
+      const workerId = `upload-${suffix}`;
+      const claimed = await claimNextStealthGenerationJob(workerId, 30);
+      assert.equal(claimed?.id, result.id);
+      await generateStealthPromptForRun({
+        runId: checkpoint.runId,
+        promptId: result.promptId,
+        workerId,
+      });
+      await finishStealthGenerationRun(checkpoint.runId);
+    }
+    return checkpoint;
   }
-  assert.ok(recoveredUpload);
-  assert.equal(
-    (
-      await prisma.stealthGenerationRun.findUniqueOrThrow({
-        where: { id: recoveredUpload.runId },
-      })
-    ).status,
-    "SUCCEEDED",
-    "a complete upload must remain successful after transient finalization failure",
-  );
-  assert.equal(
-    (
-      await prisma.stealthVariant.findUniqueOrThrow({
-        where: { id: recoveredUpload.variantId },
-      })
-    ).status,
-    "READY",
-  );
-  const uploaded = await completeUploadedStealthCohort(
-    memberActor,
-    organization.id,
-    uploadedEvaluation.id,
-    {
-      codename: "Uploaded One",
-      builds: prompts.map((prompt) => ({
-        promptSlug: prompt.slug,
-        build: {
-          version: "1.0",
-          blocks: [{ x: 0, y: 0, z: 0, type: "stone" }],
-        },
-      })),
-    },
-  );
+
+  let uploaded: Awaited<ReturnType<typeof createStealthUploadCheckpoint>>;
+  try {
+    uploaded = await completeUploadCheckpoint("Uploaded One", 0);
+    await completeUploadCheckpoint("Uploaded Two", 32);
+  } finally {
+    global.fetch = uploadFetch;
+    if (uploadStorageUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = uploadStorageUrl;
+    if (uploadStorageKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = uploadStorageKey;
+  }
   const uploadedVariant = await prisma.stealthVariant.findUniqueOrThrow({
     where: { id: uploaded.variantId },
   });
   assert.equal(uploadedVariant.source, "UPLOAD");
   assert.equal(uploadedVariant.generatedBuildCount, prompts.length);
   assert.equal(uploadedVariant.status, "READY");
-  await completeUploadedStealthCohort(
-    memberActor,
-    organization.id,
-    uploadedEvaluation.id,
-    {
-      codename: "Uploaded Two",
-      builds: prompts.map((prompt) => ({
-        promptSlug: prompt.slug,
-        build: {
-          version: "1.0",
-          blocks: [{ x: 1, y: 0, z: 0, type: "stone" }],
-        },
-      })),
-    },
-  );
   assert.equal(
     await prisma.stealthVariant.count({ where: { experimentId: uploadedEvaluation.id } }),
     2,
     "checkpoint membership stays open until activation",
   );
-  const uploadedRun = await prisma.stealthGenerationRun.findFirstOrThrow({
-    where: { variantId: uploaded.variantId, status: "SUCCEEDED" },
-  });
-  await prisma.stealthGenerationRun.update({
-    where: { id: uploadedRun.id },
-    data: { promptCohortId: "prompts-v1:stale" },
-  });
-  const staleUploadWorkspace = await getStealthEvaluationWorkspace(
-    memberActor,
-    organization.id,
-    uploadedEvaluation.id,
-  );
-  assert.equal(
-    staleUploadWorkspace?.checkpoints.find((entry) => entry.id === uploaded.variantId)
-      ?.promptCohortCurrent,
-    false,
-  );
-  await assert.rejects(
-    activateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id),
-    /outdated prompt cohort/,
-  );
-  await completeUploadedStealthCohort(memberActor, organization.id, uploadedEvaluation.id, {
-    variantId: uploaded.variantId,
-    codename: uploadedVariant.codename,
-    builds: prompts.map((prompt) => ({
-      promptSlug: prompt.slug,
-      build: {
-        version: "1.0",
-        blocks: [{ x: 0, y: 0, z: 0, type: "stone" }],
-      },
-    })),
-  });
   await activateStealthEvaluation(memberActor, organization.id, uploadedEvaluation.id);
   const active = await prisma.stealthExperiment.findUniqueOrThrow({
     where: { id: uploadedEvaluation.id },
@@ -2155,14 +1957,17 @@ async function main() {
       { buildId: survivingBuild.id, bucket: "previous-artifacts", path: previousSharedPath },
     ],
   });
-  const trackedUploadPath = `stealth-cohort-uploads/v1/${organization.id}/${uploadedEvaluation.id}/${randomUUID()}.json`;
-  await prisma.stealthCohortUpload.create({
+  const trackedUploadResult = await prisma.stealthGenerationResult.findFirstOrThrow({
+    where: { run: { variantId: uploaded.variantId } },
+  });
+  const trackedUploadPath = `stealth-build-uploads/v1/${organization.id}/${uploadedEvaluation.id}/${uploaded.variantId}/${trackedUploadResult.promptId}/${randomUUID()}.json`;
+  await prisma.stealthGenerationResult.update({
+    where: { id: trackedUploadResult.id },
     data: {
-      id: randomUUID(),
-      experimentId: uploadedEvaluation.id,
-      bucket: "builds",
-      path: trackedUploadPath,
-      expiresAt: new Date(Date.now() - 60_000),
+      uploadBucket: "builds",
+      uploadPath: trackedUploadPath,
+      uploadExpiresAt: new Date(Date.now() - 60_000),
+      uploadQueuedAt: new Date(Date.now() - 120_000),
     },
   });
   const dueShared = new Date(Date.now() - 60_000);
@@ -2329,45 +2134,6 @@ async function main() {
   const laterPurge = await createStealthEvaluation(minebenchAdmin, otherOrganization.id, {
     name: `Later purge ${suffix}`,
   });
-  const uploadQuotaEvaluation = await createStealthEvaluation(
-    minebenchAdmin,
-    otherOrganization.id,
-    { name: `Upload quota ${suffix}` },
-  );
-  const quotaUploadIds = Array.from({ length: 20 }, () => randomUUID());
-  await prisma.stealthCohortUpload.createMany({
-    data: quotaUploadIds.map((id) => ({
-      id,
-      experimentId: uploadQuotaEvaluation.id,
-      bucket: "builds",
-      path: `stealth-cohort-uploads/v1/${otherOrganization.id}/${uploadQuotaEvaluation.id}/${id}.json`,
-      expiresAt: new Date(Date.now() + 60_000),
-    })),
-  });
-  await assert.rejects(
-    createStealthCohortUploadTarget(
-      minebenchAdmin,
-      otherOrganization.id,
-      uploadQuotaEvaluation.id,
-    ),
-    /Too many pending cohort uploads/,
-  );
-  await prisma.stealthCohortUpload.deleteMany({ where: { id: { in: quotaUploadIds } } });
-  const abandonedUploadEvaluation = await createStealthEvaluation(
-    minebenchAdmin,
-    otherOrganization.id,
-    { name: `Abandoned upload ${suffix}` },
-  );
-  const abandonedUploadIds = Array.from({ length: 101 }, () => randomUUID());
-  await prisma.stealthCohortUpload.createMany({
-    data: abandonedUploadIds.map((id) => ({
-      id,
-      experimentId: abandonedUploadEvaluation.id,
-      bucket: "builds",
-      path: `stealth-cohort-uploads/v1/${otherOrganization.id}/${abandonedUploadEvaluation.id}/${id}.json`,
-      expiresAt: new Date(Date.now() - 60_000),
-    })),
-  });
   await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, blockedPurge.id);
   await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, laterPurge.id);
   const purgeNow = new Date();
@@ -2412,16 +2178,6 @@ async function main() {
   assert.equal(batchPurge.failures[0]?.evaluationId, blockedPurge.id);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: blockedPurge.id } }), 1);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: laterPurge.id } }), 0);
-  assert.equal(
-    await prisma.stealthCohortUpload.count({ where: { id: { in: abandonedUploadIds } } }),
-    0,
-    "expired upload cleanup must advance beyond its first batch",
-  );
-  assert.equal(
-    await prisma.stealthExperiment.count({ where: { id: abandonedUploadEvaluation.id } }),
-    1,
-  );
-
   console.log("private evaluation application service checks passed");
 }
 

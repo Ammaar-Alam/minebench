@@ -130,14 +130,15 @@ function normalizeRateLimitPath(pathname: string): string {
   if (/^\/api\/lab\/organizations\/[^/]+\/builds\/[^/]+$/.test(pathname)) {
     return "/api/lab/organizations/:orgSlug/builds/:resultId";
   }
+  if (/^\/api\/lab\/organizations\/[^/]+\/experiments\/[^/]+\/export$/.test(pathname)) {
+    return "/api/lab/organizations/:orgSlug/experiments/:experimentId/export";
+  }
   if (
-    /^\/api\/lab\/organizations\/[^/]+\/experiments\/[^/]+\/(?:cohort-upload|export)$/.test(
+    /^\/api\/lab\/organizations\/[^/]+\/experiments\/[^/]+\/build-uploads\/[^/]+$/.test(
       pathname,
     )
   ) {
-    return pathname.endsWith("/export")
-      ? "/api/lab/organizations/:orgSlug/experiments/:experimentId/export"
-      : "/api/lab/organizations/:orgSlug/experiments/:experimentId/cohort-upload";
+    return "/api/lab/organizations/:orgSlug/experiments/:experimentId/build-uploads/:resultId";
   }
   if (/^\/api\/arena\/builds\/[^/]+\/stream$/.test(pathname)) {
     return "/api/arena/builds/:buildId/stream";

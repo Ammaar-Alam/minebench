@@ -11,6 +11,7 @@ export type ProtectedBuildOption = {
   resultId: string | null;
   checkpointId: string;
   checkpoint: string;
+  checkpointStatus: string;
   promptId: string;
   prompt: string;
   status: string;
@@ -93,9 +94,27 @@ export function ProtectedBuildInspector({
   orgSlug: string;
   builds: ProtectedBuildOption[];
 }) {
-  const initialBuild = builds.find((build) => build.status === "READY") ?? builds[0] ?? null;
+  const currentCheckpointIds = Array.from(
+    new Set(
+      builds
+        .filter((build) => build.checkpointStatus !== "WITHDRAWN")
+        .map((build) => build.checkpointId),
+    ),
+  );
+  const defaultCheckpointFilter =
+    currentCheckpointIds.length === 1
+      ? currentCheckpointIds[0]!
+      : currentCheckpointIds.length === 0
+        ? builds[0]?.checkpointId ?? "ALL"
+        : "ALL";
+  const initialBuild =
+    builds.find(
+      (build) =>
+        build.status === "READY" &&
+        (defaultCheckpointFilter === "ALL" || build.checkpointId === defaultCheckpointFilter),
+    ) ?? builds[0] ?? null;
   const [selectedId, setSelectedId] = useState(initialBuild?.id ?? "");
-  const [checkpointFilter, setCheckpointFilter] = useState("ALL");
+  const [checkpointFilter, setCheckpointFilter] = useState(defaultCheckpointFilter);
   const [statusFilter, setStatusFilter] = useState<BuildFilter>("ALL");
   const [query, setQuery] = useState("");
   const [payload, setPayload] = useState<ProtectedBuildResponse | null>(null);
@@ -105,22 +124,32 @@ export function ProtectedBuildInspector({
   const [error, setError] = useState<string | null>(null);
 
   const checkpoints = useMemo(() => {
-    const unique = new Map<string, string>();
-    for (const build of builds) unique.set(build.checkpointId, build.checkpoint);
-    return Array.from(unique, ([id, name]) => ({ id, name }));
+    const unique = new Map<string, { name: string; archived: boolean }>();
+    for (const build of builds) {
+      unique.set(build.checkpointId, {
+        name: build.checkpoint,
+        archived: build.checkpointStatus === "WITHDRAWN",
+      });
+    }
+    return Array.from(unique, ([id, checkpoint]) => ({ id, ...checkpoint }));
   }, [builds]);
+  const currentCheckpoints = checkpoints.filter((checkpoint) => !checkpoint.archived);
+  const archivedCheckpoints = checkpoints.filter((checkpoint) => checkpoint.archived);
+  const hasCurrentCheckpoints = currentCheckpoints.length > 0;
 
   const filteredBuilds = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     return builds.filter(
       (build) =>
-        (checkpointFilter === "ALL" || build.checkpointId === checkpointFilter) &&
+        (checkpointFilter === "ALL"
+          ? !hasCurrentCheckpoints || build.checkpointStatus !== "WITHDRAWN"
+          : build.checkpointId === checkpointFilter) &&
         matchesStatus(build, statusFilter) &&
         (!normalizedQuery ||
           build.prompt.toLowerCase().includes(normalizedQuery) ||
           build.checkpoint.toLowerCase().includes(normalizedQuery)),
     );
-  }, [builds, checkpointFilter, query, statusFilter]);
+  }, [builds, checkpointFilter, hasCurrentCheckpoints, query, statusFilter]);
 
   const selected =
     filteredBuilds.find((build) => build.id === selectedId) ?? filteredBuilds[0] ?? null;
@@ -188,7 +217,9 @@ export function ProtectedBuildInspector({
     const next = filteredBuilds[selectedIndex + offset];
     if (next) setSelectedId(next.id);
   };
-  const issueCount = builds.filter((build) => build.status === "FAILED" || build.error).length;
+  const issueCount = filteredBuilds.filter(
+    (build) => build.status === "FAILED" || build.error,
+  ).length;
   const viewerMetrics = payload
     ? {
         blockCount: payload.blockCount,
@@ -241,12 +272,25 @@ export function ProtectedBuildInspector({
               onChange={(event) => setCheckpointFilter(event.target.value)}
               className="mb-field h-11"
             >
-              <option value="ALL">All checkpoints</option>
-              {checkpoints.map((checkpoint) => (
-                <option key={checkpoint.id} value={checkpoint.id}>
-                  {checkpoint.name}
-                </option>
-              ))}
+              {hasCurrentCheckpoints ? <option value="ALL">All current</option> : null}
+              {currentCheckpoints.length > 0 ? (
+                <optgroup label="Current">
+                  {currentCheckpoints.map((checkpoint) => (
+                    <option key={checkpoint.id} value={checkpoint.id}>
+                      {checkpoint.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+              {archivedCheckpoints.length > 0 ? (
+                <optgroup label="Archived">
+                  {archivedCheckpoints.map((checkpoint) => (
+                    <option key={checkpoint.id} value={checkpoint.id}>
+                      {checkpoint.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
             </select>
           </label>
           <label>
