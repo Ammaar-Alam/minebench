@@ -947,7 +947,10 @@ export async function finishStealthGenerationRun(runId: string): Promise<void> {
       if (experiment.status !== "CLOSED") {
         await tx.stealthVariant.updateMany({
           where: { id: run.variantId, status: { not: "WITHDRAWN" } },
-          data: { ...variantProgress, status: "GENERATING" },
+          data: {
+            ...variantProgress,
+            status: progress.completedBuildCount > 0 ? "GENERATING" : "DRAFT",
+          },
         });
         await syncExperimentReadiness(tx, run.variant.experimentId);
       }

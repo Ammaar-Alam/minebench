@@ -695,6 +695,7 @@ async function main() {
     where: { id: pendingUploadCheckpoint.variantId },
     data: { status: "GENERATING" },
   });
+  await finishStealthGenerationRun(pendingUploadCheckpoint.runId);
   await getStealthEvaluationWorkspace(memberActor, organization.id, evaluation.id);
   assert.equal(
     (
@@ -704,6 +705,19 @@ async function main() {
     ).status,
     "RUNNING",
     "failed upload slots must remain open for replacement files",
+  );
+  assert.equal(
+    (
+      await prisma.stealthVariant.findUniqueOrThrow({
+        where: { id: pendingUploadCheckpoint.variantId },
+      })
+    ).status,
+    "DRAFT",
+    "failed-only upload checkpoints must remain deletable",
+  );
+  assert.equal(
+    (await prisma.stealthExperiment.findUniqueOrThrow({ where: { id: evaluation.id } })).status,
+    "DRAFT",
   );
   const pendingUploadPath = `stealth-build-uploads/v1/${organization.id}/${evaluation.id}/${pendingUploadCheckpoint.variantId}/${pendingUploadResult.promptId}/${randomUUID()}.json`;
   await prisma.stealthGenerationResult.update({
