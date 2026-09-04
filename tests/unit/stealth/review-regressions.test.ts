@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { shouldPollStealthGeneration } from "../../../lib/stealth/generationPolling";
 
 const read = (path: string) => readFileSync(path, "utf8");
 
@@ -199,12 +200,30 @@ assert.match(matchupPicker, /hasReachedStealthVoteGoal/);
 const buildsPage = read("app/lab/[orgSlug]/experiments/[experimentId]/builds/page.tsx");
 assert.match(buildsPage, /promptCohortCurrent/);
 assert.match(buildsPage, /currentExpectedBuildCount/);
-assert.match(buildsPage, /checkpoint\.status !== "WITHDRAWN"/);
+assert.match(buildsPage, /shouldPollStealthGeneration/);
 const buildInspector = read("components/lab/ProtectedBuildInspector.tsx");
 assert.match(buildInspector, /<optgroup label="Current">/);
 assert.match(buildInspector, /<optgroup label="Archived">/);
 const overviewPage = read("app/lab/[orgSlug]/experiments/[experimentId]/overview/page.tsx");
 assert.match(overviewPage, /canResume/);
+assert.match(overviewPage, /shouldPollStealthGeneration/);
+
+const uploadPollingState = (statuses: string[]) => ({
+  status: "GENERATING",
+  source: "UPLOAD",
+  latestGenerationRun: {
+    status: "RUNNING",
+    results: statuses.map((status) => ({ status, uploadPending: status === "QUEUED" })),
+  },
+});
+assert.equal(shouldPollStealthGeneration(uploadPollingState(["READY"])), true);
+assert.equal(shouldPollStealthGeneration(uploadPollingState(["READY", "FAILED"])), false);
+assert.equal(shouldPollStealthGeneration(uploadPollingState(["QUEUED"])), true);
+assert.equal(
+  shouldPollStealthGeneration({ ...uploadPollingState(["QUEUED"]), status: "WITHDRAWN" }),
+  false,
+);
+assert.match(settings, /shouldPollStealthGeneration/);
 const adminEvaluationPage = read("app/admin/private-evaluations/[experimentId]/page.tsx");
 assert.match(adminEvaluationPage, /canResume/);
 const arena = read("components/arena/Arena.tsx");

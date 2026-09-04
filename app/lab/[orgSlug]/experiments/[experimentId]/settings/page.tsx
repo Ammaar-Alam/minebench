@@ -6,6 +6,7 @@ import { GenerationPoller } from "@/components/lab/GenerationPoller";
 import { LabDisclosure } from "@/components/lab/LabDisclosure";
 import { LifecycleActionButton } from "@/components/lab/LifecycleActionButton";
 import { EndpointRequestOverrides } from "@/components/lab/EndpointRequestOverrides";
+import { shouldPollStealthGeneration } from "@/lib/stealth/generationPolling";
 import {
   closeEvaluationAction,
   configureEndpointAction,
@@ -82,14 +83,9 @@ export default async function EvaluationSettingsPage({
     workspace.checkpoints.every(
       (checkpoint) => checkpoint.persistedBuildCount === 0 && checkpoint.totalVotes === 0,
     );
-  const uploadProcessing = Boolean(
-    uploadCheckpoint?.latestGenerationRun?.results.some(
-      (result) =>
-        (result.status === "QUEUED" && result.uploadPending) ||
-        result.status === "GENERATING" ||
-        result.status === "VALIDATING",
-    ),
-  );
+  const uploadProcessing = uploadCheckpoint
+    ? shouldPollStealthGeneration(uploadCheckpoint)
+    : false;
 
   return (
     <div className="space-y-8">

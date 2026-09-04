@@ -5,6 +5,7 @@ import {
   ProtectedBuildInspector,
   type ProtectedBuildOption,
 } from "@/components/lab/ProtectedBuildInspector";
+import { shouldPollStealthGeneration } from "@/lib/stealth/generationPolling";
 import { startGenerationAction } from "../../../actions";
 import { loadEvaluationReport } from "../data";
 
@@ -15,18 +16,7 @@ export default async function EvaluationBuildsPage({
 }) {
   const { orgSlug, experimentId } = await params;
   const { workspace, report } = await loadEvaluationReport(orgSlug, experimentId);
-  const generationActive = workspace.checkpoints.some(
-    (checkpoint) =>
-      checkpoint.status !== "WITHDRAWN" &&
-      checkpoint.latestGenerationRun?.status === "RUNNING" &&
-      (checkpoint.source === "ENDPOINT" ||
-        checkpoint.latestGenerationRun.results.some(
-          (result) =>
-            (result.status === "QUEUED" && result.uploadPending) ||
-            result.status === "GENERATING" ||
-            result.status === "VALIDATING",
-        )),
-  );
+  const generationActive = workspace.checkpoints.some(shouldPollStealthGeneration);
   const pendingCheckpoints = workspace.checkpoints.filter(
     (checkpoint) =>
       checkpoint.status !== "WITHDRAWN" &&
@@ -66,15 +56,7 @@ export default async function EvaluationBuildsPage({
               </div>
               <div className="divide-y divide-border/50">
                 {pendingCheckpoints.map((checkpoint) => {
-                  const running =
-                    checkpoint.latestGenerationRun?.status === "RUNNING" &&
-                    (checkpoint.source === "ENDPOINT" ||
-                      checkpoint.latestGenerationRun.results.some(
-                        (result) =>
-                          (result.status === "QUEUED" && result.uploadPending) ||
-                          result.status === "GENERATING" ||
-                          result.status === "VALIDATING",
-                      ));
+                  const running = shouldPollStealthGeneration(checkpoint);
                   const canStart =
                     workspace.status !== "CLOSED" &&
                     checkpoint.source === "ENDPOINT" &&
