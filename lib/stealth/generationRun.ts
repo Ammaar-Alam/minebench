@@ -41,6 +41,7 @@ import { validateOwnedVoxelBuild } from "@/lib/voxel/validate";
 
 const MAX_GENERATION_ATTEMPTS = 10;
 const MAX_GENERATION_CONCURRENCY = 15;
+const MAX_STEALTH_BUILD_UPLOAD_BYTES = 320 * 1024 * 1024;
 const { gridSize: GRID_SIZE, palette: PALETTE, mode: MODE } = STEALTH_COHORT_BUILD;
 
 function positiveInt(value: number, label: string, max: number): number {
@@ -123,11 +124,29 @@ async function loadStealthBuildUpload(
   ref: StealthBuildUploadRef,
   signal?: AbortSignal,
 ) {
-  const bytes = await fetchStoredBuildBytes(ref, { signal });
+  let bytes: Uint8Array;
+  try {
+    bytes = await fetchStoredBuildBytes(ref, {
+      signal,
+      maxBytes: MAX_STEALTH_BUILD_UPLOAD_BYTES,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("size limit")) {
+      throw new InvalidStealthBuildUploadError("Build exceeds the 320 MB upload limit");
+    }
+    throw error;
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(decodeStoredBuildText(bytes));
-  } catch {
+    parsed = JSON.parse(
+      decodeStoredBuildText(bytes, null, {
+        maxOutputBytes: MAX_STEALTH_BUILD_UPLOAD_BYTES,
+      }),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("size limit")) {
+      throw new InvalidStealthBuildUploadError("Build exceeds the 320 MB upload limit");
+    }
     throw new InvalidStealthBuildUploadError("Build must be valid JSON");
   }
   const validated = validateOwnedVoxelBuild(parsed, {

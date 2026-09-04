@@ -89,6 +89,15 @@ for (const functionName of ["disableStealthEndpoint", "recordStealthReleaseMappi
 
 const generationRun = read("lib/stealth/generationRun.ts");
 const providerSignal = read("lib/generation-worker/providerSignal.ts");
+assert.match(generationRun, /MAX_STEALTH_BUILD_UPLOAD_BYTES = 320 \* 1024 \* 1024/);
+assert.match(
+  generationRun,
+  /fetchStoredBuildBytes\(ref, \{[\s\S]*maxBytes: MAX_STEALTH_BUILD_UPLOAD_BYTES/,
+);
+assert.match(
+  generationRun,
+  /decodeStoredBuildText\(bytes, null, \{[\s\S]*maxOutputBytes: MAX_STEALTH_BUILD_UPLOAD_BYTES/,
+);
 assert.match(generationRun, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
 assert.match(generationRun, /abortSignal:/);
 assert.match(generationRun, /generationProviderSignal\(params\.signal\)/);
