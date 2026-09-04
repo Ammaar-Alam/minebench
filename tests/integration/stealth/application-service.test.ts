@@ -2198,6 +2198,20 @@ async function main() {
   const laterPurge = await createStealthEvaluation(minebenchAdmin, otherOrganization.id, {
     name: `Later purge ${suffix}`,
   });
+  const legacyUploadEvaluation = await createStealthEvaluation(
+    minebenchAdmin,
+    otherOrganization.id,
+    { name: `Legacy upload ${suffix}` },
+  );
+  const legacyUpload = await prisma.stealthCohortUpload.create({
+    data: {
+      id: randomUUID(),
+      experimentId: legacyUploadEvaluation.id,
+      bucket: "builds",
+      path: `stealth-cohort-uploads/v1/${otherOrganization.id}/${legacyUploadEvaluation.id}/${randomUUID()}.json`,
+      expiresAt: new Date(Date.now() - 60_000),
+    },
+  });
   await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, blockedPurge.id);
   await closeStealthEvaluation(minebenchAdmin, otherOrganization.id, laterPurge.id);
   const purgeNow = new Date();
@@ -2242,6 +2256,11 @@ async function main() {
   assert.equal(batchPurge.failures[0]?.evaluationId, blockedPurge.id);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: blockedPurge.id } }), 1);
   assert.equal(await prisma.stealthExperiment.count({ where: { id: laterPurge.id } }), 0);
+  assert.equal(await prisma.stealthCohortUpload.count({ where: { id: legacyUpload.id } }), 0);
+  assert.equal(
+    await prisma.stealthExperiment.count({ where: { id: legacyUploadEvaluation.id } }),
+    1,
+  );
   console.log("private evaluation application service checks passed");
 }
 

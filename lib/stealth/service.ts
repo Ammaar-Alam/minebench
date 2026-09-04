@@ -2408,6 +2408,48 @@ export async function purgeDueStealthEvaluations(
   const purged: string[] = [];
   const failures: Array<{ evaluationId: string; error: string }> = [];
   if (hasSupabaseStorageConfig()) {
+    let legacyUploadCursor: { expiresAt: Date; id: string } | null = null;
+    while (true) {
+      const expiredLegacyUploads: Array<{
+        id: string;
+        experimentId: string;
+        bucket: string;
+        path: string;
+        expiresAt: Date;
+      }> = await prisma.stealthCohortUpload.findMany({
+        where: {
+          expiresAt: { lte: now },
+          ...(legacyUploadCursor
+            ? {
+                OR: [
+                  { expiresAt: { gt: legacyUploadCursor.expiresAt } },
+                  { expiresAt: legacyUploadCursor.expiresAt, id: { gt: legacyUploadCursor.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ expiresAt: "asc" }, { id: "asc" }],
+        take: 100,
+        select: { id: true, experimentId: true, bucket: true, path: true, expiresAt: true },
+      });
+      if (expiredLegacyUploads.length === 0) break;
+      for (const upload of expiredLegacyUploads) {
+        try {
+          await deleteSupabaseStorageObjects([upload]);
+          await prisma.stealthCohortUpload.deleteMany({
+            where: { id: upload.id, expiresAt: { lte: now } },
+          });
+        } catch (error) {
+          failures.push({
+            evaluationId: upload.experimentId,
+            error: sanitizeOperationalError(error),
+          });
+        }
+      }
+      const lastUpload = expiredLegacyUploads.at(-1)!;
+      legacyUploadCursor = { expiresAt: lastUpload.expiresAt, id: lastUpload.id };
+    }
+
     let uploadCursor: { expiresAt: Date; id: string } | null = null;
     while (true) {
       const expiredUploads: Array<{
