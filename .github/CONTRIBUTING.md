@@ -38,7 +38,7 @@ When adding a format:
 
 1. Reuse the validated `VoxelBuild` shape and palette block IDs.
 2. Keep conversion lazy and worker-backed so Arena and Sandbox rendering stay responsive.
-3. Preserve block identity through native block states, material names, or metadata.
+3. Preserve block IDs through native block states, material names, or metadata when the target format supports them; otherwise document the loss explicitly.
 4. Add artifact checks to `tests/integration/voxel-export.test.ts`.
 5. Update `docs/voxel-exec-raw-output.md` with import steps and format limits.
 
