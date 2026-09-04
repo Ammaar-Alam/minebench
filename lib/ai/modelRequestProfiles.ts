@@ -29,6 +29,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
   },
   { tokens: 131_072, ids: ["qwen3.8-max"] },
   { tokens: 272_000, ids: ["gpt-5-pro"] },
+  { tokens: 128_000, ids: ["gpt-6-astra"] },
   // MiniMax M2.7 rejects the larger MineBench default on its OpenAI-compatible route
   {
     tokens: 131_072,
@@ -66,6 +67,7 @@ const OUTPUT_CEILING_PREFIXES: readonly { prefix: string; tokens: number }[] = [
 // Models that should use provider-default sampling instead of MineBench's
 // shared temperature, including models that reject sampling overrides
 const DEFAULT_SAMPLING_IDS: readonly string[] = [
+  "gpt-6-astra",
   "grok-4.6",
   "kimi-k3",
   "qwen3.8-max",

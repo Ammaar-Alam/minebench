@@ -112,10 +112,11 @@ Copy `.env.example` to `.env` and set what you need.
 - `ANTHROPIC_SONNET_4_6_EFFORT=low|medium|high|max` (runtime falls back automatically if provider rejects `max`)
 - `ANTHROPIC_STREAM_RESPONSES=1`
 - `OPENAI_STREAM_RESPONSES=1` (applies to live-delta callers; batch generation uses non-streamed Responses JSON)
-- `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs; defaults on for `gpt-5*` when not streaming deltas)
+- `OPENAI_USE_BACKGROUND_MODE=1` (recommended for long-running Responses jobs; defaults on for `gpt-5*` and `gpt-6-astra` when not streaming deltas)
 - `OPENAI_BACKGROUND_POLL_MS=2000` (poll interval for background mode)
 - `ANTHROPIC_ENABLE_1M_CONTEXT_BETA=1`
 - `ANTHROPIC_THINKING_BUDGET` (legacy/manual thinking models)
+- GPT 6 Astra Pro uses `gpt-6-astra` through the Responses API with `reasoning.mode=pro`, `reasoning.effort=max`, high text verbosity, strict structured output, and provider-default sampling. Its context window is 1050000 tokens and its combined reasoning/output cap is 128000 tokens. Supported efforts are `max`, `xhigh`, `high`, `medium`, and `low`; `none` and `minimal` are unsupported. Its OpenRouter fallback uses `openai/gpt-6-astra-pro` with max effort and strict structured output. See the [model contract](https://developers.openai.com/api/docs/models/gpt-6-astra) and [migration guide](https://developers.openai.com/api/docs/guides/latest-model).
 - GPT 5.6 Sol uses the native OpenAI model ID `gpt-5.6-sol` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses the model's 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-sol-pro` with max effort and strict structured output.
 - GPT 5.6 Luna uses the native OpenAI model ID `gpt-5.6-luna` through the Responses API with `reasoning.mode=pro`, defaults to `reasoning.effort=max`, and uses its 1050000-token context window and 128000-token combined reasoning and output cap. Its OpenRouter fallback uses `openai/gpt-5.6-luna-pro` with max effort and strict structured output.
 - Kimi K3 uses the native Moonshot model ID `kimi-k3`, always reasons with `reasoning_effort=max`, uses its 1048576-token completion ceiling, and omits its fixed sampling parameters. Its OpenRouter fallback uses `moonshotai/kimi-k3` with max effort and fails closed if that effort is rejected.

@@ -16,6 +16,18 @@ import {
 import { promptCohortId } from "../../../lib/benchmark/promptCohortId";
 import { BENCHMARK_PROMPT_COHORT_ID } from "../../../lib/benchmark/prompts";
 
+const astra = getModelBenchmarkProfile("openai_gpt_6_astra");
+assert.ok(astra);
+assert.deepEqual(astra.parameters, [
+  { label: "Reasoning mode", value: "Pro" },
+  { label: "Reasoning effort", value: "Max" },
+  { label: "Text verbosity", value: "High" },
+]);
+assert.deepEqual(astra.outputCap, { kind: "unavailable", reason: "accepted-cap-unrecorded" });
+assert.equal(astra.totalCost, undefined);
+assert.equal(astra.averageInference, undefined);
+assert.equal(astra.buildCount, undefined);
+
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
 assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
 assert.deepEqual(gpt56Luna.parameters, [

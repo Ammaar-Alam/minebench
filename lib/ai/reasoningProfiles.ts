@@ -85,6 +85,10 @@ type EffortLadderRule = {
 
 const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
   {
+    ids: ["gpt-6-astra", "openai/gpt-6-astra-pro"],
+    ladder: ["max", "xhigh", "high", "medium", "low"],
+  },
+  {
     prefixes: ["gpt-5.6", "openai/gpt-5.6"],
     ladder: ["max", "xhigh", "high", "medium", "low", "none"],
   },
@@ -230,6 +234,8 @@ export function zaiReasoningEffortAttempts(
 export function modelRequiresReasoning(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return (
+    normalized === "gpt-6-astra" ||
+    normalized === "openai/gpt-6-astra-pro" ||
     normalized === "grok-4.6" ||
     normalized === "x-ai/grok-4.6" ||
     normalized === "glm-5.3" ||

@@ -195,7 +195,7 @@ function describeRequestedThinkingMode(opts: {
   }
 
   if (opts.provider === "openai") {
-    const usesProReasoning = opts.modelId.startsWith("gpt-5.6");
+    const usesProReasoning = opts.modelId.startsWith("gpt-5.6") || opts.modelId === "gpt-6-astra";
     const reasoningMode = usesProReasoning
       ? "reasoning_mode=pro,"
       : "";
