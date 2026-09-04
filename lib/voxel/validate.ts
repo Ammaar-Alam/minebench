@@ -110,9 +110,10 @@ function clampInt(n: number, min: number, max: number): number {
   return n;
 }
 
-export function validateVoxelBuildSpec(
+function validateVoxelBuildSpecInternal(
   build: VoxelBuild,
   opts: ValidateVoxelOptions,
+  releaseInput: boolean,
 ): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
   const allowed = new Set(opts.palette.map((b) => b.id));
   const paletteIndex = new Map(opts.palette.map((block, index) => [block.id, index + 1]));
@@ -169,6 +170,11 @@ export function validateVoxelBuildSpec(
     }
     const localIndex = (x & 15) | ((y & 15) << 4) | ((z & 15) << 8);
     if (chunk[localIndex] === 0) {
+      if (occupiedCount >= opts.maxBlocks) {
+        throw new Error(
+          `Too many blocks (${occupiedCount + 1}) > maxBlocks (${opts.maxBlocks})`,
+        );
+      }
       if (occupiedCount === occupied.length) {
         const grown = new Uint32Array(occupied.length * 2);
         grown.set(occupied);
@@ -278,6 +284,11 @@ export function validateVoxelBuildSpec(
     if (remaining > 0) warnings.push(`Dropped ${remaining} additional unknown block types`);
   }
 
+  if (releaseInput) {
+    build.blocks.length = 0;
+    if (build.boxes) build.boxes.length = 0;
+    if (build.lines) build.lines.length = 0;
+  }
   const blocks = Array.from({ length: occupiedCount }, (_, index) => {
     const key = occupied[index]!;
     const x = key & 1023;
@@ -296,6 +307,13 @@ export function validateVoxelBuildSpec(
   }
 
   return { ok: true, value: { build: { version: "1.0", blocks }, warnings } };
+}
+
+export function validateVoxelBuildSpec(
+  build: VoxelBuild,
+  opts: ValidateVoxelOptions,
+): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+  return validateVoxelBuildSpecInternal(build, opts, false);
 }
 
 export function validateVoxelBuild(
@@ -368,5 +386,5 @@ export function validateOwnedVoxelBuild(
       }
     }
   }
-  return validateVoxelBuildSpec(input as VoxelBuild, opts);
+  return validateVoxelBuildSpecInternal(input as VoxelBuild, opts, true);
 }

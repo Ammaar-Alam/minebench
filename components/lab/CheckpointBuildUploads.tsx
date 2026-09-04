@@ -50,6 +50,16 @@ function uploadBuild(
         contentType: file.type || "application/json",
         cacheControl: "0",
       },
+      fingerprint: async (selected) =>
+        [
+          "minebench-build",
+          target.bucket,
+          target.path,
+          selected.name,
+          selected.type,
+          selected.size,
+          selected.lastModified,
+        ].join(":"),
       uploadDataDuringCreation: true,
       removeFingerprintOnSuccess: true,
       onError: reject,

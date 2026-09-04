@@ -1791,7 +1791,12 @@ async function main() {
     throw new Error(`Unexpected upload request: ${String(input)}`);
   }) as typeof fetch;
 
-  async function completeUploadCheckpoint(codename: string, x: number, variantId?: string) {
+  async function completeUploadCheckpoint(
+    codename: string,
+    x: number,
+    variantId?: string,
+    seedUnacceptedBuild = false,
+  ) {
     const checkpoint = await createStealthUploadCheckpoint(
       memberActor,
       organization.id,
@@ -1802,16 +1807,46 @@ async function main() {
       where: { runId: checkpoint.runId },
       orderBy: { promptId: "asc" },
     });
+    const variant = await prisma.stealthVariant.findUniqueOrThrow({
+      where: { id: checkpoint.variantId },
+      select: { modelId: true },
+    });
     assert.equal(results.length, prompts.length);
     assert.equal(await claimNextStealthGenerationJob(`upload-${suffix}`, 30), null);
     for (const [index, result] of results.entries()) {
-      const target = await createStealthBuildUploadTarget(
+      let target = await createStealthBuildUploadTarget(
         memberActor,
         organization.id,
         uploadedEvaluation.id,
         result.id,
       );
-      assert.equal(target.endpoint, "https://storage.example.test/storage/v1/upload/resumable");
+      assert.equal(target.endpoint, "https://storage.example.test/storage/v1/upload/resumable/sign");
+      if (index === 0) {
+        await prisma.stealthGenerationResult.update({
+          where: { id: result.id },
+          data: { status: "FAILED", uploadExpiresAt: new Date(0) },
+        });
+        const replacement = await createStealthBuildUploadTarget(
+          memberActor,
+          organization.id,
+          uploadedEvaluation.id,
+          result.id,
+        );
+        assert.equal(replacement.path, target.path, "replacement uploads must retain their target");
+        target = replacement;
+      }
+      if (seedUnacceptedBuild && index === 0) {
+        const prompt = prompts.find((entry) => entry.prompt.id === result.promptId);
+        assert.ok(prompt);
+        await persistStealthBuild({
+          variantId: checkpoint.variantId,
+          modelId: variant.modelId,
+          promptSlug: prompt.slug,
+          promptText: prompt.text,
+          build: { version: "1.0", blocks: [{ x: 255, y: 0, z: 0, type: "stone" }] },
+          generationTimeMs: 0,
+        });
+      }
       uploadedBlocks.set(
         `https://storage.example.test/storage/v1/object/builds/${target.path}`,
         x + index,
@@ -1830,6 +1865,17 @@ async function main() {
         promptId: result.promptId,
         workerId,
       });
+      if (seedUnacceptedBuild && index === 0) {
+        const accepted = await prisma.stealthGenerationResult.findUniqueOrThrow({
+          where: { id: result.id },
+          include: { build: { select: { voxelData: true } } },
+        });
+        const voxelData = accepted.build?.voxelData as
+          | { blocks?: Array<{ x?: number }> }
+          | null
+          | undefined;
+        assert.equal(voxelData?.blocks?.[0]?.x, x, "replacement JSON must replace stale builds");
+      }
       await finishStealthGenerationRun(checkpoint.runId);
     }
     return checkpoint;
@@ -1837,7 +1883,7 @@ async function main() {
 
   let uploaded: Awaited<ReturnType<typeof createStealthUploadCheckpoint>>;
   try {
-    uploaded = await completeUploadCheckpoint("Uploaded One", 0);
+    uploaded = await completeUploadCheckpoint("Uploaded One", 0, undefined, true);
     const outdatedRunId = uploaded.runId;
     await prisma.stealthGenerationRun.update({
       where: { id: outdatedRunId },

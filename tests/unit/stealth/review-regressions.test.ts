@@ -14,6 +14,7 @@ const buildUploads = read("components/lab/CheckpointBuildUploads.tsx");
 assert.match(buildUploads, /from "tus-js-client"/);
 assert.match(buildUploads, /chunkSize: 6 \* 1024 \* 1024/);
 assert.match(buildUploads, /"x-signature": target\.token/);
+assert.match(buildUploads, /fingerprint:[\s\S]*target\.path/);
 assert.match(buildUploads, /upload\.findPreviousUploads\(\)/);
 assert.match(buildUploads, /queueAction\(slot\.resultId\)/);
 assert.doesNotMatch(settings, /CohortUploadForm|Upload cohort/);
@@ -55,7 +56,9 @@ assertOrder(
   "workspace reads must reclaim expired generation reservations before reporting status",
 );
 const uploadTarget = functionBody(service, "createStealthBuildUploadTarget");
-assert.match(uploadTarget, /createSupabaseSignedUploadToken\(\{ bucket, path: prepared\.path \}\)/);
+assert.match(service, /storage\/v1\/upload\/resumable\/sign/);
+assert.match(uploadTarget, /result\.uploadPath \?\?/);
+assert.match(uploadTarget, /createSupabaseSignedUploadToken\(prepared\)/);
 const activation = functionBody(service, "activateStealthEvaluation");
 assert.match(activation, /generationRuns:[\s\S]*status: "SUCCEEDED"/);
 assert.match(activation, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
@@ -96,6 +99,7 @@ for (const functionName of ["disableStealthEndpoint", "recordStealthReleaseMappi
 const generationRun = read("lib/stealth/generationRun.ts");
 const providerSignal = read("lib/generation-worker/providerSignal.ts");
 assert.match(generationRun, /MAX_STEALTH_BUILD_UPLOAD_BYTES = 320 \* 1024 \* 1024/);
+assert.match(generationRun, /MAX_STEALTH_BUILD_BLOCKS = 4_000_000/);
 assert.match(
   generationRun,
   /fetchStoredBuildBytes\(ref, \{[\s\S]*maxBytes: MAX_STEALTH_BUILD_UPLOAD_BYTES/,
@@ -107,6 +111,8 @@ assert.match(
 assert.match(generationRun, /promptCohortId !== BENCHMARK_PROMPT_COHORT_ID/);
 assert.match(generationRun, /abortSignal:/);
 assert.match(generationRun, /generationProviderSignal\(params\.signal\)/);
+assert.match(generationRun, /returnExpandedBuild: true/);
+assert.match(generationRun, /existing && run\.variant\.source !== "UPLOAD"/);
 assert.match(providerSignal, /90 \* 60 \* 1000/);
 for (const functionName of [
   "failStealthGenerationRun",

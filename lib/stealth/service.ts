@@ -1619,7 +1619,7 @@ function resumableUploadEndpoint(): string {
   if (endpoint.hostname.endsWith(".supabase.co")) {
     endpoint.hostname = endpoint.hostname.replace(/\.supabase\.co$/, ".storage.supabase.co");
   }
-  endpoint.pathname = "/storage/v1/upload/resumable";
+  endpoint.pathname = "/storage/v1/upload/resumable/sign";
   endpoint.search = "";
   return endpoint.toString();
 }
@@ -1631,7 +1631,7 @@ export async function createStealthBuildUploadTarget(
   resultId: string,
 ): Promise<StealthBuildUploadTarget> {
   const now = new Date();
-  const bucket = getBuildStorageBucketFromEnv();
+  const defaultBucket = getBuildStorageBucketFromEnv();
   const prepared = await prisma.$transaction(async (tx) => {
     await assertEvaluationOperator(tx, actor, organizationId);
     const experiment = await lockExperiment(tx, experimentId);
@@ -1674,47 +1674,33 @@ export async function createStealthBuildUploadTarget(
       throw new Error("Build is already queued");
     }
 
-    const reusable =
-      result.status === "QUEUED" &&
-      result.uploadPath &&
-      result.uploadBucket === bucket &&
-      result.uploadExpiresAt &&
-      result.uploadExpiresAt > now;
-    const path = reusable
-      ? result.uploadPath!
-      : `${BUILD_UPLOAD_PREFIX}/${organizationId}/${experimentId}/${variant.id}/${result.promptId}/${randomUUID()}.json`;
-    const previous =
-      !reusable && result.uploadBucket && result.uploadPath
-        ? { bucket: result.uploadBucket, path: result.uploadPath }
-        : null;
-    if (!reusable) {
-      await tx.stealthGenerationResult.update({
-        where: { id: result.id },
-        data: {
-          status: "QUEUED",
-          error: null,
-          workerAttempts: 0,
-          runAfter: now,
-          lockedBy: null,
-          lockedAt: null,
-          leaseExpiresAt: null,
-          uploadBucket: bucket,
-          uploadPath: path,
-          uploadExpiresAt: new Date(now.getTime() + BUILD_UPLOAD_TTL_MS),
-          uploadQueuedAt: null,
-        },
-      });
-    }
-    return { path, previous };
+    const bucket = result.uploadBucket ?? defaultBucket;
+    const path =
+      result.uploadPath ??
+      `${BUILD_UPLOAD_PREFIX}/${organizationId}/${experimentId}/${variant.id}/${result.promptId}/${randomUUID()}.json`;
+    await tx.stealthGenerationResult.update({
+      where: { id: result.id },
+      data: {
+        status: "QUEUED",
+        error: null,
+        workerAttempts: 0,
+        runAfter: now,
+        lockedBy: null,
+        lockedAt: null,
+        leaseExpiresAt: null,
+        uploadBucket: bucket,
+        uploadPath: path,
+        uploadExpiresAt: new Date(now.getTime() + BUILD_UPLOAD_TTL_MS),
+        uploadQueuedAt: null,
+      },
+    });
+    return { bucket, path };
   });
 
-  const token = await createSupabaseSignedUploadToken({ bucket, path: prepared.path });
-  if (prepared.previous) {
-    await deleteSupabaseStorageObjects([prepared.previous]).catch(() => undefined);
-  }
+  const token = await createSupabaseSignedUploadToken(prepared);
   return {
     resultId,
-    bucket,
+    bucket: prepared.bucket,
     path: prepared.path,
     endpoint: resumableUploadEndpoint(),
     token,

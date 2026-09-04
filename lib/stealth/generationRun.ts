@@ -1,6 +1,5 @@
 import { Prisma, type StealthGenerationResultStatus } from "@prisma/client";
 import { generateVoxelBuild } from "@/lib/ai/generateVoxelBuild";
-import { MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import { BENCHMARK_PROMPT_COHORT_ID } from "@/lib/benchmark/prompts";
 import { getPalette } from "@/lib/blocks/palettes";
 import { prisma } from "@/lib/prisma";
@@ -42,6 +41,7 @@ import { validateOwnedVoxelBuild } from "@/lib/voxel/validate";
 const MAX_GENERATION_ATTEMPTS = 10;
 const MAX_GENERATION_CONCURRENCY = 15;
 const MAX_STEALTH_BUILD_UPLOAD_BYTES = 320 * 1024 * 1024;
+const MAX_STEALTH_BUILD_BLOCKS = 4_000_000;
 const { gridSize: GRID_SIZE, palette: PALETTE, mode: MODE } = STEALTH_COHORT_BUILD;
 
 function positiveInt(value: number, label: string, max: number): number {
@@ -149,10 +149,11 @@ async function loadStealthBuildUpload(
     }
     throw new InvalidStealthBuildUploadError("Build must be valid JSON");
   }
+  bytes = new Uint8Array();
   const validated = validateOwnedVoxelBuild(parsed, {
     gridSize: GRID_SIZE,
     palette: getPalette(PALETTE),
-    maxBlocks: MAX_BLOCKS_BY_GRID[GRID_SIZE],
+    maxBlocks: MAX_STEALTH_BUILD_BLOCKS,
   });
   if (!validated.ok) throw new InvalidStealthBuildUploadError(validated.error);
   return validated.value.build;
@@ -597,7 +598,7 @@ export async function generateStealthPromptForRun(params: {
     },
     select: { id: true, generationTimeMs: true },
   });
-  if (existing) {
+  if (existing && run.variant.source !== "UPLOAD") {
     try {
       await withStealthGenerationHeartbeat(run.id, entry.prompt.id, async () => {
         await params.acquireBuildProcessing?.();
@@ -673,16 +674,17 @@ export async function generateStealthPromptForRun(params: {
       data: { status: "VALIDATING", error: null },
     });
     if (validating.count !== 1) return;
-    const build = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, () =>
-      persistStealthBuild({
+    const build = await withStealthGenerationHeartbeat(run.id, entry.prompt.id, async () => {
+      if (existing) await deleteUnacceptedStealthBuild(existing.id);
+      return persistStealthBuild({
         variantId: run.variant.id,
         modelId: run.variant.modelId,
         promptSlug: entry.slug,
         promptText: entry.text,
         build: uploadedBuild,
         generationTimeMs: 0,
-      }),
-    );
+      });
+    });
     const accepted = await acceptStealthGenerationBuild({
       runId: run.id,
       resultIdentity,
@@ -732,6 +734,7 @@ export async function generateStealthPromptForRun(params: {
         gridSize: GRID_SIZE,
         palette: PALETTE,
         maxAttempts,
+        returnExpandedBuild: true,
         abortSignal: generationProviderSignal(params.signal),
         acquireBuildProcessing: params.acquireBuildProcessing,
         onProviderRequest: (attempt) => {
