@@ -1850,6 +1850,36 @@ async function main() {
       0,
       "refreshing an outdated upload checkpoint must replace its upload run",
     );
+    const incompleteEvaluation = await createStealthEvaluation(memberActor, organization.id, {
+      name: `Incomplete upload ${suffix}`,
+    });
+    const incomplete = await createStealthUploadCheckpoint(
+      memberActor,
+      organization.id,
+      incompleteEvaluation.id,
+      { codename: "Incomplete upload" },
+    );
+    await prisma.stealthVariant.update({
+      where: { id: incomplete.variantId },
+      data: { status: "GENERATING" },
+    });
+    await prisma.stealthGenerationRun.update({
+      where: { id: incomplete.runId },
+      data: { promptCohortId: `outdated-incomplete-${suffix}` },
+    });
+    const refreshedIncomplete = await createStealthUploadCheckpoint(
+      memberActor,
+      organization.id,
+      incompleteEvaluation.id,
+      { codename: "Incomplete upload", variantId: incomplete.variantId },
+    );
+    assert.notEqual(refreshedIncomplete.runId, incomplete.runId);
+    assert.equal(
+      await prisma.stealthGenerationRun.count({ where: { id: incomplete.runId } }),
+      0,
+      "outdated incomplete uploads must replace their active run",
+    );
+    await closeStealthEvaluation(memberActor, organization.id, incompleteEvaluation.id);
     await completeUploadCheckpoint("Uploaded Two", 32);
   } finally {
     global.fetch = uploadFetch;

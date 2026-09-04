@@ -54,13 +54,16 @@ export default async function EvaluationSettingsPage({
       : null;
   const uploadCheckpoint =
     selectedCheckpoint?.source === "UPLOAD" &&
+    selectedCheckpoint.promptCohortCurrent &&
     (selectedCheckpoint.status === "DRAFT" || selectedCheckpoint.status === "GENERATING")
       ? selectedCheckpoint
       : null;
   const refreshUpload =
     selectedCheckpoint?.source === "UPLOAD" &&
-    selectedCheckpoint.status === "READY" &&
-    !selectedCheckpoint.promptCohortCurrent
+    !selectedCheckpoint.promptCohortCurrent &&
+    (selectedCheckpoint.status === "DRAFT" ||
+      selectedCheckpoint.status === "GENERATING" ||
+      selectedCheckpoint.status === "READY")
       ? selectedCheckpoint
       : null;
   const configureAction = configureEndpointAction.bind(null, orgSlug, experimentId);
@@ -193,7 +196,8 @@ export default async function EvaluationSettingsPage({
                 <div className="mt-1 text-xs text-muted">
                   {titleCase(checkpoint.source)}
                   {needsEndpointKey(checkpoint) ? " · Needs key" : ""}
-                  {checkpoint.status === "READY" && !checkpoint.promptCohortCurrent
+                  {!checkpoint.promptCohortCurrent &&
+                  (checkpoint.status === "READY" || checkpoint.source === "UPLOAD")
                     ? " · Refresh required"
                     : ""}
                 </div>
@@ -225,7 +229,7 @@ export default async function EvaluationSettingsPage({
                     href={`?checkpoint=${encodeURIComponent(checkpoint.id)}`}
                     className="inline-flex items-center text-xs font-medium text-accent hover:underline"
                   >
-                    {checkpoint.status === "READY"
+                    {!checkpoint.promptCohortCurrent
                       ? "Refresh"
                       : checkpoint.generatedBuildCount > 0
                         ? "Review uploads"

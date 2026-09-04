@@ -636,6 +636,13 @@ async function assertCheckpointRetryable(
     where: { variantId, status: "RUNNING" },
   });
   if (activeRunCount > 0) throw new Error("Generation is still running");
+  await assertCheckpointUnvoted(db, variantId);
+}
+
+async function assertCheckpointUnvoted(
+  db: Prisma.TransactionClient,
+  variantId: string,
+): Promise<void> {
   const [matchupCount, voteCount] = await Promise.all([
     db.matchup.count({ where: { stealthVariantId: variantId } }),
     db.vote.count({ where: { matchup: { stealthVariantId: variantId } } }),
@@ -670,9 +677,18 @@ async function purgeDraftCheckpointBuilds(
       voxelStoragePath: true,
     },
   });
-  if (staleBuilds.length === 0) return;
+  const staleUploads = (
+    await db.stealthGenerationResult.findMany({
+      where: {
+        run: { variantId },
+        uploadBucket: { not: null },
+        uploadPath: { not: null },
+      },
+      select: { uploadBucket: true, uploadPath: true },
+    })
+  ).map((upload) => ({ bucket: upload.uploadBucket!, path: upload.uploadPath! }));
 
-  if (hasSupabaseStorageConfig()) {
+  if (staleBuilds.length > 0 && hasSupabaseStorageConfig()) {
     const staleBuildIds = staleBuilds.map((build) => build.id);
     const checksums = staleBuilds
       .map((b) => b.voxelSha256)
@@ -714,6 +730,9 @@ async function purgeDraftCheckpointBuilds(
       await deleteSupabaseStorageObjects(storageRefs);
     }
   }
+  if (staleUploads.length > 0 && hasSupabaseStorageConfig()) {
+    await deleteSupabaseStorageObjects(staleUploads);
+  }
 
   await db.stealthGenerationResult.deleteMany({
     where: { run: { variantId } },
@@ -734,6 +753,21 @@ async function isOutdatedReadyCheckpoint(
   const run = await db.stealthGenerationRun.findFirst({
     where: { variantId: variant.id, status: "SUCCEEDED" },
     orderBy: { completedAt: "desc" },
+    select: { promptCohortId: true },
+  });
+  return run?.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID;
+}
+
+async function isOutdatedUploadCheckpoint(
+  db: Prisma.TransactionClient,
+  variant: Pick<LockedVariant, "id" | "status">,
+): Promise<boolean> {
+  if (variant.status !== "READY" && !CONFIGURABLE_VARIANT_STATUSES.includes(variant.status)) {
+    return false;
+  }
+  const run = await db.stealthGenerationRun.findFirst({
+    where: { variantId: variant.id },
+    orderBy: { startedAt: "desc" },
     select: { promptCohortId: true },
   });
   return run?.promptCohortId !== BENCHMARK_PROMPT_COHORT_ID;
@@ -1520,10 +1554,10 @@ export async function createStealthUploadCheckpoint(
         throw new Error("Checkpoint not found");
       }
       if (!input.variantId) throw new Error("Checkpoint codename already exists");
-      if (!(await isOutdatedReadyCheckpoint(tx, existing))) {
+      if (!(await isOutdatedUploadCheckpoint(tx, existing))) {
         throw new Error("Only outdated upload checkpoints can be refreshed");
       }
-      await assertCheckpointRetryable(tx, existing.id);
+      await assertCheckpointUnvoted(tx, existing.id);
       await purgeDraftCheckpointBuilds(tx, existing.id, existing.modelId);
       await tx.stealthVariant.update({
         where: { id: existing.id },

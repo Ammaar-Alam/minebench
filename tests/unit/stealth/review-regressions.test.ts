@@ -24,7 +24,7 @@ const service = read("lib/stealth/service.ts");
 assert.match(service, /createSupabaseSignedUploadToken/);
 assert.match(
   functionBody(service, "createStealthUploadCheckpoint"),
-  /isOutdatedReadyCheckpoint[\s\S]*purgeDraftCheckpointBuilds[\s\S]*createStealthUploadRun/,
+  /isOutdatedUploadCheckpoint[\s\S]*assertCheckpointUnvoted[\s\S]*purgeDraftCheckpointBuilds[\s\S]*createStealthUploadRun/,
 );
 assert.doesNotMatch(service, /MAX_COHORT_UPLOAD_BYTES|completeUploadedStealthCohort/);
 const workspaceList = service.slice(
