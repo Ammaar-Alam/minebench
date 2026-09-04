@@ -683,6 +683,28 @@ async function main() {
   const pendingUploadResult = await prisma.stealthGenerationResult.findFirstOrThrow({
     where: { runId: pendingUploadCheckpoint.runId },
   });
+  await prisma.stealthGenerationRun.update({
+    where: { id: pendingUploadCheckpoint.runId },
+    data: { startedAt: new Date(Date.now() - 20 * 60_000) },
+  });
+  await prisma.stealthGenerationResult.updateMany({
+    where: { runId: pendingUploadCheckpoint.runId },
+    data: { status: "FAILED" },
+  });
+  await prisma.stealthVariant.update({
+    where: { id: pendingUploadCheckpoint.variantId },
+    data: { status: "GENERATING" },
+  });
+  await getStealthEvaluationWorkspace(memberActor, organization.id, evaluation.id);
+  assert.equal(
+    (
+      await prisma.stealthGenerationRun.findUniqueOrThrow({
+        where: { id: pendingUploadCheckpoint.runId },
+      })
+    ).status,
+    "RUNNING",
+    "failed upload slots must remain open for replacement files",
+  );
   const pendingUploadPath = `stealth-build-uploads/v1/${organization.id}/${evaluation.id}/${pendingUploadCheckpoint.variantId}/${pendingUploadResult.promptId}/${randomUUID()}.json`;
   await prisma.stealthGenerationResult.update({
     where: { id: pendingUploadResult.id },

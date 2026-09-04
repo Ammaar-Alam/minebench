@@ -538,6 +538,7 @@ export async function reclaimStaleStealthGenerationRuns(
       results: {
         none: { status: { in: ["QUEUED", "GENERATING", "VALIDATING"] } },
       },
+      NOT: { variant: { source: "UPLOAD" }, results: { some: { status: "FAILED" } } },
     },
     select: {
       id: true,
