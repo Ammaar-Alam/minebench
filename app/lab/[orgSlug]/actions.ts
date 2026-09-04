@@ -173,7 +173,10 @@ export async function createUploadCheckpointAction(
     context.actor,
     context.organizationId,
     experimentId,
-    { codename: text(formData, "codename") },
+    {
+      variantId: text(formData, "variantId") || undefined,
+      codename: text(formData, "codename"),
+    },
   );
   revalidateEvaluation(orgSlug, experimentId);
   redirect(

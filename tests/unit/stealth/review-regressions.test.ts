@@ -17,9 +17,15 @@ assert.match(buildUploads, /"x-signature": target\.token/);
 assert.match(buildUploads, /upload\.findPreviousUploads\(\)/);
 assert.match(buildUploads, /queueAction\(slot\.resultId\)/);
 assert.doesNotMatch(settings, /CohortUploadForm|Upload cohort/);
+assert.match(settings, /const refreshUpload =/);
+assert.match(settings, /name="variantId" value=\{refreshUpload\.id\}/);
 
 const service = read("lib/stealth/service.ts");
 assert.match(service, /createSupabaseSignedUploadToken/);
+assert.match(
+  functionBody(service, "createStealthUploadCheckpoint"),
+  /isOutdatedReadyCheckpoint[\s\S]*purgeDraftCheckpointBuilds[\s\S]*createStealthUploadRun/,
+);
 assert.doesNotMatch(service, /MAX_COHORT_UPLOAD_BYTES|completeUploadedStealthCohort/);
 const workspaceList = service.slice(
   service.indexOf("export async function listStealthEvaluationWorkspaces"),

@@ -63,6 +63,7 @@ export type ConfigureStealthEndpointInput = {
 };
 
 export type CreateStealthUploadCheckpointInput = {
+  variantId?: string;
   codename: string;
 };
 
@@ -1510,9 +1511,39 @@ export async function createStealthUploadCheckpoint(
     if (!isStealthCheckpointSetOpen(experiment.status)) {
       throw new Error("Activated evaluations cannot accept new checkpoints");
     }
-    if (await lockVariantByCodename(tx, experiment.id, codename)) {
-      throw new Error("Checkpoint codename already exists");
+    const existing = input.variantId
+      ? await lockVariant(tx, input.variantId)
+      : await lockVariantByCodename(tx, experiment.id, codename);
+    if (existing) {
+      if (existing.experimentId !== experiment.id || existing.source !== "UPLOAD") {
+        throw new Error("Checkpoint not found");
+      }
+      if (!input.variantId) throw new Error("Checkpoint codename already exists");
+      if (!(await isOutdatedReadyCheckpoint(tx, existing))) {
+        throw new Error("Only outdated upload checkpoints can be refreshed");
+      }
+      await assertCheckpointRetryable(tx, existing.id);
+      await purgeDraftCheckpointBuilds(tx, existing.id, existing.modelId);
+      await tx.stealthVariant.update({
+        where: { id: existing.id },
+        data: {
+          status: "DRAFT",
+          expectedBuildCount: prompts.length,
+          generatedBuildCount: 0,
+          generationFailureCount: 0,
+          cohortGeneratedAt: null,
+          lastGenerationError: null,
+        },
+      });
+      const runId = await createStealthUploadRun(
+        tx,
+        existing.id,
+        prompts.map((prompt) => prompt.prompt.id),
+      );
+      await syncExperimentReadiness(tx, experiment.id);
+      return { variantId: existing.id, runId };
     }
+    if (input.variantId) throw new Error("Checkpoint not found");
 
     const variantId = randomUUID();
     const modelId = randomUUID();

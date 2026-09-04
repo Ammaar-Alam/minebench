@@ -1769,12 +1769,12 @@ async function main() {
     throw new Error(`Unexpected upload request: ${String(input)}`);
   }) as typeof fetch;
 
-  async function completeUploadCheckpoint(codename: string, x: number) {
+  async function completeUploadCheckpoint(codename: string, x: number, variantId?: string) {
     const checkpoint = await createStealthUploadCheckpoint(
       memberActor,
       organization.id,
       uploadedEvaluation.id,
-      { codename },
+      { codename, variantId },
     );
     const results = await prisma.stealthGenerationResult.findMany({
       where: { runId: checkpoint.runId },
@@ -1816,6 +1816,18 @@ async function main() {
   let uploaded: Awaited<ReturnType<typeof createStealthUploadCheckpoint>>;
   try {
     uploaded = await completeUploadCheckpoint("Uploaded One", 0);
+    const outdatedRunId = uploaded.runId;
+    await prisma.stealthGenerationRun.update({
+      where: { id: outdatedRunId },
+      data: { promptCohortId: `outdated-${suffix}` },
+    });
+    uploaded = await completeUploadCheckpoint("Uploaded One", 16, uploaded.variantId);
+    assert.notEqual(uploaded.runId, outdatedRunId);
+    assert.equal(
+      await prisma.stealthGenerationRun.count({ where: { id: outdatedRunId } }),
+      0,
+      "refreshing an outdated upload checkpoint must replace its upload run",
+    );
     await completeUploadCheckpoint("Uploaded Two", 32);
   } finally {
     global.fetch = uploadFetch;
