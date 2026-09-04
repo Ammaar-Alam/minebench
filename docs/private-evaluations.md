@@ -58,7 +58,8 @@ storage, and artifact requirements used by MineBench's Arena pipeline. Uploads
 are processed independently, so an invalid build can be replaced without
 re-uploading successful prompts. The checkpoint becomes ready only after every
 prompt succeeds. Accepted builds are immutable; replacing a valid accepted build
-requires a new checkpoint in a new draft evaluation. Private cohort preparation
+requires a new checkpoint in a new draft evaluation. A checkpoint whose cohort
+has since changed can be refreshed in place. Private cohort preparation
 never changes a prompt's public eligibility. A running endpoint or upload
 operation reserves its checkpoint, and a persisted build is accepted only after
 its required artifacts and the open evaluation lifecycle are revalidated.
