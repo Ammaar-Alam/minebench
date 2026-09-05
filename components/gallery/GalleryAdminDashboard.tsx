@@ -8,6 +8,7 @@ import {
   mutateGalleryAdmin,
 } from "@/app/admin/gallery/actions";
 import { GalleryAdminGenerations } from "@/components/gallery/GalleryAdminGenerations";
+import { ArenaVoteReview } from "@/components/arena/ArenaVoteReview";
 import type {
   getGalleryAdminDashboard,
   getGalleryAdminPerson,
@@ -18,6 +19,7 @@ type Person = Awaited<ReturnType<typeof getGalleryAdminPerson>>;
 type PromptFilter = "latest" | "reported" | "hidden" | "selected";
 type PeopleFilter = "online" | "all" | "suspended";
 type Mutation =
+  | { type: "generation_published"; publicId: string }
   | { type: "candidate_hidden"; publicId: string; hidden: boolean }
   | { type: "example_hidden"; exampleId: string }
   | { type: "candidate_selected"; publicId: string; selected: boolean }
@@ -382,7 +384,7 @@ function PersonInspector({
 
 export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   const router = useRouter();
-  const [view, setView] = useState<"generations" | "prompts">("generations");
+  const [view, setView] = useState<"generations" | "prompts" | "votes">("generations");
   const [generationOwner, setGenerationOwner] = useState<{ id: string; label: string } | null>(null);
   const [promptFilter, setPromptFilter] = useState<PromptFilter>("latest");
   const [peopleFilter, setPeopleFilter] = useState<PeopleFilter>("online");
@@ -396,6 +398,17 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   const [suspendTarget, setSuspendTarget] = useState<{ userId: string; email: string } | null>(null);
   const [refreshing, startTransition] = useTransition();
   const personRequest = useRef(0);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const update = () => document.body.classList.toggle("mb-page-fixed", desktop.matches);
+    update();
+    desktop.addEventListener("change", update);
+    return () => {
+      desktop.removeEventListener("change", update);
+      document.body.classList.remove("mb-page-fixed");
+    };
+  }, []);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
@@ -475,6 +488,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
         <div className="flex min-w-0 flex-wrap items-center gap-x-5" aria-label="Admin views">
           <FilterButton active={view === "generations"} onClick={() => { setView("generations"); setGenerationOwner(null); }}>Generations</FilterButton>
           <FilterButton active={view === "prompts"} onClick={() => setView("prompts")}>Prompts</FilterButton>
+          <FilterButton active={view === "votes"} onClick={() => setView("votes")}>Votes</FilterButton>
           {view === "generations" && generationOwner ? <button type="button" className="max-w-48 truncate text-xs text-muted hover:text-fg" title="Show all generations" onClick={() => setGenerationOwner(null)}>{generationOwner.label} · Clear</button> : null}
         </div>
         <div className="flex items-center gap-4">
@@ -490,8 +504,8 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
           </button>
         </div>
       </div>
-      <div className="grid items-start gap-8 lg:h-[max(36rem,calc(100dvh-22rem))] lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-        {view === "generations" ? <GalleryAdminGenerations ownerId={generationOwner?.id} refreshedAt={dashboard.refreshedAt} /> : (
+      {view === "votes" ? <ArenaVoteReview refreshedAt={dashboard.refreshedAt} /> : <div className="grid items-start gap-8 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+        {view === "generations" ? <GalleryAdminGenerations ownerId={generationOwner?.id} refreshedAt={dashboard.refreshedAt} onPublish={(publicId) => mutate({ type: "generation_published", publicId })} /> : (
         <section className="min-w-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col" aria-labelledby="admin-prompts-title">
           <div className="flex flex-wrap items-end justify-between gap-5 border-b border-border pb-4">
             <div>
@@ -653,7 +667,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
             </div>
           </section>
         </aside>
-      </div>
+      </div>}
 
       <SuspendDialog
         target={suspendTarget}

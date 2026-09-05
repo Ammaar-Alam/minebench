@@ -19,7 +19,7 @@ export default async function GalleryAdminPage() {
   const dashboard = await getGalleryAdminDashboard(account.id);
 
   return (
-    <div className="mx-auto w-full max-w-[92rem] space-y-8 py-6 sm:py-10">
+    <div className="mx-auto w-full max-w-[92rem] space-y-8 py-6 sm:py-10 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:gap-5 lg:space-y-0 lg:py-2">
       <header className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-6">
         <div>
           <p className="mb-eyebrow">MineBench</p>

@@ -106,6 +106,7 @@ const galleryModelSelect = {
 
 const exampleSelect = {
   id: true,
+  contributorId: true,
   candidateId: true,
   createdAt: true,
   postAnonymously: true,
@@ -163,10 +164,11 @@ function publicGalleryModel(model: GalleryModelRow) {
   };
 }
 
-function publicExample(example: ExampleRow) {
+function publicExample(example: ExampleRow, viewerUserId?: string | null) {
   const kinds = new Set(example.customBuild.artifacts.map((artifact) => artifact.kind));
   return {
     id: example.id,
+    canRemove: Boolean(viewerUserId && example.contributorId === viewerUserId),
     buildId: example.customBuild.publicId,
     attribution: galleryAttribution({
       postAnonymously: example.postAnonymously,
@@ -223,8 +225,8 @@ function publicCandidate(
     ),
     publishedAt: candidate.publishedAt.toISOString(),
     exampleCount,
-    cover: cover ? publicExample(cover) : null,
-    alternate: alternate ? publicExample(alternate) : null,
+    cover: cover ? publicExample(cover, viewerUserId) : null,
+    alternate: alternate ? publicExample(alternate, viewerUserId) : null,
     modelLabels,
     matchedModelLabels: [...new Set(matchedModels.map((model) => publicGalleryModel(model).label))],
   };
@@ -461,7 +463,7 @@ export async function getGalleryCandidate(
     ...publicCandidate(candidate, cover, exampleCount, Boolean(upvoted), options.userId),
     examples: [options.examplesCursor ? null : cover, ...page]
       .filter((value): value is ExampleRow => Boolean(value))
-      .map(publicExample),
+      .map((example) => publicExample(example, options.userId)),
     nextExamplesCursor: additional.length > limit && last
       ? encodeGalleryCursor({ score: 0, publishedAt: last.createdAt, id: last.id })
       : null,
@@ -704,6 +706,25 @@ export async function addGalleryExample(
       });
     }
     return { ...example, created };
+  });
+}
+
+export async function removeGalleryExample(userId: string, candidatePublicId: string, exampleId: string) {
+  const now = new Date();
+  const purgeAt = new Date(now.getTime() + RETENTION_MS);
+  return prisma.$transaction(async (tx) => {
+    const example = await tx.galleryExample.findFirst({
+      where: { id: exampleId, contributorId: userId, removedAt: null, candidate: { publicId: candidatePublicId } },
+      select: { id: true, candidateId: true },
+    });
+    if (!example) throw new GalleryServiceError("not_found", "Gallery build not found.");
+    await tx.galleryExample.update({ where: { id: example.id }, data: { removedAt: now, purgeAt } });
+    await tx.galleryModerationRecord.create({ data: {
+      kind: "ADMIN_ACTION", target: "EXAMPLE", action: "user_removed",
+      actorUserId: userId, subjectUserId: userId,
+      candidateId: example.candidateId, exampleId: example.id, purgeAt,
+    } });
+    return { removed: true };
   });
 }
 
