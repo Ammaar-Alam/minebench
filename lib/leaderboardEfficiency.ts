@@ -32,15 +32,18 @@ export function getEfficiencyPoints(
       model.sampledPrompts <= 0 || model.sampledVotes <= 0 ||
       (establishedOnly && model.stability === "Provisional")
     ) return [];
-    const score = model.meanScore;
     return [{
       model,
       resource,
-      perScore: score != null && Number.isFinite(score) && score > 0 && score <= 1
-        ? resource / (score * 100)
-        : null,
+      perScore: getResourcePerScore(resource, model.meanScore),
     }];
   }).sort((a, b) => a.resource - b.resource || b.model.rankScore - a.model.rankScore || a.model.key.localeCompare(b.model.key));
+}
+
+export function getResourcePerScore(resource: number | null, score: number | null): number | null {
+  return resource != null && score != null && Number.isFinite(score) && score > 0 && score <= 1
+    ? resource / (score * 100)
+    : null;
 }
 
 export function getParetoFrontier(points: EfficiencyPoint[]): EfficiencyPoint[] {

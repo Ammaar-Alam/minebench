@@ -410,7 +410,7 @@ export function Leaderboard({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4 sm:gap-5">
+    <div className="flex h-full min-h-0 min-w-0 flex-col gap-4 sm:gap-5">
       <div className="mb-panel shrink-0 px-5 py-5 ring-inset before:hidden">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center xl:grid-cols-[minmax(0,1fr)_auto_auto] xl:gap-x-6 xl:gap-y-0">
           {topModel ? (
@@ -567,7 +567,7 @@ export function Leaderboard({
         </div>
       </div>
 
-      <div role="group" aria-label="Leaderboard view" className="flex shrink-0 gap-1 border-b border-border">
+      <div role="group" aria-label="Leaderboard view" className="mb-leaderboard-switch shrink-0 self-start">
         {(["rankings", "efficiency"] as const).map((item) => (
           <button
             key={item}
@@ -575,10 +575,9 @@ export function Leaderboard({
             aria-pressed={view === item}
             aria-controls="leaderboard-models"
             onClick={() => setView(item)}
-            className={`mb-btn mb-btn-ghost relative h-11 px-4 text-sm ${view === item ? "text-fg" : "text-muted"}`}
+            className="mb-leaderboard-option"
           >
             {item === "rankings" ? "Rankings" : "Efficiency"}
-            <span aria-hidden="true" className={`absolute inset-x-4 bottom-0 h-0.5 origin-left bg-accent transition-transform duration-200 ease-out motion-reduce:transition-none ${view === item ? "scale-x-100" : "scale-x-0"}`} />
           </button>
         ))}
       </div>
@@ -591,15 +590,14 @@ export function Leaderboard({
         />
       ) : null}
       {view === "efficiency" && data ? (
-        <div id="leaderboard-models" className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div key="efficiency" id="leaderboard-models" className="mb-leaderboard-scroll min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
           <LeaderboardEfficiency models={data.models} modelQuery={modelQuery} />
         </div>
-      ) : <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
-        <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
+      ) : <div key="rankings" className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
 
         <div
           id="leaderboard-models"
-          className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]"
+          className="mb-leaderboard-scroll min-h-0 flex-1 overflow-auto overscroll-contain [-webkit-overflow-scrolling:touch]"
         >
           <div className="relative z-[2] space-y-2.5 p-2.5 sm:hidden">
 	            {visibleModels.map((m) => {
@@ -753,7 +751,7 @@ export function Leaderboard({
           <table
             aria-label="Model rankings"
             data-details={showDetailed ? "open" : "closed"}
-            className="mb-leaderboard-table relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table"
+            className={`mb-leaderboard-table relative z-[2] hidden w-full table-fixed border-separate border-spacing-0 text-left text-sm [font-variant-numeric:tabular-nums] sm:table ${showDetailed ? "min-w-[1180px]" : "min-w-[880px]"}`}
           >
             <colgroup>
               <col className={showDetailed ? "w-[21%]" : "w-[28%]"} />
@@ -870,14 +868,14 @@ export function Leaderboard({
 	                    data-tier={tier}
 	                    onMouseEnter={() => prefetchModel(m.key)}
 	                    onClick={() => navigateToModel(m.key)}
-                    className={`mb-leaderboard-row group mb-card-enter ${
+                    className={`mb-leaderboard-row group ${
                       navigatingModelKey === m.key ? "opacity-75" : ""
                     }`}
                     style={{ animationDelay: `${Math.min(resultIndex, 10) * 34}ms` }}
                   >
 	                    <td className="mb-leaderboard-model-cell px-3 py-3 sm:px-3.5 sm:py-3.5">
 	                      <div className="flex items-start gap-3">
-		                        <div className="mt-0.5 flex w-9 flex-col items-center gap-0.5">
+		                        <div className="mt-0.5 flex w-9 shrink-0 flex-col items-center gap-0.5">
 		                          <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-bg/62 px-1.5 text-[11px] font-mono text-muted ring-1 ring-border/80">
 		                            {m.rank}
 	                          </span>

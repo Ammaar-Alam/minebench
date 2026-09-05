@@ -73,7 +73,7 @@ assert.ok(singleMin < Math.log10(0.5) && singleMax > Math.log10(0.5));
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 const render = (entries = models, query = "") => renderToStaticMarkup(React.createElement(LeaderboardEfficiency, { models: entries, modelQuery: query }));
 const markup = render();
-assert.ok(markup.includes("Cost per score point") && markup.includes("How to read these metrics"));
+assert.ok(markup.includes("Comparison units") && markup.includes("Methodology"));
 assert.ok(markup.includes("6 models · 4 on frontier"));
 const searched = render(models, "dominated");
 assert.ok(searched.includes("6 models · 4 on frontier"), "search must preserve the full frontier population");

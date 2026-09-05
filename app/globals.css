@@ -559,11 +559,10 @@
 
   .mb-leaderboard-row {
     @apply cursor-pointer border-b border-border/65 outline-none;
-    transition-property: transform, background-color, box-shadow, border-color;
+    transition-property: background-color, box-shadow, border-color;
     transition-duration: 220ms;
     transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-    transform: translate3d(0, 0, 0);
-    will-change: transform;
+    animation: mb-col-fade-in 220ms ease-out both;
   }
 
   .mb-leaderboard-row:hover {
@@ -591,10 +590,6 @@
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    .mb-leaderboard-row:hover {
-      transform: translateY(-2px);
-    }
-
     .mb-leaderboard-row:hover .mb-leaderboard-outcome-chip {
       transform: translateY(-1px) scale(1.02);
     }
@@ -1700,4 +1695,39 @@
 @media (prefers-reduced-motion: reduce) {
   .mb-efficiency-enter, .mb-efficiency-frontier, .mb-efficiency-detail { animation: none; }
   .mb-efficiency-point, .mb-efficiency-dot, .mb-efficiency-row { transition: none; }
+}
+
+.mb-leaderboard-switch {
+  display: inline-flex;
+  max-width: 100%;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 6px;
+  background: hsl(var(--fg) / 0.045);
+}
+.mb-leaderboard-option {
+  min-height: 44px;
+  padding: 0 16px;
+  border-radius: 4px;
+  color: hsl(var(--muted));
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+.mb-leaderboard-option:hover { color: hsl(var(--fg)); }
+.mb-leaderboard-option[aria-pressed="true"] {
+  color: hsl(var(--fg));
+  background: hsl(var(--fg) / 0.1);
+}
+.mb-leaderboard-option:focus-visible,
+.mb-efficiency-sort:focus-visible {
+  outline: 2px solid hsl(var(--accent));
+  outline-offset: -2px;
+}
+.mb-efficiency-sort:hover { color: hsl(var(--fg)); }
+.mb-efficiency-tooltip { animation: efficiency-detail 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .mb-leaderboard-row, .mb-efficiency-tooltip { animation: none; }
+  .mb-leaderboard-option { transition: none; }
 }
