@@ -1,0 +1,22 @@
+{
+  "AlarmName": "MineBench-HighDisk",
+  "AlarmDescription": "Average root filesystem usage is at least 85 percent for two consecutive five-minute periods.",
+  "ActionsEnabled": true,
+  "AlarmActions": ["arn:aws:sns:us-east-1:571600857924:minebench-production-alerts"],
+  "OKActions": [],
+  "InsufficientDataActions": [],
+  "Namespace": "MineBench/Production",
+  "MetricName": "disk_used_percent",
+  "Dimensions": [
+    { "Name": "path", "Value": "/" },
+    { "Name": "device", "Value": "nvme0n1p1" },
+    { "Name": "fstype", "Value": "xfs" }
+  ],
+  "Statistic": "Average",
+  "Period": 300,
+  "EvaluationPeriods": 2,
+  "DatapointsToAlarm": 2,
+  "Threshold": 85,
+  "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+  "TreatMissingData": "missing"
+}

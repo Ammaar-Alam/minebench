@@ -19,6 +19,7 @@ import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { resolveSavedGenerationModel } from "@/lib/generations/model";
 import { prisma } from "@/lib/prisma";
+import { publicCandidateWhere, publicExampleWhere, requireMineBenchAdmin } from "@/lib/gallery/service";
 
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -398,6 +399,75 @@ export async function listSavedGenerations(
     items: page.map(serializeGeneration),
     nextCursor: hasMore && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null,
   };
+}
+
+export async function listAdminGenerations(
+  adminId: string,
+  options: { ownerId?: string; cursor?: string | null; query?: string; active?: boolean; limit?: number } = {},
+) {
+  await requireMineBenchAdmin(adminId);
+  const limit = Math.max(1, Math.min(options.limit ?? 20, 50));
+  const cursor = decodeCursor(options.cursor);
+  const query = options.query?.trim();
+  const rows = await prisma.customBuild.findMany({
+    where: {
+      removedAt: null,
+      ...(options.ownerId ? { ownerId: options.ownerId } : {}),
+      ...(options.active ? { status: { in: ["queued", "running"] } } : {}),
+      AND: [
+        ...(query ? [{ OR: [
+          { promptText: { contains: query, mode: "insensitive" as const } },
+          { modelDisplayName: { contains: query, mode: "insensitive" as const } },
+          { owner: { email: { contains: query, mode: "insensitive" as const } } },
+        ] }] : []),
+        ...(cursor ? [{ OR: [
+          { createdAt: { lt: cursor.createdAt } },
+          { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+        ] }] : []),
+      ],
+    },
+    select: {
+      ...generationSelect,
+      owner: { select: { id: true, email: true, publicNickname: true } },
+      galleryExamples: { where: { ...publicExampleWhere, candidate: publicCandidateWhere }, select: { id: true } },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+  });
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  return {
+    items: page.map((row) => {
+      const generation = serializeGeneration(row);
+      const artifactUrl = (kind: string) => `/api/admin/generations/${row.publicId}?artifact=${kind}`;
+      return {
+        ...generation,
+        previewUrl: generation.previewUrl ? artifactUrl("preview") : null,
+        thumbnailUrl: generation.thumbnailUrl ? artifactUrl("thumbnail") : null,
+        viewerUrl: generation.viewerUrl ? artifactUrl("viewer") : null,
+        downloadUrl: generation.downloadUrl ? artifactUrl("download") : null,
+        owner: row.owner,
+        published: row.galleryExamples.length > 0,
+      };
+    }),
+    nextCursor: rows.length > limit && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null,
+  };
+}
+
+export async function getAdminGenerationArtifact(
+  adminId: string,
+  publicId: string,
+  kinds: CustomBuildArtifactKind[],
+) {
+  await requireMineBenchAdmin(adminId);
+  return prisma.customBuildArtifact.findFirst({
+    where: {
+      kind: { in: kinds },
+      customBuild: { publicId, removedAt: null, status: "succeeded" },
+    },
+    select: { kind: true, bucket: true, path: true, contentType: true, encoding: true },
+    orderBy: { createdAt: "desc" },
+  });
 }
 
 export async function getSavedGeneration(ownerId: string, publicId: string) {
