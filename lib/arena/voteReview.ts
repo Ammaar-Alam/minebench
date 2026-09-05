@@ -12,6 +12,7 @@ export type VoteReviewSession = {
   label: string;
   location: string | null;
   lastVoteAt: string | null;
+  lastVoteId: string | null;
   votes: number;
   choiceA: number;
   choiceB: number;
@@ -84,13 +85,14 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
   const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
   const retainedSince = new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS);
   const ranking = await latestRanks();
-  type Summary = Metrics & { sessionId: string; userId: string | null; lastVoteAt: Date | null; ties: number; medianGapSeconds: number | null };
+  type Summary = Metrics & { sessionId: string; userId: string | null; lastVoteAt: Date | null; lastVoteId: string | null; ties: number; medianGapSeconds: number | null };
   const [rows, blocks] = await Promise.all([
     prisma.$queryRaw<Summary[]>(Prisma.sql`
       WITH ranks AS (
         SELECT "modelId", rank FROM "ModelRankSnapshot" WHERE "capturedAt" = (${ranking.capturedAt}::timestamptz AT TIME ZONE 'UTC')
       ), votes AS (
         SELECT v.*, m."buildAId", m."buildBId", a.rank AS rank_a, b.rank AS rank_b,
+          FIRST_VALUE(v.id) OVER (PARTITION BY v."sessionId" ORDER BY v."createdAt" DESC, v.id DESC) AS latest_id,
           EXTRACT(EPOCH FROM v."createdAt" - LAG(v."createdAt") OVER (
             PARTITION BY v."sessionId" ORDER BY v."createdAt", v.id
           ))::double precision AS gap
@@ -101,6 +103,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
           AND v."createdAt" <= (${now}::timestamptz AT TIME ZONE 'UTC') AND m."stealthVariantId" IS NULL
       )
       SELECT "sessionId", MAX("userId"::text) AS "userId", MAX("createdAt") AS "lastVoteAt",
+        MAX(latest_id) AS "lastVoteId",
         COUNT(*)::int AS votes,
         COUNT(*) FILTER (WHERE choice = 'A')::int AS "choiceA",
         COUNT(*) FILTER (WHERE choice = 'B')::int AS "choiceB",
@@ -115,7 +118,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
           (choice = 'A' AND rank_b <= ${Math.max(1, Math.floor(ranking.ranks.size * 0.15))} AND rank_a > ${ranking.ranks.size / 2}) OR
           (choice = 'B' AND rank_a <= ${Math.max(1, Math.floor(ranking.ranks.size * 0.15))} AND rank_b > ${ranking.ranks.size / 2})
         )::int AS "largeUpsets"
-      FROM votes GROUP BY "sessionId" ORDER BY votes DESC, "sessionId" LIMIT ${SESSION_LIMIT + 1}
+      FROM votes GROUP BY "sessionId" ORDER BY "lastVoteAt" DESC, "sessionId" LIMIT ${SESSION_LIMIT + 1}
     `),
     prisma.galleryVoteBlock.findMany({ where: { reversedAt: null }, select: { userId: true, sessionHash: true, ipHmac: true } }),
   ]);
@@ -153,7 +156,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
       Boolean(session.userId && blockedUsers.has(session.userId)) ||
       Boolean(session.ipHmac && blockedIps.has(session.ipHmac))
     )) {
-      summaries.set(session.sessionId, { sessionId: session.sessionId, userId: session.userId, lastVoteAt: null,
+      summaries.set(session.sessionId, { sessionId: session.sessionId, userId: session.userId, lastVoteAt: null, lastVoteId: null,
         votes: 0, choiceA: 0, choiceB: 0, ties: 0, bothBad: 0, medianGapSeconds: null,
         fastVotes: 0, repeatVotes: 0, rankedVotes: 0, upsets: 0, largeUpsets: 0 });
     }

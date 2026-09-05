@@ -49,12 +49,24 @@ async function main() {
     await db.vote.create({ data: { sessionId, matchupId: (await db.matchup.create({ data: {
       modelAId: models[0].id, modelBId: models[7].id, buildAId: builds[0].id, buildBId: builds[1].id, promptId: prompt.id,
     } })).id, choice: "A", createdAt: new Date(now.getTime() - 48 * 60 * 60 * 1000) } });
+    await db.vote.create({ data: { sessionId: peerSession, matchupId: matchup.id, choice: "A", createdAt: new Date(now.getTime() - 1000) } });
     await setArenaVoteSessionBlocked(adminId, oldBlockedSession, true);
     await db.galleryVoteBlock.createMany({ data: [
       { sessionHash: hashVoteSession(hashOnlySession), createdById: adminId },
       { userId: memberId, createdById: adminId },
     ] });
     const review = await getArenaVoteReview(adminId);
+    assert.equal(review.sessions[0]?.sessionId, peerSession, "the latest vote sorts ahead of a higher-volume session");
+    const peerVote = (await getArenaVotePage(adminId, peerSession)).votes[0];
+    assert.equal(review.sessions[0]?.lastVoteId, peerVote.id);
+    const tiedVote = await db.vote.create({ data: {
+      id: `z-${suffix}`, sessionId: peerSession, choice: "B", createdAt: new Date(peerVote.createdAt),
+      matchupId: (await db.matchup.findFirstOrThrow({ where: { promptId: prompt.id, id: { not: matchup.id } } })).id,
+    } });
+    const refreshed = (await getArenaVoteReview(adminId)).sessions.find(row => row.sessionId === peerSession)!;
+    assert.equal(refreshed.lastVoteAt, peerVote.createdAt);
+    assert.equal(refreshed.lastVoteId, tiedVote.id, "summary and history use the same cursor for tied timestamps");
+    assert.equal((await getArenaVotePage(adminId, peerSession)).votes[0].id, refreshed.lastVoteId);
     for (const id of [hashOnlySession, accountOnlySession]) {
       const restricted = review.sessions.find(row => row.sessionId === id);
       assert.equal(restricted?.blocked, true, "retain restrictions without votes or IPs");
