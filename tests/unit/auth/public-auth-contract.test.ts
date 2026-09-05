@@ -102,11 +102,14 @@ assert.doesNotMatch(personalRankingView, /Ties count|Early signal/);
 const oauthRoute = readFileSync("app/auth/oauth/route.ts", "utf8");
 const callbackRoute = readFileSync("app/auth/callback/route.ts", "utf8");
 const confirmRoute = readFileSync("app/auth/confirm/route.ts", "utf8");
+const confirmHandler = readFileSync("lib/auth/confirmRoute.ts", "utf8");
 const labConfirmRoute = readFileSync("app/lab/auth/confirm/route.ts", "utf8");
 const labActions = readFileSync("app/lab/sign-in/actions.ts", "utf8");
 assert.match(oauthRoute, /signInWithOAuth/);
 assert.match(callbackRoute, /exchangeCodeForSession/);
-assert.match(confirmRoute, /verifyOtp/);
+assert.match(confirmRoute, /handleConfirmGet/);
+assert.match(confirmHandler, /verifyOtp/);
+assert.match(confirmHandler, /isRecovery/);
 assert.match(labConfirmRoute, /await finishPublicSignIn\(result\.data\.user\)/);
 assert.match(labActions, /finally \{\s+await rotateArenaSession\(\)/);
 
