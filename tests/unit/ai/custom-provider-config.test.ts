@@ -70,6 +70,59 @@ assert.deepEqual(
     text: { format: { type: "json_schema" }, verbosity: "low" },
   },
 );
+for (const adapterAlias of ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const) {
+  for (const userAlias of ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const) {
+    if (adapterAlias === userAlias) continue;
+    const merged = mergeCustomRequestBody(
+      { model: "m", [adapterAlias]: 4096 } as Record<string, unknown>,
+      { [userAlias]: 1024 } as Record<string, unknown>,
+    );
+    assert.equal(
+      Object.hasOwn(merged, adapterAlias),
+      false,
+      `adapter alias ${adapterAlias} should be stripped when user sets ${userAlias}`,
+    );
+    assert.equal(merged[userAlias], 1024);
+    assert.equal(
+      Object.keys(merged).filter(
+        (k) =>
+          k === "max_tokens" ||
+          k === "max_completion_tokens" ||
+          k === "max_output_tokens",
+      ).length,
+      1,
+    );
+  }
+}
+assert.deepEqual(
+  mergeCustomRequestBody({ model: "m", max_tokens: 4096 }, { max_tokens: 1024 }),
+  { model: "m", max_tokens: 1024 },
+);
+assert.deepEqual(
+  mergeCustomRequestBody(
+    { model: "m", max_tokens: 4096, temperature: 0.5 },
+    { temperature: 0.7 },
+  ),
+  { model: "m", max_tokens: 4096, temperature: 0.7 },
+);
+assert.deepEqual(
+  mergeCustomRequestBody({ model: "m", max_tokens: 4096 }, undefined),
+  { model: "m", max_tokens: 4096 },
+);
+assert.deepEqual(
+  mergeCustomRequestBody(
+    { max_completion_tokens: 4096, tools: [{ type: "function" }] },
+    { max_tokens: 1024 },
+    ["tools"],
+  ),
+  { max_tokens: 1024, tools: [{ type: "function" }] },
+);
+assert.throws(
+  () => normalizeProviderRequestOverrides({
+    body: { max_tokens: 1024, max_completion_tokens: 2048 },
+  }),
+  /Use only one output token parameter/,
+);
 assert.deepEqual(
   deserializeCustomProviderRequestConfig("https://legacy.example.test/v1/chat/completions"),
   { baseUrl: "https://legacy.example.test/v1/chat/completions" },
