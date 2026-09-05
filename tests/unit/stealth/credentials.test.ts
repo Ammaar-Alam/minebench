@@ -250,6 +250,69 @@ try {
     /endpointUrl must not target private or loopback IP addresses/,
   );
 
+  for (const emptyAfterNormalize of ['Bearer ""', '""', 'Bearer "  "', "Bearer ''"]) {
+    assert.throws(
+      () => encryptStealthEndpointConfig({
+        protocol: "openai-compatible",
+        endpointUrl: "https://api.example.com/v1",
+        apiKey: emptyAfterNormalize,
+        modelId: "gpt-4o",
+      }),
+      /apiKey must not be empty after normalization/,
+    );
+  }
+
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://api.example.com/v1",
+      apiKey: "   ",
+      modelId: "gpt-4o",
+    }),
+  );
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://api.example.com/v1",
+      apiKey: "",
+      modelId: "gpt-4o",
+    }),
+  );
+
+  assert.throws(
+    () => encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://api.example.com/v1",
+      apiKey: "sk-real",
+      modelId: "   ",
+    }),
+  );
+
+  for (const acceptedApiKey of [
+    "sk-real",
+    "Bearer sk-real",
+    'Bearer "openrouter-key"',
+    '"sk-quoted"',
+    "'sk-single'",
+    "  sk-padded  ",
+  ]) {
+    const { encryptedConfig } = encryptStealthEndpointConfig({
+      protocol: "openai-compatible",
+      endpointUrl: "https://api.example.com/v1",
+      apiKey: acceptedApiKey,
+      modelId: "gpt-4o",
+    });
+    const decrypted = decryptStealthEndpointConfig(encryptedConfig);
+    assert.ok(
+      decrypted.apiKey.length > 0,
+      `expected non-empty apiKey after round-trip for ${JSON.stringify(acceptedApiKey)}`,
+    );
+    assert.equal(
+      decryptStealthEndpointConfig(encryptedConfig).apiKey,
+      decrypted.apiKey,
+    );
+  }
+
   console.log("stealth credential envelope checks passed");
 } finally {
   if (originalKey === undefined) delete process.env.STEALTH_CONFIG_ENCRYPTION_KEY;

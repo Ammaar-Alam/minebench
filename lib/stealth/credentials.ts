@@ -32,8 +32,8 @@ export const stealthEndpointConfigSchema = z.object({
     "gemini",
   ]),
   endpointUrl: z.string().max(2048).default(""),
-  apiKey: z.string().min(1).max(8192),
-  modelId: z.string().min(1).max(512),
+  apiKey: z.string().trim().min(1).max(8192),
+  modelId: z.string().trim().min(1).max(512),
   maxOutputTokens: z
     .number()
     .int()
@@ -177,6 +177,10 @@ function normalizeEndpointApiKey(raw: string): string {
 
 function canonicalConfig(config: StealthEndpointConfigInput): CanonicalStealthEndpointConfig {
   const parsed = stealthEndpointConfigSchema.parse(config);
+  const normalizedApiKey = normalizeEndpointApiKey(parsed.apiKey);
+  if (normalizedApiKey === "") {
+    throw new Error("apiKey must not be empty after normalization");
+  }
   const protocol =
     parsed.protocol === "openai-chat-completions"
       ? "openai-compatible"
@@ -191,7 +195,7 @@ function canonicalConfig(config: StealthEndpointConfigInput): CanonicalStealthEn
       protocol === "openai-compatible"
         ? parsed.endpointUrl.trim().replace(/\/+$/, "")
         : "",
-    apiKey: normalizeEndpointApiKey(parsed.apiKey),
+    apiKey: normalizedApiKey,
     modelId: parsed.modelId.trim(),
   };
   if (reasoning) canonical.reasoning = reasoning;
