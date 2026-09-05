@@ -265,6 +265,7 @@ export async function openrouterGenerateText(params: {
     const tokenBudgets = tokenBudgetCandidates(maxTokens);
     let requireParameters =
       Boolean(params.jsonSchema) && params.requireParameterSupport !== false;
+    outerTokenBudgetLoop:
     for (const [tokIdx, tok] of tokenBudgets.entries()) {
       let tryLowerTokenBudget = false;
       for (const [cfgIdx, cfg] of reasoningAttempts.entries()) {
@@ -371,6 +372,12 @@ export async function openrouterGenerateText(params: {
               `OpenRouter reasoning config '${currentLabel}' rejected (HTTP ${res.status}); falling back to '${nextLabel}'.`,
             );
             break;
+          }
+          if (!res.ok) {
+            params.onTrace?.(
+              `OpenRouter returned unhandled HTTP ${res.status} after retries; aborting config fallback.`,
+            );
+            break outerTokenBudgetLoop;
           }
           break;
         }
