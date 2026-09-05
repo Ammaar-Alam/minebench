@@ -843,9 +843,9 @@ export async function claimAnonymousGalleryVotes(userId: string, sessionId: stri
   });
 }
 
-async function requireMineBenchAdmin(userId: string) {
+export async function requireMineBenchAdmin(userId: string) {
   const admin = await prisma.user.findFirst({
-    where: { id: userId, isMineBenchAdmin: true },
+    where: { id: userId, isMineBenchAdmin: true, deletedAt: null },
     select: { id: true },
   });
   if (!admin) throw new GalleryServiceError("forbidden", "MineBench admin access required.");
@@ -1447,7 +1447,8 @@ export async function getGalleryAdminDashboard(
   await requireMineBenchAdmin(adminId);
   const now = options.now ?? new Date();
   const retainedSince = new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS);
-  const [moderation, prompts, accounts, sessions, voteBlocks] = await Promise.all([
+  const onlineSince = now.getTime() - PUBLIC_SESSION_ONLINE_MS;
+  const [moderation, prompts, accounts, sessions, voteBlocks, onlineGroups] = await Promise.all([
     prisma.galleryModerationRecord.findMany({
       where: { NOT: { action: "email_delivery_failed" } },
       orderBy: { createdAt: "desc" },
@@ -1534,12 +1535,16 @@ export async function getGalleryAdminDashboard(
       where: { reversedAt: null },
       select: { userId: true, sessionHash: true, ipHmac: true },
     }),
+    prisma.publicSessionActivity.groupBy({
+      by: ["userId"],
+      where: { lastSeenAt: { gte: new Date(onlineSince) } },
+      _count: { _all: true },
+    }),
   ]);
 
   const blockedUsers = new Set(voteBlocks.flatMap((block) => block.userId ? [block.userId] : []));
   const blockedSessions = new Set(voteBlocks.flatMap((block) => block.sessionHash ? [block.sessionHash] : []));
   const blockedIps = new Set(voteBlocks.flatMap((block) => block.ipHmac ? [block.ipHmac] : []));
-  const onlineSince = now.getTime() - PUBLIC_SESSION_ONLINE_MS;
   const people = new Map<string, {
     id: string;
     label: string;
@@ -1612,6 +1617,8 @@ export async function getGalleryAdminDashboard(
   }
 
   return {
+    refreshedAt: now.toISOString(),
+    onlinePeopleCount: onlineGroups.reduce((total, group) => total + (group.userId ? 1 : group._count._all), 0),
     prompts: prompts.map((prompt) => ({
       publicId: prompt.publicId,
       prompt: prompt.promptText,

@@ -216,7 +216,7 @@ function GenerationActions({
   );
 }
 
-function SavedBuildDialog({
+export function SavedBuildDialog({
   generation,
   onClose,
   onExplorerExit,

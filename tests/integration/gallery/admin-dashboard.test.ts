@@ -17,6 +17,8 @@ async function main() {
   const memberIpHmac = `member-ip-${suffix}`;
   const guestSession = `admin-guest-${suffix}`;
   const staleSession = `admin-stale-${suffix}`;
+  const extraSessions = Array.from({ length: 252 }, (_, index) => `admin-online-${suffix}-${index}`);
+  extraSessions.push(`${memberSession}-other`);
   const promptText = `Gallery admin fixture ${suffix}`;
   const modelAKey = `admin-a-${suffix}`;
   const modelBKey = `admin-b-${suffix}`;
@@ -31,6 +33,9 @@ async function main() {
     setGalleryPublishingSuspension,
     setHostedGenerationLimit,
   } = await import("../../../lib/gallery/service");
+  const { listAdminGenerations, getAdminGenerationArtifact, getOwnedGenerationArtifact, getSavedGeneration } = await import("../../../lib/generations/service");
+  const { GET: listGenerationRoute } = await import("../../../app/api/admin/generations/route");
+  const { GET: generationArtifactRoute } = await import("../../../app/api/admin/generations/[id]/route");
   const { touchPublicSessionActivity } = await import("../../../lib/publicPresence");
   const { hashVoteSession } = await import("../../../lib/voteBlock");
   const { POST: recordPresence } = await import("../../../app/api/presence/route");
@@ -200,6 +205,58 @@ async function main() {
     assert.equal(detail.hostedGenerationCount, 7);
     assert.equal(detail.hostedGenerationLimit, 125);
 
+    const publicId = `cst_admin_one_${suffix}`;
+    const removedPublicId = `cst_admin_two_${suffix}`;
+    const generations = await listAdminGenerations(adminId, { ownerId: memberId, active: true });
+    assert.equal(generations.items.length, 1, "active unpublished generations are visible to admins");
+    assert.equal(generations.items[0]?.prompt, promptText);
+    assert.equal(generations.items[0]?.owner?.id, memberId);
+    assert.equal(generations.items[0]?.published, false);
+    assert.equal(generations.items[0]?.viewerUrl, null);
+    assert.equal((await listAdminGenerations(adminId, { ownerId: adminId })).items.length, 0);
+    assert.equal((await listAdminGenerations(adminId, { query: `member-${suffix}@example.test` })).items.length, 1);
+    assert.equal((await listAdminGenerations(adminId, { query: `missing-${suffix}` })).items.length, 0);
+    await assert.rejects(() => listAdminGenerations(memberId), (error: unknown) => error instanceof GalleryServiceError && error.code === "forbidden");
+    await assert.rejects(() => getAdminGenerationArtifact(memberId, publicId, ["viewer_mbv4"]), (error: unknown) => error instanceof GalleryServiceError && error.code === "forbidden");
+    assert.equal((await listGenerationRoute(new Request("http://localhost/api/admin/generations"))).status, 401);
+    assert.equal((await generationArtifactRoute(new Request(`http://localhost/api/admin/generations/${publicId}?artifact=viewer`), { params: Promise.resolve({ id: publicId }) })).status, 401);
+
+    await db.customBuild.update({ where: { publicId: removedPublicId }, data: { removedAt: null } });
+    const firstPage = await listAdminGenerations(adminId, { ownerId: memberId, limit: 1 });
+    assert.ok(firstPage.nextCursor);
+    const secondPage = await listAdminGenerations(adminId, { ownerId: memberId, limit: 1, cursor: firstPage.nextCursor });
+    assert.equal(secondPage.items.length, 1);
+    assert.notEqual(firstPage.items[0]?.id, secondPage.items[0]?.id);
+    assert.equal(secondPage.nextCursor, null);
+    await db.customBuild.update({ where: { publicId: removedPublicId }, data: { removedAt: now } });
+    const completed = await db.customBuild.update({ where: { publicId }, data: { status: "succeeded", generationTimeMs: 1_200_000 } });
+    await db.customBuildArtifact.create({ data: {
+      customBuildId: completed.id,
+      kind: "viewer_mbv4",
+      format: "mbv4",
+      bucket: "private-builds",
+      path: `admin/${suffix}/viewer.mbv4`,
+      contentType: "application/octet-stream",
+      fileName: "viewer.mbv4",
+      sha256: "c".repeat(64),
+      byteSize: 10,
+      storedByteSize: 10,
+    } });
+    const ready = (await listAdminGenerations(adminId, { ownerId: memberId })).items[0]!;
+    assert.equal(ready.viewerUrl, `/api/admin/generations/${publicId}?artifact=viewer`);
+    assert.equal(ready.generationTimeMs, 1_200_000);
+    assert.equal((await listAdminGenerations(adminId, { ownerId: memberId, active: true })).items.length, 0);
+    assert.ok(await getAdminGenerationArtifact(adminId, publicId, ["viewer_mbv4"]));
+    assert.equal(await getOwnedGenerationArtifact(adminId, publicId, ["viewer_mbv4"]), null, "ordinary owner routes remain owner-only even for admins");
+    assert.equal(await getSavedGeneration(adminId, publicId), null);
+    assert.ok(await getOwnedGenerationArtifact(memberId, publicId, ["viewer_mbv4"]));
+    await db.customBuild.update({ where: { publicId }, data: { removedAt: now } });
+    assert.equal(await getAdminGenerationArtifact(adminId, publicId, ["viewer_mbv4"]), null, "removed artifacts remain unavailable to admins");
+    await db.customBuild.update({ where: { publicId }, data: { removedAt: null } });
+    await db.user.update({ where: { id: adminId }, data: { deletedAt: now } });
+    await assert.rejects(() => listAdminGenerations(adminId), (error: unknown) => error instanceof GalleryServiceError && error.code === "forbidden");
+    await db.user.update({ where: { id: adminId }, data: { deletedAt: null } });
+
     await setHostedGenerationLimit(adminId, memberId, 0);
     assert.deepEqual(
       await db.user.findUniqueOrThrow({
@@ -250,11 +307,23 @@ async function main() {
       },
     }), 0);
 
+    await db.publicSessionActivity.createMany({
+      data: extraSessions.map((sessionId, index) => ({
+        sessionId,
+        userId: sessionId === `${memberSession}-other` ? memberId : null,
+        lastSeenAt: new Date(now.getTime() - (index === 251 ? 10 * 60_000 : 0)),
+      })),
+    });
+    dashboard = await getGalleryAdminDashboard(adminId, { now });
+    assert.equal(dashboard.onlinePeopleCount, 255, "online count includes boundary sessions beyond the list cap and counts signed-in people once");
+    assert.ok(dashboard.onlinePeopleCount > dashboard.people.filter((person) => person.online).length);
+    assert.equal(dashboard.refreshedAt, now.toISOString());
+
     console.log("Gallery admin dashboard checks passed");
   } finally {
     await db.galleryVoteBlock.deleteMany({ where: { OR: [{ userId: memberId }, { createdById: adminId }] } });
     await db.publicSessionActivity.deleteMany({
-      where: { sessionId: { in: [memberSession, guestSession, staleSession, ...(routeSession ? [routeSession] : [])] } },
+      where: { sessionId: { in: [memberSession, guestSession, staleSession, ...extraSessions, ...(routeSession ? [routeSession] : [])] } },
     });
     await db.galleryModerationRecord.deleteMany({ where: { OR: [{ actorUserId: adminId }, { subjectUserId: memberId }] } });
     await db.galleryCandidate.deleteMany({ where: { uploaderId: memberId } });

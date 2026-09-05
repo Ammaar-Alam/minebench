@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import {
   loadGalleryAdminPerson,
   mutateGalleryAdmin,
 } from "@/app/admin/gallery/actions";
+import { GalleryAdminGenerations } from "@/components/gallery/GalleryAdminGenerations";
 import type {
   getGalleryAdminDashboard,
   getGalleryAdminPerson,
@@ -150,20 +151,20 @@ function PersonInspector({
   person,
   loading,
   pending,
-  onBack,
   onReload,
+  onViewGenerations,
   onMutate,
   onSuspend,
 }: {
   person: Person | null;
   loading: boolean;
   pending: boolean;
-  onBack: () => void;
   onReload: () => void;
+  onViewGenerations: () => void;
   onMutate: (mutation: Mutation) => Promise<boolean>;
   onSuspend: (target: { userId: string; email: string }) => void;
 }) {
-  if (loading) return <p className="py-8 text-sm text-muted">Loading person…</p>;
+  if (loading && !person) return <p className="py-8 text-sm text-muted">Loading person…</p>;
   if (!person) {
     return (
       <div className="space-y-4 py-8">
@@ -177,21 +178,6 @@ function PersonInspector({
   return (
     <div className="min-h-0 min-w-0 space-y-5">
       <div className="min-w-0 space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            className="group -ml-2 inline-flex min-h-9 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted transition-colors hover:bg-card/40 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-            aria-label="Back to people"
-            onClick={onBack}
-          >
-            <span aria-hidden="true" className="transition-transform duration-200 group-hover:-translate-x-0.5 motion-reduce:transform-none motion-reduce:transition-none">←</span>
-            <span>All people</span>
-          </button>
-          <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${person.online ? "text-success" : "text-muted"}`}>
-            <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${person.online ? "bg-success" : "bg-muted/40"}`} />
-            {person.online ? "Online" : "Offline"}
-          </span>
-        </div>
         <div className="min-w-0 space-y-0.5">
           <h3 className="truncate text-lg font-semibold text-fg" title={person.label}>{person.label}</h3>
           {person.email ? <p className="truncate font-mono text-xs text-muted" title={person.email}>{person.email}</p> : null}
@@ -253,6 +239,7 @@ function PersonInspector({
       ) : null}
 
       <div className="flex flex-wrap gap-2">
+        {userId ? <button type="button" className="mb-btn mb-btn-ghost h-9 text-xs" onClick={onViewGenerations}>Generations</button> : null}
         {person.userId && person.email ? (
           person.suspended ? (
             <button
@@ -284,7 +271,7 @@ function PersonInspector({
             <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">Prompts</h4>
             <span className="text-[11px] tabular-nums text-muted">{person.contributions.length}</span>
           </div>
-          <div className={person.contributions.length > 0 ? "max-h-40 min-w-0 divide-y divide-border/60 overflow-y-auto rounded-md border border-border/60 bg-card/10 px-3" : ""}>
+          <div className={person.contributions.length > 0 ? "min-w-0 divide-y divide-border/60 rounded-md border border-border/60 bg-card/10 px-3" : ""}>
             {person.contributions.map((candidate) => {
               const content = (
                 <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
@@ -309,10 +296,10 @@ function PersonInspector({
           <h4 className="text-xs font-semibold uppercase tracking-wider text-muted">Vote history</h4>
           <span className="text-[11px] tabular-nums text-muted">{person.votes.length}</span>
         </div>
-        <div className={person.votes.length > 0 ? "max-h-80 min-w-0 space-y-2 overflow-y-auto pr-1" : ""}>
+        <div className={person.votes.length > 0 ? "min-w-0 space-y-2" : ""}>
           {person.votes.map((vote) => (
-            <article key={vote.id} className="min-w-0 rounded-lg border border-border/70 bg-card/20 p-3 transition-colors hover:border-border hover:bg-card/40">
-              <div className="flex items-center justify-between gap-2">
+            <article key={vote.id} className="min-w-0 rounded-md border border-border/70 bg-card/20 p-3 transition-colors hover:border-border hover:bg-card/40">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${
                   vote.source === "Arena"
                     ? "border border-border/80 bg-bg/70 text-muted"
@@ -395,6 +382,8 @@ function PersonInspector({
 
 export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   const router = useRouter();
+  const [view, setView] = useState<"generations" | "prompts">("generations");
+  const [generationOwner, setGenerationOwner] = useState<{ id: string; label: string } | null>(null);
   const [promptFilter, setPromptFilter] = useState<PromptFilter>("latest");
   const [peopleFilter, setPeopleFilter] = useState<PeopleFilter>("online");
   const [promptQuery, setPromptQuery] = useState("");
@@ -405,11 +394,12 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [suspendTarget, setSuspendTarget] = useState<{ userId: string; email: string } | null>(null);
-  const [, startTransition] = useTransition();
+  const [refreshing, startTransition] = useTransition();
+  const personRequest = useRef(0);
 
   useEffect(() => {
     const interval = window.setInterval(() => {
-      if (document.visibilityState === "visible") router.refresh();
+      if (document.visibilityState === "visible") startTransition(() => router.refresh());
     }, 60_000);
     return () => window.clearInterval(interval);
   }, [router]);
@@ -433,35 +423,44 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
     });
   }, [dashboard.people, peopleFilter, peopleQuery]);
 
-  async function loadPerson(personId: string) {
-    setSelectedPersonId(personId);
+  const loadPerson = useCallback(async (personId: string) => {
+    const request = ++personRequest.current;
     setPersonLoading(true);
-    setPerson(null);
-    const result = await loadGalleryAdminPerson(personId);
-    setPersonLoading(false);
-    if (result.ok) setPerson(result.person);
-    else setNotice(result.error);
-  }
+    setNotice(null);
+    try {
+      const result = await loadGalleryAdminPerson(personId);
+      if (request !== personRequest.current) return;
+      if (result.ok) setPerson(result.person);
+      else setNotice(result.error);
+    } catch {
+      if (request === personRequest.current) setNotice("Could not load this person. Try again.");
+    } finally {
+      if (request === personRequest.current) setPersonLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedPersonId) void loadPerson(selectedPersonId);
+    return () => { personRequest.current += 1; };
+  }, [dashboard.refreshedAt, selectedPersonId, loadPerson]);
 
   async function mutate(mutation: Mutation, key: string = mutation.type): Promise<boolean> {
     setPendingKey(key);
     setNotice(null);
-    const result = await mutateGalleryAdmin(mutation);
-    setPendingKey(null);
-    if (!result.ok) {
-      setNotice(result.error);
+    try {
+      const result = await mutateGalleryAdmin(mutation);
+      if (!result.ok) {
+        setNotice(result.error);
+        return false;
+      }
+      startTransition(() => router.refresh());
+      return true;
+    } catch {
+      setNotice("Could not save this change. Try again.");
       return false;
+    } finally {
+      setPendingKey(null);
     }
-    setNotice(null);
-    if (selectedPersonId && (
-      mutation.type === "account_suspended" ||
-      mutation.type === "votes_blocked" ||
-      mutation.type === "hosted_generation_limit"
-    )) {
-      await loadPerson(selectedPersonId);
-    }
-    startTransition(() => router.refresh());
-    return true;
   }
 
   function openSuspend(target: { userId: string; email: string }) {
@@ -472,7 +471,27 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
   return (
     <>
       {notice ? <p role="alert" className="text-sm text-danger">{notice}</p> : null}
-      <div className="grid items-start gap-8 lg:h-[calc(100dvh-8rem)] lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-5" aria-label="Admin views">
+          <FilterButton active={view === "generations"} onClick={() => { setView("generations"); setGenerationOwner(null); }}>Generations</FilterButton>
+          <FilterButton active={view === "prompts"} onClick={() => setView("prompts")}>Prompts</FilterButton>
+          {view === "generations" && generationOwner ? <button type="button" className="max-w-48 truncate text-xs text-muted hover:text-fg" title="Show all generations" onClick={() => setGenerationOwner(null)}>{generationOwner.label} · Clear</button> : null}
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-success" title="Active in the last 10 minutes">
+            <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-success" />
+            {dashboard.onlinePeopleCount.toLocaleString()} online
+          </span>
+          <time className="hidden text-xs text-muted sm:block" dateTime={dashboard.refreshedAt}>
+            Updated {dateTime.format(new Date(dashboard.refreshedAt))}
+          </time>
+          <button type="button" className="mb-btn mb-btn-ghost h-9 text-xs" disabled={refreshing || personLoading || Boolean(pendingKey)} onClick={() => startTransition(() => router.refresh())}>
+            {refreshing ? "Refreshing…" : "Refresh"}
+          </button>
+        </div>
+      </div>
+      <div className="grid items-start gap-8 lg:h-[max(36rem,calc(100dvh-22rem))] lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+        {view === "generations" ? <GalleryAdminGenerations ownerId={generationOwner?.id} refreshedAt={dashboard.refreshedAt} /> : (
         <section className="min-w-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col" aria-labelledby="admin-prompts-title">
           <div className="flex flex-wrap items-end justify-between gap-5 border-b border-border pb-4">
             <div>
@@ -491,7 +510,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
               </FilterButton>
             ))}
           </div>
-          <div className="divide-y divide-border border-b border-border lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
+          <div className="divide-y divide-border border-b border-border lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:px-1 lg:pb-1">
             {prompts.map((prompt) => {
               const key = `prompt:${prompt.publicId}`;
               return (
@@ -530,21 +549,38 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
             {prompts.length === 0 ? <p className="py-10 text-sm text-muted">No matching prompts</p> : null}
           </div>
         </section>
+        )}
 
         <aside className="grid min-h-0 min-w-0 w-full gap-8 lg:sticky lg:top-24 lg:h-full lg:grid-rows-[minmax(18rem,3fr)_minmax(14rem,2fr)] lg:border-l lg:border-border lg:pl-8">
           <section className="flex min-h-0 min-w-0 w-full flex-col" aria-labelledby="admin-people-title">
             {selectedPersonId ? (
-              <div className="min-h-0 min-w-0 overflow-y-auto pr-1">
+              <>
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border pb-3">
+                <button type="button" className="inline-flex min-h-9 items-center gap-1.5 rounded-md px-1 text-xs font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:text-accent" aria-label="Back to people" onClick={() => { personRequest.current += 1; setSelectedPersonId(null); setPerson(null); setPersonLoading(false); setNotice(null); }}>
+                  <span aria-hidden="true">←</span> All people
+                </button>
+                <h2 id="admin-people-title" className="sr-only">Person details</h2>
+                {personLoading ? <span role="status" className="text-xs text-muted">Updating…</span> : person ? (
+                  <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${person.online ? "text-success" : "text-muted"}`}>
+                    <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${person.online ? "bg-success" : "bg-muted/40"}`} />
+                    {person.online ? "Online" : "Offline"}
+                  </span>
+                ) : null}
+              </div>
+              <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-1 py-4">
                 <PersonInspector
                   person={person}
                   loading={personLoading}
                   pending={Boolean(pendingKey)}
-                  onBack={() => { setSelectedPersonId(null); setPerson(null); }}
                   onReload={() => void loadPerson(selectedPersonId)}
+                  onViewGenerations={() => {
+                    if (person?.userId) { setGenerationOwner({ id: person.userId, label: person.label }); setView("generations"); }
+                  }}
                   onMutate={mutate}
                   onSuspend={openSuspend}
                 />
               </div>
+              </>
             ) : (
               <>
                 <div className="flex flex-wrap items-end justify-between gap-3 border-b border-border pb-3">
@@ -563,7 +599,7 @@ export function GalleryAdminDashboard({ dashboard }: { dashboard: Dashboard }) {
                 </div>
                 <div className="max-h-[32rem] min-h-0 flex-1 divide-y divide-border overflow-y-auto border-b border-border pr-1 lg:max-h-none">
                   {people.map((entry) => (
-                    <button key={entry.id} type="button" className="flex min-h-14 w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:text-accent focus-visible:outline-none focus-visible:text-accent" onClick={() => void loadPerson(entry.id)}>
+                    <button key={entry.id} type="button" className="flex min-h-14 w-full items-center justify-between gap-3 py-3 text-left transition-colors hover:text-accent focus-visible:outline-none focus-visible:text-accent" onClick={() => { setPerson(null); setPersonLoading(true); setSelectedPersonId(entry.id); }}>
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-medium">{entry.label}</span>
                         <span className="block truncate text-xs text-muted">
