@@ -40,7 +40,7 @@ All telemetry is emitted under the `MineBench/Production` namespace.
 | `disk_used_percent` | Percent | Host disk space utilization percentage. |
 | `cpu_usage_idle` | Percent | Host idle CPU percentage. |
 
-Worker heartbeats and queue health are emitted immediately at startup and every 30 seconds. They continue while active work drains after shutdown begins, so deploys remain visible. The queue alarm treats missing telemetry as unhealthy; `WorkerAcceptingJobs` is currently dashboard-only.
+Worker heartbeats and queue health are emitted immediately at startup and every 30 seconds. They continue while active work drains after shutdown begins, so deploys remain visible. The queue and worker-availability alarms treat missing telemetry as unhealthy.
 
 Success, duration, and error events publish both an `Environment` aggregate for alarms and detailed model dimensions for dashboards. CloudWatch does not aggregate custom metrics across dimension sets automatically, so alarms must use the aggregate series.
 
@@ -62,15 +62,30 @@ Verified in `us-east-1` on 2026-09-05. Enabled alarms notify the `minebench-prod
 | `MineBench-GenerationErrors` | At least one failed generation attempt in 5 minutes | Sensitive: includes user credentials, exhausted credits, invalid model output, and provider errors as well as infrastructure failures. Keep error details visible; consider paging only on actionable infrastructure failures or sustained failures after defining the desired policy. |
 | `MineBench-HighCPU` | Average CPU busy >= 85% for two consecutive 5-minute periods | Reasonable sustained host-pressure warning; missing data becomes insufficient data. |
 | `MineBench-HighMemory` | Average RAM used >= 85% for two consecutive 1-minute periods | Reasonable for the small worker host; missing data becomes insufficient data. |
+| `MineBench-WorkerUnavailable` | Maximum `WorkerAcceptingJobs` < 1 for three consecutive 1-minute periods | Detects a stopped or persistently draining worker, including missing telemetry. A worker doing long inference continues reporting 1. |
+| `MineBench-HighDisk` | Average root filesystem usage >= 85% for two consecutive 5-minute periods | Warns before artifact/log growth fills the worker disk; missing data becomes insufficient data. |
 | `MineBench-StuckQueuedGenerations` | Maximum oldest runnable queue age >= 180 seconds for two consecutive 1-minute periods | Detects waiting work, not running inference. Missing data breaches. A healthy worker at capacity can also trigger this, so inspect active jobs and accepting-jobs status before treating it as stuck. |
 
 Low traffic makes the duration alarm especially noisy: a single completed build can determine the period's p95, then an idle period returns it to OK because missing data is non-breaching. CloudWatch supports [ignoring low-sample percentiles](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/percentiles-with-low-samples.html), but that would not make generation duration a useful responsiveness alarm.
 
 The seven days reviewed contained 84 HighLatency ALARM transitions, 27 GenerationErrors transitions, and one StuckQueuedGenerations transition. There were 206 recorded successes and 71 error events; these are telemetry events, not a unique-job failure rate, because retries can emit errors before success.
 
+### Applying worker and disk alarms
+
+The checked-in definitions target the existing production metrics and SNS topic. Apply them from the repository root; `put-metric-alarm` creates or updates the named alarm:
+
+```bash
+aws cloudwatch put-metric-alarm --profile minebench --region us-east-1 --cli-input-json file://docs/cloudwatch/worker-unavailable.json
+aws cloudwatch put-metric-alarm --profile minebench --region us-east-1 --cli-input-json file://docs/cloudwatch/high-disk.json
+```
+
+Worker availability uses the maximum sample in each minute so a healthy heartbeat clears that minute. Three breaching periods allow the normal 45-second restart window. Missing-heartbeat detection can take longer than three minutes because CloudWatch can evaluate earlier real samples before filling missing periods as breaching; see [AWS missing-data evaluation](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/alarms-and-missing-data.html).
+
+The disk dimensions match the current root filesystem (`/`, `nvme0n1p1`, `xfs`). Recheck them after replacing the host. Both alarms send notifications only; they do not restart the worker or delete files. Pushing these definitions to Alpha does not apply AWS configuration automatically.
+
 ### Coverage limits
 
-- `WorkerAcceptingJobs`, disk usage, and swap usage have metrics but no dedicated alarms. Queue telemetry can detect a dead reporter; a live draining worker with an empty queue will not trip the queue alarm.
+- Swap usage has a metric but no dedicated alarm. Worker availability detects a persistently draining worker even when its queue is empty; it does not measure provider progress or worker capacity.
 - Active jobs and queue health include private checkpoint work. Success/duration/error events currently cover saved Sandbox generation jobs and `/api/generate` streams, not private checkpoint generations, imports, or all benchmark batch jobs.
 - `ActiveGenerations` measures worker jobs, not simultaneous Vercel streams.
 - Host metrics belong to the worker host; they do not describe Vercel web functions or database health.

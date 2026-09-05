@@ -1,0 +1,21 @@
+{
+  "AlarmName": "MineBench-WorkerUnavailable",
+  "AlarmDescription": "No accepting worker for three consecutive one-minute periods, or missing worker heartbeat telemetry. Normal short restarts and long active generations do not breach.",
+  "ActionsEnabled": true,
+  "AlarmActions": ["arn:aws:sns:us-east-1:571600857924:minebench-production-alerts"],
+  "OKActions": [],
+  "InsufficientDataActions": [],
+  "Namespace": "MineBench/Production",
+  "MetricName": "WorkerAcceptingJobs",
+  "Dimensions": [
+    { "Name": "Environment", "Value": "production" },
+    { "Name": "JobType", "Value": "worker" }
+  ],
+  "Statistic": "Maximum",
+  "Period": 60,
+  "EvaluationPeriods": 3,
+  "DatapointsToAlarm": 3,
+  "Threshold": 1,
+  "ComparisonOperator": "LessThanThreshold",
+  "TreatMissingData": "breaching"
+}
