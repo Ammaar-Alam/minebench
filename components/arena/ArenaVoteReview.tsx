@@ -323,7 +323,8 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
   const busy = votesLoading || pendingAction !== null;
   const pageSelected = pageVoteIds.length > 0 && pageVoteIds.every((id) => selectedVoteIds.has(id));
   const hasNewVotes = loadedSessionId === selectedSessionId && selectedSession?.lastVoteAt &&
-    (!votes[0] || selectedSession.lastVoteAt > votes[0].createdAt);
+    (!votes[0] || selectedSession.lastVoteAt > votes[0].createdAt ||
+      (selectedSession.lastVoteAt === votes[0].createdAt && (selectedSession.lastVoteId ?? "") > votes[0].id));
 
   function toggleVote(voteId: string) {
     if (!selectedVoteIds.has(voteId) && selectedVoteIds.size >= MAX_SELECTED_VOTES) {
@@ -434,10 +435,17 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         </div>
       </div>
 
-      <div className="grid gap-8 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(15rem,0.7fr)_minmax(0,1.6fr)] lg:overflow-hidden">
+      {sessions.length === 0 ? (
+        <div className="flex min-h-48 flex-1 flex-col items-center justify-center gap-3 py-8 text-center">
+          {listLoading && !data ? <p role="status" className="text-sm text-muted">Loading votes...</p> : null}
+          {data ? <p className="text-sm text-muted">No matching sessions.</p> : null}
+          {data && filter === "suspicious" && counts.all > 0 ? (
+            <button type="button" className="mb-btn h-10" onClick={() => setFilter("all")}>Show all</button>
+          ) : null}
+        </div>
+      ) : <div className="grid gap-8 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(15rem,0.7fr)_minmax(0,1.6fr)] lg:overflow-hidden">
         <section className="min-w-0 lg:flex lg:min-h-0 lg:flex-col" aria-label="Vote sessions">
           <div className="divide-y divide-border border-b border-border lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
-            {listLoading && !data ? <p className="py-8 text-sm text-muted">Loading votes...</p> : null}
             {sessions.map((session) => (
               <SessionRow
                 key={session.sessionId}
@@ -447,18 +455,10 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
                 onSelect={() => selectSession(session.sessionId)}
               />
             ))}
-            {!listLoading && data && sessions.length === 0 ? (
-              <div className="space-y-3 py-8">
-                <p className="text-sm text-muted">No matching sessions.</p>
-                {filter === "suspicious" && counts.all > 0 ? (
-                  <button type="button" className="mb-btn h-10" onClick={() => setFilter("all")}>Show all</button>
-                ) : null}
-              </div>
-            ) : null}
           </div>
         </section>
 
-        <section className="min-w-0 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2" aria-labelledby="arena-vote-detail-title">
+        {selectedSession ? <section className="min-w-0 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2" aria-labelledby="arena-vote-detail-title">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-bg px-1 pb-3 pt-2 lg:sticky lg:top-0 lg:z-10">
             <div className="min-w-0 space-y-1">
               <h3 id="arena-vote-detail-title" className="truncate text-lg font-semibold text-fg" title={selectedSession?.label ?? undefined}>
@@ -498,7 +498,6 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
             {selectedSession && !votesError && (votesLoading || loadedSessionId !== selectedSessionId) && votes.length === 0 ? <p role="status" className="py-8 text-sm text-muted">Loading votes...</p> : null}
             {votesError ? <div className="flex items-center gap-3 py-4"><p role="alert" className="text-sm text-danger">{votesError}</p><button type="button" className="mb-btn h-10" disabled={busy} onClick={() => selectedSessionId && void loadVotes(selectedSessionId)}>Retry</button></div> : null}
             {!votesLoading && !votesError && selectedSession && loadedSessionId === selectedSessionId && votes.length === 0 ? <p className="py-8 text-sm text-muted">No votes in this session.</p> : null}
-            {!selectedSession ? <p className="py-8 text-sm text-muted">Choose a session.</p> : null}
             {votes.map((vote) => (
               <VoteCard
                 key={vote.id}
@@ -525,8 +524,8 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
               <p>IP matches use retained hashes, not raw addresses. Shared IPs may include other visitors. <a className="text-fg underline underline-offset-4" href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer">Privacy policy</a></p>
             </div>
           </details>
-        </section>
-      </div>
+        </section> : null}
+      </div>}
       {data?.truncated ? <p className="text-xs text-muted">Showing the first 1,000 sessions plus retained restrictions.</p> : null}
     </section>
   );
