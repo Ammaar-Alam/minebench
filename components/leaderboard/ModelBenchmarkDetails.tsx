@@ -95,7 +95,7 @@ function formatJsonSize(bytes: number): string {
 }
 
 function formatCost(cost: BenchmarkCost): string {
-  return `$${cost.usd.toFixed(2)}`;
+  return `$${cost.usd.toFixed(2)}${cost.estimated ? "*" : ""}`;
 }
 
 // Unit follows whichever denominator was measured, since models benchmarked
@@ -103,10 +103,10 @@ function formatCost(cost: BenchmarkCost): string {
 function formatCostDetail(profile: ModelBenchmarkProfile): string | undefined {
   if (!profile.totalCost) return undefined;
   if (profile.totalCost.attemptCount) {
-    return `$${(profile.totalCost.usd / profile.totalCost.attemptCount).toFixed(2)} per attempt`;
+    return `${formatCost({ ...profile.totalCost, usd: profile.totalCost.usd / profile.totalCost.attemptCount })} per attempt`;
   }
   if (profile.buildCount) {
-    return `$${(profile.totalCost.usd / profile.buildCount).toFixed(2)} per build`;
+    return `${formatCost({ ...profile.totalCost, usd: profile.totalCost.usd / profile.buildCount })} per build`;
   }
   return undefined;
 }

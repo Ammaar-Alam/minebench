@@ -16,6 +16,7 @@ export type BenchmarkDuration = {
 
 export type BenchmarkCost = {
   usd: number;
+  estimated?: boolean;
   // Completed responses covered by this cost snapshot
   attemptCount?: number;
 };
@@ -77,6 +78,11 @@ const OPENROUTER_XHIGH: ModelRunParameters = [
 ];
 
 const MODEL_RUN_PARAMETERS = {
+  openai_gpt_6_astra: [
+    { label: "Reasoning mode", value: "Pro" },
+    { label: "Reasoning effort", value: "Max" },
+    { label: "Text verbosity", value: "High" },
+  ],
   openai_gpt_5_6_luna: [
     { label: "Reasoning mode", value: "Pro" },
     { label: "Reasoning effort", value: "Max" },
@@ -243,6 +249,10 @@ const exactOutputCap = (tokens: number): BenchmarkOutputCap => ({
 export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
   Record<ModelKey, BenchmarkOutputCap>
 > = {
+  openai_gpt_6_astra: {
+    kind: "unavailable",
+    reason: "accepted-cap-unrecorded",
+  },
   openai_gpt_5_6_luna: {
     kind: "unavailable",
     reason: "accepted-cap-unrecorded",
@@ -318,6 +328,11 @@ export const HISTORICAL_BENCHMARK_OUTPUT_CAPS: Partial<
 const MODEL_BENCHMARK_METADATA: Partial<
   Record<ModelKey, Omit<ModelBenchmarkProfile, "outputCap" | "parameters">>
 > = {
+  openai_gpt_6_astra: {
+    sourceRelease: "4.3.0",
+    totalCost: { usd: 34.71, attemptCount: 15, estimated: true },
+    note: "* Estimated cost; the provider dashboard has not yet updated.",
+  },
   meta_muse_spark_1_3: {
     totalCost: { usd: 6.57, attemptCount: 28 },
   },

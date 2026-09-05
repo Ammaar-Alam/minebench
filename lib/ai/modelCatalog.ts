@@ -29,6 +29,15 @@ type ModelCatalogEntryShape = {
 
 const CATALOG = [
   {
+    key: "openai_gpt_6_astra",
+    slug: "gpt-6-astra",
+    provider: "openai",
+    modelId: "gpt-6-astra",
+    displayName: "GPT 6 Astra Pro",
+    enabled: true,
+    openRouterModelId: "openai/gpt-6-astra-pro",
+  },
+  {
     key: "openai_gpt_5_6_luna",
     slug: "gpt-5-6-luna",
     provider: "openai",

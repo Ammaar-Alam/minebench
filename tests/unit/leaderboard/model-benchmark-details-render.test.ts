@@ -69,6 +69,7 @@ assert.ok(
 );
 
 const attemptCostSnapshots = [
+  ["openai_gpt_6_astra", "GPT 6 Astra Pro", "$34.71*", "$2.31* per attempt"],
   ["meta_muse_spark_1_3", "Muse Spark 1.3", "$6.57", "$0.23 per attempt"],
   ["openai_gpt_5_6_luna", "GPT 5.6 Luna Pro", "$1.15", "$0.05 per attempt"],
   ["anthropic_claude_fable_5_1", "Claude Fable 5.1", "$147.55", "$6.42 per attempt"],
@@ -95,6 +96,16 @@ for (const [modelKey, displayName, totalCost, averageCost] of attemptCostSnapsho
     `${displayName} should divide its cost snapshot by covered attempts`,
   );
 }
+
+const astraMarkup = renderToStaticMarkup(
+  React.createElement(ModelBenchmarkDetailsInline, {
+    id: "astra-details",
+    modelKey: "openai_gpt_6_astra",
+    displayName: "GPT 6 Astra Pro",
+    open: true,
+  }),
+);
+assert.ok(astraMarkup.includes("* Estimated cost; the provider dashboard has not yet updated."));
 
 const gemini30Markup = renderToStaticMarkup(
   React.createElement(ModelBenchmarkDetailsInline, {

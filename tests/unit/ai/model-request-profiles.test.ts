@@ -9,6 +9,7 @@ import { tokenBudgetCandidates } from "../../../lib/ai/tokenBudgets";
 
 // A ceiling belongs to the model, so both routes resolve the same number
 for (const [direct, routed] of [
+  ["gpt-6-astra", "openai/gpt-6-astra-pro"],
   ["kimi-k3", "moonshotai/kimi-k3"],
   ["grok-4.6", "x-ai/grok-4.6"],
   ["grok-4.5", "x-ai/grok-4.5"],
@@ -48,6 +49,7 @@ assert.equal(modelOutputCeiling("claude-opus-4-6"), undefined);
 // plus output, while OpenRouter counts visible output alone
 assert.equal(modelOutputCeiling("gpt-5.4"), 128_000);
 assert.equal(modelOutputCeiling("gpt-5.6-luna"), 128_000);
+assert.equal(modelOutputCeiling("gpt-6-astra"), 128_000);
 assert.equal(modelOutputCeiling("gpt-5-pro"), 272_000);
 assert.equal(modelOutputCeiling("openai/gpt-5.4"), undefined);
 
@@ -55,6 +57,7 @@ assert.equal(modelUsesDefaultSampling("kimi-k3"), true);
 assert.equal(modelUsesDefaultSampling("grok-4.6"), true);
 assert.equal(modelUsesDefaultSampling("x-ai/grok-4.6"), true);
 assert.equal(modelUsesDefaultSampling("gpt-5.6-sol"), true);
+assert.equal(modelUsesDefaultSampling("gpt-6-astra"), true);
 assert.equal(modelUsesDefaultSampling("gpt-5.6-luna"), true);
 assert.equal(modelUsesDefaultSampling("openai/gpt-5.6-luna-pro"), true);
 assert.equal(modelUsesDefaultSampling("claude-opus-5"), true);
