@@ -20,9 +20,11 @@ import {
   ModelBenchmarkDetailsTrigger,
 } from "@/components/leaderboard/ModelBenchmarkDetails";
 import { LeaderboardSkeleton } from "@/components/leaderboard/LeaderboardSkeleton";
+import { LeaderboardEfficiency } from "@/components/leaderboard/LeaderboardEfficiency";
 
 const LEADERBOARD_SLOW_THRESHOLD_MS = 5_000;
 const LEADERBOARD_TIMEOUT_MS = 10_000;
+const LEADERBOARD_REFRESH_MS = 60_000;
 
 function ChevronUp({ className }: { className?: string }) {
   return (
@@ -249,10 +251,14 @@ export function Leaderboard({
   const [reloadToken, setReloadToken] = useState(0);
   const [navigatingModelKey, setNavigatingModelKey] = useState<string | null>(null);
   const [showDetailed, setShowDetailed] = useState(false);
+  const [view, setView] = useState<"rankings" | "efficiency">("rankings");
   const [expandedMobileModelKey, setExpandedMobileModelKey] = useState<string | null>(null);
   const [modelQuery, setModelQuery] = useState("");
   const modelSearchInputRef = useRef<HTMLInputElement>(null);
   const initialDataCachedRef = useRef(false);
+  const dataRef = useRef(initialData);
+  const lastRefreshStartedRef = useRef(0);
+  const lastSuccessRef = useRef(Date.now());
   const router = useRouter();
   const activeModelCount = data?.models.length ?? 0;
   const topModel = data?.models[0] ?? null;
@@ -283,6 +289,7 @@ export function Leaderboard({
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    lastRefreshStartedRef.current = Date.now();
 
     // 1. hydrate from stale cache immediately so the first paint shows data —
     //    but only when the cache is still within our stated freshness window
@@ -290,7 +297,9 @@ export function Leaderboard({
     //    the primary table would mislead users; we'd rather show the loader
     //    and fall through to error handling if the fetch can't recover.
     const cached = readStale<LeaderboardResponse>(LEADERBOARD_CACHE_KEY, LEADERBOARD_STALE_MAX_AGE_MS);
-    if (!initialData && cached.value && cached.isFresh) {
+    if (!dataRef.current && cached.value && cached.isFresh) {
+      dataRef.current = cached.value;
+      lastSuccessRef.current = Date.now() - (cached.ageMs ?? 0);
       setData(cached.value);
       setDataAgeMs(cached.ageMs);
       setIsStale(true);
@@ -299,7 +308,7 @@ export function Leaderboard({
       writeStale(LEADERBOARD_CACHE_KEY, initialData);
       initialDataCachedRef.current = true;
     }
-    const hasFallbackData = initialData != null || Boolean(cached.value && cached.isFresh);
+    const hasFallbackData = dataRef.current != null;
 
     setError(null);
     setRefreshError(null);
@@ -321,6 +330,8 @@ export function Leaderboard({
       .then((r) => r.json())
       .then((d: LeaderboardResponse) => {
         if (cancelled) return;
+        dataRef.current = d;
+        lastSuccessRef.current = Date.now();
         setData(d);
         setDataAgeMs(0);
         setIsStale(false);
@@ -333,11 +344,10 @@ export function Leaderboard({
         const fetchErr = e instanceof FetchError
           ? e
           : new FetchError("network", "Failed to load leaderboard", null, true);
-        // keep cached data on refresh failure only if it was fresh enough to
-        // paint in the first place; otherwise fall through to the full error
-        // state so we don't leave hours-old rankings on screen with a soft
-        // "couldn't refresh" note pretending they're current.
+        // retain the latest successful response and mark its age on refresh failure
         if (hasFallbackData) {
+          setIsStale(true);
+          setDataAgeMs(Date.now() - lastSuccessRef.current);
           setRefreshError(fetchErr);
         } else {
           setError(fetchErr);
@@ -354,6 +364,22 @@ export function Leaderboard({
       controller.abort();
     };
   }, [initialData, reloadToken]);
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== "visible" || Date.now() - lastRefreshStartedRef.current < LEADERBOARD_REFRESH_MS) return;
+      lastRefreshStartedRef.current = Date.now();
+      setReloadToken((value) => value + 1);
+    };
+    const interval = window.setInterval(refresh, LEADERBOARD_REFRESH_MS);
+    document.addEventListener("visibilitychange", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
 
   const handleRetry = useCallback(() => {
     setRetrying(true);
@@ -456,7 +482,7 @@ export function Leaderboard({
                   <span className="absolute inset-0 rounded-full bg-success" />
                   <span className="absolute inset-0 animate-ping rounded-full bg-success/60 motion-reduce:animate-none" />
                 </span>
-                <span className="text-fg">Live</span>
+                <span className="text-fg">{isStale && refreshError ? "Saved" : "Live"}</span>
                 <span className="text-muted/40">·</span>
                 <span>{activeModelCount} models</span>
                 <span className="hidden text-muted/40 sm:inline">·</span>
@@ -479,7 +505,7 @@ export function Leaderboard({
             ) : null}
           </div>
           <div className="order-2 flex w-full min-w-0 items-center gap-3 sm:order-none sm:w-auto sm:justify-self-end">
-            <button
+            {view === "rankings" ? <button
               type="button"
               onClick={() => setShowDetailed((v) => !v)}
               aria-label={showDetailed ? "Hide details" : "Show details"}
@@ -491,7 +517,7 @@ export function Leaderboard({
               }`}
             >
               Details
-            </button>
+            </button> : null}
             <div
               role="search"
               aria-label="Leaderboard models"
@@ -541,6 +567,21 @@ export function Leaderboard({
         </div>
       </div>
 
+      <div role="group" aria-label="Leaderboard view" className="flex shrink-0 gap-1 border-b border-border">
+        {(["rankings", "efficiency"] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            aria-pressed={view === item}
+            aria-controls="leaderboard-models"
+            onClick={() => setView(item)}
+            className={`mb-btn mb-btn-ghost relative h-11 px-4 text-sm ${view === item ? "text-fg" : "text-muted"}`}
+          >
+            {item === "rankings" ? "Rankings" : "Efficiency"}
+            <span aria-hidden="true" className={`absolute inset-x-4 bottom-0 h-0.5 origin-left bg-accent transition-transform duration-200 ease-out motion-reduce:transition-none ${view === item ? "scale-x-100" : "scale-x-0"}`} />
+          </button>
+        ))}
+      </div>
       {error ? (
         <ErrorState
           error={error}
@@ -549,7 +590,11 @@ export function Leaderboard({
           className="shrink-0"
         />
       ) : null}
-      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
+      {view === "efficiency" && data ? (
+        <div id="leaderboard-models" className="mb-leaderboard-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <LeaderboardEfficiency models={data.models} modelQuery={modelQuery} />
+        </div>
+      ) : <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-border">
         <div className="pointer-events-none absolute inset-y-0 right-0 z-20 hidden w-8 bg-gradient-to-l from-bg/70 to-transparent sm:block md:hidden" />
 
         <div
@@ -982,7 +1027,7 @@ export function Leaderboard({
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
     </div>
   );
 }

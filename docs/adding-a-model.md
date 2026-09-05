@@ -136,8 +136,11 @@ generated metrics, and only then activates the model. Imported models stay
 staged (disabled) until verification passes, so a partial cohort never reaches
 public surfaces. Real publications use `DIRECT_URL` to hold a per-model database
 lock through activation; configure it as a direct or session-mode connection.
-Commit `lib/ai/modelBenchmarkMetrics.generated.json` after
-publication. Once a model has vote history, publication permits only
+Commit and deploy `lib/ai/modelBenchmarkMetrics.generated.json` after
+publication, along with any recorded cost updates in `modelBenchmarkProfiles.ts`.
+The leaderboard efficiency views use these profiles automatically; models enter
+each frontier once that measurement and sampled prompt votes are available.
+Once a model has vote history, publication permits only
 payload-identical cohort reconciliation; publish changed builds under a new
 model identity or explicitly reset the vote and derived rating history first.
 
