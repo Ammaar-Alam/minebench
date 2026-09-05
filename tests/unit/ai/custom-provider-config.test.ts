@@ -108,6 +108,36 @@ assert.throws(
   /Header names must be unique/,
 );
 
+const singleMultibyteOverByteBudget = { field: "漢字".repeat(11_000) };
+assert.ok(JSON.stringify(singleMultibyteOverByteBudget).length <= 65_536);
+assert.ok(new TextEncoder().encode(JSON.stringify(singleMultibyteOverByteBudget)).byteLength > 65_536);
+assert.throws(
+  () => normalizeProviderRequestOverrides({ body: singleMultibyteOverByteBudget }),
+  /Keep custom body parameters under 64 KB/,
+);
+
+const multiMultibyteOverByteBudget = {
+  a: "漢字".repeat(8_000),
+  b: "漢字".repeat(8_000),
+};
+assert.ok(JSON.stringify(multiMultibyteOverByteBudget).length <= 65_536);
+assert.ok(new TextEncoder().encode(JSON.stringify(multiMultibyteOverByteBudget)).byteLength > 65_536);
+assert.throws(
+  () => normalizeProviderRequestOverrides({ body: multiMultibyteOverByteBudget }),
+  /Keep custom body parameters under 64 KB/,
+);
+
+const byteCapFraming = '{"field":""}'.length;
+const atByteCap = { field: "x".repeat(65_536 - byteCapFraming) };
+assert.equal(new TextEncoder().encode(JSON.stringify(atByteCap)).byteLength, 65_536);
+assert.deepEqual(normalizeProviderRequestOverrides({ body: atByteCap }), { body: atByteCap });
+const oneByteOverCap = { field: "x".repeat(65_536 - byteCapFraming + 1) };
+assert.equal(new TextEncoder().encode(JSON.stringify(oneByteOverCap)).byteLength, 65_537);
+assert.throws(
+  () => normalizeProviderRequestOverrides({ body: oneByteOverCap }),
+  /Keep custom body parameters under 64 KB/,
+);
+
 const originalLookup = dns.lookup;
 const originalHttpsRequest = https.request;
 const requests: Array<{ headers: http.IncomingHttpHeaders; body: Record<string, unknown> }> = [];

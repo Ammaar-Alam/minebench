@@ -26,7 +26,7 @@ const customHeaders = z
   .optional();
 const customBody = z
   .record(z.string().trim().min(1).max(128), z.unknown())
-  .refine((value) => JSON.stringify(value).length <= 65_536, "Custom body is too large.")
+  .refine((value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 65_536, "Custom body is too large.")
   .optional();
 
 const model = z.union([
