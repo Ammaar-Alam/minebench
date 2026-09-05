@@ -128,6 +128,41 @@ Here, `votesA` and `votesB` are decisive votes for each model on the prompt, and
 
 The consistency estimator is documented separately in [Consistency Metric](./consistency-metric-percentile-band.md).
 
+### Efficiency
+
+The cost, speed, and block frontiers compare the current rating against average
+resource use per build. A model is on a Pareto frontier when no other included
+model has an equal or higher rating and equal or lower resource use, with at
+least one strict improvement. Exact ties remain on the frontier. These are
+point-estimate comparisons, not claims of statistically significant superiority.
+
+- Cost divides recorded cohort expenditure by finalized builds, including retry
+  expenditure where recorded. Estimated costs are marked explicitly
+- Speed uses the existing benchmark inference-time profile, which requires
+  complete timing coverage or a documented historical measurement
+- Blocks average nonempty canonical public builds over Arena-eligible prompts
+  and require complete build coverage. Block count describes size, not quality
+
+Resource per score point divides each average by `100 * meanScore`. This observed
+prompt score averages win = 1, tie = 0.5, and loss = 0 across prompts with at least
+two eligible votes; `BOTH_BAD` is excluded. Missing or zero scores have no ratio.
+These descriptive ratios depend on sampled opponents and prompts; they do not
+replace the Bradley-Terry ranking. Dividing by the rating itself would depend on
+its arbitrary 1500-point origin.
+
+Models without sampled prompt evidence or a positive selected resource
+measurement are excluded. Provisional models remain identifiable, and the
+established-only filter recomputes the comparison population. Searching
+highlights matching models without changing frontier membership.
+
+Charts are derived from the same response as the rankings. Visible tabs refresh
+at most once per minute automatically, including when focus returns; failed
+refreshes retain the last successful data with a stale indicator. Server ranking
+and response caches still apply, so updates are eventual rather than instant.
+Publication activates eligible models after cohort verification. Generated
+benchmark metrics and profile cost updates must be committed and deployed through
+the existing model publication workflow; no separate chart export is needed.
+
 ## Operations
 
 `pnpm elo:recompute` performs a read-only replay. `pnpm elo:recompute --yes` writes current public Bradley-Terry ratings and counters while independently replaying private variant state. Private votes never enter the public fit.

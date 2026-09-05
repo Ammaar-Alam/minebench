@@ -118,6 +118,16 @@ export type PromptListResponse = {
   prompts: { id: string; text: string }[];
 };
 
+export type LeaderboardModelBenchmark = {
+  averageCostUsd: number | null;
+  costEstimated: boolean;
+  averageTimeMs: number | null;
+  averageBlocks: number | null;
+  blockSampleCount: number;
+  expectedBuildCount: number;
+  note?: string;
+};
+
 export type LeaderboardResponse = {
   models: {
     key: string;
@@ -152,5 +162,6 @@ export type LeaderboardResponse = {
     consistency: number | null;
     sampledPrompts: number;
     sampledVotes: number;
+    benchmark?: LeaderboardModelBenchmark;
   }[];
 };

@@ -1,14 +1,22 @@
 import type { Prisma } from "@prisma/client";
 import { getCache } from "@vercel/functions";
+import {
+  getAverageBenchmarkCostPerBuildUsd,
+  getAverageBenchmarkInferenceTimeMs,
+  getModelBenchmarkProfile,
+} from "@/lib/ai/modelBenchmarkProfiles";
 import { resolveModelDisplayName, resolveModelSlug } from "@/lib/ai/modelCatalog";
 import { getArenaPairCoverageByKey } from "@/lib/arena/coverage";
-import { getArenaEligiblePromptIds } from "@/lib/arena/eligibility";
+import {
+  arenaCohortBuildWhere,
+  getArenaEligiblePromptIds,
+} from "@/lib/arena/eligibility";
 import { confidenceFromRd, stabilityTier } from "@/lib/arena/rating";
 import {
   getGlobalBradleyTerrySnapshot,
   getLeaderboardDispersionByModelId,
 } from "@/lib/arena/stats";
-import type { LeaderboardResponse } from "@/lib/arena/types";
+import type { LeaderboardModelBenchmark, LeaderboardResponse } from "@/lib/arena/types";
 import { summarizeArenaVotes } from "@/lib/arena/voteMath";
 import { prisma } from "@/lib/prisma";
 
@@ -18,12 +26,17 @@ const ADJ_PAIR_PROMPTS_FLOOR = 6;
 const MOVEMENT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const MOVEMENT_CONFIDENCE_FLOOR = 50;
 const BRADLEY_TERRY_SNAPSHOT_EPOCH = new Date("2026-08-25T00:00:00.000Z");
-const LEADERBOARD_RUNTIME_CACHE_KEY = "response-v1";
+const LEADERBOARD_RUNTIME_CACHE_KEY = "response-v2";
 const LEADERBOARD_RUNTIME_CACHE_TTL_SECONDS = 30;
 
 type PairCoverage = {
   decisiveVotes: number;
   promptCount: number;
+};
+
+type LeaderboardBenchmarkBlockSummary = {
+  averageBlocks: number | null;
+  blockSampleCount: number;
 };
 
 const LEADERBOARD_MODEL_SELECT = {
@@ -62,6 +75,56 @@ function pairCompletion(coverage: PairCoverage | null): number {
   const votesCompletion = Math.min(1, coverage.decisiveVotes / ADJ_PAIR_VOTES_FLOOR);
   const promptsCompletion = Math.min(1, coverage.promptCount / ADJ_PAIR_PROMPTS_FLOOR);
   return Math.min(votesCompletion, promptsCompletion);
+}
+
+export function createLeaderboardBenchmark(
+  modelKey: string,
+  expectedBuildCount: number,
+  blockSummary?: LeaderboardBenchmarkBlockSummary,
+): LeaderboardModelBenchmark {
+  const profile = getModelBenchmarkProfile(modelKey);
+  const benchmark: LeaderboardModelBenchmark = {
+    averageCostUsd: getAverageBenchmarkCostPerBuildUsd(modelKey),
+    costEstimated: Boolean(profile?.totalCost?.estimated),
+    averageTimeMs: getAverageBenchmarkInferenceTimeMs(modelKey),
+    averageBlocks:
+      expectedBuildCount > 0 && blockSummary?.blockSampleCount === expectedBuildCount && (blockSummary.averageBlocks ?? 0) > 0
+        ? blockSummary.averageBlocks
+        : null,
+    blockSampleCount: blockSummary?.blockSampleCount ?? 0,
+    expectedBuildCount,
+  };
+  return profile?.note ? { ...benchmark, note: profile.note } : benchmark;
+}
+
+async function getLeaderboardBenchmarkBlocksByModelId(
+  eligiblePromptIds: readonly string[],
+): Promise<Map<string, LeaderboardBenchmarkBlockSummary>> {
+  if (eligiblePromptIds.length === 0) return new Map();
+
+  const where = {
+    ...arenaCohortBuildWhere(),
+    promptId: { in: [...eligiblePromptIds] },
+    blockCount: { gt: 0 },
+  } satisfies Prisma.BuildWhereInput;
+
+  const rows = await prisma.build.groupBy({
+    by: ["modelId"],
+    where,
+    _avg: { blockCount: true },
+    _count: { _all: true },
+  });
+
+  return new Map(
+    rows.map((row) => [
+      row.modelId,
+      {
+        averageBlocks:
+          typeof row._avg.blockCount === "number" ? row._avg.blockCount : null,
+        blockSampleCount: row._count._all,
+      },
+    ]),
+  );
 }
 
 function isLeaderboardResponse(value: unknown): value is LeaderboardResponse {
@@ -137,7 +200,7 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
   });
   const topBandIds = sortedModels.slice(0, CONTENDER_BAND_SIZE).map((model) => model.id);
 
-  const [baselineRows, pairCoverageByKey] = await Promise.all([
+  const [baselineRows, pairCoverageByKey, benchmarkBlocksByModelId] = await Promise.all([
     baselineAnchor
       ? prisma.modelRankSnapshot.findMany({
           where: { capturedAt: baselineAnchor.capturedAt },
@@ -147,6 +210,7 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
     topBandIds.length >= 2 && eligiblePromptIds.length > 0
       ? getArenaPairCoverageByKey(topBandIds, eligiblePromptIds)
       : Promise.resolve(new Map<string, PairCoverage>()),
+    getLeaderboardBenchmarkBlocksByModelId(eligiblePromptIds),
   ]);
   const baselineRanksByModelId = new Map(
     baselineRows.map((row) => [row.modelId, row.rank]),
@@ -240,6 +304,11 @@ async function queryLeaderboardData(): Promise<LeaderboardResponse> {
         consistency: dispersion.consistency,
         sampledPrompts: dispersion.sampledPrompts,
         sampledVotes: dispersion.sampledVotes,
+        benchmark: createLeaderboardBenchmark(
+          model.key,
+          eligiblePromptCount,
+          benchmarkBlocksByModelId.get(model.id),
+        ),
       };
     }),
   };
