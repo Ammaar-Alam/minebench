@@ -245,6 +245,20 @@ async function main() {
     const ready = (await listAdminGenerations(adminId, { ownerId: memberId })).items[0]!;
     assert.equal(ready.viewerUrl, `/api/admin/generations/${publicId}?artifact=viewer`);
     assert.equal(ready.generationTimeMs, 1_200_000);
+    const example = await db.galleryExample.create({ data: {
+      candidateId: candidate.id, customBuildId: completed.id, contributorId: memberId,
+    } });
+    assert.equal((await listAdminGenerations(adminId, { ownerId: memberId })).items[0]?.published, true);
+    await setGalleryCandidateHidden(adminId, candidate.publicId, true);
+    assert.equal((await listAdminGenerations(adminId, { ownerId: memberId })).items[0]?.published, false, "hidden prompts are not in the public Gallery");
+    await setGalleryCandidateHidden(adminId, candidate.publicId, false);
+    assert.equal((await listAdminGenerations(adminId, { ownerId: memberId })).items[0]?.published, true, "restoring the prompt restores its publication status");
+    await db.galleryExample.update({ where: { id: example.id }, data: { adminHiddenAt: now } });
+    assert.equal((await listAdminGenerations(adminId, { ownerId: memberId })).items[0]?.published, false, "hidden examples are not in the public Gallery");
+    await db.galleryExample.update({ where: { id: example.id }, data: { adminHiddenAt: null } });
+    await db.user.update({ where: { id: memberId }, data: { gallerySuspendedAt: now } });
+    assert.equal((await listAdminGenerations(adminId, { ownerId: memberId })).items[0]?.published, false, "suspended contributions are not in the public Gallery");
+    await db.user.update({ where: { id: memberId }, data: { gallerySuspendedAt: null } });
     assert.equal((await listAdminGenerations(adminId, { ownerId: memberId, active: true })).items.length, 0);
     assert.ok(await getAdminGenerationArtifact(adminId, publicId, ["viewer_mbv4"]));
     assert.equal(await getOwnedGenerationArtifact(adminId, publicId, ["viewer_mbv4"]), null, "ordinary owner routes remain owner-only even for admins");

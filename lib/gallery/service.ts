@@ -68,7 +68,7 @@ function generateGalleryPublicId(): string {
   return `gal_${randomBytes(12).toString("base64url")}`;
 }
 
-const publicCandidateWhere = {
+export const publicCandidateWhere = {
   removedAt: null,
   adminHiddenAt: null,
   OR: [
@@ -77,7 +77,7 @@ const publicCandidateWhere = {
   ],
 } satisfies Prisma.GalleryCandidateWhereInput;
 
-const publicExampleWhere = {
+export const publicExampleWhere = {
   removedAt: null,
   adminHiddenAt: null,
   contributor: { gallerySuspendedAt: null },

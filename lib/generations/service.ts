@@ -19,7 +19,7 @@ import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { resolveSavedGenerationModel } from "@/lib/generations/model";
 import { prisma } from "@/lib/prisma";
-import { requireMineBenchAdmin } from "@/lib/gallery/service";
+import { publicCandidateWhere, publicExampleWhere, requireMineBenchAdmin } from "@/lib/gallery/service";
 
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
@@ -429,7 +429,7 @@ export async function listAdminGenerations(
     select: {
       ...generationSelect,
       owner: { select: { id: true, email: true, publicNickname: true } },
-      galleryExamples: { where: { removedAt: null }, select: { id: true } },
+      galleryExamples: { where: { ...publicExampleWhere, candidate: publicCandidateWhere }, select: { id: true } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
