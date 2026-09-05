@@ -113,8 +113,8 @@ function SessionRow({
     >
       <span className="flex min-w-0 items-start justify-between gap-3">
         <span className="min-w-0">
-          <span className="block truncate text-sm font-semibold text-fg" title={session.label}>{session.label}</span>
-          <span className="block truncate font-mono text-[11px] text-muted" title={session.sessionId}>{session.sessionId}</span>
+          <span className="block truncate text-sm font-semibold text-fg" title={`${session.label} · ${session.sessionId}`}>{session.label}</span>
+          {session.lastVoteAt ? <time className="block text-xs text-muted" dateTime={session.lastVoteAt}>{formatDate(session.lastVoteAt)}</time> : <span className="block text-xs text-muted">No recent votes</span>}
         </span>
         <span className={`shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium ${
           session.blocked
@@ -215,10 +215,13 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
   const [selectedVoteIds, setSelectedVoteIds] = useState<Set<string>>(new Set());
   const [listLoading, setListLoading] = useState(true);
   const [votesLoading, setVotesLoading] = useState(false);
+  const [votesError, setVotesError] = useState<string | null>(null);
+  const [loadedSessionId, setLoadedSessionId] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<"remove" | "block" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const listRequest = useRef(0);
   const votesRequest = useRef(0);
+  const activeSession = useRef<string | null>(null);
 
   const loadList = useCallback(async () => {
     const request = ++listRequest.current;
@@ -241,34 +244,46 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
     cursor?: VoteReviewPage["nextCursor"],
     append = false,
   ) => {
+    if (sessionId !== activeSession.current) return;
     const request = ++votesRequest.current;
     setVotesLoading(true);
-    setNotice(null);
-    if (!append) {
-      setVotes([]);
-      setPageVoteIds([]);
-    }
+    setVotesError(null);
     try {
       const result = await loadArenaVotePage(sessionId, cursor ?? undefined);
-      if (request !== votesRequest.current || sessionId !== selectedSessionId) return;
+      if (request !== votesRequest.current || sessionId !== activeSession.current) return;
       if (!result.ok) {
-        setNotice(result.error);
+        setVotesError(result.error);
         return;
       }
       const voteIds = result.data.votes.map((vote) => vote.id);
       setVotes((current) => append ? [...current, ...result.data.votes] : result.data.votes);
+      setLoadedSessionId(sessionId);
       setPageVoteIds(voteIds);
       setNextCursor(result.data.nextCursor);
-      const liveIds = new Set(voteIds);
-      setSelectedVoteIds((current) => append
-        ? current
-        : new Set([...current].filter((id) => liveIds.has(id))));
+      if (!append) {
+        const liveIds = new Set(voteIds);
+        setSelectedVoteIds((current) => new Set([...current].filter((id) => liveIds.has(id))));
+      }
     } catch {
-      if (request === votesRequest.current) setNotice("Could not load vote history.");
+      if (request === votesRequest.current) setVotesError("Could not load vote history.");
     } finally {
       if (request === votesRequest.current) setVotesLoading(false);
     }
-  }, [selectedSessionId]);
+  }, []);
+
+  const selectSession = useCallback((sessionId: string | null) => {
+    if (sessionId === activeSession.current) return;
+    activeSession.current = sessionId;
+    votesRequest.current += 1;
+    setLoadedSessionId(null);
+    setVotesError(null);
+    setSelectedSessionId(sessionId);
+    setSelectedVoteIds(new Set());
+    setVotes([]);
+    setPageVoteIds([]);
+    setNextCursor(null);
+    setNotice(null);
+  }, []);
 
   useEffect(() => {
     void loadList();
@@ -276,21 +291,10 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
   }, [loadList, refreshedAt]);
 
   useEffect(() => {
-    if (!data) return;
-    if (selectedSessionId && data.sessions.some((session) => session.sessionId === selectedSessionId)) return;
-    const firstSession = data.sessions.find((session) => session.flags.length > 0) ?? data.sessions[0] ?? null;
-    setSelectedSessionId(firstSession?.sessionId ?? null);
-    setSelectedVoteIds(new Set());
-    setVotes([]);
-    setPageVoteIds([]);
-    setNextCursor(null);
-  }, [data, selectedSessionId]);
-
-  useEffect(() => {
     if (!selectedSessionId) return;
     void loadVotes(selectedSessionId);
     return () => { votesRequest.current += 1; };
-  }, [loadVotes, selectedSessionId, refreshedAt]);
+  }, [loadVotes, selectedSessionId]);
 
   const counts = useMemo(() => {
     const sessions = data?.sessions ?? [];
@@ -308,21 +312,18 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
     ));
   }, [data, filter, query]);
 
+  useEffect(() => {
+    if (selectedSessionId && sessions.some((session) => session.sessionId === selectedSessionId)) return;
+    selectSession(sessions[0]?.sessionId ?? null);
+  }, [sessions, selectedSessionId, selectSession]);
+
   const selectedSession = useMemo(() => (
     data?.sessions.find((session) => session.sessionId === selectedSessionId) ?? null
   ), [data, selectedSessionId]);
-  const busy = listLoading || votesLoading || pendingAction !== null;
+  const busy = votesLoading || pendingAction !== null;
   const pageSelected = pageVoteIds.length > 0 && pageVoteIds.every((id) => selectedVoteIds.has(id));
-
-  function selectSession(sessionId: string) {
-    votesRequest.current += 1;
-    setSelectedSessionId(sessionId);
-    setSelectedVoteIds(new Set());
-    setVotes([]);
-    setPageVoteIds([]);
-    setNextCursor(null);
-    setNotice(null);
-  }
+  const hasNewVotes = loadedSessionId === selectedSessionId && selectedSession?.lastVoteAt &&
+    (!votes[0] || selectedSession.lastVoteAt > votes[0].createdAt);
 
   function toggleVote(voteId: string) {
     if (!selectedVoteIds.has(voteId) && selectedVoteIds.size >= MAX_SELECTED_VOTES) {
@@ -458,7 +459,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         </section>
 
         <section className="min-w-0 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2" aria-labelledby="arena-vote-detail-title">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-bg pb-3 lg:sticky lg:top-0 lg:z-10">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-bg px-1 pb-3 pt-2 lg:sticky lg:top-0 lg:z-10">
             <div className="min-w-0 space-y-1">
               <h3 id="arena-vote-detail-title" className="truncate text-lg font-semibold text-fg" title={selectedSession?.label ?? undefined}>
                 {selectedSession?.label ?? "Session"}
@@ -490,11 +491,13 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
               <span>{metric(selectedSession.upsets, "ranking upsets")}</span>
               <span>Median gap {formatGap(selectedSession.medianGapSeconds)}</span>
               <span>{votes.length.toLocaleString()} loaded · {selectedVoteIds.size.toLocaleString()} selected</span>
+              {hasNewVotes && !votesError ? <button type="button" className="font-medium text-accent underline underline-offset-4" disabled={busy} onClick={() => selectedSessionId && void loadVotes(selectedSessionId)}>New votes</button> : null}
             </p>
           ) : null}
           <div className="divide-y divide-border">
-            {votesLoading && votes.length === 0 ? <p className="py-8 text-sm text-muted">Loading history...</p> : null}
-            {!votesLoading && selectedSession && votes.length === 0 ? <p className="py-8 text-sm text-muted">No retained public votes.</p> : null}
+            {selectedSession && !votesError && (votesLoading || loadedSessionId !== selectedSessionId) && votes.length === 0 ? <p role="status" className="py-8 text-sm text-muted">Loading votes...</p> : null}
+            {votesError ? <div className="flex items-center gap-3 py-4"><p role="alert" className="text-sm text-danger">{votesError}</p><button type="button" className="mb-btn h-10" disabled={busy} onClick={() => selectedSessionId && void loadVotes(selectedSessionId)}>Retry</button></div> : null}
+            {!votesLoading && !votesError && selectedSession && loadedSessionId === selectedSessionId && votes.length === 0 ? <p className="py-8 text-sm text-muted">No votes in this session.</p> : null}
             {!selectedSession ? <p className="py-8 text-sm text-muted">Choose a session.</p> : null}
             {votes.map((vote) => (
               <VoteCard

@@ -115,7 +115,7 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
           (choice = 'A' AND rank_b <= ${Math.max(1, Math.floor(ranking.ranks.size * 0.15))} AND rank_a > ${ranking.ranks.size / 2}) OR
           (choice = 'B' AND rank_a <= ${Math.max(1, Math.floor(ranking.ranks.size * 0.15))} AND rank_b > ${ranking.ranks.size / 2})
         )::int AS "largeUpsets"
-      FROM votes GROUP BY "sessionId" ORDER BY votes DESC, "sessionId" LIMIT ${SESSION_LIMIT + 1}
+      FROM votes GROUP BY "sessionId" ORDER BY "lastVoteAt" DESC, "sessionId" LIMIT ${SESSION_LIMIT + 1}
     `),
     prisma.galleryVoteBlock.findMany({ where: { reversedAt: null }, select: { userId: true, sessionHash: true, ipHmac: true } }),
   ]);

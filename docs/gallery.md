@@ -26,7 +26,9 @@ See [Architecture](./architecture.md) for the data and generation flow.
 ## Admin vote review
 
 The Votes view summarizes public Arena sessions over the last 24 hours, with
-Suspicious, All, and Restricted filters. Selecting a session loads its full public
+Suspicious, All, and Restricted filters, ordered by latest vote. Background refreshes
+update the session list without resetting a review; New votes loads newer history
+on request. Selecting a session loads its full public
 vote history in pages of 100. Flags identify repeated rapid voting, one-sided
 choices, repeated matchups, frequent rejections, and ranking upsets for manual
 review. Ranking comparisons use the latest hourly snapshot, not vote-time ranks;
