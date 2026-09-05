@@ -353,7 +353,17 @@ async function main() {
   } finally {
     if (previousVoteSecret === undefined) delete process.env.VOTE_BLOCK_HMAC_SECRET;
     else process.env.VOTE_BLOCK_HMAC_SECRET = previousVoteSecret;
-    await db.$disconnect();
+    try {
+      const prompt = { text: { startsWith: "Vote moderation ", endsWith: suffix } };
+      await db.matchup.deleteMany({ where: { prompt } });
+      await db.prompt.deleteMany({ where: prompt });
+      await db.organization.deleteMany({ where: { slug: `vote-mod-${suffix}` } });
+      await db.model.deleteMany({ where: { key: { startsWith: "vote-mod-", endsWith: suffix } } });
+      await db.galleryModerationRecord.deleteMany({ where: { actorUserId: adminId } });
+      await db.user.deleteMany({ where: { id: { in: [adminId, memberId] } } });
+    } finally {
+      await db.$disconnect();
+    }
   }
 }
 
