@@ -674,6 +674,28 @@
       "interruptedRunCount": 8,
       "providerCallTrackingJobCount": 15,
       "completedAttemptTrackingJobCount": 15
+    },
+    "openai_gpt_6_astra": {
+      "inferenceSampleCount": 15,
+      "expectedBuildCount": 15,
+      "finalizedBuildCount": 15,
+      "promptCohortId": "prompts-v1:bd8c28367f8a97f2",
+      "averageJsonSizeBytes": 134777521,
+      "configurationSampleCount": 15,
+      "configurationIsConsistent": true,
+      "outputCapSampleCount": 15,
+      "outputCapIsConsistent": true,
+      "averageInferenceMs": 1553517,
+      "finalizedAttemptCount": 15,
+      "outputCapTokens": 128000,
+      "providerCallCount": 15,
+      "completedAttemptCount": 15,
+      "rejectedResponseCount": 0,
+      "failedAttemptCount": 0,
+      "failedRunCount": 0,
+      "interruptedRunCount": 0,
+      "providerCallTrackingJobCount": 15,
+      "completedAttemptTrackingJobCount": 15
     }
   }
 }

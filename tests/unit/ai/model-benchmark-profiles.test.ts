@@ -23,10 +23,13 @@ assert.deepEqual(astra.parameters, [
   { label: "Reasoning effort", value: "Max" },
   { label: "Text verbosity", value: "High" },
 ]);
-assert.deepEqual(astra.outputCap, { kind: "unavailable", reason: "accepted-cap-unrecorded" });
-assert.equal(astra.totalCost, undefined);
-assert.equal(astra.averageInference, undefined);
-assert.equal(astra.buildCount, undefined);
+assert.deepEqual(astra.outputCap, { kind: "exact", tokens: 128_000 });
+assert.deepEqual(astra.totalCost, { usd: 34.71, attemptCount: 15, estimated: true });
+assert.equal(astra.sourceRelease, "4.3.0");
+assert.deepEqual(astra.averageInference, { milliseconds: 1_553_517 });
+assert.equal(astra.averageJsonSizeBytes, 134_777_521);
+assert.equal(astra.totalAttempts, 15);
+assert.equal(astra.buildCount, 15);
 
 const gpt56Luna = getModelBenchmarkProfile("openai_gpt_5_6_luna");
 assert.ok(gpt56Luna, "GPT 5.6 Luna Pro should have benchmark run details");
