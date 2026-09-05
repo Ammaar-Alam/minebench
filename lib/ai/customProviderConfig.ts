@@ -63,6 +63,7 @@ const BLOCKED_BODY_FIELDS = new Set([
   "tool_choice",
   "tools",
 ]);
+const TOKEN_FIELD_ALIASES = ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const;
 
 export function emptyCustomProviderProfile(): CustomProviderProfile {
   return {
@@ -254,13 +255,11 @@ function normalizeBody(body: CustomRequestBody | undefined): CustomRequestBody {
     normalized.push([name, value]);
   }
   const result = Object.fromEntries(normalized);
-  const tokenFields = ["max_tokens", "max_completion_tokens", "max_output_tokens"].filter(
-    (name) => Object.hasOwn(result, name),
-  );
+  const tokenFields = TOKEN_FIELD_ALIASES.filter((name) => Object.hasOwn(result, name));
   if (tokenFields.length > 1) {
     throw new Error("Use only one output token parameter.");
   }
-  for (const name of ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const) {
+  for (const name of TOKEN_FIELD_ALIASES) {
     if (!Object.hasOwn(result, name)) continue;
     const value = result[name];
     if (
@@ -525,7 +524,14 @@ export function mergeCustomRequestBody(
   protectedPaths: readonly string[] = [],
 ): Record<string, unknown> {
   const custom = normalizeProviderRequestOverrides({ body: customBody }).body ?? {};
-  const merged = mergeJsonObjects(base, custom);
+  const sanitizedBase = TOKEN_FIELD_ALIASES.some((name) => Object.hasOwn(custom, name))
+    ? Object.fromEntries(
+        Object.entries(base).filter(
+          ([name]) => !(TOKEN_FIELD_ALIASES as readonly string[]).includes(name),
+        ),
+      )
+    : base;
+  const merged = mergeJsonObjects(sanitizedBase, custom);
   for (const path of protectedPaths) {
     const managed = ownValueAtPath(base, path);
     if (managed.found) setValueAtPath(merged, path, managed.value);
