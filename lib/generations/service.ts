@@ -19,9 +19,18 @@ import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { resolveSavedGenerationModel } from "@/lib/generations/model";
 import { prisma } from "@/lib/prisma";
-import { publicCandidateWhere, publicExampleWhere, requireMineBenchAdmin } from "@/lib/gallery/service";
+import {
+  addGalleryExample,
+  GalleryServiceError,
+  publicCandidateWhere,
+  publicExampleWhere,
+  requireMineBenchAdmin,
+  submitGalleryCandidate,
+} from "@/lib/gallery/service";
+import { normalizeGalleryPrompt, publicGalleryTextError } from "@/lib/gallery/policy";
 
 const STORAGE_FAILSAFE_BYTES = 1024 * 1024 * 1024;
+const GALLERY_AUDIT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SECRET_TTL_MS = 24 * 60 * 60 * 1000;
 const GENERATE_JOB_MAX_ATTEMPTS = 2;
 const HOSTED_GEMINI_MODEL_KEY = "gemini_3_8_flash";
@@ -428,8 +437,9 @@ export async function listAdminGenerations(
     },
     select: {
       ...generationSelect,
-      owner: { select: { id: true, email: true, publicNickname: true } },
+      owner: { select: { id: true, email: true, publicNickname: true, gallerySuspendedAt: true } },
       galleryExamples: { where: { ...publicExampleWhere, candidate: publicCandidateWhere }, select: { id: true } },
+      _count: { select: { galleryExamples: true } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
@@ -446,12 +456,132 @@ export async function listAdminGenerations(
         thumbnailUrl: generation.thumbnailUrl ? artifactUrl("thumbnail") : null,
         viewerUrl: generation.viewerUrl ? artifactUrl("viewer") : null,
         downloadUrl: generation.downloadUrl ? artifactUrl("download") : null,
-        owner: row.owner,
+        owner: row.owner ? {
+          id: row.owner.id,
+          email: row.owner.email,
+          publicNickname: row.owner.publicNickname,
+        } : null,
         published: row.galleryExamples.length > 0,
+        canPublish: Boolean(
+          row.owner &&
+          !row.owner.gallerySuspendedAt &&
+          generation.status === "succeeded" &&
+          generation.viewerUrl &&
+          row._count.galleryExamples === 0
+        ),
       };
     }),
     nextCursor: rows.length > limit && last ? encodeCursor({ createdAt: last.createdAt, id: last.id }) : null,
   };
+}
+
+export async function publishAdminGeneration(adminId: string, publicId: string) {
+  await requireMineBenchAdmin(adminId);
+  const now = new Date();
+  const purgeAt = new Date(now.getTime() + GALLERY_AUDIT_RETENTION_MS);
+  const build = await prisma.customBuild.findUnique({
+    where: { publicId },
+    select: {
+      id: true,
+      ownerId: true,
+      status: true,
+      removedAt: true,
+      objectsDeletedAt: true,
+      promptText: true,
+      modelKind: true,
+      modelDisplayName: true,
+      modelId: true,
+      owner: { select: { gallerySuspendedAt: true } },
+      artifacts: { where: { kind: "build_json" }, select: { id: true }, take: 1 },
+      galleryExamples: {
+        select: {
+          id: true,
+          removedAt: true,
+          adminHiddenAt: true,
+          candidate: {
+            select: {
+              publicId: true,
+              removedAt: true,
+              adminHiddenAt: true,
+              selectedAt: true,
+              uploader: { select: { gallerySuspendedAt: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!build) throw new GalleryServiceError("not_found", "Saved generation not found.");
+  if (
+    !build.ownerId ||
+    build.status !== "succeeded" ||
+    build.removedAt ||
+    build.objectsDeletedAt ||
+    build.owner?.gallerySuspendedAt ||
+    build.artifacts.length === 0
+  ) {
+    throw new GalleryServiceError("generation_not_available", "Saved generation not available.");
+  }
+
+  for (const example of build.galleryExamples) {
+    const publicExample = !example.removedAt &&
+      !example.adminHiddenAt &&
+      !example.candidate.removedAt &&
+      !example.candidate.adminHiddenAt &&
+      (example.candidate.selectedAt || !example.candidate.uploader.gallerySuspendedAt);
+    if (publicExample) {
+      return { created: false, candidateId: example.candidate.publicId, exampleId: example.id };
+    }
+  }
+  if (build.galleryExamples.length > 0) {
+    throw new GalleryServiceError("generation_not_available", "Saved generation not available.");
+  }
+
+  const prompt = normalizeGalleryPrompt(build.promptText);
+  if (!prompt || prompt.length > 800) {
+    throw new GalleryServiceError("invalid_prompt", "Enter a prompt to submit.");
+  }
+  if (publicGalleryTextError(prompt)) {
+    throw new GalleryServiceError("prompt_rejected", "This prompt can't be submitted. Try a different prompt.");
+  }
+  if (
+    build.modelKind === "custom" &&
+    publicGalleryTextError(`${build.modelDisplayName} ${build.modelId}`)
+  ) {
+    throw new GalleryServiceError("model_label_rejected", "Choose a different public model label.");
+  }
+
+  const submission = await submitGalleryCandidate(build.ownerId, {
+    generationId: publicId,
+    postAnonymously: true,
+  });
+  const example = await addGalleryExample(build.ownerId, submission.candidate.id, {
+    generationId: publicId,
+    postAnonymously: true,
+  });
+  const changed = submission.created || example.created;
+  if (changed) {
+    await prisma.galleryModerationRecord.create({
+      data: {
+        kind: "ADMIN_ACTION",
+        target: "EXAMPLE",
+        action: "generation_published",
+        actorUserId: adminId,
+        subjectUserId: build.ownerId,
+        candidateId: (await prisma.galleryCandidate.findUniqueOrThrow({
+          where: { publicId: submission.candidate.id },
+          select: { id: true },
+        })).id,
+        exampleId: example.id,
+        safeSnapshot: {
+          prompt,
+          model: build.modelDisplayName,
+        },
+        purgeAt,
+      },
+    });
+  }
+  return { created: changed, candidateId: submission.candidate.id, exampleId: example.id };
 }
 
 export async function getAdminGenerationArtifact(

@@ -244,6 +244,27 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
     }
   }
 
+  async function removeExample(exampleId: string) {
+    if (!window.confirm("Remove this build from Gallery? Your saved generation will remain.")) return;
+    setRemoving(true);
+    setActionError(null);
+    try {
+      const response = await fetch(`/api/gallery/candidates/${encodeURIComponent(candidate.id)}/examples`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exampleId }),
+      });
+      if (!response.ok) throw new Error("Build could not be removed");
+      setExamples((current) => current.filter((example) => example.id !== exampleId));
+      setSelectedIds((current) => current.filter((id) => id !== exampleId));
+      router.refresh();
+    } catch {
+      setActionError("Build could not be removed");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   async function loadMoreExamples() {
     if (!nextExamplesCursor || loadingMore) return;
     setLoadingMore(true);
@@ -625,6 +646,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       )}
 
       <footer className="mt-8 flex flex-wrap items-center gap-5 text-sm text-muted sm:mt-10">
+        {selected?.canRemove ? <button type="button" disabled={removing} className="min-h-11 transition-colors hover:text-danger disabled:opacity-65 motion-reduce:transition-none" onClick={() => void removeExample(selected.id)}>{removing ? "Removing…" : "Remove build"}</button> : null}
         {candidate.canRemove ? <button type="button" disabled={removing} className="min-h-11 transition-colors hover:text-danger disabled:opacity-65 motion-reduce:transition-none" onClick={() => void removeCandidate()}>{removing ? "Removing…" : "Remove prompt"}</button> : null}
         <button type="button" className="min-h-11 transition-colors hover:text-fg motion-reduce:transition-none" onClick={() => setReportOpen(true)}>Report</button>
       </footer>

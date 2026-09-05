@@ -8,7 +8,15 @@ import type { listAdminGenerations } from "@/lib/generations/service";
 type Page = Awaited<ReturnType<typeof listAdminGenerations>>;
 const dateTime = new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" });
 
-export function GalleryAdminGenerations({ ownerId, refreshedAt }: { ownerId?: string; refreshedAt?: string }) {
+export function GalleryAdminGenerations({
+  ownerId,
+  refreshedAt,
+  onPublish,
+}: {
+  ownerId?: string;
+  refreshedAt?: string;
+  onPublish: (publicId: string) => Promise<boolean>;
+}) {
   const [page, setPage] = useState<Page>({ items: [], nextCursor: null });
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(false);
@@ -16,6 +24,9 @@ export function GalleryAdminGenerations({ ownerId, refreshedAt }: { ownerId?: st
   const [pageCount, setPageCount] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Page["items"][number] | null>(null);
+  const [previewedIds, setPreviewedIds] = useState<Set<string>>(() => new Set());
+  const [publishingId, setPublishingId] = useState<string | null>(null);
+  const [publishMessage, setPublishMessage] = useState<{ id: string; text: string } | null>(null);
   const [reload, setReload] = useState(0);
   const params = new URLSearchParams({ query, active: String(active), ...(ownerId ? { ownerId } : {}) }).toString();
 
@@ -58,6 +69,35 @@ export function GalleryAdminGenerations({ ownerId, refreshedAt }: { ownerId?: st
     return () => window.clearInterval(interval);
   }, []);
 
+  function viewGeneration(generation: Page["items"][number]) {
+    if (generation.canPublish) {
+      setPreviewedIds((current) => new Set(current).add(generation.id));
+    }
+    setSelected(generation);
+  }
+
+  async function publishGeneration(generation: Page["items"][number]) {
+    if (!window.confirm("Publish this build anonymously to Gallery? Confirm the prompt and build contain no personal or sensitive information.")) return;
+    setPublishingId(generation.id);
+    setPublishMessage(null);
+    try {
+      const ok = await onPublish(generation.id);
+      if (!ok) throw new Error("Build could not be published.");
+      setPage((current) => ({
+        ...current,
+        items: current.items.map((item) =>
+          item.id === generation.id ? { ...item, published: true, canPublish: false } : item
+        ),
+      }));
+      setPublishMessage({ id: generation.id, text: "Published anonymously." });
+      setReload((value) => value + 1);
+    } catch {
+      setPublishMessage({ id: generation.id, text: "Build could not be published." });
+    } finally {
+      setPublishingId(null);
+    }
+  }
+
 
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col lg:h-full" aria-label="Generations" aria-busy={loading}>
@@ -80,7 +120,14 @@ export function GalleryAdminGenerations({ ownerId, refreshedAt }: { ownerId?: st
           <article key={generation.id} className="space-y-2 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm font-medium text-fg [overflow-wrap:anywhere]">{generation.prompt}</p>
-              {generation.viewerUrl ? <button type="button" className="mb-btn h-9 shrink-0 text-xs" onClick={() => setSelected(generation)}>View build</button> : null}
+              <div className="flex shrink-0 flex-wrap gap-2">
+                {generation.viewerUrl ? <button type="button" className="mb-btn h-9 text-xs" onClick={() => viewGeneration(generation)}>View build</button> : null}
+                {generation.canPublish && previewedIds.has(generation.id) ? (
+                  <button type="button" disabled={publishingId === generation.id} className="mb-btn mb-btn-primary h-9 text-xs" onClick={() => void publishGeneration(generation)}>
+                    {publishingId === generation.id ? "Publishing…" : "Publish anonymously"}
+                  </button>
+                ) : null}
+              </div>
             </div>
             <p className="break-all text-xs text-muted">{generation.owner?.email ?? "Guest"}{generation.owner?.publicNickname ? ` · ${generation.owner.publicNickname}` : ""}</p>
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
@@ -93,6 +140,7 @@ export function GalleryAdminGenerations({ ownerId, refreshedAt }: { ownerId?: st
               <time dateTime={generation.createdAt}>{dateTime.format(new Date(generation.createdAt))}</time>
             </div>
             {generation.error ? <p className="break-words text-xs text-danger">{generation.error.message}</p> : null}
+            {publishMessage?.id === generation.id ? <p role="status" className="text-xs text-muted">{publishMessage.text}</p> : null}
           </article>
         ))}
         {page.items.length === 0 ? <p className="py-8 text-sm text-muted">{loading ? "Loading generations…" : "No matching generations"}</p> : null}

@@ -231,7 +231,7 @@ export function LeaderboardEfficiency({ models, modelQuery }: {
       </div>
       <details className="mt-3 text-sm text-muted">
         <summary className="min-h-11 cursor-pointer py-3 font-medium text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">Methodology</summary>
-        <div className="max-w-[85ch] space-y-3 pb-3 leading-relaxed">
+        <div className="space-y-3 pb-3 leading-relaxed">
           <p>A model is on the Pareto frontier when no included model has an equal or higher rating with equal or lower resource use, with at least one strict improvement. The frontier follows point estimates; overlapping confidence intervals can mean the differences are uncertain.</p>
           <p>Per-score values divide average resource use by the observed prompt score on a 0–100 scale: wins count as 1, ties as 0.5, and losses as 0, averaged equally over prompts with at least two votes. Both-bad votes are excluded. These ratios depend on sampled opponents and prompts; they describe the evidence rather than replace the rating.</p>
           <p>Cost is recorded cohort expenditure divided by finalized builds, including retries where recorded. Timing uses complete tracked cohorts or documented historical measurements. Block averages require complete public build coverage. Estimates are marked; missing measurements are omitted. New data follows the leaderboard’s regular refresh.</p>
