@@ -411,43 +411,29 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
   return (
     <section className="flex min-h-0 flex-col gap-4 lg:flex-1" aria-labelledby="arena-vote-review-title">
       {notice ? <p role="alert" className="text-sm text-danger">{notice}</p> : null}
-      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-4">
-        <div className="min-w-0">
-          <h2 id="arena-vote-review-title" className="text-xl font-semibold text-fg">Votes</h2>
-          <p className="mt-1 text-sm text-muted">
-            {data ? `${formatDate(data.since)} - ${formatDate(data.until)}` : `Updated ${formatDate(refreshedAt)}`}
-          </p>
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-border pb-2">
+        <h2 id="arena-vote-review-title" className="sr-only">Votes</h2>
+        <div className="flex flex-wrap items-center gap-5" aria-label="Vote session filters">
+          {([
+            ["suspicious", "Suspicious", counts.suspicious],
+            ["all", "All", counts.all],
+            ["restricted", "Restricted", counts.restricted],
+          ] as const).map(([key, label, count]) => (
+            <FilterButton key={key} active={filter === key} onClick={() => setFilter(key)}>
+              {label} <span className="ml-1 text-xs text-muted">{count.toLocaleString()}</span>
+            </FilterButton>
+          ))}
         </div>
-        <div className="flex w-full flex-wrap items-center gap-3 sm:w-auto">
-          <label className="min-w-0 flex-1 sm:w-72 sm:flex-none">
+        <div className="flex items-center gap-4">
+          <span className="text-xs text-muted" title={data ? `${formatDate(data.since)} – ${formatDate(data.until)}` : undefined}>Last 24 hours</span>
+          <label className="w-48 sm:w-60">
             <span className="sr-only">Search vote sessions</span>
-            <input
-              className="mb-field h-10"
-              type="search"
-              placeholder="Search sessions"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
+            <input className="mb-field h-10" type="search" placeholder="Search sessions" value={query} onChange={(event) => setQuery(event.target.value)} />
           </label>
-          <button type="button" className="mb-btn mb-btn-ghost h-10" disabled={busy} onClick={() => void loadList()}>
-            {listLoading ? "Refreshing..." : "Refresh"}
-          </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-5 border-b border-border py-1" aria-label="Vote session filters">
-        {([
-          ["suspicious", "Suspicious", counts.suspicious],
-          ["all", "All", counts.all],
-          ["restricted", "Restricted", counts.restricted],
-        ] as const).map(([key, label, count]) => (
-          <FilterButton key={key} active={filter === key} onClick={() => setFilter(key)}>
-            {label} <span className="text-xs text-muted">{count.toLocaleString()}</span>
-          </FilterButton>
-        ))}
-      </div>
-
-      <div className="grid gap-8 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(16rem,0.85fr)_minmax(0,1.4fr)] lg:overflow-hidden">
+      <div className="grid gap-8 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(15rem,0.7fr)_minmax(0,1.6fr)] lg:overflow-hidden">
         <section className="min-w-0 lg:flex lg:min-h-0 lg:flex-col" aria-label="Vote sessions">
           <div className="divide-y divide-border border-b border-border lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
             {listLoading && !data ? <p className="py-8 text-sm text-muted">Loading votes...</p> : null}
@@ -471,22 +457,19 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
           </div>
         </section>
 
-        <section className="min-w-0 lg:flex lg:min-h-0 lg:flex-col" aria-labelledby="arena-vote-detail-title">
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border pb-4">
+        <section className="min-w-0 lg:min-h-0 lg:overflow-y-auto lg:overscroll-contain lg:pr-2" aria-labelledby="arena-vote-detail-title">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-bg pb-3 lg:sticky lg:top-0 lg:z-10">
             <div className="min-w-0 space-y-1">
               <h3 id="arena-vote-detail-title" className="truncate text-lg font-semibold text-fg" title={selectedSession?.label ?? undefined}>
                 {selectedSession?.label ?? "Session"}
               </h3>
-              <p className="max-w-2xl text-sm text-muted">
-                Restricts the account when known, plus recorded browser sessions and IP addresses. Shared IPs can affect other visitors.
-              </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button type="button" className="mb-btn h-10" disabled={busy || pageVoteIds.length === 0} onClick={togglePage}>
                 {pageSelected ? "Clear page" : "Select page"}
               </button>
               <button type="button" className="mb-btn mb-btn-danger h-10" disabled={busy || selectedVoteIds.size === 0} onClick={() => void removeSelectedVotes()}>
-                {pendingAction === "remove" ? "Removing..." : `Remove ${selectedVoteIds.size.toLocaleString()}`}
+                {pendingAction === "remove" ? "Removing..." : selectedVoteIds.size ? `Remove ${selectedVoteIds.size.toLocaleString()}` : "Remove"}
               </button>
               {selectedSession ? (
                 <button
@@ -501,66 +484,15 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
             </div>
           </div>
 
-          <div className="grid gap-3 border-b border-border py-4 text-xs sm:grid-cols-2 xl:grid-cols-4">
-            <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
-              <p className="text-muted">Choices</p>
-              <p className="mt-1 font-medium text-fg">
-                A {selectedSession?.choiceA.toLocaleString() ?? 0} · B {selectedSession?.choiceB.toLocaleString() ?? 0}
-              </p>
-              <p className="mt-1 text-muted">
-                Tie {selectedSession?.ties.toLocaleString() ?? 0} · Both bad {selectedSession?.bothBad.toLocaleString() ?? 0}
-              </p>
-            </div>
-            <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
-              <p className="text-muted">Ranking signals</p>
-              <p className="mt-1 font-medium text-fg">
-                {metric(selectedSession?.upsets ?? 0, "upsets")} · {metric(selectedSession?.largeUpsets ?? 0, "large")}
-              </p>
-              <p className="mt-1 text-muted">{metric(selectedSession?.rankedVotes ?? 0, "ranked votes")}</p>
-            </div>
-            <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
-              <p className="text-muted">Pace</p>
-              <p className="mt-1 font-medium text-fg">
-                {metric(selectedSession?.repeatVotes ?? 0, "repeat")} · {metric(selectedSession?.fastVotes ?? 0, "fast")}
-              </p>
-              <p className="mt-1 text-muted">Median {formatGap(selectedSession?.medianGapSeconds ?? null)}</p>
-            </div>
-            <div className="min-w-0 rounded-md border border-border/60 bg-card/20 p-2.5">
-              <p className="text-muted">Network</p>
-              <p className="mt-1 truncate font-medium text-fg" title={selectedSession?.location ?? "Location unavailable"}>
-                {selectedSession?.location ?? "Location unavailable"}
-              </p>
-              <p className="mt-1 truncate text-muted" title={selectedSession?.networkLabel ?? "No network hash"}>
-                {selectedSession?.networkLabel ?? "No network hash"} · {metric(selectedSession?.matchingSessions ?? 0, "matched")}
-              </p>
-            </div>
-          </div>
-
-          <details className="border-b border-border py-3 text-sm text-muted">
-            <summary className="cursor-pointer text-fg">Criteria</summary>
-            <p className="mt-2 max-w-3xl">
-              Flags identify patterns for manual review: 80% lower-ranked picks or three top-versus-bottom-half upsets across at least 10 ranked votes. At 20 votes, rapid voting, repeated matchups, one-sided choices, and frequent rejections can also qualify. No votes are removed automatically.
+          {selectedSession ? (
+            <p className="flex flex-wrap gap-x-4 gap-y-1 py-3 text-xs text-muted">
+              <span>{metric(selectedSession.votes, "votes in 24h")}</span>
+              <span>{metric(selectedSession.upsets, "ranking upsets")}</span>
+              <span>Median gap {formatGap(selectedSession.medianGapSeconds)}</span>
+              <span>{votes.length.toLocaleString()} loaded · {selectedVoteIds.size.toLocaleString()} selected</span>
             </p>
-            <p className="mt-2 max-w-3xl">
-              Ranks use the current hourly snapshot{data?.rankingAt ? ` from ${formatDate(data.rankingAt)}` : ""}, so they are context, not vote-time proof.
-            </p>
-            <p className="mt-2 max-w-3xl">
-              IP matching uses existing hashes; locations approximate. <a className="font-medium text-fg underline-offset-4 hover:underline focus-visible:outline-none focus-visible:text-accent" href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer">Privacy policy</a>
-            </p>
-          </details>
-
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border py-3 text-xs text-muted">
-            <p>
-              {votes.length.toLocaleString()} loaded · {selectedVoteIds.size.toLocaleString()} selected
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className="mb-btn mb-btn-ghost h-9 text-xs" disabled={busy || !selectedSessionId || !nextCursor} onClick={() => selectedSessionId && void loadVotes(selectedSessionId, nextCursor, true)}>
-                {votesLoading ? "Loading..." : "Load more"}
-              </button>
-            </div>
-          </div>
-
-          <div className="divide-y divide-border border-b border-border lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:pr-2">
+          ) : null}
+          <div className="divide-y divide-border">
             {votesLoading && votes.length === 0 ? <p className="py-8 text-sm text-muted">Loading history...</p> : null}
             {!votesLoading && selectedSession && votes.length === 0 ? <p className="py-8 text-sm text-muted">No retained public votes.</p> : null}
             {!selectedSession ? <p className="py-8 text-sm text-muted">Choose a session.</p> : null}
@@ -574,6 +506,22 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
               />
             ))}
           </div>
+          {nextCursor ? (
+            <div className="flex justify-center py-4">
+              <button type="button" className="mb-btn h-10 px-5" disabled={busy || !selectedSessionId} onClick={() => selectedSessionId && void loadVotes(selectedSessionId, nextCursor, true)}>
+                {votesLoading ? "Loading..." : "Load more"}
+              </button>
+            </div>
+          ) : null}
+          <details className="mt-4 text-sm text-muted">
+            <summary className="min-h-11 cursor-pointer py-3 text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">Review signals</summary>
+            <div className="space-y-3 pb-4 leading-relaxed">
+              {selectedSession ? <p>A {selectedSession.choiceA} · B {selectedSession.choiceB} · Tie {selectedSession.ties} · Both bad {selectedSession.bothBad}. {selectedSession.rankedVotes} ranked votes, {selectedSession.largeUpsets} large upsets, {selectedSession.fastVotes} fast votes, {selectedSession.repeatVotes} repeats.</p> : null}
+              <p>Ranking flags require at least 10 ranked votes: 80% lower-ranked picks, or three wins by bottom-half models against the top 15%. At 20 votes, flags also cover half of gaps below two seconds, 90% same-side decisive choices, 50% repeated matchups, or at least 10 both-bad votes making up 40% of votes.</p>
+              <p>These patterns need review; they do not establish abuse or remove votes automatically. Ranks use the latest snapshot{data?.rankingAt ? ` from ${formatDate(data.rankingAt)}` : ""}.</p>
+              <p>IP matches use retained hashes, not raw addresses. Shared IPs may include other visitors. <a className="text-fg underline underline-offset-4" href={PRIVACY_POLICY_URL} target="_blank" rel="noreferrer">Privacy policy</a></p>
+            </div>
+          </details>
         </section>
       </div>
       {data?.truncated ? <p className="text-xs text-muted">Showing the first 1,000 sessions plus retained restrictions.</p> : null}

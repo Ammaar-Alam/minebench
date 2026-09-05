@@ -120,30 +120,40 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
     prisma.galleryVoteBlock.findMany({ where: { reversedAt: null }, select: { userId: true, sessionHash: true, ipHmac: true } }),
   ]);
   const ipBlocks = blocks.flatMap(block => block.ipHmac ? [block.ipHmac] : []);
+  const blockedSessions = new Set(blocks.flatMap(block => block.sessionHash ? [block.sessionHash] : []));
+  const blockedUsers = new Set(blocks.flatMap(block => block.userId ? [block.userId] : []));
+  // ponytail: scan retained session IDs for hash matches until volume warrants an indexed hash
+  const blockedSessionIds = blockedSessions.size ? (await prisma.publicSessionActivity.findMany({
+    where: { lastSeenAt: { gte: retainedSince } }, select: { sessionId: true },
+  })).filter(session => blockedSessions.has(hashVoteSession(session.sessionId)!)).map(session => session.sessionId) : [];
+
   const sessions = await prisma.publicSessionActivity.findMany({
     where: { lastSeenAt: { gte: retainedSince }, OR: [
-      { sessionId: { in: rows.slice(0, SESSION_LIMIT).map(row => row.sessionId) } },
+      { sessionId: { in: [...rows.slice(0, SESSION_LIMIT).map(row => row.sessionId), ...blockedSessionIds] } },
+      ...(blockedUsers.size ? [{ userId: { in: [...blockedUsers] } }] : []),
       ...(ipBlocks.length ? [{ ipHmac: { in: ipBlocks } }] : []),
     ] },
     orderBy: { lastSeenAt: "desc" }, take: SESSION_LIMIT + 1,
-    select: { sessionId: true, ipHmac: true, city: true, countryRegion: true, country: true },
+    select: { sessionId: true, userId: true, ipHmac: true, city: true, countryRegion: true, country: true },
   });
   const ips = [...new Set(sessions.flatMap(session => session.ipHmac ? [session.ipHmac] : []))];
   const [networks, accounts] = await Promise.all([
     prisma.publicSessionActivity.groupBy({ by: ["ipHmac"], where: { ipHmac: { in: ips }, lastSeenAt: { gte: retainedSince } }, _count: { _all: true } }),
-    prisma.user.findMany({ where: { id: { in: rows.flatMap(row => row.userId ? [row.userId] : []) } }, select: { id: true, publicNickname: true, email: true } }),
+    prisma.user.findMany({ where: { id: { in: [...rows, ...sessions].flatMap(row => row.userId ? [row.userId] : []) } }, select: { id: true, publicNickname: true, email: true } }),
   ]);
   const presence = new Map(sessions.map(session => [session.sessionId, session]));
   const networkCounts = new Map(networks.map(network => [network.ipHmac, network._count._all]));
   const labels = new Map(accounts.map(account => [account.id, account.publicNickname ?? account.email]));
-  const blockedSessions = new Set(blocks.map(block => block.sessionHash));
   const blockedIps = new Set(ipBlocks);
-  const blockedUsers = new Set(blocks.map(block => block.userId).filter(Boolean));
   const summaries = new Map(rows.slice(0, SESSION_LIMIT).map(row => [row.sessionId, row]));
   // keep restricted visitors visible after their votes are removed
   for (const session of sessions) {
-    if (!summaries.has(session.sessionId) && session.ipHmac && blockedIps.has(session.ipHmac)) {
-      summaries.set(session.sessionId, { sessionId: session.sessionId, userId: null, lastVoteAt: null,
+    if (!summaries.has(session.sessionId) && (
+      blockedSessions.has(hashVoteSession(session.sessionId)!) ||
+      Boolean(session.userId && blockedUsers.has(session.userId)) ||
+      Boolean(session.ipHmac && blockedIps.has(session.ipHmac))
+    )) {
+      summaries.set(session.sessionId, { sessionId: session.sessionId, userId: session.userId, lastVoteAt: null,
         votes: 0, choiceA: 0, choiceB: 0, ties: 0, bothBad: 0, medianGapSeconds: null,
         fastVotes: 0, repeatVotes: 0, rankedVotes: 0, upsets: 0, largeUpsets: 0 });
     }
@@ -155,12 +165,13 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
       const session = presence.get(row.sessionId);
       const sessionHash = hashVoteSession(row.sessionId)!;
       const ip = session?.ipHmac;
+      const userId = row.userId ?? session?.userId;
       return { ...row, lastVoteAt: row.lastVoteAt?.toISOString() ?? null,
-        label: (row.userId && labels.get(row.userId)) || `Guest ${sessionHash.slice(0, 6).toUpperCase()}`,
+        label: (userId && labels.get(userId)) || `Guest ${sessionHash.slice(0, 6).toUpperCase()}`,
         location: session ? [session.city, session.countryRegion, session.country].filter(Boolean).join(", ") || null : null,
         networkLabel: ip ? `IP ${ip.slice(0, 8).toUpperCase()}` : null,
         matchingSessions: ip ? networkCounts.get(ip) ?? 0 : 0,
-        blocked: blockedSessions.has(sessionHash) || Boolean(ip && blockedIps.has(ip)) || Boolean(row.userId && blockedUsers.has(row.userId)),
+        blocked: blockedSessions.has(sessionHash) || Boolean(ip && blockedIps.has(ip)) || Boolean(userId && blockedUsers.has(userId)),
         flags: voteReviewFlags(row),
       };
     }),
@@ -203,8 +214,8 @@ export async function setArenaVoteSessionBlocked(adminId: string, sessionId: str
     orderBy: { createdAt: "desc" }, select: { userId: true },
   });
   if (vote?.userId) return setGalleryPersonVoteBlocked(adminId, `user:${vote.userId}`, blocked);
-  const presence = await prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { id: true } });
-  if (presence) return setGalleryPersonVoteBlocked(adminId, `session:${presence.id}`, blocked);
+  const presence = await prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { id: true, userId: true } });
+  if (presence) return setGalleryPersonVoteBlocked(adminId, presence.userId ? `user:${presence.userId}` : `session:${presence.id}`, blocked);
   const sessionHash = hashVoteSession(sessionId)!;
   const existing = await prisma.galleryVoteBlock.findMany({ where: { sessionHash, reversedAt: null }, select: { id: true } });
   if (blocked && existing.length === 0) await createVoteBlock(adminId, { sessionId });
