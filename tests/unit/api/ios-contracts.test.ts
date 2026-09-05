@@ -127,6 +127,16 @@ async function main() {
     assert.match(source, /@\/lib\/auth\/request/);
     assert.match(source, /getAuthenticatedUserId\((request|req)\)/);
   }
+  const generationRoute = readFileSync("app/api/generations/route.ts", "utf8");
+  assert.match(
+    generationRoute,
+    /new TextEncoder\(\)\.encode\(JSON\.stringify\(value\)\)\.byteLength <= 65_536/,
+    "customBody size refine must enforce UTF-8 byte length to match normalizeBody",
+  );
+  assert.ok(
+    !generationRoute.includes("JSON.stringify(value).length <= 65_536"),
+    "customBody size refine must not count UTF-16 code units",
+  );
   const galleryDetail = readFileSync("app/api/gallery/candidates/[publicId]/route.ts", "utf8");
   assert.match(galleryDetail, /navigationSort:/);
   const galleryArtifact = readFileSync("app/api/gallery/examples/[id]/[kind]/route.ts", "utf8");
