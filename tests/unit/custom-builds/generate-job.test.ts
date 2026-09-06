@@ -422,7 +422,7 @@ async function main() {
   currentCustomBuild = {
     ...queuedCustomBuild,
     gridSize: 8192,
-    promptText: "Build a local mixed line",
+    promptText: "Build repeated local mixed lines",
   };
   await runCustomBuildGenerateJob({
     id: "world-mixed-job-row",
@@ -434,7 +434,7 @@ async function main() {
     payload: {
       stubBuild: {
         version: "1.0",
-        blocks: Array.from({ length: 64 }, (_, x) => ({
+        blocks: Array.from({ length: 128 }, (_, x) => ({
           x,
           y: 0,
           z: 0,
@@ -447,6 +447,11 @@ async function main() {
   const mixedPartArtifact = artifactCreates.find((artifact) => artifact.kind === "world_part");
   assert.ok(mixedManifestArtifact, "mixed worlds should record a viewer manifest");
   assert.ok(mixedPartArtifact, "mixed worlds should record authorized part data");
+  assert.equal(
+    artifactCreates.filter((artifact) => artifact.kind === "world_part").length,
+    1,
+    "identical mixed region payloads should share one stored part",
+  );
 
   const viewerResponse = await customBuildWorldViewerResponse({
     request: new Request(`http://localhost:3000/api/generations/${publicId}/artifacts/viewer`),
@@ -467,7 +472,7 @@ async function main() {
       };
     };
   };
-  assert.equal(viewerBody.voxelBuild.world.manifest.exactBlockCount, 64);
+  assert.equal(viewerBody.voxelBuild.world.manifest.exactBlockCount, 128);
   assert.equal(viewerBody.voxelBuild.world.partBaseUrl, `/api/generations/${publicId}/artifacts/viewer`);
   const partKey = viewerBody.voxelBuild.world.manifest.regions?.[0]?.data?.key;
   assert.equal(viewerBody.voxelBuild.world.manifest.regions?.[0]?.data?.kind, "opaque");
