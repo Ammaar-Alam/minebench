@@ -10,6 +10,7 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 
 export const VOXEL_EXEC_TOOL_NAME = "voxel.exec" as const;
 export const DEFAULT_VOXEL_EXEC_TIMEOUT_MS = 30_000;
+export const LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS = 15 * 60_000;
 
 export const voxelExecToolCallSchema = z.object({
   tool: z.literal(VOXEL_EXEC_TOOL_NAME),
@@ -140,8 +141,9 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const timeoutMs = Math.max(
     250,
     Math.min(
-      60_000,
-      Math.floor(Number(process.env.MINEBENCH_TOOL_TIMEOUT_MS ?? DEFAULT_VOXEL_EXEC_TIMEOUT_MS)),
+      LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS,
+      readOptionalLimitEnv("MINEBENCH_TOOL_TIMEOUT_MS") ??
+        (params.gridSize > 512 ? LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS : DEFAULT_VOXEL_EXEC_TIMEOUT_MS),
     ),
   );
   const maxBoxes = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
@@ -229,7 +231,10 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   });
 
   // Wrap code to reduce accidental top-level await / module syntax issues.
-  const wrapped = `"use strict";\n${params.code}\n`;
+  // lexical helper bindings avoid repeated context-global lookups in large loops
+  const wrapped = params.gridSize > 512
+    ? `"use strict";\n((block, box, line, rng, Math, GRID_SIZE, PALETTE) => (() => {\n${params.code}\n})())(block, box, line, rng, Math, GRID_SIZE, PALETTE);`
+    : `"use strict";\n${params.code}\n`;
   const script = new vm.Script(wrapped, { filename: "voxel.exec.js" });
 
   script.runInContext(ctx, { timeout: timeoutMs });

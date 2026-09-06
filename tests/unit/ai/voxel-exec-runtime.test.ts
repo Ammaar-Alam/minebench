@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import vm from "node:vm";
 
 import {
   DEFAULT_VOXEL_EXEC_TIMEOUT_MS,
+  LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS,
   runVoxelExec,
 } from "../../../lib/ai/tools/voxelExec";
 
@@ -17,6 +19,30 @@ try {
   delete process.env.MINEBENCH_TOOL_OUTPUT_DIR;
 
   assert.equal(DEFAULT_VOXEL_EXEC_TIMEOUT_MS, 30_000);
+  const originalRun = vm.Script.prototype.runInContext;
+  const originalTimeout = process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+  const timeouts: Array<number | undefined> = [];
+  vm.Script.prototype.runInContext = function (context, options) {
+    timeouts.push(typeof options === "object" ? options.timeout : undefined);
+    return originalRun.call(this, context, options);
+  };
+  try {
+    delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+    for (const gridSize of [512, 8192] as const) {
+      const result = runVoxelExec({
+        code: 'const Math = { floor: () => 7 }; block(Math.floor(), 0, 0, "stone");',
+        gridSize, palette: "simple",
+      });
+      assert.equal(result.build.blocks[0]?.x, 7);
+    }
+    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "120000";
+    runVoxelExec({ code: "", gridSize: 8192, palette: "simple" });
+    assert.deepEqual(timeouts, [30_000, LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS, 120_000]);
+  } finally {
+    vm.Script.prototype.runInContext = originalRun;
+    if (originalTimeout === undefined) delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+    else process.env.MINEBENCH_TOOL_TIMEOUT_MS = originalTimeout;
+  }
 
   const inMemoryRun = runVoxelExec({
     code: 'block(1, 2, 3, "stone");',

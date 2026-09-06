@@ -338,6 +338,19 @@ async function generateBuild(
       onProviderRequest: (attempt) => {
         providerAttempts = Math.max(providerAttempts, attempt);
       },
+      onRawResponse: async (attempt, text) => {
+        const bytes = new TextEncoder().encode(text);
+        const sha256 = sha256Hex(bytes);
+        await uploadAndRecordCustomBuildArtifact({
+          customBuildId: customBuild.id,
+          publicId: customBuild.publicId,
+          kind: "raw_text_debug",
+          bytes,
+          sha256,
+          sourceBuildSha256: sha256,
+          exportStats: { attempt },
+        });
+      },
       onRetry: async (attempt, reason) => {
         const safeReason = safeCustomBuildRetryReason(reason, configuredSecrets);
         const retrying = await prisma.customBuild.updateMany({

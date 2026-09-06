@@ -502,7 +502,7 @@ export type GenerateVoxelBuildParams = {
   onProviderRequest?: (attempt: number) => void;
   onRetry?: (attempt: number, reason: string) => unknown;
   // Fired after response text returns and before parsing or execution
-  onRawResponse?: (attempt: number, rawText: string) => void;
+  onRawResponse?: (attempt: number, rawText: string) => void | Promise<void>;
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
   acquireBuildProcessing?: () => Promise<() => void>;
@@ -1262,14 +1262,17 @@ export async function generateVoxelBuild(
         },
       });
       previousText = text;
+      const rawCallbackStartedAt = performance.now();
       try {
-        invokeCallback(params.onRawResponse, attempt, text);
+        await params.onRawResponse?.(attempt, text);
       } catch (err) {
         const message = getErrorMessage(err, String(err));
         invokeCallback(
           params.onProviderTrace,
           `Raw response callback failed for attempt ${attempt}: ${message}`,
         );
+      } finally {
+        callbackDurationMs += performance.now() - rawCallbackStartedAt;
       }
       let releaseBuildProcessing: (() => void) | undefined;
       if (params.acquireBuildProcessing) {
@@ -1403,6 +1406,8 @@ export async function generateVoxelBuild(
     } catch (err) {
       lastError = getErrorMessage(err, "Provider request failed");
       if (params.abortSignal?.aborted) break;
+      // preserve the response for execution recovery instead of buying another generation
+      if (err && typeof err === "object" && "code" in err && err.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") break;
       // Retry transient work that failed safely before an outbound request
       if (
         !providerRequestStarted &&

@@ -67,6 +67,38 @@ async function main() {
   if (typeof retryPrompt !== "string") throw new Error("Expected a string retry prompt");
   assert.match(retryPrompt, /R is not a function/);
 
+  const originalTimeout = process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+  let retained = false;
+  let timeoutRequests = 0;
+  const timeoutCall = JSON.stringify({ tool: "voxel.exec", input: {
+    code: "while (true) {}", gridSize: 8192, palette: "simple", seed: 1,
+  } });
+  globalThis.fetch = async () => {
+    timeoutRequests += 1;
+    return Response.json({ choices: [{ message: { content: timeoutCall } }] });
+  };
+  try {
+    process.env.MINEBENCH_TOOL_TIMEOUT_MS = "250";
+    const timedOut = await generateVoxelBuild({
+      modelKey: "qwen_qwen3_8_max", prompt: "city", gridSize: 8192,
+      palette: "simple", maxAttempts: 2, enableTools: true,
+      providerKeys: { openrouter: "test-openrouter-key" }, allowServerKeys: false,
+      onRawResponse: async (_attempt, text) => {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        assert.equal(text, timeoutCall);
+        retained = true;
+      },
+    });
+    assert.equal(timedOut.ok, false);
+    if (!timedOut.ok) assert.match(timedOut.error, /Script execution timed out after 250ms/);
+    assert.equal(timedOut.rawText, timeoutCall);
+    assert.equal(retained, true);
+    assert.equal(timeoutRequests, 1, "execution timeouts must not buy another generation");
+  } finally {
+    if (originalTimeout === undefined) delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+    else process.env.MINEBENCH_TOOL_TIMEOUT_MS = originalTimeout;
+  }
+
   console.log("voxel exec VM error propagation checks passed");
 }
 
