@@ -50,7 +50,7 @@ async function main() {
     const edges: VoxelBlock[] = [
       { x: 0, y: 0, z: 0, type: "stone" },
       { x: 511, y: 511, z: 511, type: "water" },
-      { x: 1023, y: 0, z: 1023, type: "stone" },
+      { x: 8191, y: 8191, z: 8191, type: "stone" },
     ];
     assert.deepEqual(unpackVoxelBlocks(decodeBinaryVoxelBuild(encodeBinaryVoxelBuild(edges))), edges);
 
@@ -62,7 +62,7 @@ async function main() {
   {
     // a coordinate outside the grid must fail loudly rather than wrap silently
     expectFormatError(
-      () => encodeBinaryVoxelBuild([{ x: 1024, y: 0, z: 0, type: "stone" }]),
+      () => encodeBinaryVoxelBuild([{ x: 8192, y: 0, z: 0, type: "stone" }]),
       "coordinate above the grid",
     );
     expectFormatError(

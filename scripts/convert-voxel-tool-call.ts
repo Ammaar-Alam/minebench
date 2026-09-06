@@ -16,6 +16,7 @@
  *   pnpm tool:convert --in raw.json --expanded
  */
 
+import { GRID_SIZES, isGridSize, type GridSize } from "../lib/ai/limits";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -31,7 +32,6 @@ import {
 import { getPalette } from "../lib/blocks/palettes";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "../lib/voxel/validate";
 
-type GridSize = 64 | 256 | 512;
 type PaletteName = "simple" | "advanced";
 
 type Args = {
@@ -62,8 +62,8 @@ function parseArgs(): Args {
   let gridSizeOverride: GridSize | null = null;
   if (gridSizeRaw !== null) {
     const n = Number(gridSizeRaw);
-    if (n !== 64 && n !== 256 && n !== 512) {
-      throw new Error(`Invalid --gridSize value "${gridSizeRaw}". Expected 64 | 256 | 512.`);
+    if (!isGridSize(n)) {
+      throw new Error(`Invalid --gridSize value "${gridSizeRaw}". Expected ${GRID_SIZES.join(" | ")}.`);
     }
     gridSizeOverride = n;
   }
@@ -115,7 +115,7 @@ Options:
   --paste              Read input JSON from system clipboard.
   --out <path>         Output build JSON path.
   --expanded           Write expanded/validated build (blocks-only canonical output).
-  --gridSize <n>       Override grid size in call: 64 | 256 | 512.
+  --gridSize <n>       Override grid size in call: ${GRID_SIZES.join(" | ")}.
   --palette <name>     Override palette in call: simple | advanced.
   --seed <int>         Override seed in call.
   --print              Also print resulting JSON to stdout.

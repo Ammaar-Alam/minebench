@@ -2,6 +2,11 @@ import { getRenderKind } from "@/lib/blocks/registry";
 import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
+import {
+  packVoxelPlaneCell,
+  unpackVoxelPlaneCellU,
+  unpackVoxelPlaneCellV,
+} from "@/lib/voxel/coordinateKeys";
 import type {
   SerializedBuildBounds,
   TransferableVoxelBlocks,
@@ -90,8 +95,6 @@ const workerScope = (typeof self !== "undefined" ? self : globalThis) as unknown
   postMessage?: (message: WorkerResponse, transfer?: Transferable[]) => void;
   onmessage?: ((event: MessageEvent<WorkerRequest>) => void) | null;
 };
-const POSITION_BITS = 10;
-const POSITION_MASK = (1 << POSITION_BITS) - 1;
 const WATER_BLOCK_ID = "water";
 const PROGRESS_EVERY = 4096;
 const AO_FACTORS = [0.58, 0.72, 0.86, 1] as const;
@@ -101,18 +104,6 @@ const AMBIENT_OCCLUSION_BY_BYTE = Array.from({ length: 256 }, (_, packed) => [
   AO_FACTORS[(packed >> 4) & 0x03],
   AO_FACTORS[(packed >> 6) & 0x03],
 ] as const);
-
-function packPlaneCell(u: number, v: number): number {
-  return u | (v << POSITION_BITS);
-}
-
-function unpackPlaneCellU(value: number): number {
-  return value & POSITION_MASK;
-}
-
-function unpackPlaneCellV(value: number): number {
-  return value >> POSITION_BITS;
-}
 
 function srgbByteToLinear(byte: number): number {
   const s = Math.min(1, Math.max(0, byte / 255));
@@ -660,8 +651,8 @@ function appendMergedPlaneFaces(
   let maxV = -Infinity;
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell);
-    const v = unpackPlaneCellV(cell);
+    const u = unpackVoxelPlaneCellU(cell);
+    const v = unpackVoxelPlaneCellV(cell);
     minU = Math.min(minU, u);
     minV = Math.min(minV, v);
     maxU = Math.max(maxU, u);
@@ -675,8 +666,8 @@ function appendMergedPlaneFaces(
   const mask = new Uint8Array(width * height);
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell) - minU;
-    const v = unpackPlaneCellV(cell) - minV;
+    const u = unpackVoxelPlaneCellU(cell) - minU;
+    const v = unpackVoxelPlaneCellV(cell) - minV;
     mask[v * width + u] = 1;
   }
 
@@ -725,22 +716,22 @@ function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
       const d = DIRS[dIdx];
       switch (d.face) {
         case "east":
-          getOrCreatePlane(planes, d.face, x + 1).cells.add(packPlaneCell(y, z));
+          getOrCreatePlane(planes, d.face, x + 1).cells.add(packVoxelPlaneCell(y, z));
           break;
         case "west":
-          getOrCreatePlane(planes, d.face, x).cells.add(packPlaneCell(y, z));
+          getOrCreatePlane(planes, d.face, x).cells.add(packVoxelPlaneCell(y, z));
           break;
         case "north":
-          getOrCreatePlane(planes, d.face, z).cells.add(packPlaneCell(x, y));
+          getOrCreatePlane(planes, d.face, z).cells.add(packVoxelPlaneCell(x, y));
           break;
         case "south":
-          getOrCreatePlane(planes, d.face, z + 1).cells.add(packPlaneCell(x, y));
+          getOrCreatePlane(planes, d.face, z + 1).cells.add(packVoxelPlaneCell(x, y));
           break;
         case "up":
-          getOrCreatePlane(planes, d.face, y + 1).cells.add(packPlaneCell(x, z));
+          getOrCreatePlane(planes, d.face, y + 1).cells.add(packVoxelPlaneCell(x, z));
           break;
         case "down":
-          getOrCreatePlane(planes, d.face, y).cells.add(packPlaneCell(x, z));
+          getOrCreatePlane(planes, d.face, y).cells.add(packVoxelPlaneCell(x, z));
           break;
       }
     }

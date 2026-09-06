@@ -9,5 +9,8 @@ const MINECRAFT_STATE_OVERRIDES: Record<string, string> = {
 export function getMinecraftBlockState(blockId: string): string {
   const normalized = blockId.trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
   if (!normalized) return "minecraft:air";
-  return MINECRAFT_STATE_OVERRIDES[normalized] ?? `minecraft:${normalized}`;
+  const override = MINECRAFT_STATE_OVERRIDES[normalized];
+  if (override) return override;
+  if (normalized.endsWith("_leaves")) return `minecraft:${normalized}[persistent=true]`;
+  return `minecraft:${normalized}`;
 }

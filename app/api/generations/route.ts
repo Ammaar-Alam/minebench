@@ -1,3 +1,4 @@
+import { isGridSize, type GridSize } from "@/lib/ai/limits";
 import { z } from "zod";
 import type { GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
 import { getAuthenticatedUserId } from "@/lib/auth/request";
@@ -60,7 +61,7 @@ const model = z.union([
 
 const createRequest = z.object({
   prompt: z.string().trim().min(1).max(800),
-  gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
+  gridSize: z.custom<GridSize>(isGridSize),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   models: z.array(model).min(1).max(8),
   providerKeys,

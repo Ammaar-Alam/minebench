@@ -1,5 +1,10 @@
 import { z } from "zod";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
+import {
+  decodeVoxelPositionKey,
+  encodeVoxelPositionKey,
+  MAX_VOXEL_COORDINATE,
+} from "@/lib/voxel/coordinateKeys";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
 const blockSchema = z.object({
@@ -88,7 +93,7 @@ const TYPE_ALIASES: Record<string, string> = {
   ice_block: "ice",
 };
 
-function normalizeBlockType(rawType: string, allowed: Set<string>): string | null {
+export function normalizeBlockType(rawType: string, allowed: Set<string>): string | null {
   const trimmed = rawType.trim();
   if (!trimmed) return null;
 
@@ -110,6 +115,16 @@ function clampInt(n: number, min: number, max: number): number {
   return n;
 }
 
+const LEGACY_COORDINATE_KEY_GRID_EXTENT = 1024;
+
+function encodeLegacyPositionKey(x: number, y: number, z: number): number {
+  return ((x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20)) >>> 0;
+}
+
+function decodeLegacyPositionKey(value: number): [number, number, number] {
+  return [value & 1023, (value >>> 10) & 1023, (value >>> 20) & 1023];
+}
+
 function validateVoxelBuildSpecInternal(
   build: VoxelBuild,
   opts: ValidateVoxelOptions,
@@ -121,15 +136,30 @@ function validateVoxelBuildSpecInternal(
   let droppedNegative = 0;
   let droppedOutOfBounds = 0;
   const droppedUnknownTypeCounts = new Map<string, number>();
+  const gridExtent = Number.isFinite(opts.gridSize)
+    ? Math.min(Math.max(0, Math.floor(opts.gridSize)), MAX_VOXEL_COORDINATE + 1)
+    : 0;
+  const useLegacyCoordinateKeys = gridExtent <= LEGACY_COORDINATE_KEY_GRID_EXTENT;
+  const makeOccupiedArray = (length: number) =>
+    useLegacyCoordinateKeys ? new Uint32Array(length) : new Float64Array(length);
+  const encodeOccupiedKey = useLegacyCoordinateKeys
+    ? encodeLegacyPositionKey
+    : encodeVoxelPositionKey;
+  const decodeOccupiedKey = useLegacyCoordinateKeys
+    ? decodeLegacyPositionKey
+    : decodeVoxelPositionKey;
 
   // Sparse typed chunks keep coordinate dedupe outside V8's object heap
   const chunks = new Map<number, Uint8Array | Uint16Array>();
-  let occupied = new Uint32Array(16_384);
+  let occupied = makeOccupiedArray(16_384);
   let occupiedCount = 0;
   const makeChunk = () =>
     opts.palette.length <= 255 ? new Uint8Array(16 ** 3) : new Uint16Array(16 ** 3);
-  // 10 bits per coordinate supports up to 1024³ grids (covers 512³)
-  const encode = (x: number, y: number, z: number) => x | (y << 10) | (z << 20);
+  // Keep the old 10-bit keys for <=1024 grids; wider worlds need 9 chunk bits per axis.
+  const chunkKey = (x: number, y: number, z: number) =>
+    useLegacyCoordinateKeys
+      ? (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12)
+      : (x >> 4) | ((y >> 4) << 9) | ((z >> 4) << 18);
 
   // Hard cap to prevent pathological expansions from primitives. We enforce this BEFORE building any huge intermediate arrays.
   const expansionBudget = Math.max(opts.maxBlocks * 2, 20000);
@@ -151,22 +181,22 @@ function validateVoxelBuildSpecInternal(
       droppedNegative += 1;
       return;
     }
-    if (xRaw >= opts.gridSize || yRaw >= opts.gridSize || zRaw >= opts.gridSize) {
+    if (xRaw >= gridExtent || yRaw >= gridExtent || zRaw >= gridExtent) {
       droppedOutOfBounds += 1;
       return;
     }
 
-    const x = clampInt(Math.trunc(xRaw), 0, opts.gridSize - 1);
-    const y = clampInt(Math.trunc(yRaw), 0, opts.gridSize - 1);
-    const z = clampInt(Math.trunc(zRaw), 0, opts.gridSize - 1);
+    const x = clampInt(Math.trunc(xRaw), 0, gridExtent - 1);
+    const y = clampInt(Math.trunc(yRaw), 0, gridExtent - 1);
+    const z = clampInt(Math.trunc(zRaw), 0, gridExtent - 1);
     const encodedType = paletteIndex.get(type);
     if (encodedType === undefined) return;
 
-    const chunkKey = (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12);
-    let chunk = chunks.get(chunkKey);
+    const key = chunkKey(x, y, z);
+    let chunk = chunks.get(key);
     if (!chunk) {
       chunk = makeChunk();
-      chunks.set(chunkKey, chunk);
+      chunks.set(key, chunk);
     }
     const localIndex = (x & 15) | ((y & 15) << 4) | ((z & 15) << 8);
     if (chunk[localIndex] === 0) {
@@ -176,11 +206,11 @@ function validateVoxelBuildSpecInternal(
         );
       }
       if (occupiedCount === occupied.length) {
-        const grown = new Uint32Array(occupied.length * 2);
+        const grown = makeOccupiedArray(occupied.length * 2);
         grown.set(occupied);
         occupied = grown;
       }
-      occupied[occupiedCount] = encode(x, y, z);
+      occupied[occupiedCount] = encodeOccupiedKey(x, y, z);
       occupiedCount += 1;
     }
     chunk[localIndex] = encodedType;
@@ -291,12 +321,10 @@ function validateVoxelBuildSpecInternal(
   }
   const blocks = Array.from({ length: occupiedCount }, (_, index) => {
     const key = occupied[index]!;
-    const x = key & 1023;
-    const y = (key >>> 10) & 1023;
-    const z = (key >>> 20) & 1023;
-    const chunkKey = (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12);
+    const [x, y, z] = decodeOccupiedKey(key);
+    const key2 = chunkKey(x, y, z);
     const localIndex = (x & 15) | ((y & 15) << 4) | ((z & 15) << 8);
-    const type = opts.palette[(chunks.get(chunkKey)?.[localIndex] ?? 1) - 1]!.id;
+    const type = opts.palette[(chunks.get(key2)?.[localIndex] ?? 1) - 1]!.id;
     return { x, y, z, type };
   });
   if (blocks.length > opts.maxBlocks) {

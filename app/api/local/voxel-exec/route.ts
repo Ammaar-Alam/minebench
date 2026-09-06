@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { maxBlocksForGrid } from "@/lib/ai/limits";
+import { maxBlocksForGrid, isGridSize, type GridSize } from "@/lib/ai/limits";
 import { runVoxelExec } from "@/lib/ai/tools/voxelExec";
 import { getPalette } from "@/lib/blocks/palettes";
 import { getErrorMessage } from "@/lib/errorMessage";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { summarizeVoxelWorldRegions } from "@/lib/voxel/worldRegions";
 
 export const runtime = "nodejs";
 
 const bodySchema = z.object({
   code: z.string().min(1),
-  gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
+  gridSize: z.custom<GridSize>(isGridSize),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   seed: z.number().int().optional(),
 });
@@ -80,9 +81,27 @@ export async function POST(req: Request) {
       seed: body.seed,
     });
 
+    const palette = getPalette(body.palette);
+    if (body.gridSize > 512) {
+      const summarized = summarizeVoxelWorldRegions(run.build, {
+        gridSize: body.gridSize,
+        palette,
+      });
+      if (!summarized.ok) {
+        return NextResponse.json({ error: summarized.error }, { status: 400 });
+      }
+
+      return NextResponse.json({
+        build: summarized.value.build,
+        warnings: summarized.value.warnings,
+        blockCount: summarized.value.blockCount,
+        bounds: summarized.value.bounds,
+      });
+    }
+
     const validated = validateVoxelBuild(run.build, {
       gridSize: body.gridSize,
-      palette: getPalette(body.palette),
+      palette,
       maxBlocks: maxBlocksForGrid(body.gridSize),
     });
     if (!validated.ok) {
@@ -92,6 +111,8 @@ export async function POST(req: Request) {
     return NextResponse.json({
       build: validated.value.build,
       warnings: validated.value.warnings,
+      blockCount: validated.value.build.blocks.length,
+      bounds: null,
     });
   } catch (err) {
     return NextResponse.json(

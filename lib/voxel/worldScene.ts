@@ -1,0 +1,844 @@
+import * as THREE from "three";
+import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
+import type { BlockDefinition, RenderKind } from "@/lib/blocks/palettes";
+import { getRenderKind } from "@/lib/blocks/registry";
+import { getTextureKey, type Face } from "@/lib/blocks/textures";
+import { decodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
+import {
+  configureAtlasTexture,
+  createVoxelGroupAsync,
+  type VoxelGroup,
+} from "@/lib/voxel/mesh";
+import {
+  createPackedVoxelBlocks,
+  type PackedVoxelBlocks,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
+import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
+import type { VoxelPoint } from "@/lib/voxel/types";
+import {
+  parseVoxelWorldManifest,
+  parseVoxelWorldRegionPage,
+  voxelWorldPartUrl,
+  type VoxelWorldBounds,
+  type VoxelWorldDelivery,
+  type VoxelWorldManifest,
+  type VoxelWorldMixedRegion,
+  type VoxelWorldPartRef,
+  type VoxelWorldRegion,
+  type VoxelWorldRegionPage,
+  type VoxelWorldRegionPageRef,
+  type VoxelWorldUniformRegion,
+} from "@/lib/voxel/world";
+
+export type VoxelWorldSceneStats = {
+  residentRegions: number;
+  uniformRegions: number;
+  mixedDetailRegions: number;
+  mixedProxyRegions: number;
+  residentRegionPages: number;
+  loadingParts: number;
+};
+
+export type VoxelWorldScene = VoxelGroup & {
+  updateFocus: (focus: THREE.Vector3) => void;
+  loadAround: (focus: THREE.Vector3) => Promise<void>;
+  getResidentStats: () => VoxelWorldSceneStats;
+};
+
+export type VoxelWorldSceneOptions = {
+  signal?: AbortSignal;
+  onChange?: () => void;
+  onError?: (message: string) => void;
+  onProgress?: (progress: { processedBlocks: number; totalBlocks: number; stageLabel?: string }) => void;
+  yieldAfterMs?: number;
+  maxResidentPages?: number;
+  maxUniformRegions?: number;
+  maxMixedDetailRegions?: number;
+  maxMixedProxyRegions?: number;
+  mixedDetailRadius?: number;
+  mixedProxyBlockLimit?: number;
+};
+
+type WorldCenter = { x: number; y: number; z: number };
+type ResidentMixedRegion = { region: VoxelWorldMixedRegion; mode: "detail" | "proxy"; voxelGroup: VoxelGroup };
+type LoadingJob = { controller: AbortController; promise: Promise<void> };
+type RegionCandidate = { region: VoxelWorldRegion; distanceSq: number };
+type PageCandidate = { page: VoxelWorldRegionPageRef; distanceSq: number };
+
+const DEFAULT_MAX_RESIDENT_PAGES = 8;
+const DEFAULT_MAX_UNIFORM_REGIONS = 256;
+const DEFAULT_MAX_MIXED_DETAIL_REGIONS = 24;
+const DEFAULT_MAX_MIXED_PROXY_REGIONS = 48;
+const DEFAULT_MIXED_PROXY_BLOCK_LIMIT = 1536;
+const MIXED_LOAD_CONCURRENCY = 2;
+const PAGE_LOAD_CONCURRENCY = 2;
+const FOCUS_MOVE_THRESHOLD = 24;
+
+const TINT_WHITE: [number, number, number] = [1, 1, 1];
+const TINT_GRASS: [number, number, number] = [0.7, 1, 0.42];
+const TINT_LEAVES: [number, number, number] = [0.45, 0.85, 0.28];
+const TINT_WATER: [number, number, number] = [0.35, 0.55, 1];
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function clampInt(value: number | undefined, fallback: number, min: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(min, Math.floor(value))
+    : fallback;
+}
+
+function worldCenterFromBounds(bounds: VoxelWorldBounds): WorldCenter {
+  return {
+    x: bounds.origin.x + bounds.size.x / 2,
+    y: bounds.origin.y,
+    z: bounds.origin.z + bounds.size.z / 2,
+  };
+}
+
+function emptyBounds(): { box: THREE.Box3; center: THREE.Vector3; radius: number } {
+  const origin = new THREE.Vector3(0, 0, 0);
+  return { box: new THREE.Box3(origin.clone(), origin.clone()), center: origin, radius: 0.001 };
+}
+
+function boundsForWorld(bounds: VoxelWorldBounds | null): { box: THREE.Box3; center: THREE.Vector3; radius: number } {
+  if (!bounds) return emptyBounds();
+  const center = worldCenterFromBounds(bounds);
+  const box = new THREE.Box3(
+    new THREE.Vector3(
+      bounds.origin.x - center.x,
+      bounds.origin.y - center.y,
+      bounds.origin.z - center.z,
+    ),
+    new THREE.Vector3(
+      bounds.origin.x + bounds.size.x - center.x,
+      bounds.origin.y + bounds.size.y - center.y,
+      bounds.origin.z + bounds.size.z - center.z,
+    ),
+  );
+  const sphere = new THREE.Sphere();
+  box.getBoundingSphere(sphere);
+  return {
+    box,
+    center: box.getCenter(new THREE.Vector3()),
+    radius: Number.isFinite(sphere.radius) && sphere.radius > 0 ? sphere.radius : 0.001,
+  };
+}
+
+function endOf(bounds: VoxelWorldBounds): VoxelPoint {
+  return {
+    x: bounds.origin.x + bounds.size.x,
+    y: bounds.origin.y + bounds.size.y,
+    z: bounds.origin.z + bounds.size.z,
+  };
+}
+
+function regionBounds(region: Pick<VoxelWorldRegion, "origin" | "size">): VoxelWorldBounds {
+  return { origin: region.origin, size: region.size };
+}
+
+function distanceSqToBounds(bounds: VoxelWorldBounds, point: VoxelPoint): number {
+  const end = endOf(bounds);
+  const dx = point.x < bounds.origin.x ? bounds.origin.x - point.x : point.x > end.x ? point.x - end.x : 0;
+  const dy = point.y < bounds.origin.y ? bounds.origin.y - point.y : point.y > end.y ? point.y - end.y : 0;
+  const dz = point.z < bounds.origin.z ? bounds.origin.z - point.z : point.z > end.z ? point.z - end.z : 0;
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function sameFocus(a: VoxelPoint | null, b: VoxelPoint): boolean {
+  if (!a) return false;
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  const dz = a.z - b.z;
+  return dx * dx + dy * dy + dz * dz < FOCUS_MOVE_THRESHOLD * FOCUS_MOVE_THRESHOLD;
+}
+
+function faceTint(blockType: string, face: Face): [number, number, number] {
+  if (blockType === "oak_leaves") return TINT_LEAVES;
+  if (blockType === "water") return TINT_WATER;
+  if (blockType === "grass_block" && face === "up") return TINT_GRASS;
+  return TINT_WHITE;
+}
+
+function materialKind(blockType: string): RenderKind {
+  return getRenderKind(blockType) ?? "opaque";
+}
+
+function patchRepeatingAtlasMaterial(material: THREE.Material) {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <uv_pars_vertex>",
+        "#include <uv_pars_vertex>\nattribute vec4 atlasUvFrame;\nvarying vec4 vAtlasUvFrame;",
+      )
+      .replace(
+        "#include <uv_vertex>",
+        "#include <uv_vertex>\nvAtlasUvFrame = atlasUvFrame;",
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <uv_pars_fragment>",
+        "#include <uv_pars_fragment>\nvarying vec4 vAtlasUvFrame;",
+      )
+      .replace(
+        "#include <map_fragment>",
+        [
+          "#ifdef USE_MAP",
+          "  vec2 atlasTileUv = vAtlasUvFrame.xy + fract(vMapUv) * (vAtlasUvFrame.zw - vAtlasUvFrame.xy);",
+          "  vec4 sampledDiffuseColor = texture2D(map, atlasTileUv);",
+          "  diffuseColor *= sampledDiffuseColor;",
+          "#endif",
+        ].join("\n"),
+      );
+  };
+  material.customProgramCacheKey = () => "voxel-world-repeating-atlas-v1";
+}
+
+function makeUniformMaterial(kind: RenderKind, atlasTexture: THREE.Texture): THREE.Material {
+  const material =
+    kind === "emissive"
+      ? new THREE.MeshBasicMaterial({ map: atlasTexture, vertexColors: true })
+      : new THREE.MeshLambertMaterial({
+          map: atlasTexture,
+          alphaTest: kind === "cutout" ? 0.45 : 0,
+          transparent: kind === "transparent",
+          opacity: kind === "transparent" ? 0.85 : 1,
+          depthWrite: kind !== "transparent",
+          vertexColors: true,
+        });
+  patchRepeatingAtlasMaterial(material);
+  return material;
+}
+
+function disposeObject(obj: THREE.Object3D) {
+  obj.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    child.geometry.dispose();
+    if (Array.isArray(child.material)) child.material.forEach((material) => material.dispose());
+    else child.material.dispose();
+  });
+}
+
+type UniformGeometryData = {
+  positions: number[];
+  normals: number[];
+  uvs: number[];
+  colors: number[];
+  atlasUvFrames: number[];
+  indices: number[];
+  vertexCount: number;
+};
+
+function makeUniformGeometryData(): UniformGeometryData {
+  return {
+    positions: [],
+    normals: [],
+    uvs: [],
+    colors: [],
+    atlasUvFrames: [],
+    indices: [],
+    vertexCount: 0,
+  };
+}
+
+function appendUniformQuad(
+  data: UniformGeometryData,
+  verts: readonly (readonly [number, number, number])[],
+  normal: readonly [number, number, number],
+  tint: readonly [number, number, number],
+  uvRepeat: readonly [number, number],
+  atlasFrame: readonly [number, number, number, number],
+) {
+  const base = data.vertexCount;
+  const uv: readonly (readonly [number, number])[] = [
+    [0, 0],
+    [0, uvRepeat[1]],
+    [uvRepeat[0], uvRepeat[1]],
+    [uvRepeat[0], 0],
+  ];
+
+  for (let index = 0; index < 4; index += 1) {
+    data.positions.push(verts[index][0], verts[index][1], verts[index][2]);
+    data.normals.push(normal[0], normal[1], normal[2]);
+    data.uvs.push(uv[index][0], uv[index][1]);
+    data.colors.push(
+      Math.round(tint[0] * 255),
+      Math.round(tint[1] * 255),
+      Math.round(tint[2] * 255),
+    );
+    data.atlasUvFrames.push(atlasFrame[0], atlasFrame[1], atlasFrame[2], atlasFrame[3]);
+  }
+
+  data.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  data.vertexCount += 4;
+}
+
+function buildGeometry(data: UniformGeometryData): THREE.BufferGeometry | null {
+  if (data.indices.length === 0) return null;
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(data.positions), 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(new Float32Array(data.normals), 3));
+  geometry.setAttribute("uv", new THREE.BufferAttribute(new Float32Array(data.uvs), 2));
+  geometry.setAttribute("color", new THREE.BufferAttribute(new Uint8Array(data.colors), 3, true));
+  geometry.setAttribute("atlasUvFrame", new THREE.BufferAttribute(new Float32Array(data.atlasUvFrames), 4));
+  geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(data.indices), 1));
+  geometry.computeBoundingBox();
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
+function fullyOccludedByUniformNeighbor(
+  region: VoxelWorldUniformRegion,
+  face: Face,
+  knownRegions: readonly VoxelWorldRegion[],
+): boolean {
+  const regionEnd = endOf(regionBounds(region));
+  for (const candidate of knownRegions) {
+    if (candidate.key === region.key || candidate.kind !== "uniform" || !isVoxelOccluder(candidate.type)) continue;
+    const candidateEnd = endOf(regionBounds(candidate));
+    const coversY = candidate.origin.y <= region.origin.y && candidateEnd.y >= regionEnd.y;
+    const coversX = candidate.origin.x <= region.origin.x && candidateEnd.x >= regionEnd.x;
+    const coversZ = candidate.origin.z <= region.origin.z && candidateEnd.z >= regionEnd.z;
+
+    if (face === "east" && candidate.origin.x === regionEnd.x && coversY && coversZ) return true;
+    if (face === "west" && candidateEnd.x === region.origin.x && coversY && coversZ) return true;
+    if (face === "up" && candidate.origin.y === regionEnd.y && coversX && coversZ) return true;
+    if (face === "down" && candidateEnd.y === region.origin.y && coversX && coversZ) return true;
+    if (face === "south" && candidate.origin.z === regionEnd.z && coversX && coversY) return true;
+    if (face === "north" && candidateEnd.z === region.origin.z && coversX && coversY) return true;
+  }
+  return false;
+}
+
+function appendUniformRegion(
+  buckets: Map<RenderKind, UniformGeometryData>,
+  region: VoxelWorldUniformRegion,
+  center: WorldCenter,
+  knownRegions: readonly VoxelWorldRegion[],
+) {
+  const kind = materialKind(region.type);
+  const data = buckets.get(kind) ?? makeUniformGeometryData();
+  buckets.set(kind, data);
+
+  const x0 = region.origin.x - center.x;
+  const y0 = region.origin.y - center.y;
+  const z0 = region.origin.z - center.z;
+  const x1 = x0 + region.size.x;
+  const y1 = y0 + region.size.y;
+  const z1 = z0 + region.size.z;
+  const faces: Array<{
+    face: Face;
+    normal: readonly [number, number, number];
+    verts: readonly (readonly [number, number, number])[];
+    repeat: readonly [number, number];
+  }> = [
+    { face: "east", normal: [1, 0, 0], verts: [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], repeat: [region.size.z, region.size.y] },
+    { face: "west", normal: [-1, 0, 0], verts: [[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]], repeat: [region.size.z, region.size.y] },
+    { face: "north", normal: [0, 0, -1], verts: [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]], repeat: [region.size.x, region.size.y] },
+    { face: "south", normal: [0, 0, 1], verts: [[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]], repeat: [region.size.x, region.size.y] },
+    { face: "up", normal: [0, 1, 0], verts: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]], repeat: [region.size.x, region.size.z] },
+    { face: "down", normal: [0, -1, 0], verts: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], repeat: [region.size.x, region.size.z] },
+  ];
+
+  for (const face of faces) {
+    if (fullyOccludedByUniformNeighbor(region, face.face, knownRegions)) continue;
+    const textureKey = getTextureKey(region.type, face.face);
+    if (!hasAtlasKey(textureKey)) continue;
+    const uv = getAtlasUv(textureKey);
+    appendUniformQuad(
+      data,
+      face.verts,
+      face.normal,
+      faceTint(region.type, face.face),
+      face.repeat,
+      [uv.u0, uv.v0, uv.u1, uv.v1],
+    );
+  }
+}
+
+function buildUniformGroup(
+  regions: readonly VoxelWorldUniformRegion[],
+  knownRegions: readonly VoxelWorldRegion[],
+  center: WorldCenter,
+  atlasTexture: THREE.Texture,
+): THREE.Group | null {
+  if (regions.length === 0) return null;
+  configureAtlasTexture(atlasTexture);
+  const buckets = new Map<RenderKind, UniformGeometryData>();
+  for (const region of regions) appendUniformRegion(buckets, region, center, knownRegions);
+
+  const group = new THREE.Group();
+  group.name = "VoxelWorldUniformRegions";
+  for (const [kind, data] of buckets) {
+    const geometry = buildGeometry(data);
+    if (!geometry) continue;
+    const mesh = new THREE.Mesh(geometry, makeUniformMaterial(kind, atlasTexture));
+    if (kind === "transparent") mesh.renderOrder = 1;
+    group.add(mesh);
+  }
+  return group.children.length > 0 ? group : null;
+}
+
+async function inflatePart(bytes: Uint8Array): Promise<Uint8Array> {
+  if (typeof DecompressionStream !== "function") {
+    throw new Error("Compressed world parts are not supported by this browser.");
+  }
+  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const stream = new Blob([body])
+    .stream()
+    .pipeThrough(new DecompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function hasGzipMagic(bytes: Uint8Array): boolean {
+  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
+async function readPartBytes(
+  delivery: VoxelWorldDelivery,
+  ref: VoxelWorldPartRef,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  let encoded: Uint8Array;
+  if (delivery.resolvePart) {
+    encoded = await delivery.resolvePart(ref.key, signal);
+  } else {
+    if (ref.kind !== "opaque") throw new Error("Voxel world part is not available to this client.");
+    if (typeof window === "undefined") throw new Error("Voxel world part fetch requires a browser.");
+    const url = new URL(voxelWorldPartUrl(delivery, ref.key), window.location.href);
+    if (url.origin !== window.location.origin) {
+      throw new Error("Voxel world part URL must be same-origin.");
+    }
+    const response = await fetch(url, { credentials: "same-origin", signal });
+    if (!response.ok) throw new Error(`World part request failed (${response.status})`);
+    encoded = new Uint8Array(await response.arrayBuffer());
+  }
+  return ref.encoding === "gzip" && hasGzipMagic(encoded) ? inflatePart(encoded) : encoded;
+}
+
+function parseJsonBytes(bytes: Uint8Array, label: string): unknown {
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    throw new Error(`${label} is not valid JSON.`);
+  }
+}
+
+function packedAnchor(packed: PackedVoxelBlocks): WorldCenter {
+  if (packed.count <= 0) return { x: 0, y: 0, z: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let minZ = Infinity;
+  let maxX = -Infinity;
+  let maxZ = -Infinity;
+  for (let i = 0; i < packed.count; i += 1) {
+    const x = packed.positions[i * 3];
+    const y = packed.positions[i * 3 + 1];
+    const z = packed.positions[i * 3 + 2];
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x);
+    maxZ = Math.max(maxZ, z);
+  }
+  return { x: (minX + maxX + 1) / 2, y: minY, z: (minZ + maxZ + 1) / 2 };
+}
+
+function samplePackedBlocks(packed: PackedVoxelBlocks, limit: number): PackedVoxelBlocks {
+  if (packed.count <= limit) return packed;
+  const count = Math.max(1, Math.min(packed.count, limit));
+  const stride = Math.max(1, Math.ceil(packed.count / count));
+  const sampled = createPackedVoxelBlocks(count);
+  sampled.typeNames = packed.typeNames.slice();
+  let write = 0;
+  for (let read = 0; read < packed.count && write < count; read += stride) {
+    sampled.positions[write * 3] = packed.positions[read * 3];
+    sampled.positions[write * 3 + 1] = packed.positions[read * 3 + 1];
+    sampled.positions[write * 3 + 2] = packed.positions[read * 3 + 2];
+    sampled.typeIds[write] = packed.typeIds[read];
+    write += 1;
+  }
+  sampled.count = write;
+  return sampled;
+}
+
+function focusFromLocal(local: THREE.Vector3, center: WorldCenter): VoxelPoint {
+  return {
+    x: local.x + center.x,
+    y: local.y + center.y,
+    z: local.z + center.z,
+  };
+}
+
+function sortByDistance<T extends { distanceSq: number }>(a: T, b: T): number {
+  return a.distanceSq - b.distanceSq;
+}
+
+class ManagedVoxelWorldScene implements VoxelWorldScene {
+  readonly group = new THREE.Group();
+  readonly bounds: { box: THREE.Box3; center: THREE.Vector3; radius: number };
+  readonly stats: { blockCount: number };
+
+  private readonly delivery: VoxelWorldDelivery;
+  private readonly manifest: VoxelWorldManifest;
+  private readonly palette: BlockDefinition[];
+  private readonly atlasTexture: THREE.Texture;
+  private readonly opts: Required<Omit<VoxelWorldSceneOptions, "signal" | "onChange" | "onError" | "onProgress" | "yieldAfterMs" | "mixedDetailRadius">> & {
+    signal?: AbortSignal;
+    onChange?: () => void;
+    onError?: (message: string) => void;
+    onProgress?: VoxelWorldSceneOptions["onProgress"];
+    yieldAfterMs?: number;
+    mixedDetailRadius: number;
+  };
+  private readonly center: WorldCenter;
+  private readonly regions = new Map<string, VoxelWorldRegion>();
+  private readonly regionPages = new Map<number, VoxelWorldRegionPage>();
+  private readonly residentMixed = new Map<string, ResidentMixedRegion>();
+  private readonly loadingMixed = new Map<string, LoadingJob>();
+  private readonly loadingPages = new Map<number, LoadingJob>();
+  private readonly failures: Error[] = [];
+  private uniformGroup: THREE.Group | null = null;
+  private uniformRegionCount = 0;
+  private mixedProxyRegions = 0;
+  private mixedDetailRegions = 0;
+  private focusWorld: VoxelPoint | null = null;
+  private disposed = false;
+
+  constructor(
+    delivery: VoxelWorldDelivery,
+    manifest: VoxelWorldManifest,
+    palette: BlockDefinition[],
+    atlasTexture: THREE.Texture,
+    opts: VoxelWorldSceneOptions = {},
+  ) {
+    this.delivery = delivery;
+    this.manifest = manifest;
+    this.palette = palette;
+    this.atlasTexture = atlasTexture;
+    this.bounds = boundsForWorld(manifest.bounds);
+    this.stats = { blockCount: manifest.exactBlockCount };
+    this.center = manifest.bounds ? worldCenterFromBounds(manifest.bounds) : { x: 0, y: 0, z: 0 };
+    this.opts = {
+      signal: opts.signal,
+      onChange: opts.onChange,
+      onError: opts.onError,
+      onProgress: opts.onProgress,
+      yieldAfterMs: opts.yieldAfterMs,
+      maxResidentPages: clampInt(opts.maxResidentPages, DEFAULT_MAX_RESIDENT_PAGES, 1),
+      maxUniformRegions: clampInt(opts.maxUniformRegions, DEFAULT_MAX_UNIFORM_REGIONS, 0),
+      maxMixedDetailRegions: clampInt(opts.maxMixedDetailRegions, DEFAULT_MAX_MIXED_DETAIL_REGIONS, 0),
+      maxMixedProxyRegions: clampInt(opts.maxMixedProxyRegions, DEFAULT_MAX_MIXED_PROXY_REGIONS, 0),
+      mixedProxyBlockLimit: clampInt(opts.mixedProxyBlockLimit, DEFAULT_MIXED_PROXY_BLOCK_LIMIT, 1),
+      mixedDetailRadius:
+        typeof opts.mixedDetailRadius === "number" && Number.isFinite(opts.mixedDetailRadius)
+          ? Math.max(0, opts.mixedDetailRadius)
+          : Math.max(192, manifest.leafSize * 3),
+    };
+    this.group.name = "VoxelWorldScene";
+    for (const region of manifest.regions ?? []) this.addRegion(region);
+    opts.signal?.addEventListener("abort", () => this.dispose(), { once: true });
+  }
+
+  updateFocus(focus: THREE.Vector3) {
+    if (this.disposed || !this.manifest.bounds) return;
+    const next = focusFromLocal(focus, this.center);
+    if (sameFocus(this.focusWorld, next)) return;
+    this.reconcile(next);
+  }
+
+  async loadAround(focus: THREE.Vector3): Promise<void> {
+    if (this.disposed || !this.manifest.bounds) return;
+    const startedWithFailures = this.failures.length;
+    this.reconcile(focusFromLocal(focus, this.center), true);
+    while (!this.disposed) {
+      const pending = [...this.loadingPages.values(), ...this.loadingMixed.values()].map((job) => job.promise);
+      if (pending.length === 0) break;
+      await Promise.all(pending);
+      if (this.failures.length > startedWithFailures) throw this.failures[startedWithFailures];
+      if (this.focusWorld) this.reconcile(this.focusWorld, true);
+    }
+  }
+
+  getResidentStats(): VoxelWorldSceneStats {
+    return {
+      residentRegions: this.uniformRegionCount + this.residentMixed.size,
+      uniformRegions: this.uniformRegionCount,
+      mixedDetailRegions: this.mixedDetailRegions,
+      mixedProxyRegions: this.mixedProxyRegions,
+      residentRegionPages: this.regionPages.size,
+      loadingParts: this.loadingPages.size + this.loadingMixed.size,
+    };
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const job of this.loadingPages.values()) job.controller.abort();
+    for (const job of this.loadingMixed.values()) job.controller.abort();
+    this.loadingPages.clear();
+    this.loadingMixed.clear();
+    if (this.uniformGroup) {
+      this.group.remove(this.uniformGroup);
+      disposeObject(this.uniformGroup);
+      this.uniformGroup = null;
+    }
+    for (const resident of this.residentMixed.values()) {
+      this.group.remove(resident.voxelGroup.group);
+      resident.voxelGroup.dispose();
+    }
+    this.residentMixed.clear();
+  }
+
+  private addRegion(region: VoxelWorldRegion, pageIndex?: number) {
+    this.regions.set(region.key, region);
+  }
+
+  private reconcile(focusWorld: VoxelPoint, force = false) {
+    if (this.disposed) return;
+    this.focusWorld = focusWorld;
+    this.loadPagesAround(focusWorld);
+    this.trimPageCache(focusWorld);
+
+    const candidates = Array.from(this.regions.values())
+      .map((region): RegionCandidate => ({ region, distanceSq: distanceSqToBounds(regionBounds(region), focusWorld) }))
+      .sort(sortByDistance);
+
+    const uniformRegions = candidates
+      .filter((candidate): candidate is RegionCandidate & { region: VoxelWorldUniformRegion } => candidate.region.kind === "uniform")
+      .slice(0, this.opts.maxUniformRegions)
+      .map((candidate) => candidate.region);
+    const mixedRegions = candidates.filter(
+      (candidate): candidate is RegionCandidate & { region: VoxelWorldMixedRegion } => candidate.region.kind === "mixed",
+    );
+
+    this.rebuildUniformRegions(uniformRegions, force);
+    this.reconcileMixedRegions(mixedRegions, focusWorld);
+    this.opts.onProgress?.({
+      processedBlocks: this.residentBlockCount(),
+      totalBlocks: Math.max(1, this.manifest.exactBlockCount),
+      stageLabel: "Loading world",
+    });
+  }
+
+  private loadPagesAround(focusWorld: VoxelPoint) {
+    const pageRefs = this.manifest.regionPages;
+    if (!pageRefs || pageRefs.length === 0) return;
+    const candidates = pageRefs
+      .map((page): PageCandidate => ({ page, distanceSq: distanceSqToBounds(page.bounds, focusWorld) }))
+      .sort(sortByDistance);
+    const desired = new Set(candidates.slice(0, this.opts.maxResidentPages).map(({ page }) => page.index));
+
+    for (const index of this.regionPages.keys()) {
+      if (!desired.has(index)) this.evictPage(index);
+    }
+    for (const [index, job] of this.loadingPages) {
+      if (desired.has(index)) continue;
+      job.controller.abort();
+      this.loadingPages.delete(index);
+    }
+
+    const pages = candidates
+      .filter(({ page }) => desired.has(page.index) && !this.regionPages.has(page.index) && !this.loadingPages.has(page.index))
+      .slice(0, PAGE_LOAD_CONCURRENCY);
+    for (const { page } of pages) this.loadPage(page);
+  }
+
+  private loadPage(page: VoxelWorldRegionPageRef) {
+    const controller = new AbortController();
+    const promise = this.readPage(page, controller.signal)
+      .catch((error: unknown) => this.recordFailure(error))
+      .finally(() => {
+        this.loadingPages.delete(page.index);
+        if (!this.disposed && this.focusWorld) this.reconcile(this.focusWorld, true);
+      });
+    this.loadingPages.set(page.index, { controller, promise });
+  }
+
+  private async readPage(page: VoxelWorldRegionPageRef, signal: AbortSignal) {
+    const bytes = await readPartBytes(this.delivery, page.data, signal);
+    if (signal.aborted || this.disposed) return;
+    const parsed = parseVoxelWorldRegionPage(parseJsonBytes(bytes, "World region page"), {
+      gridSize: this.manifest.gridSize,
+      worldBounds: this.manifest.bounds,
+      pageRef: page,
+      allowLocalBlobRefs: Boolean(this.delivery.resolvePart),
+    });
+    if (!parsed.ok) throw new Error(parsed.error);
+    this.regionPages.set(page.index, parsed.value);
+    for (const region of parsed.value.regions) this.addRegion(region, page.index);
+  }
+
+  private trimPageCache(focusWorld: VoxelPoint) {
+    while (this.regionPages.size > this.opts.maxResidentPages) {
+      let farthest: { index: number; distanceSq: number } | null = null;
+      for (const [index, page] of this.regionPages) {
+        const distanceSq = distanceSqToBounds(page.bounds, focusWorld);
+        if (!farthest || distanceSq > farthest.distanceSq) farthest = { index, distanceSq };
+      }
+      if (!farthest) return;
+      this.evictPage(farthest.index);
+    }
+  }
+
+  private evictPage(index: number) {
+    const page = this.regionPages.get(index);
+    this.regionPages.delete(index);
+    for (const region of page?.regions ?? []) {
+      this.regions.delete(region.key);
+      const resident = this.residentMixed.get(region.key);
+      if (resident) {
+        this.group.remove(resident.voxelGroup.group);
+        resident.voxelGroup.dispose();
+        this.residentMixed.delete(region.key);
+      }
+    }
+  }
+
+  private rebuildUniformRegions(regions: readonly VoxelWorldUniformRegion[], force: boolean) {
+    const key = regions.map((region) => region.key).join("|");
+    if (!force && this.uniformGroup?.userData.key === key) return;
+    if (this.uniformGroup) {
+      this.group.remove(this.uniformGroup);
+      disposeObject(this.uniformGroup);
+      this.uniformGroup = null;
+    }
+    this.uniformRegionCount = regions.length;
+    const group = buildUniformGroup(regions, Array.from(this.regions.values()), this.center, this.atlasTexture);
+    if (!group) {
+      this.opts.onChange?.();
+      return;
+    }
+    group.userData.key = key;
+    this.uniformGroup = group;
+    this.group.add(group);
+    this.opts.onChange?.();
+  }
+
+  private reconcileMixedRegions(
+    mixedRegions: readonly (RegionCandidate & { region: VoxelWorldMixedRegion })[],
+    focusWorld: VoxelPoint,
+  ) {
+    const detailRadiusSq = this.opts.mixedDetailRadius * this.opts.mixedDetailRadius;
+    const desired = new Map<string, "detail" | "proxy">();
+    for (const candidate of mixedRegions) {
+      if (desired.size >= this.opts.maxMixedDetailRegions) break;
+      if (candidate.distanceSq <= detailRadiusSq || desired.size === 0) desired.set(candidate.region.key, "detail");
+    }
+    for (const candidate of mixedRegions) {
+      if (desired.has(candidate.region.key) || desired.size >= this.opts.maxMixedDetailRegions + this.opts.maxMixedProxyRegions) continue;
+      desired.set(candidate.region.key, "proxy");
+    }
+
+    for (const [key, resident] of this.residentMixed) {
+      if (desired.has(key)) continue;
+      this.group.remove(resident.voxelGroup.group);
+      resident.voxelGroup.dispose();
+      this.residentMixed.delete(key);
+    }
+    for (const [key, job] of this.loadingMixed) {
+      if (desired.has(key)) continue;
+      job.controller.abort();
+      this.loadingMixed.delete(key);
+    }
+
+    const activeLoads = this.loadingMixed.size;
+    let loadSlots = Math.max(0, MIXED_LOAD_CONCURRENCY - activeLoads);
+    for (const candidate of mixedRegions) {
+      if (loadSlots <= 0) break;
+      const mode = desired.get(candidate.region.key);
+      if (!mode) continue;
+      const resident = this.residentMixed.get(candidate.region.key);
+      if (resident?.mode === "detail" || resident?.mode === mode || this.loadingMixed.has(candidate.region.key)) continue;
+      this.loadMixedRegion(candidate.region, mode);
+      loadSlots -= 1;
+    }
+
+    this.mixedDetailRegions = 0;
+    this.mixedProxyRegions = 0;
+    for (const resident of this.residentMixed.values()) {
+      if (resident.mode === "detail") this.mixedDetailRegions += 1;
+      else this.mixedProxyRegions += 1;
+    }
+  }
+
+  private loadMixedRegion(region: VoxelWorldMixedRegion, mode: "detail" | "proxy") {
+    const controller = new AbortController();
+    const promise = this.readMixedRegion(region, mode, controller.signal)
+      .catch((error: unknown) => this.recordFailure(error))
+      .finally(() => {
+        this.loadingMixed.delete(region.key);
+        if (!this.disposed && this.focusWorld) this.reconcile(this.focusWorld, true);
+      });
+    this.loadingMixed.set(region.key, { controller, promise });
+  }
+
+  private async readMixedRegion(region: VoxelWorldMixedRegion, mode: "detail" | "proxy", signal: AbortSignal) {
+    const bytes = await readPartBytes(this.delivery, region.data, signal);
+    if (signal.aborted || this.disposed) return;
+    const decoded = decodeBinaryVoxelBuild(bytes);
+    const packed = mode === "proxy" ? samplePackedBlocks(decoded, this.opts.mixedProxyBlockLimit) : decoded;
+    const anchor = packedAnchor(packed);
+    const build: RenderableVoxelBuild = { version: "1.0", blocks: [], packed };
+    const voxelGroup = await createVoxelGroupAsync(build, this.palette, this.atlasTexture, {
+      signal,
+      yieldAfterMs: this.opts.yieldAfterMs,
+    });
+    if (signal.aborted || this.disposed) {
+      voxelGroup.dispose();
+      return;
+    }
+    voxelGroup.group.position.set(
+      region.origin.x + anchor.x - this.center.x,
+      region.origin.y + anchor.y - this.center.y,
+      region.origin.z + anchor.z - this.center.z,
+    );
+    const previous = this.residentMixed.get(region.key);
+    if (previous) {
+      this.group.remove(previous.voxelGroup.group);
+      previous.voxelGroup.dispose();
+    }
+    this.residentMixed.set(region.key, { region, mode, voxelGroup });
+    this.group.add(voxelGroup.group);
+    this.opts.onChange?.();
+  }
+
+  private residentBlockCount(): number {
+    let count = 0;
+    for (const region of this.regions.values()) {
+      if (region.kind === "uniform") count += region.blockCount;
+    }
+    for (const resident of this.residentMixed.values()) {
+      count += resident.voxelGroup.stats.blockCount;
+    }
+    return count;
+  }
+
+  private recordFailure(error: unknown) {
+    if (isAbortError(error) || this.disposed) return;
+    const err = error instanceof Error ? error : new Error(String(error));
+    this.failures.push(err);
+    this.opts.onError?.(err.message);
+  }
+}
+
+export async function createVoxelWorldScene(
+  delivery: VoxelWorldDelivery,
+  palette: BlockDefinition[],
+  atlasTexture: THREE.Texture,
+  opts: VoxelWorldSceneOptions = {},
+): Promise<VoxelWorldScene> {
+  const parsed = parseVoxelWorldManifest(delivery.manifest, {
+    allowLocalBlobRefs: Boolean(delivery.resolvePart),
+  });
+  if (!parsed.ok) throw new Error(parsed.error);
+  const scene = new ManagedVoxelWorldScene(delivery, parsed.value, palette, atlasTexture, opts);
+  await scene.loadAround(scene.bounds.center);
+  return scene;
+}
+
+export function isVoxelWorldScene(group: VoxelGroup | null): group is VoxelWorldScene {
+  return typeof (group as VoxelWorldScene | null)?.updateFocus === "function";
+}

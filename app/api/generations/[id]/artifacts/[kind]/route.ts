@@ -1,7 +1,12 @@
 import { getAuthenticatedUserId } from "@/lib/auth/request";
+import { customBuildWorldViewerResponse } from "@/lib/custom-builds/worldDelivery";
 import { createCustomBuildArtifactSignedUrl, downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
 import { apiJson, apiServiceError } from "@/lib/gallery/api";
-import { GenerationServiceError, getOwnedGenerationArtifact } from "@/lib/generations/service";
+import {
+  GenerationServiceError,
+  getOwnedGenerationArtifact,
+  getOwnedGenerationWorldPart,
+} from "@/lib/generations/service";
 
 export const runtime = "nodejs";
 
@@ -14,12 +19,25 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     : kind === "thumbnail"
       ? (["preview_svg"] as const)
     : kind === "viewer"
-      ? (["viewer_mbf1", "viewer_mbv4"] as const)
+      ? (["viewer_world", "viewer_mbf1", "viewer_mbv4"] as const)
       : null;
   if (!kinds) return apiJson({ error: { code: "not_found", message: "Artifact not found." } }, 404);
   try {
     const artifact = await getOwnedGenerationArtifact(ownerId, id, [...kinds]);
     if (!artifact) throw new GenerationServiceError("not_found", "Artifact not found.");
+    if (kind === "viewer" && artifact.kind === "viewer_world") {
+      return await customBuildWorldViewerResponse({
+        request,
+        artifact,
+        buildId: id,
+        findPart: (sourceBuildSha256, partKey) =>
+          getOwnedGenerationWorldPart(ownerId, id, sourceBuildSha256, partKey),
+        cacheControl: "private, no-store",
+      });
+    }
+    if (kind === "viewer" && new URL(request.url).searchParams.has("part")) {
+      throw new GenerationServiceError("not_found", "Artifact not found.");
+    }
     const signedUrl = await createCustomBuildArtifactSignedUrl(artifact);
     if (signedUrl.startsWith("file:")) {
       const bytes = await downloadCustomBuildArtifactBytes(artifact);

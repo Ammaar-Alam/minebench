@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { GRID_SIZES, isGridSize, type GridSize } from "@/lib/ai/limits";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent, GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
@@ -39,9 +40,14 @@ import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { getPalette } from "@/lib/blocks/palettes";
 import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
+import {
+  attachLocalVoxelWorldResolver,
+  createLocalVoxelWorld,
+  deleteLocalVoxelWorldParts,
+  type LocalVoxelWorldOwnership,
+} from "@/lib/voxel/localWorld";
 
 type Palette = "simple" | "advanced";
-type GridSize = 64 | 256 | 512;
 type SelectedModelValue =
   | ModelKey
   | typeof OPENROUTER_MODEL_VALUE
@@ -93,6 +99,7 @@ type ModelResult = {
   customBuildExpandedBytes?: number | null;
   renderGridSize?: GridSize;
   renderPalette?: Palette;
+  localWorld?: LocalVoxelWorldOwnership;
   currentStage?: string;
   submittedPrompt?: string;
   customBuildRetryable?: boolean;
@@ -277,6 +284,8 @@ function buildPreviewFromRawText(opts: {
   gridSize: GridSize;
   palette: Palette;
 }): VoxelBuild | null {
+  if (opts.gridSize > 512) return null;
+
   const blocksIdx = findArrayStart(opts.rawText, "blocks");
   const boxesIdx = findArrayStart(opts.rawText, "boxes");
   const linesIdx = findArrayStart(opts.rawText, "lines");
@@ -406,7 +415,21 @@ function getRawBuildJsonForExport(args: {
 }): string | null {
   if (args.voxelBuild != null) {
     try {
-      return JSON.stringify(args.voxelBuild, null, 2);
+      const raw = args.voxelBuild as {
+        version?: unknown;
+        blocks?: unknown;
+        boxes?: unknown;
+        lines?: unknown;
+      };
+      const build = raw.version === "1.0" && Array.isArray(raw.blocks)
+        ? {
+            version: "1.0",
+            boxes: Array.isArray(raw.boxes) ? raw.boxes : [],
+            lines: Array.isArray(raw.lines) ? raw.lines : [],
+            blocks: raw.blocks,
+          }
+        : args.voxelBuild;
+      return JSON.stringify(build, null, 2);
     } catch {
       // ignore and try raw text extraction
     }
@@ -542,7 +565,7 @@ function customBuildMetrics(status: SavedGenerationPayload): ModelResult["metric
 }
 
 function customBuildGridSize(value: number, fallback: GridSize): GridSize {
-  return value === 64 || value === 256 || value === 512 ? value : fallback;
+  return isGridSize(value) ? value : fallback;
 }
 
 function customBuildPalette(value: string, fallback: Palette): Palette {
@@ -628,6 +651,7 @@ export function SandboxLive({
   const durableRunSequenceRef = useRef(0);
   const activeDurableRunRef = useRef<number | null>(null);
   const canceledDurableRunsRef = useRef(new Set<number>());
+  const transientWorldsRef = useRef(new Map<string, LocalVoxelWorldOwnership>());
   const previewCacheRef = useRef(
     new Map<string, { at: number; textLen: number; build: VoxelBuild | null }>()
   );
@@ -723,6 +747,35 @@ export function SandboxLive({
   );
   const lastGenerateInputRef = useRef<string | null>(null);
 
+  const releaseTransientWorld = useCallback((modelKey: string) => {
+    const ownership = transientWorldsRef.current.get(modelKey);
+    if (!ownership) return;
+    transientWorldsRef.current.delete(modelKey);
+    void deleteLocalVoxelWorldParts(ownership.partKeys, ownership.worldId);
+  }, []);
+
+  const releaseAllTransientWorlds = useCallback(() => {
+    for (const modelKey of transientWorldsRef.current.keys()) {
+      releaseTransientWorld(modelKey);
+    }
+  }, [releaseTransientWorld]);
+
+  const setTransientWorld = useCallback((modelKey: string, ownership: LocalVoxelWorldOwnership | null) => {
+    const previous = transientWorldsRef.current.get(modelKey);
+    if (previous && previous.worldId !== ownership?.worldId) {
+      void deleteLocalVoxelWorldParts(previous.partKeys, previous.worldId);
+    }
+    if (ownership) {
+      transientWorldsRef.current.set(modelKey, ownership);
+    } else {
+      transientWorldsRef.current.delete(modelKey);
+    }
+  }, []);
+
+  useEffect(() => () => {
+    releaseAllTransientWorlds();
+  }, [releaseAllTransientWorlds]);
+
   useEffect(() => {
     if (!running) return;
     const id = window.setInterval(() => forceRender((c) => c + 1), 250);
@@ -783,6 +836,7 @@ export function SandboxLive({
 
   useEffect(() => {
     if (lastGenerateInputRef.current === inputSignature) return;
+    releaseAllTransientWorlds();
     if (signedIn) {
       previewCacheRef.current.clear();
       setRequestError(null);
@@ -802,7 +856,7 @@ export function SandboxLive({
       }
       return next;
     });
-  }, [inputSignature, selectedModels, signedIn]);
+  }, [inputSignature, releaseAllTransientWorlds, selectedModels, signedIn]);
 
   useEffect(() => {
     if (!compareEnabled) return;
@@ -871,6 +925,7 @@ export function SandboxLive({
   }
 
   function stopGenerate() {
+    for (const model of selectedModels) releaseTransientWorld(model.id);
     if (signedIn) {
       const runId = activeDurableRunRef.current;
       if (runId !== null) canceledDurableRunsRef.current.add(runId);
@@ -1397,6 +1452,7 @@ export function SandboxLive({
     lastGenerateInputRef.current = inputSignature;
     setRequestError(null);
     forceRender((c) => c + 1);
+    for (const model of selectedModels) releaseTransientWorld(model.id);
     setResults((prev) => {
       const next = new Map(prev);
       const now = Date.now();
@@ -1471,6 +1527,7 @@ export function SandboxLive({
           if (evt.type === "hello" || evt.type === "ping") continue;
 
           if (evt.type === "start") {
+            releaseTransientWorld(evt.modelKey);
             setResults((prev) => {
               const next = new Map(prev);
               const existing = next.get(evt.modelKey);
@@ -1489,6 +1546,7 @@ export function SandboxLive({
           }
 
           if (evt.type === "retry") {
+            releaseTransientWorld(evt.modelKey);
             setResults((prev) => {
               const next = new Map(prev);
               const existing = next.get(evt.modelKey);
@@ -1529,23 +1587,63 @@ export function SandboxLive({
               return next;
             });
           } else if (evt.type === "result") {
+            let voxelBuild: unknown = evt.voxelBuild;
+            let localWorld: LocalVoxelWorldOwnership | undefined;
+            if (gridSize > 512) {
+              try {
+                const world = await createLocalVoxelWorld(evt.voxelBuild, {
+                  gridSize,
+                  palette,
+                  signal: abortController.signal,
+                });
+                if (abortController.signal.aborted) {
+                  void deleteLocalVoxelWorldParts(world.partKeys, world.worldId);
+                  throw new DOMException("Aborted", "AbortError");
+                }
+                localWorld = { worldId: world.worldId, partKeys: world.partKeys };
+                setTransientWorld(evt.modelKey, localWorld);
+                voxelBuild = attachLocalVoxelWorldResolver(world.build);
+              } catch (error) {
+                if (isAbortError(error)) throw error;
+                releaseTransientWorld(evt.modelKey);
+                setResults((prev) => {
+                  const next = new Map(prev);
+                  const existing = next.get(evt.modelKey);
+                  next.set(evt.modelKey, {
+                    modelKey: evt.modelKey,
+                    status: "error",
+                    voxelBuild: null,
+                    error: error instanceof Error ? error.message : "World could not be prepared",
+                    rawText: existing?.rawText,
+                    startedAt: existing?.startedAt,
+                    submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
+                  });
+                  return next;
+                });
+                continue;
+              }
+            } else {
+              releaseTransientWorld(evt.modelKey);
+            }
             setResults((prev) => {
               const next = new Map(prev);
               const existing = next.get(evt.modelKey);
               next.set(evt.modelKey, {
                 modelKey: evt.modelKey,
                 status: "success",
-                voxelBuild: evt.voxelBuild,
+                voxelBuild,
                 attempt: existing?.attempt,
                 retryReason: undefined,
                 metrics: evt.metrics,
                 startedAt: existing?.startedAt,
                 rawText: existing?.rawText,
                 submittedPrompt: existing?.submittedPrompt ?? submittedPrompt,
+                localWorld,
               });
               return next;
             });
           } else if (evt.type === "error") {
+            releaseTransientWorld(evt.modelKey);
             setResults((prev) => {
               const next = new Map(prev);
               const existing = next.get(evt.modelKey);
@@ -1855,9 +1953,9 @@ export function SandboxLive({
                 value={gridSize}
                 onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
               >
-                <option value={64}>64</option>
-                <option value={256}>256</option>
-                <option value={512}>512</option>
+                {GRID_SIZES.map((size) => (
+                  <option key={size} value={size}>{size}³</option>
+                ))}
               </select>
             </label>
 

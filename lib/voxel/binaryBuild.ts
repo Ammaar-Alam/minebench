@@ -3,6 +3,7 @@ import {
   packVoxelBlocks,
   type PackedVoxelBlocks,
 } from "@/lib/voxel/packedBlocks";
+import { MAX_VOXEL_COORDINATE } from "@/lib/voxel/coordinateKeys";
 import type { VoxelBlock } from "@/lib/voxel/types";
 
 // Binary v4 build encoding.
@@ -30,8 +31,8 @@ export const BINARY_BUILD_VERSION = 4;
 export const BINARY_BUILD_MAGIC = 0x4d425634;
 export const BINARY_BUILD_HEADER_BYTES = 16;
 
-// validated builds clamp coordinates into the grid, and the largest grid is 512
-const MAX_COORDINATE = 1023;
+// Uint16 can store more, but MineBench's render/export coordinate contract is 0..8191.
+const MAX_COORDINATE = MAX_VOXEL_COORDINATE;
 const MAX_PALETTE_BYTES = 65535;
 // guards allocation from a corrupt or hostile length before anything is read
 const MAX_BLOCKS = 64_000_000;

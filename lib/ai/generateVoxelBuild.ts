@@ -45,7 +45,8 @@ import {
   validateVoxelBuildSpec,
 } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
-import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
+import { summarizeVoxelWorldRegions } from "@/lib/voxel/worldRegions";
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import type {
   AcceptedProviderRequestConfiguration,
   AcceptedRequestConfigurationRecord,
@@ -78,7 +79,7 @@ function boundedExplicitMaxOutputTokens(value: number | undefined): number | und
 }
 
 function defaultMaxOutputTokens(
-  _gridSize: 64 | 256 | 512,
+  _gridSize: GridSize,
   modelId: string,
   explicitMaxOutputTokens?: number,
 ): number {
@@ -487,7 +488,7 @@ export type GenerateVoxelBuildParams = {
     requireStructuredOutput?: boolean;
   };
   prompt: string;
-  gridSize: 64 | 256 | 512;
+  gridSize: GridSize;
   palette: "simple" | "advanced";
   maxAttempts?: number;
   maxOutputTokens?: number;
@@ -1066,7 +1067,7 @@ async function providerGenerateText(args: {
   });
 }
 
-function validateParsedJson(json: unknown, palette: BlockDefinition[], gridSize: 64 | 256 | 512) {
+function validateParsedJson(json: unknown, palette: BlockDefinition[], gridSize: GridSize) {
   return validateVoxelBuild(json, {
     palette,
     gridSize,
@@ -1321,20 +1322,23 @@ export async function generateVoxelBuild(
 
         if (!buildJson) continue;
 
-        const validated = enableTools
+        const world = params.gridSize > 512
+          ? summarizeVoxelWorldRegions(buildJson, { palette: paletteDefs, gridSize: params.gridSize })
+          : null;
+        const validated = world ?? (enableTools
           ? validateVoxelBuildSpec(buildJson as VoxelBuild, {
               palette: paletteDefs,
               gridSize: params.gridSize,
               maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
             })
-          : validateParsedJson(buildJson, paletteDefs, params.gridSize);
+          : validateParsedJson(buildJson, paletteDefs, params.gridSize));
         if (!validated.ok) {
           lastError = validated.error;
           continue;
         }
 
-        const expandedBuild = validated.value.build;
-        const blockCount = expandedBuild.blocks.length;
+        const validatedBuild = validated.value.build;
+        const blockCount = world?.ok ? world.value.blockCount : validatedBuild.blocks.length;
 
         if (blockCount === 0) {
           lastError =
@@ -1347,10 +1351,15 @@ export async function generateVoxelBuild(
           continue;
         }
 
-        const bounds = buildBounds(expandedBuild);
+        const worldBounds = world?.ok ? world.value.bounds : null;
+        const bounds = worldBounds
+          ? { spanX: worldBounds.size.x, spanY: worldBounds.size.y, spanZ: worldBounds.size.z }
+          : buildBounds(validatedBuild);
         if (bounds) {
-          const minFootprint = Math.max(6, Math.floor(params.gridSize * 0.15));
-          const minHeight = Math.max(4, Math.floor(params.gridSize * 0.1));
+          // wider worlds should not force every subject to be hundreds of blocks tall
+          const detailGridSize = Math.min(params.gridSize, 512);
+          const minFootprint = Math.max(6, Math.floor(detailGridSize * 0.15));
+          const minHeight = Math.max(4, Math.floor(detailGridSize * 0.1));
           const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
 
           if (maxFootprintSpan < minFootprint) {
@@ -1364,8 +1373,8 @@ export async function generateVoxelBuild(
           }
         }
 
-        let build = expandedBuild;
-        if (!params.returnExpandedBuild) {
+        let build = validatedBuild;
+        if (!world && !params.returnExpandedBuild) {
           const spec = parseVoxelBuildSpec(buildJson);
           if (!spec.ok) {
             lastError = spec.error;
@@ -1421,6 +1430,6 @@ export async function generateVoxelBuild(
   };
 }
 
-export function maxBlocksForGrid(gridSize: 64 | 256 | 512) {
+export function maxBlocksForGrid(gridSize: GridSize) {
   return MAX_BLOCKS_BY_GRID[gridSize];
 }

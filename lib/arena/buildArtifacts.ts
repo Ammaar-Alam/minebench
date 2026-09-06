@@ -1,3 +1,4 @@
+import { isGridSize, type GridSize } from "@/lib/ai/limits";
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -7,6 +8,7 @@ import {
   shouldPreferPreviewVariant,
 } from "@/lib/arena/buildDeliveryPolicy";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
+import { encodeVoxelPositionKey } from "@/lib/voxel/coordinateKeys";
 import { filterRenderableVoxelBuild } from "@/lib/voxel/renderVisibility";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { resolveBuildPayload } from "@/lib/storage/buildPayload";
@@ -149,8 +151,8 @@ function normalizePalette(value: string): "simple" | "advanced" {
   return value === "advanced" ? "advanced" : "simple";
 }
 
-function normalizeGridSize(value: number): 64 | 256 | 512 {
-  if (value === 64 || value === 256 || value === 512) return value;
+function normalizeGridSize(value: number): GridSize {
+  if (isGridSize(value)) return value;
   return 256;
 }
 
@@ -329,10 +331,6 @@ const NEIGHBOR_DIRS: ReadonlyArray<readonly [number, number, number]> = [
   [0, 0, -1],
 ];
 
-function encodePosition(x: number, y: number, z: number): number {
-  return (x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20);
-}
-
 function hashBlock(block: VoxelBlock): number {
   let h = (block.x * 73856093) ^ (block.y * 19349663) ^ (block.z * 83492791);
   h ^= h >>> 13;
@@ -344,14 +342,14 @@ function extractSurfaceBlocks(blocks: VoxelBlock[]): VoxelBlock[] {
   // previews should show visible shape, not hidden interior volume
   const occupied = new Set<number>();
   for (const block of blocks) {
-    occupied.add(encodePosition(block.x, block.y, block.z));
+    occupied.add(encodeVoxelPositionKey(block.x, block.y, block.z));
   }
 
   const surface: VoxelBlock[] = [];
   for (const block of blocks) {
     let exposed = false;
     for (const [dx, dy, dz] of NEIGHBOR_DIRS) {
-      const neighborKey = encodePosition(block.x + dx, block.y + dy, block.z + dz);
+      const neighborKey = encodeVoxelPositionKey(block.x + dx, block.y + dy, block.z + dz);
       if (!occupied.has(neighborKey)) {
         exposed = true;
         break;
@@ -377,13 +375,13 @@ function deterministicSampleBlocks(blocks: VoxelBlock[], targetBlockCount: numbe
     return sampled.slice(0, targetBlockCount);
   }
 
-  const sampledKeys = new Set(sampled.map((block) => encodePosition(block.x, block.y, block.z)));
+  const sampledKeys = new Set(sampled.map((block) => encodeVoxelPositionKey(block.x, block.y, block.z)));
   const remainder = targetBlockCount - sampled.length;
   const stride = Math.max(1, Math.floor(blocks.length / Math.max(1, remainder)));
   for (let i = 0; i < blocks.length && sampled.length < targetBlockCount; i += stride) {
     const block = blocks[i];
     if (!block) continue;
-    const key = encodePosition(block.x, block.y, block.z);
+    const key = encodeVoxelPositionKey(block.x, block.y, block.z);
     if (sampledKeys.has(key)) continue;
     sampled.push(block);
     sampledKeys.add(key);

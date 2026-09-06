@@ -24,6 +24,47 @@ function* canonicalBuildJsonChunks(build: VoxelBuild): Generator<Uint8Array> {
   yield ENCODER.encode(`${chunk}]}`);
 }
 
+function* compactBuildJsonChunks(build: VoxelBuild): Generator<Uint8Array> {
+  yield ENCODER.encode('{"version":"1.0"');
+  if (build.boxes?.length) {
+    let chunk = ',"boxes":[';
+    for (let index = 0; index < build.boxes.length; index += 1) {
+      const box = `${index === 0 ? "" : ","}${JSON.stringify(build.boxes[index])}`;
+      if (chunk.length + box.length > 64 * 1024) {
+        yield ENCODER.encode(chunk);
+        chunk = box;
+      } else {
+        chunk += box;
+      }
+    }
+    yield ENCODER.encode(`${chunk}]`);
+  }
+  if (build.lines?.length) {
+    let chunk = ',"lines":[';
+    for (let index = 0; index < build.lines.length; index += 1) {
+      const line = `${index === 0 ? "" : ","}${JSON.stringify(build.lines[index])}`;
+      if (chunk.length + line.length > 64 * 1024) {
+        yield ENCODER.encode(chunk);
+        chunk = line;
+      } else {
+        chunk += line;
+      }
+    }
+    yield ENCODER.encode(`${chunk}]`);
+  }
+  let chunk = ',"blocks":[';
+  for (let index = 0; index < build.blocks.length; index += 1) {
+    const block = `${index === 0 ? "" : ","}${JSON.stringify(build.blocks[index])}`;
+    if (chunk.length + block.length > 64 * 1024) {
+      yield ENCODER.encode(chunk);
+      chunk = block;
+    } else {
+      chunk += block;
+    }
+  }
+  yield ENCODER.encode(`${chunk}]}`);
+}
+
 async function removeArtifactFile(directory: string, filePath: string): Promise<void> {
   try {
     await unlink(filePath);
@@ -41,16 +82,21 @@ async function removeArtifactFile(directory: string, filePath: string): Promise<
   }
 }
 
-export async function writeCanonicalBuildArtifact(build: VoxelBuild): Promise<{
+type WrittenBuildArtifact = {
   filePath: string;
   byteSize: number;
   storedByteSize: number;
   sha256: string;
   sourceSha256: string;
   cleanup: () => Promise<void>;
-}> {
+};
+
+async function writeBuildArtifactFile(
+  chunks: Generator<Uint8Array>,
+  fileName: string,
+): Promise<WrittenBuildArtifact> {
   const directory = await mkdtemp(path.join(tmpdir(), "minebench-build-"));
-  const filePath = path.join(directory, "build.json.gz");
+  const filePath = path.join(directory, fileName);
   const sourceHash = createHash("sha256");
   const storedHash = createHash("sha256");
   let byteSize = 0;
@@ -63,7 +109,7 @@ export async function writeCanonicalBuildArtifact(build: VoxelBuild): Promise<{
   };
   try {
     await pipeline(
-      Readable.from(canonicalBuildJsonChunks(build)),
+      Readable.from(chunks),
       new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           sourceHash.update(chunk);
@@ -93,4 +139,12 @@ export async function writeCanonicalBuildArtifact(build: VoxelBuild): Promise<{
     await cleanup();
     throw error;
   }
+}
+
+export async function writeCanonicalBuildArtifact(build: VoxelBuild): Promise<WrittenBuildArtifact> {
+  return writeBuildArtifactFile(canonicalBuildJsonChunks(build), "build.json.gz");
+}
+
+export async function writeVoxelBuildSourceArtifact(build: VoxelBuild): Promise<WrittenBuildArtifact> {
+  return writeBuildArtifactFile(compactBuildJsonChunks(build), "source.json.gz");
 }

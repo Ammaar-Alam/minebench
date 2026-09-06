@@ -3,9 +3,19 @@
 import { ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { SandboxGifExportButton, type SandboxGifExportTarget } from "@/components/sandbox/SandboxGifExportButton";
 import { buildSystemPrompt, buildUserPrompt, buildWebPrompt } from "@/lib/ai/prompts";
-import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, GRID_SIZES, type GridSize } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
+import {
+  attachLocalVoxelWorldResolver,
+  createLocalVoxelWorld,
+  deleteLocalVoxelWorldParts,
+  type LocalVoxelWorldOwnership,
+} from "@/lib/voxel/localWorld";
+import {
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
@@ -13,7 +23,6 @@ import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 
 type Palette = "simple" | "advanced";
-type GridSize = 64 | 256 | 512;
 
 type LocalParseWorkerRequest =
   | {
@@ -40,7 +49,7 @@ type LocalParseWorkerResponse =
   | {
       type: "complete";
       requestId: number;
-      voxelBuild: VoxelBuild;
+      voxelBuild: RenderableVoxelBuild;
       warnings: string[];
       receivedBlocks: number;
       totalBlocks: number | null;
@@ -49,6 +58,7 @@ type LocalParseWorkerResponse =
         gridSize: GridSize;
         palette: Palette;
       };
+      localWorld?: LocalVoxelWorldOwnership;
     }
   | {
       type: "error";
@@ -291,7 +301,7 @@ export function LocalLab() {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [rendered, setRendered] = useState<{
     kind: "idle" | "loading" | "ready" | "error";
-    build: VoxelBuild | null;
+    build: RenderableVoxelBuild | null;
     warnings: string[];
     progress?: {
       receivedBlocks: number;
@@ -303,6 +313,7 @@ export function LocalLab() {
   const parseWorkerRef = useRef<Worker | null>(null);
   const parseRequestIdRef = useRef(0);
   const streamedBlocksRef = useRef<VoxelBuild["blocks"]>([]);
+  const localWorldRef = useRef<LocalVoxelWorldOwnership | null>(null);
   const gridSizeRef = useRef<GridSize>(gridSize);
   const paletteRef = useRef<Palette>(palette);
 
@@ -345,6 +356,7 @@ export function LocalLab() {
       }
 
       if (message.type === "complete") {
+        replaceLocalWorld(message.localWorld ?? null);
         if (message.resolved.gridSize !== gridSizeRef.current) {
           setGridSize(message.resolved.gridSize);
         }
@@ -365,7 +377,7 @@ export function LocalLab() {
 
         setRendered({
           kind: "ready",
-          build: message.voxelBuild,
+          build: attachLocalVoxelWorldResolver(message.voxelBuild),
           warnings: message.warnings,
           progress: {
             receivedBlocks: message.receivedBlocks,
@@ -377,6 +389,7 @@ export function LocalLab() {
 
       if (message.type === "error") {
         setStatusNote(null);
+        replaceLocalWorld(null);
         setRendered({
           kind: "error",
           build: null,
@@ -397,6 +410,7 @@ export function LocalLab() {
       }
       worker.terminate();
       if (parseWorkerRef.current === worker) parseWorkerRef.current = null;
+      replaceLocalWorld(null);
     };
   }, []);
 
@@ -407,7 +421,7 @@ export function LocalLab() {
         viewerRef: previewViewerRef,
         modelName: "Local Preview",
         company: "MineBench",
-        blockCount: rendered.build.blocks.length,
+        blockCount: voxelBuildBlockCount(rendered.build),
       },
     ];
   }, [rendered]);
@@ -417,6 +431,14 @@ export function LocalLab() {
   function readActiveInputText() {
     if (typeof bufferedOutputRef.current === "string") return bufferedOutputRef.current;
     return modelOutputRef.current?.value ?? "";
+  }
+
+  function replaceLocalWorld(next: LocalVoxelWorldOwnership | null) {
+    const previous = localWorldRef.current;
+    if (previous && previous.worldId !== next?.worldId) {
+      void deleteLocalVoxelWorldParts(previous.partKeys, previous.worldId);
+    }
+    localWorldRef.current = next;
   }
 
   function clearModelInput() {
@@ -462,7 +484,16 @@ export function LocalLab() {
       return;
     }
 
-    const fallbackSync = () => {
+    const fallbackParse = async () => {
+      const requestId = ++parseRequestIdRef.current;
+      replaceLocalWorld(null);
+      setRendered({
+        kind: "loading",
+        build: null,
+        warnings: [],
+        progress: { receivedBlocks: 0, totalBlocks: null },
+      });
+
       let json: unknown = null;
       try {
         json = JSON.parse(trimmed) as unknown;
@@ -481,6 +512,37 @@ export function LocalLab() {
         return;
       }
 
+      if (gridSize > 512) {
+        try {
+          const world = await createLocalVoxelWorld(json, { gridSize, palette });
+          if (requestId !== parseRequestIdRef.current) {
+            void deleteLocalVoxelWorldParts(world.partKeys, world.worldId);
+            return;
+          }
+          replaceLocalWorld({ worldId: world.worldId, partKeys: world.partKeys });
+          setStatusNote(null);
+          setRendered({
+            kind: "ready",
+            build: attachLocalVoxelWorldResolver(world.build),
+            warnings: world.warnings,
+            progress: {
+              receivedBlocks: world.blockCount,
+              totalBlocks: world.blockCount,
+            },
+          });
+        } catch (error) {
+          if (requestId !== parseRequestIdRef.current) return;
+          setStatusNote(null);
+          setRendered({
+            kind: "error",
+            build: null,
+            warnings: [],
+            message: error instanceof Error ? error.message : "Failed to parse build",
+          });
+        }
+        return;
+      }
+
       const paletteDefs = getPalette(palette);
       const validated = validateVoxelBuild(json, {
         gridSize,
@@ -495,6 +557,7 @@ export function LocalLab() {
       }
 
       setStatusNote(null);
+      replaceLocalWorld(null);
       setRendered({
         kind: "ready",
         build: validated.value.build,
@@ -508,11 +571,12 @@ export function LocalLab() {
 
     const worker = parseWorkerRef.current;
     if (!worker) {
-      fallbackSync();
+      void fallbackParse();
       return;
     }
 
     setStatusNote(null);
+    replaceLocalWorld(null);
     const currentRequestId = parseRequestIdRef.current;
     if (currentRequestId > 0) {
       try {
@@ -541,7 +605,7 @@ export function LocalLab() {
         maxBlocksByGrid: MAX_BLOCKS_BY_GRID,
       } satisfies LocalParseWorkerRequest);
     } catch {
-      fallbackSync();
+      void fallbackParse();
     }
   }
 
@@ -573,39 +637,16 @@ export function LocalLab() {
               hint="Larger grids allow more detail."
               className="min-w-[220px] flex-1 sm:min-w-[240px]"
             >
-              <SegmentedControl
-                value={String(gridSize)}
-                onChange={(value) => setGridSize(Number(value) as GridSize)}
-                options={[
-                  {
-                    value: "64",
-                    label: (
-                      <span className="inline-flex items-start">
-                        <span>64</span>
-                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                      </span>
-                    ),
-                  },
-                  {
-                    value: "256",
-                    label: (
-                      <span className="inline-flex items-start">
-                        <span>256</span>
-                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                      </span>
-                    ),
-                  },
-                  {
-                    value: "512",
-                    label: (
-                      <span className="inline-flex items-start">
-                        <span>512</span>
-                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                      </span>
-                    ),
-                  },
-                ]}
-              />
+              <select
+                aria-label="Grid size"
+                className="mb-field h-11 w-full"
+                value={gridSize}
+                onChange={(event) => setGridSize(Number(event.target.value) as GridSize)}
+              >
+                {GRID_SIZES.map((size) => (
+                  <option key={size} value={size}>{size}³</option>
+                ))}
+              </select>
             </SegmentedField>
             <SegmentedField
               label="Block palette"
@@ -875,7 +916,7 @@ export function LocalLab() {
               rendered.kind === "ready" || rendered.kind === "loading"
                 ? {
                     blockCount:
-                      rendered.progress?.receivedBlocks ?? rendered.build?.blocks.length ?? 0,
+                      rendered.progress?.receivedBlocks ?? voxelBuildBlockCount(rendered.build),
                     warnings: rendered.warnings,
                   }
                 : undefined

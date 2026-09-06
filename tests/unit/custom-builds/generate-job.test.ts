@@ -199,14 +199,16 @@ async function main() {
     isTerminalCustomBuildGenerateError,
     validateGeneratedBuildForArtifacts,
   } = await import("../../../lib/custom-builds/generateJob");
+  const { customBuildWorldViewerResponse } = await import("../../../lib/custom-builds/worldDelivery");
+  const { voxelWorldPartSourceSha256 } = await import("../../../lib/custom-builds/worldArtifacts");
   const { safeCustomBuildRetryReason } = await import("../../../lib/custom-builds/sanitize");
   const { jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
   const { CustomBuildLeaseLostError } = await import("../../../lib/custom-builds/lease");
 
   assert.ok(
-    generateJobSource.includes("buildGalleryPreviewSvg(canonicalBuild)") &&
+    generateJobSource.includes("buildGalleryPreviewSvg(useWorldArtifacts ? preview : canonicalBuild)") &&
       generateJobSource.includes("blockCount: canonicalBuild.blocks.length"),
-    "static thumbnails should derive from the canonical build rather than the sampled viewer preview",
+    "static thumbnails should derive from the canonical build, except compact worlds which use the world preview",
   );
   assert.ok(
     generateJobSource.includes("writeCanonicalBuildArtifact(canonicalBuild)") &&
@@ -371,6 +373,128 @@ async function main() {
     artifactCreates.map((artifact) => artifact.kind).sort(),
     ["build_json", "preview_mbv4", "preview_svg", "viewer_mbv4"],
   );
+
+  updates.length = 0;
+  operations.length = 0;
+  artifactCreates.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
+  currentCustomBuild = {
+    ...queuedCustomBuild,
+    gridSize: 8192,
+    promptText: "Build a solid stone world",
+  };
+  await runCustomBuildGenerateJob({
+    id: "world-cube-job-row",
+    customBuildId,
+    type: "generate",
+    status: "running",
+    attempts: 1,
+    maxAttempts: 1,
+    payload: {
+      stubBuild: {
+        version: "1.0",
+        boxes: [{ x1: 0, y1: 0, z1: 0, x2: 8191, y2: 8191, z2: 8191, type: "stone" }],
+        blocks: [],
+      },
+    },
+  } as never);
+  const cubeSuccess = updates.find((update) => update.data.status === "succeeded");
+  assert.ok(cubeSuccess, "8192 saved jobs should complete from compact source");
+  assert.equal(cubeSuccess.data.blockCount, 8192 ** 3);
+  assert.equal(cubeSuccess.data.previewBlockCount, 3000);
+  assert.ok(
+    Number(cubeSuccess.data.buildByteSize) < 400,
+    "compact source should be stored instead of expanded JSON",
+  );
+  assert.deepEqual(
+    artifactCreates.map((artifact) => artifact.kind).sort(),
+    ["build_json", "preview_mbv4", "preview_svg", "viewer_world"],
+  );
+  const cubeManifestArtifact = artifactCreates.find((artifact) => artifact.kind === "viewer_world");
+  assert.equal(cubeManifestArtifact?.blockCount, 8192 ** 3);
+
+  updates.length = 0;
+  operations.length = 0;
+  artifactCreates.length = 0;
+  eventSeq = 0;
+  txSeq = 0;
+  currentCustomBuild = {
+    ...queuedCustomBuild,
+    gridSize: 8192,
+    promptText: "Build a local mixed line",
+  };
+  await runCustomBuildGenerateJob({
+    id: "world-mixed-job-row",
+    customBuildId,
+    type: "generate",
+    status: "running",
+    attempts: 1,
+    maxAttempts: 1,
+    payload: {
+      stubBuild: {
+        version: "1.0",
+        blocks: Array.from({ length: 64 }, (_, x) => ({
+          x,
+          y: 0,
+          z: 0,
+          type: x % 2 === 0 ? "stone" : "cobblestone",
+        })),
+      },
+    },
+  } as never);
+  const mixedManifestArtifact = artifactCreates.find((artifact) => artifact.kind === "viewer_world");
+  const mixedPartArtifact = artifactCreates.find((artifact) => artifact.kind === "world_part");
+  assert.ok(mixedManifestArtifact, "mixed worlds should record a viewer manifest");
+  assert.ok(mixedPartArtifact, "mixed worlds should record authorized part data");
+
+  const viewerResponse = await customBuildWorldViewerResponse({
+    request: new Request(`http://localhost:3000/api/generations/${publicId}/artifacts/viewer`),
+    artifact: mixedManifestArtifact as never,
+    buildId: publicId,
+    findPart: async () => null,
+    cacheControl: "private, no-store",
+  });
+  assert.equal(viewerResponse.status, 200);
+  const viewerBody = await viewerResponse.json() as {
+    voxelBuild: {
+      world: {
+        manifest: {
+          exactBlockCount: number;
+          regions?: Array<{ kind: string; data?: { key: string; kind: string } }>;
+        };
+        partBaseUrl: string;
+      };
+    };
+  };
+  assert.equal(viewerBody.voxelBuild.world.manifest.exactBlockCount, 64);
+  assert.equal(viewerBody.voxelBuild.world.partBaseUrl, `/api/generations/${publicId}/artifacts/viewer`);
+  const partKey = viewerBody.voxelBuild.world.manifest.regions?.[0]?.data?.key;
+  assert.equal(viewerBody.voxelBuild.world.manifest.regions?.[0]?.data?.kind, "opaque");
+  assert.ok(partKey, "delivered manifests should expose opaque part keys");
+
+  let requestedPart: { sourceBuildSha256: string; partKey: string } | null = null;
+  const partResponse = await customBuildWorldViewerResponse({
+    request: new Request(`http://localhost:3000/api/generations/${publicId}/artifacts/viewer?part=${partKey}`),
+    artifact: mixedManifestArtifact as never,
+    buildId: publicId,
+    findPart: async (sourceBuildSha256, requestedKey) => {
+      requestedPart = { sourceBuildSha256, partKey: requestedKey };
+      return artifactCreates.find((artifact) =>
+        artifact.kind === "world_part" &&
+        artifact.sourceBuildSha256 === voxelWorldPartSourceSha256(sourceBuildSha256, requestedKey)
+      ) as never ?? null;
+    },
+    cacheControl: "private, no-store",
+  });
+  assert.equal(partResponse.status, 200);
+  assert.deepEqual(requestedPart, {
+    sourceBuildSha256: mixedManifestArtifact.sourceBuildSha256,
+    partKey,
+  });
+  const partBytes = new Uint8Array(await partResponse.arrayBuffer());
+  assert.equal(partBytes[0], 0x1f, "world parts should remain gzip encoded for client-side inflation");
+  assert.equal(partBytes[1], 0x8b);
 
   updates.length = 0;
   operations.length = 0;

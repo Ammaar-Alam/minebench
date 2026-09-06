@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as vm from "node:vm";
 import { z } from "zod";
-import type { GridSize } from "@/lib/ai/limits";
+import { type GridSize, GRID_SIZES, isGridSize } from "@/lib/ai/limits";
 import type { PaletteMode } from "@/lib/ai/types";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
@@ -15,7 +15,7 @@ export const voxelExecToolCallSchema = z.object({
   tool: z.literal(VOXEL_EXEC_TOOL_NAME),
   input: z.object({
     code: z.string().min(1),
-    gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
+    gridSize: z.custom<GridSize>(isGridSize),
     palette: z.union([z.literal("simple"), z.literal("advanced")]),
     seed: z.number().int().optional(),
   }),
@@ -32,7 +32,7 @@ export function voxelExecToolCallJsonSchema() {
         type: "object",
         properties: {
           code: { type: "string", minLength: 1 },
-          gridSize: { type: "integer", enum: [64, 256, 512] },
+          gridSize: { type: "integer", enum: GRID_SIZES },
           palette: { type: "string", enum: ["simple", "advanced"] },
           seed: { type: "integer" },
         },

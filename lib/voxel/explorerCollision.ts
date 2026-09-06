@@ -1,3 +1,17 @@
+import { decodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
+import {
+  parseVoxelWorldManifest,
+  parseVoxelWorldRegionPage,
+  voxelWorldPartUrl,
+  type VoxelWorldBounds,
+  type VoxelWorldDelivery,
+  type VoxelWorldManifest,
+  type VoxelWorldMixedRegion,
+  type VoxelWorldPartRef,
+  type VoxelWorldRegion,
+  type VoxelWorldRegionPageRef,
+  type VoxelWorldUniformRegion,
+} from "@/lib/voxel/world";
 import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
@@ -8,9 +22,18 @@ export const EXPLORER_PLAYER_HEIGHT = 1.8;
 export const EXPLORER_EYE_HEIGHT = 1.62;
 
 const PLAYER_HALF_WIDTH = EXPLORER_PLAYER_WIDTH / 2;
-const MAX_COLLISION_AXIS = 512;
+const MAX_COLLISION_AXIS = 8192;
+// Local cells live in 8^3 chunk bitsets. At 8192 per axis the chunk key still
+// stays below 2^30, while empty space between distant blocks costs nothing.
+const COLLISION_CHUNK_BITS = 3;
+const COLLISION_CHUNK_SIZE = 1 << COLLISION_CHUNK_BITS;
+const COLLISION_CHUNK_MASK = COLLISION_CHUNK_SIZE - 1;
+const COLLISION_CHUNK_BYTES = (COLLISION_CHUNK_SIZE ** 3) / 8;
 const COLLISION_EPSILON = 1e-5;
 const YIELD_EVERY_BLOCKS = 262_144;
+const WORLD_LOAD_RADIUS = 96;
+const WORLD_SPAWN_LOAD_RADIUS = 8;
+const SPAWN_CLEARANCE = 0.2;
 
 export type ExplorerPosition = { x: number; y: number; z: number };
 export type ExplorerAxis = "x" | "y" | "z";
@@ -36,13 +59,40 @@ export function setExplorerMoveDirection(
 
 export type ExplorerCollisionWorld = {
   height: number;
+  spawnPosition: ExplorerPosition;
   collides: (position: ExplorerPosition) => boolean;
   isInWater: (position: ExplorerPosition) => boolean;
+  updateActiveCamera?: (position: ExplorerPosition) => Promise<void>;
 };
 
 type BuildProgress = {
   processedBlocks: number;
   totalBlocks: number;
+};
+
+type CellBounds = {
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxX: number;
+  maxY: number;
+  maxZ: number;
+};
+
+type WorldTransform = {
+  centerX: number;
+  centerZ: number;
+  originY: number;
+  width: number;
+  height: number;
+  depth: number;
+  bounds: CellBounds;
+};
+
+type LoadedMixedCollisionRegion = {
+  region: VoxelWorldMixedRegion;
+  solids: Uint8Array | null;
+  water: Uint8Array | null;
 };
 
 function throwIfAborted(signal?: AbortSignal) {
@@ -60,12 +110,415 @@ async function yieldToMainThread() {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+async function gunzipVoxelWorldPart(bytes: Uint8Array): Promise<Uint8Array> {
+  const DecompressionStreamCtor = (globalThis as typeof globalThis & {
+    DecompressionStream?: typeof DecompressionStream;
+  }).DecompressionStream;
+  if (typeof DecompressionStreamCtor !== "function") {
+    throw new Error("This browser cannot decompress voxel world parts");
+  }
+  const decompressor = new DecompressionStreamCtor("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  }).pipeThrough(decompressor);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+export async function readVoxelWorldPartBytes(
+  delivery: VoxelWorldDelivery,
+  ref: VoxelWorldPartRef,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
+  throwIfAborted(signal);
+  const encoded = delivery.resolvePart
+    ? await delivery.resolvePart(ref.key, signal)
+    : await (async () => {
+        const response = await fetch(voxelWorldPartUrl(delivery, ref.key), { signal });
+        if (!response.ok) throw new Error(`Voxel world part ${ref.key} failed to load`);
+        return new Uint8Array(await response.arrayBuffer());
+      })();
+  throwIfAborted(signal);
+  return ref.encoding === "gzip" ? gunzipVoxelWorldPart(encoded) : encoded;
+}
+
 function setBit(bits: Uint8Array, index: number) {
   bits[index >>> 3] |= 1 << (index & 7);
 }
 
 function hasBit(bits: Uint8Array | null, index: number): boolean {
   return Boolean(bits && (bits[index >>> 3] & (1 << (index & 7))));
+}
+
+function getChunk(chunks: Map<number, Uint8Array>, key: number): Uint8Array {
+  let chunk = chunks.get(key);
+  if (chunk) return chunk;
+  chunk = new Uint8Array(COLLISION_CHUNK_BYTES);
+  chunks.set(key, chunk);
+  return chunk;
+}
+
+function materialIsSolid(type: string): boolean {
+  return type !== "water" && type !== "lava";
+}
+
+function materialIsSpawnSurface(type: string): boolean {
+  return type !== "lava";
+}
+
+function worldTransformFromBounds(bounds: VoxelWorldBounds): WorldTransform {
+  return {
+    centerX: bounds.origin.x + bounds.size.x / 2,
+    centerZ: bounds.origin.z + bounds.size.z / 2,
+    originY: bounds.origin.y,
+    width: bounds.size.x,
+    height: bounds.size.y,
+    depth: bounds.size.z,
+    bounds: boundsToCellBounds(bounds),
+  };
+}
+
+function boundsToCellBounds(bounds: VoxelWorldBounds): CellBounds {
+  return {
+    minX: bounds.origin.x,
+    minY: bounds.origin.y,
+    minZ: bounds.origin.z,
+    maxX: bounds.origin.x + bounds.size.x - 1,
+    maxY: bounds.origin.y + bounds.size.y - 1,
+    maxZ: bounds.origin.z + bounds.size.z - 1,
+  };
+}
+
+function regionCellBounds(region: Pick<VoxelWorldRegion, "origin" | "size">): CellBounds {
+  return {
+    minX: region.origin.x,
+    minY: region.origin.y,
+    minZ: region.origin.z,
+    maxX: region.origin.x + region.size.x - 1,
+    maxY: region.origin.y + region.size.y - 1,
+    maxZ: region.origin.z + region.size.z - 1,
+  };
+}
+
+function intersectsBounds(a: CellBounds, b: CellBounds): boolean {
+  return a.minX <= b.maxX && a.maxX >= b.minX &&
+    a.minY <= b.maxY && a.maxY >= b.minY &&
+    a.minZ <= b.maxZ && a.maxZ >= b.minZ;
+}
+
+function containsColumn(bounds: CellBounds, x: number, z: number): boolean {
+  return x >= bounds.minX && x <= bounds.maxX && z >= bounds.minZ && z <= bounds.maxZ;
+}
+
+function playerCellBounds(transform: WorldTransform, position: ExplorerPosition): CellBounds {
+  const feetY = position.y - EXPLORER_EYE_HEIGHT;
+  return {
+    minX: Math.floor(position.x - PLAYER_HALF_WIDTH + transform.centerX + COLLISION_EPSILON),
+    maxX: Math.floor(position.x + PLAYER_HALF_WIDTH + transform.centerX - COLLISION_EPSILON),
+    minY: Math.floor(feetY + transform.originY + COLLISION_EPSILON),
+    maxY: Math.floor(feetY + EXPLORER_PLAYER_HEIGHT + transform.originY - COLLISION_EPSILON),
+    minZ: Math.floor(position.z - PLAYER_HALF_WIDTH + transform.centerZ + COLLISION_EPSILON),
+    maxZ: Math.floor(position.z + PLAYER_HALF_WIDTH + transform.centerZ - COLLISION_EPSILON),
+  };
+}
+
+function cameraRawCell(transform: WorldTransform, position: ExplorerPosition) {
+  return {
+    x: Math.floor(position.x + transform.centerX),
+    y: Math.floor(position.y + transform.originY - EXPLORER_EYE_HEIGHT),
+    z: Math.floor(position.z + transform.centerZ),
+  };
+}
+
+function loadBoundsAround(transform: WorldTransform, rawX: number, rawZ: number, radius: number): CellBounds {
+  return {
+    minX: rawX - radius,
+    maxX: rawX + radius,
+    minY: transform.bounds.minY,
+    maxY: transform.bounds.maxY,
+    minZ: rawZ - radius,
+    maxZ: rawZ + radius,
+  };
+}
+
+function mixedBitIndex(region: VoxelWorldMixedRegion, rawX: number, rawY: number, rawZ: number): number {
+  const x = rawX - region.origin.x;
+  const y = rawY - region.origin.y;
+  const z = rawZ - region.origin.z;
+  return x + region.size.x * (z + region.size.z * y);
+}
+
+function mixedIntersects(
+  loaded: LoadedMixedCollisionRegion,
+  cells: CellBounds,
+  layer: "solids" | "water",
+): boolean {
+  const bits = loaded[layer];
+  if (!bits) return false;
+  const regionBounds = regionCellBounds(loaded.region);
+  if (!intersectsBounds(regionBounds, cells)) return false;
+
+  const minX = Math.max(regionBounds.minX, cells.minX);
+  const maxX = Math.min(regionBounds.maxX, cells.maxX);
+  const minY = Math.max(regionBounds.minY, cells.minY);
+  const maxY = Math.min(regionBounds.maxY, cells.maxY);
+  const minZ = Math.max(regionBounds.minZ, cells.minZ);
+  const maxZ = Math.min(regionBounds.maxZ, cells.maxZ);
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let z = minZ; z <= maxZ; z += 1) {
+      for (let x = minX; x <= maxX; x += 1) {
+        if (hasBit(bits, mixedBitIndex(loaded.region, x, y, z))) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function buildLoadedMixedCollisionRegion(region: VoxelWorldMixedRegion, bytes: Uint8Array): LoadedMixedCollisionRegion {
+  const packed = decodeBinaryVoxelBuild(bytes);
+  if (packed.count !== region.blockCount) {
+    throw new Error(`Voxel world region ${region.key} block count mismatch`);
+  }
+
+  const cellCount = region.size.x * region.size.y * region.size.z;
+  const solids = new Uint8Array(Math.ceil(cellCount / 8));
+  const water = new Uint8Array(Math.ceil(cellCount / 8));
+  let hasSolids = false;
+  let hasWater = false;
+
+  for (let i = 0; i < packed.count; i += 1) {
+    const x = packed.positions[i * 3];
+    const y = packed.positions[i * 3 + 1];
+    const z = packed.positions[i * 3 + 2];
+    if (x >= region.size.x || y >= region.size.y || z >= region.size.z) {
+      throw new Error(`Voxel world region ${region.key} has out-of-bounds local blocks`);
+    }
+    const type = packed.typeNames[packed.typeIds[i]] ?? "";
+    const index = x + region.size.x * (z + region.size.z * y);
+    if (type === "water") {
+      setBit(water, index);
+      hasWater = true;
+    } else if (materialIsSolid(type)) {
+      setBit(solids, index);
+      hasSolids = true;
+    }
+  }
+
+  return {
+    region,
+    solids: hasSolids ? solids : null,
+    water: hasWater ? water : null,
+  };
+}
+
+async function createVoxelWorldCollisionWorld(
+  delivery: VoxelWorldDelivery,
+  opts?: {
+    signal?: AbortSignal;
+    onProgress?: (progress: BuildProgress) => void;
+  },
+): Promise<ExplorerCollisionWorld> {
+  const parsed = parseVoxelWorldManifest(delivery.manifest, {
+    allowLocalBlobRefs: Boolean(delivery.resolvePart),
+  });
+  if (!parsed.ok) throw new Error(parsed.error);
+  const manifest: VoxelWorldManifest = parsed.value;
+  if (manifest.exactBlockCount === 0 || !manifest.bounds) throw new Error("Build has no blocks");
+
+  const transform = worldTransformFromBounds(manifest.bounds);
+  const uniformRegions: VoxelWorldUniformRegion[] = [];
+  const uniformKeys = new Set<string>();
+  const mixedRegions = new Map<string, VoxelWorldMixedRegion>();
+  const loadedMixedRegions = new Map<string, LoadedMixedCollisionRegion>();
+  const loadingMixedRegions = new Map<string, Promise<void>>();
+  const failedMixedRegions = new Set<string>();
+  const pageRefs = manifest.regionPages ?? [];
+  const loadedPages = new Set<number>();
+  const loadingPages = new Map<number, Promise<void>>();
+  const failedPages = new Set<number>();
+
+  const addRegions = (regions: readonly VoxelWorldRegion[]) => {
+    for (const region of regions) {
+      if (region.kind === "uniform") {
+        if (uniformKeys.has(region.key)) continue;
+        uniformKeys.add(region.key);
+        uniformRegions.push(region);
+      } else if (!mixedRegions.has(region.key)) {
+        mixedRegions.set(region.key, region);
+      }
+    }
+  };
+
+  addRegions(manifest.regions ?? []);
+
+  const loadPage = (pageRef: VoxelWorldRegionPageRef): Promise<void> => {
+    if (loadedPages.has(pageRef.index) || failedPages.has(pageRef.index)) return Promise.resolve();
+    const existing = loadingPages.get(pageRef.index);
+    if (existing) return existing;
+    const promise = (async () => {
+      try {
+        const bytes = await readVoxelWorldPartBytes(delivery, pageRef.data, opts?.signal);
+        const decoded = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+        const page = parseVoxelWorldRegionPage(decoded, {
+          gridSize: manifest.gridSize,
+          worldBounds: manifest.bounds,
+          pageRef,
+          allowLocalBlobRefs: Boolean(delivery.resolvePart),
+        });
+        if (!page.ok) throw new Error(page.error);
+        addRegions(page.value.regions);
+        loadedPages.add(pageRef.index);
+      } catch (error) {
+        failedPages.add(pageRef.index);
+        throw error;
+      } finally {
+        loadingPages.delete(pageRef.index);
+      }
+    })();
+    loadingPages.set(pageRef.index, promise);
+    return promise;
+  };
+
+  const loadMixedRegion = (region: VoxelWorldMixedRegion): Promise<void> => {
+    if (loadedMixedRegions.has(region.key) || failedMixedRegions.has(region.key)) return Promise.resolve();
+    const existing = loadingMixedRegions.get(region.key);
+    if (existing) return existing;
+    const promise = (async () => {
+      try {
+        const bytes = await readVoxelWorldPartBytes(delivery, region.data, opts?.signal);
+        loadedMixedRegions.set(region.key, buildLoadedMixedCollisionRegion(region, bytes));
+      } catch (error) {
+        failedMixedRegions.add(region.key);
+        throw error;
+      } finally {
+        loadingMixedRegions.delete(region.key);
+      }
+    })();
+    loadingMixedRegions.set(region.key, promise);
+    return promise;
+  };
+
+  const loadNear = async (rawX: number, rawZ: number, radius: number) => {
+    throwIfAborted(opts?.signal);
+    const activeBounds = loadBoundsAround(transform, rawX, rawZ, radius);
+    const pageLoads: Promise<void>[] = [];
+    for (const pageRef of pageRefs) {
+      if (intersectsBounds(boundsToCellBounds(pageRef.bounds), activeBounds)) {
+        pageLoads.push(loadPage(pageRef));
+      }
+    }
+    await Promise.allSettled(pageLoads);
+
+    const mixedLoads: Promise<void>[] = [];
+    for (const region of mixedRegions.values()) {
+      if (intersectsBounds(regionCellBounds(region), activeBounds)) {
+        mixedLoads.push(loadMixedRegion(region));
+      }
+    }
+    await Promise.allSettled(mixedLoads);
+    throwIfAborted(opts?.signal);
+  };
+
+  const centerRawX = Math.floor(transform.centerX);
+  const centerRawZ = Math.floor(transform.centerZ);
+  await loadNear(centerRawX, centerRawZ, WORLD_SPAWN_LOAD_RADIUS);
+
+  const unloadedPageIntersects = (cells: CellBounds) => pageRefs.some((pageRef) => (
+    !loadedPages.has(pageRef.index) && intersectsBounds(boundsToCellBounds(pageRef.bounds), cells)
+  ));
+  const unloadedMixedIntersects = (cells: CellBounds) => {
+    for (const region of mixedRegions.values()) {
+      if (!loadedMixedRegions.has(region.key) && intersectsBounds(regionCellBounds(region), cells)) return true;
+    }
+    return false;
+  };
+
+  const highestTopAtColumn = (rawX: number, rawZ: number): number | null => {
+    let top: number | null = null;
+    for (const region of uniformRegions) {
+      if (!materialIsSpawnSurface(region.type)) continue;
+      const cells = regionCellBounds(region);
+      if (containsColumn(cells, rawX, rawZ)) {
+        top = Math.max(top ?? -Infinity, cells.maxY + 1 - transform.originY);
+      }
+    }
+    for (const loaded of loadedMixedRegions.values()) {
+      const cells = regionCellBounds(loaded.region);
+      if (!containsColumn(cells, rawX, rawZ)) continue;
+      for (let rawY = cells.maxY; rawY >= cells.minY; rawY -= 1) {
+        const index = mixedBitIndex(loaded.region, rawX, rawY, rawZ);
+        if (hasBit(loaded.solids, index) || hasBit(loaded.water, index)) {
+          top = Math.max(top ?? -Infinity, rawY + 1 - transform.originY);
+          break;
+        }
+      }
+    }
+    for (const region of mixedRegions.values()) {
+      if (loadedMixedRegions.has(region.key)) continue;
+      const cells = regionCellBounds(region);
+      if (containsColumn(cells, rawX, rawZ)) {
+        top = Math.max(top ?? -Infinity, cells.maxY + 1 - transform.originY);
+      }
+    }
+    for (const pageRef of pageRefs) {
+      if (loadedPages.has(pageRef.index)) continue;
+      const cells = boundsToCellBounds(pageRef.bounds);
+      if (containsColumn(cells, rawX, rawZ)) {
+        top = Math.max(top ?? -Infinity, cells.maxY + 1 - transform.originY);
+      }
+    }
+    return top;
+  };
+
+  const centerTop = highestTopAtColumn(centerRawX, centerRawZ);
+  const spawnPosition = {
+    x: 0,
+    y: (centerTop ?? 2) + EXPLORER_EYE_HEIGHT + SPAWN_CLEARANCE,
+    z: 0,
+  };
+  let activeLoad: Promise<void> | null = null;
+
+  opts?.onProgress?.({
+    processedBlocks: manifest.exactBlockCount,
+    totalBlocks: manifest.exactBlockCount,
+  });
+
+  return {
+    height: transform.height,
+    spawnPosition,
+    collides(position) {
+      const feetY = position.y - EXPLORER_EYE_HEIGHT;
+      if (feetY < -COLLISION_EPSILON) return true;
+      const cells = playerCellBounds(transform, position);
+      for (const region of uniformRegions) {
+        if (materialIsSolid(region.type) && intersectsBounds(regionCellBounds(region), cells)) return true;
+      }
+      for (const loaded of loadedMixedRegions.values()) {
+        if (mixedIntersects(loaded, cells, "solids")) return true;
+      }
+      return unloadedMixedIntersects(cells) || unloadedPageIntersects(cells);
+    },
+    isInWater(position) {
+      const cells = playerCellBounds(transform, position);
+      for (const region of uniformRegions) {
+        if (region.type === "water" && intersectsBounds(regionCellBounds(region), cells)) return true;
+      }
+      for (const loaded of loadedMixedRegions.values()) {
+        if (mixedIntersects(loaded, cells, "water")) return true;
+      }
+      return false;
+    },
+    async updateActiveCamera(position) {
+      if (activeLoad) return activeLoad;
+      const raw = cameraRawCell(transform, position);
+      activeLoad = loadNear(raw.x, raw.z, WORLD_LOAD_RADIUS).finally(() => {
+        activeLoad = null;
+      });
+      return activeLoad;
+    },
+  };
 }
 
 export async function createExplorerCollisionWorld(
@@ -75,6 +528,8 @@ export async function createExplorerCollisionWorld(
     onProgress?: (progress: BuildProgress) => void;
   },
 ): Promise<ExplorerCollisionWorld> {
+  if (build.world) return createVoxelWorldCollisionWorld(build.world, opts);
+
   const blockCount = voxelBuildBlockCount(build);
   if (blockCount === 0) throw new Error("Build has no blocks");
 
@@ -127,20 +582,29 @@ export async function createExplorerCollisionWorld(
     throw new Error("Build collision bounds exceed the supported grid");
   }
 
-  const cellCount = width * height * depth;
-  const byteCount = Math.ceil(cellCount / 8);
-  const solids = new Uint8Array(byteCount);
-  const water = hasWaterBlocks ? new Uint8Array(byteCount) : null;
+  const chunkCountX = Math.ceil(width / COLLISION_CHUNK_SIZE);
+  const chunkCountZ = Math.ceil(depth / COLLISION_CHUNK_SIZE);
+  const solids = new Map<number, Uint8Array>();
+  const water = hasWaterBlocks ? new Map<number, Uint8Array>() : null;
+  const chunkKey = (x: number, y: number, z: number) =>
+    (x >> COLLISION_CHUNK_BITS) +
+    chunkCountX * ((z >> COLLISION_CHUNK_BITS) + chunkCountZ * (y >> COLLISION_CHUNK_BITS));
+  const cellBit = (x: number, y: number, z: number) =>
+    (x & COLLISION_CHUNK_MASK) +
+    COLLISION_CHUNK_SIZE *
+      ((z & COLLISION_CHUNK_MASK) + COLLISION_CHUNK_SIZE * (y & COLLISION_CHUNK_MASK));
 
   for (let i = 0; i < blockCount; i += 1) {
     const block = packed ? null : build.blocks[i];
-    const x = (packed ? packed.positions[i * 3] : block?.x) as number;
-    const y = (packed ? packed.positions[i * 3 + 1] : block?.y) as number;
-    const z = (packed ? packed.positions[i * 3 + 2] : block?.z) as number;
-    const type = packed ? packed.typeNames[packed.typeIds[i]] : block?.type;
-    const index = x - minX + width * (z - minZ + depth * (y - minY));
-    if (type === "water") setBit(water as Uint8Array, index);
-    else if (type !== "lava") setBit(solids, index);
+    const x = (packed ? packed.positions[i * 3] : block!.x) - minX;
+    const y = (packed ? packed.positions[i * 3 + 1] : block!.y) - minY;
+    const z = (packed ? packed.positions[i * 3 + 2] : block!.z) - minZ;
+    const type = packed ? packed.typeNames[packed.typeIds[i]] : block!.type;
+    if (type === "water" && water) {
+      setBit(getChunk(water, chunkKey(x, y, z)), cellBit(x, y, z));
+    } else if (type !== "lava") {
+      setBit(getChunk(solids, chunkKey(x, y, z)), cellBit(x, y, z));
+    }
 
     if ((i + 1) % YIELD_EVERY_BLOCKS === 0) {
       opts?.onProgress?.({
@@ -154,11 +618,13 @@ export async function createExplorerCollisionWorld(
   throwIfAborted(opts?.signal);
   opts?.onProgress?.({ processedBlocks: blockCount * 2, totalBlocks: blockCount * 2 });
 
+  // Meshes are centered on X/Z and shifted to minY, so collision and spawn use
+  // the same local world instead of raw build coordinates.
   const worldMinX = -width / 2;
   const worldMinZ = -depth / 2;
 
-  const intersects = (position: ExplorerPosition, bits: Uint8Array | null): boolean => {
-    if (!bits) return false;
+  const intersects = (position: ExplorerPosition, chunks: Map<number, Uint8Array> | null): boolean => {
+    if (!chunks) return false;
     const feetY = position.y - EXPLORER_EYE_HEIGHT;
     const minCellX = Math.floor(position.x - PLAYER_HALF_WIDTH - worldMinX + COLLISION_EPSILON);
     const maxCellX = Math.floor(position.x + PLAYER_HALF_WIDTH - worldMinX - COLLISION_EPSILON);
@@ -178,15 +644,33 @@ export async function createExplorerCollisionWorld(
     for (let y = Math.max(0, minCellY); y <= Math.min(height - 1, maxCellY); y += 1) {
       for (let z = Math.max(0, minCellZ); z <= Math.min(depth - 1, maxCellZ); z += 1) {
         for (let x = Math.max(0, minCellX); x <= Math.min(width - 1, maxCellX); x += 1) {
-          if (hasBit(bits, x + width * (z + depth * y))) return true;
+          if (hasBit(chunks.get(chunkKey(x, y, z)) ?? null, cellBit(x, y, z))) return true;
         }
       }
     }
     return false;
   };
 
+  const topAtCenterColumn = () => {
+    const x = Math.floor(-worldMinX);
+    const z = Math.floor(-worldMinZ);
+    if (x < 0 || x >= width || z < 0 || z >= depth) return null;
+    for (let y = height - 1; y >= 0; y -= 1) {
+      const key = chunkKey(x, y, z);
+      const bit = cellBit(x, y, z);
+      if (hasBit(solids.get(key) ?? null, bit) || hasBit(water?.get(key) ?? null, bit)) return y + 1;
+    }
+    return null;
+  };
+  const centerTop = topAtCenterColumn();
+
   return {
     height,
+    spawnPosition: {
+      x: 0,
+      y: (centerTop ?? 2) + EXPLORER_EYE_HEIGHT + SPAWN_CLEARANCE,
+      z: 0,
+    },
     collides(position) {
       const feetY = position.y - EXPLORER_EYE_HEIGHT;
       return feetY < -COLLISION_EPSILON || intersects(position, solids);

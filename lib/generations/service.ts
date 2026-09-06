@@ -1,3 +1,4 @@
+import { type GridSize } from "@/lib/ai/limits";
 import { randomUUID } from "node:crypto";
 import { Prisma, type CustomBuildArtifactKind } from "@prisma/client";
 import {
@@ -13,10 +14,12 @@ import { isProviderApiKeyName } from "@/lib/ai/providerKeys";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import { sha256Hex } from "@/lib/custom-builds/hash";
 import { generateCustomBuildPublicId } from "@/lib/custom-builds/ids";
+import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-builds/numericMetadata";
 import { safeCustomBuildRetryReason } from "@/lib/custom-builds/sanitize";
 import { encryptProviderKey, encryptSecretValue } from "@/lib/custom-builds/secrets";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
+import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
 import { resolveSavedGenerationModel } from "@/lib/generations/model";
 import { prisma } from "@/lib/prisma";
 import {
@@ -53,7 +56,7 @@ export class GenerationServiceError extends Error {
 export type CreateSavedGenerationsInput = {
   ownerId: string;
   prompt: string;
-  gridSize: 64 | 256 | 512;
+  gridSize: GridSize;
   palette: PaletteMode;
   models: GenerateModelRequest[];
   providerKeys: ProviderApiKeys;
@@ -126,11 +129,13 @@ function serializeGeneration(row: GenerationRow) {
   const artifactKinds = new Set(row.artifacts.map((artifact) => artifact.kind));
   const artifactsAvailable = row.status === "succeeded";
   const progress = readGenerationProgress(row.progress);
-  const viewerKind = artifactKinds.has("viewer_mbf1")
-    ? "viewer_mbf1"
-    : artifactKinds.has("viewer_mbv4")
-      ? "viewer_mbv4"
-      : null;
+  const viewerKind = artifactKinds.has("viewer_world")
+    ? "viewer_world"
+    : artifactKinds.has("viewer_mbf1")
+      ? "viewer_mbf1"
+      : artifactKinds.has("viewer_mbv4")
+        ? "viewer_mbv4"
+        : null;
   return {
     id: row.publicId,
     createdAt: row.createdAt.toISOString(),
@@ -156,12 +161,12 @@ function serializeGeneration(row: GenerationRow) {
           ? "openrouter"
           : "direct",
     },
-    blockCount: row.blockCount,
+    blockCount: customBuildJsonNumber(row.blockCount, "CustomBuild.blockCount"),
     generationTimeMs: row.generationTimeMs,
     warnings: Array.isArray(row.warnings) ? row.warnings.filter((value): value is string => typeof value === "string") : [],
-    expandedBytes: row.buildByteSize,
-    canonicalStoredBytes: row.buildCompressedByteSize,
-    storedBytes: row.storedByteSize,
+    expandedBytes: customBuildJsonNumber(row.buildByteSize, "CustomBuild.buildByteSize"),
+    canonicalStoredBytes: customBuildJsonNumber(row.buildCompressedByteSize, "CustomBuild.buildCompressedByteSize"),
+    storedBytes: customBuildJsonNumber(row.storedByteSize, "CustomBuild.storedByteSize"),
     sha256: row.buildSha256,
     error: row.errorCode
       ? {
@@ -199,7 +204,7 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
     },
     _sum: { storedByteSize: true },
   });
-  if ((retained._sum.storedByteSize ?? 0) >= STORAGE_FAILSAFE_BYTES) {
+  if (customBuildStorageBigInt(retained._sum.storedByteSize) >= BigInt(STORAGE_FAILSAFE_BYTES)) {
     throw new GenerationServiceError(
       "storage_failsafe",
       "Remove a saved generation before starting another.",
@@ -826,6 +831,31 @@ export async function getOwnedGenerationArtifact(
       encoding: true,
       fileName: true,
       sha256: true,
+      sourceBuildSha256: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function getOwnedGenerationWorldPart(
+  ownerId: string,
+  publicId: string,
+  sourceBuildSha256: string,
+  partKey: string,
+) {
+  return prisma.customBuildArtifact.findFirst({
+    where: {
+      kind: "world_part",
+      sourceBuildSha256: voxelWorldPartSourceSha256(sourceBuildSha256, partKey),
+      customBuild: { publicId, ownerId, removedAt: null, status: "succeeded" },
+    },
+    select: {
+      bucket: true,
+      path: true,
+      contentType: true,
+      encoding: true,
+      sha256: true,
+      sourceBuildSha256: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -950,7 +980,7 @@ export async function removeSavedGeneration(
       await tx.customBuild.update({
         where: { id: build.id },
         data: {
-          storedByteSize: remaining._sum.storedByteSize ?? 0,
+          storedByteSize: customBuildStorageBigInt(remaining._sum.storedByteSize),
           objectsDeletedAt: remaining._count === 0 ? new Date() : null,
           deletionPendingAt: remaining._count === 0 ? null : new Date(),
           deletionError: remaining._count === 0 ? null : "Artifact cleanup pending.",

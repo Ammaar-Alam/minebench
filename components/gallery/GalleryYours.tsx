@@ -1,5 +1,6 @@
 "use client";
 
+import { isGridSize } from "@/lib/ai/limits";
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -291,7 +292,7 @@ export function SavedBuildDialog({
             title={generation.model.label}
             voxelBuild={build}
             expectedBlockCount={generation.blockCount ?? undefined}
-            gridSize={generation.gridSize === 64 || generation.gridSize === 512 ? generation.gridSize : 256}
+            gridSize={isGridSize(generation.gridSize) ? generation.gridSize : 256}
             palette={generation.palette === "advanced" ? "advanced" : "simple"}
             isLoading={loading}
             error={error ?? undefined}

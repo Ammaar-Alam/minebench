@@ -1,5 +1,6 @@
 "use client";
 
+import { isGridSize } from "@/lib/ai/limits";
 import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -403,7 +404,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         voxelBuild={build}
         expectedBlockCount={example.blockCount ?? undefined}
         jsonBytes={example.jsonBytes}
-        gridSize={example.gridSize === 64 || example.gridSize === 512 ? example.gridSize : 256}
+        gridSize={isGridSize(example.gridSize) ? example.gridSize : 256}
         palette={example.palette}
         isLoading={loading}
         error={state?.error ?? undefined}

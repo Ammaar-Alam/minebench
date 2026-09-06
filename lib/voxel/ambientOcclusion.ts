@@ -1,4 +1,9 @@
 import type { Face } from "@/lib/blocks/textures";
+import {
+  encodeVoxelPositionKey,
+  hashVoxelPositionKey,
+  MAX_VOXEL_COORDINATE,
+} from "@/lib/voxel/coordinateKeys";
 
 export type CornerOffset = {
   readonly sideA: readonly [number, number, number];
@@ -147,38 +152,120 @@ export const DIRS: readonly Direction[] = [
   },
 ];
 
-const EMPTY_SLOT = 0xffffffff;
+const EMPTY_SLOT = -1;
+const SMALL_COORDINATE_MAX = 1023;
+const SMALL_EMPTY_SLOT = 0xffffffff;
+
+function areTableCoordinatesInRange(x: number, y: number, z: number): boolean {
+  // Mesh inputs are validated integers; keep the hot neighbor path to bounds checks.
+  return (
+    x >= 0 &&
+    x <= MAX_VOXEL_COORDINATE &&
+    y >= 0 &&
+    y <= MAX_VOXEL_COORDINATE &&
+    z >= 0 &&
+    z <= MAX_VOXEL_COORDINATE
+  );
+}
+
+function areSmallTableCoordinates(x: number, y: number, z: number): boolean {
+  return x <= SMALL_COORDINATE_MAX && y <= SMALL_COORDINATE_MAX && z <= SMALL_COORDINATE_MAX;
+}
+
+function encodeSmallPositionKey(x: number, y: number, z: number): number {
+  return ((x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20)) >>> 0;
+}
+
+function decodeSmallPositionKey(value: number): [number, number, number] {
+  return [value & 1023, (value >>> 10) & 1023, (value >>> 20) & 1023];
+}
 
 export class SpatialBlockTable {
-  private readonly keys: Uint32Array;
-  private readonly values: Uint16Array;
+  private smallKeys: Uint32Array | null;
+  private wideKeys: Float64Array | null;
+  private values: Uint16Array;
   private readonly mask: number;
 
   constructor(capacity: number) {
     const minCap = Math.max(64, Math.ceil(Math.max(1, capacity) / 0.7));
     const size = 1 << Math.ceil(Math.log2(minCap));
     this.mask = size - 1;
-    this.keys = new Uint32Array(size);
-    this.keys.fill(EMPTY_SLOT);
+    this.smallKeys = new Uint32Array(size);
+    this.smallKeys.fill(SMALL_EMPTY_SLOT);
+    this.wideKeys = null;
     this.values = new Uint16Array(size);
   }
 
+  private upgradeToWideKeys(): void {
+    if (this.wideKeys) return;
+
+    const oldKeys = this.smallKeys;
+    const oldValues = this.values;
+    const wideKeys = new Float64Array(oldValues.length);
+    const values = new Uint16Array(oldValues.length);
+    wideKeys.fill(EMPTY_SLOT);
+    if (oldKeys) {
+      for (let oldIndex = 0; oldIndex < oldKeys.length; oldIndex += 1) {
+        const oldKey = oldKeys[oldIndex];
+        if (oldKey === SMALL_EMPTY_SLOT) continue;
+        const [x, y, z] = decodeSmallPositionKey(oldKey);
+        const key = encodeVoxelPositionKey(x, y, z);
+        let index = hashVoxelPositionKey(x, y, z) & this.mask;
+        while (wideKeys[index] !== EMPTY_SLOT) {
+          index = (index + 1) & this.mask;
+        }
+        wideKeys[index] = key;
+        values[index] = oldValues[oldIndex];
+      }
+    }
+    this.smallKeys = null;
+    this.wideKeys = wideKeys;
+    this.values = values;
+  }
+
   set(x: number, y: number, z: number, typeId: number): void {
-    const key = ((x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20)) >>> 0;
-    let index = (Math.imul(key, 0x9e3779b9) >>> 0) & this.mask;
-    while (this.keys[index] !== EMPTY_SLOT && this.keys[index] !== key) {
+    if (!areTableCoordinatesInRange(x, y, z)) return;
+    if (this.smallKeys && areSmallTableCoordinates(x, y, z)) {
+      const key = encodeSmallPositionKey(x, y, z);
+      let index = (Math.imul(key, 0x9e3779b9) >>> 0) & this.mask;
+      while (this.smallKeys[index] !== SMALL_EMPTY_SLOT && this.smallKeys[index] !== key) {
+        index = (index + 1) & this.mask;
+      }
+      this.smallKeys[index] = key;
+      this.values[index] = typeId;
+      return;
+    }
+
+    this.upgradeToWideKeys();
+    const key = encodeVoxelPositionKey(x, y, z);
+    let index = hashVoxelPositionKey(x, y, z) & this.mask;
+    const keys = this.wideKeys!;
+    while (keys[index] !== EMPTY_SLOT && keys[index] !== key) {
       index = (index + 1) & this.mask;
     }
-    this.keys[index] = key;
+    keys[index] = key;
     this.values[index] = typeId;
   }
 
   get(x: number, y: number, z: number): number {
-    if (x < 0 || y < 0 || z < 0 || x > 1023 || y > 1023 || z > 1023) return -1;
-    const key = ((x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20)) >>> 0;
-    let index = (Math.imul(key, 0x9e3779b9) >>> 0) & this.mask;
+    if (!areTableCoordinatesInRange(x, y, z)) return -1;
+    if (this.smallKeys) {
+      if (!areSmallTableCoordinates(x, y, z)) return -1;
+      const key = encodeSmallPositionKey(x, y, z);
+      let index = (Math.imul(key, 0x9e3779b9) >>> 0) & this.mask;
+      while (true) {
+        const stored = this.smallKeys[index];
+        if (stored === SMALL_EMPTY_SLOT) return -1;
+        if (stored === key) return this.values[index];
+        index = (index + 1) & this.mask;
+      }
+    }
+
+    const key = encodeVoxelPositionKey(x, y, z);
+    let index = hashVoxelPositionKey(x, y, z) & this.mask;
+    const keys = this.wideKeys!;
     while (true) {
-      const stored = this.keys[index];
+      const stored = keys[index];
       if (stored === EMPTY_SLOT) return -1;
       if (stored === key) return this.values[index];
       index = (index + 1) & this.mask;

@@ -1,3 +1,4 @@
+import { isGridSize, type GridSize } from "@/lib/ai/limits";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
@@ -69,7 +70,7 @@ const modelRequestSchema = z.union([
 
 const reqSchema = z.object({
   prompt: z.string().min(1).max(800),
-  gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
+  gridSize: z.custom<GridSize>(isGridSize),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8).optional(),
   models: z.array(modelRequestSchema).min(1).max(8).optional(),

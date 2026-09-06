@@ -22,6 +22,11 @@ import {
 } from "@/lib/voxel/meshBuckets";
 import { getCachedMeshPayload, setCachedMeshPayload } from "@/lib/voxel/meshPayloadCache";
 import {
+  packVoxelPlaneCell,
+  unpackVoxelPlaneCellU,
+  unpackVoxelPlaneCellV,
+} from "@/lib/voxel/coordinateKeys";
+import {
   canBlockEmitAnyFace,
   computeFaceAO,
   DIRS,
@@ -185,37 +190,7 @@ type PreparedMeshData = {
   cz: number;
 };
 
-const POSITION_BITS = 10;
-const POSITION_MASK = (1 << POSITION_BITS) - 1;
 const WATER_BLOCK_ID = "water";
-
-function encodePosition(x: number, y: number, z: number): number {
-  return x | (y << POSITION_BITS) | (z << (POSITION_BITS * 2));
-}
-
-function decodePositionX(value: number): number {
-  return value & POSITION_MASK;
-}
-
-function decodePositionY(value: number): number {
-  return (value >> POSITION_BITS) & POSITION_MASK;
-}
-
-function decodePositionZ(value: number): number {
-  return (value >> (POSITION_BITS * 2)) & POSITION_MASK;
-}
-
-function packPlaneCell(u: number, v: number): number {
-  return u | (v << POSITION_BITS);
-}
-
-function unpackPlaneCellU(value: number): number {
-  return value & POSITION_MASK;
-}
-
-function unpackPlaneCellV(value: number): number {
-  return value >> POSITION_BITS;
-}
 
 function srgbByteToLinear(byte: number): number {
   const s = Math.min(1, Math.max(0, byte / 255));
@@ -672,22 +647,22 @@ function collectWaterPlanes(prepared: PreparedMeshData) {
 
       switch (d.face) {
         case "east":
-          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "west":
-          getOrCreatePlane(planes, d.face, block.x).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "north":
-          getOrCreatePlane(planes, d.face, block.z).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "south":
-          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "up":
-          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
         case "down":
-          getOrCreatePlane(planes, d.face, block.y).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
       }
     }
@@ -792,8 +767,8 @@ function appendMergedPlaneFaces(
   let maxV = -Infinity;
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell);
-    const v = unpackPlaneCellV(cell);
+    const u = unpackVoxelPlaneCellU(cell);
+    const v = unpackVoxelPlaneCellV(cell);
     minU = Math.min(minU, u);
     minV = Math.min(minV, v);
     maxU = Math.max(maxU, u);
@@ -807,8 +782,8 @@ function appendMergedPlaneFaces(
   const mask = new Uint8Array(width * height);
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell) - minU;
-    const v = unpackPlaneCellV(cell) - minV;
+    const u = unpackVoxelPlaneCellU(cell) - minU;
+    const v = unpackVoxelPlaneCellV(cell) - minV;
     mask[v * width + u] = 1;
   }
 
@@ -883,22 +858,22 @@ async function buildWaterSurfaceBucketAsync(
 
       switch (d.face) {
         case "east":
-          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x + 1).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "west":
-          getOrCreatePlane(planes, d.face, block.x).cells.add(packPlaneCell(block.y, block.z));
+          getOrCreatePlane(planes, d.face, block.x).cells.add(packVoxelPlaneCell(block.y, block.z));
           break;
         case "north":
-          getOrCreatePlane(planes, d.face, block.z).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "south":
-          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packPlaneCell(block.x, block.y));
+          getOrCreatePlane(planes, d.face, block.z + 1).cells.add(packVoxelPlaneCell(block.x, block.y));
           break;
         case "up":
-          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y + 1).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
         case "down":
-          getOrCreatePlane(planes, d.face, block.y).cells.add(packPlaneCell(block.x, block.z));
+          getOrCreatePlane(planes, d.face, block.y).cells.add(packVoxelPlaneCell(block.x, block.z));
           break;
       }
     }

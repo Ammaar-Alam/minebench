@@ -14,7 +14,10 @@ import type { CustomBuildArtifactKind, CustomBuildStorageEncoding } from "@/lib/
 import { decodeStoredBuildText } from "@/lib/storage/buildPayload";
 import type { VoxelBuild } from "@/lib/voxel/types";
 
-export { writeCanonicalBuildArtifact } from "@/lib/voxel/canonicalArtifact";
+export {
+  writeCanonicalBuildArtifact,
+  writeVoxelBuildSourceArtifact,
+} from "@/lib/voxel/canonicalArtifact";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -130,6 +133,10 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
             ? `${args.publicId}.mbv4.gz`
             : args.kind === "viewer_mbf1"
               ? `${args.publicId}.mbf1.gz`
+              : args.kind === "viewer_world"
+                ? `${args.publicId}.world.json`
+                : args.kind === "world_part"
+                  ? `${args.publicId}-world-part.gz`
               : args.kind === "preview_svg"
                 ? `${args.publicId}-preview.svg`
         : `${args.publicId}.${descriptor.fileExtension}`;
@@ -211,6 +218,8 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     "preview_mbv4",
     "viewer_mbv4",
     "viewer_mbf1",
+    "viewer_world",
+    "world_part",
     "preview_svg",
   ].includes(args.kind);
   if (generationArtifact) {

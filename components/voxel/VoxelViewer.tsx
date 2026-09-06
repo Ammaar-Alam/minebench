@@ -17,6 +17,7 @@ import {
   voxelBuildBlocksRef,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
+import { createVoxelWorldScene, isVoxelWorldScene } from "@/lib/voxel/worldScene";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
 import {
   fitDistanceToRotatingBounds,
@@ -720,35 +721,53 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       if (!sameIdentity(identityRef.current, incomingIdentity)) return;
       if (!buildSnapshot) return;
 
-      const vg = await createVoxelGroupAsync(buildSnapshot, paletteSnapshot, tex, {
-        signal: controller.signal,
-        blockLimit,
-        cacheKey: meshCacheKeySnapshot,
-        premeshedPayloadPromise,
-        onPremeshedPayloadConsumed: latest.onPremeshedPayloadConsumed ?? undefined,
-        yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
-        onStage(event) {
-          meshStrategy = event.strategy;
-          if (event.cacheStatus) meshCacheStatus = event.cacheStatus;
-          if (event.stage === "mesh_started") {
-            if (!meshStarted) {
-              meshStarted = true;
-              buildTrace.mark("mesh_started");
+      const progress = (progress: VoxelViewerBuildProgress) => {
+        onBuildProgressChangeRef.current?.({
+          processedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
+          totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
+          stageLabel: progress.stageLabel ?? "Placing blocks",
+        });
+      };
+      let vg: VoxelGroup;
+      if (buildSnapshot.world) {
+        meshStarted = true;
+        meshStrategy = "worker";
+        meshCacheStatus = "disabled";
+        buildTrace.mark("mesh_started");
+        vg = await createVoxelWorldScene(buildSnapshot.world, paletteSnapshot, tex, {
+          signal: controller.signal,
+          yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
+          onChange: () => requestRenderRef.current?.(),
+          onError: (message) => onBuildErrorChangeRef.current?.(message),
+          onProgress: progress,
+        });
+        buildTrace.mark("mesh_payload_complete");
+        buildTrace.mark("three_group_complete");
+      } else {
+        vg = await createVoxelGroupAsync(buildSnapshot, paletteSnapshot, tex, {
+          signal: controller.signal,
+          blockLimit,
+          cacheKey: meshCacheKeySnapshot,
+          premeshedPayloadPromise,
+          onPremeshedPayloadConsumed: latest.onPremeshedPayloadConsumed ?? undefined,
+          yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
+          onStage(event) {
+            meshStrategy = event.strategy;
+            if (event.cacheStatus) meshCacheStatus = event.cacheStatus;
+            if (event.stage === "mesh_started") {
+              if (!meshStarted) {
+                meshStarted = true;
+                buildTrace.mark("mesh_started");
+              }
+            } else if (event.stage === "mesh_payload_complete") {
+              buildTrace.mark("mesh_payload_complete");
+            } else {
+              buildTrace.mark("three_group_complete");
             }
-          } else if (event.stage === "mesh_payload_complete") {
-            buildTrace.mark("mesh_payload_complete");
-          } else {
-            buildTrace.mark("three_group_complete");
-          }
-        },
-        onProgress(progress) {
-          onBuildProgressChangeRef.current?.({
-            processedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
-            totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
-            stageLabel: progress.stageLabel ?? "Placing blocks",
-          });
-        },
-      });
+          },
+          onProgress: progress,
+        });
+      }
 
       if (controller.signal.aborted) {
         vg.dispose();
@@ -1177,8 +1196,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const controlsChanged = (controls.update() as boolean | void) === true;
 
         const vg = voxelGroupRef.current;
+        const worldScene = isVoxelWorldScene(vg) ? vg : null;
+        worldScene?.updateFocus(controls.target);
         const shouldAutoRotate = Boolean(
-          vg && autoRotateRef.current && !userInteractingRef.current,
+          vg && !worldScene && autoRotateRef.current && !userInteractingRef.current,
         );
         if (vg && shouldAutoRotate) {
           vg.group.rotation.y += dt * 0.25;

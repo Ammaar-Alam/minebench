@@ -1,9 +1,14 @@
+import { isGridSize, type GridSize } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
+import {
+  createLocalVoxelWorld,
+  type LocalVoxelWorldOwnership,
+} from "@/lib/voxel/localWorld";
+import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 
-type GridSize = 64 | 256 | 512;
 type Palette = "simple" | "advanced";
 type ParseSource = "build-json" | "tool-call";
 
@@ -39,12 +44,13 @@ type ProgressMessage = {
 type CompleteMessage = {
   type: "complete";
   requestId: number;
-  voxelBuild: VoxelBuild;
+  voxelBuild: RenderableVoxelBuild;
   warnings: string[];
   receivedBlocks: number;
   totalBlocks: number | null;
   source: ParseSource;
   resolved: ResolvedSettings;
+  localWorld?: LocalVoxelWorldOwnership;
 };
 
 type ErrorMessage = {
@@ -60,6 +66,7 @@ const EMIT_BLOCK_THRESHOLD = 6_000;
 const CANCELLED_ERROR = "__cancelled__";
 
 let activeRequestId = -1;
+let activeAbortController: AbortController | null = null;
 
 function isCancelled(requestId: number): boolean {
   return activeRequestId !== requestId;
@@ -162,7 +169,7 @@ function parseToolCallInput(value: unknown): ToolCallInput | null {
 
   const input = obj.input as { code?: unknown; gridSize?: unknown; palette?: unknown; seed?: unknown };
   if (typeof input.code !== "string" || input.code.trim().length === 0) return null;
-  if (input.gridSize !== 64 && input.gridSize !== 256 && input.gridSize !== 512) return null;
+  if (!isGridSize(input.gridSize)) return null;
   if (input.palette !== "simple" && input.palette !== "advanced") return null;
   if (input.seed != null && (!Number.isInteger(input.seed) || !Number.isFinite(input.seed))) return null;
 
@@ -408,6 +415,9 @@ function streamBlocksFromText(
 }
 
 async function runParse(request: ParseRequest) {
+  activeAbortController?.abort();
+  const abortController = new AbortController();
+  activeAbortController = abortController;
   activeRequestId = request.requestId;
 
   const raw = trimOuterWhitespace(request.rawText);
@@ -418,6 +428,9 @@ async function runParse(request: ParseRequest) {
       message: "Paste a JSON object first.",
     };
     postMessage(message satisfies WorkerResponse);
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
     return;
   }
 
@@ -434,7 +447,7 @@ async function runParse(request: ParseRequest) {
     let resolvedPalette: Palette = request.palette;
     const sourceWarnings: string[] = [];
 
-    const streamed = streamBlocksFromText(request, postProgress);
+    const streamed = request.gridSize > 512 ? null : streamBlocksFromText(request, postProgress);
     // If we didn't manage to extract any blocks, fall back to full JSON extraction so we can
     // handle builds that rely on `boxes`/`lines` primitives (or non-standard block encodings).
     if (streamed && streamed.blocks.length > 0) {
@@ -466,6 +479,37 @@ async function runParse(request: ParseRequest) {
         resolvedPalette = toolCall.palette;
         sourceWarnings.push(...executed.warnings);
 
+        if (resolvedGridSize > 512) {
+          const world = await createLocalVoxelWorld(executed.build, {
+            gridSize: resolvedGridSize,
+            palette: resolvedPalette,
+            signal: abortController.signal,
+          });
+          if (isCancelled(request.requestId)) {
+            throw new Error(CANCELLED_ERROR);
+          }
+
+          const complete: CompleteMessage = {
+            type: "complete",
+            requestId: request.requestId,
+            voxelBuild: world.build,
+            warnings: sourceWarnings.concat(world.warnings),
+            receivedBlocks: world.blockCount,
+            totalBlocks: world.blockCount,
+            source,
+            resolved: {
+              gridSize: resolvedGridSize,
+              palette: resolvedPalette,
+            },
+            localWorld: {
+              worldId: world.worldId,
+              partKeys: world.partKeys,
+            },
+          };
+          postMessage(complete satisfies WorkerResponse);
+          return;
+        }
+
         const validatedTool = validateVoxelBuild(executed.build, {
           gridSize: resolvedGridSize,
           palette: getPalette(resolvedPalette),
@@ -495,6 +539,37 @@ async function runParse(request: ParseRequest) {
 
       if (!extracted) {
         throw new Error("Could not find a valid JSON object. Paste the raw JSON if possible.");
+      }
+
+      if (resolvedGridSize > 512) {
+        const world = await createLocalVoxelWorld(extracted, {
+          gridSize: resolvedGridSize,
+          palette: resolvedPalette,
+          signal: abortController.signal,
+        });
+        if (isCancelled(request.requestId)) {
+          throw new Error(CANCELLED_ERROR);
+        }
+
+        const complete: CompleteMessage = {
+          type: "complete",
+          requestId: request.requestId,
+          voxelBuild: world.build,
+          warnings: world.warnings,
+          receivedBlocks: world.blockCount,
+          totalBlocks: world.blockCount,
+          source,
+          resolved: {
+            gridSize: resolvedGridSize,
+            palette: resolvedPalette,
+          },
+          localWorld: {
+            worldId: world.worldId,
+            partKeys: world.partKeys,
+          },
+        };
+        postMessage(complete satisfies WorkerResponse);
+        return;
       }
 
       const validatedDirect = validateVoxelBuild(extracted, {
@@ -567,6 +642,10 @@ async function runParse(request: ParseRequest) {
       message: err instanceof Error ? err.message : "Failed to parse build",
     };
     postMessage(message satisfies WorkerResponse);
+  } finally {
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
   }
 }
 
@@ -577,6 +656,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   if (message.type === "cancel") {
     if (message.requestId == null || message.requestId === activeRequestId) {
       activeRequestId = -1;
+      activeAbortController?.abort();
+      activeAbortController = null;
     }
     return;
   }

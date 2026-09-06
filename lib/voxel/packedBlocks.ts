@@ -1,5 +1,6 @@
 import type { VoxelBlock, VoxelBuild } from "./types";
 import type { VoxelMeshFacts } from "./meshFacts";
+import type { VoxelWorldDelivery } from "./world";
 
 // Blocks cost roughly 80 bytes each as JS objects and 8 bytes each in typed
 // arrays, plus one shared palette. Stream chunks are written directly into
@@ -20,6 +21,7 @@ export type PackedVoxelBlocks = {
 export type RenderableVoxelBuild = VoxelBuild & {
   packed?: PackedVoxelBlocks;
   meshFacts?: VoxelMeshFacts;
+  world?: VoxelWorldDelivery;
 };
 
 const MIN_PACKED_CAPACITY = 1024;
@@ -142,6 +144,7 @@ export function copyPackedVoxelBlocks(
 
 export function voxelBuildBlockCount(build: RenderableVoxelBuild | null | undefined): number {
   if (!build) return 0;
+  if (build.world) return build.world.manifest.exactBlockCount;
   return build.packed ? build.packed.count : build.blocks.length;
 }
 
@@ -149,10 +152,11 @@ export function voxelBuildBlockCount(build: RenderableVoxelBuild | null | undefi
 // same container in place, which is what keeps progressive rebuilds attached to
 // the same identity.
 export function voxelBuildBlocksRef(build: RenderableVoxelBuild): object {
-  return build.packed ?? build.blocks;
+  return build.world ?? build.packed ?? build.blocks;
 }
 
 export function toObjectBackedVoxelBuild(build: RenderableVoxelBuild): VoxelBuild {
+  if (build.world) throw new Error("This world is too large for this export format. Download its JSON instead.");
   if (!build.packed) return build;
   const { packed, ...rest } = build;
   return { ...rest, blocks: unpackVoxelBlocks(packed) };

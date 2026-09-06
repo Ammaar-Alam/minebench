@@ -326,6 +326,8 @@ enum CustomBuildArtifactKind {
   preview_mbv4
   viewer_mbv4
   viewer_mbf1
+  viewer_world
+  world_part
   preview_svg
 }
 
@@ -618,17 +620,17 @@ model CustomBuild {
   usesHostedGeneration Boolean @default(false)
   reasoning         String?
 
-  blockCount       Int?
+  blockCount       BigInt?
   generationTimeMs Int?
   warnings         Json?
   metrics          Json?
 
   buildSha256             String?
-  buildByteSize           Int?
-  buildCompressedByteSize Int?
+  buildByteSize           BigInt?
+  buildCompressedByteSize BigInt?
   previewBlockCount       Int?
   previewSha256           String?
-  storedByteSize          Int @default(0)
+  storedByteSize          BigInt @default(0)
 
   errorCode      String?
   errorMessage   String?
@@ -720,10 +722,10 @@ model CustomBuildArtifact {
 
   sha256             String
   sourceBuildSha256  String?
-  byteSize           Int
-  compressedByteSize Int?
-  storedByteSize     Int
-  blockCount         Int?
+  byteSize           BigInt
+  compressedByteSize BigInt?
+  storedByteSize     BigInt
+  blockCount         BigInt?
   exportStats        Json?
 
   createdAt DateTime @default(now())

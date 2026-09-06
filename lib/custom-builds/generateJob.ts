@@ -6,7 +6,7 @@ import {
 } from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
-import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, type GridSize, isGridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import { recordGenerationError, recordGenerationSuccess } from "@/lib/observability/cloudwatch";
@@ -15,10 +15,12 @@ import { getPalette } from "@/lib/blocks/palettes";
 import {
   buildCustomBuildPreview,
   decodeAndVerifyCustomBuildArtifactText,
+  getCustomBuildPreviewTargetBlocks,
   gzipBytes,
   sha256Hex,
   uploadAndRecordCustomBuildArtifact,
   writeCanonicalBuildArtifact,
+  writeVoxelBuildSourceArtifact,
 } from "@/lib/custom-builds/artifacts";
 import { appendCustomBuildEvent } from "@/lib/custom-builds/events";
 import {
@@ -32,12 +34,14 @@ import {
   assertCustomBuildStorageConfigured,
   downloadCustomBuildArtifactBytes,
 } from "@/lib/custom-builds/storage";
+import { persistVoxelWorldArtifacts } from "@/lib/custom-builds/worldArtifacts";
 import { prisma } from "@/lib/prisma";
 import { buildGalleryPreviewSvg } from "@/lib/gallery/preview";
 import { packVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "@/lib/voxel/meshFacts";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { summarizeVoxelWorldRegions } from "@/lib/voxel/worldRegions";
 import { generationProviderSignal } from "@/lib/generation-worker/providerSignal";
 
 type GenerateJobPayload = {
@@ -85,7 +89,7 @@ function asGenerateJobPayload(payload: Prisma.JsonValue | null): GenerateJobPayl
 }
 
 function assertGridSize(value: number): GridSize {
-  if (value === 64 || value === 256 || value === 512) return value;
+  if (isGridSize(value)) return value;
   throw new Error(`Unsupported custom build grid size: ${value}`);
 }
 
@@ -218,9 +222,23 @@ export function isTerminalCustomBuildGenerateError(message: string): boolean {
 export function validateGeneratedBuildForArtifacts(
   build: unknown,
   customBuild: Pick<CustomBuild, "gridSize" | "palette">,
-): { build: VoxelBuild; warnings: string[] } {
+): { build: VoxelBuild; warnings: string[]; blockCount: number } {
   const gridSize = assertGridSize(customBuild.gridSize);
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
+  if (gridSize > 512) {
+    const summarized = summarizeVoxelWorldRegions(build, {
+      gridSize,
+      palette: getPalette(palette),
+    });
+    if (!summarized.ok) {
+      throw new Error(`Generated custom build is invalid: ${summarized.error}`);
+    }
+    return {
+      build: summarized.value.build,
+      warnings: summarized.value.warnings,
+      blockCount: summarized.value.blockCount,
+    };
+  }
   const validated = validateVoxelBuild(build, {
     gridSize,
     palette: getPalette(palette),
@@ -229,7 +247,7 @@ export function validateGeneratedBuildForArtifacts(
   if (!validated.ok) {
     throw new Error(`Generated custom build is invalid: ${validated.error}`);
   }
-  return validated.value;
+  return { ...validated.value, blockCount: validated.value.build.blocks.length };
 }
 
 function emitCustomBuildEvent(customBuildId: string, type: string, data: Prisma.InputJsonValue): void {
@@ -259,7 +277,7 @@ async function generateBuild(
     return {
       build: validated.build,
       warnings: validated.warnings,
-      blockCount: validated.build.blocks.length,
+      blockCount: validated.blockCount,
       generationTimeMs: Date.now() - started,
     };
   }
@@ -393,7 +411,7 @@ async function recoverStoredBuild(
       sourceSha256: artifact.sourceBuildSha256,
     });
     const validated = validateGeneratedBuildForArtifacts(JSON.parse(canonicalText), customBuild);
-    if (artifact.blockCount != null && artifact.blockCount !== validated.build.blocks.length) {
+    if (artifact.blockCount != null && BigInt(artifact.blockCount) !== BigInt(validated.blockCount)) {
       throw new Error("Stored canonical block count does not match");
     }
     return {
@@ -402,7 +420,7 @@ async function recoverStoredBuild(
         ...persistedWarnings(customBuild.warnings),
         ...validated.warnings,
       ])),
-      blockCount: validated.build.blocks.length,
+      blockCount: validated.blockCount,
       generationTimeMs: customBuild.generationTimeMs,
     };
   } catch (error) {
@@ -457,13 +475,20 @@ export async function runCustomBuildGenerateJob(
     throwIfCustomBuildLeaseLost(opts.signal);
     await opts.beforeSynchronousArtifactPackaging?.();
     throwIfCustomBuildLeaseLost(opts.signal);
-    const canonicalBuild: VoxelBuild = {
-      version: "1.0",
-      blocks: generated.build.blocks.sort(
-        (a, b) => a.x - b.x || a.y - b.y || a.z - b.z || a.type.localeCompare(b.type),
-      ),
-    };
-    const canonicalArtifact = await writeCanonicalBuildArtifact(canonicalBuild);
+    const gridSize = assertGridSize(customBuild.gridSize);
+    const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
+    const useWorldArtifacts = gridSize > 512;
+    const canonicalBuild: VoxelBuild = useWorldArtifacts
+      ? generated.build
+      : {
+          version: "1.0",
+          blocks: generated.build.blocks.sort(
+            (a, b) => a.x - b.x || a.y - b.y || a.z - b.z || a.type.localeCompare(b.type),
+          ),
+        };
+    const canonicalArtifact = useWorldArtifacts
+      ? await writeVoxelBuildSourceArtifact(canonicalBuild)
+      : await writeCanonicalBuildArtifact(canonicalBuild);
     const buildByteSize = canonicalArtifact.byteSize;
     const buildCompressedByteSize = canonicalArtifact.storedByteSize;
     const fullSha = canonicalArtifact.sourceSha256;
@@ -488,7 +513,22 @@ export async function runCustomBuildGenerateJob(
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const preview = buildCustomBuildPreview(canonicalBuild);
+    let preview = buildCustomBuildPreview(canonicalBuild);
+    if (useWorldArtifacts) {
+      const worldArtifacts = await persistVoxelWorldArtifacts({
+        customBuildId: customBuild.id,
+        publicId: customBuild.publicId,
+        sourceBuildSha256: fullSha,
+        sourceBuild: canonicalBuild,
+        gridSize,
+        palette,
+        previewTargetBlocks: getCustomBuildPreviewTargetBlocks(),
+        persistArtifact: persistCustomBuildArtifact,
+        throwIfCanceled: () => throwIfCustomBuildLeaseLost(opts.signal),
+      });
+      preview = worldArtifacts.previewBuild;
+      emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "viewer_world" });
+    }
     const previewBytes = encodeBinaryArtifact(
       {
         buildId: customBuild.publicId,
@@ -517,40 +557,42 @@ export async function runCustomBuildGenerateJob(
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_mbv4" });
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const viewerKind =
-      canonicalBuild.blocks.length >= ARENA_MESH_FACTS_MIN_BLOCKS
-        ? "viewer_mbf1"
-        : "viewer_mbv4";
-    const viewerBytes =
-      viewerKind === "viewer_mbf1"
-        ? encodeVoxelMeshFacts(createVoxelMeshFacts(packVoxelBlocks(canonicalBuild.blocks)))
-        : encodeBinaryArtifact(
-            {
-              buildId: customBuild.publicId,
-              variant: "full",
-              checksum: fullSha,
-              serverValidated: true,
-              version: canonicalBuild.version,
-            },
-            canonicalBuild.blocks,
-            fullSha,
-          );
-    const viewerGzip = gzipBytes(viewerBytes);
-    await persistCustomBuildArtifact({
-      customBuildId: customBuild.id,
-      publicId: customBuild.publicId,
-      kind: viewerKind,
-      bytes: viewerGzip,
-      uncompressedByteSize: viewerBytes.byteLength,
-      sha256: sha256Hex(viewerGzip),
-      sourceBuildSha256: fullSha,
-      blockCount: canonicalBuild.blocks.length,
-      encoding: "gzip",
-    });
-    emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: viewerKind });
+    if (!useWorldArtifacts) {
+      const viewerKind =
+        canonicalBuild.blocks.length >= ARENA_MESH_FACTS_MIN_BLOCKS
+          ? "viewer_mbf1"
+          : "viewer_mbv4";
+      const viewerBytes =
+        viewerKind === "viewer_mbf1"
+          ? encodeVoxelMeshFacts(createVoxelMeshFacts(packVoxelBlocks(canonicalBuild.blocks)))
+          : encodeBinaryArtifact(
+              {
+                buildId: customBuild.publicId,
+                variant: "full",
+                checksum: fullSha,
+                serverValidated: true,
+                version: canonicalBuild.version,
+              },
+              canonicalBuild.blocks,
+              fullSha,
+            );
+      const viewerGzip = gzipBytes(viewerBytes);
+      await persistCustomBuildArtifact({
+        customBuildId: customBuild.id,
+        publicId: customBuild.publicId,
+        kind: viewerKind,
+        bytes: viewerGzip,
+        uncompressedByteSize: viewerBytes.byteLength,
+        sha256: sha256Hex(viewerGzip),
+        sourceBuildSha256: fullSha,
+        blockCount: canonicalBuild.blocks.length,
+        encoding: "gzip",
+      });
+      emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: viewerKind });
+    }
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const previewSvg = new TextEncoder().encode(buildGalleryPreviewSvg(canonicalBuild));
+    const previewSvg = new TextEncoder().encode(buildGalleryPreviewSvg(useWorldArtifacts ? preview : canonicalBuild));
     await persistCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,

@@ -110,9 +110,28 @@ async function main() {
     // negative coordinates and the grid edges have to survive Int16 storage
     const blocks: VoxelBlock[] = [
       { x: -256, y: 0, z: 255, type: "stone" },
-      { x: 511, y: 255, z: -1, type: "water" },
+      { x: 8191, y: 255, z: -1, type: "water" },
     ];
     assertRoundTrip(packVoxelBlocks(blocks), blocks);
+  }
+
+  {
+    const bounds = { origin: { x: 0, y: 0, z: 0 }, size: { x: 8192, y: 8192, z: 8192 } };
+    const build = {
+      version: "1.0" as const,
+      blocks: [],
+      world: {
+        manifest: {
+          kind: "voxel_world" as const, version: 1 as const, gridSize: 8192,
+          palette: "simple" as const, bounds, exactBlockCount: 8192 ** 3, leafSize: 64 as const,
+          source: { format: "voxel-build-json" as const, sha256: "0".repeat(64), evaluatorVersion: 1 },
+          regions: [{ kind: "uniform" as const, key: "r0", ...bounds, type: "stone", blockCount: 8192 ** 3 }],
+        },
+      },
+    };
+    assert.equal(voxelBuildBlockCount(build), 549_755_813_888);
+    assert.equal(voxelBuildBlocksRef(build), build.world);
+    assert.throws(() => toObjectBackedVoxelBuild(build), /Download its JSON/);
   }
 
   console.log("packed voxel block checks passed");

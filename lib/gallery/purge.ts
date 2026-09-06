@@ -1,5 +1,6 @@
 import type { CustomBuildArtifact } from "@prisma/client";
 import { retryPendingAuthDeletions } from "@/lib/account/service";
+import { customBuildStorageBigInt } from "@/lib/custom-builds/numericMetadata";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { prisma } from "@/lib/prisma";
@@ -80,7 +81,7 @@ export async function purgeDueGalleryRecords(
         await tx.customBuild.update({
           where: { id: build.id },
           data: {
-            storedByteSize: remaining._sum.storedByteSize ?? 0,
+            storedByteSize: customBuildStorageBigInt(remaining._sum.storedByteSize),
             objectsDeletedAt: cleanupPending ? null : now,
             deletionPendingAt: cleanupPending ? now : null,
             deletionError: cleanupPending ? "Artifact cleanup pending." : null,
