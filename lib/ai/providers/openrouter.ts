@@ -21,6 +21,7 @@ type OpenRouterChatResponse = {
 
 type OpenRouterStreamChunk = {
   choices?: { delta?: { content?: unknown } }[];
+  error?: { message?: string } | string;
 };
 
 type TextVerbosity = "low" | "medium" | "high";
@@ -291,7 +292,7 @@ export async function openrouterGenerateText(params: {
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://minebench.dev",
                 "X-Title": "MineBench",
-                ...(params.onDelta ? { Accept: "text/event-stream" } : {}),
+                Accept: "text/event-stream, application/json",
               }, params.customHeaders),
               signal: controller.signal,
               body: JSON.stringify(mergeCustomRequestBody({
@@ -307,7 +308,7 @@ export async function openrouterGenerateText(params: {
                       },
                     }
                   : {}),
-                stream: Boolean(params.onDelta),
+                stream: true,
                 ...openRouterTemperaturePayload(params.modelId, params.temperature),
                 ...openRouterTopPPayload(modelRecommendedTopP(params.modelId)),
                 max_tokens: tok,
@@ -440,7 +441,10 @@ export async function openrouterGenerateText(params: {
       }
     }
 
-    if (params.onDelta) {
+    const contentType = res.headers.get("content-type") ?? "";
+    const isEventStream = contentType.includes("text/event-stream");
+
+    if (isEventStream || params.onDelta) {
       let text = "";
       await consumeSseStream(res, (evt) => {
         if (evt.data === "[DONE]") return;
@@ -450,10 +454,25 @@ export async function openrouterGenerateText(params: {
         } catch {
           return;
         }
+        if (parsed?.error) {
+          const message =
+            typeof parsed.error === "object" ? parsed.error.message : String(parsed.error);
+          throw new Error(`OpenRouter stream error: ${message || "Unknown error"}`);
+        }
         const chunk = parsed?.choices?.[0]?.delta?.content;
-        if (typeof chunk === "string" && chunk) {
-          text += chunk;
-          params.onDelta?.(chunk);
+        const deltaText =
+          typeof chunk === "string"
+            ? chunk
+            : Array.isArray(chunk)
+              ? chunk
+                  .map((c) =>
+                    c && typeof c === "object" ? String((c as { text?: unknown }).text ?? "") : "",
+                  )
+                  .join("")
+              : "";
+        if (deltaText) {
+          text += deltaText;
+          params.onDelta?.(deltaText);
         }
       });
       return { text };
