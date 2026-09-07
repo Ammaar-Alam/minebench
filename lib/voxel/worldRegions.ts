@@ -1,6 +1,7 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { MAX_VOXEL_COORDINATE } from "@/lib/voxel/coordinateKeys";
 import type { VoxelBuild, VoxelPoint } from "@/lib/voxel/types";
+import type { PackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import { normalizeBlockType, parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 const DEFAULT_MIXED_LEAF_SIZE = 64;
@@ -19,6 +20,21 @@ type PaintOperation = {
   bounds: Bounds;
   material: number;
   type: string;
+};
+
+type PackedPointSource = {
+  packed: PackedVoxelBlocks;
+  materials: Uint16Array;
+  bounds: Bounds;
+  count: number;
+};
+
+type PackedPointRange = {
+  source: PackedPointSource;
+  indices: Uint32Array;
+  start: number;
+  end: number;
+  bounds: Bounds;
 };
 
 export type VoxelWorldRegionOptions = {
@@ -72,6 +88,7 @@ function normalizeLeafSize(value: number | undefined): number {
 }
 
 function sortedBounds(bounds: Bounds): Bounds {
+  if (bounds.x1 <= bounds.x2 && bounds.y1 <= bounds.y2 && bounds.z1 <= bounds.z2) return bounds;
   return {
     x1: Math.min(bounds.x1, bounds.x2),
     y1: Math.min(bounds.y1, bounds.y2),
@@ -221,7 +238,7 @@ function addUnknownType(counts: Map<string, number>, rawType: string, count: num
 function preprocessBuild(
   build: VoxelBuild,
   opts: VoxelWorldRegionOptions,
-): { ok: true; warnings: string[]; operations: PaintOperation[]; root: Bounds | null } | { ok: false; error: string } {
+): { ok: true; warnings: string[]; operations: PaintOperation[]; root: Bounds | null; points?: PackedPointSource } | { ok: false; error: string } {
   const allowed = new Set(opts.palette.map((block) => block.id));
   const paletteIndex = new Map(opts.palette.map((block, index) => [block.id, index + 1]));
   const gridExtent = normalizeGridExtent(opts.gridSize);
@@ -258,19 +275,12 @@ function preprocessBuild(
     droppedNegative += total - nonNegative;
     droppedOutOfBounds += nonNegative - inBounds;
 
-    const clipped = gridExtent > 0 ? intersectBounds(bounds, gridBounds) : null;
+    const clipped = gridExtent > 0 ? (covers(gridBounds, bounds) ? bounds : intersectBounds(bounds, gridBounds)) : null;
     if (clipped) addOperation(clipped, type);
   };
 
   for (const box of build.boxes ?? []) {
-    const bounds = sortedBounds({
-      x1: box.x1,
-      y1: box.y1,
-      z1: box.z1,
-      x2: box.x2,
-      y2: box.y2,
-      z2: box.z2,
-    });
+    const bounds = sortedBounds(box);
     const total = volume(bounds);
     if (!Number.isFinite(total) || total <= 0) continue;
 
@@ -323,8 +333,87 @@ function preprocessBuild(
     addValidBounds({ x1: block.x, y1: block.y, z1: block.z, x2: block.x, y2: block.y, z2: block.z }, normalizedType);
   }
 
+  let points: PackedPointSource | undefined;
+  if (build.packed) {
+    const packed = build.packed;
+    const materials = Uint16Array.from(packed.typeNames, (type) => {
+      const normalized = normalizeBlockType(type, allowed);
+      return normalized ? paletteIndex.get(normalized)! : 0;
+    });
+    const bounds = { x1: gridExtent, y1: gridExtent, z1: gridExtent, x2: -1, y2: -1, z2: -1 };
+    let count = 0;
+    for (let index = 0; index < packed.count; index += 1) {
+      const typeId = packed.typeIds[index]!;
+      if (materials[typeId] === 0) {
+        addUnknownType(droppedUnknownTypeCounts, packed.typeNames[typeId]!, 1);
+        continue;
+      }
+      const x = packed.positions[index * 3]!;
+      const y = packed.positions[index * 3 + 1]!;
+      const z = packed.positions[index * 3 + 2]!;
+      if (x < 0 || y < 0 || z < 0) { droppedNegative += 1; continue; }
+      if (x >= gridExtent || y >= gridExtent || z >= gridExtent) { droppedOutOfBounds += 1; continue; }
+      bounds.x1 = Math.min(bounds.x1, x); bounds.x2 = Math.max(bounds.x2, x);
+      bounds.y1 = Math.min(bounds.y1, y); bounds.y2 = Math.max(bounds.y2, y);
+      bounds.z1 = Math.min(bounds.z1, z); bounds.z2 = Math.max(bounds.z2, z);
+      count += 1;
+    }
+    if (count > 0) {
+      points = { packed, materials, bounds, count };
+      root = includeBounds(root, bounds);
+    }
+  }
+
   pushWarningCounts(warnings, droppedNegative, droppedOutOfBounds, droppedUnknownTypeCounts);
-  return { ok: true, warnings, operations, root };
+  return { ok: true, warnings, operations, root, points };
+}
+
+function collectPackedPoints(source: PackedPointSource | undefined, bounds: Bounds): PackedPointRange | undefined {
+  if (!source) return undefined;
+  const clipped = intersectBounds(source.bounds, bounds);
+  if (!clipped) return undefined;
+  const { packed, materials } = source;
+  let indices = new Uint32Array(covers(bounds, source.bounds) ? source.count : Math.min(4096, source.count));
+  let count = 0;
+  const occupied = { x1: clipped.x2, y1: clipped.y2, z1: clipped.z2, x2: clipped.x1, y2: clipped.y1, z2: clipped.z1 };
+  for (let index = 0; index < packed.count; index += 1) {
+    const offset = index * 3;
+    const x = packed.positions[offset]!;
+    const y = packed.positions[offset + 1]!;
+    const z = packed.positions[offset + 2]!;
+    if (materials[packed.typeIds[index]!] === 0 || x < clipped.x1 || x > clipped.x2 || y < clipped.y1 || y > clipped.y2 || z < clipped.z1 || z > clipped.z2) continue;
+    if (count === indices.length) {
+      const grown = new Uint32Array(indices.length * 2);
+      grown.set(indices);
+      indices = grown;
+    }
+    indices[count++] = index;
+    occupied.x1 = Math.min(occupied.x1, x); occupied.x2 = Math.max(occupied.x2, x);
+    occupied.y1 = Math.min(occupied.y1, y); occupied.y2 = Math.max(occupied.y2, y);
+    occupied.z1 = Math.min(occupied.z1, z); occupied.z2 = Math.max(occupied.z2, z);
+  }
+  return count > 0 ? { source, indices, start: 0, end: count, bounds: occupied } : undefined;
+}
+
+// partition one index buffer in place and restore write order only in bounded leaves
+function partitionPackedPoints(points: PackedPointRange, bounds: Bounds, start: number): PackedPointRange | undefined {
+  const { indices, source } = points;
+  const positions = source.packed.positions;
+  let end = start;
+  let x1 = bounds.x2, y1 = bounds.y2, z1 = bounds.z2;
+  let x2 = bounds.x1, y2 = bounds.y1, z2 = bounds.z1;
+  for (let index = start; index < points.end; index += 1) {
+    const point = indices[index]!;
+    const offset = point * 3;
+    const x = positions[offset]!, y = positions[offset + 1]!, z = positions[offset + 2]!;
+    if (x < bounds.x1 || x > bounds.x2 || y < bounds.y1 || y > bounds.y2 || z < bounds.z1 || z > bounds.z2) continue;
+    indices[index] = indices[end]!;
+    indices[end++] = point;
+    x1 = Math.min(x1, x); x2 = Math.max(x2, x);
+    y1 = Math.min(y1, y); y2 = Math.max(y2, y);
+    z1 = Math.min(z1, z); z2 = Math.max(z2, z);
+  }
+  return end > start ? { source, indices, start, end, bounds: { x1, y1, z1, x2, y2, z2 } } : undefined;
 }
 
 function uniformMaterialFor(bounds: Bounds, operations: PaintOperation[]): number | null {
@@ -360,6 +449,7 @@ function evaluateMixedLeaf(
   bounds: Bounds,
   operations: PaintOperation[],
   palette: BlockDefinition[],
+  points?: PackedPointRange,
 ): VoxelWorldRegion | null {
   const sx = bounds.x2 - bounds.x1 + 1;
   const sy = bounds.y2 - bounds.y1 + 1;
@@ -391,6 +481,24 @@ function evaluateMixedLeaf(
     }
   }
 
+  if (points) {
+    const { packed, materials } = points.source;
+    points.indices.subarray(points.start, points.end).sort();
+    for (let i = points.start; i < points.end; i += 1) {
+      const point = points.indices[i]!;
+      const offset = point * 3;
+      const index = packed.positions[offset]! - bounds.x1 +
+        (packed.positions[offset + 1]! - bounds.y1) * sx + (packed.positions[offset + 2]! - bounds.z1) * strideZ;
+      const material = materials[packed.typeIds[point]!]!;
+      const previous = materialIndexes[index]!;
+      if (previous === material) continue;
+      if (previous === 0) blockCount += 1;
+      else materialCounts[previous] -= 1;
+      materialIndexes[index] = material;
+      materialCounts[material] += 1;
+    }
+  }
+
   if (blockCount === 0) return null;
   const origin = toRegionPoint(bounds.x1, bounds.y1, bounds.z1);
   const size = toRegionSize(bounds);
@@ -417,23 +525,19 @@ function* evaluateNode(
   operations: PaintOperation[],
   palette: BlockDefinition[],
   leafSize: number,
+  points?: PackedPointRange,
 ): Generator<VoxelWorldRegion> {
-  if (operations.length === 0) return;
+  if (operations.length === 0 && !points) return;
 
   // trim empty margins so a thin floor remains a uniform region
-  let occupied: Bounds | null = null;
+  let occupied: Bounds | null = points ? { ...points.bounds } : null;
   for (const operation of operations) {
-    const clipped = intersectBounds(bounds, operation.bounds);
-    if (!clipped) continue;
-    occupied = occupied ? {
-      x1: Math.min(occupied.x1, clipped.x1), y1: Math.min(occupied.y1, clipped.y1), z1: Math.min(occupied.z1, clipped.z1),
-      x2: Math.max(occupied.x2, clipped.x2), y2: Math.max(occupied.y2, clipped.y2), z2: Math.max(occupied.z2, clipped.z2),
-    } : clipped;
+    occupied = includeIntersection(occupied, bounds, operation.bounds) ?? occupied;
   }
   if (!occupied) return;
   bounds = occupied;
 
-  const uniformMaterial = uniformMaterialFor(bounds, operations);
+  const uniformMaterial = points ? null : uniformMaterialFor(bounds, operations);
   if (uniformMaterial !== null) {
     const type = palette[uniformMaterial - 1]?.id;
     if (type) {
@@ -450,7 +554,7 @@ function* evaluateNode(
 
   const size = toRegionSize(bounds);
   if (size.x <= leafSize && size.y <= leafSize && size.z <= leafSize) {
-    const region = evaluateMixedLeaf(bounds, operations, palette);
+    const region = evaluateMixedLeaf(bounds, operations, palette, points);
     if (region) yield region;
     return;
   }
@@ -458,29 +562,32 @@ function* evaluateNode(
   const xRanges = splitAxis(bounds.x1, bounds.x2, leafSize);
   const yRanges = splitAxis(bounds.y1, bounds.y2, leafSize);
   const zRanges = splitAxis(bounds.z1, bounds.z2, leafSize);
+  let pointStart = points?.start ?? 0;
   for (const [z1, z2] of zRanges) {
     for (const [y1, y2] of yRanges) {
       for (const [x1, x2] of xRanges) {
         const child = { x1, y1, z1, x2, y2, z2 };
+        const childPoints = points ? partitionPackedPoints(points, child, pointStart) : undefined;
+        if (childPoints) pointStart = childPoints.end;
         const shouldTighten =
           x2 - x1 + 1 <= leafSize &&
           y2 - y1 + 1 <= leafSize &&
           z2 - z1 + 1 <= leafSize;
         if (!shouldTighten) {
           const childOperations = operations.filter((operation) => intersects(operation.bounds, child));
-          yield* evaluateNode(child, childOperations, palette, leafSize);
+          yield* evaluateNode(child, childOperations, palette, leafSize, childPoints);
           continue;
         }
 
         const childOperations: PaintOperation[] = [];
-        let childBounds: Bounds | null = null;
+        let childBounds: Bounds | null = childPoints ? { ...childPoints.bounds } : null;
         for (const operation of operations) {
           const nextBounds = includeIntersection(childBounds, operation.bounds, child);
           if (!nextBounds) continue;
           childOperations.push(operation);
           childBounds = nextBounds;
         }
-        if (childBounds) yield* evaluateNode(childBounds, childOperations, palette, leafSize);
+        if (childBounds) yield* evaluateNode(childBounds, childOperations, palette, leafSize, childPoints);
       }
     }
   }
@@ -491,10 +598,11 @@ function regionsIterable(
   operations: PaintOperation[],
   palette: BlockDefinition[],
   leafSize: number,
+  points?: PackedPointSource,
 ): Iterable<VoxelWorldRegion> {
   return {
     [Symbol.iterator]() {
-      return root ? evaluateNode(root, operations, palette, leafSize) : [][Symbol.iterator]();
+      return root ? evaluateNode(root, operations, palette, leafSize, collectPackedPoints(points, root)) : [][Symbol.iterator]();
     },
   };
 }
@@ -511,13 +619,14 @@ function createEvaluatorFromBuild(
     ok: true,
     value: {
       warnings: prepared.warnings,
-      regions: regionsIterable(prepared.root, prepared.operations, opts.palette, leafSize),
+      regions: regionsIterable(prepared.root, prepared.operations, opts.palette, leafSize, prepared.points),
       evaluateBounds(origin, size) {
         const bounds = boundsFromOriginSize(origin, size, leafSize);
         if (typeof bounds === "string") return { ok: false, error: bounds };
         const operations = prepared.operations.filter((operation) => intersects(operation.bounds, bounds));
-        const region = operations.length > 0
-          ? Array.from(evaluateNode(bounds, operations, opts.palette, leafSize))[0] ?? null
+        const points = collectPackedPoints(prepared.points, bounds);
+        const region = operations.length > 0 || points
+          ? Array.from(evaluateNode(bounds, operations, opts.palette, leafSize, points))[0] ?? null
           : null;
         return { ok: true, region };
       },

@@ -7,6 +7,12 @@ import { z } from "zod";
 import { type GridSize, GRID_SIZES, isGridSize } from "@/lib/ai/limits";
 import type { PaletteMode } from "@/lib/ai/types";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { voxelBuildSourceJsonChunks } from "@/lib/voxel/canonicalArtifact";
+import {
+  appendCoalescedVoxelBox,
+  appendPackedVoxelBlocks,
+  createPackedVoxelBlocks,
+} from "@/lib/voxel/packedBlocks";
 
 export const VOXEL_EXEC_TOOL_NAME = "voxel.exec" as const;
 export const DEFAULT_VOXEL_EXEC_TIMEOUT_MS = 30_000;
@@ -155,12 +161,26 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const lines: { from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number }; type: string }[] =
     [];
   const blocks: { x: number; y: number; z: number; type: string }[] = [];
+  const packed = params.gridSize > 512 ? createPackedVoxelBlocks(0) : undefined;
+  const blockBatch: typeof blocks = [];
+  let blockCount = 0;
+  let boxCount = 0;
+  const flushBlocks = () => {
+    if (!packed || blockBatch.length === 0) return;
+    appendPackedVoxelBlocks(packed, blockBatch);
+    blockBatch.length = 0;
+  };
 
   const block = (x: unknown, y: unknown, z: unknown, type: unknown) => {
-    if (maxBlocks !== null && blocks.length >= maxBlocks) {
-      throw new Error(`Too many blocks (${blocks.length})`);
+    if (maxBlocks !== null && blockCount >= maxBlocks) {
+      throw new Error(`Too many blocks (${blockCount})`);
     }
-    blocks.push({ x: toInt(x), y: toInt(y), z: toInt(z), type: toType(type) });
+    const value = { x: toInt(x), y: toInt(y), z: toInt(z), type: toType(type) };
+    blockCount += 1;
+    if (packed && value.x >= -32_768 && value.x <= 32_767 && value.y >= -32_768 && value.y <= 32_767 && value.z >= -32_768 && value.z <= 32_767) {
+      blockBatch.push(value);
+      if (blockBatch.length === 4096) flushBlocks();
+    } else blocks.push(value);
   };
   const box = (
     x1: unknown,
@@ -171,10 +191,10 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
     z2: unknown,
     type: unknown,
   ) => {
-    if (maxBoxes !== null && boxes.length >= maxBoxes) {
-      throw new Error(`Too many boxes (${boxes.length})`);
+    if (maxBoxes !== null && boxCount >= maxBoxes) {
+      throw new Error(`Too many boxes (${boxCount})`);
     }
-    boxes.push({
+    const value = {
       x1: toInt(x1),
       y1: toInt(y1),
       z1: toInt(z1),
@@ -182,7 +202,10 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
       y2: toInt(y2),
       z2: toInt(z2),
       type: toType(type),
-    });
+    };
+    boxCount += 1;
+    if (packed) appendCoalescedVoxelBox(boxes, value);
+    else boxes.push(value);
   };
   const line = (...args: unknown[]) => {
     if (maxLines !== null && lines.length >= maxLines) {
@@ -238,12 +261,14 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const script = new vm.Script(wrapped, { filename: "voxel.exec.js" });
 
   script.runInContext(ctx, { timeout: timeoutMs });
+  flushBlocks();
 
   const build: VoxelBuild = {
     version: "1.0",
     boxes,
     lines,
     blocks,
+    ...(packed ? { packed } : {}),
   };
 
   const outDir = pickOutputDir(params.outputDir);
@@ -254,13 +279,20 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
         ? crypto.randomUUID()
         : crypto.randomBytes(16).toString("hex");
     filePath = path.join(outDir, `voxel-exec-${Date.now()}-${runId}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(build));
+    if (build.packed) {
+      const fd = fs.openSync(filePath, "wx");
+      try {
+        for (const bytes of voxelBuildSourceJsonChunks(build)) fs.writeSync(fd, bytes);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else fs.writeFileSync(filePath, JSON.stringify(build));
   }
 
   return {
     filePath,
-    blockCount: blocks.length,
-    boxCount: boxes.length,
+    blockCount,
+    boxCount,
     lineCount: lines.length,
     seed: params.seed,
     build,

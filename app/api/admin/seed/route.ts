@@ -368,7 +368,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const buildJson = JSON.stringify(r.build);
+    const { packed, ...build } = r.build;
+    if (packed) throw new Error("Benchmark seeds require an expanded build");
+    const buildJson = JSON.stringify(build);
     const saved = await prisma.build.create({
       data: {
         promptId: job.promptId,
@@ -376,7 +378,7 @@ export async function POST(req: Request) {
         gridSize: ARENA_SETTINGS.gridSize,
         palette: ARENA_SETTINGS.palette,
         mode: ARENA_SETTINGS.mode,
-        voxelData: r.build,
+        voxelData: build,
         voxelByteSize: Buffer.byteLength(buildJson),
         voxelSha256: createHash("sha256").update(buildJson).digest("hex"),
         blockCount: r.blockCount,

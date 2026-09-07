@@ -421,7 +421,7 @@ export async function createLocalVoxelWorld(
 }
 
 export function attachLocalVoxelWorldResolver(build: RenderableVoxelBuild): RenderableVoxelBuild {
-  if (!build.world) return build;
+  if (!build.world || build.world.partBaseUrl) return build;
   return {
     ...build,
     world: {

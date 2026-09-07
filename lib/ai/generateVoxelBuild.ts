@@ -1099,6 +1099,88 @@ function buildBounds(build: VoxelBuild) {
   return { minX, minY, minZ, maxX, maxY, maxZ, spanX, spanY, spanZ };
 }
 
+export function processVoxelBuildResponse(
+  text: string,
+  params: Pick<GenerateVoxelBuildParams, "gridSize" | "palette" | "enableTools" | "returnExpandedBuild">,
+):
+  | { ok: true; build: VoxelBuild; warnings: string[]; blockCount: number }
+  | { ok: false; error: string } {
+  const enableTools = params.enableTools ?? true;
+  const paletteDefs = getPalette(params.palette);
+  const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
+  const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
+  if (!json) return { ok: false, error: "Could not find a valid JSON object in the response" };
+
+  let buildJson: unknown = json;
+  if (enableTools) {
+    const parsedCall = voxelExecToolCallSchema.safeParse(json);
+    if (!parsedCall.success) return { ok: false, error: parsedCall.error.message };
+    const call = parsedCall.data;
+    if (call.input.gridSize !== params.gridSize) {
+      return { ok: false, error: `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})` };
+    }
+    if (call.input.palette !== params.palette) {
+      return { ok: false, error: `Tool call palette mismatch (${call.input.palette} vs ${params.palette})` };
+    }
+    buildJson = runVoxelExec({
+      code: call.input.code,
+      gridSize: params.gridSize,
+      palette: params.palette,
+      seed: call.input.seed,
+    }).build;
+  }
+
+  const world = params.gridSize > 512
+    ? summarizeVoxelWorldRegions(buildJson, { palette: paletteDefs, gridSize: params.gridSize })
+    : null;
+  const validated = world ?? (enableTools
+    ? validateVoxelBuildSpec(buildJson as VoxelBuild, {
+        palette: paletteDefs,
+        gridSize: params.gridSize,
+        maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
+      })
+    : validateParsedJson(buildJson, paletteDefs, params.gridSize));
+  if (!validated.ok) return { ok: false, error: validated.error };
+
+  const validatedBuild = validated.value.build;
+  const blockCount = world?.ok ? world.value.blockCount : validatedBuild.blocks.length;
+  if (blockCount === 0) {
+    return {
+      ok: false,
+      error: "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.",
+    };
+  }
+  if (blockCount < minBlocks) {
+    return { ok: false, error: `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.` };
+  }
+
+  const worldBounds = world?.ok ? world.value.bounds : null;
+  const bounds = worldBounds
+    ? { spanX: worldBounds.size.x, spanY: worldBounds.size.y, spanZ: worldBounds.size.z }
+    : buildBounds(validatedBuild);
+  if (bounds) {
+    // wider worlds should not force every subject to be hundreds of blocks tall
+    const detailGridSize = Math.min(params.gridSize, 512);
+    const minFootprint = Math.max(6, Math.floor(detailGridSize * 0.15));
+    const minHeight = Math.max(4, Math.floor(detailGridSize * 0.1));
+    const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
+    if (maxFootprintSpan < minFootprint) {
+      return { ok: false, error: `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.` };
+    }
+    if (bounds.spanY < minHeight) {
+      return { ok: false, error: `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.` };
+    }
+  }
+
+  let build = validatedBuild;
+  if (!world && !params.returnExpandedBuild) {
+    const spec = parseVoxelBuildSpec(buildJson);
+    if (!spec.ok) return { ok: false, error: spec.error };
+    build = spec.value;
+  }
+  return { ok: true, build, warnings: validated.value.warnings, blockCount };
+}
+
 export async function generateVoxelBuild(
   params: GenerateVoxelBuildParams,
 ): Promise<GenerateVoxelBuildResult> {
@@ -1126,7 +1208,6 @@ export async function generateVoxelBuild(
       generationTimeMs: 0,
     };
   }
-  const paletteDefs = getPalette(params.palette);
   const enableTools = params.enableTools ?? true;
   const maxAttempts = params.maxAttempts ?? (enableTools ? 8 : 3);
   const allowServerKeys = params.allowServerKeys ?? true;
@@ -1288,111 +1369,16 @@ export async function generateVoxelBuild(
       let keepBuildProcessingLease = false;
       try {
         params.abortSignal?.throwIfAborted();
-        const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
-        if (!json) {
-          lastError = "Could not find a valid JSON object in the response";
+        const processed = processVoxelBuildResponse(text, params);
+        if (!processed.ok) {
+          lastError = processed.error;
           continue;
-        }
-
-        const buildJson: unknown = enableTools
-          ? (() => {
-              const parsedCall = voxelExecToolCallSchema.safeParse(json);
-              if (!parsedCall.success) {
-                lastError = parsedCall.error.message;
-                return null;
-              }
-
-              const call = parsedCall.data;
-              if (call.input.gridSize !== params.gridSize) {
-                lastError = `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})`;
-                return null;
-              }
-              if (call.input.palette !== params.palette) {
-                lastError = `Tool call palette mismatch (${call.input.palette} vs ${params.palette})`;
-                return null;
-              }
-
-              const run = runVoxelExec({
-                code: call.input.code,
-                gridSize: params.gridSize,
-                palette: params.palette,
-                seed: call.input.seed,
-              });
-
-              return run.build;
-            })()
-          : json;
-
-        if (!buildJson) continue;
-
-        const world = params.gridSize > 512
-          ? summarizeVoxelWorldRegions(buildJson, { palette: paletteDefs, gridSize: params.gridSize })
-          : null;
-        const validated = world ?? (enableTools
-          ? validateVoxelBuildSpec(buildJson as VoxelBuild, {
-              palette: paletteDefs,
-              gridSize: params.gridSize,
-              maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
-            })
-          : validateParsedJson(buildJson, paletteDefs, params.gridSize));
-        if (!validated.ok) {
-          lastError = validated.error;
-          continue;
-        }
-
-        const validatedBuild = validated.value.build;
-        const blockCount = world?.ok ? world.value.blockCount : validatedBuild.blocks.length;
-
-        if (blockCount === 0) {
-          lastError =
-            "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.";
-          continue;
-        }
-
-        if (blockCount < minBlocks) {
-          lastError = `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.`;
-          continue;
-        }
-
-        const worldBounds = world?.ok ? world.value.bounds : null;
-        const bounds = worldBounds
-          ? { spanX: worldBounds.size.x, spanY: worldBounds.size.y, spanZ: worldBounds.size.z }
-          : buildBounds(validatedBuild);
-        if (bounds) {
-          // wider worlds should not force every subject to be hundreds of blocks tall
-          const detailGridSize = Math.min(params.gridSize, 512);
-          const minFootprint = Math.max(6, Math.floor(detailGridSize * 0.15));
-          const minHeight = Math.max(4, Math.floor(detailGridSize * 0.1));
-          const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
-
-          if (maxFootprintSpan < minFootprint) {
-            lastError = `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.`;
-            continue;
-          }
-
-          if (bounds.spanY < minHeight) {
-            lastError = `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.`;
-            continue;
-          }
-        }
-
-        let build = validatedBuild;
-        if (!world && !params.returnExpandedBuild) {
-          const spec = parseVoxelBuildSpec(buildJson);
-          if (!spec.ok) {
-            lastError = spec.error;
-            continue;
-          }
-          build = spec.value;
         }
 
         const generationTimeMs = measuredInferenceTimeMs();
         keepBuildProcessingLease = true;
         return {
-          ok: true,
-          build,
-          warnings: validated.value.warnings,
-          blockCount,
+          ...processed,
           generationTimeMs,
           acceptedOutputTokens,
           providerRoute,

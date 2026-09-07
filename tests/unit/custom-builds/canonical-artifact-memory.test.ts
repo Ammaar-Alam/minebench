@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
+import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { writeCanonicalBuildArtifact } from "../../../lib/custom-builds/artifacts";
 
 const MEMORY_CHILD = "MINEBENCH_CANONICAL_ARTIFACT_MEMORY_CHILD";
+const FAILURE_CHILD = "MINEBENCH_CANONICAL_ARTIFACT_FAILURE_CHILD";
 
 async function streamLargeArtifact() {
+  const { writeCanonicalBuildArtifact } = await import("../../../lib/custom-builds/artifacts");
   const block = { x: 511, y: 511, z: 511, type: "oak_planks" };
   const artifact = await writeCanonicalBuildArtifact({
     version: "1.0",
@@ -20,8 +22,65 @@ async function streamLargeArtifact() {
   }
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("timed out waiting for failed artifact stream")), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function rejectFailedWriterWithoutHanging() {
+  const require = createRequire(import.meta.url);
+  const fs = require("node:fs") as { createWriteStream: unknown };
+  const originalCreateWriteStream = fs.createWriteStream;
+  fs.createWriteStream = () => new Writable({
+    write(_chunk, _encoding, callback) {
+      callback(new Error("forced artifact stream failure"));
+    },
+  });
+  syncBuiltinESMExports();
+  const { createVoxelBuildSourceArtifactWriter } = await import("../../../lib/voxel/canonicalArtifact");
+  const writer = await createVoxelBuildSourceArtifactWriter();
+  const failedWrite = (async () => {
+    for (let index = 0; index < 256; index += 1) {
+      await writer.write(new Uint8Array(64 * 1024).fill(index));
+    }
+    await writer.close();
+  })();
+  try {
+    await assert.rejects(withTimeout(failedWrite, 1_000), /forced artifact stream failure|stream was destroyed/);
+  } finally {
+    await writer.abort().catch(() => undefined);
+    await failedWrite.catch(() => undefined);
+    fs.createWriteStream = originalCreateWriteStream;
+    syncBuiltinESMExports();
+  }
+}
+
 async function main() {
   const require = createRequire(import.meta.url);
+  const failureResult = spawnSync(
+    process.execPath,
+    [require.resolve("tsx/cli"), fileURLToPath(import.meta.url)],
+    {
+      env: { ...process.env, [FAILURE_CHILD]: "1" },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  assert.equal(
+    failureResult.status,
+    0,
+    `canonical artifact failed writer did not reject cleanly\n${failureResult.stdout}\n${failureResult.stderr}`,
+  );
+
   const result = spawnSync(
     process.execPath,
     ["--max-old-space-size=96", require.resolve("tsx/cli"), fileURLToPath(import.meta.url)],
@@ -35,7 +94,11 @@ async function main() {
   console.log("canonical artifact memory checks passed");
 }
 
-const run = process.env[MEMORY_CHILD] === "1" ? streamLargeArtifact() : main();
+const run = process.env[MEMORY_CHILD] === "1"
+  ? streamLargeArtifact()
+  : process.env[FAILURE_CHILD] === "1"
+    ? rejectFailedWriterWithoutHanging()
+    : main();
 run.catch((error) => {
   console.error(error);
   process.exit(1);

@@ -60,6 +60,7 @@ const manifestSchema = z.object({
   exactBlockCount: countSchema,
   leafSize: z.literal(VOXEL_WORLD_MIXED_LEAF_SIZE),
   source: sourceSchema,
+  overview: z.object({ data: partRefSchema, scale: positiveCountSchema.max(VOXEL_WORLD_MAX_GRID_SIZE) }).strict().optional(),
   regions: z.array(regionSchema).max(VOXEL_WORLD_INLINE_REGION_LIMIT, "regions has too many entries").optional(),
   regionPages: z.array(regionPageRefSchema).max(VOXEL_WORLD_REGION_PAGE_REF_LIMIT, "regionPages has too many entries").optional(),
 }).strict();
@@ -225,6 +226,11 @@ function validateManifest(manifest: VoxelWorldManifest, opts: VoxelWorldParseOpt
   if (manifest.exactBlockCount > 0 && regions.length === 0 && pages.length === 0) throw new Error("Non-empty worlds require regions or region pages");
 
   const ctx = newContext(manifest.gridSize, manifest.bounds, opts);
+  if (manifest.overview) {
+    const cellsPerAxis = manifest.gridSize / manifest.overview.scale;
+    if (!Number.isInteger(cellsPerAxis) || cellsPerAxis < 1 || cellsPerAxis > 256) throw new Error("Invalid overview scale");
+    checkPartRef(manifest.overview.data, ctx);
+  }
   for (const region of regions) checkRegion(region, ctx);
   const pageIndexes = new Set<number>();
   for (const page of pages) checkPageRef(page, ctx, pageIndexes);
@@ -288,6 +294,7 @@ export function toOpaqueVoxelWorldManifest(manifest: VoxelWorldManifest): VoxelW
     ...manifest,
     bounds: manifest.bounds ? cloneBounds(manifest.bounds) : null,
     source: { ...manifest.source },
+    ...(manifest.overview ? { overview: { ...manifest.overview, data: toOpaquePartRef(manifest.overview.data) } } : {}),
     regions: manifest.regions?.map(toOpaqueRegion),
     regionPages: manifest.regionPages?.map((page) => ({ ...page, bounds: cloneBounds(page.bounds), data: toOpaquePartRef(page.data) })),
   };

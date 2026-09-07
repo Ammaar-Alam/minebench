@@ -9,6 +9,7 @@ import {
   LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS,
   runVoxelExec,
 } from "../../../lib/ai/tools/voxelExec";
+import { unpackVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 
 const originalOutputDir = process.env.MINEBENCH_TOOL_OUTPUT_DIR;
 const originalTmpDir = process.env.TMPDIR;
@@ -33,7 +34,7 @@ try {
         code: 'const Math = { floor: () => 7 }; block(Math.floor(), 0, 0, "stone");',
         gridSize, palette: "simple",
       });
-      assert.equal(result.build.blocks[0]?.x, 7);
+      assert.equal((result.build.packed ? unpackVoxelBlocks(result.build.packed) : result.build.blocks)[0]?.x, 7);
     }
     process.env.MINEBENCH_TOOL_TIMEOUT_MS = "120000";
     runVoxelExec({ code: "", gridSize: 8192, palette: "simple" });
@@ -52,6 +53,18 @@ try {
   });
   assert.equal(inMemoryRun.filePath, null);
   assert.equal(inMemoryRun.blockCount, 1);
+
+  const compact = runVoxelExec({
+    code: 'box(0,0,0,0,1,1,"stone"); block(0,0,0,"gold_block"); box(1,0,0,2,1,1,"stone"); line(0,0,0,2,0,0,"glass"); block(0,0,0,"water");',
+    gridSize: 8192, palette: "simple",
+  });
+  assert.deepEqual([compact.boxCount, compact.lineCount, compact.blockCount], [2, 1, 2]);
+  assert.equal(compact.build.boxes?.length, 1);
+  assert.deepEqual(compact.build.blocks, []);
+  assert.deepEqual(unpackVoxelBlocks(compact.build.packed!), [
+    { x: 0, y: 0, z: 0, type: "gold_block" },
+    { x: 0, y: 0, z: 0, type: "water" },
+  ]);
 
   const persistedRun = runVoxelExec({
     code: 'block(4, 5, 6, "oak_log");',

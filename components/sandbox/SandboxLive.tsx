@@ -466,6 +466,7 @@ function customBuildStageLabel(status: SavedGenerationPayload): string {
   if (status.status === "canceled") return "Canceled";
   if (status.stage === "retrying") return "Trying again";
   if (status.stage === "generating") return "Generating";
+  if (status.stage === "finalizing") return "Building";
   if (status.stage === "queued") return "Queued";
   return status.stage ?? (status.status === "running" ? "Generating" : "Queued");
 }

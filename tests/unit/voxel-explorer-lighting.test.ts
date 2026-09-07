@@ -7,6 +7,7 @@ import {
   getExplorerBlockLight,
   isExplorerSunRayVisible,
   renderExplorerBloomOverlay,
+  setExplorerWorldFog,
 } from "@/lib/voxel/explorerLighting";
 import {
   packVoxelBlocks,
@@ -81,6 +82,25 @@ async function main() {
   const renderer = { autoClear: true };
   renderExplorerBloomOverlay(renderer, () => assert.equal(renderer.autoClear, false));
   assert.equal(renderer.autoClear, true);
+
+  for (const aspect of [0.5, 16 / 9, 3]) {
+    const camera = new THREE.PerspectiveCamera(70, aspect, 0.05, 1000);
+    camera.zoom = 1.4;
+    camera.updateProjectionMatrix();
+    const fog = new THREE.Fog(0xaed4ef);
+    const bloomFog = new THREE.Fog(0xffffff);
+    setExplorerWorldFog(camera, fog, bloomFog, 100);
+    const corner = new THREE.Vector3(1, 1, 0.5).unproject(camera).normalize();
+    assert.ok(Math.abs(fog.far / -corner.z - 100) < 1e-8, "the farthest visible corner stays within exact coverage");
+    assert.ok(fog.near < fog.far);
+    const emission = new THREE.Color(10, 8, 2).lerp(
+      bloomFog.color,
+      THREE.MathUtils.smoothstep(fog.far, bloomFog.near, bloomFog.far),
+    );
+    assert.deepEqual(emission.toArray(), [0, 0, 0], "bloom cannot reveal geometry beyond the fog");
+    setExplorerWorldFog(camera, fog, bloomFog, 0);
+    assert.equal(THREE.MathUtils.smoothstep(camera.near, fog.near, fog.far), 1, "unloaded space is fully fogged");
+  }
   assert.throws(() => renderExplorerBloomOverlay(renderer, () => { throw new Error("draw failed"); }));
   assert.equal(renderer.autoClear, true);
 

@@ -1,11 +1,15 @@
-import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { PassThrough } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
+import { Prisma, type CustomBuild, type CustomBuildArtifact, type CustomBuildJob } from "@prisma/client";
 import {
   deserializeSavedGenerationRequestConfig,
   requestOverrideSecretValues,
   type SavedGenerationRequestConfig,
 } from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
-import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
+import { generateVoxelBuild, processVoxelBuildResponse, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
 import { MAX_BLOCKS_BY_GRID, type GridSize, isGridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
@@ -33,6 +37,7 @@ import { redactSensitiveText, safeCustomBuildRetryReason } from "@/lib/custom-bu
 import {
   assertCustomBuildStorageConfigured,
   downloadCustomBuildArtifactBytes,
+  downloadCustomBuildArtifactStream,
 } from "@/lib/custom-builds/storage";
 import { persistVoxelWorldArtifacts } from "@/lib/custom-builds/worldArtifacts";
 import { prisma } from "@/lib/prisma";
@@ -41,6 +46,7 @@ import { packVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "@/lib/voxel/meshFacts";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { parseVoxelBuildStream } from "@/lib/voxel/sourceStream";
 import { summarizeVoxelWorldRegions } from "@/lib/voxel/worldRegions";
 import { generationProviderSignal } from "@/lib/generation-worker/providerSignal";
 
@@ -65,6 +71,7 @@ export type ImportedCustomBuildResult = Required<Pick<
 >>;
 
 const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2;
+const MAX_RECOVERED_RAW_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export function customBuildProviderSignal(
   signal?: AbortSignal,
@@ -350,6 +357,10 @@ async function generateBuild(
           sourceBuildSha256: sha256,
           exportStats: { attempt },
         });
+        await prisma.customBuild.updateMany({
+          where: { id: customBuild.id, removedAt: null, status: "running" },
+          data: { currentStage: "finalizing" },
+        });
       },
       onRetry: async (attempt, reason) => {
         const safeReason = safeCustomBuildRetryReason(reason, configuredSecrets);
@@ -390,6 +401,137 @@ function persistedWarnings(value: Prisma.JsonValue | null): string[] {
     : [];
 }
 
+async function recoverStoredRawBuild(
+  customBuild: CustomBuild,
+  opts: {
+    signal?: AbortSignal;
+    acquireBuildProcessing?: () => Promise<() => void>;
+  },
+): Promise<GeneratedBuildResult | null> {
+  const artifact = await prisma.customBuildArtifact.findFirst({
+    where: { customBuildId: customBuild.id, kind: "raw_text_debug" },
+    select: {
+      bucket: true,
+      path: true,
+      encoding: true,
+      sha256: true,
+      sourceBuildSha256: true,
+      storedByteSize: true,
+      exportStats: true,
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+  if (!artifact) return null;
+  try {
+    await opts.acquireBuildProcessing?.();
+    throwIfCustomBuildLeaseLost(opts.signal);
+    if (!artifact.sha256 || !artifact.sourceBuildSha256) {
+      throw new Error("Stored raw response metadata is incomplete");
+    }
+    if (artifact.storedByteSize > MAX_RECOVERED_RAW_RESPONSE_BYTES) {
+      throw new Error("Stored raw response exceeds the 8 MiB recovery limit");
+    }
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    for await (const chunk of downloadCustomBuildArtifactStream({ ...artifact, signal: opts.signal })) {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      byteLength += chunk.byteLength;
+      if (byteLength > MAX_RECOVERED_RAW_RESPONSE_BYTES) {
+        throw new Error("Stored raw response exceeds the 8 MiB recovery limit");
+      }
+      chunks.push(chunk);
+    }
+    const text = decodeAndVerifyCustomBuildArtifactText({
+      bytes: Buffer.concat(chunks, byteLength),
+      encoding: artifact.encoding,
+      storedSha256: artifact.sha256,
+      sourceSha256: artifact.sourceBuildSha256,
+      maxOutputBytes: MAX_RECOVERED_RAW_RESPONSE_BYTES,
+    });
+    throwIfCustomBuildLeaseLost(opts.signal);
+    const finalizing = await prisma.customBuild.updateMany({
+      where: { id: customBuild.id, removedAt: null, status: "running" },
+      data: { currentStage: "finalizing" },
+    });
+    if (finalizing.count !== 1) throw new CustomBuildLeaseLostError();
+    const stats = artifact.exportStats;
+    const attempt = stats && typeof stats === "object" && !Array.isArray(stats) &&
+      typeof stats.attempt === "number" && Number.isInteger(stats.attempt) && stats.attempt > 0
+      ? stats.attempt
+      : 1;
+    try {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      const result = processVoxelBuildResponse(text, {
+        gridSize: assertGridSize(customBuild.gridSize),
+        palette: customBuild.palette === "advanced" ? "advanced" : "simple",
+        returnExpandedBuild: true,
+      });
+      throwIfCustomBuildLeaseLost(opts.signal);
+      if (!result.ok) throw new Error(result.error);
+      return {
+        build: result.build,
+        warnings: Array.from(new Set([...persistedWarnings(customBuild.warnings), ...result.warnings])),
+        blockCount: result.blockCount,
+        generationTimeMs: customBuild.generationTimeMs,
+        sourceArtifactSha256: artifact.sourceBuildSha256,
+      };
+    } catch (error) {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      throw new CustomBuildGenerationFailedError(redactSensitiveText(error, 1_000), attempt);
+    }
+  } catch (error) {
+    throwIfCustomBuildLeaseLost(opts.signal);
+    if (isCustomBuildLeaseLostError(error) || error instanceof CustomBuildGenerationFailedError) throw error;
+    throw new CustomBuildArtifactBookkeepingError(error);
+  }
+}
+
+async function readStoredBuildSource(
+  artifact: Pick<CustomBuildArtifact, "bucket" | "path" | "sha256" | "sourceBuildSha256">,
+  signal?: AbortSignal,
+): Promise<VoxelBuild> {
+  const chunks = downloadCustomBuildArtifactStream({ ...artifact, signal });
+  const storedHash = createHash("sha256");
+  const sourceHash = createHash("sha256");
+  try {
+    let header = Buffer.alloc(0);
+    while (header.length < 2) {
+      const next = await chunks.next();
+      if (next.done) break;
+      header = Buffer.concat([header, next.value]);
+    }
+    const isGzip = header[0] === 0x1f && header[1] === 0x8b;
+    const build = await pipeline(
+      (async function* () {
+        storedHash.update(header);
+        yield header;
+        for await (const bytes of chunks) {
+          storedHash.update(bytes);
+          yield bytes;
+        }
+      })(),
+      isGzip ? createGunzip() : new PassThrough(),
+      async (source) => parseVoxelBuildStream((async function* () {
+        for await (const bytes of source) {
+          sourceHash.update(bytes);
+          yield bytes;
+        }
+      })()),
+      { signal },
+    );
+    // fetch may already have decoded a gzip response
+    if (isGzip && artifact.sha256 && storedHash.digest("hex") !== artifact.sha256) {
+      throw new Error("Stored custom build artifact checksum does not match");
+    }
+    if (sourceHash.digest("hex") !== artifact.sourceBuildSha256) {
+      throw new Error("Stored custom build source checksum does not match");
+    }
+    return build;
+  } finally {
+    await chunks.return(undefined);
+  }
+}
+
 async function recoverStoredBuild(
   customBuild: CustomBuild,
   opts: {
@@ -409,21 +551,27 @@ async function recoverStoredBuild(
     },
     orderBy: { createdAt: "desc" },
   });
-  if (!artifact) return null;
+  if (!artifact) return customBuild.gridSize > 512 ? recoverStoredRawBuild(customBuild, opts) : null;
   try {
     await opts.acquireBuildProcessing?.();
     throwIfCustomBuildLeaseLost(opts.signal);
     if (artifact.encoding !== "gzip" || !artifact.sourceBuildSha256) {
       throw new Error("Stored canonical artifact metadata is incomplete");
     }
-    const bytes = await downloadCustomBuildArtifactBytes(artifact);
-    const canonicalText = decodeAndVerifyCustomBuildArtifactText({
-      bytes,
-      encoding: artifact.encoding,
-      storedSha256: artifact.sha256,
-      sourceSha256: artifact.sourceBuildSha256,
-    });
-    const validated = validateGeneratedBuildForArtifacts(JSON.parse(canonicalText), customBuild);
+    let build: unknown;
+    if (customBuild.gridSize > 512) {
+      build = await readStoredBuildSource(artifact, opts.signal);
+    } else {
+      const bytes = await downloadCustomBuildArtifactBytes(artifact);
+      build = JSON.parse(decodeAndVerifyCustomBuildArtifactText({
+        bytes,
+        encoding: artifact.encoding,
+        storedSha256: artifact.sha256,
+        sourceSha256: artifact.sourceBuildSha256,
+      }));
+    }
+    throwIfCustomBuildLeaseLost(opts.signal);
+    const validated = validateGeneratedBuildForArtifacts(build, customBuild);
     if (artifact.blockCount != null && BigInt(artifact.blockCount) !== BigInt(validated.blockCount)) {
       throw new Error("Stored canonical block count does not match");
     }
@@ -437,6 +585,7 @@ async function recoverStoredBuild(
       generationTimeMs: customBuild.generationTimeMs,
     };
   } catch (error) {
+    throwIfCustomBuildLeaseLost(opts.signal);
     if (isCustomBuildLeaseLostError(error)) throw error;
     throw new CustomBuildArtifactBookkeepingError(error);
   }

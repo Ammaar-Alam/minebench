@@ -202,7 +202,8 @@ async function main() {
   const { customBuildWorldViewerResponse } = await import("../../../lib/custom-builds/worldDelivery");
   const { voxelWorldPartSourceSha256 } = await import("../../../lib/custom-builds/worldArtifacts");
   const { safeCustomBuildRetryReason } = await import("../../../lib/custom-builds/sanitize");
-  const { jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
+  const { decodeAndVerifyCustomBuildArtifactText, jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
+  const { downloadCustomBuildArtifactBytes } = await import("../../../lib/custom-builds/storage");
   const { CustomBuildLeaseLostError } = await import("../../../lib/custom-builds/lease");
 
   assert.ok(
@@ -409,7 +410,7 @@ async function main() {
   );
   assert.deepEqual(
     artifactCreates.map((artifact) => artifact.kind).sort(),
-    ["build_json", "preview_mbv4", "preview_svg", "viewer_world"],
+    ["build_json", "preview_mbv4", "preview_svg", "viewer_world", "world_part"],
   );
   const cubeManifestArtifact = artifactCreates.find((artifact) => artifact.kind === "viewer_world");
   assert.equal(cubeManifestArtifact?.blockCount, 8192 ** 3);
@@ -448,7 +449,7 @@ async function main() {
   assert.ok(mixedManifestArtifact, "mixed worlds should record a viewer manifest");
   assert.ok(mixedPartArtifact, "mixed worlds should record authorized part data");
   assert.equal(
-    artifactCreates.filter((artifact) => artifact.kind === "world_part").length,
+    artifactCreates.filter((artifact) => artifact.kind === "world_part" && (artifact.exportStats as { worldPartKey?: string })?.worldPartKey?.startsWith("mixed-")).length,
     1,
     "identical mixed region payloads should share one stored part",
   );
@@ -500,6 +501,101 @@ async function main() {
   const partBytes = new Uint8Array(await partResponse.arrayBuffer());
   assert.equal(partBytes[0], 0x1f, "world parts should remain gzip encoded for client-side inflation");
   assert.equal(partBytes[1], 0x8b);
+
+  const recoveryArtifact = artifactCreates.find((artifact) => artifact.kind === "build_json");
+  assert.ok(recoveryArtifact);
+  const recoveryBytes = await downloadCustomBuildArtifactBytes(recoveryArtifact as never);
+  const recoveryText = decodeAndVerifyCustomBuildArtifactText({ bytes: recoveryBytes, encoding: "gzip" });
+  const recoverySourceBytes = new TextEncoder().encode(recoveryText);
+  const originalFetch = globalThis.fetch;
+  const originalParse = JSON.parse;
+  const recoveryEnv = { SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY };
+  process.env.SUPABASE_URL = "http://127.0.0.1:43198";
+  process.env.SUPABASE_SECRET_KEY = "unit-stream-recovery-secret";
+  JSON.parse = (text, reviver) => {
+    assert.notEqual(text, recoveryText, "recovery must parse source entries without a whole-build JSON string");
+    return originalParse(text, reviver);
+  };
+  try {
+    for (const mode of ["local", "gzip", "decoded", "stored-sha", "source-sha", "block-count", "stream-error", "aborted"] as const) {
+      updates.length = 0;
+      operations.length = 0;
+      currentCustomBuild = { ...queuedCustomBuild, gridSize: 8192, generationTimeMs: 1234 };
+      const artifact = {
+        ...recoveryArtifact,
+        bucket: mode === "local" ? "__local_fs__" : "recovery-fixture",
+        ...(mode === "stored-sha" ? { sha256: "0".repeat(64) } : {}),
+        ...(mode === "source-sha" ? { sourceBuildSha256: "0".repeat(64) } : {}),
+        ...(mode === "block-count" ? { blockCount: 129 } : {}),
+      };
+      artifactCreates.splice(0, artifactCreates.length, artifact);
+      const abort = new AbortController();
+      let fetches = 0;
+      let canceled = false;
+      globalThis.fetch = async (input, init) => {
+        fetches += 1;
+        assert.equal(String(input), `http://127.0.0.1:43198/storage/v1/object/recovery-fixture/${recoveryArtifact.path}`);
+        assert.equal(new Headers(init?.headers).get("authorization"), "Bearer unit-stream-recovery-secret");
+        assert.equal(init?.signal, abort.signal);
+        const bytes = mode === "decoded" ? recoverySourceBytes : recoveryBytes;
+        let offset = 0;
+        const response = new Response(new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (offset >= 12 && mode === "stream-error") {
+              controller.error(new Error("stream download interrupted"));
+              return;
+            }
+            if (offset >= 12 && mode === "aborted") {
+              abort.abort(new CustomBuildLeaseLostError());
+            }
+            if (offset >= bytes.length) {
+              controller.close();
+              return;
+            }
+            const end = Math.min(bytes.length, offset === 0 ? 1 : offset + 11);
+            controller.enqueue(bytes.subarray(offset, end));
+            offset = end;
+          },
+          cancel() { canceled = true; },
+        }), { headers: { "content-encoding": "gzip" } });
+        response.arrayBuffer = async () => { throw new Error("recovery must consume the response stream"); };
+        return response;
+      };
+      const recovery = runCustomBuildGenerateJob({
+        id: `stream-recovery-${mode}`,
+        customBuildId,
+        type: "generate",
+        status: "running",
+        attempts: 2,
+        maxAttempts: 3,
+        payload: { stubBuild: { version: "1.0", blocks: [{ x: 8191, y: 0, z: 0, type: "gold_block" }] } },
+      } as never, { signal: abort.signal });
+      if (mode === "aborted") {
+        await assert.rejects(recovery, /lease is no longer owned/);
+        assert.equal(canceled, true, "lease loss should cancel the response reader");
+        assert.equal(updates.some((update) => ["queued", "failed", "succeeded"].includes(String(update.data.status))), false);
+      } else if (["stored-sha", "source-sha", "block-count", "stream-error"].includes(mode)) {
+        await assert.rejects(recovery, /generation_retryable/);
+        assert.equal(artifactCreates.length, 1, `${mode} should preserve the existing source without packaging artifacts`);
+        assert.equal(updates.some((update) => update.data.status === "succeeded"), false);
+      } else {
+        await recovery;
+        const completed = updates.find((update) => update.data.status === "succeeded");
+        assert.ok(completed, `${mode} recovery should complete`);
+        assert.equal(completed.data.blockCount, 128);
+        assert.equal(completed.data.generationTimeMs, 1234);
+        assert.equal(completed.data.buildSha256, recoveryArtifact.sourceBuildSha256, "recovery should retain the stored source instead of regenerating");
+      }
+      assert.equal(fetches, mode === "local" ? 0 : 1);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    JSON.parse = originalParse;
+    for (const [key, value] of Object.entries(recoveryEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 
   updates.length = 0;
   operations.length = 0;

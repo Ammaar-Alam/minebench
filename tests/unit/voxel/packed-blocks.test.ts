@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  appendCoalescedVoxelBox,
   appendPackedVoxelBlocks,
   copyPackedVoxelBlocks,
   createPackedVoxelBlocks,
@@ -11,7 +12,8 @@ import {
   voxelBuildBlockCount,
   voxelBuildBlocksRef,
 } from "../../../lib/voxel/packedBlocks";
-import type { VoxelBlock } from "../../../lib/voxel/types";
+import type { VoxelBlock, VoxelBox } from "../../../lib/voxel/types";
+import { parseVoxelBuildSpec } from "../../../lib/voxel/validate";
 
 function makeBlocks(count: number, offset = 0): VoxelBlock[] {
   const types = ["stone", "water", "oak_leaves"];
@@ -29,6 +31,25 @@ function assertRoundTrip(packed: ReturnType<typeof packVoxelBlocks>, expected: V
 }
 
 async function main() {
+  {
+    const boxes: VoxelBox[] = [];
+    for (const x of [0, 1, 2]) appendCoalescedVoxelBox(boxes, { x1: x, y1: 0, z1: 0, x2: x, y2: 1, z2: 1, type: "stone" });
+    assert.deepEqual(boxes, [{ x1: 0, y1: 0, z1: 0, x2: 2, y2: 1, z2: 1, type: "stone" }]);
+    appendCoalescedVoxelBox(boxes, { x1: 2, y1: 0, z1: 0, x2: 3, y2: 1, z2: 1, type: "stone" });
+    assert.equal(boxes.length, 2);
+    const reversed: VoxelBox[] = [{ x1: 3, y1: 0, z1: 0, x2: 1, y2: 0, z2: 0, type: "stone" }];
+    appendCoalescedVoxelBox(reversed, { x1: 2, y1: 0, z1: 0, x2: 2, y2: 0, z2: 0, type: "stone" });
+    assert.equal(reversed.length, 2);
+
+    const packed = packVoxelBlocks([{ x: 8191, y: 2, z: 3, type: "stone" }]);
+    const source = { version: "1.0", blocks: [], boxes, packed };
+    const parsed = parseVoxelBuildSpec(source);
+    assert.ok(parsed.ok);
+    if (parsed.ok) assert.equal(parsed.value, source);
+    assert.equal(parseVoxelBuildSpec({ ...source, packed: { ...packed, count: 2 } }).ok, false);
+    assert.equal(parseVoxelBuildSpec({ ...source, packed: { ...packed, typeNames: [] } }).ok, false);
+    assert.throws(() => packVoxelBlocks([{ x: 32768, y: 0, z: 0, type: "stone" }]), /coordinate range/);
+  }
   {
     const blocks = makeBlocks(500);
     assertRoundTrip(packVoxelBlocks(blocks), blocks);

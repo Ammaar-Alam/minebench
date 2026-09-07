@@ -6,6 +6,7 @@ import {
   MAX_VOXEL_COORDINATE,
 } from "@/lib/voxel/coordinateKeys";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { isPackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
 
 const blockSchema = z.object({
   x: z.number().int(),
@@ -50,7 +51,7 @@ export type ValidateVoxelOptions = {
 };
 
 export type ValidatedVoxelBuild = {
-  build: VoxelBuild;
+  build: Omit<VoxelBuild, "packed">;
   warnings: string[];
 };
 
@@ -66,6 +67,7 @@ function normalizeParsedBuild(data: z.infer<typeof buildSchema>): VoxelBuild {
 export function parseVoxelBuildSpec(
   input: unknown,
 ): { ok: true; value: VoxelBuild } | { ok: false; error: string } {
+  if (isRecord(input) && input.packed !== undefined) return parseOwnedVoxelBuildSpec(input);
   const parsed = buildSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.message };
 
@@ -294,6 +296,17 @@ function validateVoxelBuildSpecInternal(
       }
       put(b.x, b.y, b.z, normalizedType);
     }
+    if (build.packed) {
+      const packed = build.packed;
+      charge(packed.count);
+      const types = packed.typeNames.map((type) => normalizeBlockType(type, allowed));
+      for (let index = 0; index < packed.count; index += 1) {
+        const typeId = packed.typeIds[index]!;
+        const type = types[typeId];
+        if (!type) bumpUnknownType(packed.typeNames[typeId]!, 1);
+        else put(packed.positions[index * 3]!, packed.positions[index * 3 + 1]!, packed.positions[index * 3 + 2]!, type);
+      }
+    }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Failed to expand primitives" };
   }
@@ -318,6 +331,7 @@ function validateVoxelBuildSpecInternal(
     build.blocks.length = 0;
     if (build.boxes) build.boxes.length = 0;
     if (build.lines) build.lines.length = 0;
+    delete build.packed;
   }
   const blocks = Array.from({ length: occupiedCount }, (_, index) => {
     const key = occupied[index]!;
@@ -348,9 +362,9 @@ export function validateVoxelBuild(
   input: unknown,
   opts: ValidateVoxelOptions,
 ): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
-  const parsed = buildSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.message };
-  return validateVoxelBuildSpec(normalizeParsedBuild(parsed.data), opts);
+  const parsed = parseVoxelBuildSpec(input);
+  if (!parsed.ok) return parsed;
+  return validateVoxelBuildSpec(parsed.value, opts);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -366,11 +380,10 @@ function isPoint(value: unknown): boolean {
   );
 }
 
-// Large uploaded builds are already owned by the worker, so avoid Zod's deep copy
-export function validateOwnedVoxelBuild(
+// owned sources retain their arrays after validation
+export function parseOwnedVoxelBuildSpec(
   input: unknown,
-  opts: ValidateVoxelOptions,
-): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+): { ok: true; value: VoxelBuild } | { ok: false; error: string } {
   if (!isRecord(input) || input.version !== "1.0" || !Array.isArray(input.blocks)) {
     return { ok: false, error: "Build must contain version 1.0 and a blocks list" };
   }
@@ -414,5 +427,17 @@ export function validateOwnedVoxelBuild(
       }
     }
   }
-  return validateVoxelBuildSpecInternal(input as VoxelBuild, opts, true);
+  if (input.packed !== undefined && !isPackedVoxelBlocks(input.packed)) {
+    return { ok: false, error: "Invalid packed voxel blocks" };
+  }
+  return { ok: true, value: input as VoxelBuild };
+}
+
+export function validateOwnedVoxelBuild(
+  input: unknown,
+  opts: ValidateVoxelOptions,
+): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+  const parsed = parseOwnedVoxelBuildSpec(input);
+  if (!parsed.ok) return parsed;
+  return validateVoxelBuildSpecInternal(parsed.value, opts, true);
 }

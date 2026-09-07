@@ -282,7 +282,14 @@ export async function middleware(req: NextRequest) {
   const isCustomBuildCreate =
     (pathname === "/api/custom-builds" || pathname === "/api/generations") && req.method === "POST";
   const isGalleryReport = pathname === "/api/gallery/reports" && req.method === "POST";
-  const maxPerWindow = pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
+  const isWorldPart = req.method === "GET" && req.nextUrl.searchParams.has("part") && (
+    pathname === "/api/local/voxel-exec" ||
+    /^\/api\/generations\/[^/]+\/artifacts\/viewer$/.test(pathname) ||
+    /^\/api\/gallery\/examples\/[^/]+\/viewer$/.test(pathname)
+  );
+  const maxPerWindow = isWorldPart
+    ? MAX_PER_WINDOW * ARENA_BUILD_IP_GUARDRAIL_MULTIPLIER
+    : pathname === "/api/local/voxel-exec" ? MAX_PER_WINDOW_LOCAL_EXEC : MAX_PER_WINDOW;
   const { value: ip, trusted: hasTrustedIp } = getIp(req);
   const modelAnonymousBucketId = isModelDetailApi && !hasTrustedIp
     ? getAnonymousBucketId(req, null)
@@ -290,7 +297,7 @@ export async function middleware(req: NextRequest) {
   const modelSession = modelAnonymousBucketId
     ? getRateLimitSession(req, modelAnonymousBucketId)
     : null;
-  const bucketPath = normalizeRateLimitPath(pathname);
+  const bucketPath = `${normalizeRateLimitPath(pathname)}${isWorldPart ? ":part" : ""}`;
   const ipBucket = ip ?? "unknown";
   const now = Date.now();
   maybePruneExpiredBuckets(now);
@@ -444,5 +451,12 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|api/local/voxel-exec$).*)",
+    {
+      source: "/api/local/voxel-exec",
+      // next buffers middleware bodies so local source uploads stream directly to the route
+      missing: [{ type: "header", key: "content-type", value: "application/vnd.minebench.build\\+json" }],
+    },
+  ],
 };

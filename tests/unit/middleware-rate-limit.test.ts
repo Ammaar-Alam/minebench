@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
+import { unstable_doesMiddlewareMatch } from "next/experimental/testing/server";
 
-import { middleware } from "../../middleware";
+import { config, middleware } from "../../middleware";
 
 async function main() {
+  const uploadHeaders = { "content-type": "application/vnd.minebench.build+json" };
+  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/local/voxel-exec", headers: uploadHeaders }), false);
+  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/local/voxel-exec", headers: { "content-type": "application/json" } }), true);
+  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/local/voxel-exec?world=city&part=page-0" }), true);
+  assert.equal(unstable_doesMiddlewareMatch({ config, url: "/api/generations", headers: uploadHeaders }), true);
   process.env.ARENA_TRUST_X_FORWARDED_FOR = "1";
   const ip = "203.0.113.42";
 
@@ -168,6 +174,27 @@ async function main() {
   }));
   assert.equal(reportLimited.status, 429);
   assert.ok(Number(reportLimited.headers.get("retry-after")) > 3_500);
+
+  const worldHeaders = { "x-real-ip": "203.0.113.153" };
+  for (const path of [
+    "/api/local/voxel-exec?world=local-city",
+    "/api/generations/city/artifacts/viewer?",
+    "/api/gallery/examples/city/viewer?",
+  ]) {
+    for (let index = 0; index < 128; index += 1) {
+      assert.equal((await middleware(new NextRequest(`http://localhost${path}&part=mixed-${index}`, {
+        headers: worldHeaders,
+      }))).status, 200, "world parts must load within one viewer session");
+    }
+  }
+  for (let index = 0; index < 6; index += 1) {
+    assert.equal((await middleware(new NextRequest("http://localhost/api/local/voxel-exec", {
+      method: "POST", headers: worldHeaders,
+    }))).status, 200, "part fetches must not consume the execution bucket");
+  }
+  assert.equal((await middleware(new NextRequest("http://localhost/api/local/voxel-exec", {
+    method: "POST", headers: worldHeaders,
+  }))).status, 429);
 
   console.log("middleware rate-limit contract checks passed");
 }

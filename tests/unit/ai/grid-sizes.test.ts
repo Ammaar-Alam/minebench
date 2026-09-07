@@ -62,7 +62,20 @@ async function main() {
       }));
       assert.equal(response.status, 200);
       const imported = await response.json();
-      assert.deepEqual(imported.build, generated.build);
+      if (gridSize > 512) {
+        assert.equal(imported.build.version, "1.0");
+        assert.deepEqual(imported.build.blocks, []);
+        assert.equal("boxes" in imported.build, false);
+        assert.equal(imported.blockCount, width * height * depth);
+        assert.deepEqual(imported.bounds, {
+          origin: { x: gridSize - width, y: 0, z: gridSize - depth },
+          size: { x: width, y: height, z: depth },
+        });
+        assert.match(imported.build.world.partBaseUrl, /^\/api\/local\/voxel-exec\?world=[0-9a-f-]{36}$/);
+        assert.equal(imported.build.world.manifest.exactBlockCount, width * height * depth);
+      } else {
+        assert.deepEqual(imported.build, generated.build);
+      }
     }
   } finally {
     globalThis.fetch = originalFetch;

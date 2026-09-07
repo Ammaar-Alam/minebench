@@ -11,6 +11,7 @@ import {
   type VoxelWorldRegion,
 } from "../../../lib/voxel/worldRegions";
 import type { VoxelBuild, VoxelBlock } from "../../../lib/voxel/types";
+import { packVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 import { validateVoxelBuild } from "../../../lib/voxel/validate";
 
 const MEMORY_CHILD = "MINEBENCH_WORLD_REGIONS_MEMORY_CHILD";
@@ -60,14 +61,15 @@ function assertMatchesValidator(build: VoxelBuild, gridSize: number) {
   });
   if (!expected.ok) throw new Error(expected.error);
 
-  const evaluated = evaluateVoxelWorldRegions(build, { gridSize, palette });
-  if (!evaluated.ok) throw new Error(evaluated.error);
-  assert.deepEqual(evaluated.warnings, expected.value.warnings);
-
-  const actualBlocks = expandRegions(Array.from(evaluated.regions), palette);
-  assert.equal(actualBlocks.size, expected.value.build.blocks.length);
-  for (const block of expected.value.build.blocks) {
-    assert.equal(actualBlocks.get(key(block)), block.type, key(block));
+  for (const source of [build, { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) }]) {
+    const evaluated = evaluateVoxelWorldRegions(source, { gridSize, palette });
+    if (!evaluated.ok) throw new Error(evaluated.error);
+    assert.deepEqual(evaluated.warnings, expected.value.warnings);
+    const actualBlocks = expandRegions(Array.from(evaluated.regions), palette);
+    assert.equal(actualBlocks.size, expected.value.build.blocks.length);
+    for (const block of expected.value.build.blocks) {
+      assert.equal(actualBlocks.get(key(block)), block.type, key(block));
+    }
   }
 }
 
@@ -144,7 +146,8 @@ function assertLargeWorldSmoke() {
   const boundary = evaluateVoxelWorldRegions(
     {
       version: "1.0",
-      blocks: [{ x: 8191, y: 8191, z: 8191, type: "glass" }],
+      blocks: [],
+      packed: packVoxelBlocks([{ x: 8191, y: 8191, z: 8191, type: "glass" }]),
       boxes: [{ x1: 0, y1: 0, z1: 0, x2: 8191, y2: 8191, z2: 8191, type: "stone" }],
     },
     { gridSize: 8192, palette },
@@ -164,6 +167,26 @@ function assertLargeWorldSmoke() {
 }
 
 async function main() {
+  const scattered = Array.from({ length: 600 }, (_, index) => ({
+    x: index * 37 % 128, y: index * 17 % 96, z: index * 73 % 128,
+    type: index < 300 ? "water" : "glass",
+  }));
+  const isolated = createVoxelWorldRegionEvaluator({ version: "1.0", blocks: [], packed: packVoxelBlocks(scattered) }, {
+    gridSize: 128, palette: getPalette("simple"),
+  });
+  if (!isolated.ok) throw new Error(isolated.error);
+  const first = isolated.value.regions[Symbol.iterator]();
+  const partial = [first.next().value as VoxelWorldRegion];
+  const independentlyEvaluated = Array.from(isolated.value.regions);
+  assert.equal(isolated.value.evaluateBounds({ x: 0, y: 0, z: 0 }, { x: 64, y: 64, z: 64 }).ok, true);
+  for (let next = first.next(); !next.done; next = first.next()) partial.push(next.value);
+  assert.deepEqual(expandRegions(partial, getPalette("simple")), expandRegions(independentlyEvaluated, getPalette("simple")));
+  assertMatchesValidator({
+    version: "1.0",
+    boxes: [{ x1: 0, y1: 0, z1: 0, x2: 127, y2: 0, z2: 127, type: "stone" }],
+    lines: [{ from: { x: 0, y: 0, z: 0 }, to: { x: 127, y: 95, z: 127 }, type: "gold_block" }],
+    blocks: [...scattered, ...scattered.slice(0, 50).map((block) => ({ ...block, type: "oak_log" }))],
+  }, 128);
   assertMatchesValidator(
     {
       version: "1.0",

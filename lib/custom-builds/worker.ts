@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { CustomBuildJob } from "@prisma/client";
+import { Prisma, type CustomBuildJob } from "@prisma/client";
+import { isDatabaseUnavailableError } from "@/lib/db/errors";
 import {
   claimNextCustomBuildJob,
   completeCustomBuildJob,
@@ -13,6 +14,7 @@ import {
 } from "@/lib/custom-builds/jobs";
 import { runCustomBuildExportJob } from "@/lib/custom-builds/exportJob";
 import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
+import { createCustomBuildProcessingGate } from "@/lib/custom-builds/processingGate";
 import {
   CustomBuildLeaseLostError,
   isCustomBuildLeaseLostError,
@@ -76,38 +78,7 @@ export function getCustomBuildSynchronousExportLeaseMs(): number {
   return Math.max(getCustomBuildJobLeaseSeconds() * 1000, SYNCHRONOUS_EXPORT_LEASE_MS);
 }
 
-export function createCustomBuildProcessingGate(): {
-  acquire: (signal?: AbortSignal) => Promise<() => void>;
-} {
-  let tail = Promise.resolve();
-
-  return {
-    async acquire(signal) {
-      signal?.throwIfAborted();
-      let unlock = () => {};
-      const current = new Promise<void>((resolve) => {
-        unlock = resolve;
-      });
-      const previous = tail;
-      tail = previous.then(() => current);
-      await previous;
-
-      let released = false;
-      const release = () => {
-        if (released) return;
-        released = true;
-        unlock();
-      };
-      try {
-        signal?.throwIfAborted();
-        return release;
-      } catch (error) {
-        release();
-        throw error;
-      }
-    },
-  };
-}
+export { createCustomBuildProcessingGate };
 
 function abortLease(controller: AbortController, message: string): void {
   if (controller.signal.aborted) return;
@@ -392,6 +363,8 @@ async function checkAndReportQueueHealth(): Promise<void> {
 
 export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId()): Promise<void> {
   let shutdownRequested = false;
+  const pollAbort = new AbortController();
+  let retryDelayMs = getCustomBuildWorkerPollMs();
   const concurrency = getCustomBuildWorkerConcurrency();
   const processingGate = createCustomBuildProcessingGate();
   const activeJobs = new Set<Promise<unknown>>();
@@ -409,61 +382,88 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   const stop = () => {
     if (shutdownRequested) return;
     shutdownRequested = true;
+    pollAbort.abort();
     recordActiveGenerations(activeJobs.size, "worker", undefined, false);
   };
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  const waitForPoll = async (delayMs: number, wakeOn: Iterable<Promise<unknown>> = []) => {
+    const wake = new AbortController();
+    try {
+      await Promise.race([
+        sleep(delayMs, undefined, { signal: AbortSignal.any([pollAbort.signal, wake.signal]), ref: false }),
+        ...wakeOn,
+      ]);
+    } catch (error) {
+      if (!shutdownRequested) throw error;
+    } finally {
+      wake.abort();
+    }
+  };
 
   try {
     while (!shutdownRequested) {
-      await recoverStaleCustomBuildJobLeases();
-      const recovered = await recoverStaleStealthGenerationJobLeases(
-        getCustomBuildJobLeaseSeconds(),
-      );
-      await Promise.all(recovered.failedRunIds.map(finishStealthGenerationRun));
       let claimed = false;
-      while (!shutdownRequested && activeJobs.size < concurrency) {
-        const stealthFirst = preferStealth;
-        preferStealth = !preferStealth;
-        const stealthJob = stealthFirst
-          ? await claimNextStealthGenerationJob(
-              workerId,
-              getCustomBuildJobLeaseSeconds(),
-            )
-          : null;
-        const customJob = stealthJob ? null : await claimNextCustomBuildJob(workerId);
-        const fallbackStealthJob =
-          !stealthJob && !customJob && !stealthFirst
+      try {
+        await recoverStaleCustomBuildJobLeases();
+        const recovered = await recoverStaleStealthGenerationJobLeases(
+          getCustomBuildJobLeaseSeconds(),
+        );
+        await Promise.all(recovered.failedRunIds.map(finishStealthGenerationRun));
+        while (!shutdownRequested && activeJobs.size < concurrency) {
+          const stealthFirst = preferStealth;
+          preferStealth = !preferStealth;
+          const stealthJob = stealthFirst
             ? await claimNextStealthGenerationJob(
                 workerId,
                 getCustomBuildJobLeaseSeconds(),
               )
             : null;
-        if (!customJob && !stealthJob && !fallbackStealthJob) break;
-        claimed = true;
-        const privateJob = stealthJob ?? fallbackStealthJob;
-        const active = privateJob
-          ? processClaimedStealthJob(privateJob, workerId, processingGate)
-          : processClaimedJob(customJob!, workerId, processingGate);
-        activeJobs.add(active);
-        void active.then(
-          () => activeJobs.delete(active),
-          () => activeJobs.delete(active),
-        );
+          const customJob = stealthJob ? null : await claimNextCustomBuildJob(workerId);
+          const fallbackStealthJob =
+            !stealthJob && !customJob && !stealthFirst
+              ? await claimNextStealthGenerationJob(
+                  workerId,
+                  getCustomBuildJobLeaseSeconds(),
+                )
+              : null;
+          if (!customJob && !stealthJob && !fallbackStealthJob) break;
+          claimed = true;
+          const privateJob = stealthJob ?? fallbackStealthJob;
+          const active = privateJob
+            ? processClaimedStealthJob(privateJob, workerId, processingGate)
+            : processClaimedJob(customJob!, workerId, processingGate);
+          activeJobs.add(active);
+          void active.then(
+            () => activeJobs.delete(active),
+            () => activeJobs.delete(active),
+          );
+        }
+        retryDelayMs = getCustomBuildWorkerPollMs();
+      } catch (error) {
+        if (!isDatabaseUnavailableError(error) && !(error instanceof Prisma.PrismaClientKnownRequestError && ["P2028", "P2034"].includes(error.code))) throw error;
+        console.warn(`worker queue poll failed; retrying in ${retryDelayMs}ms: ${redactSensitiveText(error)}`);
+        await waitForPoll(retryDelayMs);
+        retryDelayMs = Math.min(60_000, retryDelayMs * 2);
+        continue;
       }
 
       if (shutdownRequested) break;
       if (activeJobs.size >= concurrency) {
         await Promise.race(activeJobs);
       } else if (!claimed) {
-        await Promise.race([sleep(getCustomBuildWorkerPollMs()), ...activeJobs]);
+        await waitForPoll(getCustomBuildWorkerPollMs(), activeJobs);
       }
     }
 
     await Promise.all(activeJobs);
   } finally {
+    stop();
+    await Promise.allSettled(activeJobs);
     clearInterval(heartbeat);
     clearInterval(queueHeartbeat);
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
     await prisma.$disconnect();
   }
 }

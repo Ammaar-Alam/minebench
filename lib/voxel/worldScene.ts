@@ -3,7 +3,7 @@ import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import type { BlockDefinition, RenderKind } from "@/lib/blocks/palettes";
 import { getRenderKind } from "@/lib/blocks/registry";
 import { getTextureKey, type Face } from "@/lib/blocks/textures";
-import { decodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
+import { decodeBinaryVoxelBuild, readBinaryVoxelBuildHeader } from "@/lib/voxel/binaryBuild";
 import {
   configureAtlasTexture,
   createVoxelGroupAsync,
@@ -43,6 +43,7 @@ export type VoxelWorldSceneStats = {
 export type VoxelWorldScene = VoxelGroup & {
   updateFocus: (focus: THREE.Vector3) => void;
   loadAround: (focus: THREE.Vector3) => Promise<void>;
+  getDetailRadius: (focus: THREE.Vector3) => number;
   getResidentStats: () => VoxelWorldSceneStats;
 };
 
@@ -52,6 +53,8 @@ export type VoxelWorldSceneOptions = {
   onError?: (message: string) => void;
   onProgress?: (progress: { processedBlocks: number; totalBlocks: number; stageLabel?: string }) => void;
   yieldAfterMs?: number;
+  initialFocus?: THREE.Vector3;
+  showOverview?: boolean;
   maxResidentPages?: number;
   maxUniformRegions?: number;
   maxMixedDetailRegions?: number;
@@ -360,14 +363,13 @@ function appendUniformRegion(
 
 function buildUniformGroup(
   regions: readonly VoxelWorldUniformRegion[],
-  knownRegions: readonly VoxelWorldRegion[],
   center: WorldCenter,
   atlasTexture: THREE.Texture,
 ): THREE.Group | null {
   if (regions.length === 0) return null;
   configureAtlasTexture(atlasTexture);
   const buckets = new Map<RenderKind, UniformGeometryData>();
-  for (const region of regions) appendUniformRegion(buckets, region, center, knownRegions);
+  for (const region of regions) appendUniformRegion(buckets, region, center, regions);
 
   const group = new THREE.Group();
   group.name = "VoxelWorldUniformRegions";
@@ -485,7 +487,7 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
   private readonly manifest: VoxelWorldManifest;
   private readonly palette: BlockDefinition[];
   private readonly atlasTexture: THREE.Texture;
-  private readonly opts: Required<Omit<VoxelWorldSceneOptions, "signal" | "onChange" | "onError" | "onProgress" | "yieldAfterMs" | "mixedDetailRadius">> & {
+  private readonly opts: Required<Omit<VoxelWorldSceneOptions, "signal" | "onChange" | "onError" | "onProgress" | "yieldAfterMs" | "mixedDetailRadius" | "initialFocus" | "showOverview">> & {
     signal?: AbortSignal;
     onChange?: () => void;
     onError?: (message: string) => void;
@@ -497,11 +499,16 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
   private readonly regions = new Map<string, VoxelWorldRegion>();
   private readonly regionPages = new Map<number, VoxelWorldRegionPage>();
   private readonly residentMixed = new Map<string, ResidentMixedRegion>();
-  private readonly loadingMixed = new Map<string, LoadingJob>();
+  private readonly loadingMixed = new Map<string, LoadingJob & { mode: ResidentMixedRegion["mode"] }>();
   private readonly loadingPages = new Map<number, LoadingJob>();
-  private readonly failures: Error[] = [];
+  private failure: Error | null = null;
   private uniformGroup: THREE.Group | null = null;
+  private uniformRegionKey = "";
   private uniformRegionCount = 0;
+  private overview: VoxelGroup | null = null;
+  private readonly overviewController = new AbortController();
+  private readonly detailFocus = { value: new THREE.Vector3() };
+  private readonly detailRadius = { value: 0 };
   private mixedProxyRegions = 0;
   private mixedDetailRegions = 0;
   private focusWorld: VoxelPoint | null = null;
@@ -530,7 +537,7 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
       maxResidentPages: clampInt(opts.maxResidentPages, DEFAULT_MAX_RESIDENT_PAGES, 1),
       maxUniformRegions: clampInt(opts.maxUniformRegions, DEFAULT_MAX_UNIFORM_REGIONS, 0),
       maxMixedDetailRegions: clampInt(opts.maxMixedDetailRegions, DEFAULT_MAX_MIXED_DETAIL_REGIONS, 0),
-      maxMixedProxyRegions: clampInt(opts.maxMixedProxyRegions, DEFAULT_MAX_MIXED_PROXY_REGIONS, 0),
+      maxMixedProxyRegions: clampInt(opts.maxMixedProxyRegions, manifest.overview ? 0 : DEFAULT_MAX_MIXED_PROXY_REGIONS, 0),
       mixedProxyBlockLimit: clampInt(opts.mixedProxyBlockLimit, DEFAULT_MIXED_PROXY_BLOCK_LIMIT, 1),
       mixedDetailRadius:
         typeof opts.mixedDetailRadius === "number" && Number.isFinite(opts.mixedDetailRadius)
@@ -542,6 +549,51 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     opts.signal?.addEventListener("abort", () => this.dispose(), { once: true });
   }
 
+  async loadOverview() {
+    const overview = this.manifest.overview;
+    if (!overview) return;
+    const signal = this.overviewController.signal;
+    const bytes = await readPartBytes(this.delivery, overview.data, signal);
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    if (readBinaryVoxelBuildHeader(bytes).blockCount > 1_000_000) throw new Error("World overview is too large");
+    const packed = decodeBinaryVoxelBuild(bytes);
+    const cellsPerAxis = this.manifest.gridSize / overview.scale;
+    if (packed.positions.some((coordinate) => coordinate >= cellsPerAxis)) throw new Error("World overview exceeds its bounds");
+    const anchor = packedAnchor(packed);
+    const rendered = await createVoxelGroupAsync({ version: "1.0", blocks: [], packed }, this.palette, this.atlasTexture, { signal });
+    if (signal.aborted || this.disposed) {
+      rendered.dispose();
+      throw new DOMException("Aborted", "AbortError");
+    }
+    rendered.group.name = "VoxelWorldOverview";
+    rendered.group.scale.setScalar(overview.scale);
+    rendered.group.position.set(
+      anchor.x * overview.scale - this.center.x,
+      anchor.y * overview.scale - this.center.y,
+      anchor.z * overview.scale - this.center.z,
+    );
+    rendered.group.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.userData.voxelWorldOverview = true;
+      const materials: THREE.Material[] = Array.isArray(child.material) ? child.material : [child.material];
+      for (const material of materials) {
+        material.allowOverride = false;
+        material.onBeforeRender = (_renderer, scene) => { material.colorWrite = !scene.overrideMaterial; };
+        material.onBeforeCompile = (shader) => {
+          shader.uniforms.worldDetailFocus = this.detailFocus;
+          shader.uniforms.worldDetailRadius = this.detailRadius;
+          shader.vertexShader = `varying vec3 vWorldOverviewPosition;\n${shader.vertexShader}`
+            .replace("#include <project_vertex>", "#include <project_vertex>\nvWorldOverviewPosition = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+          shader.fragmentShader = `varying vec3 vWorldOverviewPosition;\nuniform vec3 worldDetailFocus;\nuniform float worldDetailRadius;\n${shader.fragmentShader}`
+            .replace("#include <clipping_planes_fragment>", "#include <clipping_planes_fragment>\nif (distance(vWorldOverviewPosition, worldDetailFocus) < worldDetailRadius) discard;");
+        };
+        material.customProgramCacheKey = () => "voxel-world-overview-v1";
+      }
+    });
+    this.overview = rendered;
+    this.group.add(rendered.group);
+  }
+
   updateFocus(focus: THREE.Vector3) {
     if (this.disposed || !this.manifest.bounds) return;
     const next = focusFromLocal(focus, this.center);
@@ -550,15 +602,15 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
   }
 
   async loadAround(focus: THREE.Vector3): Promise<void> {
+    if (this.failure) throw this.failure;
     if (this.disposed || !this.manifest.bounds) return;
-    const startedWithFailures = this.failures.length;
-    this.reconcile(focusFromLocal(focus, this.center), true);
+    this.reconcile(focusFromLocal(focus, this.center));
     while (!this.disposed) {
       const pending = [...this.loadingPages.values(), ...this.loadingMixed.values()].map((job) => job.promise);
       if (pending.length === 0) break;
       await Promise.all(pending);
-      if (this.failures.length > startedWithFailures) throw this.failures[startedWithFailures];
-      if (this.focusWorld) this.reconcile(this.focusWorld, true);
+      if (this.failure) throw this.failure;
+      if (this.focusWorld) this.reconcile(this.focusWorld);
     }
   }
 
@@ -573,9 +625,14 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     };
   }
 
+  getDetailRadius(focus: THREE.Vector3): number {
+    return this.disposed ? 0 : Math.max(0, this.detailRadius.value - focus.distanceTo(this.detailFocus.value));
+  }
+
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.overviewController.abort();
     for (const job of this.loadingPages.values()) job.controller.abort();
     for (const job of this.loadingMixed.values()) job.controller.abort();
     this.loadingPages.clear();
@@ -590,14 +647,19 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
       resident.voxelGroup.dispose();
     }
     this.residentMixed.clear();
+    if (this.overview) {
+      this.group.remove(this.overview.group);
+      this.overview.dispose();
+      this.overview = null;
+    }
   }
 
-  private addRegion(region: VoxelWorldRegion, pageIndex?: number) {
+  private addRegion(region: VoxelWorldRegion) {
     this.regions.set(region.key, region);
   }
 
-  private reconcile(focusWorld: VoxelPoint, force = false) {
-    if (this.disposed) return;
+  private reconcile(focusWorld: VoxelPoint) {
+    if (this.disposed || this.failure) return;
     this.focusWorld = focusWorld;
     this.loadPagesAround(focusWorld);
     this.trimPageCache(focusWorld);
@@ -614,8 +676,22 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
       (candidate): candidate is RegionCandidate & { region: VoxelWorldMixedRegion } => candidate.region.kind === "mixed",
     );
 
-    this.rebuildUniformRegions(uniformRegions, force);
-    this.reconcileMixedRegions(mixedRegions, focusWorld);
+    this.rebuildUniformRegions(uniformRegions);
+    this.reconcileMixedRegions(mixedRegions);
+    const uniformKeys = new Set(uniformRegions.map((region) => region.key));
+    let unknownDistanceSq = Infinity;
+    for (const candidate of candidates) {
+      const region = candidate.region;
+      const detailed = region.kind === "uniform" ? uniformKeys.has(region.key) : this.residentMixed.get(region.key)?.mode === "detail";
+      if (!detailed) unknownDistanceSq = Math.min(unknownDistanceSq, candidate.distanceSq);
+    }
+    for (const page of this.manifest.regionPages ?? []) {
+      if (!this.regionPages.has(page.index)) unknownDistanceSq = Math.min(unknownDistanceSq, distanceSqToBounds(page.bounds, focusWorld));
+    }
+    this.detailFocus.value.set(focusWorld.x - this.center.x, focusWorld.y - this.center.y, focusWorld.z - this.center.z);
+    this.detailRadius.value = Math.max(0, Math.sqrt(unknownDistanceSq) - 0.001);
+    if (this.overview) this.overview.group.visible = Number.isFinite(unknownDistanceSq);
+    this.opts.onChange?.();
     this.opts.onProgress?.({
       processedBlocks: this.residentBlockCount(),
       totalBlocks: Math.max(1, this.manifest.exactBlockCount),
@@ -642,7 +718,7 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
 
     const pages = candidates
       .filter(({ page }) => desired.has(page.index) && !this.regionPages.has(page.index) && !this.loadingPages.has(page.index))
-      .slice(0, PAGE_LOAD_CONCURRENCY);
+      .slice(0, Math.max(0, PAGE_LOAD_CONCURRENCY - this.loadingPages.size));
     for (const { page } of pages) this.loadPage(page);
   }
 
@@ -651,8 +727,8 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     const promise = this.readPage(page, controller.signal)
       .catch((error: unknown) => this.recordFailure(error))
       .finally(() => {
-        this.loadingPages.delete(page.index);
-        if (!this.disposed && this.focusWorld) this.reconcile(this.focusWorld, true);
+        if (this.loadingPages.get(page.index)?.controller === controller) this.loadingPages.delete(page.index);
+        if (this.focusWorld) this.reconcile(this.focusWorld);
       });
     this.loadingPages.set(page.index, { controller, promise });
   }
@@ -668,7 +744,7 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     });
     if (!parsed.ok) throw new Error(parsed.error);
     this.regionPages.set(page.index, parsed.value);
-    for (const region of parsed.value.regions) this.addRegion(region, page.index);
+    for (const region of parsed.value.regions) this.addRegion(region);
   }
 
   private trimPageCache(focusWorld: VoxelPoint) {
@@ -697,21 +773,21 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     }
   }
 
-  private rebuildUniformRegions(regions: readonly VoxelWorldUniformRegion[], force: boolean) {
-    const key = regions.map((region) => region.key).join("|");
-    if (!force && this.uniformGroup?.userData.key === key) return;
+  private rebuildUniformRegions(regions: readonly VoxelWorldUniformRegion[]) {
+    const key = regions.map((region) => region.key).sort().join("|");
+    if (this.uniformRegionKey === key) return;
     if (this.uniformGroup) {
       this.group.remove(this.uniformGroup);
       disposeObject(this.uniformGroup);
       this.uniformGroup = null;
     }
+    this.uniformRegionKey = key;
     this.uniformRegionCount = regions.length;
-    const group = buildUniformGroup(regions, Array.from(this.regions.values()), this.center, this.atlasTexture);
+    const group = buildUniformGroup(regions, this.center, this.atlasTexture);
     if (!group) {
       this.opts.onChange?.();
       return;
     }
-    group.userData.key = key;
     this.uniformGroup = group;
     this.group.add(group);
     this.opts.onChange?.();
@@ -719,7 +795,6 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
 
   private reconcileMixedRegions(
     mixedRegions: readonly (RegionCandidate & { region: VoxelWorldMixedRegion })[],
-    focusWorld: VoxelPoint,
   ) {
     const detailRadiusSq = this.opts.mixedDetailRadius * this.opts.mixedDetailRadius;
     const desired = new Map<string, "detail" | "proxy">();
@@ -727,19 +802,21 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
       if (desired.size >= this.opts.maxMixedDetailRegions) break;
       if (candidate.distanceSq <= detailRadiusSq || desired.size === 0) desired.set(candidate.region.key, "detail");
     }
+    const maxResidentRegions = desired.size + this.opts.maxMixedProxyRegions;
     for (const candidate of mixedRegions) {
-      if (desired.has(candidate.region.key) || desired.size >= this.opts.maxMixedDetailRegions + this.opts.maxMixedProxyRegions) continue;
+      if (desired.has(candidate.region.key) || desired.size >= maxResidentRegions) continue;
       desired.set(candidate.region.key, "proxy");
     }
 
     for (const [key, resident] of this.residentMixed) {
-      if (desired.has(key)) continue;
+      const mode = desired.get(key);
+      if (mode === resident.mode || (resident.mode === "proxy" && mode === "detail")) continue;
       this.group.remove(resident.voxelGroup.group);
       resident.voxelGroup.dispose();
       this.residentMixed.delete(key);
     }
     for (const [key, job] of this.loadingMixed) {
-      if (desired.has(key)) continue;
+      if (desired.get(key) === job.mode) continue;
       job.controller.abort();
       this.loadingMixed.delete(key);
     }
@@ -751,7 +828,7 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
       const mode = desired.get(candidate.region.key);
       if (!mode) continue;
       const resident = this.residentMixed.get(candidate.region.key);
-      if (resident?.mode === "detail" || resident?.mode === mode || this.loadingMixed.has(candidate.region.key)) continue;
+      if (resident?.mode === mode || this.loadingMixed.has(candidate.region.key)) continue;
       this.loadMixedRegion(candidate.region, mode);
       loadSlots -= 1;
     }
@@ -769,16 +846,17 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     const promise = this.readMixedRegion(region, mode, controller.signal)
       .catch((error: unknown) => this.recordFailure(error))
       .finally(() => {
-        this.loadingMixed.delete(region.key);
-        if (!this.disposed && this.focusWorld) this.reconcile(this.focusWorld, true);
+        if (this.loadingMixed.get(region.key)?.controller === controller) this.loadingMixed.delete(region.key);
+        if (this.focusWorld) this.reconcile(this.focusWorld);
       });
-    this.loadingMixed.set(region.key, { controller, promise });
+    this.loadingMixed.set(region.key, { controller, promise, mode });
   }
 
   private async readMixedRegion(region: VoxelWorldMixedRegion, mode: "detail" | "proxy", signal: AbortSignal) {
     const bytes = await readPartBytes(this.delivery, region.data, signal);
     if (signal.aborted || this.disposed) return;
     const decoded = decodeBinaryVoxelBuild(bytes);
+    if (decoded.count !== region.blockCount) throw new Error(`Voxel world region ${region.key} block count mismatch`);
     const packed = mode === "proxy" ? samplePackedBlocks(decoded, this.opts.mixedProxyBlockLimit) : decoded;
     const anchor = packedAnchor(packed);
     const build: RenderableVoxelBuild = { version: "1.0", blocks: [], packed };
@@ -817,9 +895,11 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
   }
 
   private recordFailure(error: unknown) {
-    if (isAbortError(error) || this.disposed) return;
+    if (isAbortError(error) || this.disposed || this.failure) return;
     const err = error instanceof Error ? error : new Error(String(error));
-    this.failures.push(err);
+    this.failure = err;
+    for (const job of this.loadingPages.values()) job.controller.abort();
+    for (const job of this.loadingMixed.values()) job.controller.abort();
     this.opts.onError?.(err.message);
   }
 }
@@ -830,13 +910,26 @@ export async function createVoxelWorldScene(
   atlasTexture: THREE.Texture,
   opts: VoxelWorldSceneOptions = {},
 ): Promise<VoxelWorldScene> {
+  if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const parsed = parseVoxelWorldManifest(delivery.manifest, {
     allowLocalBlobRefs: Boolean(delivery.resolvePart),
   });
   if (!parsed.ok) throw new Error(parsed.error);
   const scene = new ManagedVoxelWorldScene(delivery, parsed.value, palette, atlasTexture, opts);
-  await scene.loadAround(scene.bounds.center);
-  return scene;
+  try {
+    const focus = opts.initialFocus ?? scene.bounds.center;
+    if (parsed.value.overview && opts.showOverview !== false) {
+      await scene.loadOverview();
+      scene.updateFocus(focus);
+    } else {
+      await scene.loadAround(focus);
+    }
+    if (opts.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    return scene;
+  } catch (error) {
+    scene.dispose();
+    throw error;
+  }
 }
 
 export function isVoxelWorldScene(group: VoxelGroup | null): group is VoxelWorldScene {

@@ -54,6 +54,7 @@ export function decodeAndVerifyCustomBuildArtifactText(args: {
   encoding?: string | null;
   storedSha256?: string | null;
   sourceSha256?: string | null;
+  maxOutputBytes?: number;
 }): string {
   const encoding = args.encoding?.split(",")[0]?.trim().toLowerCase();
   const wantsGzip = encoding === "gzip" || encoding === "x-gzip";
@@ -64,7 +65,7 @@ export function decodeAndVerifyCustomBuildArtifactText(args: {
   ) {
     throw new Error("Stored custom build artifact checksum does not match");
   }
-  const text = decodeStoredBuildText(args.bytes, args.encoding);
+  const text = decodeStoredBuildText(args.bytes, args.encoding, { maxOutputBytes: args.maxOutputBytes });
   if (args.sourceSha256 && sha256Hex(text) !== args.sourceSha256) {
     throw new Error("Stored custom build source checksum does not match");
   }

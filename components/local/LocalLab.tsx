@@ -29,6 +29,7 @@ type LocalParseWorkerRequest =
       type: "parse";
       requestId: number;
       rawText: string;
+      file?: File;
       gridSize: GridSize;
       palette: Palette;
       maxBlocksByGrid: Record<GridSize, number>;
@@ -292,8 +293,8 @@ export function LocalLab() {
   );
 
   const modelOutputRef = useRef<HTMLTextAreaElement | null>(null);
-  const bufferedOutputRef = useRef<string | null>(null);
-  const [inputStats, setInputStats] = useState<{ mode: "empty" | "editor" | "buffered"; chars: number }>({
+  const bufferedOutputRef = useRef<string | File | null>(null);
+  const [inputStats, setInputStats] = useState<{ mode: "empty" | "editor" | "buffered" | "file"; chars: number }>({
     mode: "empty",
     chars: 0,
   });
@@ -455,6 +456,13 @@ export function LocalLab() {
     }
 
     try {
+      if (gridSize > 512 && file.size >= LARGE_PASTE_CHAR_THRESHOLD) {
+        bufferedOutputRef.current = file;
+        if (modelOutputRef.current) modelOutputRef.current.value = "";
+        setInputStats({ mode: "file", chars: file.size });
+        setStatusNote(`${file.name} ready.`);
+        return;
+      }
       const text = await file.text();
       if (!trimOuterWhitespace(text)) {
         setStatusNote(`${file.name} is empty.`);
@@ -471,9 +479,9 @@ export function LocalLab() {
     }
   }
 
-  function renderFromText(text: string) {
+  function renderFromText(text: string, file?: File) {
     const trimmed = trimOuterWhitespace(text);
-    if (!trimmed) {
+    if (!trimmed && !file) {
       setStatusNote(null);
       setRendered({
         kind: "error",
@@ -571,6 +579,10 @@ export function LocalLab() {
 
     const worker = parseWorkerRef.current;
     if (!worker) {
+      if (file) {
+        setRendered({ kind: "error", build: null, warnings: [], message: "Reload the page to import this file." });
+        return;
+      }
       void fallbackParse();
       return;
     }
@@ -600,6 +612,7 @@ export function LocalLab() {
         type: "parse",
         requestId,
         rawText: trimmed,
+        file,
         gridSize,
         palette,
         maxBlocksByGrid: MAX_BLOCKS_BY_GRID,
@@ -610,7 +623,8 @@ export function LocalLab() {
   }
 
   function renderFromInput() {
-    renderFromText(readActiveInputText());
+    const input = bufferedOutputRef.current;
+    renderFromText(readActiveInputText(), input instanceof File ? input : undefined);
   }
 
   const loadingMessage =
@@ -855,7 +869,7 @@ export function LocalLab() {
 
             {inputStats.mode !== "empty" ? (
               <div className="text-[11px] text-muted">
-                {formatCompactCount(inputStats.chars)} chars (~{formatApproxMbFromChars(inputStats.chars)})
+                {inputStats.mode === "file" ? formatApproxMbFromChars(inputStats.chars) : `${formatCompactCount(inputStats.chars)} chars (~${formatApproxMbFromChars(inputStats.chars)})`}
                 {inputStats.mode === "buffered" ? " held in memory" : ""}
               </div>
             ) : null}

@@ -8,6 +8,7 @@ import {
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { parseVoxelWorldManifest } from "@/lib/voxel/world";
 
 type Palette = "simple" | "advanced";
 type ParseSource = "build-json" | "tool-call";
@@ -21,6 +22,7 @@ type ParseRequest = {
   type: "parse";
   requestId: number;
   rawText: string;
+  file?: File;
   gridSize: GridSize;
   palette: Palette;
   maxBlocksByGrid: Record<GridSize, number>;
@@ -233,15 +235,19 @@ function parseTopLevelJsonObjects(text: string, limit = 4): unknown[] {
   return parsed;
 }
 
-async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: unknown; warnings: string[] }> {
+async function executeVoxelExecToolCall(input: ToolCallInput, signal: AbortSignal): Promise<{ build: unknown; warnings: string[] }> {
   const response = await fetch("/api/local/voxel-exec", {
     method: "POST",
     headers: {
       "content-type": "application/json",
     },
     body: JSON.stringify(input),
+    signal,
   });
+  return readExecutionResponse(response);
+}
 
+async function readExecutionResponse(response: Response): Promise<{ build: unknown; warnings: string[] }> {
   const bodyText = await response.text();
   let parsed: unknown = null;
   try {
@@ -297,6 +303,19 @@ async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: 
       : [];
 
   return { build, warnings };
+}
+
+function readServerWorld(build: unknown): RenderableVoxelBuild | null {
+  if (!build || typeof build !== "object" || !("world" in build)) return null;
+  const world = build.world as { manifest?: unknown; partBaseUrl?: unknown } | null;
+  if (!world || typeof world.partBaseUrl !== "string") throw new Error("World delivery URL is missing");
+  const url = new URL(world.partBaseUrl, self.location.origin);
+  if (url.origin !== self.location.origin || url.pathname !== "/api/local/voxel-exec") {
+    throw new Error("Invalid local world delivery URL");
+  }
+  const parsed = parseVoxelWorldManifest(world.manifest);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return { version: "1.0", blocks: [], world: { manifest: parsed.value, partBaseUrl: world.partBaseUrl } };
 }
 
 function streamBlocksFromText(
@@ -421,7 +440,7 @@ async function runParse(request: ParseRequest) {
   activeRequestId = request.requestId;
 
   const raw = trimOuterWhitespace(request.rawText);
-  if (!raw) {
+  if (!raw && !request.file) {
     const message: ErrorMessage = {
       type: "error",
       requestId: request.requestId,
@@ -440,6 +459,33 @@ async function runParse(request: ParseRequest) {
   };
 
   try {
+    const finishServerWorld = (build: RenderableVoxelBuild, warnings: string[], source: ParseSource) => {
+      if (isCancelled(request.requestId)) return;
+      const manifest = build.world!.manifest;
+      postMessage({
+        type: "complete",
+        requestId: request.requestId,
+        voxelBuild: build,
+        warnings,
+        receivedBlocks: manifest.exactBlockCount,
+        totalBlocks: manifest.exactBlockCount,
+        source,
+        resolved: { gridSize: manifest.gridSize as GridSize, palette: manifest.palette },
+      } satisfies CompleteMessage);
+    };
+    if (request.file) {
+      const response = await fetch(`/api/local/voxel-exec?gridSize=${request.gridSize}&palette=${request.palette}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/vnd.minebench.build+json" },
+        body: request.file,
+        signal: abortController.signal,
+      });
+      const result = await readExecutionResponse(response);
+      const world = readServerWorld(result.build);
+      if (!world) throw new Error("Import returned no world");
+      finishServerWorld(world, result.warnings, "build-json");
+      return;
+    }
     let baseBuild: VoxelBuild | null = null;
     let totalBlocks: number | null = null;
     let source: ParseSource = "build-json";
@@ -469,7 +515,7 @@ async function runParse(request: ParseRequest) {
           : extractBestVoxelBuildJson(raw);
 
       if (toolCall) {
-        const executed = await executeVoxelExecToolCall(toolCall);
+        const executed = await executeVoxelExecToolCall(toolCall, abortController.signal);
         if (isCancelled(request.requestId)) {
           throw new Error(CANCELLED_ERROR);
         }
@@ -478,6 +524,12 @@ async function runParse(request: ParseRequest) {
         resolvedGridSize = toolCall.gridSize;
         resolvedPalette = toolCall.palette;
         sourceWarnings.push(...executed.warnings);
+
+        const serverWorld = readServerWorld(executed.build);
+        if (serverWorld) {
+          finishServerWorld(serverWorld, sourceWarnings, source);
+          return;
+        }
 
         if (resolvedGridSize > 512) {
           const world = await createLocalVoxelWorld(executed.build, {

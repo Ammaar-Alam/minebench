@@ -14,17 +14,13 @@ import {
   type BuildVariantStreamResponse,
 } from "@/lib/arena/clientBuildResponse";
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
-import { getPalette, type BlockDefinition } from "@/lib/blocks/palettes";
-import { getRenderKind } from "@/lib/blocks/registry";
-import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
-import { getTextureKey, type Face } from "@/lib/blocks/textures";
+import { getPalette } from "@/lib/blocks/palettes";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
 import { parseExplorerBuildId } from "@/lib/voxel/explorerBuildId";
 import {
   EXPLORER_EYE_HEIGHT,
   createExplorerCollisionWorld,
   moveExplorerPlayerAxis,
-  readVoxelWorldPartBytes,
   setExplorerMoveDirection,
   type ExplorerCollisionWorld,
   type ExplorerPosition,
@@ -35,27 +31,14 @@ import {
   getExplorerMeteorOpacity,
   isExplorerSunRayVisible,
   renderExplorerBloomOverlay,
+  setExplorerWorldFog,
 } from "@/lib/voxel/explorerLighting";
-import { decodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
-import { configureAtlasTexture, createVoxelGroupAsync, type VoxelGroup } from "@/lib/voxel/mesh";
-import { appendQuad, makeBucket, serializeBucket, type MeshBucket } from "@/lib/voxel/meshBuckets";
-import { createVoxelWorldScene } from "@/lib/voxel/worldScene";
+import { createVoxelGroupAsync, type VoxelGroup } from "@/lib/voxel/mesh";
+import { createVoxelWorldScene, isVoxelWorldScene } from "@/lib/voxel/worldScene";
 import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
-import type { VoxelBlock } from "@/lib/voxel/types";
-import {
-  parseVoxelWorldManifest,
-  parseVoxelWorldRegionPage,
-  type VoxelWorldBounds,
-  type VoxelWorldDelivery,
-  type VoxelWorldManifest,
-  type VoxelWorldMixedRegion,
-  type VoxelWorldRegion,
-  type VoxelWorldRegionPageRef,
-  type VoxelWorldUniformRegion,
-} from "@/lib/voxel/world";
 import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 import {
   setExplorerViewBob,
@@ -97,7 +80,6 @@ const NIGHT_FOG_COLOR = new THREE.Color(0x0b1830);
 const SUN_FLARE_COLOR = new THREE.Color(0xffdf9f);
 const STAR_LAYER_COUNT = 3;
 const STARS_PER_LAYER = 560;
-const WORLD_RENDER_LOAD_RADIUS = 96;
 const WORLD_STREAM_UPDATE_DISTANCE = 24;
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
@@ -686,440 +668,6 @@ type ExplorerRenderableVoxelGroup = VoxelGroup & {
   updateActiveCamera?: (position: ExplorerPosition) => Promise<void>;
 };
 
-type ExplorerWorldRenderProgress = {
-  processedBlocks: number;
-  totalBlocks: number;
-  stageLabel?: string;
-};
-
-type WorldRenderCellBounds = {
-  minX: number;
-  minY: number;
-  minZ: number;
-  maxX: number;
-  maxY: number;
-  maxZ: number;
-};
-
-type WorldRenderTransform = {
-  centerX: number;
-  centerZ: number;
-  originY: number;
-  bounds: WorldRenderCellBounds;
-};
-
-const WORLD_TINT_WHITE: [number, number, number] = [1, 1, 1];
-const WORLD_TINT_GRASS: [number, number, number] = [0.5, 0.7, 0.22];
-const WORLD_TINT_WATER: [number, number, number] = [0.25, 0.46, 0.9];
-const WORLD_TINT_LEAVES: [number, number, number] = [0.28, 0.7, 0.1];
-
-type WorldRenderBucketKind = "opaque" | "transparent" | "cutout" | "emissive";
-
-function worldBoundsToCellBounds(bounds: VoxelWorldBounds): WorldRenderCellBounds {
-  return {
-    minX: bounds.origin.x,
-    minY: bounds.origin.y,
-    minZ: bounds.origin.z,
-    maxX: bounds.origin.x + bounds.size.x - 1,
-    maxY: bounds.origin.y + bounds.size.y - 1,
-    maxZ: bounds.origin.z + bounds.size.z - 1,
-  };
-}
-
-function worldRegionCellBounds(region: Pick<VoxelWorldRegion, "origin" | "size">): WorldRenderCellBounds {
-  return {
-    minX: region.origin.x,
-    minY: region.origin.y,
-    minZ: region.origin.z,
-    maxX: region.origin.x + region.size.x - 1,
-    maxY: region.origin.y + region.size.y - 1,
-    maxZ: region.origin.z + region.size.z - 1,
-  };
-}
-
-function worldBoundsIntersect(a: WorldRenderCellBounds, b: WorldRenderCellBounds): boolean {
-  return a.minX <= b.maxX && a.maxX >= b.minX &&
-    a.minY <= b.maxY && a.maxY >= b.minY &&
-    a.minZ <= b.maxZ && a.maxZ >= b.minZ;
-}
-
-function worldTransformFromBounds(bounds: VoxelWorldBounds): WorldRenderTransform {
-  return {
-    centerX: bounds.origin.x + bounds.size.x / 2,
-    centerZ: bounds.origin.z + bounds.size.z / 2,
-    originY: bounds.origin.y,
-    bounds: worldBoundsToCellBounds(bounds),
-  };
-}
-
-function worldRenderBounds(bounds: VoxelWorldBounds): VoxelGroup["bounds"] {
-  const box = new THREE.Box3(
-    new THREE.Vector3(-bounds.size.x / 2, 0, -bounds.size.z / 2),
-    new THREE.Vector3(bounds.size.x / 2, bounds.size.y, bounds.size.z / 2),
-  );
-  const center = box.getCenter(new THREE.Vector3());
-  const sphere = new THREE.Sphere();
-  box.getBoundingSphere(sphere);
-  return { box, center, radius: Math.max(0.001, sphere.radius) };
-}
-
-function worldCameraCell(transform: WorldRenderTransform, position: ExplorerPosition) {
-  return {
-    x: Math.floor(position.x + transform.centerX),
-    z: Math.floor(position.z + transform.centerZ),
-  };
-}
-
-function worldLoadBounds(transform: WorldRenderTransform, rawX: number, rawZ: number): WorldRenderCellBounds {
-  return {
-    minX: rawX - WORLD_RENDER_LOAD_RADIUS,
-    maxX: rawX + WORLD_RENDER_LOAD_RADIUS,
-    minY: transform.bounds.minY,
-    maxY: transform.bounds.maxY,
-    minZ: rawZ - WORLD_RENDER_LOAD_RADIUS,
-    maxZ: rawZ + WORLD_RENDER_LOAD_RADIUS,
-  };
-}
-
-function worldFaceTint(blockType: string, face: Face): [number, number, number] {
-  if (blockType === "water") return WORLD_TINT_WATER;
-  if (blockType === "oak_leaves") return WORLD_TINT_LEAVES;
-  if (blockType === "grass_block" && face === "up") return WORLD_TINT_GRASS;
-  return WORLD_TINT_WHITE;
-}
-
-function worldBucketKind(blockType: string): WorldRenderBucketKind {
-  return getRenderKind(blockType) ?? "opaque";
-}
-
-function createWorldGeometry(bucket: MeshBucket, bounds: VoxelGroup["bounds"]): THREE.BufferGeometry | null {
-  const serialized = serializeBucket(bucket);
-  if (!serialized) return null;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute("position", new THREE.BufferAttribute(serialized.positions, 3));
-  geometry.setAttribute("normal", new THREE.BufferAttribute(serialized.normals, 3, true));
-  geometry.setAttribute(
-    "uv",
-    new THREE.BufferAttribute(serialized.uvs, 2, serialized.uvs instanceof Uint16Array),
-  );
-  geometry.setAttribute("color", new THREE.BufferAttribute(serialized.colors, 3, true));
-  geometry.setIndex(new THREE.BufferAttribute(serialized.indices, 1));
-  geometry.boundingBox = bounds.box.clone();
-  geometry.boundingSphere = new THREE.Sphere(bounds.center.clone(), bounds.radius);
-  return geometry;
-}
-
-function appendWorldFace(
-  bucket: MeshBucket,
-  blockType: string,
-  face: Face,
-  verts: readonly (readonly [number, number, number])[],
-  normal: { nx: number; ny: number; nz: number },
-) {
-  const textureKey = getTextureKey(blockType, face);
-  if (!hasAtlasKey(textureKey)) return;
-  const uv = getAtlasUv(textureKey);
-  appendQuad(
-    bucket,
-    verts,
-    normal,
-    worldFaceTint(blockType, face),
-    [uv.u0, uv.v0, uv.u0, uv.v1, uv.u1, uv.v1, uv.u1, uv.v0],
-  );
-}
-
-function appendWorldRegionBox(
-  bucket: MeshBucket,
-  region: VoxelWorldUniformRegion,
-  transform: WorldRenderTransform,
-) {
-  const x0 = region.origin.x - transform.centerX;
-  const x1 = region.origin.x + region.size.x - transform.centerX;
-  const y0 = region.origin.y - transform.originY;
-  const y1 = region.origin.y + region.size.y - transform.originY;
-  const z0 = region.origin.z - transform.centerZ;
-  const z1 = region.origin.z + region.size.z - transform.centerZ;
-
-  appendWorldFace(bucket, region.type, "east", [
-    [x1, y0, z0],
-    [x1, y1, z0],
-    [x1, y1, z1],
-    [x1, y0, z1],
-  ], { nx: 1, ny: 0, nz: 0 });
-  appendWorldFace(bucket, region.type, "west", [
-    [x0, y0, z1],
-    [x0, y1, z1],
-    [x0, y1, z0],
-    [x0, y0, z0],
-  ], { nx: -1, ny: 0, nz: 0 });
-  appendWorldFace(bucket, region.type, "north", [
-    [x0, y0, z0],
-    [x0, y1, z0],
-    [x1, y1, z0],
-    [x1, y0, z0],
-  ], { nx: 0, ny: 0, nz: -1 });
-  appendWorldFace(bucket, region.type, "south", [
-    [x1, y0, z1],
-    [x1, y1, z1],
-    [x0, y1, z1],
-    [x0, y0, z1],
-  ], { nx: 0, ny: 0, nz: 1 });
-  appendWorldFace(bucket, region.type, "up", [
-    [x0, y1, z1],
-    [x1, y1, z1],
-    [x1, y1, z0],
-    [x0, y1, z0],
-  ], { nx: 0, ny: 1, nz: 0 });
-  appendWorldFace(bucket, region.type, "down", [
-    [x0, y0, z0],
-    [x1, y0, z0],
-    [x1, y0, z1],
-    [x0, y0, z1],
-  ], { nx: 0, ny: -1, nz: 0 });
-}
-
-function createWorldMaterials(atlasTexture: THREE.Texture) {
-  configureAtlasTexture(atlasTexture);
-  return {
-    opaque: new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true }),
-    cutout: new THREE.MeshLambertMaterial({
-      map: atlasTexture,
-      alphaTest: 0.45,
-      vertexColors: true,
-    }),
-    transparent: new THREE.MeshLambertMaterial({
-      map: atlasTexture,
-      transparent: true,
-      opacity: 0.85,
-      depthWrite: false,
-      vertexColors: true,
-    }),
-    emissive: new THREE.MeshBasicMaterial({ map: atlasTexture, vertexColors: true }),
-  };
-}
-
-function disposeWorldMaterials(materials: ReturnType<typeof createWorldMaterials>) {
-  materials.opaque.dispose();
-  materials.cutout.dispose();
-  materials.transparent.dispose();
-  materials.emissive.dispose();
-}
-
-async function createExplorerWorldGroup(
-  build: RenderableVoxelBuild,
-  palette: BlockDefinition[],
-  atlasTexture: THREE.Texture,
-  opts: {
-    signal?: AbortSignal;
-    initialPosition: ExplorerPosition;
-    onProgress?: (progress: ExplorerWorldRenderProgress) => void;
-  },
-): Promise<ExplorerRenderableVoxelGroup> {
-  const delivery = build.world;
-  if (!delivery) throw new Error("Voxel world delivery is missing");
-  const parsed = parseVoxelWorldManifest(delivery.manifest, {
-    allowLocalBlobRefs: Boolean(delivery.resolvePart),
-  });
-  if (!parsed.ok) throw new Error(parsed.error);
-  const manifest: VoxelWorldManifest = parsed.value;
-  if (!manifest.bounds || manifest.exactBlockCount === 0) throw new Error("Build has no blocks");
-
-  const transform = worldTransformFromBounds(manifest.bounds);
-  const bounds = worldRenderBounds(manifest.bounds);
-  const group = new THREE.Group();
-  group.name = "VoxelWorldGroup";
-  const materials = createWorldMaterials(atlasTexture);
-  const uniformRegions: VoxelWorldUniformRegion[] = [];
-  const mixedRegions = new Map<string, VoxelWorldMixedRegion>();
-  const renderedUniformRegions = new Set<string>();
-  const renderedMixedRegions = new Set<string>();
-  const loadingMixedRegions = new Map<string, Promise<void>>();
-  const failedMixedRegions = new Set<string>();
-  const pageRefs = manifest.regionPages ?? [];
-  const loadedPages = new Set<number>();
-  const loadingPages = new Map<number, Promise<void>>();
-  const failedPages = new Set<number>();
-  const uniformMeshes: THREE.Mesh[] = [];
-  const dynamicDisposers: Array<() => void> = [];
-
-  const addRegions = (regions: readonly VoxelWorldRegion[]) => {
-    for (const region of regions) {
-      if (region.kind === "uniform") {
-        if (renderedUniformRegions.has(region.key) || uniformRegions.some((item) => item.key === region.key)) continue;
-        uniformRegions.push(region);
-      } else if (!mixedRegions.has(region.key)) {
-        mixedRegions.set(region.key, region);
-      }
-    }
-  };
-
-  const renderUniformRegions = (activeBounds?: WorldRenderCellBounds) => {
-    for (const region of uniformRegions) {
-      if (renderedUniformRegions.has(region.key)) continue;
-      if (activeBounds && !worldBoundsIntersect(worldRegionCellBounds(region), activeBounds)) continue;
-      const bucket = makeBucket();
-      appendWorldRegionBox(bucket, region, transform);
-      const geometry = createWorldGeometry(bucket, bounds);
-      if (!geometry) {
-        renderedUniformRegions.add(region.key);
-        continue;
-      }
-      const kind = worldBucketKind(region.type);
-      const mesh = new THREE.Mesh(geometry, materials[kind]);
-      if (kind === "transparent") mesh.renderOrder = 1;
-      group.add(mesh);
-      uniformMeshes.push(mesh);
-      renderedUniformRegions.add(region.key);
-    }
-  };
-
-  const loadPage = (pageRef: VoxelWorldRegionPageRef): Promise<void> => {
-    if (loadedPages.has(pageRef.index) || failedPages.has(pageRef.index)) return Promise.resolve();
-    const existing = loadingPages.get(pageRef.index);
-    if (existing) return existing;
-    const promise = (async () => {
-      opts.onProgress?.({
-        processedBlocks: 0,
-        totalBlocks: manifest.exactBlockCount,
-        stageLabel: "Loading world",
-      });
-      const bytes = await readVoxelWorldPartBytes(delivery, pageRef.data, opts.signal);
-      const decoded = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-      const page = parseVoxelWorldRegionPage(decoded, {
-        gridSize: manifest.gridSize,
-        worldBounds: manifest.bounds,
-        pageRef,
-        allowLocalBlobRefs: Boolean(delivery.resolvePart),
-      });
-      if (!page.ok) throw new Error(page.error);
-      addRegions(page.value.regions);
-      loadedPages.add(pageRef.index);
-    })().catch(() => {
-      failedPages.add(pageRef.index);
-    }).finally(() => {
-      loadingPages.delete(pageRef.index);
-    });
-    loadingPages.set(pageRef.index, promise);
-    return promise;
-  };
-
-  const renderMixedRegion = (region: VoxelWorldMixedRegion): Promise<void> => {
-    if (renderedMixedRegions.has(region.key) || failedMixedRegions.has(region.key)) return Promise.resolve();
-    const existing = loadingMixedRegions.get(region.key);
-    if (existing) return existing;
-    const promise = (async () => {
-      opts.onProgress?.({
-        processedBlocks: 0,
-        totalBlocks: manifest.exactBlockCount,
-        stageLabel: "Loading world",
-      });
-      const bytes = await readVoxelWorldPartBytes(delivery, region.data, opts.signal);
-      const packed = decodeBinaryVoxelBuild(bytes);
-      if (packed.count !== region.blockCount) throw new Error(`Voxel world region ${region.key} block count mismatch`);
-      if (packed.count === 0) {
-        renderedMixedRegions.add(region.key);
-        return;
-      }
-
-      const blocks: VoxelBlock[] = new Array(packed.count);
-      let minX = Infinity;
-      let minY = Infinity;
-      let minZ = Infinity;
-      let maxX = -Infinity;
-      let maxZ = -Infinity;
-      for (let i = 0; i < packed.count; i += 1) {
-        const localX = packed.positions[i * 3];
-        const localY = packed.positions[i * 3 + 1];
-        const localZ = packed.positions[i * 3 + 2];
-        if (localX >= region.size.x || localY >= region.size.y || localZ >= region.size.z) {
-          throw new Error(`Voxel world region ${region.key} has out-of-bounds local blocks`);
-        }
-        const block = {
-          x: region.origin.x + localX,
-          y: region.origin.y + localY,
-          z: region.origin.z + localZ,
-          type: packed.typeNames[packed.typeIds[i]] ?? "",
-        };
-        blocks[i] = block;
-        minX = Math.min(minX, block.x);
-        minY = Math.min(minY, block.y);
-        minZ = Math.min(minZ, block.z);
-        maxX = Math.max(maxX, block.x);
-        maxZ = Math.max(maxZ, block.z);
-      }
-
-      const leaf = await createVoxelGroupAsync({ version: "1.0", blocks }, palette, atlasTexture, {
-        signal: opts.signal,
-        onProgress(progress) {
-          opts.onProgress?.({ ...progress, stageLabel: progress.stageLabel ?? "Building world" });
-        },
-      });
-      leaf.group.position.set(
-        (minX + maxX + 1) / 2 - transform.centerX,
-        minY - transform.originY,
-        (minZ + maxZ + 1) / 2 - transform.centerZ,
-      );
-      group.add(leaf.group);
-      dynamicDisposers.push(() => {
-        group.remove(leaf.group);
-        leaf.dispose();
-      });
-      renderedMixedRegions.add(region.key);
-    })().catch(() => {
-      failedMixedRegions.add(region.key);
-    }).finally(() => {
-      loadingMixedRegions.delete(region.key);
-    });
-    loadingMixedRegions.set(region.key, promise);
-    return promise;
-  };
-
-  const loadNear = async (position: ExplorerPosition) => {
-    const raw = worldCameraCell(transform, position);
-    const activeBounds = worldLoadBounds(transform, raw.x, raw.z);
-    const pageLoads: Promise<void>[] = [];
-    for (const pageRef of pageRefs) {
-      if (worldBoundsIntersect(worldBoundsToCellBounds(pageRef.bounds), activeBounds)) {
-        pageLoads.push(loadPage(pageRef));
-      }
-    }
-    await Promise.allSettled(pageLoads);
-    renderUniformRegions(activeBounds);
-
-    const mixedLoads: Promise<void>[] = [];
-    for (const region of mixedRegions.values()) {
-      if (worldBoundsIntersect(worldRegionCellBounds(region), activeBounds)) {
-        mixedLoads.push(renderMixedRegion(region));
-      }
-    }
-    await Promise.allSettled(mixedLoads);
-  };
-
-  addRegions(manifest.regions ?? []);
-  renderUniformRegions();
-  let activeLoad: Promise<void> | null = null;
-  const updateActiveCamera = async (position: ExplorerPosition) => {
-    if (activeLoad) return activeLoad;
-    activeLoad = loadNear(position).finally(() => {
-      activeLoad = null;
-    });
-    return activeLoad;
-  };
-  await updateActiveCamera(opts.initialPosition);
-
-  return {
-    group,
-    dispose() {
-      for (const dispose of dynamicDisposers) dispose();
-      for (const mesh of uniformMeshes) mesh.geometry.dispose();
-      disposeWorldMaterials(materials);
-    },
-    bounds,
-    stats: { blockCount: manifest.exactBlockCount },
-    updateActiveCamera,
-  };
-}
-
 function hasKey(keys: Set<string>, left: string, right?: string): boolean {
   return keys.has(left) || Boolean(right && keys.has(right));
 }
@@ -1244,6 +792,7 @@ function ExplorerScene({
     });
     const bloomOverlay = new FullScreenQuad(bloomOverlayMaterial);
     const bloomDepthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
+    const worldBloomFog = new THREE.Fog(0x000000);
     const sunRayTexture = createSunHaloTexture();
     const sunRaySpriteMaterial = new THREE.SpriteMaterial({
       map: sunRayTexture,
@@ -1298,6 +847,18 @@ function ExplorerScene({
     });
     const sunRayOverlay = new FullScreenQuad(sunRayMaterial);
     let hasEmissiveMeshes = false;
+    const prepareVoxelMeshes = (group: THREE.Object3D) => {
+      hasEmissiveMeshes = false;
+      group.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        child.castShadow = !child.userData.voxelWorldOverview && materials.every((material) => !material.transparent);
+        child.receiveShadow = !child.userData.voxelWorldOverview;
+        if (!materials.some((material) => material instanceof THREE.MeshBasicMaterial)) return;
+        hasEmissiveMeshes = true;
+        child.layers.enable(EMISSIVE_LAYER);
+      });
+    };
 
     const controls = new PointerLockControls(camera, renderer.domElement);
     controls.pointerSpeed = 0.9;
@@ -1401,7 +962,7 @@ function ExplorerScene({
       const clearAlpha = renderer.getClearAlpha();
       try {
         scene.background = null;
-        scene.fog = null;
+        scene.fog = isVoxelWorldScene(voxelGroup) ? worldBloomFog : null;
         atmosphere.root.visible = false;
         renderer.setClearColor(0x000000, 0);
         renderer.setRenderTarget(bloomTarget);
@@ -1556,6 +1117,10 @@ function ExplorerScene({
         .catch((error: unknown) => {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
             console.warn("Voxel world stream failed", error);
+            if (!disposed) {
+              setError(error instanceof Error ? error.message : "World failed to load");
+              controls.unlock();
+            }
           }
         })
         .finally(() => {
@@ -1675,6 +1240,9 @@ function ExplorerScene({
       const moonSize =
         2 * sunDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 0.075;
       atmosphere.moon.scale.set(moonSize, moonSize, 1);
+      if (isVoxelWorldScene(voxelGroup)) {
+        setExplorerWorldFog(camera, scene.fog as THREE.Fog, worldBloomFog, voxelGroup.getDetailRadius(camera.position));
+      }
       try {
         renderer.render(scene, camera);
         renderPostEffects(seconds);
@@ -1714,22 +1282,38 @@ function ExplorerScene({
         const atlas = await atlasPromise;
         const groupPromise: Promise<ExplorerRenderableVoxelGroup> = worldDelivery
           ? collisionPromise.then(async (nextCollisionWorld) => {
-              const worldScene = await createVoxelWorldScene(worldDelivery, getPalette(build.palette), atlas, {
-                signal: abortController.signal,
-                onProgress(progress) {
-                  if (!disposed) setLoading(progress.stageLabel ?? "Loading world");
-                },
-              });
               const focus = new THREE.Vector3(
                 nextCollisionWorld.spawnPosition.x,
                 nextCollisionWorld.spawnPosition.y,
                 nextCollisionWorld.spawnPosition.z,
               );
-              await worldScene.loadAround(focus);
+              const worldScene = await createVoxelWorldScene(worldDelivery, getPalette(build.palette), atlas, {
+                signal: abortController.signal,
+                initialFocus: focus,
+                showOverview: false,
+                maxMixedDetailRegions: 64,
+                maxMixedProxyRegions: 0,
+                mixedDetailRadius: 512,
+                onProgress(progress) {
+                  if (!disposed) setLoading(progress.stageLabel ?? "Loading world");
+                },
+                onChange() {
+                  if (!disposed && voxelGroup) {
+                    prepareVoxelMeshes(voxelGroup.group);
+                    renderer.shadowMap.needsUpdate = true;
+                  }
+                },
+                onError(message) {
+                  if (!disposed) {
+                    setError(message);
+                    controls.unlock();
+                  }
+                },
+              });
               return Object.assign(worldScene, {
-                updateActiveCamera(position: ExplorerPosition) {
+                async updateActiveCamera(position: ExplorerPosition) {
                   focus.set(position.x, position.y, position.z);
-                  return worldScene.loadAround(focus);
+                  worldScene.updateFocus(focus);
                 },
               });
             })
@@ -1765,15 +1349,7 @@ function ExplorerScene({
             },
           );
         }
-        voxelGroup.group.traverse((child) => {
-          if (!(child instanceof THREE.Mesh)) return;
-          const materials = Array.isArray(child.material) ? child.material : [child.material];
-          child.castShadow = materials.every((material) => !material.transparent);
-          child.receiveShadow = true;
-          if (!materials.some((material) => material instanceof THREE.MeshBasicMaterial)) return;
-          hasEmissiveMeshes = true;
-          child.layers.enable(EMISSIVE_LAYER);
-        });
+        prepareVoxelMeshes(voxelGroup.group);
         scene.add(voxelGroup.group);
         frameAtmosphere(camera, scene, atmosphere, voxelGroup.bounds, SUN_DIRECTION);
         resize();
@@ -1794,6 +1370,10 @@ function ExplorerScene({
           camera.lookAt(0, Math.max(0, collisionWorld.height - 4), -12);
         }
         renderer.shadowMap.needsUpdate = true;
+        if (worldDelivery) {
+          await collisionWorld.updateActiveCamera?.(camera.position);
+          if (disposed || abortController.signal.aborted) return;
+        }
         worldReady = true;
         setLoading("");
         setReady(true);

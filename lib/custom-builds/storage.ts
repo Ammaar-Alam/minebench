@@ -358,14 +358,11 @@ export async function deleteCustomBuildArtifact(args: {
   if (error) throw new Error(`Custom build artifact deletion failed: ${error.message}`);
 }
 
-export async function downloadCustomBuildArtifactBytes(args: {
+async function fetchCustomBuildArtifact(args: {
   bucket: string;
   path: string;
-}): Promise<Uint8Array> {
-  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
-    return readLocalCustomBuildArtifact(resolveLocalCustomBuildStoragePath(args.path));
-  }
-
+  signal?: AbortSignal;
+}): Promise<Response> {
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(args.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(args.bucket)}/${encodedPath}`;
@@ -376,10 +373,46 @@ export async function downloadCustomBuildArtifactBytes(args: {
       apikey: config.serviceRoleKey,
     },
     cache: "no-store",
+    signal: args.signal,
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`Custom build artifact download failed (${resp.status}): ${text || "empty response"}`);
   }
-  return new Uint8Array(await resp.arrayBuffer());
+  return resp;
+}
+
+export async function downloadCustomBuildArtifactBytes(args: {
+  bucket: string;
+  path: string;
+}): Promise<Uint8Array> {
+  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    return readLocalCustomBuildArtifact(resolveLocalCustomBuildStoragePath(args.path));
+  }
+  return new Uint8Array(await (await fetchCustomBuildArtifact(args)).arrayBuffer());
+}
+
+export async function* downloadCustomBuildArtifactStream(args: {
+  bucket: string;
+  path: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<Uint8Array> {
+  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    const { createReadStream } = await import("node:fs");
+    yield* createReadStream(resolveLocalCustomBuildStoragePath(args.path), { signal: args.signal });
+    return;
+  }
+  const response = await fetchCustomBuildArtifact(args);
+  if (!response.body) throw new Error("Custom build artifact download returned an empty body");
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }

@@ -309,6 +309,21 @@ export async function applyExplorerBlockLighting(
   }
 }
 
+export function setExplorerWorldFog(
+  camera: THREE.PerspectiveCamera,
+  fog: THREE.Fog,
+  bloomFog: THREE.Fog,
+  detailRadius: number,
+): void {
+  const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.getEffectiveFOV()) / 2);
+  const cornerDistance = Math.hypot(1, halfHeight, halfHeight * camera.aspect);
+  fog.far = Math.max(camera.near, Math.min(512, detailRadius / cornerDistance));
+  fog.near = fog.far * 0.55;
+  bloomFog.near = fog.near;
+  bloomFog.far = fog.far;
+  bloomFog.color.set(0x000000);
+}
+
 export function renderExplorerBloomOverlay(
   renderer: { autoClear: boolean },
   render: () => void,

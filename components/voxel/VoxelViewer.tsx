@@ -729,6 +729,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         });
       };
       let vg: VoxelGroup;
+      let worldLoadError: string | null = null;
       if (buildSnapshot.world) {
         meshStarted = true;
         meshStrategy = "worker";
@@ -738,8 +739,13 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           signal: controller.signal,
           yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
           onChange: () => requestRenderRef.current?.(),
-          onError: (message) => onBuildErrorChangeRef.current?.(message),
-          onProgress: progress,
+          onError(message) {
+            worldLoadError = message;
+            onBuildErrorChangeRef.current?.(message);
+            reportReady(false);
+            reportFirstRenderReady(false);
+          },
+          onProgress: buildSnapshot.world.manifest.overview ? undefined : progress,
         });
         buildTrace.mark("mesh_payload_complete");
         buildTrace.mark("three_group_complete");
@@ -784,7 +790,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
 
       const old = voxelGroupRef.current;
-      vg.group.rotation.y = previousRotationY;
+      vg.group.rotation.y = buildSnapshot.world ? 0 : previousRotationY;
       voxelGroupRef.current = vg;
       three.scene.add(vg.group);
       if (old) {
@@ -815,7 +821,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         if (metricsReported) return;
         if (
           traceAbandoned ||
-          !buildReady ||
+          !buildReady || worldLoadError ||
           controller.signal.aborted ||
           !sameIdentity(identityRef.current, incomingIdentity) ||
           voxelGroupRef.current?.group !== vg.group
@@ -854,7 +860,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         report() {
           buildTrace.mark("first_render");
           firstRenderComplete = true;
-          reportFirstRenderReady(buildReady);
+          reportFirstRenderReady(buildReady && !worldLoadError);
           maybeReportBuildMetrics();
         },
         discard() {
@@ -931,8 +937,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       revealComplete = true;
       maybeReportBuildMetrics();
       onBuildProgressChangeRef.current?.(null);
-      onBuildErrorChangeRef.current?.(null);
-      reportReady(buildReady);
+      if (!worldLoadError) onBuildErrorChangeRef.current?.(null);
+      reportReady(buildReady && !worldLoadError);
       requestRenderRef.current?.();
     } catch (err: unknown) {
       traceAbandoned = true;

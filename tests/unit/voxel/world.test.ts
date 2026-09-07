@@ -98,6 +98,13 @@ const inlineManifest = {
   const manifest = assertManifest(parseVoxelWorldManifest(inlineManifest));
   assert.equal(manifest.exactBlockCount, 262_156);
   assert.equal(manifest.regions?.[1]?.kind, "mixed");
+  const overview = { ...inlineManifest, overview: { data: storedPart("overview"), scale: 32 } };
+  assertBad(parseVoxelWorldManifest(overview), /server-only/);
+  const storedOverview = assertManifest(parseVoxelWorldManifest(overview, { allowStoredRefs: true }));
+  const opaqueOverview = toOpaqueVoxelWorldManifest(storedOverview);
+  assert.equal(opaqueOverview.overview?.data.kind, "opaque");
+  assertManifest(parseVoxelWorldManifest(opaqueOverview));
+  assertBad(parseVoxelWorldManifest({ ...opaqueOverview, overview: { ...opaqueOverview.overview, scale: 1 } }), /overview scale/);
   assert.equal(
     voxelWorldPartUrl(
       { manifest, partBaseUrl: "/api/generations/gen_123/artifacts/viewer" },

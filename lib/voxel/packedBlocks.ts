@@ -1,4 +1,4 @@
-import type { VoxelBlock, VoxelBuild } from "./types";
+import type { VoxelBlock, VoxelBox, VoxelBuild } from "./types";
 import type { VoxelMeshFacts } from "./meshFacts";
 import type { VoxelWorldDelivery } from "./world";
 
@@ -19,7 +19,6 @@ export type PackedVoxelBlocks = {
 // coming out of validation stay object-backed, so both shapes flow through the
 // same viewer and mesh entry points.
 export type RenderableVoxelBuild = VoxelBuild & {
-  packed?: PackedVoxelBlocks;
   meshFacts?: VoxelMeshFacts;
   world?: VoxelWorldDelivery;
 };
@@ -50,11 +49,12 @@ export function packedVoxelBlocksCapacity(packed: PackedVoxelBlocks): number {
 
 // The announced total is a plan, not a guarantee, so growth has to be handled
 // rather than trusted away.
-function ensurePackedCapacity(packed: PackedVoxelBlocks, needed: number): void {
+function ensurePackedCapacity(packed: PackedVoxelBlocks, needed: number, exact = false): void {
   const capacity = packedVoxelBlocksCapacity(packed);
   if (needed <= capacity) return;
   let next = Math.max(capacity, MIN_PACKED_CAPACITY);
   while (next < needed) next *= 2;
+  if (exact) next = needed;
   const positions = new Int16Array(next * 3);
   positions.set(packed.positions.subarray(0, packed.count * 3));
   const typeIds = new Uint16Array(next);
@@ -67,7 +67,42 @@ function ensurePackedCapacity(packed: PackedVoxelBlocks, needed: number): void {
 // growing through every power of two on its way there.
 export function reservePackedVoxelBlocks(packed: PackedVoxelBlocks, capacity: number): void {
   if (!Number.isFinite(capacity) || capacity <= 0) return;
-  ensurePackedCapacity(packed, Math.ceil(capacity));
+  ensurePackedCapacity(packed, Math.ceil(capacity), true);
+}
+
+export function appendCoalescedVoxelBox(boxes: VoxelBox[], box: VoxelBox): void {
+  const last = boxes.at(-1);
+  if (last?.type === box.type && box.x1 <= box.x2 && box.y1 <= box.y2 && box.z1 <= box.z2 && last.x1 <= last.x2 && last.y1 <= last.y2 && last.z1 <= last.z2) {
+    for (const axis of ["x", "y", "z"] as const) {
+      const min = `${axis}1` as const;
+      const max = `${axis}2` as const;
+      if (last[max] + 1 !== box[min] && box[max] + 1 !== last[min]) continue;
+      const others = axis === "x" ? ["y", "z"] as const : axis === "y" ? ["x", "z"] as const : ["x", "y"] as const;
+      if (others.some((other) => last[`${other}1`] !== box[`${other}1`] || last[`${other}2`] !== box[`${other}2`])) continue;
+      last[min] = Math.min(last[min], box[min]);
+      last[max] = Math.max(last[max], box[max]);
+      return;
+    }
+  }
+  boxes.push(box);
+}
+
+export function isPackedVoxelBlocks(value: unknown): value is PackedVoxelBlocks {
+  if (!value || typeof value !== "object") return false;
+  const packed = value as PackedVoxelBlocks;
+  if (
+    !(packed.positions instanceof Int16Array) || !(packed.typeIds instanceof Uint16Array) ||
+    !Number.isInteger(packed.count) || packed.count < 0 ||
+    packed.count > packed.typeIds.length || packed.count * 3 > packed.positions.length ||
+    !Array.isArray(packed.typeNames) || packed.typeNames.length > 65_536
+  ) return false;
+  for (let index = 0; index < packed.typeNames.length; index += 1) {
+    if (typeof packed.typeNames[index] !== "string" || packed.typeNames[index]!.length === 0) return false;
+  }
+  for (let index = 0; index < packed.count; index += 1) {
+    if (packed.typeIds[index]! >= packed.typeNames.length) return false;
+  }
+  return true;
 }
 
 export function appendPackedVoxelBlocks(
@@ -84,12 +119,18 @@ export function appendPackedVoxelBlocks(
   for (let i = 0; i < blocks.length; i += 1) {
     const block = blocks[i];
     if (!block) continue;
+    if (
+      !Number.isInteger(block.x) || !Number.isInteger(block.y) || !Number.isInteger(block.z) ||
+      block.x < -32_768 || block.x > 32_767 || block.y < -32_768 || block.y > 32_767 ||
+      block.z < -32_768 || block.z > 32_767
+    ) throw new Error("Block coordinates exceed the packed coordinate range");
     packed.positions[write * 3] = block.x;
     packed.positions[write * 3 + 1] = block.y;
     packed.positions[write * 3 + 2] = block.z;
     let typeId = typeIdByName.get(block.type);
     if (typeId === undefined) {
       typeId = packed.typeNames.length;
+      if (typeId > 65_535) throw new Error("Too many packed block types");
       packed.typeNames.push(block.type);
       typeIdByName.set(block.type, typeId);
     }
