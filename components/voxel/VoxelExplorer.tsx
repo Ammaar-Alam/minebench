@@ -23,7 +23,6 @@ import {
   moveExplorerPlayerAxis,
   setExplorerMoveDirection,
   type ExplorerCollisionWorld,
-  type ExplorerPosition,
 } from "@/lib/voxel/explorerCollision";
 import {
   applyExplorerBlockLighting,
@@ -665,10 +664,6 @@ function frameAtmosphere(
 }
 
 
-type ExplorerRenderableVoxelGroup = VoxelGroup & {
-  updateActiveCamera?: (position: ExplorerPosition) => Promise<void>;
-};
-
 function hasKey(keys: Set<string>, left: string, right?: string): boolean {
   return keys.has(left) || Boolean(right && keys.has(right));
 }
@@ -724,7 +719,7 @@ function ExplorerScene({
     if (!mount) return;
     const abortController = new AbortController();
     let disposed = false;
-    let voxelGroup: ExplorerRenderableVoxelGroup | null = null;
+    let voxelGroup: VoxelGroup | null = null;
     let collisionWorld: ExplorerCollisionWorld | null = null;
     const worldBounds = build.voxelBuild.world?.manifest.bounds;
     const worldViewDistance = build.voxelBuild.world?.manifest.overview && worldBounds
@@ -1111,14 +1106,10 @@ function ExplorerScene({
     const lastWorldStreamPosition = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0);
     const updateWorldStreaming = () => {
       if (activeWorldCameraUpdate || lastWorldStreamPosition.distanceToSquared(camera.position) < WORLD_STREAM_UPDATE_DISTANCE ** 2) return;
-      const groupUpdate = voxelGroup?.updateActiveCamera;
       const collisionUpdate = collisionWorld?.updateActiveCamera;
-      if (!groupUpdate && !collisionUpdate) return;
+      if (!collisionUpdate) return;
       lastWorldStreamPosition.copy(camera.position);
-      activeWorldCameraUpdate = Promise.all([
-        groupUpdate?.(camera.position),
-        collisionUpdate?.(camera.position),
-      ])
+      activeWorldCameraUpdate = collisionUpdate(camera.position)
         .then(() => undefined)
         .catch((error: unknown) => {
           if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -1248,6 +1239,7 @@ function ExplorerScene({
       atmosphere.moon.scale.set(moonSize, moonSize, 1);
       if (isVoxelWorldScene(voxelGroup)) {
         setExplorerWorldFog(camera, scene.fog as THREE.Fog, worldBloomFog, voxelGroup.getDetailRadius(camera.position), worldViewDistance);
+        voxelGroup.updateFocus(camera.position, camera, mount.clientHeight);
       }
       try {
         renderer.render(scene, camera);
@@ -1286,7 +1278,7 @@ function ExplorerScene({
               },
             });
         const atlas = await atlasPromise;
-        const groupPromise: Promise<ExplorerRenderableVoxelGroup> = worldDelivery
+        const groupPromise: Promise<VoxelGroup> = worldDelivery
           ? collisionPromise.then(async (nextCollisionWorld) => {
               const focus = new THREE.Vector3(
                 nextCollisionWorld.spawnPosition.x,
@@ -1297,7 +1289,6 @@ function ExplorerScene({
                 signal: abortController.signal,
                 initialFocus: focus,
                 maxMixedDetailRegions: 64,
-                maxMixedProxyRegions: 0,
                 mixedDetailRadius: 512,
                 onProgress(progress) {
                   if (!disposed) setLoading(progress ? progress.stageLabel ?? "Loading world" : "");
@@ -1315,18 +1306,7 @@ function ExplorerScene({
                   }
                 },
               });
-              try {
-                await worldScene.loadAround(focus);
-              } catch (error) {
-                worldScene.dispose();
-                throw error;
-              }
-              return Object.assign(worldScene, {
-                async updateActiveCamera(position: ExplorerPosition) {
-                  focus.set(position.x, position.y, position.z);
-                  worldScene.updateFocus(focus);
-                },
-              });
+              return worldScene;
             })
           : createVoxelGroupAsync(build.voxelBuild, getPalette(build.palette), atlas, {
               signal: abortController.signal,
@@ -1382,7 +1362,10 @@ function ExplorerScene({
         }
         renderer.shadowMap.needsUpdate = true;
         if (worldDelivery) {
-          await collisionWorld.updateActiveCamera?.(camera.position);
+          await Promise.all([
+            collisionWorld.updateActiveCamera?.(camera.position),
+            isVoxelWorldScene(voxelGroup) ? voxelGroup.loadAround(camera.position, camera, mount.clientHeight) : undefined,
+          ]);
           if (disposed || abortController.signal.aborted) return;
         }
         worldReady = true;
@@ -1390,6 +1373,12 @@ function ExplorerScene({
         setReady(true);
       } catch (loadError) {
         if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+        abortController.abort();
+        if (voxelGroup) {
+          scene.remove(voxelGroup.group);
+          voxelGroup.dispose();
+          voxelGroup = null;
+        }
         console.warn("Voxel explorer setup failed", loadError);
         if (!disposed) {
           setError(loadError instanceof Error ? loadError.message : "Explorer failed to start");

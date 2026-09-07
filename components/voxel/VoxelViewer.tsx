@@ -21,7 +21,9 @@ import { createVoxelWorldScene, isVoxelWorldScene } from "@/lib/voxel/worldScene
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
 import {
   fitDistanceToRotatingBounds,
+  minimumOrbitDistance,
   retargetDistanceForAspect,
+  worldCameraClipping,
   type RotatingBoundsFraming,
 } from "@/lib/voxel/framing";
 import { createBrowserPerformanceTrace } from "@/lib/observability/browserPerformance";
@@ -311,7 +313,7 @@ function frameBounds(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   bounds: BuildBounds,
-  opts?: { reserveMobileBottomChrome?: boolean },
+  opts?: { reserveMobileBottomChrome?: boolean; isWorld?: boolean },
 ) {
   const center = bounds.center;
   const radius = Math.max(0.001, bounds.radius);
@@ -340,7 +342,7 @@ function frameBounds(
   camera.updateProjectionMatrix();
   camera.lookAt(target);
 
-  controls.minDistance = Math.max(0.5, distance * 0.12);
+  controls.minDistance = minimumOrbitDistance(distance, opts?.isWorld);
   controls.maxDistance = Math.max(40, distance * 14);
 
   controls.update();
@@ -567,7 +569,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     const vg = voxelGroupRef.current;
     const bounds = boundsRef.current;
     if (!three || !vg || !bounds) return;
-    frameBounds(three.camera, three.controls, bounds, { reserveMobileBottomChrome: showControls });
+    frameBounds(three.camera, three.controls, bounds, {
+      reserveMobileBottomChrome: showControls,
+      isWorld: isVoxelWorldScene(vg),
+    });
     if (gridRef.current) {
       gridRef.current.position.y = bounds.box.min.y - 0.5;
     }
@@ -1009,6 +1014,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const previousY = vg.group.rotation.y;
         const previousAspect = camera.aspect;
         const previousPosition = camera.position.clone();
+        const previousNear = camera.near;
+        const previousFar = camera.far;
         const rotationY =
           typeof opts?.rotationY === "number" && Number.isFinite(opts.rotationY) ? opts.rotationY : null;
         const source = renderer.domElement;
@@ -1041,6 +1048,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
               .addScaledVector(cameraOffset, (targetDistance * distanceScale) / distance);
           }
           camera.aspect = targetAspect;
+          if (isVoxelWorldScene(vg)) Object.assign(camera, worldCameraClipping(camera.position, bounds));
           camera.updateProjectionMatrix();
           exportRenderer.setSize(width, height, false);
           exportRenderer.render(scene, camera);
@@ -1049,6 +1057,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
           vg.group.rotation.y = previousY;
           camera.position.copy(previousPosition);
           camera.aspect = previousAspect;
+          camera.near = previousNear;
+          camera.far = previousFar;
           camera.updateProjectionMatrix();
         }
       },
@@ -1208,7 +1218,15 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
         const vg = voxelGroupRef.current;
         const worldScene = isVoxelWorldScene(vg) ? vg : null;
-        worldScene?.updateFocus(controls.target);
+        if (worldScene) {
+          const { near, far } = worldCameraClipping(camera.position, worldScene.bounds);
+          if (camera.near !== near || camera.far !== far) {
+            camera.near = near;
+            camera.far = far;
+            camera.updateProjectionMatrix();
+          }
+          worldScene.updateFocus(controls.target, camera, mount.clientHeight);
+        }
         const shouldAutoRotate = Boolean(
           vg && !worldScene && autoRotateRef.current && !userInteractingRef.current,
         );

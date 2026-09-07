@@ -411,6 +411,130 @@ async function main() {
     failed.dispose();
   }
 
+  {
+    const floor = Array.from({ length: 64 * 64 }, (_, index) => ({
+      x: index % 64, y: 0, z: Math.floor(index / 64), type: index === 0 ? "bricks" : "stone",
+    }));
+    const bytes = encodeBinaryVoxelBuild(floor, SHA);
+    const overviewBytes = encodeBinaryVoxelBuild(
+      Array.from({ length: 16 * 16 }, (_, index) => ({
+        x: index % 16, y: 0, z: Math.floor(index / 16), type: "stone",
+      })),
+      SHA,
+    );
+    const manifest: VoxelWorldManifest = {
+      kind: "voxel_world", version: 1, gridSize: 8192, palette: "simple", source: source(),
+      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 512, y: 1, z: 512 } },
+      exactBlockCount: 512 ** 2, leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE,
+      overview: { scale: 32, data: localPart("overview", overviewBytes.byteLength) },
+      regions: Array.from({ length: 64 }, (_, index) => ({
+        kind: "mixed", key: `floor-${index}`, origin: { x: (index % 8) * 64, y: 0, z: Math.floor(index / 8) * 64 },
+        size: { x: 64, y: 1, z: 64 }, blockCount: 64 ** 2, format: "mbv4", coordinateSpace: "local",
+        data: localPart(`floor-${index}`, bytes.byteLength),
+      })),
+    };
+    const focus = new THREE.Vector3(0, 0, 0);
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 5000);
+    const scene = await createScene({ manifest, resolvePart: async (key) => key === "overview" ? overviewBytes : bytes }, {
+      initialFocus: focus, maxMixedDetailRegions: 4,
+    });
+    const overview = scene.group.getObjectByName("VoxelWorldOverview")!;
+    const shader = {
+      uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
+    } as Parameters<THREE.Material["onBeforeCompile"]>[0];
+    (meshDescendants(overview)[0].material as THREE.Material).onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+    const ray = new THREE.Raycaster();
+    for (const distance of [300, 120]) {
+      camera.position.set(0, distance, distance);
+      camera.lookAt(focus);
+      camera.updateMatrixWorld();
+      await scene.loadAround(focus, camera, 800);
+      scene.group.updateMatrixWorld(true);
+      const offsets = distance === 300 ? [-128, 0, 128] : [-32, 0, 32];
+      for (const x of offsets) for (const z of offsets) {
+        const point = new THREE.Vector3(x, 1, z).project(camera);
+        ray.setFromCamera(new THREE.Vector2(point.x, point.y), camera);
+        const hit = ray.intersectObject(scene.group, true).find((candidate) => {
+          if (!candidate.object.userData.voxelWorldOverview) return true;
+          const offset = candidate.point.clone().sub(shader.uniforms.worldDetailFocus.value);
+          const direction = shader.uniforms.worldDetailDirection?.value as THREE.Vector3 | undefined;
+          const coverageDistance = direction?.lengthSq() ? offset.dot(direction) : offset.length();
+          return overview.visible && coverageDistance >= shader.uniforms.worldDetailRadius.value;
+        });
+        assert.ok(hit, "all visible floor samples retain geometry");
+        const depth = -hit.point.clone().applyMatrix4(camera.matrixWorldInverse).z;
+        const scale = hit.object.getWorldScale(new THREE.Vector3()).x;
+        const cellPixels = scale * 800 /
+          (2 * Math.tan(THREE.MathUtils.degToRad(camera.getEffectiveFOV()) / 2) * depth);
+        assert.ok(scale === 1 || cellPixels <= 6, `finished detail cannot leave ${cellPixels.toFixed(1)}-pixel coarse cells`);
+        assert.ok(hit.point.y <= 1.001, "coarse detail cannot raise the floor beyond its source region");
+      }
+      if (distance === 300) assert.ok(scene.getResidentStats().mixedProxyRegions > 0, "intermediate detail covers the visible frame");
+      else assert.ok(scene.getResidentStats().mixedDetailRegions > 4, "visible blocks retain exact detail when the neighborhood budget is full");
+      assert.ok(scene.getResidentStats().residentRegions <= 64);
+      assert.equal(scene.getResidentStats().loadingParts, 0);
+    }
+    scene.dispose();
+
+    const captureOverview = encodeBinaryVoxelBuild([0, 1, 126, 127].flatMap((x) =>
+      [0, 1].map((z) => ({ x, y: 0, z, type: "stone" }))), SHA);
+    const captureManifest: VoxelWorldManifest = {
+      ...manifest,
+      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 4096, y: 1, z: 64 } },
+      exactBlockCount: 2 * 64 ** 2,
+      overview: { scale: 32, data: localPart("overview", captureOverview.byteLength) },
+      regions: [0, 4032].map((x) => ({
+        kind: "mixed", key: `capture-${x}`, origin: { x, y: 0, z: 0 }, size: { x: 64, y: 1, z: 64 },
+        blockCount: 64 ** 2, format: "mbv4", coordinateSpace: "local", data: localPart(`capture-${x}`, bytes.byteLength),
+      })),
+    };
+    focus.set(-2016, 0, 0);
+    camera.position.set(-2016, 120, 120);
+    camera.lookAt(focus);
+    camera.updateMatrixWorld();
+    const captureReads = new Set<string>();
+    const captured = await createScene({ manifest: captureManifest, resolvePart: async (key) => {
+      captureReads.add(key);
+      return key === "overview" ? captureOverview : bytes;
+    } }, {
+      initialFocus: focus, maxMixedDetailRegions: 0,
+    });
+    await captured.loadAround(focus, camera, 800);
+    assert.equal(captured.getResidentStats().mixedDetailRegions, 1, "the active view loads only one of the distant platforms");
+    captured.group.rotation.y = Math.PI;
+    captured.group.updateMatrixWorld(true);
+    const captureObject = captured.group.getObjectByName("VoxelWorldOverview")!;
+    assert.ok(captureObject.visible, "a rotated capture retains fallback geometry outside the previously visible area");
+    const captureMesh = meshDescendants(captureObject)[0];
+    const captureMaterial = captureMesh.material as THREE.Material;
+    const captureShader = {
+      uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
+    } as Parameters<THREE.Material["onBeforeCompile"]>[0];
+    captureMaterial.onBeforeCompile(captureShader, {} as THREE.WebGLRenderer);
+    captureMaterial.onBeforeRender({} as THREE.WebGLRenderer, new THREE.Scene(), camera, captureMesh.geometry, captureMesh, {} as THREE.Group);
+    ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const capturedHit = ray.intersectObject(captureObject, true)[0];
+    assert.ok(capturedHit, "the newly exposed platform remains present in the capture");
+    const localPoint = capturedHit.point.clone().applyMatrix4(captureShader.uniforms.worldDetailRootInverse.value);
+    const projected = localPoint.clone().project(camera);
+    assert.ok(Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1, "the fallback lies outside the view whose detail was loaded");
+    captured.group.rotation.y = 0;
+    camera.position.set(-2100, 70, 0);
+    camera.lookAt(2016, 0, 0);
+    camera.far = 1000;
+    await captured.loadAround(focus, camera, 800);
+    captureReads.clear();
+    camera.far = 5000;
+    captured.updateFocus(focus, camera, 800);
+    assert.ok(captureReads.has("capture-4032"), "extending the far plane loads newly visible scenery");
+    await captured.loadAround(focus, camera, 800);
+    const projectionBeforeRoll = captureShader.uniforms.worldDetailProjection.value.elements.slice();
+    camera.rotateZ(Math.PI / 2);
+    captured.updateFocus(focus, camera, 800);
+    assert.notDeepEqual(captureShader.uniforms.worldDetailProjection.value.elements, projectionBeforeRoll, "camera roll updates the refinement frustum");
+    captured.dispose();
+  }
+
   console.log("voxel world scene checks passed");
 }
 
