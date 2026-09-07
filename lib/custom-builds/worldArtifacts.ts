@@ -8,8 +8,6 @@ import {
   uploadAndRecordCustomBuildArtifact,
 } from "@/lib/custom-builds/artifacts";
 import { encodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
-import { createPackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
-import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild, VoxelBlock, VoxelPoint } from "@/lib/voxel/types";
 import {
   VOXEL_WORLD_EVALUATOR_VERSION,
@@ -32,6 +30,13 @@ import {
   type MixedVoxelWorldRegion,
   type VoxelWorldRegion as EvaluatedVoxelWorldRegion,
 } from "@/lib/voxel/worldRegions";
+import {
+  VOXEL_WORLD_OVERVIEW_SCALE,
+  createVoxelWorldOverviewState,
+  encodeVoxelWorldOverviewBuild,
+  markMixedVoxelWorldOverviewRegion,
+  markUniformVoxelWorldOverviewRegion,
+} from "@/lib/voxel/worldOverview";
 
 type PaletteName = "simple" | "advanced";
 export type PersistedVoxelWorldArtifact = Pick<
@@ -44,13 +49,7 @@ export type PersistVoxelWorldArtifact = (
 
 const PAGE_KEY_PREFIX = "page-";
 const OVERVIEW_PART_KEY = "overview";
-const OVERVIEW_SCALE = 32;
 const MIXED_PART_PERSIST_CONCURRENCY = 4;
-
-type OverviewState = {
-  cellsPerAxis: number;
-  materials: Uint8Array | Uint16Array;
-};
 
 export function voxelWorldPartSourceSha256(sourceBuildSha256: string, partKey: string): string {
   return sha256Hex(`${sourceBuildSha256}\0${partKey}`);
@@ -153,118 +152,6 @@ function mixedRegionBlocks(region: MixedVoxelWorldRegion, paletteIds: string[]):
   return blocks;
 }
 
-function createOverviewState(gridSize: number, paletteSize: number): OverviewState | null {
-  if (gridSize <= 512) return null;
-  const cellsPerAxis = gridSize / OVERVIEW_SCALE;
-  if (!Number.isInteger(cellsPerAxis) || cellsPerAxis < 1 || cellsPerAxis > 256) return null;
-  return {
-    cellsPerAxis,
-    materials: paletteSize <= 255
-      ? new Uint8Array(cellsPerAxis ** 3)
-      : new Uint16Array(cellsPerAxis ** 3),
-  };
-}
-
-function overviewIndex(cellsPerAxis: number, x: number, y: number, z: number): number {
-  return x + y * cellsPerAxis + z * cellsPerAxis * cellsPerAxis;
-}
-
-function markUniformOverviewRegion(
-  overview: OverviewState,
-  region: Extract<EvaluatedVoxelWorldRegion, { kind: "uniform" }>,
-  material: number,
-): void {
-  const max = overview.cellsPerAxis - 1;
-  const x1 = Math.max(0, Math.min(max, Math.floor(region.origin.x / OVERVIEW_SCALE)));
-  const y1 = Math.max(0, Math.min(max, Math.floor(region.origin.y / OVERVIEW_SCALE)));
-  const z1 = Math.max(0, Math.min(max, Math.floor(region.origin.z / OVERVIEW_SCALE)));
-  const x2 = Math.max(0, Math.min(max, Math.floor((region.origin.x + region.size.x - 1) / OVERVIEW_SCALE)));
-  const y2 = Math.max(0, Math.min(max, Math.floor((region.origin.y + region.size.y - 1) / OVERVIEW_SCALE)));
-  const z2 = Math.max(0, Math.min(max, Math.floor((region.origin.z + region.size.z - 1) / OVERVIEW_SCALE)));
-  for (let z = z1; z <= z2; z += 1) {
-    for (let y = y1; y <= y2; y += 1) {
-      const start = overviewIndex(overview.cellsPerAxis, x1, y, z);
-      overview.materials.fill(material, start, start + x2 - x1 + 1);
-    }
-  }
-}
-
-function markMixedOverviewRegion(overview: OverviewState, region: MixedVoxelWorldRegion): void {
-  const sx = region.size.x;
-  const sy = region.size.y;
-  const plane = sx * sy;
-  for (let index = 0; index < region.materialIndexes.length; index += 1) {
-    const material = region.materialIndexes[index]!;
-    if (material === 0) continue;
-    const x = region.origin.x + (index % sx);
-    const y = region.origin.y + (Math.floor(index / sx) % sy);
-    const z = region.origin.z + Math.floor(index / plane);
-    overview.materials[overviewIndex(
-      overview.cellsPerAxis,
-      Math.floor(x / OVERVIEW_SCALE),
-      Math.floor(y / OVERVIEW_SCALE),
-      Math.floor(z / OVERVIEW_SCALE),
-    )] = material;
-  }
-}
-
-function canOverviewCellEmitAnyFace(
-  materials: Uint8Array | Uint16Array,
-  occluders: Uint8Array,
-  cellsPerAxis: number,
-  x: number,
-  y: number,
-  z: number,
-): boolean {
-  const material = materials[overviewIndex(cellsPerAxis, x, y, z)]!;
-  for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]] as const) {
-    const nx = x + dx;
-    const ny = y + dy;
-    const nz = z + dz;
-    if (nx < 0 || ny < 0 || nz < 0 || nx >= cellsPerAxis || ny >= cellsPerAxis || nz >= cellsPerAxis) return true;
-    const neighbor = materials[overviewIndex(cellsPerAxis, nx, ny, nz)]!;
-    if (neighbor === 0) return true;
-    if (neighbor === material) continue;
-    if (occluders[neighbor]) continue;
-    return true;
-  }
-  return false;
-}
-
-function encodeOverviewBuild(overview: OverviewState, paletteIds: string[], sourceBuildSha256: string): { bytes: Uint8Array; blockCount: number } {
-  const occluders = Uint8Array.from([0, ...paletteIds.map((type) => isVoxelOccluder(type) ? 1 : 0)]);
-  const { cellsPerAxis, materials } = overview;
-  let blockCount = 0;
-  for (let z = 0; z < cellsPerAxis; z += 1) {
-    for (let y = 0; y < cellsPerAxis; y += 1) {
-      for (let x = 0; x < cellsPerAxis; x += 1) {
-        if (materials[overviewIndex(cellsPerAxis, x, y, z)] && canOverviewCellEmitAnyFace(materials, occluders, cellsPerAxis, x, y, z)) {
-          blockCount += 1;
-        }
-      }
-    }
-  }
-
-  const packed = createPackedVoxelBlocks(blockCount);
-  packed.typeNames = paletteIds.slice();
-  for (let z = 0; z < cellsPerAxis; z += 1) {
-    for (let y = 0; y < cellsPerAxis; y += 1) {
-      for (let x = 0; x < cellsPerAxis; x += 1) {
-        const material = materials[overviewIndex(cellsPerAxis, x, y, z)]!;
-        if (material === 0 || !canOverviewCellEmitAnyFace(materials, occluders, cellsPerAxis, x, y, z)) continue;
-        const write = packed.count;
-        packed.positions[write * 3] = x;
-        packed.positions[write * 3 + 1] = y;
-        packed.positions[write * 3 + 2] = z;
-        packed.typeIds[write] = material - 1;
-        packed.count += 1;
-      }
-    }
-  }
-
-  return { bytes: encodeBinaryVoxelBuild(packed, sourceBuildSha256), blockCount };
-}
-
 function storedPartRef(key: string, artifact: PersistedVoxelWorldArtifact): StoredVoxelWorldPartRef {
   return {
     kind: "stored",
@@ -347,7 +234,7 @@ export async function persistVoxelWorldArtifacts(args: {
   const regionPages: VoxelWorldRegionPageRef[] = [];
   const previewBlocks: VoxelBlock[] = [];
   const mixedPartsBySha = new Map<string, Promise<StoredVoxelWorldPartRef>>();
-  const overview = createOverviewState(args.gridSize, palette.length);
+  const overview = createVoxelWorldOverviewState(args.gridSize, palette.length);
   const materialByType = new Map(paletteIds.map((type, index) => [type, index + 1]));
   const queuedRegions: Array<Promise<VoxelWorldRegion>> = [];
 
@@ -438,7 +325,7 @@ export async function persistVoxelWorldArtifacts(args: {
       bounds = extendBounds(bounds, region.origin, region.size);
       if (region.kind === "uniform") {
         const material = materialByType.get(region.type);
-        if (overview && material) markUniformOverviewRegion(overview, region, material);
+        if (overview && material) markUniformVoxelWorldOverviewRegion(overview, region, material);
         appendUniformPreviewBlocks(previewBlocks, region, args.previewTargetBlocks);
         await queueRegion({
           kind: "uniform",
@@ -452,7 +339,7 @@ export async function persistVoxelWorldArtifacts(args: {
       }
 
       appendMixedPreviewBlocks(previewBlocks, region, paletteIds, args.previewTargetBlocks);
-      if (overview) markMixedOverviewRegion(overview, region);
+      if (overview) markMixedVoxelWorldOverviewRegion(overview, region);
       const bytes = encodeBinaryVoxelBuild(mixedRegionBlocks(region, paletteIds), args.sourceBuildSha256);
       const gzip = gzipSync(bytes, { level: zlibConstants.Z_BEST_SPEED });
       const gzipSha = sha256Hex(gzip);
@@ -488,7 +375,7 @@ export async function persistVoxelWorldArtifacts(args: {
 
     let overviewData: StoredVoxelWorldPartRef | undefined;
     if (overview && exactBlockCount > 0) {
-      const overviewBuild = encodeOverviewBuild(overview, paletteIds, args.sourceBuildSha256);
+      const overviewBuild = encodeVoxelWorldOverviewBuild(overview, paletteIds, args.sourceBuildSha256);
       const overviewBytes = gzipBytes(overviewBuild.bytes);
       const artifact = await persistBytes({
         persistArtifact,
@@ -517,7 +404,7 @@ export async function persistVoxelWorldArtifacts(args: {
         sha256: args.sourceBuildSha256,
         evaluatorVersion: VOXEL_WORLD_EVALUATOR_VERSION,
       },
-      ...(overviewData ? { overview: { data: overviewData, scale: OVERVIEW_SCALE } } : {}),
+      ...(overviewData ? { overview: { data: overviewData, scale: VOXEL_WORLD_OVERVIEW_SCALE } } : {}),
       ...(paged ? { regionPages } : { regions: inlineRegions }),
     };
     const parsed = parseVoxelWorldManifest(manifest, { allowStoredRefs: true });

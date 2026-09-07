@@ -10,6 +10,7 @@ import {
   attachLocalVoxelWorldResolver,
   createLocalVoxelWorld,
   deleteLocalVoxelWorldParts,
+  type LocalVoxelWorldProgress,
   type LocalVoxelWorldOwnership,
 } from "@/lib/voxel/localWorld";
 import {
@@ -23,6 +24,14 @@ import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 
 type Palette = "simple" | "advanced";
+
+type LocalParseProgress = {
+  receivedBlocks: number;
+  totalBlocks: number | null;
+  stage?: LocalVoxelWorldProgress["stage"];
+  bytesRead?: number;
+  totalBytes?: number;
+};
 
 type LocalParseWorkerRequest =
   | {
@@ -46,6 +55,9 @@ type LocalParseWorkerResponse =
       deltaBlocks: VoxelBuild["blocks"];
       receivedBlocks: number;
       totalBlocks: number | null;
+      stage?: LocalVoxelWorldProgress["stage"];
+      bytesRead?: number;
+      totalBytes?: number;
     }
   | {
       type: "complete";
@@ -77,11 +89,24 @@ function formatCompactCount(value: number): string {
   return value.toLocaleString();
 }
 
-function formatApproxMbFromChars(chars: number): string {
-  const mb = chars / 1_000_000;
+function formatApproxMb(bytes: number): string {
+  const mb = bytes / 1_000_000;
   if (mb >= 100) return `${Math.round(mb)}MB`;
   if (mb >= 10) return `${mb.toFixed(1)}MB`;
   return `${mb.toFixed(2)}MB`;
+}
+
+function formatLocalLoadingMessage(progress?: LocalParseProgress): string {
+  if (progress?.stage === "reading" && progress.bytesRead !== undefined) {
+    const read = formatApproxMb(progress.bytesRead);
+    if (progress.totalBytes !== undefined && progress.totalBytes > 0) {
+      const pct = Math.max(0, Math.min(100, Math.round((progress.bytesRead / progress.totalBytes) * 100)));
+      return `Reading file ${read} / ${formatApproxMb(progress.totalBytes)} (${pct}%)`;
+    }
+    return `Reading file ${read}`;
+  }
+  if (progress?.stage === "building") return "Building world...";
+  return formatVoxelLoadingMessage("Retrieving build", progress);
 }
 
 function trimOuterWhitespace(text: string): string {
@@ -304,10 +329,7 @@ export function LocalLab() {
     kind: "idle" | "loading" | "ready" | "error";
     build: RenderableVoxelBuild | null;
     warnings: string[];
-    progress?: {
-      receivedBlocks: number;
-      totalBlocks: number | null;
-    };
+    progress?: LocalParseProgress;
     message?: string;
   }>({ kind: "idle", build: null, warnings: [] });
   const previewViewerRef = useRef<VoxelViewerHandle | null>(null);
@@ -334,7 +356,12 @@ export function LocalLab() {
       const message = event.data;
       if (!message) return;
 
-      if (message.requestId !== parseRequestIdRef.current) return;
+      if (message.requestId !== parseRequestIdRef.current) {
+        if (message.type === "complete" && message.localWorld) {
+          void deleteLocalVoxelWorldParts(message.localWorld.partKeys, message.localWorld.worldId);
+        }
+        return;
+      }
 
       if (message.type === "progress") {
         if (message.deltaBlocks.length > 0) {
@@ -343,14 +370,19 @@ export function LocalLab() {
 
         setRendered({
           kind: "loading",
-          build: {
-            version: "1.0",
-            blocks: streamedBlocksRef.current,
-          },
+          build: streamedBlocksRef.current.length > 0
+            ? {
+                version: "1.0",
+                blocks: streamedBlocksRef.current,
+              }
+            : null,
           warnings: [],
           progress: {
             receivedBlocks: message.receivedBlocks,
             totalBlocks: message.totalBlocks,
+            stage: message.stage,
+            bytesRead: message.bytesRead,
+            totalBytes: message.totalBytes,
           },
         });
         return;
@@ -456,7 +488,7 @@ export function LocalLab() {
     }
 
     try {
-      if (gridSize > 512 && file.size >= LARGE_PASTE_CHAR_THRESHOLD) {
+      if (file.size >= LARGE_PASTE_CHAR_THRESHOLD) {
         bufferedOutputRef.current = file;
         if (modelOutputRef.current) modelOutputRef.current.value = "";
         setInputStats({ mode: "file", chars: file.size });
@@ -629,7 +661,7 @@ export function LocalLab() {
 
   const loadingMessage =
     rendered.kind === "loading"
-      ? formatVoxelLoadingMessage("Retrieving build", rendered.progress)
+      ? formatLocalLoadingMessage(rendered.progress)
       : undefined;
 
   return (
@@ -849,7 +881,7 @@ export function LocalLab() {
                 if (modelOutputRef.current) modelOutputRef.current.value = "";
                 setInputStats({ mode: "buffered", chars: pasted.length });
                 setStatusNote(
-                  `Large paste ready (~${formatApproxMbFromChars(pasted.length)}).`,
+                  `Large paste ready (~${formatApproxMb(pasted.length)}).`,
                 );
               }}
               onChange={(e) => {
@@ -869,7 +901,7 @@ export function LocalLab() {
 
             {inputStats.mode !== "empty" ? (
               <div className="text-[11px] text-muted">
-                {inputStats.mode === "file" ? formatApproxMbFromChars(inputStats.chars) : `${formatCompactCount(inputStats.chars)} chars (~${formatApproxMbFromChars(inputStats.chars)})`}
+                {inputStats.mode === "file" ? formatApproxMb(inputStats.chars) : `${formatCompactCount(inputStats.chars)} chars (~${formatApproxMb(inputStats.chars)})`}
                 {inputStats.mode === "buffered" ? " held in memory" : ""}
               </div>
             ) : null}

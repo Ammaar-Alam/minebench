@@ -163,7 +163,7 @@ export function VoxelViewerCard({
     return { build: validated.value.build, warnings: validated.value.warnings, error: null };
   }, [voxelBuild, gridSize, palette, skipValidation]);
 
-  const build = rendered.build;
+  const build: RenderableVoxelBuild | null = rendered.build;
   const buildBlocksRef = build ? voxelBuildBlocksRef(build) : null;
   const warnings = metrics?.warnings ?? rendered.warnings;
   const blockCount = metrics?.blockCount ?? voxelBuildBlockCount(build);
@@ -287,24 +287,24 @@ export function VoxelViewerCard({
     (ready: boolean) => {
       setViewerReady(ready);
       if (ready) {
-        setPlacementProgress(null);
+        if (!build?.world) setPlacementProgress(null);
         setPlacementError(null);
       }
       onBuildReadyChange?.(ready);
     },
-    [onBuildReadyChange],
+    [build?.world, onBuildReadyChange],
   );
 
   const handleFirstRenderReadyChange = useCallback(
     (ready: boolean) => {
       setFirstRenderReady(ready);
       if (ready) {
-        setPlacementProgress(null);
+        if (!build?.world) setPlacementProgress(null);
         setPlacementError(null);
       }
       onFirstRenderReadyChange?.(ready);
     },
-    [onFirstRenderReadyChange],
+    [build?.world, onFirstRenderReadyChange],
   );
 
   const handleBuildProgressChange = useCallback(
@@ -474,6 +474,12 @@ export function VoxelViewerCard({
               attempt={attempt}
               retryReason={retryReason}
             />
+          ) : null}
+
+          {build?.world && placementProgress && viewerReady && showBuildView && !explorerActive && !combinedError && !showLoadingHud ? (
+            <div role="status" className="pointer-events-none absolute bottom-3 left-3 rounded-md bg-bg/75 px-3 py-2 text-xs text-muted backdrop-blur-sm">
+              {hudLabel}
+            </div>
           ) : null}
 
           {isLoading && showJsonView && showLoadingOverlay ? (

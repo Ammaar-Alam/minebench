@@ -721,15 +721,17 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       if (!sameIdentity(identityRef.current, incomingIdentity)) return;
       if (!buildSnapshot) return;
 
-      const progress = (progress: VoxelViewerBuildProgress) => {
-        onBuildProgressChangeRef.current?.({
+      const progress = (progress: VoxelViewerBuildProgress | null) => {
+        if (controller.signal.aborted) return;
+        onBuildProgressChangeRef.current?.(progress ? {
           processedBlocks: Math.max(0, Math.floor(progress.processedBlocks)),
           totalBlocks: Math.max(1, Math.floor(progress.totalBlocks)),
           stageLabel: progress.stageLabel ?? "Placing blocks",
-        });
+        } : null);
       };
       let vg: VoxelGroup;
       let worldLoadError: string | null = null;
+      let worldProgress: VoxelViewerBuildProgress | null = null;
       if (buildSnapshot.world) {
         meshStarted = true;
         meshStrategy = "worker";
@@ -745,7 +747,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
             reportReady(false);
             reportFirstRenderReady(false);
           },
-          onProgress: buildSnapshot.world.manifest.overview ? undefined : progress,
+          onProgress(value) {
+            worldProgress = value;
+            progress(value);
+          },
         });
         buildTrace.mark("mesh_payload_complete");
         buildTrace.mark("three_group_complete");
@@ -936,7 +941,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       buildTrace.mark("reveal_complete");
       revealComplete = true;
       maybeReportBuildMetrics();
-      onBuildProgressChangeRef.current?.(null);
+      onBuildProgressChangeRef.current?.(worldProgress);
       if (!worldLoadError) onBuildErrorChangeRef.current?.(null);
       reportReady(buildReady && !worldLoadError);
       requestRenderRef.current?.();
@@ -956,7 +961,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         activeJobRef.current.controller = null;
         activeJobRef.current.identity = null;
       }
-      onBuildProgressChangeRef.current?.(null);
+      if (!buildSnapshot?.world) onBuildProgressChangeRef.current?.(null);
       if (!traceRetainedForFirstRender) buildTrace.clear();
       if (buildPendingRef.current.dirty) scheduleKick();
     }

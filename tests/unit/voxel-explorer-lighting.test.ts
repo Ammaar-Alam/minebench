@@ -100,6 +100,12 @@ async function main() {
     assert.deepEqual(emission.toArray(), [0, 0, 0], "bloom cannot reveal geometry beyond the fog");
     setExplorerWorldFog(camera, fog, bloomFog, 0);
     assert.equal(THREE.MathUtils.smoothstep(camera.near, fog.near, fog.far), 1, "unloaded space is fully fogged");
+    setExplorerWorldFog(camera, fog, bloomFog, 100, 10_240);
+    assert.equal(fog.far, 10_240, "whole-world coverage keeps distant scenery beyond nearby exact detail");
+    assert.ok(fog.near > 5_000, "fog begins in the distance instead of enclosing the player");
+    assert.ok(camera.far > fog.far, "the camera cannot clip scenery before the fog");
+    assert.equal(bloomFog.near, fog.near);
+    assert.equal(bloomFog.far, fog.far);
   }
   assert.throws(() => renderExplorerBloomOverlay(renderer, () => { throw new Error("draw failed"); }));
   assert.equal(renderer.autoClear, true);

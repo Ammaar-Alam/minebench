@@ -634,12 +634,13 @@ function frameAtmosphere(
   atmosphere: ReturnType<typeof configureAtmosphere>,
   bounds: VoxelGroup["bounds"],
   lightDirection: THREE.Vector3,
+  viewDistance?: number,
 ) {
   const size = bounds.box.getSize(new THREE.Vector3());
   const radius = Math.max(8, bounds.radius);
   const fog = scene.fog as THREE.Fog;
-  fog.near = THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.35, 48, 96);
-  fog.far = THREE.MathUtils.clamp(Math.max(size.x, size.z) * 1.5, 160, 512);
+  fog.near = viewDistance ? viewDistance * 0.55 : THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.35, 48, 96);
+  fog.far = viewDistance ?? THREE.MathUtils.clamp(Math.max(size.x, size.z) * 1.5, 160, 512);
   camera.far = Math.max(1_000, fog.far * 3);
   camera.updateProjectionMatrix();
   atmosphere.sky.scale.setScalar(camera.far * 0.96);
@@ -725,6 +726,10 @@ function ExplorerScene({
     let disposed = false;
     let voxelGroup: ExplorerRenderableVoxelGroup | null = null;
     let collisionWorld: ExplorerCollisionWorld | null = null;
+    const worldBounds = build.voxelBuild.world?.manifest.bounds;
+    const worldViewDistance = build.voxelBuild.world?.manifest.overview && worldBounds
+      ? Math.max(2048, Math.hypot(worldBounds.size.x, worldBounds.size.y, worldBounds.size.z) * 1.25)
+      : undefined;
     let worldReady = false;
     let isNoclip = true;
     let verticalVelocity = 0;
@@ -1061,6 +1066,7 @@ function ExplorerScene({
           atmosphere,
           voxelGroup.bounds,
           moonLightActive ? MOON_DIRECTION : SUN_DIRECTION,
+          worldViewDistance,
         );
       }
 
@@ -1241,7 +1247,7 @@ function ExplorerScene({
         2 * sunDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 0.075;
       atmosphere.moon.scale.set(moonSize, moonSize, 1);
       if (isVoxelWorldScene(voxelGroup)) {
-        setExplorerWorldFog(camera, scene.fog as THREE.Fog, worldBloomFog, voxelGroup.getDetailRadius(camera.position));
+        setExplorerWorldFog(camera, scene.fog as THREE.Fog, worldBloomFog, voxelGroup.getDetailRadius(camera.position), worldViewDistance);
       }
       try {
         renderer.render(scene, camera);
@@ -1290,12 +1296,11 @@ function ExplorerScene({
               const worldScene = await createVoxelWorldScene(worldDelivery, getPalette(build.palette), atlas, {
                 signal: abortController.signal,
                 initialFocus: focus,
-                showOverview: false,
                 maxMixedDetailRegions: 64,
                 maxMixedProxyRegions: 0,
                 mixedDetailRadius: 512,
                 onProgress(progress) {
-                  if (!disposed) setLoading(progress.stageLabel ?? "Loading world");
+                  if (!disposed) setLoading(progress ? progress.stageLabel ?? "Loading world" : "");
                 },
                 onChange() {
                   if (!disposed && voxelGroup) {
@@ -1310,6 +1315,12 @@ function ExplorerScene({
                   }
                 },
               });
+              try {
+                await worldScene.loadAround(focus);
+              } catch (error) {
+                worldScene.dispose();
+                throw error;
+              }
               return Object.assign(worldScene, {
                 async updateActiveCamera(position: ExplorerPosition) {
                   focus.set(position.x, position.y, position.z);
@@ -1351,7 +1362,7 @@ function ExplorerScene({
         }
         prepareVoxelMeshes(voxelGroup.group);
         scene.add(voxelGroup.group);
-        frameAtmosphere(camera, scene, atmosphere, voxelGroup.bounds, SUN_DIRECTION);
+        frameAtmosphere(camera, scene, atmosphere, voxelGroup.bounds, SUN_DIRECTION, worldViewDistance);
         resize();
 
         if (worldDelivery) {
@@ -1453,6 +1464,7 @@ function ExplorerScene({
           <span>{noclip ? "Noclip" : "Walking"}</span>
           <span className="text-white/45">·</span>
           <span className="tabular-nums text-white/75">{fps} FPS</span>
+          {loading ? <span role="status" className="text-white/75">{loading}</span> : null}
         </div>
       ) : null}
 

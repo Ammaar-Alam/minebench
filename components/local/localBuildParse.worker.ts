@@ -3,6 +3,7 @@ import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
   createLocalVoxelWorld,
+  type LocalVoxelWorldProgress,
   type LocalVoxelWorldOwnership,
 } from "@/lib/voxel/localWorld";
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
@@ -41,6 +42,9 @@ type ProgressMessage = {
   deltaBlocks: VoxelBlock[];
   receivedBlocks: number;
   totalBlocks: number | null;
+  stage?: LocalVoxelWorldProgress["stage"];
+  bytesRead?: number;
+  totalBytes?: number;
 };
 
 type CompleteMessage = {
@@ -439,7 +443,7 @@ async function runParse(request: ParseRequest) {
   activeAbortController = abortController;
   activeRequestId = request.requestId;
 
-  const raw = trimOuterWhitespace(request.rawText);
+  let raw = trimOuterWhitespace(request.rawText);
   if (!raw && !request.file) {
     const message: ErrorMessage = {
       type: "error",
@@ -459,7 +463,12 @@ async function runParse(request: ParseRequest) {
   };
 
   try {
-    const finishServerWorld = (build: RenderableVoxelBuild, warnings: string[], source: ParseSource) => {
+    const finishWorld = (
+      build: RenderableVoxelBuild,
+      warnings: string[],
+      source: ParseSource,
+      localWorld?: LocalVoxelWorldOwnership,
+    ) => {
       if (isCancelled(request.requestId)) return;
       const manifest = build.world!.manifest;
       postMessage({
@@ -471,20 +480,75 @@ async function runParse(request: ParseRequest) {
         totalBlocks: manifest.exactBlockCount,
         source,
         resolved: { gridSize: manifest.gridSize as GridSize, palette: manifest.palette },
+        ...(localWorld ? { localWorld } : {}),
       } satisfies CompleteMessage);
     };
     if (request.file) {
-      const response = await fetch(`/api/local/voxel-exec?gridSize=${request.gridSize}&palette=${request.palette}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/vnd.minebench.build+json" },
-        body: request.file,
-        signal: abortController.signal,
+      if (request.gridSize > 512) {
+        let lastFileProgressAt = -Infinity;
+        const postFileProgress = (progress: LocalVoxelWorldProgress) => {
+          if (isCancelled(request.requestId)) return;
+          const now = performance.now();
+          const complete =
+            progress.stage === "building" ||
+            (progress.bytesRead !== undefined &&
+              progress.totalBytes !== undefined &&
+              progress.bytesRead >= progress.totalBytes);
+          if (!complete && now - lastFileProgressAt < EMIT_INTERVAL_MS) return;
+          lastFileProgressAt = now;
+          postProgress({
+            type: "progress",
+            requestId: request.requestId,
+            deltaBlocks: [],
+            receivedBlocks: 0,
+            totalBlocks: null,
+            ...progress,
+          });
+        };
+        const world = await createLocalVoxelWorld(request.file, {
+          gridSize: request.gridSize,
+          palette: request.palette,
+          signal: abortController.signal,
+          onProgress: postFileProgress,
+        });
+        if (isCancelled(request.requestId)) {
+          throw new Error(CANCELLED_ERROR);
+        }
+
+        finishWorld(world.build, world.warnings, "build-json", {
+          worldId: world.worldId,
+          partKeys: world.partKeys,
+        });
+        return;
+      }
+
+      postProgress({
+        type: "progress",
+        requestId: request.requestId,
+        deltaBlocks: [],
+        receivedBlocks: 0,
+        totalBlocks: null,
+        stage: "reading",
+        bytesRead: 0,
+        totalBytes: request.file.size,
       });
-      const result = await readExecutionResponse(response);
-      const world = readServerWorld(result.build);
-      if (!world) throw new Error("Import returned no world");
-      finishServerWorld(world, result.warnings, "build-json");
-      return;
+      raw = trimOuterWhitespace(await request.file.text());
+      if (isCancelled(request.requestId)) {
+        throw new Error(CANCELLED_ERROR);
+      }
+      postProgress({
+        type: "progress",
+        requestId: request.requestId,
+        deltaBlocks: [],
+        receivedBlocks: 0,
+        totalBlocks: null,
+        stage: "reading",
+        bytesRead: request.file.size,
+        totalBytes: request.file.size,
+      });
+      if (!raw) {
+        throw new Error("Paste a JSON object first.");
+      }
     }
     let baseBuild: VoxelBuild | null = null;
     let totalBlocks: number | null = null;
@@ -493,7 +557,8 @@ async function runParse(request: ParseRequest) {
     let resolvedPalette: Palette = request.palette;
     const sourceWarnings: string[] = [];
 
-    const streamed = request.gridSize > 512 ? null : streamBlocksFromText(request, postProgress);
+    const parseRequest = raw === request.rawText ? request : { ...request, rawText: raw };
+    const streamed = request.gridSize > 512 ? null : streamBlocksFromText(parseRequest, postProgress);
     // If we didn't manage to extract any blocks, fall back to full JSON extraction so we can
     // handle builds that rely on `boxes`/`lines` primitives (or non-standard block encodings).
     if (streamed && streamed.blocks.length > 0) {
@@ -527,7 +592,7 @@ async function runParse(request: ParseRequest) {
 
         const serverWorld = readServerWorld(executed.build);
         if (serverWorld) {
-          finishServerWorld(serverWorld, sourceWarnings, source);
+          finishWorld(serverWorld, sourceWarnings, source);
           return;
         }
 

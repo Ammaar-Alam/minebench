@@ -328,7 +328,7 @@ async function main() {
     assert.equal(detailed.group.getObjectByName("VoxelWorldOverview")?.visible, false, "complete exact coverage hides the overview");
     detailed.dispose();
     const exact = await createScene({ manifest, resolvePart: async () => {
-      throw new Error("coarse overview must not enter Explorer");
+      throw new Error("overview must not enter an exact-only scene");
     } }, { showOverview: false, maxMixedProxyRegions: 0 });
     assert.equal(exact.group.getObjectByName("VoxelWorldOverview"), undefined);
     assert.equal(exact.getDetailRadius(exact.bounds.center), Infinity);
@@ -351,12 +351,16 @@ async function main() {
     let releaseDetail = () => {};
     const pendingDetail = new Promise<Uint8Array>((resolve) => { releaseDetail = () => resolve(bytes); });
     const focus = new THREE.Vector3(-240, 1, 0);
+    const progress: Array<{ processedBlocks: number; totalBlocks: number; stageLabel?: string } | null> = [];
     let deadline: ReturnType<typeof setTimeout> | undefined;
     const scene = await Promise.race([
-      createScene({ manifest, resolvePart: async (key) => key === "overview" ? bytes : pendingDetail }, { initialFocus: focus, maxMixedDetailRegions: 1 }),
+      createScene({ manifest, resolvePart: async (key) => key === "overview" ? bytes : pendingDetail }, {
+        initialFocus: focus, maxMixedDetailRegions: 1, onProgress: (value) => progress.push(value),
+      }),
       new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("overview waited for distant detail")), 1000); }),
     ]).finally(() => clearTimeout(deadline));
     assert.equal(scene.getResidentStats().loadingParts, 1, "the overview is ready while exact detail is still loading");
+    assert.ok(progress.at(-1), "loading stays visible while nearby detail is pending");
     const overview = scene.group.getObjectByName("VoxelWorldOverview");
     assert.ok(overview);
     const material = meshDescendants(overview)[0].material as THREE.Material;
@@ -368,6 +372,7 @@ async function main() {
     assert.match(shader.fragmentShader, /distance\(vWorldOverviewPosition, worldDetailFocus\) < worldDetailRadius\) discard/);
     releaseDetail();
     await scene.loadAround(focus);
+    assert.equal(progress.at(-1), null, "loading finishes when requested detail is ready");
     assert.ok(shader.uniforms.worldDetailRadius.value > 431 && shader.uniforms.worldDetailRadius.value < 432);
     assert.deepEqual(shader.uniforms.worldDetailFocus.value.toArray(), focus.toArray());
     assert.equal(overview.visible, true, "distant unavailable regions keep their overview");
@@ -382,7 +387,7 @@ async function main() {
     assert.deepEqual(shader.uniforms.worldDetailFocus.value.toArray(), movedFocus.toArray());
     scene.dispose();
     const exact = await createScene({ manifest, resolvePart: async (key) => {
-      assert.notEqual(key, "overview", "Explorer never downloads coarse geometry");
+      assert.notEqual(key, "overview", "exact-only scenes never download coarse geometry");
       return bytes;
     } }, { initialFocus: focus, showOverview: false, maxMixedDetailRegions: 1, maxMixedProxyRegions: 0 });
     assert.equal(exact.group.getObjectByName("VoxelWorldOverview"), undefined);

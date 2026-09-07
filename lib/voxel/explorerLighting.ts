@@ -314,11 +314,16 @@ export function setExplorerWorldFog(
   fog: THREE.Fog,
   bloomFog: THREE.Fog,
   detailRadius: number,
+  viewDistance?: number,
 ): void {
   const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.getEffectiveFOV()) / 2);
   const cornerDistance = Math.hypot(1, halfHeight, halfHeight * camera.aspect);
-  fog.far = Math.max(camera.near, Math.min(512, detailRadius / cornerDistance));
+  fog.far = Math.max(camera.near, viewDistance ?? Math.min(512, detailRadius / cornerDistance));
   fog.near = fog.far * 0.55;
+  if (camera.far <= fog.far) {
+    camera.far = fog.far * 1.5;
+    camera.updateProjectionMatrix();
+  }
   bloomFog.near = fog.near;
   bloomFog.far = fog.far;
   bloomFog.color.set(0x000000);

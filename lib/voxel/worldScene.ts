@@ -51,7 +51,7 @@ export type VoxelWorldSceneOptions = {
   signal?: AbortSignal;
   onChange?: () => void;
   onError?: (message: string) => void;
-  onProgress?: (progress: { processedBlocks: number; totalBlocks: number; stageLabel?: string }) => void;
+  onProgress?: (progress: { processedBlocks: number; totalBlocks: number; stageLabel?: string } | null) => void;
   yieldAfterMs?: number;
   initialFocus?: THREE.Vector3;
   showOverview?: boolean;
@@ -553,6 +553,7 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     const overview = this.manifest.overview;
     if (!overview) return;
     const signal = this.overviewController.signal;
+    this.opts.onProgress?.({ processedBlocks: 0, totalBlocks: 1, stageLabel: "Loading world" });
     const bytes = await readPartBytes(this.delivery, overview.data, signal);
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     if (readBinaryVoxelBuildHeader(bytes).blockCount > 1_000_000) throw new Error("World overview is too large");
@@ -560,7 +561,10 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     const cellsPerAxis = this.manifest.gridSize / overview.scale;
     if (packed.positions.some((coordinate) => coordinate >= cellsPerAxis)) throw new Error("World overview exceeds its bounds");
     const anchor = packedAnchor(packed);
-    const rendered = await createVoxelGroupAsync({ version: "1.0", blocks: [], packed }, this.palette, this.atlasTexture, { signal });
+    const rendered = await createVoxelGroupAsync({ version: "1.0", blocks: [], packed }, this.palette, this.atlasTexture, {
+      signal,
+      onProgress: (progress) => this.opts.onProgress?.({ ...progress, stageLabel: "Loading world" }),
+    });
     if (signal.aborted || this.disposed) {
       rendered.dispose();
       throw new DOMException("Aborted", "AbortError");
@@ -677,7 +681,7 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     );
 
     this.rebuildUniformRegions(uniformRegions);
-    this.reconcileMixedRegions(mixedRegions);
+    const progress = this.reconcileMixedRegions(mixedRegions);
     const uniformKeys = new Set(uniformRegions.map((region) => region.key));
     let unknownDistanceSq = Infinity;
     for (const candidate of candidates) {
@@ -692,11 +696,10 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     this.detailRadius.value = Math.max(0, Math.sqrt(unknownDistanceSq) - 0.001);
     if (this.overview) this.overview.group.visible = Number.isFinite(unknownDistanceSq);
     this.opts.onChange?.();
-    this.opts.onProgress?.({
-      processedBlocks: this.residentBlockCount(),
-      totalBlocks: Math.max(1, this.manifest.exactBlockCount),
-      stageLabel: "Loading world",
-    });
+    this.opts.onProgress?.(this.loadingPages.size + this.loadingMixed.size > 0 ? {
+      ...progress,
+      stageLabel: "Loading details",
+    } : null);
   }
 
   private loadPagesAround(focusWorld: VoxelPoint) {
@@ -839,6 +842,15 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
       if (resident.mode === "detail") this.mixedDetailRegions += 1;
       else this.mixedProxyRegions += 1;
     }
+    let processedBlocks = 0;
+    let totalBlocks = 0;
+    for (const { region } of mixedRegions) {
+      const mode = desired.get(region.key);
+      if (!mode) continue;
+      totalBlocks += region.blockCount;
+      if (this.residentMixed.get(region.key)?.mode === mode) processedBlocks += region.blockCount;
+    }
+    return { processedBlocks, totalBlocks: Math.max(1, totalBlocks) };
   }
 
   private loadMixedRegion(region: VoxelWorldMixedRegion, mode: "detail" | "proxy") {
@@ -881,17 +893,6 @@ class ManagedVoxelWorldScene implements VoxelWorldScene {
     this.residentMixed.set(region.key, { region, mode, voxelGroup });
     this.group.add(voxelGroup.group);
     this.opts.onChange?.();
-  }
-
-  private residentBlockCount(): number {
-    let count = 0;
-    for (const region of this.regions.values()) {
-      if (region.kind === "uniform") count += region.blockCount;
-    }
-    for (const resident of this.residentMixed.values()) {
-      count += resident.voxelGroup.stats.blockCount;
-    }
-    return count;
   }
 
   private recordFailure(error: unknown) {
