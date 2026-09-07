@@ -117,4 +117,21 @@ camera.updateMatrixWorld(true);
 const portraitDepth = manhattanBounds.center.clone().project(camera).z;
 assert.ok(portraitDepth >= -1 && portraitDepth <= 1, "portrait capture retains the city after moving the camera farther back");
 
+const thinWorldBox = new THREE.Box3(new THREE.Vector3(-1, 0, -2000), new THREE.Vector3(1, 10, 2000));
+const thinWorldBounds = {
+  box: thinWorldBox,
+  center: thinWorldBox.getCenter(new THREE.Vector3()),
+  radius: thinWorldBox.getSize(new THREE.Vector3()).length() / 2,
+};
+const rotatedCamera = new THREE.PerspectiveCamera(45, liveAspect);
+rotatedCamera.position.set(1800, 5, 1.5);
+const nearbyRotatedPoint = new THREE.Vector3(1800, 5, 1);
+rotatedCamera.lookAt(nearbyRotatedPoint);
+const localCameraPosition = rotatedCamera.position.clone().applyAxisAngle(THREE.Object3D.DEFAULT_UP, -Math.PI / 2);
+Object.assign(rotatedCamera, worldCameraClipping(localCameraPosition, thinWorldBounds));
+rotatedCamera.updateProjectionMatrix();
+rotatedCamera.updateMatrixWorld(true);
+const rotatedDepth = nearbyRotatedPoint.clone().project(rotatedCamera).z;
+assert.ok(rotatedDepth >= -1 && rotatedDepth <= 1, "a quarter-turn world retains blocks half a unit from the camera");
+
 console.log("voxel framing checks passed");

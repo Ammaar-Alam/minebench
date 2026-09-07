@@ -722,7 +722,7 @@ function ExplorerScene({
     let voxelGroup: VoxelGroup | null = null;
     let collisionWorld: ExplorerCollisionWorld | null = null;
     const worldBounds = build.voxelBuild.world?.manifest.bounds;
-    const worldViewDistance = build.voxelBuild.world?.manifest.overview && worldBounds
+    const worldViewDistance = worldBounds
       ? Math.max(2048, Math.hypot(worldBounds.size.x, worldBounds.size.y, worldBounds.size.z) * 1.25)
       : undefined;
     let worldReady = false;
@@ -852,8 +852,8 @@ function ExplorerScene({
       group.traverse((child) => {
         if (!(child instanceof THREE.Mesh)) return;
         const materials = Array.isArray(child.material) ? child.material : [child.material];
-        child.castShadow = !child.userData.voxelWorldOverview && materials.every((material) => !material.transparent);
-        child.receiveShadow = !child.userData.voxelWorldOverview;
+        child.castShadow = materials.every((material) => !material.transparent);
+        child.receiveShadow = true;
         if (!materials.some((material) => material instanceof THREE.MeshBasicMaterial)) return;
         hasEmissiveMeshes = true;
         child.layers.enable(EMISSIVE_LAYER);
@@ -1237,10 +1237,6 @@ function ExplorerScene({
       const moonSize =
         2 * sunDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 0.075;
       atmosphere.moon.scale.set(moonSize, moonSize, 1);
-      if (isVoxelWorldScene(voxelGroup)) {
-        setExplorerWorldFog(camera, scene.fog as THREE.Fog, worldBloomFog, voxelGroup.getDetailRadius(camera.position), worldViewDistance);
-        voxelGroup.updateFocus(camera.position, camera, mount.clientHeight);
-      }
       try {
         renderer.render(scene, camera);
         renderPostEffects(seconds);
@@ -1279,34 +1275,11 @@ function ExplorerScene({
             });
         const atlas = await atlasPromise;
         const groupPromise: Promise<VoxelGroup> = worldDelivery
-          ? collisionPromise.then(async (nextCollisionWorld) => {
-              const focus = new THREE.Vector3(
-                nextCollisionWorld.spawnPosition.x,
-                nextCollisionWorld.spawnPosition.y,
-                nextCollisionWorld.spawnPosition.z,
-              );
-              const worldScene = await createVoxelWorldScene(worldDelivery, getPalette(build.palette), atlas, {
-                signal: abortController.signal,
-                initialFocus: focus,
-                maxMixedDetailRegions: 64,
-                mixedDetailRadius: 512,
-                onProgress(progress) {
-                  if (!disposed) setLoading(progress ? progress.stageLabel ?? "Loading world" : "");
-                },
-                onChange() {
-                  if (!disposed && voxelGroup) {
-                    prepareVoxelMeshes(voxelGroup.group);
-                    renderer.shadowMap.needsUpdate = true;
-                  }
-                },
-                onError(message) {
-                  if (!disposed) {
-                    setError(message);
-                    controls.unlock();
-                  }
-                },
-              });
-              return worldScene;
+          ? createVoxelWorldScene(worldDelivery, getPalette(build.palette), atlas, {
+              signal: abortController.signal,
+              onProgress(progress) {
+                if (!disposed) setLoading(progress ? progress.stageLabel ?? "Loading world" : "");
+              },
             })
           : createVoxelGroupAsync(build.voxelBuild, getPalette(build.palette), atlas, {
               signal: abortController.signal,
@@ -1343,6 +1316,9 @@ function ExplorerScene({
         prepareVoxelMeshes(voxelGroup.group);
         scene.add(voxelGroup.group);
         frameAtmosphere(camera, scene, atmosphere, voxelGroup.bounds, SUN_DIRECTION, worldViewDistance);
+        if (worldViewDistance) {
+          setExplorerWorldFog(camera, scene.fog as THREE.Fog, worldBloomFog, worldViewDistance);
+        }
         resize();
 
         if (worldDelivery) {
@@ -1362,10 +1338,7 @@ function ExplorerScene({
         }
         renderer.shadowMap.needsUpdate = true;
         if (worldDelivery) {
-          await Promise.all([
-            collisionWorld.updateActiveCamera?.(camera.position),
-            isVoxelWorldScene(voxelGroup) ? voxelGroup.loadAround(camera.position, camera, mount.clientHeight) : undefined,
-          ]);
+          await collisionWorld.updateActiveCamera?.(camera.position);
           if (disposed || abortController.signal.aborted) return;
         }
         worldReady = true;

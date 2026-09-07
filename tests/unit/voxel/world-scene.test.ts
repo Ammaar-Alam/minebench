@@ -1,544 +1,315 @@
 import assert from "node:assert/strict";
 import * as THREE from "three";
 import { getPalette } from "../../../lib/blocks/palettes";
-import { encodeBinaryVoxelBuild } from "../../../lib/voxel/binaryBuild";
-import { createVoxelWorldScene } from "../../../lib/voxel/worldScene";
-import {
-  VOXEL_WORLD_MIXED_LEAF_SIZE,
-  type VoxelWorldDelivery,
-  type VoxelWorldManifest,
-  type VoxelWorldPartRef,
-  type VoxelWorldRegion,
-  type VoxelWorldRegionPage,
-  type VoxelWorldRegionPageRef,
+import { decodeBinaryVoxelBuild, encodeBinaryVoxelBuild } from "../../../lib/voxel/binaryBuild";
+import { createVoxelWorldScene, isVoxelWorldScene } from "../../../lib/voxel/worldScene";
+import { encodeWorldMeshPayload, getWorldMeshVersion } from "../../../lib/voxel/worldMesh";
+import { buildWorldRegionGreedyMeshPayload } from "../../../lib/voxel/worldRegionMesh";
+import type {
+  VoxelWorldDelivery,
+  VoxelWorldManifest,
+  VoxelWorldPartRef,
+  VoxelWorldRegionPage,
+  VoxelWorldRegionPageRef,
 } from "../../../lib/voxel/world";
-import type { VoxelBlock } from "../../../lib/voxel/types";
 
 const SHA = "a".repeat(64);
+const BASE = {
+  kind: "voxel_world", version: 1, gridSize: 8192, palette: "simple", leafSize: 64,
+  source: { format: "build_json", sha256: SHA, evaluatorVersion: 1 },
+} as const;
 
-function source() {
-  return {
-    format: "build_json" as const,
-    sha256: SHA,
-    evaluatorVersion: 1,
-  };
+function localPart(key: string): VoxelWorldPartRef {
+  return { kind: "localBlob", key, encoding: "identity", byteSize: 1, sha256: SHA };
 }
 
-function localPart(key: string, byteSize = 1): VoxelWorldPartRef {
-  return {
-    kind: "localBlob",
-    key,
-    encoding: "identity",
-    byteSize,
-    sha256: SHA,
-  };
+function meshes(object: THREE.Object3D): THREE.Mesh[] {
+  const result: THREE.Mesh[] = [];
+  object.traverse((child) => { if (child instanceof THREE.Mesh) result.push(child); });
+  return result;
 }
 
-function texture() {
-  return new THREE.Texture();
-}
-
-function assertFiniteBounds(actual: THREE.Box3, expected: THREE.Box3) {
-  assert.deepEqual(actual.min.toArray(), expected.min.toArray());
-  assert.deepEqual(actual.max.toArray(), expected.max.toArray());
-}
-
-function boxFor(object: THREE.Object3D): THREE.Box3 {
-  return new THREE.Box3().setFromObject(object);
-}
-
-function meshDescendants(object: THREE.Object3D): THREE.Mesh[] {
-  const meshes: THREE.Mesh[] = [];
-  object.traverse((child) => {
-    if (child instanceof THREE.Mesh) meshes.push(child);
-  });
-  return meshes;
-}
-
-function lineBlocks(type: string): VoxelBlock[] {
-  return Array.from({ length: 64 }, (_, x) => ({ x, y: 0, z: 0, type }));
-}
-
-async function createScene(delivery: VoxelWorldDelivery, opts?: Parameters<typeof createVoxelWorldScene>[3]) {
-  return createVoxelWorldScene(delivery, getPalette("simple"), texture(), opts);
+function createScene(delivery: VoxelWorldDelivery, opts?: Parameters<typeof createVoxelWorldScene>[3]) {
+  return createVoxelWorldScene(delivery, getPalette("simple"), new THREE.Texture(), opts);
 }
 
 async function main() {
   {
     const manifest: VoxelWorldManifest = {
-      kind: "voxel_world",
-      version: 1,
-      gridSize: 8192,
-      palette: "simple",
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 2, y: 3, z: 4 } },
+      ...BASE,
+      bounds: { origin: { x: 128, y: 32, z: 64 }, size: { x: 2, y: 3, z: 4 } },
       exactBlockCount: 24,
-      leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE,
-      source: source(),
-      regions: [
-        {
-          kind: "uniform",
-          key: "solid",
-          origin: { x: 0, y: 0, z: 0 },
-          size: { x: 2, y: 3, z: 4 },
-          type: "stone",
-          blockCount: 24,
-        },
-      ],
+      overview: { scale: 32, data: localPart("overview") },
+      regions: [{
+        kind: "uniform", key: "solid", origin: { x: 128, y: 32, z: 64 },
+        size: { x: 2, y: 3, z: 4 }, type: "stone", blockCount: 24,
+      }],
     };
-    const scene = await createScene({ manifest });
-
-    assertFiniteBounds(
-      scene.bounds.box,
-      new THREE.Box3(new THREE.Vector3(-1, 0, -2), new THREE.Vector3(1, 3, 2)),
-    );
+    const scene = await createScene({ manifest, resolvePart: async () => {
+      throw new Error("coarse overview must never load");
+    } });
+    assert.ok(isVoxelWorldScene(scene));
+    assert.deepEqual(scene.bounds.box.min.toArray(), [-1, 0, -2]);
+    assert.deepEqual(scene.bounds.box.max.toArray(), [1, 3, 2]);
+    assert.deepEqual(new THREE.Box3().setFromObject(scene.group), scene.bounds.box);
     assert.equal(scene.stats.blockCount, 24);
     assert.deepEqual(scene.getResidentStats(), {
-      residentRegions: 1,
-      uniformRegions: 1,
-      mixedDetailRegions: 0,
-      mixedProxyRegions: 0,
-      residentRegionPages: 0,
-      loadingParts: 0,
+      residentRegions: 1, uniformRegions: 1, mixedRegions: 0, residentRegionPages: 0, meshBatches: 0,
     });
-
-    const meshes = meshDescendants(scene.group);
-    assert.equal(meshes.length, 1);
-    const geometry = meshes[0].geometry;
+    const geometry = meshes(scene.group)[0].geometry;
     assert.equal(geometry.index?.count, 36);
     assert.equal(geometry.getAttribute("position").count, 24);
     assert.equal(geometry.getAttribute("atlasUvFrame").itemSize, 4);
-    assert.equal(Math.max(...Array.from(geometry.getAttribute("uv").array)), 4);
-    await scene.loadAround(scene.bounds.center);
-    assert.equal(meshDescendants(scene.group)[0].geometry, geometry, "unchanged regions keep their geometry");
+    assert.equal(Math.max(...geometry.getAttribute("uv").array), 4);
     scene.dispose();
-  }
-
-  {
-    const manifest: VoxelWorldManifest = {
-      kind: "voxel_world", version: 1, gridSize: 8192, palette: "simple",
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 2, y: 1, z: 1 } },
-      exactBlockCount: 2, leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE, source: source(),
-      regions: [0, 1].map((x) => ({
-        kind: "uniform", key: `solid-${x}`, origin: { x, y: 0, z: 0 },
-        size: { x: 1, y: 1, z: 1 }, type: "stone", blockCount: 1,
-      })),
-    };
-    const scene = await createScene({ manifest }, { maxUniformRegions: 1 });
-    assert.equal(meshDescendants(scene.group)[0].geometry.index?.count, 36, "unloaded neighbors cannot hide visible faces");
-    assert.equal(scene.getDetailRadius(scene.bounds.center), 0, "unrendered uniform regions limit exact coverage");
-    assert.equal(boxFor(scene.group).min.x, -1);
-    await scene.loadAround(new THREE.Vector3(1, 0, 0));
-    assert.equal(boxFor(scene.group).min.x, 0, "same-count region selection changes with focus");
     scene.dispose();
-  }
-
-  {
-    const detailBytes = encodeBinaryVoxelBuild(lineBlocks("stone"), SHA);
-    const farBytes = encodeBinaryVoxelBuild(lineBlocks("cobblestone"), SHA);
-    const manifest: VoxelWorldManifest = {
-      kind: "voxel_world",
-      version: 1,
-      gridSize: 8192,
-      palette: "simple",
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 192, y: 1, z: 64 } },
-      exactBlockCount: 128,
-      leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE,
-      source: source(),
-      regions: [
-        {
-          kind: "mixed",
-          key: "far",
-          origin: { x: 0, y: 0, z: 0 },
-          size: { x: 64, y: 1, z: 1 },
-          blockCount: 64,
-          format: "mbv4",
-          coordinateSpace: "local",
-          data: localPart("far", farBytes.byteLength),
-        },
-        {
-          kind: "mixed",
-          key: "detail",
-          origin: { x: 64, y: 0, z: 0 },
-          size: { x: 64, y: 1, z: 1 },
-          blockCount: 64,
-          format: "mbv4",
-          coordinateSpace: "local",
-          data: localPart("detail", detailBytes.byteLength),
-        },
-      ],
-    };
-    const parts = new Map([
-      ["detail", detailBytes],
-      ["far", farBytes],
-    ]);
-    const scene = await createScene(
-      { manifest, resolvePart: async (key) => parts.get(key) ?? new Uint8Array() },
-      { maxMixedDetailRegions: 1, maxMixedProxyRegions: 0 },
-    );
-
-    assert.equal(scene.getResidentStats().mixedDetailRegions, 1);
-    assert.equal(scene.getResidentStats().mixedProxyRegions, 0);
-    assertFiniteBounds(
-      boxFor(scene.group),
-      new THREE.Box3(new THREE.Vector3(-32, 0, -32), new THREE.Vector3(32, 1, -31)),
-    );
-    scene.dispose();
-
-    const withoutProxies = await createScene(
-      { manifest, resolvePart: async (key) => parts.get(key) ?? new Uint8Array() },
-      { maxMixedDetailRegions: 2, maxMixedProxyRegions: 0, mixedDetailRadius: 0 },
-    );
-    assert.equal(withoutProxies.getResidentStats().mixedDetailRegions, 1);
-    assert.equal(withoutProxies.getResidentStats().mixedProxyRegions, 0, "unused detail slots cannot become proxies");
-    withoutProxies.dispose();
-
-    const moving = await createScene(
-      { manifest, resolvePart: async (key) => parts.get(key) ?? new Uint8Array() },
-      { maxMixedDetailRegions: 1, maxMixedProxyRegions: 1 },
-    );
-    await moving.loadAround(new THREE.Vector3(-96, 0, -32));
-    assert.equal(moving.getResidentStats().mixedDetailRegions, 1, "distant details downgrade when focus moves");
-    assert.equal(moving.getResidentStats().mixedProxyRegions, 1);
-    moving.dispose();
-  }
-
-  {
-    const pageRefs: VoxelWorldRegionPageRef[] = Array.from({ length: 4 }, (_, index) => ({
-      index,
-      bounds: { origin: { x: index * 64, y: 0, z: 0 }, size: { x: 64, y: 1, z: 64 } },
-      regionCount: 1,
-      blockCount: 64,
-      data: localPart(`page-${index}`),
-    }));
-    const manifest: VoxelWorldManifest = {
-      kind: "voxel_world",
-      version: 1,
-      gridSize: 8192,
-      palette: "simple",
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 256, y: 1, z: 64 } },
-      exactBlockCount: 256,
-      leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE,
-      source: source(),
-      regionPages: pageRefs,
-    };
-    const pages = new Map<string, Uint8Array>();
-    for (const ref of pageRefs) {
-      const region: VoxelWorldRegion = {
-        kind: "uniform",
-        key: `page-${ref.index}-solid`,
-        origin: ref.bounds.origin,
-        size: { x: 64, y: 1, z: 1 },
-        type: "stone",
-        blockCount: 64,
-      };
-      const page: VoxelWorldRegionPage = {
-        kind: "voxel_world_region_page",
-        version: 1,
-        index: ref.index,
-        bounds: ref.bounds,
-        regionCount: 1,
-        blockCount: 64,
-        regions: [region],
-      };
-      pages.set(ref.data.key, new TextEncoder().encode(JSON.stringify(page)));
-    }
-
-    const scene = await createScene(
-      { manifest, resolvePart: async (key) => pages.get(key) ?? new Uint8Array() },
-      { maxResidentPages: 2, maxMixedDetailRegions: 0, maxMixedProxyRegions: 0 },
-    );
-    assert.ok(scene.getDetailRadius(scene.bounds.center) > 63 && scene.getDetailRadius(scene.bounds.center) < 64, "unloaded pages limit exact coverage");
-    await scene.loadAround(new THREE.Vector3(128, 0, 0));
-    const stats = scene.getResidentStats();
-    assert.equal(stats.residentRegionPages <= 2, true);
-    assert.equal(stats.residentRegionPages < pageRefs.length, true);
-    scene.dispose();
-
-    let activeReads = 0;
-    let peakReads = 0;
-    const allPages = await createScene({
-      manifest,
-      resolvePart: async (key) => {
-        peakReads = Math.max(peakReads, ++activeReads);
-        await new Promise((resolve) => setTimeout(resolve, 1));
-        activeReads -= 1;
-        return pages.get(key) ?? new Uint8Array();
-      },
-    }, { maxResidentPages: 4, maxMixedDetailRegions: 0, maxMixedProxyRegions: 0 });
-    assert.ok(peakReads <= 2, `page reads must stay bounded, saw ${peakReads}`);
-    allPages.dispose();
-  }
-
-  {
-    const bytes = encodeBinaryVoxelBuild(lineBlocks("stone"), SHA);
-    const manifest: VoxelWorldManifest = {
-      kind: "voxel_world", version: 1, gridSize: 8192, palette: "simple",
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 512, y: 1, z: 1 } },
-      exactBlockCount: 128, leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE, source: source(),
-      regions: [0, 448].map((x) => ({
-        kind: "mixed", key: `region-${x}`, origin: { x, y: 0, z: 0 },
-        size: { x: 64, y: 1, z: 1 }, blockCount: 64, format: "mbv4", coordinateSpace: "local",
-        data: localPart(`part-${x}`, bytes.byteLength),
-      })),
-    };
-    const requested: string[] = [];
-    const scene = await createScene({ manifest, resolvePart: async (key) => {
-      requested.push(key);
-      return bytes;
-    } }, { initialFocus: new THREE.Vector3(256, 0, 0), maxMixedDetailRegions: 1, maxMixedProxyRegions: 0 });
-    assert.deepEqual(requested, ["part-448"], "initial loading follows the player position");
-    scene.dispose();
-
-    let failures = 0;
-    const controller = new AbortController();
-    await assert.rejects(createScene({ manifest, resolvePart: async () => {
-      failures += 1;
-      throw new Error("missing world part");
-    } }, { signal: controller.signal, maxMixedDetailRegions: 1, maxMixedProxyRegions: 0 }), /missing world part/);
-    controller.abort();
-    assert.equal(failures, 1, "failed parts must not start an endless retry loop");
-  }
-
-  {
-    const bytes = encodeBinaryVoxelBuild([{ x: 4, y: 1, z: 2, type: "stone" }], SHA);
-    const manifest: VoxelWorldManifest = {
-      kind: "voxel_world", version: 1, gridSize: 8192, palette: "simple",
-      bounds: { origin: { x: 128, y: 32, z: 64 }, size: { x: 32, y: 32, z: 32 } },
-      exactBlockCount: 32 ** 3, leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE, source: source(),
-      overview: { scale: 32, data: localPart("overview", bytes.byteLength) },
-      regions: [{ kind: "uniform", key: "solid", origin: { x: 128, y: 32, z: 64 }, size: { x: 32, y: 32, z: 32 }, type: "stone", blockCount: 32 ** 3 }],
-    };
-    const scene = await createScene({ manifest, resolvePart: async () => bytes }, { maxUniformRegions: 0 });
-    const overview = scene.group.getObjectByName("VoxelWorldOverview");
-    assert.ok(overview);
-    assertFiniteBounds(boxFor(overview), new THREE.Box3(new THREE.Vector3(-16, 0, -16), new THREE.Vector3(16, 32, 16)));
-    const mesh = meshDescendants(overview)[0];
-    const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-    assert.equal(material.allowOverride, false, "the overview keeps its clipping shader in depth passes");
-    const passScene = new THREE.Scene();
-    passScene.overrideMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
-    material.onBeforeRender({} as THREE.WebGLRenderer, passScene, new THREE.Camera(), mesh.geometry, mesh, new THREE.Group());
-    assert.equal(material.colorWrite, false);
-    passScene.overrideMaterial.dispose();
-    passScene.overrideMaterial = null;
-    material.onBeforeRender({} as THREE.WebGLRenderer, passScene, new THREE.Camera(), mesh.geometry, mesh, new THREE.Group());
-    assert.equal(material.colorWrite, true);
-    scene.dispose();
-    const detailed = await createScene({ manifest, resolvePart: async () => bytes });
-    assert.equal(detailed.group.getObjectByName("VoxelWorldOverview")?.visible, false, "complete exact coverage hides the overview");
-    detailed.dispose();
-    const exact = await createScene({ manifest, resolvePart: async () => {
-      throw new Error("overview must not enter an exact-only scene");
-    } }, { showOverview: false, maxMixedProxyRegions: 0 });
-    assert.equal(exact.group.getObjectByName("VoxelWorldOverview"), undefined);
-    assert.equal(exact.getDetailRadius(exact.bounds.center), Infinity);
-    exact.dispose();
-  }
-
-  {
-    const bytes = encodeBinaryVoxelBuild([{ x: 0, y: 0, z: 0, type: "stone" }], SHA);
-    const manifest: VoxelWorldManifest = {
-      kind: "voxel_world", version: 1, gridSize: 8192, palette: "simple",
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 512, y: 64, z: 64 } },
-      exactBlockCount: 2, leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE, source: source(),
-      overview: { scale: 32, data: localPart("overview", bytes.byteLength) },
-      regions: [0, 448].map((x) => ({
-        kind: "mixed", key: `region-${x}`, origin: { x, y: 0, z: 0 },
-        size: { x: 64, y: 64, z: 64 }, blockCount: 1, format: "mbv4", coordinateSpace: "local",
-        data: localPart(`part-${x}`, bytes.byteLength),
-      })),
-    };
-    let releaseDetail = () => {};
-    const pendingDetail = new Promise<Uint8Array>((resolve) => { releaseDetail = () => resolve(bytes); });
-    const focus = new THREE.Vector3(-240, 1, 0);
-    const progress: Array<{ processedBlocks: number; totalBlocks: number; stageLabel?: string } | null> = [];
-    let deadline: ReturnType<typeof setTimeout> | undefined;
-    const scene = await Promise.race([
-      createScene({ manifest, resolvePart: async (key) => key === "overview" ? bytes : pendingDetail }, {
-        initialFocus: focus, maxMixedDetailRegions: 1, onProgress: (value) => progress.push(value),
-      }),
-      new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("overview waited for distant detail")), 1000); }),
-    ]).finally(() => clearTimeout(deadline));
-    assert.equal(scene.getResidentStats().loadingParts, 1, "the overview is ready while exact detail is still loading");
-    assert.ok(progress.at(-1), "loading stays visible while nearby detail is pending");
-    const overview = scene.group.getObjectByName("VoxelWorldOverview");
-    assert.ok(overview);
-    const material = meshDescendants(overview)[0].material as THREE.Material;
-    const shader = {
-      uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
-    } as Parameters<THREE.Material["onBeforeCompile"]>[0];
-    material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
-    assert.equal(shader.uniforms.worldDetailRadius.value, 0, "overview coverage remains until the exact region is ready");
-    assert.match(shader.fragmentShader, /distance\(vWorldOverviewPosition, worldDetailFocus\) < worldDetailRadius\) discard/);
-    releaseDetail();
-    await scene.loadAround(focus);
-    assert.equal(progress.at(-1), null, "loading finishes when requested detail is ready");
-    assert.ok(shader.uniforms.worldDetailRadius.value > 431 && shader.uniforms.worldDetailRadius.value < 432);
-    assert.deepEqual(shader.uniforms.worldDetailFocus.value.toArray(), focus.toArray());
-    assert.equal(overview.visible, true, "distant unavailable regions keep their overview");
-    assert.equal(scene.getDetailRadius(focus), shader.uniforms.worldDetailRadius.value);
-    assert.equal(scene.getDetailRadius(focus.clone().addScalar(10)), shader.uniforms.worldDetailRadius.value - Math.sqrt(300));
-    const movedFocus = new THREE.Vector3(240, 1, 0);
-    const moving = scene.loadAround(movedFocus);
-    assert.equal(shader.uniforms.worldDetailRadius.value, 0, "moving restores overview coverage while detail loads");
-    await moving;
-    assert.equal(scene.getResidentStats().mixedDetailRegions, 1);
-    assert.ok(shader.uniforms.worldDetailRadius.value > 431 && shader.uniforms.worldDetailRadius.value < 432);
-    assert.deepEqual(shader.uniforms.worldDetailFocus.value.toArray(), movedFocus.toArray());
-    scene.dispose();
-    const exact = await createScene({ manifest, resolvePart: async (key) => {
-      assert.notEqual(key, "overview", "exact-only scenes never download coarse geometry");
-      return bytes;
-    } }, { initialFocus: focus, showOverview: false, maxMixedDetailRegions: 1, maxMixedProxyRegions: 0 });
-    assert.equal(exact.group.getObjectByName("VoxelWorldOverview"), undefined);
-    assert.ok(exact.getDetailRadius(focus) > 431, "initial detail is ready before Explore returns");
-    const exactMove = exact.loadAround(movedFocus);
-    assert.equal(exact.group.getObjectByName("VoxelWorldOverview"), undefined, "moving cannot restore coarse geometry");
-    assert.equal(exact.getDetailRadius(movedFocus), 0);
-    await exactMove;
-    assert.ok(exact.getDetailRadius(movedFocus) > 431);
-    exact.dispose();
-    const errors: string[] = [];
-    const failed = await createScene({
-      manifest,
-      resolvePart: async (key) => {
-        if (key === "overview") return bytes;
-        throw new Error("nearby detail failed");
-      },
-    }, { initialFocus: focus, maxMixedDetailRegions: 1, onError: (message) => errors.push(message) });
-    await assert.rejects(failed.loadAround(focus), /nearby detail failed/);
-    assert.deepEqual(errors, ["nearby detail failed"]);
-    failed.dispose();
+    assert.equal(scene.group.children.length, 0);
+    assert.equal(scene.getResidentStats().residentRegions, 0);
   }
 
   {
     const floor = Array.from({ length: 64 * 64 }, (_, index) => ({
       x: index % 64, y: 0, z: Math.floor(index / 64), type: index === 0 ? "bricks" : "stone",
-    }));
+    })).filter((block) => block.x !== 1 || block.z !== 0);
     const bytes = encodeBinaryVoxelBuild(floor, SHA);
-    const overviewBytes = encodeBinaryVoxelBuild(
-      Array.from({ length: 16 * 16 }, (_, index) => ({
-        x: index % 16, y: 0, z: Math.floor(index / 16), type: "stone",
-      })),
-      SHA,
-    );
     const manifest: VoxelWorldManifest = {
-      kind: "voxel_world", version: 1, gridSize: 8192, palette: "simple", source: source(),
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 512, y: 1, z: 512 } },
-      exactBlockCount: 512 ** 2, leafSize: VOXEL_WORLD_MIXED_LEAF_SIZE,
-      overview: { scale: 32, data: localPart("overview", overviewBytes.byteLength) },
-      regions: Array.from({ length: 64 }, (_, index) => ({
-        kind: "mixed", key: `floor-${index}`, origin: { x: (index % 8) * 64, y: 0, z: Math.floor(index / 8) * 64 },
-        size: { x: 64, y: 1, z: 64 }, blockCount: 64 ** 2, format: "mbv4", coordinateSpace: "local",
-        data: localPart(`floor-${index}`, bytes.byteLength),
+      ...BASE,
+      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 2048, y: 1, z: 64 } },
+      exactBlockCount: 32 * floor.length,
+      overview: { scale: 32, data: localPart("overview") },
+      regions: Array.from({ length: 32 }, (_, index) => ({
+        kind: "mixed", key: `floor-${index}`, origin: { x: index * 64, y: 0, z: 0 },
+        size: { x: 64, y: 1, z: 64 }, blockCount: floor.length, format: "mbv4", coordinateSpace: "local",
+        data: localPart(`floor-${index}`),
       })),
     };
-    const focus = new THREE.Vector3(0, 0, 0);
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.05, 5000);
-    const scene = await createScene({ manifest, resolvePart: async (key) => key === "overview" ? overviewBytes : bytes }, {
-      initialFocus: focus, maxMixedDetailRegions: 4,
-    });
-    const overview = scene.group.getObjectByName("VoxelWorldOverview")!;
-    const shader = {
-      uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
-    } as Parameters<THREE.Material["onBeforeCompile"]>[0];
-    (meshDescendants(overview)[0].material as THREE.Material).onBeforeCompile(shader, {} as THREE.WebGLRenderer);
-    const ray = new THREE.Raycaster();
-    for (const distance of [300, 120]) {
-      camera.position.set(0, distance, distance);
-      camera.lookAt(focus);
-      camera.updateMatrixWorld();
-      await scene.loadAround(focus, camera, 800);
-      scene.group.updateMatrixWorld(true);
-      const offsets = distance === 300 ? [-128, 0, 128] : [-32, 0, 32];
-      for (const x of offsets) for (const z of offsets) {
-        const point = new THREE.Vector3(x, 1, z).project(camera);
-        ray.setFromCamera(new THREE.Vector2(point.x, point.y), camera);
-        const hit = ray.intersectObject(scene.group, true).find((candidate) => {
-          if (!candidate.object.userData.voxelWorldOverview) return true;
-          const offset = candidate.point.clone().sub(shader.uniforms.worldDetailFocus.value);
-          const direction = shader.uniforms.worldDetailDirection?.value as THREE.Vector3 | undefined;
-          const coverageDistance = direction?.lengthSq() ? offset.dot(direction) : offset.length();
-          return overview.visible && coverageDistance >= shader.uniforms.worldDetailRadius.value;
-        });
-        assert.ok(hit, "all visible floor samples retain geometry");
-        const depth = -hit.point.clone().applyMatrix4(camera.matrixWorldInverse).z;
-        const scale = hit.object.getWorldScale(new THREE.Vector3()).x;
-        const cellPixels = scale * 800 /
-          (2 * Math.tan(THREE.MathUtils.degToRad(camera.getEffectiveFOV()) / 2) * depth);
-        assert.ok(scale === 1 || cellPixels <= 6, `finished detail cannot leave ${cellPixels.toFixed(1)}-pixel coarse cells`);
-        assert.ok(hit.point.y <= 1.001, "coarse detail cannot raise the floor beyond its source region");
+    const requested: string[] = [];
+    const progress: Array<{ processedBlocks: number; totalBlocks: number } | null> = [];
+    const scene = await createScene({ manifest, resolvePart: async (key) => {
+      assert.notEqual(key, "overview");
+      requested.push(key);
+      return bytes;
+    } }, { onProgress: (value) => progress.push(value) });
+    assert.equal(scene.getResidentStats().mixedRegions, 32, "all source regions are ready together");
+    assert.equal(scene.getResidentStats().meshBatches, 4);
+    assert.equal(new Set(requested).size, 32);
+    assert.deepEqual(new THREE.Box3().setFromObject(scene.group), scene.bounds.box);
+    assert.equal(progress.at(-1), null);
+    assert.equal(progress.at(-2)?.processedBlocks, manifest.exactBlockCount);
+    assert.ok(progress.filter((value) => value !== null).every((value) => value.totalBlocks === manifest.exactBlockCount));
+    const geometry = meshes(scene.group);
+    assert.ok(geometry.length <= 20, "regions share spatial material batches");
+    assert.ok(geometry.reduce((sum, mesh) => sum + mesh.geometry.getAttribute("worldQuad").count, 0) < 3000,
+      "coplanar surfaces merge without replacing source blocks");
+    const covered = new Uint8Array(2048 * 64);
+    for (const mesh of geometry) {
+      assert.deepEqual(mesh.getWorldScale(new THREE.Vector3()).toArray(), [1, 1, 1]);
+      assert.equal(mesh.frustumCulled, true);
+      const words = mesh.geometry.getAttribute("worldQuad");
+      assert.equal(words.itemSize, 4);
+      assert.equal(words.array.byteLength, words.count * 16);
+      const shader = {
+        vertexShader: THREE.ShaderLib.lambert.vertexShader,
+        fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
+        uniforms: {},
+      } as Parameters<THREE.Material["onBeforeCompile"]>[0];
+      (mesh.material as THREE.Material).onBeforeCompile(shader, {} as THREE.WebGLRenderer);
+      const anchor = shader.uniforms.worldQuadAnchor.value as THREE.Vector3;
+      const offset = mesh.getWorldPosition(new THREE.Vector3()).sub(anchor).add(new THREE.Vector3(1024, 0, 32));
+      for (let index = 0; index < words.count; index += 1) {
+        const coordinates = words.getX(index);
+        const dimensions = words.getY(index);
+        if (((dimensions >>> 20) & 7) !== 4) continue;
+        assert.equal((coordinates & 1023) + offset.y, 1, "all floors retain unit height");
+        const x0 = ((coordinates >>> 10) & 1023) + offset.x;
+        const z0 = ((coordinates >>> 20) & 1023) + offset.z;
+        const width = dimensions & 1023;
+        const height = (dimensions >>> 10) & 1023;
+        assert.ok(x0 >= 0 && x0 + width <= 2048 && z0 >= 0 && z0 + height <= 64);
+        for (let z = z0; z < z0 + height; z += 1) {
+          for (let x = x0; x < x0 + width; x += 1) covered[z * 2048 + x] += 1;
+        }
       }
-      if (distance === 300) assert.ok(scene.getResidentStats().mixedProxyRegions > 0, "intermediate detail covers the visible frame");
-      else assert.ok(scene.getResidentStats().mixedDetailRegions > 4, "visible blocks retain exact detail when the neighborhood budget is full");
-      assert.ok(scene.getResidentStats().residentRegions <= 64);
-      assert.equal(scene.getResidentStats().loadingParts, 0);
     }
+    for (let z = 0; z < 64; z += 1) {
+      for (let x = 0; x < 2048; x += 1) {
+        assert.equal(covered[z * 2048 + x], x % 64 === 1 && z === 0 ? 0 : 1,
+          "every source floor cell renders once and every hole stays empty");
+      }
+    }
+    const readCount = requested.length;
+    for (const rotation of [0, Math.PI / 2, Math.PI]) {
+      scene.group.rotation.y = rotation;
+      scene.group.updateMatrixWorld(true);
+      const size = new THREE.Box3().setFromObject(scene.group).getSize(new THREE.Vector3());
+      assert.equal(size.y, 1);
+      assert.ok(Math.abs(Math.hypot(size.x, size.z) - Math.hypot(2048, 64)) < 1e-6);
+    }
+    assert.equal(requested.length, readCount, "rotating a complete scene cannot reload geometry");
+    assert.deepEqual(meshes(scene.group), geometry, "view changes keep the same complete geometry");
+    assert.equal(scene.group.getObjectByName("VoxelWorldOverview"), undefined);
     scene.dispose();
-
-    const captureOverview = encodeBinaryVoxelBuild([0, 1, 126, 127].flatMap((x) =>
-      [0, 1].map((z) => ({ x, y: 0, z, type: "stone" }))), SHA);
-    const captureManifest: VoxelWorldManifest = {
-      ...manifest,
-      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 4096, y: 1, z: 64 } },
-      exactBlockCount: 2 * 64 ** 2,
-      overview: { scale: 32, data: localPart("overview", captureOverview.byteLength) },
-      regions: [0, 4032].map((x) => ({
-        kind: "mixed", key: `capture-${x}`, origin: { x, y: 0, z: 0 }, size: { x: 64, y: 1, z: 64 },
-        blockCount: 64 ** 2, format: "mbv4", coordinateSpace: "local", data: localPart(`capture-${x}`, bytes.byteLength),
-      })),
-    };
-    focus.set(-2016, 0, 0);
-    camera.position.set(-2016, 120, 120);
-    camera.lookAt(focus);
-    camera.updateMatrixWorld();
-    const captureReads = new Set<string>();
-    const captured = await createScene({ manifest: captureManifest, resolvePart: async (key) => {
-      captureReads.add(key);
-      return key === "overview" ? captureOverview : bytes;
-    } }, {
-      initialFocus: focus, maxMixedDetailRegions: 0,
-    });
-    await captured.loadAround(focus, camera, 800);
-    assert.equal(captured.getResidentStats().mixedDetailRegions, 1, "the active view loads only one of the distant platforms");
-    captured.group.rotation.y = Math.PI;
-    captured.group.updateMatrixWorld(true);
-    const captureObject = captured.group.getObjectByName("VoxelWorldOverview")!;
-    assert.ok(captureObject.visible, "a rotated capture retains fallback geometry outside the previously visible area");
-    const captureMesh = meshDescendants(captureObject)[0];
-    const captureMaterial = captureMesh.material as THREE.Material;
-    const captureShader = {
-      uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader,
-    } as Parameters<THREE.Material["onBeforeCompile"]>[0];
-    captureMaterial.onBeforeCompile(captureShader, {} as THREE.WebGLRenderer);
-    captureMaterial.onBeforeRender({} as THREE.WebGLRenderer, new THREE.Scene(), camera, captureMesh.geometry, captureMesh, {} as THREE.Group);
-    ray.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const capturedHit = ray.intersectObject(captureObject, true)[0];
-    assert.ok(capturedHit, "the newly exposed platform remains present in the capture");
-    const localPoint = capturedHit.point.clone().applyMatrix4(captureShader.uniforms.worldDetailRootInverse.value);
-    const projected = localPoint.clone().project(camera);
-    assert.ok(Math.abs(projected.x) > 1 || Math.abs(projected.y) > 1, "the fallback lies outside the view whose detail was loaded");
-    captured.group.rotation.y = 0;
-    camera.position.set(-2100, 70, 0);
-    camera.lookAt(2016, 0, 0);
-    camera.far = 1000;
-    await captured.loadAround(focus, camera, 800);
-    captureReads.clear();
-    camera.far = 5000;
-    captured.updateFocus(focus, camera, 800);
-    assert.ok(captureReads.has("capture-4032"), "extending the far plane loads newly visible scenery");
-    await captured.loadAround(focus, camera, 800);
-    const projectionBeforeRoll = captureShader.uniforms.worldDetailProjection.value.elements.slice();
-    camera.rotateZ(Math.PI / 2);
-    captured.updateFocus(focus, camera, 800);
-    assert.notDeepEqual(captureShader.uniforms.worldDetailProjection.value.elements, projectionBeforeRoll, "camera roll updates the refinement frustum");
-    captured.dispose();
   }
 
+  {
+    const bytes = encodeBinaryVoxelBuild([{ x: 0, y: 0, z: 0, type: "stone" }], SHA);
+    const size = { x: 1, y: 1, z: 1 };
+    const payload = buildWorldRegionGreedyMeshPayload(decodeBinaryVoxelBuild(bytes), ["stone"], { size });
+    const meshBytes = encodeWorldMeshPayload(payload);
+    const regions = Array.from({ length: 6 }, (_, index) => ({
+      kind: "mixed" as const, key: `source-${index}`, origin: { x: index * 1024, y: 7, z: 13 }, size,
+      blockCount: 1, format: "mbv4" as const, coordinateSpace: "local" as const, data: localPart(`source-${index}`),
+    }));
+    const manifest: VoxelWorldManifest = {
+      ...BASE, bounds: { origin: { x: 0, y: 7, z: 13 }, size: { x: 5121, y: 1, z: 1 } },
+      exactBlockCount: 6, regions,
+      mesh: { version: await getWorldMeshVersion(), batches: regions.map((region, index) => ({
+        bounds: { origin: region.origin, size }, blockCount: 1, data: localPart(`mesh-${index}`),
+      })) },
+    };
+    const requested: string[] = [];
+    let active = 0;
+    let peak = 0;
+    const previousWorker = globalThis.Worker;
+    let workerCalls = 0;
+    globalThis.Worker = class { constructor() { workerCalls += 1; throw new Error("unexpected mesh worker"); } } as unknown as typeof Worker;
+    try {
+      const scene = await createScene({ manifest, resolvePart: async (key) => {
+        assert.ok(key.startsWith("mesh-"), "prepared geometry never downloads source cells");
+        requested.push(key);
+        peak = Math.max(peak, ++active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        active -= 1;
+        return meshBytes;
+      } });
+      assert.equal(workerCalls, 0, "saved worlds do not repeat meshing");
+      assert.equal(peak, 4, "ready geometry downloads use bounded concurrency");
+      assert.equal(requested.length, 6);
+      assert.equal(scene.getResidentStats().mixedRegions, 6);
+      assert.deepEqual(new THREE.Box3().setFromObject(scene.group), scene.bounds.box);
+      assert.equal(meshes(scene.group).reduce((sum, mesh) => sum + mesh.geometry.getAttribute("worldQuad").count, 0), 36);
+      scene.dispose();
+    } finally {
+      globalThis.Worker = previousWorker;
+    }
+    await assert.rejects(createScene({ manifest: {
+      ...manifest, mesh: { ...manifest.mesh!, batches: manifest.mesh!.batches.map((batch, index) =>
+        index === 0 ? { ...batch, bounds: { ...batch.bounds, origin: { x: 1, y: 7, z: 13 } } } : batch,
+      ) },
+    }, resolvePart: async () => meshBytes }), /do not match source regions/);
+    requested.length = 0;
+    const fallback = await createScene({ manifest: { ...manifest, mesh: { ...manifest.mesh!, version: `v0-${SHA}` } }, resolvePart: async (key) => {
+      assert.ok(key.startsWith("source-"), "old renderer artifacts use exact source fallback");
+      requested.push(key);
+      return bytes;
+    } });
+    assert.equal(new Set(requested).size, 6);
+    assert.deepEqual(new THREE.Box3().setFromObject(fallback.group), fallback.bounds.box);
+    fallback.dispose();
+  }
+
+  {
+    const pageRefs: VoxelWorldRegionPageRef[] = Array.from({ length: 9 }, (_, index) => ({
+      index, bounds: { origin: { x: index * 33, y: 0, z: 0 }, size: { x: 33, y: 1, z: 1 } },
+      regionCount: 33, blockCount: 33, data: localPart(`page-${index}`),
+    }));
+    const manifest: VoxelWorldManifest = {
+      ...BASE, bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 297, y: 1, z: 1 } },
+      exactBlockCount: 297, regionPages: pageRefs,
+      mesh: { version: await getWorldMeshVersion(), batches: [] },
+    };
+    const pages = new Map<string, Uint8Array>();
+    for (const ref of pageRefs) {
+      const page: VoxelWorldRegionPage = {
+        kind: "voxel_world_region_page", version: 1, index: ref.index, bounds: ref.bounds,
+        regionCount: 33, blockCount: 33,
+        regions: Array.from({ length: 33 }, (_, index) => ({
+          kind: "uniform", key: `solid-${ref.index * 33 + index}`,
+          origin: { x: ref.index * 33 + index, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 },
+          type: "stone", blockCount: 1,
+        })),
+      };
+      pages.set(ref.data.key, new TextEncoder().encode(JSON.stringify(page)));
+    }
+    let activeReads = 0;
+    let peakReads = 0;
+    const requested: string[] = [];
+    const scene = await createScene({ manifest, resolvePart: async (key) => {
+      peakReads = Math.max(peakReads, ++activeReads);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      activeReads -= 1;
+      requested.push(key);
+      return pages.get(key)!;
+    } });
+    assert.equal(peakReads, 2, "part reads remain bounded");
+    assert.equal(requested.length, 9);
+    assert.equal(scene.getResidentStats().residentRegionPages, 9);
+    assert.equal(scene.getResidentStats().uniformRegions, 297, "uniform coverage has no region budget");
+    assert.deepEqual(new THREE.Box3().setFromObject(scene.group), scene.bounds.box);
+    assert.equal(meshes(scene.group)[0].geometry.index?.count, (297 * 4 + 2) * 6,
+      "adjacent uniform regions do not emit shared faces");
+    scene.dispose();
+  }
+
+  {
+    const bytes = encodeBinaryVoxelBuild([{ x: 0, y: 0, z: 0, type: "stone" }], SHA);
+    const manifest: VoxelWorldManifest = {
+      ...BASE, bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 1025, y: 1, z: 1 } },
+      exactBlockCount: 3,
+      regions: [
+        { kind: "uniform", key: "solid", origin: { x: 512, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 }, type: "stone", blockCount: 1 },
+        ...[0, 1024].map((x) => ({
+          kind: "mixed" as const, key: `region-${x}`, origin: { x, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 },
+          blockCount: 1, format: "mbv4" as const, coordinateSpace: "local" as const, data: localPart(`part-${x}`),
+        })),
+      ],
+    };
+    let disposedGeometry = 0;
+    let readSignal: AbortSignal | undefined;
+    let failedReads = 0;
+    const allocated = new Set<THREE.BufferGeometry>();
+    const originalAttribute = THREE.BufferGeometry.prototype.setAttribute;
+    const originalDispose = THREE.BufferGeometry.prototype.dispose;
+    THREE.BufferGeometry.prototype.setAttribute = function (name, attribute) {
+      allocated.add(this);
+      return originalAttribute.call(this, name, attribute);
+    };
+    THREE.BufferGeometry.prototype.dispose = function () {
+      allocated.delete(this);
+      disposedGeometry += 1;
+      originalDispose.call(this);
+    };
+    try {
+      await assert.rejects(createScene({ manifest, resolvePart: async (key, signal) => {
+        readSignal = signal;
+        if (key === "part-1024") { failedReads += 1; throw new Error("missing world part"); }
+        return bytes;
+      } }), /missing world part/);
+      assert.ok(disposedGeometry >= 2, "failed startup disposes completed geometry");
+      assert.equal(readSignal?.aborted, true, "failed startup cancels outstanding work");
+      assert.equal(failedReads, 1, "failed parts do not retry forever");
+      for (const abortAt of ["start", "complete"]) {
+        const progressAbort = new AbortController();
+        await assert.rejects(createScene({ manifest, resolvePart: async () => bytes }, {
+          signal: progressAbort.signal,
+          onProgress(value) {
+            if (abortAt === "start" || value === null) progressAbort.abort();
+          },
+        }), { name: "AbortError" });
+        assert.equal(allocated.size, 0, "progress cancellation cannot leak geometry or report success");
+      }
+    } finally {
+      THREE.BufferGeometry.prototype.setAttribute = originalAttribute;
+      THREE.BufferGeometry.prototype.dispose = originalDispose;
+    }
+    const controller = new AbortController();
+    await assert.rejects(createScene({ manifest, resolvePart: async () => {
+      controller.abort();
+      return bytes;
+    } }, { signal: controller.signal }), { name: "AbortError" });
+    await assert.rejects(createScene({ manifest, resolvePart: async () => encodeBinaryVoxelBuild([], SHA) }), /block count mismatch/);
+  }
   console.log("voxel world scene checks passed");
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+main().catch((error) => { console.error(error); process.exitCode = 1; });

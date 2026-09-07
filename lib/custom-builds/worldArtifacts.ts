@@ -1,4 +1,7 @@
 import type { CustomBuildArtifact } from "@prisma/client";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { constants as zlibConstants, gzipSync } from "node:zlib";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
@@ -8,6 +11,8 @@ import {
   uploadAndRecordCustomBuildArtifact,
 } from "@/lib/custom-builds/artifacts";
 import { encodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
+import { encodeWorldMeshPayload, getWorldMeshVersion } from "@/lib/voxel/worldMesh";
+import { buildWorldMeshPayloads } from "@/lib/voxel/worldMeshSource";
 import type { VoxelBuild, VoxelBlock, VoxelPoint } from "@/lib/voxel/types";
 import {
   VOXEL_WORLD_EVALUATOR_VERSION,
@@ -21,6 +26,8 @@ import {
   type StoredVoxelWorldPartRef,
   type VoxelWorldBounds,
   type VoxelWorldManifest,
+  type VoxelWorldMesh,
+  type VoxelWorldPartRef,
   type VoxelWorldRegion,
   type VoxelWorldRegionPage,
   type VoxelWorldRegionPageRef,
@@ -173,7 +180,7 @@ async function persistBytes(args: {
   bytes: Uint8Array;
   uncompressedByteSize: number;
   blockCount: number;
-  role: "mixed_region" | "region_page" | "manifest";
+  role: "mixed_region" | "region_page" | "manifest" | "mesh";
   index?: number;
 }): Promise<PersistedVoxelWorldArtifact> {
   const sha256 = sha256Hex(args.bytes);
@@ -195,6 +202,52 @@ async function persistBytes(args: {
     },
     encoding: "gzip",
   });
+}
+
+export async function persistVoxelWorldMeshArtifacts(args: {
+  customBuildId: string;
+  publicId: string;
+  sourceBuildSha256: string;
+  regions: readonly VoxelWorldRegion[];
+  palette: PaletteName;
+  readPart: (ref: VoxelWorldPartRef) => Promise<Uint8Array>;
+  persistArtifact?: PersistVoxelWorldArtifact;
+  throwIfCanceled?: () => void;
+}): Promise<VoxelWorldMesh> {
+  const persistArtifact = args.persistArtifact ?? uploadAndRecordCustomBuildArtifact;
+  const paletteIds = getPalette(args.palette).map((block) => block.id);
+  const mesh: VoxelWorldMesh = { version: await getWorldMeshVersion(), batches: [] };
+  for await (const batch of buildWorldMeshPayloads({
+    regions: args.regions,
+    sourceBuildSha256: args.sourceBuildSha256,
+    paletteIds,
+    readPart: args.readPart,
+    throwIfCanceled: args.throwIfCanceled,
+  })) {
+    args.throwIfCanceled?.();
+    const index = mesh.batches.length;
+    const bytes = encodeWorldMeshPayload(batch.payload);
+    args.throwIfCanceled?.();
+    const gzip = gzipSync(bytes, { level: 6 });
+    args.throwIfCanceled?.();
+    const key = `mesh-${mesh.version}-${index}`;
+    const artifact = await persistBytes({
+      persistArtifact,
+      customBuildId: args.customBuildId,
+      publicId: args.publicId,
+      sourceBuildSha256: args.sourceBuildSha256,
+      key,
+      bytes: gzip,
+      uncompressedByteSize: bytes.byteLength,
+      blockCount: batch.blockCount,
+      role: "mesh",
+      index,
+    });
+    args.throwIfCanceled?.();
+    mesh.batches.push({ bounds: batch.bounds, blockCount: batch.blockCount, data: storedPartRef(key, artifact) });
+  }
+  args.throwIfCanceled?.();
+  return mesh;
 }
 
 export async function persistVoxelWorldArtifacts(args: {
@@ -237,6 +290,8 @@ export async function persistVoxelWorldArtifacts(args: {
   const overview = createVoxelWorldOverviewState(args.gridSize, palette.length);
   const materialByType = new Map(paletteIds.map((type, index) => [type, index + 1]));
   const queuedRegions: Array<Promise<VoxelWorldRegion>> = [];
+  const meshRegions: VoxelWorldRegion[] = [];
+  let spoolDirectory: string | undefined;
 
   const flushPage = async () => {
     if (pageRegions.length === 0 || !pageBounds) return;
@@ -286,6 +341,7 @@ export async function persistVoxelWorldArtifacts(args: {
   };
 
   const pushRegion = async (region: VoxelWorldRegion) => {
+    meshRegions.push(region);
     if (!paged) {
       inlineRegions.push(region);
       if (inlineRegions.length <= VOXEL_WORLD_INLINE_REGION_LIMIT) return;
@@ -346,6 +402,9 @@ export async function persistVoxelWorldArtifacts(args: {
       const key = `mixed-${gzipSha}`;
       let data = mixedPartsBySha.get(gzipSha);
       if (!data) {
+        spoolDirectory ??= await mkdtemp(join(tmpdir(), "minebench-world-mesh-"));
+        await writeFile(join(spoolDirectory, key), bytes);
+        args.throwIfCanceled?.();
         data = persistBytes({
           persistArtifact,
           customBuildId: args.customBuildId,
@@ -371,6 +430,7 @@ export async function persistVoxelWorldArtifacts(args: {
       })));
     }
     await drainQueuedRegions(0);
+    evaluated.regions = [];
     await flushPage();
 
     let overviewData: StoredVoxelWorldPartRef | undefined;
@@ -391,6 +451,20 @@ export async function persistVoxelWorldArtifacts(args: {
       overviewData = storedPartRef(OVERVIEW_PART_KEY, artifact);
     }
 
+    const mesh = await persistVoxelWorldMeshArtifacts({
+      customBuildId: args.customBuildId,
+      publicId: args.publicId,
+      sourceBuildSha256: args.sourceBuildSha256,
+      regions: meshRegions,
+      palette: args.palette,
+      readPart: async (ref) => {
+        if (!spoolDirectory) throw new Error("Voxel world mesh source is missing");
+        return readFile(join(spoolDirectory, ref.key));
+      },
+      persistArtifact,
+      throwIfCanceled: args.throwIfCanceled,
+    });
+    args.throwIfCanceled?.();
     const manifest: VoxelWorldManifest = {
       kind: "voxel_world",
       version: VOXEL_WORLD_MANIFEST_VERSION,
@@ -404,6 +478,7 @@ export async function persistVoxelWorldArtifacts(args: {
         sha256: args.sourceBuildSha256,
         evaluatorVersion: VOXEL_WORLD_EVALUATOR_VERSION,
       },
+      mesh,
       ...(overviewData ? { overview: { data: overviewData, scale: VOXEL_WORLD_OVERVIEW_SCALE } } : {}),
       ...(paged ? { regionPages } : { regions: inlineRegions }),
     };
@@ -430,5 +505,6 @@ export async function persistVoxelWorldArtifacts(args: {
     };
   } finally {
     await Promise.allSettled(queuedRegions);
+    if (spoolDirectory) await rm(spoolDirectory, { recursive: true, force: true });
   }
 }

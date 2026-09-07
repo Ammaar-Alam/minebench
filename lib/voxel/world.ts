@@ -51,6 +51,15 @@ const regionPageRefSchema = z.object({
   data: partRefSchema,
 }).strict();
 const sourceSchema = z.object({ format: sourceFormatSchema, sha256: sha256Schema, evaluatorVersion: positiveCountSchema }).strict();
+const meshBatchRefSchema = z.object({
+  bounds: boundsSchema,
+  blockCount: positiveCountSchema,
+  data: partRefSchema,
+}).strict();
+const meshSchema = z.object({
+  version: z.string().regex(/^v[0-9]+-[a-f0-9]{64}$/),
+  batches: z.array(meshBatchRefSchema).max(VOXEL_WORLD_REGION_PAGE_REF_LIMIT),
+}).strict();
 const manifestSchema = z.object({
   kind: z.literal("voxel_world"),
   version: z.literal(VOXEL_WORLD_MANIFEST_VERSION),
@@ -60,6 +69,7 @@ const manifestSchema = z.object({
   exactBlockCount: countSchema,
   leafSize: z.literal(VOXEL_WORLD_MIXED_LEAF_SIZE),
   source: sourceSchema,
+  mesh: meshSchema.optional(),
   overview: z.object({ data: partRefSchema, scale: positiveCountSchema.max(VOXEL_WORLD_MAX_GRID_SIZE) }).strict().optional(),
   regions: z.array(regionSchema).max(VOXEL_WORLD_INLINE_REGION_LIMIT, "regions has too many entries").optional(),
   regionPages: z.array(regionPageRefSchema).max(VOXEL_WORLD_REGION_PAGE_REF_LIMIT, "regionPages has too many entries").optional(),
@@ -86,6 +96,8 @@ export type VoxelWorldMixedRegion = z.infer<typeof mixedRegionSchema>;
 export type VoxelWorldRegion = z.infer<typeof regionSchema>;
 export type VoxelWorldRegionPageRef = z.infer<typeof regionPageRefSchema>;
 export type VoxelWorldSource = z.infer<typeof sourceSchema>;
+export type VoxelWorldMeshBatchRef = z.infer<typeof meshBatchRefSchema>;
+export type VoxelWorldMesh = z.infer<typeof meshSchema>;
 export type VoxelWorldManifest = z.infer<typeof manifestSchema>;
 export type VoxelWorldRegionPage = z.infer<typeof regionPageSchema>;
 export type VoxelWorldPartResolver = (key: string, signal?: AbortSignal) => Promise<Uint8Array>;
@@ -238,6 +250,20 @@ function validateManifest(manifest: VoxelWorldManifest, opts: VoxelWorldParseOpt
   if (checkedSum(items, worldVolume, regions.length > 0 ? "regions.blockCount" : "regionPages.blockCount") !== manifest.exactBlockCount) {
     throw new Error("World region counts do not match exactBlockCount");
   }
+  if (manifest.mesh) {
+    for (const batch of manifest.mesh.batches) {
+      if (!fitsGrid(batch.bounds, manifest.gridSize) || !manifest.bounds || !contains(manifest.bounds, batch.bounds)) {
+        throw new Error("Mesh batch is outside the world bounds");
+      }
+      if (batch.blockCount > volume(batch.bounds)) throw new Error("Mesh batch blockCount exceeds its bounds");
+      if (ctx.partRefs.has(batch.data.key)) throw new Error(`Duplicate world part key: ${batch.data.key}`);
+      checkPartRef(batch.data, ctx);
+    }
+    const meshBlocks = checkedSum(manifest.mesh.batches, manifest.exactBlockCount, "mesh.blockCount");
+    if (pages.length === 0 && meshBlocks !== checkedSum(regions.filter((region) => region.kind === "mixed"), worldVolume, "mixed.blockCount")) {
+      throw new Error("World mesh counts do not match mixed regions");
+    }
+  }
 }
 
 function validatePage(page: VoxelWorldRegionPage, opts: VoxelWorldRegionPageParseOptions) {
@@ -295,6 +321,10 @@ export function toOpaqueVoxelWorldManifest(manifest: VoxelWorldManifest): VoxelW
     bounds: manifest.bounds ? cloneBounds(manifest.bounds) : null,
     source: { ...manifest.source },
     ...(manifest.overview ? { overview: { ...manifest.overview, data: toOpaquePartRef(manifest.overview.data) } } : {}),
+    ...(manifest.mesh ? { mesh: {
+      version: manifest.mesh.version,
+      batches: manifest.mesh.batches.map((batch) => ({ ...batch, bounds: cloneBounds(batch.bounds), data: toOpaquePartRef(batch.data) })),
+    } } : {}),
     regions: manifest.regions?.map(toOpaqueRegion),
     regionPages: manifest.regionPages?.map((page) => ({ ...page, bounds: cloneBounds(page.bounds), data: toOpaquePartRef(page.data) })),
   };

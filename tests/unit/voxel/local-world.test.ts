@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import * as THREE from "three";
 
+import { getPalette } from "../../../lib/blocks/palettes";
 import { decodeBinaryVoxelBuild } from "../../../lib/voxel/binaryBuild";
 import {
   createLocalVoxelWorldForTest,
   type LocalVoxelWorldProgress,
 } from "../../../lib/voxel/localWorld";
+import { createVoxelWorldScene } from "../../../lib/voxel/worldScene";
+import { getWorldMeshVersion } from "../../../lib/voxel/worldMesh";
 
 function packedHasBlock(
   packed: ReturnType<typeof decodeBinaryVoxelBuild>,
@@ -88,6 +92,52 @@ async function main() {
     assert.ok(packed.positions[index * 3 + 2] >= 0 && packed.positions[index * 3 + 2] < 64);
   }
 
+  const mesh = mixed.build.world?.manifest.mesh;
+  assert.ok(mesh);
+  assert.equal(mesh.version, await getWorldMeshVersion());
+  assert.ok(mesh.batches.length > 0);
+  for (const batch of mesh.batches) {
+    assert.equal(batch.data.kind, "localBlob");
+    assert.equal(batch.data.encoding, "gzip");
+    const meshBytes = mixed.parts.get(batch.data.key);
+    assert.ok(meshBytes);
+    assert.equal(meshBytes[0], 0x1f);
+    assert.equal(meshBytes[1], 0x8b);
+  }
+
+  const requestedMeshKeys: string[] = [];
+  const previousWorker = globalThis.Worker;
+  let workerCalls = 0;
+  globalThis.Worker = class {
+    constructor() {
+      workerCalls += 1;
+      throw new Error("unexpected mesh worker");
+    }
+  } as unknown as typeof Worker;
+  try {
+    const scene = await createVoxelWorldScene(
+      {
+        manifest: mixed.build.world!.manifest,
+        resolvePart: async (key) => {
+          requestedMeshKeys.push(key);
+          const part = mixed.parts.get(key);
+          if (!part) throw new Error(`missing local part ${key}`);
+          return part;
+        },
+      },
+      getPalette("simple"),
+      new THREE.Texture(),
+    );
+    assert.equal(workerCalls, 0);
+    assert.equal(requestedMeshKeys.length, mesh.batches.length);
+    assert.equal(new Set(requestedMeshKeys).size, mesh.batches.length);
+    assert.ok(requestedMeshKeys.every((key) => key.includes(".mesh.")));
+    assert.equal(scene.getResidentStats().meshBatches, mesh.batches.length);
+    scene.dispose();
+  } finally {
+    globalThis.Worker = previousWorker;
+  }
+
   const overviewWorld = await createLocalVoxelWorldForTest(
     {
       version: "1.0",
@@ -138,7 +188,14 @@ async function main() {
     progress.bytesRead === rawFileBytes.byteLength &&
     progress.totalBytes === rawFileBytes.byteLength,
   ));
-  assert.ok(fileProgress.some((progress) => progress.stage === "building"));
+  const fileBuildingProgress = fileProgress.filter((progress) => progress.stage === "building");
+  assert.ok(fileBuildingProgress.length > 0);
+  assert.ok(fileBuildingProgress.some((progress) =>
+    progress.processedBlocks !== undefined &&
+    progress.totalBlocks === fileWorld.blockCount &&
+    progress.processedBlocks > 0,
+  ));
+  assert.equal(fileBuildingProgress.at(-1)?.processedBlocks, fileWorld.blockCount);
   assert.equal(fileWorld.build.world?.manifest.regionPages?.[0]?.regionCount, 1024);
   const fileOverview = fileWorld.build.world?.manifest.overview;
   assert.ok(fileOverview);
@@ -195,6 +252,32 @@ async function main() {
     (error) => error instanceof DOMException && error.name === "AbortError",
   );
   assert.equal(abortParts.size, 0);
+
+  const abortMeshParts = new Map<string, Uint8Array>();
+  const abortMeshController = new AbortController();
+  await assert.rejects(
+    () => createLocalVoxelWorldForTest(
+      {
+        version: "1.0",
+        blocks: [
+          { x: 0, y: 0, z: 0, type: "stone" },
+          { x: 1, y: 0, z: 0, type: "glass" },
+        ],
+      },
+      {
+        gridSize: 2048,
+        palette: "simple",
+        worldId: "local-test-mesh-abort",
+        signal: abortMeshController.signal,
+        parts: abortMeshParts,
+        onPutPart: (record) => {
+          if (record.key.includes(".mesh.")) abortMeshController.abort();
+        },
+      },
+    ),
+    (error) => error instanceof DOMException && error.name === "AbortError",
+  );
+  assert.equal(abortMeshParts.size, 0);
 
   console.log("local voxel world checks passed");
 }

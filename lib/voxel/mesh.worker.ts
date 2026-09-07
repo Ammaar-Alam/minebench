@@ -21,6 +21,10 @@ import {
   type Direction,
 } from "@/lib/voxel/ambientOcclusion";
 import type { VoxelMeshFacts } from "@/lib/voxel/meshFacts";
+import {
+  buildWorldRegionGreedyMeshPayload,
+  type WorldRegionMeshOptions,
+} from "@/lib/voxel/worldRegionMesh";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -34,6 +38,7 @@ type WorkerRequest =
       blocks: TransferableVoxelBlocks;
       allowedBlockIds: string[];
       blockLimit?: number;
+      worldRegion?: WorldRegionMeshOptions;
     }
   | {
       type: "mesh-facts";
@@ -758,7 +763,9 @@ export function buildMeshPayload(
   blocks: TransferableVoxelBlocks,
   allowedBlockIds: string[],
   blockLimit?: number,
+  worldRegion?: WorldRegionMeshOptions,
 ): VoxelMeshPayload {
+  if (worldRegion) return buildWorldRegionGreedyMeshPayload(blocks, allowedBlockIds, worldRegion);
   const prepared = prepareMeshData(blocks, allowedBlockIds, blockLimit);
   const faceTable = buildFaceTable(prepared.typeNames, prepared.allowed);
   const opaque = makeBucket();
@@ -873,6 +880,9 @@ function collectTransferables(payload: VoxelMeshPayload): Transferable[] {
       bucket.indices.buffer,
     );
   }
+  for (const quads of Object.values(payload.worldQuads ?? {})) {
+    if (quads instanceof Uint32Array) transferables.push(quads.buffer);
+  }
   return transferables;
 }
 
@@ -884,7 +894,12 @@ if (typeof self !== "undefined") {
     try {
       const payload = message.type === "mesh-facts"
         ? buildMeshPayloadFromFacts(message.facts, message.allowedBlockIds)
-        : buildMeshPayload(message.blocks, message.allowedBlockIds, message.blockLimit);
+        : buildMeshPayload(
+            message.blocks,
+            message.allowedBlockIds,
+            message.blockLimit,
+            message.worldRegion,
+          );
       const response: WorkerResponse = { type: "complete", payload };
       workerScope.postMessage?.(response, collectTransferables(payload));
     } catch (err) {

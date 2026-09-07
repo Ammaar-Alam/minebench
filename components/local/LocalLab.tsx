@@ -31,6 +31,8 @@ type LocalParseProgress = {
   stage?: LocalVoxelWorldProgress["stage"];
   bytesRead?: number;
   totalBytes?: number;
+  processedBlocks?: number;
+  processedTotalBlocks?: number;
 };
 
 type LocalParseWorkerRequest =
@@ -46,6 +48,7 @@ type LocalParseWorkerRequest =
   | {
       type: "cancel";
       requestId?: number;
+      shutdown?: boolean;
     };
 
 type LocalParseWorkerResponse =
@@ -58,6 +61,8 @@ type LocalParseWorkerResponse =
       stage?: LocalVoxelWorldProgress["stage"];
       bytesRead?: number;
       totalBytes?: number;
+      processedBlocks?: number;
+      processedTotalBlocks?: number;
     }
   | {
       type: "complete";
@@ -105,7 +110,15 @@ function formatLocalLoadingMessage(progress?: LocalParseProgress): string {
     }
     return `Reading file ${read}`;
   }
-  if (progress?.stage === "building") return "Building world...";
+  if (progress?.stage === "building") {
+    const total = progress.processedTotalBlocks ?? null;
+    const processed = progress.processedBlocks ?? 0;
+    if (total && total > 0) {
+      const pct = Math.max(1, Math.min(99, Math.round((processed / total) * 100)));
+      return `Building world ${pct}%`;
+    }
+    return "Building world...";
+  }
   return formatVoxelLoadingMessage("Retrieving build", progress);
 }
 
@@ -351,12 +364,13 @@ export function LocalLab() {
   useEffect(() => {
     const worker = new Worker(new URL("./localBuildParse.worker.ts", import.meta.url));
     parseWorkerRef.current = worker;
+    let disposed = false;
 
     const onMessage = (event: MessageEvent<LocalParseWorkerResponse>) => {
       const message = event.data;
       if (!message) return;
 
-      if (message.requestId !== parseRequestIdRef.current) {
+      if (disposed || message.requestId !== parseRequestIdRef.current) {
         if (message.type === "complete" && message.localWorld) {
           void deleteLocalVoxelWorldParts(message.localWorld.partKeys, message.localWorld.worldId);
         }
@@ -383,6 +397,8 @@ export function LocalLab() {
             stage: message.stage,
             bytesRead: message.bytesRead,
             totalBytes: message.totalBytes,
+            processedBlocks: message.processedBlocks,
+            processedTotalBlocks: message.processedTotalBlocks,
           },
         });
         return;
@@ -435,13 +451,13 @@ export function LocalLab() {
     worker.addEventListener("message", onMessage);
 
     return () => {
-      worker.removeEventListener("message", onMessage);
+      // allow queued completions to release their stored parts
+      disposed = true;
       try {
-        worker.postMessage({ type: "cancel" } satisfies LocalParseWorkerRequest);
+        worker.postMessage({ type: "cancel", shutdown: true } satisfies LocalParseWorkerRequest);
       } catch {
         // ignore
       }
-      worker.terminate();
       if (parseWorkerRef.current === worker) parseWorkerRef.current = null;
       replaceLocalWorld(null);
     };

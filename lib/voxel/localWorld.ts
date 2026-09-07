@@ -1,5 +1,7 @@
 import { getPalette } from "@/lib/blocks/palettes";
 import { encodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
+import { encodeWorldMeshPayload, getWorldMeshVersion } from "@/lib/voxel/worldMesh";
+import { buildWorldMeshPayloads } from "@/lib/voxel/worldMeshSource";
 import { createPackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 import { parseVoxelBuildStream } from "@/lib/voxel/sourceStream";
@@ -15,6 +17,7 @@ import {
   type VoxelWorldBounds,
   type VoxelWorldDelivery,
   type VoxelWorldManifest,
+  type VoxelWorldMesh,
   type VoxelWorldPartRef,
   type VoxelWorldRegion,
   type VoxelWorldRegionPage,
@@ -51,6 +54,8 @@ export type LocalVoxelWorldProgress = {
   stage: "reading" | "building";
   bytesRead?: number;
   totalBytes?: number;
+  processedBlocks?: number;
+  totalBlocks?: number;
 };
 
 type LocalWorldPartRecord = {
@@ -70,6 +75,7 @@ type LocalWorldMetaRecord = {
 
 type LocalWorldStorage = {
   putPart(record: LocalWorldPartRecord): Promise<void>;
+  readPart(ref: VoxelWorldPartRef): Promise<Uint8Array>;
   finishWorld(record: LocalWorldMetaRecord): Promise<void>;
   cleanupWorld(ownership: LocalVoxelWorldOwnership): Promise<void>;
   prune(keepWorldId: string): Promise<void>;
@@ -152,6 +158,10 @@ const indexedDbStorage: LocalWorldStorage = {
     tx.objectStore(PART_STORE).put(record);
     await waitForTransaction(tx);
   },
+  async readPart(ref) {
+    if (ref.kind !== "localBlob") throw new Error("Local world part is not available.");
+    return readLocalVoxelWorldPart(ref.key);
+  },
   async finishWorld(record) {
     const db = await openDb();
     const tx = db.transaction(WORLD_STORE, "readwrite");
@@ -201,6 +211,17 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
   new Uint8Array(body).set(bytes);
   const digest = await globalThis.crypto.subtle.digest("SHA-256", body);
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function gzipBytes(bytes: Uint8Array): Promise<Uint8Array> {
+  if (typeof CompressionStream !== "function") {
+    throw new Error("Compressed local mesh storage is unavailable in this browser.");
+  }
+  const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const stream = new Blob([body])
+    .stream()
+    .pipeThrough(new CompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 function isBlobLikeInput(input: unknown): input is BlobLikeInput {
@@ -341,8 +362,12 @@ function encodeMixedRegion(region: MixedVoxelWorldRegion, palette: ReturnType<ty
   return encodeBinaryVoxelBuild(packed, sourceSha);
 }
 
-function localPartRef(key: string, byteSize: number): VoxelWorldPartRef {
-  return { kind: "localBlob", key, encoding: "identity", byteSize };
+function localPartRef(
+  key: string,
+  byteSize: number,
+  encoding: VoxelWorldPartRef["encoding"] = "identity",
+): VoxelWorldPartRef {
+  return { kind: "localBlob", key, encoding, byteSize };
 }
 
 async function createLocalVoxelWorldWithStorage(
@@ -359,11 +384,17 @@ async function createLocalVoxelWorldWithStorage(
   throwIfAborted(opts.signal);
   const prepared = await prepareLocalVoxelWorldInput(input, opts);
   throwIfAborted(opts.signal);
-  opts.onProgress?.({
-    stage: "building",
+  const progressBytes = {
     ...(prepared.bytesRead === undefined ? {} : { bytesRead: prepared.bytesRead }),
     ...(prepared.totalBytes === undefined ? {} : { totalBytes: prepared.totalBytes }),
+  };
+  const emitBuildingProgress = (processedBlocks?: number, totalBlocks?: number) => opts.onProgress?.({
+    stage: "building",
+    ...progressBytes,
+    ...(processedBlocks === undefined ? {} : { processedBlocks }),
+    ...(totalBlocks === undefined ? {} : { totalBlocks }),
   });
+  emitBuildingProgress();
 
   const palette = getPalette(opts.palette);
   const evaluated = evaluateVoxelWorldRegions(prepared.sourceBuild, {
@@ -380,6 +411,7 @@ async function createLocalVoxelWorldWithStorage(
   const worldId = opts.worldId?.trim() || makeWorldId();
   const partKeys: string[] = [];
   let totalPartBytes = 0;
+  let processedBuildBlocks = 0;
 
   const putBytes = async (key: string, bytes: Uint8Array) => {
     throwIfAborted(opts.signal);
@@ -398,8 +430,10 @@ async function createLocalVoxelWorldWithStorage(
   try {
     const regions: VoxelWorldRegion[] = [];
     let blockCount = 0;
+    let mixedBlockCount = 0;
     let bounds: VoxelWorldBounds | null = null;
     let regionIndex = 0;
+    emitBuildingProgress(0);
 
     for (const region of evaluated.regions) {
       throwIfAborted(opts.signal);
@@ -419,6 +453,7 @@ async function createLocalVoxelWorldWithStorage(
           blockCount: region.blockCount,
         });
       } else {
+        mixedBlockCount += region.blockCount;
         if (overview) markMixedVoxelWorldOverviewRegion(overview, region);
         const dataKey = `${worldId}.part.${regionIndex}.mbv4`;
         const bytes = encodeMixedRegion(region, palette, sourceSha);
@@ -435,8 +470,14 @@ async function createLocalVoxelWorldWithStorage(
         });
       }
 
+      processedBuildBlocks += region.blockCount;
+      emitBuildingProgress(processedBuildBlocks);
       regionIndex += 1;
     }
+    evaluated.regions = [];
+    prepared.sourceBuild = prepared.buildForReturn;
+    const totalBuildBlocks = blockCount + mixedBlockCount;
+    emitBuildingProgress(processedBuildBlocks, totalBuildBlocks);
 
     let overviewData: VoxelWorldPartRef | undefined;
     if (overview && blockCount > 0) {
@@ -503,6 +544,33 @@ async function createLocalVoxelWorldWithStorage(
         });
       }
       manifest = { ...manifestBase, regionPages };
+    }
+
+    if (blockCount > 0) {
+      const mesh: VoxelWorldMesh = {
+        version: await getWorldMeshVersion(),
+        batches: [],
+      };
+      for await (const batch of buildWorldMeshPayloads({
+        regions,
+        sourceBuildSha256: sourceSha,
+        paletteIds,
+        readPart: (ref) => storage.readPart(ref),
+        throwIfCanceled: () => throwIfAborted(opts.signal),
+      })) {
+        const encoded = encodeWorldMeshPayload(batch.payload);
+        const compressed = await gzipBytes(encoded);
+        const meshKey = `${worldId}.mesh.${mesh.batches.length}.mbq1.gz`;
+        await putBytes(meshKey, compressed);
+        mesh.batches.push({
+          bounds: batch.bounds,
+          blockCount: batch.blockCount,
+          data: localPartRef(meshKey, compressed.byteLength, "gzip"),
+        });
+        processedBuildBlocks += batch.blockCount;
+        emitBuildingProgress(processedBuildBlocks, totalBuildBlocks);
+      }
+      manifest = { ...manifest, mesh };
     }
 
     const parsedManifest = parseVoxelWorldManifest(manifest, { allowLocalBlobRefs: true });
@@ -602,6 +670,7 @@ export async function createLocalVoxelWorldForTest(
     signal?: AbortSignal;
     onProgress?: (progress: LocalVoxelWorldProgress) => void;
     parts?: Map<string, Uint8Array>;
+    readPart?: (ref: VoxelWorldPartRef) => Uint8Array | Promise<Uint8Array> | undefined;
     onPutPart?: (record: LocalWorldPartRecord) => void | Promise<void>;
   },
 ): Promise<LocalVoxelWorldResult & { parts: Map<string, Uint8Array> }> {
@@ -610,6 +679,13 @@ export async function createLocalVoxelWorldForTest(
     async putPart(record) {
       parts.set(record.key, record.bytes);
       await opts.onPutPart?.(record);
+    },
+    async readPart(ref) {
+      const override = await opts.readPart?.(ref);
+      if (override !== undefined) return override;
+      const bytes = parts.get(ref.key);
+      if (!bytes) throw new Error("Local world part is missing.");
+      return bytes;
     },
     async finishWorld() {},
     async cleanupWorld(ownership) {

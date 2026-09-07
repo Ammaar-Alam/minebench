@@ -37,6 +37,12 @@ import {
   copyVoxelMeshFacts,
   type VoxelMeshFacts,
 } from "@/lib/voxel/meshFacts";
+import {
+  buildWorldRegionGreedyMeshPayload,
+  type WorldRegionMeshOptions,
+} from "@/lib/voxel/worldRegionMesh";
+import type { WorldQuadPayload } from "@/lib/voxel/worldQuadData";
+import { configureWorldQuadMesh, createWorldQuadGeometry } from "@/lib/voxel/worldQuadGeometry";
 
 export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
@@ -68,6 +74,7 @@ type CreateVoxelGroupAsyncOpts = {
   // Optional in-flight or resolved worker mesh promise (e.g. from background premeshing).
   premeshedPayloadPromise?: Promise<VoxelMeshPayload> | null;
   onPremeshedPayloadConsumed?: (promise: Promise<VoxelMeshPayload>) => void;
+  worldRegion?: WorldRegionMeshOptions;
 };
 
 const LOCAL_MESH_MAX_BLOCKS = Number.parseInt(
@@ -93,6 +100,7 @@ export type VoxelMeshPayload = {
   transparent: SerializedMeshBucket | null;
   water: SerializedMeshBucket | null;
   emissive: SerializedMeshBucket | null;
+  worldQuads?: WorldQuadPayload;
   bounds: SerializedBuildBounds;
   filteredBlockCount: number;
 };
@@ -372,6 +380,9 @@ function collectPayloadTransferables(payload: VoxelMeshPayload): Transferable[] 
       bucket.colors.buffer,
       bucket.indices.buffer,
     );
+  }
+  for (const quads of Object.values(payload.worldQuads ?? {})) {
+    if (quads instanceof Uint32Array) transferables.push(quads.buffer);
   }
   return transferables;
 }
@@ -993,6 +1004,7 @@ type MeshWorkerRequest =
       blocks: TransferableVoxelBlocks;
       allowedBlockIds: string[];
       blockLimit?: number;
+      worldRegion?: WorldRegionMeshOptions;
     }
   | {
       type: "mesh-facts";
@@ -1054,21 +1066,22 @@ export function createVoxelGroupFromMeshPayload(
   const group = new THREE.Group();
   group.name = "VoxelGroup";
 
-  const geoOpaque = buildGeometryFromSerialized(payload.opaque, bounds);
-  const geoCutout = buildGeometryFromSerialized(payload.cutout, bounds);
-  const geoTransparent = buildGeometryFromSerialized(payload.transparent, bounds);
-  const geoWater = buildGeometryFromSerialized(payload.water, bounds);
-  const geoEmissive = buildGeometryFromSerialized(payload.emissive, bounds);
-
-  if (geoOpaque) group.add(new THREE.Mesh(geoOpaque, matOpaque));
-  if (geoCutout) group.add(new THREE.Mesh(geoCutout, matCutout));
-  if (geoTransparent) group.add(new THREE.Mesh(geoTransparent, matTransparent));
-  if (geoWater) {
-    const mesh = new THREE.Mesh(geoWater, matWater);
-    mesh.renderOrder = 1;
+  const worldQuads = payload.worldQuads;
+  const addMesh = (kind: "opaque" | "cutout" | "transparent" | "water" | "emissive", material: THREE.Material) => {
+    const geometry = worldQuads
+      ? createWorldQuadGeometry(worldQuads[kind], bounds)
+      : buildGeometryFromSerialized(payload[kind], bounds);
+    if (!geometry) return;
+    const mesh = new THREE.Mesh(geometry, material);
+    if (worldQuads) configureWorldQuadMesh(mesh, worldQuads.anchor, kind === "water");
+    if (kind === "water") mesh.renderOrder = 1;
     group.add(mesh);
-  }
-  if (geoEmissive) group.add(new THREE.Mesh(geoEmissive, matEmissive));
+  };
+  addMesh("opaque", matOpaque);
+  addMesh("cutout", matCutout);
+  addMesh("transparent", matTransparent);
+  addMesh("water", matWater);
+  addMesh("emissive", matEmissive);
 
   return {
     group,
@@ -1083,7 +1096,7 @@ export async function createVoxelMeshPayloadInWorker(
   palette: BlockDefinition[],
   opts?: CreateVoxelGroupAsyncOpts,
 ): Promise<{ payload: VoxelMeshPayload; cacheStatus: VoxelMeshCacheStatus }> {
-  const cacheKey = opts?.cacheKey?.trim();
+  const cacheKey = opts?.worldRegion ? undefined : opts?.cacheKey?.trim();
   if (cacheKey) {
     const cached = await getCachedMeshPayload(cacheKey);
     if (cached) return { payload: cached, cacheStatus: "hit" };
@@ -1163,7 +1176,9 @@ export async function createVoxelMeshPayloadInWorker(
     }
     opts?.signal?.addEventListener("abort", onAbort, { once: true });
 
-    const usableMeshFacts = getUsableMeshFacts(build, opts?.blockLimit);
+    const usableMeshFacts = opts?.worldRegion
+      ? null
+      : getUsableMeshFacts(build, opts?.blockLimit);
     if (usableMeshFacts) {
       const facts = copyVoxelMeshFacts(usableMeshFacts);
       const request: MeshWorkerRequest = {
@@ -1184,16 +1199,37 @@ export async function createVoxelMeshPayloadInWorker(
     // trimmed copy: transferring the live arrays would detach them.
     const blocks = build.packed
       ? copyPackedVoxelBlocks(build.packed, opts?.blockLimit)
-      : encodeTransferableVoxelBlocks(build.blocks);
+      : opts?.worldRegion && typeof opts.blockLimit === "number" && Number.isFinite(opts.blockLimit)
+        ? packVoxelBlocks(build.blocks.slice(0, Math.max(0, Math.floor(opts.blockLimit))))
+        : encodeTransferableVoxelBlocks(build.blocks);
+    const worldRegion = opts?.worldRegion
+      ? {
+          size: { ...opts.worldRegion.size },
+          ...(opts.worldRegion.halo ? { halo: copyPackedVoxelBlocks(opts.worldRegion.halo) } : {}),
+        }
+      : undefined;
     const request: MeshWorkerRequest = {
       type: "build",
       blocks,
       allowedBlockIds: palette.map((entry) => entry.id),
       // the filled prefix is authoritative; array length alone would let any
       // trailing slack render as blocks at the origin
-      blockLimit: Math.min(blocks.count, opts?.blockLimit ?? Number.POSITIVE_INFINITY),
+      ...(worldRegion
+        ? {}
+        : { blockLimit: Math.min(blocks.count, opts?.blockLimit ?? Number.POSITIVE_INFINITY) }),
+      ...(worldRegion ? { worldRegion } : {}),
     };
-    worker.postMessage(request, [blocks.positions.buffer, blocks.typeIds.buffer]);
+    const transferables: Transferable[] = [
+      blocks.positions.buffer as ArrayBuffer,
+      blocks.typeIds.buffer as ArrayBuffer,
+    ];
+    if (worldRegion?.halo) {
+      transferables.push(
+        worldRegion.halo.positions.buffer as ArrayBuffer,
+        worldRegion.halo.typeIds.buffer as ArrayBuffer,
+      );
+    }
+    worker.postMessage(request, transferables);
   });
   return { payload, cacheStatus };
 }
@@ -1220,6 +1256,28 @@ async function createVoxelGroupAsyncLocal(
   opts?: CreateVoxelGroupAsyncOpts,
   strategy: VoxelMeshStrategy = "local",
 ): Promise<VoxelGroup> {
+  if (opts?.worldRegion) {
+    throwIfAborted(opts.signal);
+    const blocks = packedOrObjectBuild.packed
+      ? copyPackedVoxelBlocks(packedOrObjectBuild.packed, opts.blockLimit)
+      : typeof opts.blockLimit === "number" && Number.isFinite(opts.blockLimit)
+        ? packVoxelBlocks(packedOrObjectBuild.blocks.slice(0, Math.max(0, Math.floor(opts.blockLimit))))
+        : encodeTransferableVoxelBlocks(packedOrObjectBuild.blocks);
+    const payload = buildWorldRegionGreedyMeshPayload(
+      blocks,
+      palette.map((entry) => entry.id),
+      opts.worldRegion,
+    );
+    opts.onStage?.({
+      stage: "mesh_payload_complete",
+      strategy,
+      cacheStatus: "not-used",
+      blockCount: payload.filteredBlockCount,
+    });
+    throwIfAborted(opts.signal);
+    return createVoxelGroupFromMeshPayload(payload, atlasTexture);
+  }
+
   // Main-thread meshing walks block objects. This is the small-build path and
   // the worker-failure fallback, so materializing here costs no more than the
   // object representation this change removes everywhere else.
@@ -1418,7 +1476,7 @@ export async function createVoxelGroupAsync(
   }
 
   try {
-    const workerStrategy: VoxelMeshStrategy = getUsableMeshFacts(build, blockLimit)
+    const workerStrategy: VoxelMeshStrategy = !opts?.worldRegion && getUsableMeshFacts(build, blockLimit)
       ? "worker-facts"
       : "worker";
     opts?.onStage?.({ stage: "mesh_started", strategy: workerStrategy });

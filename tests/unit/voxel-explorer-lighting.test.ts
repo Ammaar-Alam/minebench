@@ -89,19 +89,14 @@ async function main() {
     camera.updateProjectionMatrix();
     const fog = new THREE.Fog(0xaed4ef);
     const bloomFog = new THREE.Fog(0xffffff);
-    setExplorerWorldFog(camera, fog, bloomFog, 100);
-    const corner = new THREE.Vector3(1, 1, 0.5).unproject(camera).normalize();
-    assert.ok(Math.abs(fog.far / -corner.z - 100) < 1e-8, "the farthest visible corner stays within exact coverage");
+    setExplorerWorldFog(camera, fog, bloomFog, 10_240);
     assert.ok(fog.near < fog.far);
     const emission = new THREE.Color(10, 8, 2).lerp(
       bloomFog.color,
       THREE.MathUtils.smoothstep(fog.far, bloomFog.near, bloomFog.far),
     );
     assert.deepEqual(emission.toArray(), [0, 0, 0], "bloom cannot reveal geometry beyond the fog");
-    setExplorerWorldFog(camera, fog, bloomFog, 0);
-    assert.equal(THREE.MathUtils.smoothstep(camera.near, fog.near, fog.far), 1, "unloaded space is fully fogged");
-    setExplorerWorldFog(camera, fog, bloomFog, 100, 10_240);
-    assert.equal(fog.far, 10_240, "whole-world coverage keeps distant scenery beyond nearby exact detail");
+    assert.equal(fog.far, 10_240, "whole-world scenery stays visible at every field of view");
     assert.ok(fog.near > 5_000, "fog begins in the distance instead of enclosing the player");
     assert.ok(camera.far > fog.far, "the camera cannot clip scenery before the fog");
     assert.equal(bloomFog.near, fog.near);

@@ -32,6 +32,7 @@ type ParseRequest = {
 type CancelRequest = {
   type: "cancel";
   requestId?: number;
+  shutdown?: boolean;
 };
 
 type WorkerRequest = ParseRequest | CancelRequest;
@@ -45,6 +46,8 @@ type ProgressMessage = {
   stage?: LocalVoxelWorldProgress["stage"];
   bytesRead?: number;
   totalBytes?: number;
+  processedBlocks?: number;
+  processedTotalBlocks?: number;
 };
 
 type CompleteMessage = {
@@ -73,6 +76,8 @@ const CANCELLED_ERROR = "__cancelled__";
 
 let activeRequestId = -1;
 let activeAbortController: AbortController | null = null;
+let shuttingDown = false;
+const pendingParses = new Set<Promise<void>>();
 
 function isCancelled(requestId: number): boolean {
   return activeRequestId !== requestId;
@@ -461,6 +466,35 @@ async function runParse(request: ParseRequest) {
     if (isCancelled(request.requestId)) return;
     postMessage(msg satisfies WorkerResponse);
   };
+  let lastWorldProgressAt = -Infinity;
+  const postWorldProgress = (progress: LocalVoxelWorldProgress) => {
+    if (isCancelled(request.requestId)) return;
+    const now = performance.now();
+    const complete =
+      progress.stage === "building" &&
+      progress.processedBlocks !== undefined &&
+      progress.totalBlocks !== undefined &&
+      progress.processedBlocks >= progress.totalBlocks;
+    const readingComplete =
+      progress.stage === "reading" &&
+      progress.bytesRead !== undefined &&
+      progress.totalBytes !== undefined &&
+      progress.bytesRead >= progress.totalBytes;
+    if (!complete && !readingComplete && now - lastWorldProgressAt < EMIT_INTERVAL_MS) return;
+    lastWorldProgressAt = now;
+    postProgress({
+      type: "progress",
+      requestId: request.requestId,
+      deltaBlocks: [],
+      receivedBlocks: 0,
+      totalBlocks: null,
+      stage: progress.stage,
+      bytesRead: progress.bytesRead,
+      totalBytes: progress.totalBytes,
+      processedBlocks: progress.processedBlocks,
+      processedTotalBlocks: progress.totalBlocks,
+    });
+  };
 
   try {
     const finishWorld = (
@@ -485,31 +519,11 @@ async function runParse(request: ParseRequest) {
     };
     if (request.file) {
       if (request.gridSize > 512) {
-        let lastFileProgressAt = -Infinity;
-        const postFileProgress = (progress: LocalVoxelWorldProgress) => {
-          if (isCancelled(request.requestId)) return;
-          const now = performance.now();
-          const complete =
-            progress.stage === "building" ||
-            (progress.bytesRead !== undefined &&
-              progress.totalBytes !== undefined &&
-              progress.bytesRead >= progress.totalBytes);
-          if (!complete && now - lastFileProgressAt < EMIT_INTERVAL_MS) return;
-          lastFileProgressAt = now;
-          postProgress({
-            type: "progress",
-            requestId: request.requestId,
-            deltaBlocks: [],
-            receivedBlocks: 0,
-            totalBlocks: null,
-            ...progress,
-          });
-        };
         const world = await createLocalVoxelWorld(request.file, {
           gridSize: request.gridSize,
           palette: request.palette,
           signal: abortController.signal,
-          onProgress: postFileProgress,
+          onProgress: postWorldProgress,
         });
         if (isCancelled(request.requestId)) {
           throw new Error(CANCELLED_ERROR);
@@ -601,6 +615,7 @@ async function runParse(request: ParseRequest) {
             gridSize: resolvedGridSize,
             palette: resolvedPalette,
             signal: abortController.signal,
+            onProgress: postWorldProgress,
           });
           if (isCancelled(request.requestId)) {
             throw new Error(CANCELLED_ERROR);
@@ -663,6 +678,7 @@ async function runParse(request: ParseRequest) {
           gridSize: resolvedGridSize,
           palette: resolvedPalette,
           signal: abortController.signal,
+          onProgress: postWorldProgress,
         });
         if (isCancelled(request.requestId)) {
           throw new Error(CANCELLED_ERROR);
@@ -766,20 +782,31 @@ async function runParse(request: ParseRequest) {
   }
 }
 
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const message = event.data;
-  if (!message) return;
+  if (!message || shuttingDown) return;
 
   if (message.type === "cancel") {
-    if (message.requestId == null || message.requestId === activeRequestId) {
+    if (message.shutdown || message.requestId == null || message.requestId === activeRequestId) {
       activeRequestId = -1;
       activeAbortController?.abort();
       activeAbortController = null;
     }
+    if (message.shutdown) {
+      shuttingDown = true;
+      await Promise.allSettled(pendingParses);
+      self.close();
+    }
     return;
   }
 
-  void runParse(message);
+  const pending = runParse(message);
+  pendingParses.add(pending);
+  try {
+    await pending;
+  } finally {
+    pendingParses.delete(pending);
+  }
 };
 
 export {};

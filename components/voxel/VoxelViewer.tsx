@@ -705,7 +705,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       (willReachRequired && !hadReachedRequired);
     const previousRotationY = voxelGroupRef.current?.group.rotation.y ?? 0;
     const startHadGroup = Boolean(voxelGroupRef.current);
-    const animate = Boolean(latest.animateIn && shouldFit);
+    const animate = Boolean(latest.animateIn && shouldFit && !latest.voxelBuild?.world);
     const paletteSnapshot = latest.paletteDefs;
     const buildSnapshot = latest.voxelBuild;
     const expectedSnapshot = latest.expectedBlockCount;
@@ -735,8 +735,6 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         } : null);
       };
       let vg: VoxelGroup;
-      let worldLoadError: string | null = null;
-      let worldProgress: VoxelViewerBuildProgress | null = null;
       if (buildSnapshot.world) {
         meshStarted = true;
         meshStrategy = "worker";
@@ -744,18 +742,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         buildTrace.mark("mesh_started");
         vg = await createVoxelWorldScene(buildSnapshot.world, paletteSnapshot, tex, {
           signal: controller.signal,
-          yieldAfterMs: computeBuildYieldAfterMs(blockLimit),
-          onChange: () => requestRenderRef.current?.(),
-          onError(message) {
-            worldLoadError = message;
-            onBuildErrorChangeRef.current?.(message);
-            reportReady(false);
-            reportFirstRenderReady(false);
-          },
-          onProgress(value) {
-            worldProgress = value;
-            progress(value);
-          },
+          onProgress: progress,
         });
         buildTrace.mark("mesh_payload_complete");
         buildTrace.mark("three_group_complete");
@@ -800,7 +787,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       }
 
       const old = voxelGroupRef.current;
-      vg.group.rotation.y = buildSnapshot.world ? 0 : previousRotationY;
+      vg.group.rotation.y = previousRotationY;
       voxelGroupRef.current = vg;
       three.scene.add(vg.group);
       if (old) {
@@ -831,7 +818,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         if (metricsReported) return;
         if (
           traceAbandoned ||
-          !buildReady || worldLoadError ||
+          !buildReady ||
           controller.signal.aborted ||
           !sameIdentity(identityRef.current, incomingIdentity) ||
           voxelGroupRef.current?.group !== vg.group
@@ -870,7 +857,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         report() {
           buildTrace.mark("first_render");
           firstRenderComplete = true;
-          reportFirstRenderReady(buildReady && !worldLoadError);
+          reportFirstRenderReady(buildReady);
           maybeReportBuildMetrics();
         },
         discard() {
@@ -946,9 +933,9 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       buildTrace.mark("reveal_complete");
       revealComplete = true;
       maybeReportBuildMetrics();
-      onBuildProgressChangeRef.current?.(worldProgress);
-      if (!worldLoadError) onBuildErrorChangeRef.current?.(null);
-      reportReady(buildReady && !worldLoadError);
+      onBuildProgressChangeRef.current?.(null);
+      onBuildErrorChangeRef.current?.(null);
+      reportReady(buildReady);
       requestRenderRef.current?.();
     } catch (err: unknown) {
       traceAbandoned = true;
@@ -966,7 +953,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         activeJobRef.current.controller = null;
         activeJobRef.current.identity = null;
       }
-      if (!buildSnapshot?.world) onBuildProgressChangeRef.current?.(null);
+      onBuildProgressChangeRef.current?.(null);
       if (!traceRetainedForFirstRender) buildTrace.clear();
       if (buildPendingRef.current.dirty) scheduleKick();
     }
@@ -1048,7 +1035,10 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
               .addScaledVector(cameraOffset, (targetDistance * distanceScale) / distance);
           }
           camera.aspect = targetAspect;
-          if (isVoxelWorldScene(vg)) Object.assign(camera, worldCameraClipping(camera.position, bounds));
+          if (isVoxelWorldScene(vg)) {
+            const position = camera.position.clone().applyAxisAngle(THREE.Object3D.DEFAULT_UP, -vg.group.rotation.y);
+            Object.assign(camera, worldCameraClipping(position, bounds));
+          }
           camera.updateProjectionMatrix();
           exportRenderer.setSize(width, height, false);
           exportRenderer.render(scene, camera);
@@ -1207,6 +1197,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     let raf = 0;
     let rendering = false;
     let last = performance.now();
+    const worldCameraPosition = new THREE.Vector3();
     const render = (now: number) => {
       rendering = true;
       raf = 0;
@@ -1217,21 +1208,18 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const controlsChanged = (controls.update() as boolean | void) === true;
 
         const vg = voxelGroupRef.current;
-        const worldScene = isVoxelWorldScene(vg) ? vg : null;
-        if (worldScene) {
-          const { near, far } = worldCameraClipping(camera.position, worldScene.bounds);
+        const shouldAutoRotate = Boolean(vg && autoRotateRef.current && !userInteractingRef.current);
+        if (vg && shouldAutoRotate) {
+          vg.group.rotation.y += dt * 0.25;
+        }
+        if (isVoxelWorldScene(vg)) {
+          worldCameraPosition.copy(camera.position).applyAxisAngle(THREE.Object3D.DEFAULT_UP, -vg.group.rotation.y);
+          const { near, far } = worldCameraClipping(worldCameraPosition, vg.bounds);
           if (camera.near !== near || camera.far !== far) {
             camera.near = near;
             camera.far = far;
             camera.updateProjectionMatrix();
           }
-          worldScene.updateFocus(controls.target, camera, mount.clientHeight);
-        }
-        const shouldAutoRotate = Boolean(
-          vg && !worldScene && autoRotateRef.current && !userInteractingRef.current,
-        );
-        if (vg && shouldAutoRotate) {
-          vg.group.rotation.y += dt * 0.25;
         }
         renderer.render(scene, camera);
         const pendingFirstRender = pendingFirstRenderRef.current;

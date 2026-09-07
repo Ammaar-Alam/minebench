@@ -23,6 +23,10 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function waitFor(check: () => boolean, label: string): Promise<void> {
   for (let attempt = 0; attempt < 1000; attempt += 1) {
     if (check()) return;
@@ -153,12 +157,17 @@ async function resolveUploadsOutOfOrder<T>(
   state: ReturnType<typeof delayedPersistArtifact>,
 ): Promise<T> {
   let settled = false;
+  const deadline = Date.now() + 60_000;
   const observed = run.finally(() => {
     settled = true;
   });
   void observed.catch(() => undefined);
   while (!settled) {
-    await waitFor(() => settled || state.pending.length > 0, "pending upload");
+    if (state.pending.length === 0) {
+      if (Date.now() > deadline) throw new Error("Timed out waiting for artifact persistence");
+      await wait(1);
+      continue;
+    }
     const batch = state.pending.splice(0);
     for (const upload of batch.reverse()) upload.resolve();
     await tick();
@@ -201,9 +210,11 @@ async function preserveOrderWithConcurrentUploads() {
     expectedRegionKeys,
   );
   assert.deepEqual(
-    state.startedKeys.slice(-3).map((key) => key.startsWith("page-") ? "page" : key),
+    state.startedKeys.filter((key) => !key.startsWith("mesh-")).slice(-3).map((key) => key.startsWith("page-") ? "page" : key),
     ["page", "overview", "manifest"],
   );
+  assert.equal(state.startedKeys.at(-1), "manifest");
+  assert.equal(state.startedKeys.filter((key) => key.startsWith("mesh-")).length, result.manifest.mesh?.batches.length);
 }
 
 async function dedupePendingMixedUploads() {

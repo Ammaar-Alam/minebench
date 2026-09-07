@@ -313,12 +313,9 @@ export function setExplorerWorldFog(
   camera: THREE.PerspectiveCamera,
   fog: THREE.Fog,
   bloomFog: THREE.Fog,
-  detailRadius: number,
-  viewDistance?: number,
+  viewDistance: number,
 ): void {
-  const halfHeight = Math.tan(THREE.MathUtils.degToRad(camera.getEffectiveFOV()) / 2);
-  const cornerDistance = Math.hypot(1, halfHeight, halfHeight * camera.aspect);
-  fog.far = Math.max(camera.near, viewDistance ?? Math.min(512, detailRadius / cornerDistance));
+  fog.far = Math.max(camera.near, viewDistance);
   fog.near = fog.far * 0.55;
   if (camera.far <= fog.far) {
     camera.far = fog.far * 1.5;

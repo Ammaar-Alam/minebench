@@ -130,6 +130,26 @@ const inlineManifest = {
 }
 
 {
+  const mesh = {
+    version: `v1-${SHA}`,
+    batches: [{
+      bounds: { origin: { x: 80, y: 4, z: 3 }, size: { x: 63, y: 7, z: 64 } },
+      blockCount: 12,
+      data: storedPart("mesh-0"),
+    }],
+  };
+  assertBad(parseVoxelWorldManifest({ ...inlineManifest, mesh }), /server-only/);
+  const stored = assertManifest(parseVoxelWorldManifest({ ...inlineManifest, mesh }, { allowStoredRefs: true }));
+  const delivered = toOpaqueVoxelWorldManifest(stored);
+  assert.equal(delivered.mesh?.batches[0].data.kind, "opaque");
+  assert.equal("path" in delivered.mesh!.batches[0].data, false);
+  assertManifest(parseVoxelWorldManifest(delivered));
+  assertBad(parseVoxelWorldManifest({ ...delivered, mesh: { ...delivered.mesh, batches: [] } }), /mesh counts/);
+  assertBad(parseVoxelWorldManifest({ ...delivered, mesh: { ...delivered.mesh, batches: [delivered.mesh!.batches[0], delivered.mesh!.batches[0]] } }), /Duplicate world part/);
+  assertBad(parseVoxelWorldManifest({ ...delivered, mesh: { ...delivered.mesh, batches: [{ ...delivered.mesh!.batches[0], bounds: { origin: { x: 8000, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 } } }] } }), /outside the world/);
+}
+
+{
   const withStoredRef = {
     ...inlineManifest,
     exactBlockCount: 1,
@@ -393,6 +413,7 @@ async function checkWorldDeliveryFetchCounts() {
     });
     assert.equal(response.status, 200);
     assert.equal(requestedSource, SHA);
+    await response.arrayBuffer();
     assert.deepEqual(requestedPaths, ["mixed"]);
 
     requestedPaths.length = 0;
@@ -410,6 +431,7 @@ async function checkWorldDeliveryFetchCounts() {
     });
     assert.equal(fallbackResponse.status, 200);
     assert.equal(requestedSource, inlineManifest.source.sha256);
+    await fallbackResponse.arrayBuffer();
     assert.deepEqual(requestedPaths, ["manifest", "mixed"]);
   } finally {
     globalThis.fetch = previousFetch;

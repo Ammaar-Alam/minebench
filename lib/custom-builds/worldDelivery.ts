@@ -1,7 +1,10 @@
 import {
   decodeAndVerifyCustomBuildArtifactText,
 } from "@/lib/custom-builds/artifacts";
-import { downloadCustomBuildArtifactBytes } from "@/lib/custom-builds/storage";
+import {
+  downloadCustomBuildArtifactBytes,
+  downloadCustomBuildArtifactStream,
+} from "@/lib/custom-builds/storage";
 import {
   isVoxelWorldRegionPageKey,
 } from "@/lib/custom-builds/worldArtifacts";
@@ -22,10 +25,6 @@ type WorldArtifact = {
 };
 
 type FindWorldPart = (sourceBuildSha256: string, partKey: string) => Promise<WorldArtifact | null>;
-
-function hasGzipMagic(bytes: Uint8Array): boolean {
-  return bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
-}
 
 function assertPartKey(value: string | null): string | null {
   if (value == null) return null;
@@ -48,6 +47,38 @@ async function readJsonArtifact(artifact: WorldArtifact): Promise<unknown> {
     storedSha256: artifact.sha256,
   });
   return JSON.parse(text) as unknown;
+}
+
+function streamedBytes(part: WorldArtifact, requestSignal: AbortSignal): ReadableStream<Uint8Array> {
+  const controller = new AbortController();
+  const abortFromRequest = () => controller.abort(requestSignal.reason);
+  if (requestSignal.aborted) abortFromRequest();
+  else requestSignal.addEventListener("abort", abortFromRequest, { once: true });
+  const iterator = downloadCustomBuildArtifactStream({ ...part, signal: controller.signal })[Symbol.asyncIterator]();
+  const cleanup = () => {
+    requestSignal.removeEventListener("abort", abortFromRequest);
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(streamController) {
+      try {
+        const next = await iterator.next();
+        if (next.done) {
+          cleanup();
+          streamController.close();
+          return;
+        }
+        streamController.enqueue(next.value);
+      } catch (error) {
+        cleanup();
+        streamController.error(error);
+      }
+    },
+    async cancel(reason) {
+      cleanup();
+      if (!controller.signal.aborted) controller.abort(reason);
+      await iterator.return?.(undefined);
+    },
+  }, { highWaterMark: 0 });
 }
 
 export async function customBuildWorldViewerResponse(args: {
@@ -77,8 +108,8 @@ export async function customBuildWorldViewerResponse(args: {
     if (!sourceSha) throw new Error("Voxel world source checksum is missing");
     const part = await args.findPart(sourceSha, parsedPartKey);
     if (!part) return new Response("Artifact not found", { status: 404 });
-    const bytes = await downloadCustomBuildArtifactBytes(part);
     if (isVoxelWorldRegionPageKey(parsedPartKey)) {
+      const bytes = await downloadCustomBuildArtifactBytes(part);
       if (!manifest) throw new Error("Voxel world manifest is missing");
       const pageRef = manifest.regionPages?.find((page) => page.data.key === parsedPartKey);
       const pageResult = parseVoxelWorldRegionPage(
@@ -101,11 +132,10 @@ export async function customBuildWorldViewerResponse(args: {
         },
       });
     }
-    return new Response(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer, {
+    return new Response(streamedBytes(part, args.request.signal), {
       headers: {
         "Cache-Control": args.cacheControl,
-        "Content-Type": hasGzipMagic(bytes) ? part.contentType : "application/octet-stream",
-        ...(part.encoding === "gzip" && hasGzipMagic(bytes) ? { "Content-Encoding": "gzip" } : {}),
+        "Content-Type": part.contentType,
       },
     });
   }
