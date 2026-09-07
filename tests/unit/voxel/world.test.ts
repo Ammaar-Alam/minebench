@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import {
   VOXEL_WORLD_MIXED_LEAF_SIZE,
   VOXEL_WORLD_REGION_PAGE_REF_LIMIT,
@@ -14,6 +16,7 @@ import {
 
 const SHA = "a".repeat(64);
 const OTHER_SHA = "b".repeat(64);
+const ENCODER = new TextEncoder();
 
 function assertBad(
   result: VoxelWorldManifestParseResult | VoxelWorldRegionPageParseResult,
@@ -61,6 +64,18 @@ function storedPart(key: string) {
     byteSize: 128,
     sha256: SHA,
   };
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function gzipJson(value: unknown): Uint8Array {
+  return new Uint8Array(gzipSync(ENCODER.encode(JSON.stringify(value))));
+}
+
+function responseBytes(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
 const inlineManifest = {
@@ -322,4 +337,94 @@ const inlineManifest = {
   );
 }
 
-console.log("voxel world manifest checks passed");
+async function checkWorldDeliveryFetchCounts() {
+  (globalThis as unknown as { prisma?: unknown }).prisma ??= {};
+  const { customBuildWorldViewerResponse } = await import("../../../lib/custom-builds/worldDelivery");
+
+  const manifestBytes = gzipJson(inlineManifest);
+  const partBytes = Uint8Array.of(0x1f, 0x8b, 0x08, 0x00);
+  const manifestArtifact = {
+    bucket: "unit",
+    path: "manifest",
+    contentType: "application/gzip",
+    encoding: "gzip",
+    sha256: sha256(manifestBytes),
+    sourceBuildSha256: SHA,
+  };
+  const partArtifact = {
+    bucket: "unit",
+    path: "mixed",
+    contentType: "application/gzip",
+    encoding: "gzip",
+    sha256: sha256(partBytes),
+    sourceBuildSha256: OTHER_SHA,
+  };
+  const previousFetch = globalThis.fetch;
+  const previousEnv = {
+    SUPABASE_URL: process.env.SUPABASE_URL,
+    SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY,
+  };
+  process.env.SUPABASE_URL = "http://127.0.0.1:43219";
+  process.env.SUPABASE_SECRET_KEY = "world-delivery-test-secret";
+  const requestedPaths: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer world-delivery-test-secret");
+    const url = new URL(String(input));
+    const path = decodeURIComponent(url.pathname.replace("/storage/v1/object/unit/", ""));
+    requestedPaths.push(path);
+    if (path === "manifest") return new Response(responseBytes(manifestBytes));
+    if (path === "mixed") return new Response(responseBytes(partBytes));
+    return new Response("missing", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    const partKey = "mixed-0-data";
+    let requestedSource: string | null = null;
+    const response = await customBuildWorldViewerResponse({
+      request: new Request(`http://localhost:3000/api/generations/cb/artifacts/viewer?part=${partKey}`),
+      artifact: manifestArtifact,
+      buildId: "cb",
+      findPart: async (sourceBuildSha256, requestedKey) => {
+        requestedSource = sourceBuildSha256;
+        assert.equal(requestedKey, partKey);
+        return partArtifact;
+      },
+      cacheControl: "private, no-store",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(requestedSource, SHA);
+    assert.deepEqual(requestedPaths, ["mixed"]);
+
+    requestedPaths.length = 0;
+    requestedSource = null;
+    const fallbackResponse = await customBuildWorldViewerResponse({
+      request: new Request(`http://localhost:3000/api/generations/cb/artifacts/viewer?part=${partKey}`),
+      artifact: { ...manifestArtifact, sourceBuildSha256: null },
+      buildId: "cb",
+      findPart: async (sourceBuildSha256, requestedKey) => {
+        requestedSource = sourceBuildSha256;
+        assert.equal(requestedKey, partKey);
+        return partArtifact;
+      },
+      cacheControl: "private, no-store",
+    });
+    assert.equal(fallbackResponse.status, 200);
+    assert.equal(requestedSource, inlineManifest.source.sha256);
+    assert.deepEqual(requestedPaths, ["manifest", "mixed"]);
+  } finally {
+    globalThis.fetch = previousFetch;
+    for (const [key, value] of Object.entries(previousEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+checkWorldDeliveryFetchCounts()
+  .then(() => {
+    console.log("voxel world manifest checks passed");
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

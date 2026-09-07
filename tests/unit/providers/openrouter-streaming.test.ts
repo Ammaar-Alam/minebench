@@ -8,7 +8,7 @@ async function main() {
 
   // 1. Verify stream: true is sent and SSE stream is accumulated without onDelta
   {
-    let capturedBody: Record<string, unknown> | null = null;
+    let capturedBody: Record<string, unknown> = {};
 
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;

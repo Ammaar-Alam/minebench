@@ -60,19 +60,26 @@ export async function customBuildWorldViewerResponse(args: {
   const parsedPartKey = assertPartKey(new URL(args.request.url).searchParams.get("part"));
   if (parsedPartKey === "") return new Response("Artifact not found", { status: 404 });
 
-  const manifestResult = parseVoxelWorldManifest(
-    await readJsonArtifact(args.artifact),
-    { allowStoredRefs: true },
-  );
-  if (!manifestResult.ok) throw new Error(manifestResult.error);
-  const manifest = manifestResult.value;
-  const sourceSha = args.artifact.sourceBuildSha256 ?? manifest.source.sha256;
+  const readManifest = async () => {
+    const manifestResult = parseVoxelWorldManifest(
+      await readJsonArtifact(args.artifact),
+      { allowStoredRefs: true },
+    );
+    if (!manifestResult.ok) throw new Error(manifestResult.error);
+    return manifestResult.value;
+  };
 
   if (parsedPartKey) {
+    const manifest = isVoxelWorldRegionPageKey(parsedPartKey) || !args.artifact.sourceBuildSha256
+      ? await readManifest()
+      : null;
+    const sourceSha = args.artifact.sourceBuildSha256 ?? manifest?.source.sha256;
+    if (!sourceSha) throw new Error("Voxel world source checksum is missing");
     const part = await args.findPart(sourceSha, parsedPartKey);
     if (!part) return new Response("Artifact not found", { status: 404 });
     const bytes = await downloadCustomBuildArtifactBytes(part);
     if (isVoxelWorldRegionPageKey(parsedPartKey)) {
+      if (!manifest) throw new Error("Voxel world manifest is missing");
       const pageRef = manifest.regionPages?.find((page) => page.data.key === parsedPartKey);
       const pageResult = parseVoxelWorldRegionPage(
         JSON.parse(decodeAndVerifyCustomBuildArtifactText({
@@ -103,6 +110,7 @@ export async function customBuildWorldViewerResponse(args: {
     });
   }
 
+  const manifest = await readManifest();
   return Response.json({
     buildId: args.buildId,
     variant: "full",
