@@ -202,7 +202,7 @@ async function main() {
   const { customBuildWorldViewerResponse } = await import("../../../lib/custom-builds/worldDelivery");
   const { voxelWorldPartSourceSha256 } = await import("../../../lib/custom-builds/worldArtifacts");
   const { safeCustomBuildRetryReason } = await import("../../../lib/custom-builds/sanitize");
-  const { decodeAndVerifyCustomBuildArtifactText, jsonBytes, sha256Hex } = await import("../../../lib/custom-builds/artifacts");
+  const { decodeAndVerifyCustomBuildArtifactText, gzipBytes, jsonBytes, sha256Hex, uploadAndRecordCustomBuildArtifact } = await import("../../../lib/custom-builds/artifacts");
   const { downloadCustomBuildArtifactBytes } = await import("../../../lib/custom-builds/storage");
   const { CustomBuildLeaseLostError } = await import("../../../lib/custom-builds/lease");
 
@@ -502,11 +502,17 @@ async function main() {
   assert.equal(partBytes[0], 0x1f, "world parts should remain gzip encoded for client-side inflation");
   assert.equal(partBytes[1], 0x8b);
 
-  const recoveryArtifact = artifactCreates.find((artifact) => artifact.kind === "build_json");
-  assert.ok(recoveryArtifact);
-  const recoveryBytes = await downloadCustomBuildArtifactBytes(recoveryArtifact as never);
-  const recoveryText = decodeAndVerifyCustomBuildArtifactText({ bytes: recoveryBytes, encoding: "gzip" });
+  const originalRecoveryArtifact = artifactCreates.find((artifact) => artifact.kind === "build_json");
+  assert.ok(originalRecoveryArtifact);
+  const originalRecoveryBytes = await downloadCustomBuildArtifactBytes(originalRecoveryArtifact as never);
+  const recoveryText = `\n${decodeAndVerifyCustomBuildArtifactText({ bytes: originalRecoveryBytes, encoding: "gzip" })}`;
   const recoverySourceBytes = new TextEncoder().encode(recoveryText);
+  const recoveryBytes = gzipBytes(recoverySourceBytes);
+  const recoveryArtifact = await uploadAndRecordCustomBuildArtifact({
+    customBuildId, publicId, kind: "build_json", bytes: recoveryBytes,
+    sourceBuildSha256: sha256Hex(recoverySourceBytes), uncompressedByteSize: recoverySourceBytes.length,
+    blockCount: 128, encoding: "gzip",
+  });
   const originalFetch = globalThis.fetch;
   const originalParse = JSON.parse;
   const recoveryEnv = { SUPABASE_URL: process.env.SUPABASE_URL, SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY };
@@ -585,6 +591,11 @@ async function main() {
         assert.equal(completed.data.blockCount, 128);
         assert.equal(completed.data.generationTimeMs, 1234);
         assert.equal(completed.data.buildSha256, recoveryArtifact.sourceBuildSha256, "recovery should retain the stored source instead of regenerating");
+        assert.equal(completed.data.buildByteSize, artifact.byteSize);
+        assert.equal(completed.data.buildCompressedByteSize, artifact.storedByteSize);
+        assert.equal(artifactCreates.filter(entry => entry.kind === "build_json").length, 1, "recovery should not rewrite canonical source");
+        assert.equal(artifactCreates.find(entry => entry.kind === "build_json"), artifact);
+        assert.ok(updates.some(update => update.data.currentStage === "finalizing"));
       }
       assert.equal(fetches, mode === "local" ? 0 : 1);
     }

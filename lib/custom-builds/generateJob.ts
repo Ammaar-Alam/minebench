@@ -63,6 +63,7 @@ type GeneratedBuildResult = {
   generationTimeMs: number | null;
   completedAt?: Date;
   sourceArtifactSha256?: string;
+  canonicalArtifact?: { sourceSha256: string; byteSize: number | bigint; storedByteSize: number | bigint };
 };
 
 export type ImportedCustomBuildResult = Required<Pick<
@@ -548,6 +549,8 @@ async function recoverStoredBuild(
       sha256: true,
       sourceBuildSha256: true,
       blockCount: true,
+      byteSize: true,
+      storedByteSize: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -583,6 +586,11 @@ async function recoverStoredBuild(
       ])),
       blockCount: validated.blockCount,
       generationTimeMs: customBuild.generationTimeMs,
+      canonicalArtifact: {
+        sourceSha256: artifact.sourceBuildSha256,
+        byteSize: artifact.byteSize,
+        storedByteSize: artifact.storedByteSize,
+      },
     };
   } catch (error) {
     throwIfCustomBuildLeaseLost(opts.signal);
@@ -633,7 +641,14 @@ export async function runCustomBuildGenerateJob(
     }
     const recovered = opts.importedBuild ? null : await recoverStoredBuild(customBuild, opts);
     const generated = opts.importedBuild ?? recovered ?? await generateBuild(customBuild, job, opts);
-    if (recovered) emitCustomBuildEvent(customBuild.id, "recovered", { stage: "finalizing" });
+    if (recovered) {
+      const finalizing = await prisma.customBuild.updateMany({
+        where: { id: customBuild.id, removedAt: null, status: "running" },
+        data: { currentStage: "finalizing" },
+      });
+      if (finalizing.count !== 1) throw new CustomBuildLeaseLostError();
+      emitCustomBuildEvent(customBuild.id, "recovered", { stage: "finalizing" });
+    }
     throwIfCustomBuildLeaseLost(opts.signal);
     await opts.beforeSynchronousArtifactPackaging?.();
     throwIfCustomBuildLeaseLost(opts.signal);
@@ -648,29 +663,33 @@ export async function runCustomBuildGenerateJob(
             (a, b) => a.x - b.x || a.y - b.y || a.z - b.z || a.type.localeCompare(b.type),
           ),
         };
-    const canonicalArtifact = useWorldArtifacts
-      ? await writeVoxelBuildSourceArtifact(canonicalBuild)
-      : await writeCanonicalBuildArtifact(canonicalBuild);
-    const buildByteSize = canonicalArtifact.byteSize;
-    const buildCompressedByteSize = canonicalArtifact.storedByteSize;
-    const fullSha = canonicalArtifact.sourceSha256;
-    try {
-      throwIfCustomBuildLeaseLost(opts.signal);
-      await persistCustomBuildArtifact({
-        customBuildId: customBuild.id,
-        publicId: customBuild.publicId,
-        kind: "build_json",
-        filePath: canonicalArtifact.filePath,
-        storedByteSize: canonicalArtifact.storedByteSize,
-        uncompressedByteSize: canonicalArtifact.byteSize,
-        sha256: canonicalArtifact.sha256,
-        sourceBuildSha256: fullSha,
-        blockCount: generated.blockCount,
-        encoding: "gzip",
-      });
-    } finally {
-      await canonicalArtifact.cleanup();
+    let sourceArtifact = recovered?.canonicalArtifact;
+    if (!sourceArtifact) {
+      const canonicalArtifact = useWorldArtifacts
+        ? await writeVoxelBuildSourceArtifact(canonicalBuild)
+        : await writeCanonicalBuildArtifact(canonicalBuild);
+      try {
+        throwIfCustomBuildLeaseLost(opts.signal);
+        await persistCustomBuildArtifact({
+          customBuildId: customBuild.id,
+          publicId: customBuild.publicId,
+          kind: "build_json",
+          filePath: canonicalArtifact.filePath,
+          storedByteSize: canonicalArtifact.storedByteSize,
+          uncompressedByteSize: canonicalArtifact.byteSize,
+          sha256: canonicalArtifact.sha256,
+          sourceBuildSha256: canonicalArtifact.sourceSha256,
+          blockCount: generated.blockCount,
+          encoding: "gzip",
+        });
+        sourceArtifact = canonicalArtifact;
+      } finally {
+        await canonicalArtifact.cleanup();
+      }
     }
+    const buildByteSize = sourceArtifact.byteSize;
+    const buildCompressedByteSize = sourceArtifact.storedByteSize;
+    const fullSha = sourceArtifact.sourceSha256;
     artifactsPersisted = true;
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
 
