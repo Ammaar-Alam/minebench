@@ -266,20 +266,31 @@ export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload)
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(args.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      apikey: config.serviceRoleKey,
-      "x-upsert": "true",
-      "Content-Type": args.contentType,
-      ...(args.encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}),
-    },
-    body: args.bytes as unknown as BodyInit,
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Custom build artifact upload failed (${resp.status}): ${text || "empty response"}`);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          apikey: config.serviceRoleKey,
+          "x-upsert": "true",
+          "Content-Type": args.contentType,
+          ...(args.encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}),
+        },
+        body: args.bytes as unknown as BodyInit,
+      });
+      if (resp.ok) {
+        await resp.body?.cancel().catch(() => undefined);
+        return;
+      }
+      const text = await resp.text().catch(() => "");
+      if (attempt >= 2 || !(resp.status === 408 || resp.status === 429 || resp.status >= 500)) {
+        throw new Error(`Custom build artifact upload failed (${resp.status}): ${text || "empty response"}`);
+      }
+    } catch (error) {
+      if (attempt >= 2 || !(error instanceof TypeError)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
   }
 }
 

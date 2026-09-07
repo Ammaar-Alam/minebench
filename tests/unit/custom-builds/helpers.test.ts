@@ -237,6 +237,38 @@ async function main() {
       bytes: new Uint8Array([1, 2, 3]),
       contentType: "application/gzip",
     });
+    for (const failure of [504, 429, new TypeError("fetch failed"), 403, new DOMException("Aborted", "AbortError")]) {
+      const requests: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+      globalThis.fetch = (async (input, init) => {
+        requests.push({ input, init });
+        if (requests.length > 1) return new Response("{}", { status: 200 });
+        if (failure instanceof Error) throw failure;
+        return new Response("storage unavailable", { status: failure });
+      }) as typeof fetch;
+      const bytes = new Uint8Array([1, 2, 3]);
+      const upload = uploadCustomBuildArtifact({
+        bucket: "builds", path: "world-part.gz", bytes, contentType: "application/gzip",
+      });
+      if (failure === 403 || failure instanceof DOMException) {
+        await assert.rejects(upload, failure === 403 ? /403/ : /Aborted/);
+        assert.equal(requests.length, 1, "permanent failures and cancellation should not retry");
+      } else {
+        await upload;
+        assert.equal(requests.length, 2, "transient storage failures should retry the same upload");
+        assert.equal(requests[1]!.input, requests[0]!.input);
+        assert.equal(requests[1]!.init?.body, bytes);
+        assert.equal(new Headers(requests[1]!.init?.headers).get("x-upsert"), "true");
+      }
+    }
+    let attempts = 0;
+    globalThis.fetch = (async () => {
+      attempts += 1;
+      return new Response("still unavailable", { status: 504 });
+    }) as typeof fetch;
+    await assert.rejects(uploadCustomBuildArtifact({
+      bucket: "builds", path: "world-part.gz", bytes: new Uint8Array([1]), contentType: "application/gzip",
+    }), /Custom build artifact upload failed \(504\): still unavailable/);
+    assert.equal(attempts, 3, "storage retries should stop after three attempts");
   } finally {
     globalThis.fetch = originalFetch;
     if (originalSupabaseUrl === undefined) {
