@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import * as THREE from "three";
@@ -182,7 +183,7 @@ async function reusableHelper() {
 
 async function main() {
   const originalTemp = process.env.TMPDIR;
-  const tempRoot = await mkdtemp("/private/tmp/minebench-world-mesh-test-");
+  const tempRoot = await mkdtemp(join(tmpdir(), "minebench-world-mesh-test-"));
   process.env.TMPDIR = tempRoot;
   try {
     await nativePersistence(tempRoot);
