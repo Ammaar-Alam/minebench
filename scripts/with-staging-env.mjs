@@ -56,6 +56,10 @@ const stagingEnv = {
   STEALTH_ARENA_SHARE: staging.STAGING_STEALTH_ARENA_SHARE?.trim() || "0",
   SUPABASE_STORAGE_BUCKET: staging.STAGING_SUPABASE_STORAGE_BUCKET?.trim() || sourceBucket,
   MINEBENCH_SITE_URL: required("STAGING_SITE_URL"),
+  APNS_ENABLED: staging.STAGING_APNS_ENABLED?.trim() || "false",
+  APNS_KEY_ID: staging.STAGING_APNS_KEY_ID?.trim() || "",
+  APNS_TEAM_ID: staging.STAGING_APNS_TEAM_ID?.trim() || "",
+  APNS_PRIVATE_KEY: staging.STAGING_APNS_PRIVATE_KEY || "",
   // the alpha deployment may carry its own branch-scoped ADMIN_TOKEN; without
   // this the child inherits production's and every admin call 401s
   ...(staging.STAGING_ADMIN_TOKEN?.trim()

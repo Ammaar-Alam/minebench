@@ -15,6 +15,9 @@ const privateTables = [
   "GalleryModerationRecord",
   "GalleryVoteBlock",
   "PublicSessionActivity",
+  "NotificationPreference",
+  "PushDevice",
+  "PushDelivery",
 ];
 
 async function main() {

@@ -1,6 +1,7 @@
 import type { CustomBuildJob, Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
+import { enqueueGenerationNotification } from "@/lib/notifications/service";
 
 type PrismaTx = Prisma.TransactionClient;
 
@@ -123,7 +124,7 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
     RETURNING j.id, j."customBuildId", j.type::text;
   `;
   for (const row of expiredQueuedRows) {
-    await client.customBuild.updateMany({
+    const failed = await client.customBuild.updateMany({
       where: {
         id: row.customBuildId,
         status: { in: ["queued", "running"] },
@@ -140,6 +141,7 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         deletionError: null,
       },
     });
+    if (failed.count === 1) await enqueueGenerationNotification(client, row.customBuildId);
     await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
   }
 
@@ -173,7 +175,7 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
   `;
   for (const row of failedRows) {
     if (row.type !== "generate") continue;
-    await client.customBuild.updateMany({
+    const failed = await client.customBuild.updateMany({
       where: {
         id: row.customBuildId,
         status: { in: ["queued", "running"] },
@@ -190,6 +192,7 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         deletionError: null,
       },
     });
+    if (failed.count === 1) await enqueueGenerationNotification(client, row.customBuildId);
     await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
   }
   return { requeued: requeuedRows.length, failed: expiredQueuedRows.length + failedRows.length };
@@ -273,7 +276,7 @@ export async function failCustomBuildJob(
       },
     });
     if (failed.count !== 1 || job.type !== "generate") return;
-    await tx.customBuild.updateMany({
+    const buildFailed = await tx.customBuild.updateMany({
       where: {
         id: job.customBuildId,
         status: { in: ["queued", "running"] },
@@ -290,6 +293,7 @@ export async function failCustomBuildJob(
         deletionError: null,
       },
     });
+    if (buildFailed.count === 1) await enqueueGenerationNotification(tx, job.customBuildId);
     await tx.customBuildSecret.deleteMany({ where: { customBuildId: job.customBuildId } });
   };
   const maybeTransactional = client as PrismaClient;

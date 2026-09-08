@@ -18,6 +18,7 @@ import {
   resolveGalleryModelLabel,
 } from "@/lib/gallery/policy";
 import { prisma } from "@/lib/prisma";
+import { enqueueGalleryContribution, enqueueGalleryUpvotes } from "@/lib/notifications/service";
 import {
   PUBLIC_SESSION_ONLINE_MS,
   PUBLIC_SESSION_RETENTION_MS,
@@ -657,7 +658,7 @@ export async function addGalleryExample(
   const [candidate, generation] = await Promise.all([
     prisma.galleryCandidate.findFirst({
       where: { publicId: candidatePublicId, ...publicCandidateWhere },
-      select: { id: true, promptText: true },
+      select: { id: true, promptText: true, uploaderId: true },
     }),
     loadEligibleGeneration(userId, input.generationId),
   ]);
@@ -703,6 +704,10 @@ export async function addGalleryExample(
       await tx.galleryCandidate.update({
         where: { id: candidate.id },
         data: { publishedAt: new Date() },
+      });
+      await enqueueGalleryContribution(tx, {
+        userId: candidate.uploaderId, contributorId: userId,
+        subjectId: candidatePublicId, exampleId: example.id,
       });
     }
     return { ...example, created };
@@ -782,7 +787,7 @@ export async function setGalleryVote(input: {
 }) {
   const candidate = await prisma.galleryCandidate.findFirst({
     where: { publicId: input.publicId, ...publicCandidateWhere },
-    select: { id: true, upvoteCount: true },
+    select: { id: true, upvoteCount: true, uploaderId: true },
   });
   if (!candidate) throw new GalleryServiceError("not_found", "Gallery prompt not found.");
   if (input.blocked) {
@@ -790,16 +795,20 @@ export async function setGalleryVote(input: {
   }
   return prisma.$transaction(async (tx) => {
     if (input.upvoted) {
-      const inserted = await tx.$queryRaw<Array<{ id: string }>>`
+      const inserted = await tx.$queryRaw<Array<{ id: string; createdAt: Date }>>`
         INSERT INTO "GalleryVote" (id, "candidateId", "sessionId", "userId", "createdAt")
         VALUES (${randomBytes(16).toString("hex")}, ${candidate.id}, ${input.sessionId}, ${input.userId}::uuid, now())
         ON CONFLICT DO NOTHING
-        RETURNING id
+        RETURNING id, "createdAt"
       `;
       if (inserted.length > 0) {
         await tx.galleryCandidate.update({
           where: { id: candidate.id },
           data: { upvoteCount: { increment: 1 } },
+        });
+        await enqueueGalleryUpvotes(tx, {
+          userId: candidate.uploaderId, voterId: input.userId, subjectId: input.publicId,
+          createdAt: inserted[0].createdAt,
         });
       }
     } else {

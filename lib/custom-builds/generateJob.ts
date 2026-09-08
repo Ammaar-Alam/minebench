@@ -1,4 +1,5 @@
 import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
+import { enqueueGenerationNotification } from "@/lib/notifications/service";
 import {
   deserializeSavedGenerationRequestConfig,
   requestOverrideSecretValues,
@@ -606,6 +607,7 @@ export async function runCustomBuildGenerateJob(
         update: { succeeded: { increment: 1 } },
       });
       await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+      if (!opts.importedBuild) await enqueueGenerationNotification(tx, customBuild.id);
     });
 
     throwIfCustomBuildLeaseLost(opts.signal);
@@ -667,6 +669,7 @@ export async function runCustomBuildGenerateJob(
           update: { failed: { increment: 1 } },
         });
         await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+        if (!opts.importedBuild) await enqueueGenerationNotification(tx, customBuild.id);
       });
       emitCustomBuildEvent(customBuild.id, "failed", { code: failure.code });
       throw new Error(failure.code);

@@ -51,6 +51,10 @@ always requires `--yes`. The storage sync is incremental (skip-if-exists;
 whenever a test needs current production shape — typically before validating a
 migration.
 
+Notification preferences, device registrations, and queued deliveries are excluded
+from database snapshots. Alpha push configuration is isolated through `STAGING_APNS_*`;
+see [iOS notifications](ios-notifications.md) before enabling delivery.
+
 ## Testing a change in alpha
 
 1. Merge the feature branch (or PR) into `alpha` and push; Vercel deploys it.

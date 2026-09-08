@@ -71,6 +71,9 @@ export async function deleteMineBenchAccount(
     `);
     if (!account) throw new AccountServiceError("not_found", "Account not found.");
 
+    await tx.pushDevice.deleteMany({ where: { userId } });
+    await tx.notificationPreference.deleteMany({ where: { userId } });
+
     const retainedBuilds = await tx.customBuild.findMany({
       where: {
         ownerId: userId,

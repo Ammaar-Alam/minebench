@@ -13,6 +13,7 @@ import {
 } from "@/lib/custom-builds/jobs";
 import { runCustomBuildExportJob } from "@/lib/custom-builds/exportJob";
 import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
+import { startPushNotificationDelivery } from "@/lib/notifications/delivery";
 import {
   CustomBuildLeaseLostError,
   isCustomBuildLeaseLostError,
@@ -406,6 +407,7 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   const queueHeartbeat = setInterval(() => {
     void checkAndReportQueueHealth();
   }, 30_000);
+  const stopNotifications = startPushNotificationDelivery();
   const stop = () => {
     if (shutdownRequested) return;
     shutdownRequested = true;
@@ -464,6 +466,7 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
   } finally {
     clearInterval(heartbeat);
     clearInterval(queueHeartbeat);
+    await stopNotifications();
     await prisma.$disconnect();
   }
 }

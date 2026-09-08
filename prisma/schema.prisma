@@ -92,9 +92,69 @@ model User {
   galleryVoteBlocks        GalleryVoteBlock[]        @relation("GalleryVoteBlockSubject")
   galleryVoteBlocksCreated GalleryVoteBlock[]        @relation("GalleryVoteBlockCreator")
   galleryVoteBlocksReversed GalleryVoteBlock[]       @relation("GalleryVoteBlockReverser")
+  notificationPreference   NotificationPreference?
+  pushDevices              PushDevice[]
+  pushDeliveries           PushDelivery[]
 
   @@index([gallerySuspendedById])
   @@index([deletedAt, authDeletedAt])
+}
+
+enum PushEnvironment {
+  development
+  production
+}
+
+enum NotificationKind {
+  generation_succeeded
+  generation_failed
+  gallery_upvotes
+  gallery_contribution
+}
+
+model NotificationPreference {
+  userId        String  @id @db.Uuid
+  generations   Boolean @default(true)
+  upvotes       Boolean @default(true)
+  contributions Boolean @default(true)
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PushDevice {
+  id          String          @id @default(cuid())
+  userId      String          @db.Uuid
+  token       String          @db.VarChar(512)
+  environment PushEnvironment
+  updatedAt   DateTime        @updatedAt
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries  PushDelivery[]
+
+  @@unique([token, environment])
+  @@index([userId])
+}
+
+model PushDelivery {
+  id             String           @id @default(cuid())
+  deviceId       String
+  userId         String           @db.Uuid
+  kind           NotificationKind
+  subjectId      String
+  eventKey       String
+  exampleId      String?
+  windowStart    DateTime?
+  runAfter       DateTime         @default(now())
+  leaseToken     String?
+  leaseExpiresAt DateTime?
+  attempts       Int              @default(0)
+  finishedAt     DateTime?
+  createdAt      DateTime         @default(now())
+  device         PushDevice       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, eventKey])
+  @@index([userId])
+  @@index([finishedAt, runAfter])
+  @@index([createdAt])
 }
 
 model Organization {
@@ -848,6 +908,7 @@ model GalleryVote {
   @@unique([candidateId, userId])
   @@index([sessionId])
   @@index([userId, createdAt])
+  @@index([candidateId, createdAt])
 }
 
 model GalleryModerationRecord {
