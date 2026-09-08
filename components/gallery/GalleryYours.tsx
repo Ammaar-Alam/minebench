@@ -362,22 +362,39 @@ export function SavedBuildDialog({
   );
 }
 
+function mergeGenerations(
+  current: SavedGenerationPayload[],
+  next: SavedGenerationPayload[],
+): SavedGenerationPayload[] {
+  const byId = new Map(current.map((item) => [item.id, item]));
+  for (const item of next) byId.set(item.id, item);
+  return [...byId.values()];
+}
+
 export function GalleryYours({
   initialItems,
   initialCursor,
   hasNickname,
   suspended,
+  targetGeneration,
+  targetGenerationId,
 }: {
   initialItems: SavedGenerationPayload[];
   initialCursor: string | null;
   hasNickname: boolean;
   suspended: boolean;
+  targetGeneration?: SavedGenerationPayload | null;
+  targetGenerationId?: string | null;
 }) {
-  const [items, setItems] = useState(initialItems);
+  const [items, setItems] = useState(() => mergeGenerations(
+    initialItems,
+    targetGeneration ? [targetGeneration] : [],
+  ));
   const [cursor, setCursor] = useState(initialCursor);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(targetGeneration?.viewerUrl ? targetGeneration.id : null);
+  const scrolledTargetRef = useRef<string | null>(null);
   const selected = items.find((item) => item.id === selectedId) ?? null;
 
   useEffect(() => {
@@ -386,12 +403,27 @@ export function GalleryYours({
       .then(async (response) => {
         if (!response.ok) return;
         const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
-        setItems(page.items);
+        setItems((current) => mergeGenerations(
+          page.items,
+          targetGenerationId && !page.items.some((item) => item.id === targetGenerationId)
+            ? current.filter((item) => item.id === targetGenerationId)
+            : [],
+        ));
         setCursor(page.nextCursor);
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, []);
+  }, [targetGenerationId]);
+
+  useEffect(() => {
+    if (!targetGenerationId || scrolledTargetRef.current === targetGenerationId) return;
+    if (!items.some((item) => item.id === targetGenerationId)) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(targetGenerationId)?.scrollIntoView({ block: "start" });
+      scrolledTargetRef.current = targetGenerationId;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [items, targetGenerationId]);
 
   useEffect(() => {
     if (!items.some((item) => item.status === "queued" || item.status === "running")) return;
@@ -415,7 +447,7 @@ export function GalleryYours({
       const response = await fetch(`/api/generations?cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
       if (!response.ok) throw new Error("Saved generations unavailable");
       const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
-      setItems((current) => [...current, ...page.items]);
+      setItems((current) => mergeGenerations(current, page.items));
       setCursor(page.nextCursor);
     } catch {
       setLoadError("Saved generations unavailable");
@@ -431,6 +463,11 @@ export function GalleryYours({
         <div className="flex gap-2"><Link href="/gallery" className="mb-btn h-11">Explore</Link><Link href="/sandbox?mode=live" className="mb-btn mb-btn-primary h-11">Generate</Link></div>
       </header>
       {suspended ? <div className="mt-6 rounded-md border border-danger/40 bg-danger/5 px-4 py-3"><p className="font-semibold text-fg">Gallery access suspended</p><p className="mt-1 text-sm text-muted">Your private builds remain available.</p></div> : null}
+      {targetGenerationId && !items.some((item) => item.id === targetGenerationId) ? (
+        <p role="status" className="mt-6 mb-feedback mb-feedback-error">
+          Saved build unavailable.
+        </p>
+      ) : null}
 
       <div className="mt-6 grid gap-4">
         {items.map((generation, index) => (

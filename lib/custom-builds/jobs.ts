@@ -1,8 +1,12 @@
-import type { CustomBuildJob, Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type CustomBuildJob, type PrismaClient } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
+import { enqueueGenerationNotification, lockNotificationAccounts } from "@/lib/notifications/service";
 
 type PrismaTx = Prisma.TransactionClient;
+type OwnerScopedRow = { ownerId: string | null };
+type TerminalBuildJobRow = { id: string; customBuildId: string; type: string };
+type TerminalBuildJobCandidate = TerminalBuildJobRow & OwnerScopedRow;
 
 function readIntEnv(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name];
@@ -99,31 +103,78 @@ export async function recoverStaleCustomBuildJobLeases(
 async function recoverStaleCustomBuildJobLeasesInTransaction(
   client: PrismaTx,
 ): Promise<{ requeued: number; failed: number }> {
-  await client.customBuildSecret.deleteMany({
-    where: {
-      expiresAt: { lte: new Date() },
-      customBuild: { status: "failed", errorRetryable: true },
-    },
-  });
-  const expiredQueuedRows = await client.$queryRaw<Array<{ id: string; customBuildId: string; type: string }>>`
-    UPDATE "CustomBuildJob" j
-    SET status = 'failed'::"CustomBuildJobStatus",
-        "lockedBy" = NULL,
-        "lockedAt" = NULL,
-        "leaseExpiresAt" = NULL,
-        "completedAt" = now(),
-        "lastErrorCode" = 'provider_key_expired',
-        "lastErrorMessage" = 'Provider key expired before the worker could start.',
-        "updatedAt" = now()
+  const recoveryCutoff = new Date();
+  const expiredSecretRows = await client.$queryRaw<Array<{ customBuildId: string } & OwnerScopedRow>>`
+    SELECT s."customBuildId", b."ownerId"
     FROM "CustomBuildSecret" s
-    WHERE j."customBuildId" = s."customBuildId"
-      AND j.status = 'queued'::"CustomBuildJobStatus"
-      AND j.type = 'generate'::"CustomBuildJobType"
-      AND s."expiresAt" <= now()
-    RETURNING j.id, j."customBuildId", j.type::text;
+    JOIN "CustomBuild" b ON b.id = s."customBuildId"
+    WHERE s."expiresAt" <= ${recoveryCutoff}::timestamp
+      AND b.status = 'failed'::"CustomBuildStatus"
+      AND b."errorRetryable" = true
   `;
+  const expiredQueuedCandidates = await client.$queryRaw<TerminalBuildJobCandidate[]>`
+    SELECT j.id, j."customBuildId", j.type::text, b."ownerId"
+    FROM "CustomBuildJob" j
+    JOIN "CustomBuildSecret" s ON s."customBuildId" = j."customBuildId"
+    JOIN "CustomBuild" b ON b.id = j."customBuildId"
+    WHERE j.status = 'queued'::"CustomBuildJobStatus"
+      AND j.type = 'generate'::"CustomBuildJobType"
+      AND s."expiresAt" <= ${recoveryCutoff}::timestamp
+  `;
+  const requeuedCandidates = await client.$queryRaw<Array<{ id: string } & OwnerScopedRow>>`
+    SELECT j.id, b."ownerId"
+    FROM "CustomBuildJob" j
+    JOIN "CustomBuild" b ON b.id = j."customBuildId"
+    WHERE j.status = 'running'::"CustomBuildJobStatus"
+      AND j."leaseExpiresAt" < now()
+      AND j.attempts < j."maxAttempts"
+  `;
+  const failedCandidates = await client.$queryRaw<TerminalBuildJobCandidate[]>`
+    SELECT j.id, j."customBuildId", j.type::text, b."ownerId"
+    FROM "CustomBuildJob" j
+    JOIN "CustomBuild" b ON b.id = j."customBuildId"
+    WHERE j.status = 'running'::"CustomBuildJobStatus"
+      AND j."leaseExpiresAt" < now()
+      AND j.attempts >= j."maxAttempts"
+  `;
+  await lockNotificationAccounts(client, [
+    ...expiredSecretRows.map((row) => row.ownerId),
+    ...expiredQueuedCandidates.map((row) => row.ownerId),
+    ...requeuedCandidates.map((row) => row.ownerId),
+    ...failedCandidates.map((row) => row.ownerId),
+  ]);
+  if (expiredSecretRows.length > 0) {
+    await client.customBuildSecret.deleteMany({
+      where: {
+        customBuildId: { in: expiredSecretRows.map((row) => row.customBuildId) },
+        expiresAt: { lte: recoveryCutoff },
+        customBuild: { status: "failed", errorRetryable: true },
+      },
+    });
+  }
+
+  const expiredQueuedRows = expiredQueuedCandidates.length > 0
+    ? await client.$queryRaw<TerminalBuildJobRow[]>`
+      UPDATE "CustomBuildJob" j
+      SET status = 'failed'::"CustomBuildJobStatus",
+          "lockedBy" = NULL,
+          "lockedAt" = NULL,
+          "leaseExpiresAt" = NULL,
+          "completedAt" = now(),
+          "lastErrorCode" = 'provider_key_expired',
+          "lastErrorMessage" = 'Provider key expired before the worker could start.',
+          "updatedAt" = now()
+      FROM "CustomBuildSecret" s
+      WHERE j.id IN (${Prisma.join(expiredQueuedCandidates.map((row) => row.id))})
+        AND j."customBuildId" = s."customBuildId"
+        AND j.status = 'queued'::"CustomBuildJobStatus"
+        AND j.type = 'generate'::"CustomBuildJobType"
+        AND s."expiresAt" <= ${recoveryCutoff}::timestamp
+      RETURNING j.id, j."customBuildId", j.type::text
+    `
+    : [];
   for (const row of expiredQueuedRows) {
-    await client.customBuild.updateMany({
+    const failed = await client.customBuild.updateMany({
       where: {
         id: row.customBuildId,
         status: { in: ["queued", "running"] },
@@ -140,40 +191,47 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         deletionError: null,
       },
     });
+    if (failed.count === 1) await enqueueGenerationNotification(client, row.customBuildId);
     await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
   }
 
-  const requeuedRows = await client.$queryRaw<Array<{ id: string }>>`
-    UPDATE "CustomBuildJob"
+  const requeuedRows = requeuedCandidates.length > 0
+    ? await client.$queryRaw<Array<{ id: string }>>`
+    UPDATE "CustomBuildJob" j
     SET status = 'queued'::"CustomBuildJobStatus",
         "lockedBy" = NULL,
         "lockedAt" = NULL,
         "leaseExpiresAt" = NULL,
         "runAfter" = now() + interval '15 seconds',
         "updatedAt" = now()
-    WHERE status = 'running'::"CustomBuildJobStatus"
-      AND "leaseExpiresAt" < now()
-      AND attempts < "maxAttempts"
-    RETURNING id;
-  `;
-  const failedRows = await client.$queryRaw<Array<{ id: string; customBuildId: string; type: string }>>`
-    UPDATE "CustomBuildJob"
-    SET status = 'failed'::"CustomBuildJobStatus",
-        "lockedBy" = NULL,
-        "lockedAt" = NULL,
-        "leaseExpiresAt" = NULL,
-        "completedAt" = now(),
-        "lastErrorCode" = COALESCE("lastErrorCode", 'lease_expired'),
-        "lastErrorMessage" = COALESCE("lastErrorMessage", 'Worker lease expired after maximum attempts.'),
-        "updatedAt" = now()
-    WHERE status = 'running'::"CustomBuildJobStatus"
-      AND "leaseExpiresAt" < now()
-      AND attempts >= "maxAttempts"
-    RETURNING id, "customBuildId", type::text;
-  `;
+    WHERE j.id IN (${Prisma.join(requeuedCandidates.map((row) => row.id))})
+      AND j.status = 'running'::"CustomBuildJobStatus"
+      AND j."leaseExpiresAt" < now()
+      AND j.attempts < j."maxAttempts"
+    RETURNING j.id;
+  `
+    : [];
+  const failedRows = failedCandidates.length > 0
+    ? await client.$queryRaw<TerminalBuildJobRow[]>`
+      UPDATE "CustomBuildJob" j
+      SET status = 'failed'::"CustomBuildJobStatus",
+          "lockedBy" = NULL,
+          "lockedAt" = NULL,
+          "leaseExpiresAt" = NULL,
+          "completedAt" = now(),
+          "lastErrorCode" = COALESCE("lastErrorCode", 'lease_expired'),
+          "lastErrorMessage" = COALESCE("lastErrorMessage", 'Worker lease expired after maximum attempts.'),
+          "updatedAt" = now()
+      WHERE j.id IN (${Prisma.join(failedCandidates.map((row) => row.id))})
+        AND j.status = 'running'::"CustomBuildJobStatus"
+        AND j."leaseExpiresAt" < now()
+        AND j.attempts >= j."maxAttempts"
+      RETURNING j.id, j."customBuildId", j.type::text
+    `
+    : [];
   for (const row of failedRows) {
     if (row.type !== "generate") continue;
-    await client.customBuild.updateMany({
+    const failed = await client.customBuild.updateMany({
       where: {
         id: row.customBuildId,
         status: { in: ["queued", "running"] },
@@ -190,6 +248,7 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         deletionError: null,
       },
     });
+    if (failed.count === 1) await enqueueGenerationNotification(client, row.customBuildId);
     await client.customBuildSecret.deleteMany({ where: { customBuildId: row.customBuildId } });
   }
   return { requeued: requeuedRows.length, failed: expiredQueuedRows.length + failedRows.length };
@@ -229,7 +288,13 @@ export async function failCustomBuildJob(
       status: "running",
       lockedBy: workerId,
     },
-    select: { attempts: true, maxAttempts: true, customBuildId: true, type: true },
+    select: {
+      attempts: true,
+      maxAttempts: true,
+      customBuildId: true,
+      type: true,
+      customBuild: { select: { ownerId: true } },
+    },
   });
   if (!job) return { requeued: false };
 
@@ -256,6 +321,7 @@ export async function failCustomBuildJob(
   const failedAt = new Date();
   const message = redactSensitiveText(error.message);
   const terminalize = async (tx: PrismaTx) => {
+    await lockNotificationAccounts(tx, [job.customBuild.ownerId]);
     const failed = await tx.customBuildJob.updateMany({
       where: {
         id: jobId,
@@ -273,7 +339,7 @@ export async function failCustomBuildJob(
       },
     });
     if (failed.count !== 1 || job.type !== "generate") return;
-    await tx.customBuild.updateMany({
+    const buildFailed = await tx.customBuild.updateMany({
       where: {
         id: job.customBuildId,
         status: { in: ["queued", "running"] },
@@ -290,6 +356,7 @@ export async function failCustomBuildJob(
         deletionError: null,
       },
     });
+    if (buildFailed.count === 1) await enqueueGenerationNotification(tx, job.customBuildId);
     await tx.customBuildSecret.deleteMany({ where: { customBuildId: job.customBuildId } });
   };
   const maybeTransactional = client as PrismaClient;

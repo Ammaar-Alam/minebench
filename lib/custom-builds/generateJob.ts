@@ -1,4 +1,5 @@
 import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
+import { enqueueGenerationNotification, lockNotificationAccounts } from "@/lib/notifications/service";
 import {
   deserializeSavedGenerationRequestConfig,
   requestOverrideSecretValues,
@@ -565,6 +566,7 @@ export async function runCustomBuildGenerateJob(
 
     throwIfCustomBuildLeaseLost(opts.signal);
     await prisma.$transaction(async (tx) => {
+      await lockNotificationAccounts(tx, [customBuild.ownerId]);
       const stored = await tx.customBuildArtifact.aggregate({
         where: { customBuildId: customBuild.id },
         _sum: { storedByteSize: true },
@@ -606,6 +608,7 @@ export async function runCustomBuildGenerateJob(
         update: { succeeded: { increment: 1 } },
       });
       await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+      if (!opts.importedBuild) await enqueueGenerationNotification(tx, customBuild.id);
     });
 
     throwIfCustomBuildLeaseLost(opts.signal);
@@ -643,6 +646,7 @@ export async function runCustomBuildGenerateJob(
     if (terminal) {
       const failure = safeGenerateFailure(effectiveError, message);
       await prisma.$transaction(async (tx) => {
+        await lockNotificationAccounts(tx, [customBuild.ownerId]);
         const failed = await tx.customBuild.updateMany({
           where: { id: customBuild.id, removedAt: null, status: "running" },
           data: {
@@ -667,6 +671,7 @@ export async function runCustomBuildGenerateJob(
           update: { failed: { increment: 1 } },
         });
         await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+        if (!opts.importedBuild) await enqueueGenerationNotification(tx, customBuild.id);
       });
       emitCustomBuildEvent(customBuild.id, "failed", { code: failure.code });
       throw new Error(failure.code);

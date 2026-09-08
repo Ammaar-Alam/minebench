@@ -47,7 +47,7 @@ async function main() {
         currentStage: status === "succeeded" ? "complete" : status,
         completedAt: status === "succeeded" ? now : null,
         removedAt: input.removedAt,
-        promptText: `Admin publish prompt ${label} ${suffix}`,
+        promptText: `Admin publish prompt ${label}`,
         promptSha256: "a".repeat(64),
         gridSize: 64,
         palette: "simple",
