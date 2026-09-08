@@ -8,7 +8,10 @@ export default function GalleryDetailLoading() {
         </div>
         <div className="mt-6 max-w-4xl sm:mt-8">
           <div className="h-4 w-32 rounded bg-border/30" />
-          <div className="mt-3 h-10 w-4/5 rounded bg-border/45 sm:h-12" />
+          <div className="mt-3 h-32 space-y-3">
+            <div className="h-10 w-4/5 rounded bg-border/45 sm:h-12" />
+            <div className="h-7 w-3/5 rounded bg-border/30" />
+          </div>
           <div className="mt-6 flex gap-2">
             <div className="h-11 w-16 rounded-md bg-border/30" />
             <div className="h-11 w-28 rounded-md bg-border/30" />

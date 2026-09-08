@@ -118,7 +118,7 @@ export function RequestOverridesEditor({
       <button
         type="button"
         aria-expanded={open}
-        className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="mb-disclosure-toggle"
         onClick={() => setOpen((value) => !value)}
       >
         <span className="flex min-w-0 items-baseline gap-2">

@@ -1097,10 +1097,10 @@ function GifFormatSelector({
     <div
       role="group"
       aria-label="Export layout"
-      className={`inline-flex shrink-0 items-center rounded-full text-muted ${
+      className={`mb-choice-group mb-choice-group-compact shrink-0 ${
         embedded
-          ? "p-0"
-          : "border border-border/70 bg-bg/45 p-0.5 shadow-[0_12px_30px_-24px_rgba(4,11,31,0.9)] backdrop-blur-sm"
+          ? "border-0 bg-transparent p-0"
+          : "backdrop-blur-sm"
       } ${
         compact ? "h-7" : "h-8"
       }`}
@@ -1117,12 +1117,8 @@ function GifFormatSelector({
             aria-pressed={active}
             title={label}
             onClick={() => onChange(value)}
-            className={`grid place-items-center rounded-full transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/55 motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-45 ${
+            className={`mb-choice-option mb-choice-option-compact grid place-items-center ${
               compact ? "h-7 w-7" : "h-8 w-8"
-            } ${
-              active
-                ? "bg-accent/15 text-accent ring-1 ring-accent/40 shadow-[0_8px_20px_-16px_hsl(var(--accent)_/_0.7)]"
-                : "text-muted/75 hover:bg-fg/7 hover:text-fg"
             }`}
           >
             <FormatIcon format={value} />
@@ -1350,9 +1346,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
       title={iconOnly && !embedded ? undefined : buttonTitle}
       onClick={() => void handleExport()}
       disabled={isUnavailable}
-      className={`inline-flex select-none items-center justify-center font-semibold text-fg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 motion-reduce:transition-none ${
-        embedded ? "mb-btn mb-btn-ghost rounded-md border border-border/70 bg-bg/55" : "rounded-full"
-      } ${
+      className={`mb-btn mb-btn-ghost rounded-md bg-bg/55 ${
         iconOnly
           ? "h-7 w-7 p-0 text-muted hover:bg-fg/7 hover:text-fg"
           : "h-8 gap-1.5 px-3 text-xs tracking-[0.01em] hover:bg-fg/7 sm:px-3.5 sm:text-sm"
@@ -1381,7 +1375,7 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
 
   if (!iconOnly) {
     return (
-      <div className="inline-flex h-9 items-center rounded-full border border-border/70 bg-bg/55 p-0.5 shadow-[0_18px_44px_-28px_rgba(4,11,31,0.95)] backdrop-blur-sm">
+      <div className="inline-flex h-9 items-center gap-1 rounded-md border border-border/70 bg-bg/55 p-0.5 backdrop-blur-sm">
         {formatSelector}
         {formatSelector ? <span className="mx-1 h-4 w-px bg-border/45" aria-hidden="true" /> : null}
         {button}
@@ -1390,12 +1384,12 @@ export function SandboxGifExportButton({ targets, promptText, label, iconOnly, e
   }
 
   return (
-    <div className="group/gif-export relative inline-flex h-8 items-center rounded-full border border-border/70 bg-bg/55 p-0.5 shadow-[0_18px_44px_-28px_rgba(4,11,31,0.95)] backdrop-blur-sm">
+    <div className="group/gif-export relative inline-flex h-8 items-center gap-1 rounded-md border border-border/70 bg-bg/55 p-0.5 backdrop-blur-sm">
       <div
         id={tooltipId}
         role="status"
         aria-live={busy ? "polite" : undefined}
-        className={`pointer-events-none absolute right-[calc(100%+0.55rem)] top-1/2 z-[40] w-max max-w-[min(16rem,calc(100vw-8rem))] -translate-y-1/2 rounded-full border border-border/80 bg-[linear-gradient(180deg,rgba(8,13,30,0.98),rgba(5,9,22,0.96))] px-3 py-1.5 text-right text-[11px] text-fg shadow-[0_18px_44px_-24px_rgba(4,11,31,0.9)] backdrop-blur-md transition duration-150 motion-reduce:transition-none ${shouldKeepTooltipVisible ? "translate-x-0 opacity-100" : "translate-x-1 opacity-0 group-hover/gif-export:translate-x-0 group-hover/gif-export:opacity-100 group-focus-within/gif-export:translate-x-0 group-focus-within/gif-export:opacity-100"}`}
+        className={`pointer-events-none absolute right-[calc(100%+0.55rem)] top-1/2 z-[40] w-max max-w-[min(16rem,calc(100vw-8rem))] -translate-y-1/2 rounded-md border border-border/80 bg-bg px-3 py-1.5 text-right text-[11px] text-fg backdrop-blur-md transition duration-150 motion-reduce:transition-none ${shouldKeepTooltipVisible ? "translate-x-0 opacity-100" : "translate-x-1 opacity-0 group-hover/gif-export:translate-x-0 group-hover/gif-export:opacity-100 group-focus-within/gif-export:translate-x-0 group-focus-within/gif-export:opacity-100"}`}
       >
         <span className="block truncate">{buttonTitle}</span>
       </div>

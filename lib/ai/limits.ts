@@ -2,7 +2,8 @@
 // Use the full grid volume as the ceiling for final builds: after validation and
 // dedupe, there can be at most one block per occupied cell.
 
-export type GridSize = 64 | 256 | 512;
+export const GRID_SIZES = [64, 256, 512] as const;
+export type GridSize = (typeof GRID_SIZES)[number];
 
 export const MAX_BLOCKS_BY_GRID: Record<GridSize, number> = {
   64: 64 ** 3,

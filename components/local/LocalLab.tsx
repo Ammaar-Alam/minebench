@@ -3,7 +3,7 @@
 import { ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { SandboxGifExportButton, type SandboxGifExportTarget } from "@/components/sandbox/SandboxGifExportButton";
 import { buildSystemPrompt, buildUserPrompt, buildWebPrompt } from "@/lib/ai/prompts";
-import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, GRID_SIZES, type GridSize } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
@@ -13,7 +13,6 @@ import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 
 type Palette = "simple" | "advanced";
-type GridSize = 64 | 256 | 512;
 
 type LocalParseWorkerRequest =
   | {
@@ -173,31 +172,14 @@ function SegmentedControl({
   options: Array<{ value: string; label: ReactNode }>;
   className?: string;
 }) {
-  const safeCount = Math.max(1, options.length);
-  const activeIndex = Math.max(
-    0,
-    options.findIndex((option) => option.value === value),
-  );
-  const segmentWidth = `${100 / safeCount}%`;
-  const segmentTranslate = `${activeIndex * 100}%`;
-
   return (
     <div
+      data-stretch="true"
       className={cx(
-        "relative flex rounded-md bg-bg/60 p-1 ring-1 ring-border",
+        "mb-choice-group w-full",
         className,
       )}
     >
-      <div className="pointer-events-none absolute inset-1 rounded-lg">
-        <span
-          aria-hidden="true"
-          className="absolute inset-y-0 left-0 rounded-lg bg-accent/15 ring-1 ring-accent/40 transition-transform duration-200 ease-out"
-          style={{
-            width: segmentWidth,
-            transform: `translateX(${segmentTranslate})`,
-          }}
-        />
-      </div>
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -205,10 +187,7 @@ function SegmentedControl({
             key={option.value}
             type="button"
             aria-pressed={active}
-            className={cx(
-              "relative z-10 flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg px-3 text-sm font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-10",
-              active ? "text-fg" : "text-muted hover:text-fg",
-            )}
+            className="mb-choice-option mb-choice-option-stretch"
             onClick={() => onChange(option.value)}
           >
             {option.label}
@@ -576,35 +555,15 @@ export function LocalLab() {
               <SegmentedControl
                 value={String(gridSize)}
                 onChange={(value) => setGridSize(Number(value) as GridSize)}
-                options={[
-                  {
-                    value: "64",
-                    label: (
-                      <span className="inline-flex items-start">
-                        <span>64</span>
-                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                      </span>
-                    ),
-                  },
-                  {
-                    value: "256",
-                    label: (
-                      <span className="inline-flex items-start">
-                        <span>256</span>
-                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                      </span>
-                    ),
-                  },
-                  {
-                    value: "512",
-                    label: (
-                      <span className="inline-flex items-start">
-                        <span>512</span>
-                        <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                      </span>
-                    ),
-                  },
-                ]}
+                options={GRID_SIZES.map((size) => ({
+                  value: String(size),
+                  label: (
+                    <span className="inline-flex items-start">
+                      <span>{size}</span>
+                      <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                    </span>
+                  ),
+                }))}
               />
             </SegmentedField>
             <SegmentedField

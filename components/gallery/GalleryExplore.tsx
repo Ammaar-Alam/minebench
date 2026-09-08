@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useDeferredValue, useId, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useDeferredValue, useId, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
@@ -140,7 +140,7 @@ function SubmissionDialog({
   );
 }
 
-function GalleryCard({
+const GalleryCard = memo(function GalleryCard({
   candidate,
   delayed,
   sort,
@@ -236,7 +236,7 @@ function GalleryCard({
       </article>
     </div>
   );
-}
+});
 
 export function GalleryExplore({
   initialItems,
@@ -522,8 +522,9 @@ export function GalleryExplore({
 
       {cursor && !loading && !searchPending ? (
         <div className="mt-12 flex justify-center">
-          <button type="button" className="mb-btn h-11 min-w-36" disabled={loadingMore} onClick={() => void loadMore()}>
-            {loadingMore ? "Loading…" : "More"}
+          <button type="button" className="mb-collapse-toggle" disabled={loadingMore} aria-busy={loadingMore} onClick={() => void loadMore()}>
+            <span>{loadingMore ? "Loading…" : "More"}</span>
+            <svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
           </button>
         </div>
       ) : null}
