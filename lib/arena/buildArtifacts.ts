@@ -101,7 +101,6 @@ export type PreparedArenaBuild = {
 
 type CachedArtifact = {
   prepared: PreparedArenaBuild;
-  jsonResponses: Partial<Record<ArenaBuildVariant, Uint8Array>>;
   byteWeight: number;
   touchedAt: number;
 };
@@ -539,43 +538,9 @@ export function getCachedPreparedArenaBuild(
 function setCachedPrepared(cacheKey: string, prepared: PreparedArenaBuild): void {
   artifactCache.set(cacheKey, {
     prepared,
-    jsonResponses: {},
     byteWeight: estimateCacheWeight(prepared),
     touchedAt: Date.now(),
   });
-  pruneCache();
-}
-
-export function getCachedPreparedArenaBuildResponse(
-  buildId: string,
-  checksum: string | null | undefined,
-  variant: ArenaBuildVariant,
-): Uint8Array | null {
-  const normalizedChecksum = checksum?.trim();
-  if (!normalizedChecksum) return null;
-  const cached = artifactCache.get(buildCacheKeyFromParts(buildId, normalizedChecksum));
-  if (!cached) return null;
-  cached.touchedAt = Date.now();
-  return cached.jsonResponses[variant] ?? null;
-}
-
-export function rememberCachedPreparedArenaBuildResponse(
-  prepared: PreparedArenaBuild,
-  variant: ArenaBuildVariant,
-  bytes: Uint8Array,
-): void {
-  const normalizedChecksum = prepared.checksum?.trim();
-  if (!normalizedChecksum) return;
-  const cacheKey = buildCacheKeyFromParts(prepared.buildId, normalizedChecksum);
-  const cached = artifactCache.get(cacheKey);
-  if (!cached) return;
-  const previousBytes = cached.jsonResponses[variant];
-  if (previousBytes) {
-    cached.byteWeight -= previousBytes.byteLength;
-  }
-  cached.jsonResponses[variant] = bytes;
-  cached.byteWeight += bytes.byteLength;
-  cached.touchedAt = Date.now();
   pruneCache();
 }
 
