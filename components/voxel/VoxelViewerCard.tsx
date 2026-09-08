@@ -352,32 +352,25 @@ export function VoxelViewerCard({
 
             <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
               {showViewToggle ? (
-                <div className="relative flex w-[182px] rounded-full bg-bg/55 p-1 ring-1 ring-border/80 sm:w-[210px]">
-                  <div className="pointer-events-none absolute inset-1 rounded-full">
-                    <span
-                      aria-hidden="true"
-                      className="absolute inset-y-0 left-0 rounded-full border border-accent/55 bg-accent/24 shadow-[0_8px_20px_-14px_rgba(61,229,204,0.85)] transition-transform duration-300 ease-out"
-                      style={{
-                        width: "50%",
-                        transform: activeView === "json" ? "translateX(100%)" : "translateX(0%)",
-                      }}
-                    />
-                  </div>
+                <div
+                  role="group"
+                  aria-label="Viewer mode"
+                  data-stretch="true"
+                  className="mb-choice-group w-[182px] shrink-0 sm:w-[210px]"
+                >
                   <button
                     type="button"
+                    aria-pressed={activeView === "build"}
                     onClick={() => setPreferredView("build")}
-                    className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
-                      activeView === "build" ? "text-fg" : "text-muted hover:text-fg"
-                    }`}
+                    className="mb-choice-option mb-choice-option-stretch"
                   >
                     Build
                   </button>
                   <button
                     type="button"
+                    aria-pressed={activeView === "json"}
                     onClick={() => setPreferredView("json")}
-                    className={`relative z-10 h-9 flex-1 rounded-full px-3 text-xs font-medium transition-colors sm:px-4 sm:text-sm ${
-                      activeView === "json" ? "text-fg" : "text-muted hover:text-fg"
-                    }`}
+                    className="mb-choice-option mb-choice-option-stretch"
                   >
                     JSON
                   </button>

@@ -62,38 +62,7 @@ export default async function AccountPage({
       ) : null}
 
       <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start xl:gap-16">
-        <div className="min-w-0 space-y-12">
-          <section className="space-y-4" aria-labelledby="ranking-title">
-            <h2 id="ranking-title" className="text-xl font-semibold tracking-tight text-fg">
-              Your ranking
-            </h2>
-            <Suspense fallback={<PersonalRankingSkeleton />}>
-              <PersonalRanking userId={account.id} />
-            </Suspense>
-          </section>
-
-          <GalleryYours
-            key={targetGenerationId ?? "saved-builds"}
-            initialItems={generations.items}
-            initialCursor={generations.nextCursor}
-            hasNickname={Boolean(account.publicNickname)}
-            suspended={Boolean(account.gallerySuspendedAt)}
-            targetGeneration={targetGeneration}
-            targetGenerationId={targetGenerationId}
-          />
-        </div>
-
-        <aside className="space-y-5 lg:sticky lg:top-24">
-          <GalleryAccountSettings
-            publicNickname={account.publicNickname}
-            suspendedAt={account.gallerySuspendedAt?.toISOString() ?? null}
-            suspensionReason={account.gallerySuspensionReason}
-          />
-
-          <NotificationSettings initialSettings={notificationPreferences.settings} />
-
-          <MediaExportSettings />
-
+        <aside className="space-y-5 lg:order-2">
           <section className="rounded-md border border-border/80 bg-card/10 p-5" aria-labelledby="security-title">
             <p className="mb-eyebrow">Account</p>
             <h2 id="security-title" className="mt-2 text-lg font-semibold tracking-tight text-fg">
@@ -125,7 +94,38 @@ export default async function AccountPage({
               </form>
             </div>
           </section>
+
+          <GalleryAccountSettings
+            publicNickname={account.publicNickname}
+            suspendedAt={account.gallerySuspendedAt?.toISOString() ?? null}
+            suspensionReason={account.gallerySuspensionReason}
+          />
+
+          <NotificationSettings initialSettings={notificationPreferences.settings} />
+
+          <MediaExportSettings />
         </aside>
+
+        <div className="min-w-0 space-y-12 lg:order-1">
+          <section className="space-y-4" aria-labelledby="ranking-title">
+            <h2 id="ranking-title" className="text-xl font-semibold tracking-tight text-fg">
+              Your ranking
+            </h2>
+            <Suspense fallback={<PersonalRankingSkeleton />}>
+              <PersonalRanking userId={account.id} />
+            </Suspense>
+          </section>
+
+          <GalleryYours
+            key={targetGenerationId ?? "saved-builds"}
+            initialItems={generations.items}
+            initialCursor={generations.nextCursor}
+            hasNickname={Boolean(account.publicNickname)}
+            suspended={Boolean(account.gallerySuspendedAt)}
+            targetGeneration={targetGeneration}
+            targetGenerationId={targetGenerationId}
+          />
+        </div>
       </div>
     </div>
   );

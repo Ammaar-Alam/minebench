@@ -78,11 +78,11 @@ export function LeaderboardEfficiency({ models, modelQuery }: {
     <section aria-labelledby={headingId} className="mb-efficiency-enter min-w-0 pb-5">
       <h2 id={headingId} className="sr-only">Model efficiency</h2>
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
-        <div role="group" aria-label="Efficiency metric" className="mb-leaderboard-switch">
+        <div role="group" aria-label="Efficiency metric" className="mb-choice-group">
           {METRICS.map((item) => (
             <button key={item.key} type="button" aria-pressed={metric === item.key}
               onClick={() => { setMetric(item.key); setSort({ key: item.key, descending: false }); }}
-              className="mb-leaderboard-option">
+              className="mb-choice-option">
               {item.label}
             </button>
           ))}
@@ -184,9 +184,9 @@ export function LeaderboardEfficiency({ models, modelQuery }: {
         </aside>
       </div>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <div role="group" aria-label="Comparison units" className="mb-leaderboard-switch">
-          <button type="button" aria-pressed={!perScore} className="mb-leaderboard-option" onClick={() => setPerScore(false)}>Per build</button>
-          <button type="button" aria-pressed={perScore} className="mb-leaderboard-option" onClick={() => setPerScore(true)}>Per score</button>
+        <div role="group" aria-label="Comparison units" className="mb-choice-group">
+          <button type="button" aria-pressed={!perScore} className="mb-choice-option" onClick={() => setPerScore(false)}>Per build</button>
+          <button type="button" aria-pressed={perScore} className="mb-choice-option" onClick={() => setPerScore(true)}>Per score</button>
         </div>
         <span className="text-xs text-muted">{perScore ? "Resource use per prompt-score point" : "Average resource use per build"}</span>
       </div>
@@ -230,7 +230,12 @@ export function LeaderboardEfficiency({ models, modelQuery }: {
         {modelQuery.trim() ? <span>Search highlights matches; the frontier still includes the full comparison.</span> : null}
       </div>
       <details className="mt-3 text-sm text-muted">
-        <summary className="min-h-11 cursor-pointer py-3 font-medium text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent">Methodology</summary>
+        <summary className="mb-disclosure-toggle py-3 font-medium text-fg">
+          <span>Methodology</span>
+          <svg aria-hidden="true" className="mb-disclosure-chevron h-3 w-3 shrink-0 text-muted" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 6.5L8 10.5L12 6.5" />
+          </svg>
+        </summary>
         <div className="space-y-3 pb-3 leading-relaxed">
           <p>A model is on the Pareto frontier when no included model has an equal or higher rating with equal or lower resource use, with at least one strict improvement. The frontier follows point estimates; overlapping confidence intervals can mean the differences are uncertain.</p>
           <p>Per-score values divide average resource use by the observed prompt score on a 0–100 scale: wins count as 1, ties as 0.5, and losses as 0, averaged equally over prompts with at least two votes. Both-bad votes are excluded. These ratios depend on sampled opponents and prompts; they describe the evidence rather than replace the rating.</p>

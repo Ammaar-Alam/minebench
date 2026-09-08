@@ -338,9 +338,9 @@ export function SavedBuildDialog({
           {downloadError ? <p role="status" className="mt-2 px-1 text-sm text-danger">{downloadError}</p> : null}
           {generation.retryReason ? (
             <details className="mt-3 w-full max-w-xl px-1 text-xs text-muted">
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
-                <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px] font-semibold">i</span>
-                Retry details
+              <summary className="mb-disclosure-toggle">
+                <span>Retry details</span>
+                <svg aria-hidden="true" className="mb-disclosure-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
               </summary>
               <pre className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 font-mono text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
                 {generation.retryReason}
@@ -348,8 +348,11 @@ export function SavedBuildDialog({
             </details>
           ) : null}
           {generation.sha256 ? (
-            <details className="mt-3 w-fit px-1 text-xs text-muted">
-              <summary className="cursor-pointer list-none py-1 hover:text-fg">Build details</summary>
+            <details className="mt-3 w-full max-w-xl px-1 text-xs text-muted">
+              <summary className="mb-disclosure-toggle">
+                <span>Build details</span>
+                <svg aria-hidden="true" className="mb-disclosure-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
+              </summary>
               <p className="mt-1 break-all font-mono">SHA-256 {generation.sha256}</p>
             </details>
           ) : null}
@@ -485,9 +488,9 @@ export function GalleryYours({
                 </button>
                 {generation.retryReason ? (
                   <details className="mt-3 w-full max-w-xl text-xs text-muted">
-                    <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px] font-semibold">i</span>
-                      Details
+                    <summary className="mb-disclosure-toggle">
+                      <span>Details</span>
+                      <svg aria-hidden="true" className="mb-disclosure-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
                     </summary>
                     <pre className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 font-mono text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
                       {generation.retryReason}
@@ -501,7 +504,7 @@ export function GalleryYours({
         ))}
         {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">No saved builds.</p></div> : null}
       </div>
-      {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-btn h-11 min-w-36" onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "More"}</button></div> : null}
+      {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-collapse-toggle" onClick={() => void loadMore()}><span>{loadingMore ? "Loading…" : "More"}</span><svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg></button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
       {selected ? (
         <SavedBuildDialog
