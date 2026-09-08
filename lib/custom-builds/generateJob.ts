@@ -5,7 +5,7 @@ import {
   type SavedGenerationRequestConfig,
 } from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
-import { processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
+import { isVoxelBuildResourceError, processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
 import { MAX_BLOCKS_BY_GRID, type GridSize, isGridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
@@ -177,6 +177,9 @@ function safeGenerateFailure(error: unknown, message: string) {
   if (message.includes("heap_limit_exceeded")) {
     return { code: "heap_limit_exceeded", message: "This build exceeded the processing memory limit." };
   }
+  if (message.includes("processing_capacity_exceeded")) {
+    return { code: "processing_capacity_exceeded", message: "This build exceeds the current processing capacity." };
+  }
   if (isCustomBuildArtifactPersistenceError(error) || message.includes("custom_build_artifact_persistence_failed")) {
     return { code: "artifact_persistence_failed", message: "The generated result could not be saved." };
   }
@@ -203,7 +206,7 @@ async function persistCustomBuildArtifact(args: Parameters<typeof uploadAndRecor
 export function isTerminalCustomBuildGenerateError(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (normalized.includes("custom_build_artifact_persistence_failed")) return true;
-  if (normalized.includes("heap_limit_exceeded")) return true;
+  if (isVoxelBuildResourceError(normalized)) return true;
   if (normalized === "provider_key_expired") return true;
   if (normalized.includes("invalid_api_key")) return true;
   if (normalized.includes("invalid api key") || normalized.includes("incorrect api key")) return true;
@@ -658,6 +661,7 @@ export async function runCustomBuildGenerateJob(
         publicId: customBuild.publicId,
         sourceBuildSha256: fullSha,
         sourceBuild: canonicalBuild,
+        consumeSource: true,
         gridSize,
         palette,
         previewTargetBlocks: getCustomBuildPreviewTargetBlocks(),
@@ -815,7 +819,7 @@ export async function runCustomBuildGenerateJob(
     const manuallyRetryable =
       isCustomBuildArtifactBookkeepingError(effectiveError) ||
       (effectiveError instanceof CustomBuildGenerationFailedError &&
-        (!isTerminalCustomBuildGenerateError(message) || message.includes("heap_limit_exceeded")));
+        (!isTerminalCustomBuildGenerateError(message) || isVoxelBuildResourceError(message)));
     const terminal =
       isCustomBuildArtifactPersistenceError(effectiveError) ||
       effectiveError instanceof CustomBuildGenerationFailedError ||

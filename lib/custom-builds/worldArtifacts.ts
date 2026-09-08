@@ -255,6 +255,7 @@ export async function persistVoxelWorldArtifacts(args: {
   publicId: string;
   sourceBuildSha256: string;
   sourceBuild: VoxelBuild;
+  consumeSource?: boolean;
   gridSize: number;
   palette: PaletteName;
   previewTargetBlocks: number;
@@ -431,6 +432,12 @@ export async function persistVoxelWorldArtifacts(args: {
     }
     await drainQueuedRegions(0);
     evaluated.regions = [];
+    if (args.consumeSource) {
+      args.sourceBuild.blocks.length = 0;
+      if (args.sourceBuild.boxes) args.sourceBuild.boxes.length = 0;
+      if (args.sourceBuild.lines) args.sourceBuild.lines.length = 0;
+      delete args.sourceBuild.packed;
+    }
     await flushPage();
 
     let overviewData: StoredVoxelWorldPartRef | undefined;

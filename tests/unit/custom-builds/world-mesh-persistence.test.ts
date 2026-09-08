@@ -20,6 +20,7 @@ import type { VoxelWorldManifest, VoxelWorldMeshBatchRef, VoxelWorldMixedRegion 
 import { decodeWorldMeshPayload, getWorldMeshVersion } from "../../../lib/voxel/worldMesh";
 import { createWorldMeshBatches, packWorldMeshBatch } from "../../../lib/voxel/worldMeshSource";
 import { buildWorldRegionGreedyMeshPayload } from "../../../lib/voxel/worldRegionMesh";
+import { packVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 
 const SOURCE_SHA = "a".repeat(64);
 const identity = { customBuildId: "mesh-persistence-row", publicId: "cb_123456789012345678901234",
@@ -50,6 +51,8 @@ function artifactFor(args: ArtifactArgs): PersistedVoxelWorldArtifact {
 
 async function nativePersistence(tempRoot: string) {
   for (const mode of ["success", "source-failure", "mesh-failure", "manifest-failure", "cancel-before-mesh", "cancel-after-mesh"] as const) {
+    const ownedSource = structuredClone(sourceBuild);
+    ownedSource.packed = packVoxelBlocks([ownedSource.blocks.pop()!]);
     const saved = new Map<string, ArtifactArgs>();
     let canceled = false;
     const persistArtifact: PersistVoxelWorldArtifact = async (args) => {
@@ -58,6 +61,8 @@ async function nativePersistence(tempRoot: string) {
         throw new Error("source persistence failed");
       }
       if (role === "mesh") {
+        assert.equal(ownedSource.blocks.length, 0);
+        assert.equal(ownedSource.packed, undefined, "saved source buffers must be released before meshing");
         const directories = await readdir(tempRoot);
         assert.equal(directories.length, 1);
         const spooled = await readdir(join(tempRoot, directories[0]!));
@@ -81,7 +86,7 @@ async function nativePersistence(tempRoot: string) {
       saved.set(key, args);
       return artifact;
     };
-    const run = persistVoxelWorldArtifacts({ ...identity, sourceBuild, gridSize: 2048,
+    const run = persistVoxelWorldArtifacts({ ...identity, sourceBuild: ownedSource, consumeSource: true, gridSize: 2048,
       previewTargetBlocks: 16, persistArtifact,
       throwIfCanceled: () => { if (canceled) throw new DOMException("Aborted", "AbortError"); },
     });

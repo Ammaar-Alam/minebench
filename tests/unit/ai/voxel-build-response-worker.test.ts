@@ -66,11 +66,29 @@ async function main() {
   assert.equal(world.build.packed?.count ?? 0, 0);
   assert.equal(world.build.boxes?.length, 1, "whole worlds retain compact primitives across the thread boundary");
 
+  const overCapacity = await processVoxelBuildResponseInWorker(
+    response('box(0, 0, 0, 511, 511, 511, "stone");', 512),
+    { ...options, gridSize: 512 },
+  );
+  assert.deepEqual(overCapacity, { ok: false, error: "processing_capacity_exceeded" });
+
   const invalid = await processVoxelBuildResponseInWorker("not a build", options);
   assert.equal(invalid.ok, false, "validation failures remain ordinary results");
   await assert.rejects(processVoxelBuildResponseInWorker(
     response('throw new Error("ordinary generated-program error");'), options,
   ), /ordinary generated-program error/);
+
+  const previousTimeout = process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+  process.env.MINEBENCH_TOOL_TIMEOUT_MS = "250";
+  try {
+    await assert.rejects(
+      processVoxelBuildResponseInWorker(response("while (true) {}"), options),
+      (error: unknown) => error instanceof Error && (error as NodeJS.ErrnoException).code === "ERR_SCRIPT_EXECUTION_TIMEOUT",
+    );
+  } finally {
+    if (previousTimeout === undefined) delete process.env.MINEBENCH_TOOL_TIMEOUT_MS;
+    else process.env.MINEBENCH_TOOL_TIMEOUT_MS = previousTimeout;
+  }
 
   const reason = new Error("generation lease lost");
   const preAborted = new AbortController();

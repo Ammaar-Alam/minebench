@@ -156,6 +156,7 @@ export async function persistLocalVoxelWorld(args: {
       publicId: worldId,
       sourceBuildSha256: sourceArtifact.sourceSha256,
       sourceBuild: args.sourceBuild,
+      consumeSource: true,
       gridSize: args.gridSize,
       palette: args.palette,
       previewTargetBlocks: 3_000,

@@ -33,6 +33,10 @@ export type ProcessVoxelBuildResponse = (
   signal?: AbortSignal,
 ) => Promise<ProcessedVoxelBuildResponse>;
 
+export function isVoxelBuildResourceError(message: string): boolean {
+  return /heap_limit_exceeded|processing_capacity_exceeded/.test(message);
+}
+
 function buildBounds(build: RenderableVoxelBuild) {
   let minX = Infinity;
   let minY = Infinity;
@@ -86,7 +90,10 @@ export function processVoxelBuildResponse(
   const validationOptions = {
     palette: getPalette(opts.palette),
     gridSize: opts.gridSize,
-    maxBlocks: MAX_BLOCKS_BY_GRID[opts.gridSize],
+    // legacy expanded artifacts need bounded arrays even when the source is compact
+    maxBlocks: opts.gridSize === 512 && buildOutput === "packed"
+      ? MAX_BLOCKS_BY_GRID[256]
+      : MAX_BLOCKS_BY_GRID[opts.gridSize],
     output: buildOutput === "packed" ? "packed" as const : "objects" as const,
   };
   const world = opts.gridSize > 512
@@ -97,7 +104,12 @@ export function processVoxelBuildResponse(
       ? validateVoxelBuildSpec(buildJson as VoxelBuild, validationOptions)
       : validateVoxelBuild(buildJson, validationOptions)
     : validateOwnedVoxelBuild(buildJson, validationOptions));
-  if (!validated.ok) return validated;
+  if (!validated.ok) {
+    if (opts.gridSize === 512 && buildOutput === "packed" && validated.error.startsWith("Too many blocks")) {
+      return { ok: false, error: "processing_capacity_exceeded" };
+    }
+    return validated;
+  }
 
   const expandedBuild = validated.value.build;
   const blockCount = world?.ok ? world.value.blockCount : voxelBuildBlockCount(expandedBuild);

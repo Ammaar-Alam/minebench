@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as vm from "node:vm";
 import { z } from "zod";
-import { type GridSize, GRID_SIZES, isGridSize } from "@/lib/ai/limits";
+import { type GridSize, GRID_SIZES, isGridSize, MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import type { PaletteMode } from "@/lib/ai/types";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { voxelBuildSourceJsonChunks } from "@/lib/voxel/canonicalArtifact";
@@ -156,6 +156,9 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const maxBoxes = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
   const maxLines = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_LINES");
   const maxBlocks = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BLOCKS");
+  const packedBlockLimit = params.packedOutput && params.gridSize <= 512
+    ? Math.min(MAX_BLOCKS_BY_GRID[params.gridSize], MAX_BLOCKS_BY_GRID[256]) * 2
+    : Infinity;
 
   const boxes: { x1: number; y1: number; z1: number; x2: number; y2: number; z2: number; type: string }[] =
     [];
@@ -173,6 +176,7 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   };
 
   const block = (x: unknown, y: unknown, z: unknown, type: unknown) => {
+    if (blockCount >= packedBlockLimit) throw new Error("processing_capacity_exceeded");
     if (maxBlocks !== null && blockCount >= maxBlocks) {
       throw new Error(`Too many blocks (${blockCount})`);
     }

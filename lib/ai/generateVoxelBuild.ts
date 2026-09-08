@@ -37,7 +37,7 @@ import {
   xaiReasoningEffortAttempts,
   zaiReasoningEffortAttempts,
 } from "@/lib/ai/reasoningProfiles";
-import { processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
+import { isVoxelBuildResourceError, processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import type {
@@ -1253,7 +1253,7 @@ export async function generateVoxelBuild(
           : processVoxelBuildResponse(text, params);
         if (!processed.ok) {
           lastError = processed.error;
-          if (lastError.includes("heap_limit_exceeded")) break;
+          if (isVoxelBuildResourceError(lastError)) break;
           continue;
         }
 
@@ -1274,7 +1274,7 @@ export async function generateVoxelBuild(
     } catch (err) {
       lastError = getErrorMessage(err, "Provider request failed");
       if (params.abortSignal?.aborted) break;
-      if (lastError.includes("heap_limit_exceeded")) break;
+      if (isVoxelBuildResourceError(lastError)) break;
       if (lastError.includes("custom_build_artifact_persistence_failed")) break;
       // preserve the response for execution recovery instead of buying another generation
       if (err && typeof err === "object" && "code" in err && err.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") break;
