@@ -54,7 +54,7 @@ assert.ok(
     explore.includes('/faq#how-does-minebench-account-for-nondeterminism') &&
     detail.includes("gallerySortHref") &&
     detail.includes("longPrompt") &&
-    detail.includes("text-2xl sm:text-3xl lg:text-4xl") &&
+    detail.includes("line-clamp-3 text-2xl sm:text-3xl") &&
     galleryDetailPage.includes("navigationSort: sort"),
   "Gallery details should preserve their ordering and expose polished pointer and keyboard navigation",
 );

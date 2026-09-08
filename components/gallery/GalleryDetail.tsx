@@ -177,11 +177,32 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   const viewerRefs = useRef(new Map<string, RefObject<VoxelViewerHandle | null>>());
   const viewerControllers = useRef(new Map<string, AbortController>());
   const [reportOpen, setReportOpen] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const promptRef = useRef<HTMLElement>(null);
+  const promptToggleRef = useRef<HTMLButtonElement>(null);
   const [removing, setRemoving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const examplesScrollRef = useRef<HTMLDivElement>(null);
   const [canScrollUp, setCanScrollUp] = useState(false);
   const [canScrollDown, setCanScrollDown] = useState(false);
+
+  useEffect(() => {
+    if (!promptOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setPromptOpen(false);
+      promptToggleRef.current?.focus({ preventScroll: true });
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !promptRef.current?.contains(event.target)) setPromptOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [promptOpen]);
 
   const updateScrollState = useCallback(() => {
     const el = examplesScrollRef.current;
@@ -350,7 +371,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   }, []);
 
   useEffect(() => {
-    if (!navigation || reportOpen) return;
+    if (!navigation || reportOpen || promptOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
@@ -370,7 +391,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigation, reportOpen, router]);
+  }, [navigation, reportOpen, promptOpen, router]);
 
   function selectExample(event: React.MouseEvent<HTMLButtonElement>, exampleId: string) {
     const additive = event.metaKey || event.ctrlKey;
@@ -472,13 +493,24 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         ) : null}
       </nav>
 
-      <header className="mt-6 max-w-4xl sm:mt-8">
+      <header ref={promptRef} className="relative mt-6 max-w-4xl sm:mt-8">
         <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Official prompt</span> : null}</div>
-        <h1 className={`mt-3 text-balance font-display font-semibold leading-tight tracking-tight text-fg ${longPrompt ? "text-2xl sm:text-3xl lg:text-4xl" : "text-3xl sm:text-4xl lg:text-5xl"}`}>{candidate.prompt}</h1>
+        <h1 className={`mt-3 break-words text-balance font-display font-semibold leading-tight tracking-tight text-fg ${longPrompt ? "line-clamp-3 text-2xl sm:text-3xl" : "text-3xl sm:text-4xl lg:text-5xl"}`}>{candidate.prompt}</h1>
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
           <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
+          {longPrompt ? (
+            <button ref={promptToggleRef} type="button" aria-expanded={promptOpen} aria-controls={`gallery-prompt-${candidate.id}`} onClick={() => setPromptOpen((open) => !open)} className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">
+              Full prompt
+              <svg aria-hidden="true" className={`mb-disclosure-chevron h-3.5 w-3.5 ${promptOpen ? "is-open" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
+            </button>
+          ) : null}
         </div>
+        {longPrompt ? (
+          <div id={`gallery-prompt-${candidate.id}`} role="region" aria-label="Full prompt" aria-hidden={!promptOpen} tabIndex={promptOpen ? 0 : -1} className={`mb-prompt-reveal absolute inset-x-0 top-full z-30 mt-3 max-h-[min(45svh,22rem)] max-w-[70ch] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words rounded-md border border-border bg-bg p-4 text-base leading-relaxed text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:p-5 ${promptOpen ? "is-open" : ""}`}>
+            {candidate.prompt}
+          </div>
+        ) : null}
       </header>
 
       {actionError ? <p role="alert" className="mt-5 text-sm text-danger">{actionError}</p> : null}
