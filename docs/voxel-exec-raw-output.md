@@ -140,18 +140,9 @@ Relevant runtime controls:
 - `MINEBENCH_TOOL_MAX_LINES`
 - `MINEBENCH_TOOL_MAX_BLOCKS`
 
-Execution defaults to 30 seconds through grid size 512 and 15 minutes for larger
-worlds. The durable worker executes and validates responses in a disposable Node
-thread while the parent retains queue and lease ownership. Packed point buffers
-transfer to the parent without copying. Heap and execution-time failures preserve
-their error codes and do not trigger another provider request. Custom generation
-responses are saved before execution, and recovery uses the same processing path.
+Execution defaults to 30 seconds through grid size 512 and 15 minutes for larger worlds. Custom generations save the raw response before processing and reuse it during recovery.
 
-Durable expanded-artifact jobs are limited to 16,777,216 occupied cells, with raw
-point emission bounded by twice the applicable cell limit. Capacity failures
-preserve the response and fail without clipping the build. Spatial worlds use
-compact region evaluation instead of this expanded-cell path. A thread's V8 heap
-limit does not cap total process RSS or GPU memory.
+Durable expanded-artifact jobs support up to 16,777,216 occupied cells within their grid bounds, with raw point emission limited to twice the applicable cell limit. Exceeding capacity fails the job without clipping its output or requesting another provider response. Spatial worlds use compact region evaluation instead of the expanded-cell path.
 
 ## 6) How raw output becomes a final build
 
@@ -195,11 +186,7 @@ For grids through 512, validation does all of this:
 - deduplicates final coordinates
 - enforces block-count and structure limits
 
-Durable jobs retain the normalized cells in packed buffers through canonical
-writing and viewer packaging. For 2048 and 8192, `worldRegions.ts` evaluates
-primitive precedence and exact occupied counts by region; uniform volumes remain
-compact. Once canonical source and source parts are durable, finalization releases
-owned source buffers before preparing meshes.
+For 2048 and 8192, `worldRegions.ts` evaluates primitive precedence and exact occupied counts by region; uniform volumes remain compact.
 
 ### Step E: parse final spec
 
@@ -229,8 +216,7 @@ MineBench executes the first and stores the second.
 
 Arena and Sandbox build cards can export the rendered build to these formats:
 
-Spatial worlds support canonical JSON export. The mesh and game formats below
-apply to the expanded-build path.
+Spatial worlds support canonical JSON export. The mesh and game formats below apply to the expanded-build path.
 
 - GLB (`.glb`) for Blender and other glTF tools. MineBench writes one glTF material per block type, with `extras.minebenchBlockId` and `extras.minecraftBlockState` metadata so downstream tools can inspect the original block mapping.
 - STL (`.stl`) for mesh and print workflows. STL is geometry-only, so block colors and material names are not part of the file.
