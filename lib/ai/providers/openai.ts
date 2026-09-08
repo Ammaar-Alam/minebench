@@ -51,6 +51,17 @@ type OpenAIChatCompletionsStreamChunk = {
 
 type TextVerbosity = "low" | "medium" | "high";
 
+export type OpenAIBackgroundResponseOptions = {
+  openaiResponseId?: string;
+  onOpenAIResponseCreated?: (responseId: string) => Promise<void>;
+};
+
+export class OpenAIResponseCheckpointError extends Error {
+  constructor(responseId: string, cause: unknown) {
+    super(`openai_response_checkpoint_failed: ${responseId}`, { cause });
+  }
+}
+
 function parseIntEnv(name: string, defaultValue: number): number {
   const raw = process.env[name];
   if (!raw) return defaultValue;
@@ -332,6 +343,29 @@ async function pollBackgroundResponse(opts: {
   return current;
 }
 
+function completedResponseText(
+  data: OpenAIResponsesBackgroundResponse,
+  onTrace?: (message: string) => void,
+): string {
+  const finalStatus = backgroundStatusOf(data.status);
+  if (finalStatus && finalStatus !== "completed") {
+    const reason = summarizeBackgroundError(data);
+    if (isIncompleteMaxOutputTokensResponse(data)) {
+      onTrace?.(
+        `OpenAI Responses ended with status incomplete: ${reason ?? "max_output_tokens"}; ${formatUsageNumbers(data)}. ` +
+          "The current max_output_tokens budget was fully exhausted.",
+      );
+      throw new Error(
+        `OpenAI background response ended with status incomplete: ${reason ?? "max_output_tokens"} (${formatUsageNumbers(data)})`,
+      );
+    }
+    throw new Error(
+      `OpenAI background response ended with status ${finalStatus}${reason ? `: ${reason}` : ""}`,
+    );
+  }
+  return extractTextFromResponses(data);
+}
+
 type ReasoningConfigAttempt =
   | { kind: "effort"; effort: string }
   | { kind: "max_tokens"; maxTokens: number }
@@ -440,11 +474,28 @@ export async function openaiGenerateText(params: {
   onAcceptedOutputTokens?: (tokens: number) => void;
   customHeaders?: CustomRequestHeaders;
   customBody?: CustomRequestBody;
-} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks & OpenAIBackgroundResponseOptions): Promise<{ text: string }> {
   const apiKey = params.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
 
   if (!params.jsonSchema) throw new Error("Missing jsonSchema for OpenAI structured output");
+
+  if (params.openaiResponseId) {
+    if (!/^resp_[A-Za-z0-9_-]{1,200}$/.test(params.openaiResponseId)) {
+      throw new Error("Invalid OpenAI response id");
+    }
+    const data = await pollBackgroundResponse({
+      apiKey,
+      responseId: params.openaiResponseId,
+      signal: params.signal ?? new AbortController().signal,
+      pollIntervalMs: parseIntEnv("OPENAI_BACKGROUND_POLL_MS", 15_000),
+      onTrace: params.onTrace,
+      customHeaders: params.customHeaders,
+    });
+    const text = completedResponseText(data, params.onTrace);
+    if (!text) throw new Error("OpenAI background response returned no output text");
+    return { text };
+  }
 
   const isGpt5Family = params.modelId.startsWith("gpt-5");
   const isGptOssFamily = params.modelId.startsWith("gpt-oss-");
@@ -643,6 +694,13 @@ export async function openaiGenerateText(params: {
             if (useBackgroundMode) {
               const initialStatus = backgroundStatusOf(data.status);
               const responseId = typeof data.id === "string" ? data.id : null;
+              if (responseId && params.onOpenAIResponseCreated) {
+                try {
+                  await params.onOpenAIResponseCreated(responseId);
+                } catch (error) {
+                  throw new OpenAIResponseCheckpointError(responseId, error);
+                }
+              }
               if (isBackgroundPending(initialStatus)) {
                 if (!responseId) throw new Error("OpenAI background response missing id");
                 data = await pollBackgroundResponse({
@@ -656,26 +714,10 @@ export async function openaiGenerateText(params: {
               }
             }
 
-            const finalStatus = backgroundStatusOf(data.status);
-            if (finalStatus && finalStatus !== "completed") {
-              const reason = summarizeBackgroundError(data);
-              if (isIncompleteMaxOutputTokensResponse(data)) {
-                params.onTrace?.(
-                  `OpenAI Responses ended with status incomplete: ${reason ?? "max_output_tokens"}; ${formatUsageNumbers(data)}. ` +
-                    "The current max_output_tokens budget was fully exhausted.",
-                );
-                throw new Error(
-                  `OpenAI background response ended with status incomplete: ${reason ?? "max_output_tokens"} (${formatUsageNumbers(data)})`,
-                );
-              }
-              throw new Error(
-                `OpenAI background response ended with status ${finalStatus}${reason ? `: ${reason}` : ""}`,
-              );
-            }
-
-            const text = extractTextFromResponses(data);
+            const text = completedResponseText(data, params.onTrace);
             if (text) return { text };
             if (useBackgroundMode) {
+              const finalStatus = backgroundStatusOf(data.status);
               throw new Error(
                 `OpenAI background response returned no output text${finalStatus ? ` (status ${finalStatus})` : ""}`,
               );
@@ -747,6 +789,7 @@ export async function openaiGenerateText(params: {
       }
     }
   } catch (err) {
+    if (err instanceof OpenAIResponseCheckpointError) throw err;
     // If Responses fails (unsupported endpoint/model), try chat/completions below.
     if (err instanceof Error && err.name === "AbortError") {
       throw new Error("OpenAI request timed out");

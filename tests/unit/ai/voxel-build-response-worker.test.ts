@@ -8,8 +8,8 @@ import { processVoxelBuildResponseInWorker } from "../../../scripts/process-voxe
 const options: VoxelBuildResponseOptions = {
   gridSize: 256, palette: "simple", enableTools: true, minBlocks: 1, buildOutput: "packed",
 };
-const response = (code: string) => JSON.stringify({
-  tool: "voxel.exec", input: { code, gridSize: options.gridSize, palette: options.palette, seed: 1 },
+const response = (code: string, gridSize = options.gridSize) => JSON.stringify({
+  tool: "voxel.exec", input: { code, gridSize, palette: options.palette, seed: 1 },
 });
 const smallResponse = response('box(0, 0, 0, 63, 31, 63, "stone");');
 const densePoints = response('for(let x=0;x<256;x++) for(let y=0;y<256;y++) for(let z=0;z<256;z++) block(x,y,z,"stone");');
@@ -55,6 +55,11 @@ async function main() {
   assert.deepEqual(Array.from(packed.positions.slice(-3)), [255, 63, 255]);
   assert.ok(heartbeats > 2, "processing leaves the parent event loop available");
   assert.equal(getEventListeners(denseSignal, "abort").length, 0, "completed jobs release abort listeners");
+
+  const overCapacity = await processVoxelBuildResponseInWorker(
+    response('box(0, 0, 0, 511, 511, 511, "stone");', 512), { ...options, gridSize: 512 },
+  );
+  assert.deepEqual(overCapacity, { ok: false, error: "processing_capacity_exceeded" });
 
   const invalid = await processVoxelBuildResponseInWorker("not a build", options);
   assert.equal(invalid.ok, false, "validation failures remain ordinary results");

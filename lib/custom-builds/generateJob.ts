@@ -5,9 +5,9 @@ import {
   type SavedGenerationRequestConfig,
 } from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
-import type { ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
+import { isVoxelBuildResourceError, processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
-import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import { recordGenerationError, recordGenerationSuccess } from "@/lib/observability/cloudwatch";
@@ -15,6 +15,7 @@ import { ARENA_MESH_FACTS_MIN_BLOCKS } from "@/lib/arena/types";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
   buildCustomBuildPreview,
+  decodeAndVerifyCustomBuildArtifactText,
   gzipBytes,
   readStoredBuildSource,
   sha256Hex,
@@ -31,6 +32,7 @@ import { decryptProviderKey, decryptSecretValue } from "@/lib/custom-builds/secr
 import { redactSensitiveText, safeCustomBuildRetryReason } from "@/lib/custom-builds/sanitize";
 import {
   assertCustomBuildStorageConfigured,
+  downloadCustomBuildArtifactStream,
 } from "@/lib/custom-builds/storage";
 import { prisma } from "@/lib/prisma";
 import { buildGalleryPreviewSvg } from "@/lib/gallery/preview";
@@ -42,6 +44,7 @@ import { generationProviderSignal } from "@/lib/generation-worker/providerSignal
 
 type GenerateJobPayload = {
   stubBuild?: unknown;
+  openaiResponseId?: string;
 };
 
 type GenerateVoxelBuildModel = NonNullable<GenerateVoxelBuildParams["model"]>;
@@ -66,6 +69,7 @@ export type ImportedCustomBuildResult = Required<Pick<
 >>;
 
 const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2;
+const MAX_RECOVERED_RAW_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export function customBuildProviderSignal(
   signal?: AbortSignal,
@@ -86,6 +90,10 @@ class CustomBuildGenerationFailedError extends Error {
 
 function asGenerateJobPayload(payload: Prisma.JsonValue | null): GenerateJobPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  if (payload.openaiResponseId !== undefined &&
+      (typeof payload.openaiResponseId !== "string" || !/^resp_[A-Za-z0-9_-]{1,200}$/.test(payload.openaiResponseId))) {
+    throw new Error("Invalid saved OpenAI response id");
+  }
   return payload as GenerateJobPayload;
 }
 
@@ -174,6 +182,12 @@ function safeGenerateFailure(error: unknown, message: string) {
   if (message.includes("heap_limit_exceeded")) {
     return { code: "heap_limit_exceeded", message: "This build exceeded the processing memory limit." };
   }
+  if (message.includes("processing_capacity_exceeded")) {
+    return { code: "processing_capacity_exceeded", message: "This build exceeds the current processing capacity." };
+  }
+  if (message.includes("openai_response_checkpoint_failed")) {
+    return { code: "provider_checkpoint_failed", message: "The provider response could not be saved." };
+  }
   if (isCustomBuildArtifactPersistenceError(error) || message.includes("custom_build_artifact_persistence_failed")) {
     return { code: "artifact_persistence_failed", message: "The generated result could not be saved." };
   }
@@ -200,7 +214,7 @@ async function persistCustomBuildArtifact(args: Parameters<typeof uploadAndRecor
 export function isTerminalCustomBuildGenerateError(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (normalized.includes("custom_build_artifact_persistence_failed")) return true;
-  if (normalized.includes("heap_limit_exceeded")) return true;
+  if (isVoxelBuildResourceError(normalized)) return true;
   if (normalized === "provider_key_expired") return true;
   if (normalized.includes("invalid_api_key")) return true;
   if (normalized.includes("invalid api key") || normalized.includes("incorrect api key")) return true;
@@ -330,6 +344,15 @@ async function generateBuild(
       onProviderRequest: (attempt) => {
         providerAttempts = Math.max(providerAttempts, attempt);
       },
+      openaiResponseId: payload.openaiResponseId,
+      onOpenAIResponseCreated: async (responseId) => {
+        throwIfCustomBuildLeaseLost(opts.signal);
+        const checkpoint = await prisma.customBuildJob.updateMany({
+          where: { id: job.id, status: "running", lockedBy: job.lockedBy },
+          data: { payload: { ...(job.payload as Prisma.InputJsonObject), openaiResponseId: responseId } },
+        });
+        if (checkpoint.count !== 1) throw new CustomBuildLeaseLostError();
+      },
       onRawResponse: async (attempt, text) => {
         const bytes = new TextEncoder().encode(text);
         const sha256 = sha256Hex(bytes);
@@ -373,7 +396,7 @@ async function generateBuild(
     build: result.build,
     warnings: result.warnings,
     blockCount: result.blockCount,
-    generationTimeMs: result.generationTimeMs,
+    generationTimeMs: payload.openaiResponseId ? null : result.generationTimeMs,
   };
 }
 
@@ -381,6 +404,99 @@ function persistedWarnings(value: Prisma.JsonValue | null): string[] {
   return Array.isArray(value)
     ? value.filter((warning): warning is string => typeof warning === "string")
     : [];
+}
+
+async function recoverStoredRawBuild(
+  customBuild: CustomBuild,
+  opts: {
+    signal?: AbortSignal;
+    acquireBuildProcessing?: () => Promise<() => void>;
+    processResponse?: ProcessVoxelBuildResponse;
+  },
+): Promise<GeneratedBuildResult | null> {
+  const artifact = await prisma.customBuildArtifact.findFirst({
+    where: { customBuildId: customBuild.id, kind: "raw_text_debug" },
+    select: {
+      bucket: true,
+      path: true,
+      encoding: true,
+      sha256: true,
+      sourceBuildSha256: true,
+      storedByteSize: true,
+      exportStats: true,
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+  if (!artifact) return null;
+  try {
+    await opts.acquireBuildProcessing?.();
+    throwIfCustomBuildLeaseLost(opts.signal);
+    if (!artifact.sha256 || !artifact.sourceBuildSha256) {
+      throw new Error("Stored raw response metadata is incomplete");
+    }
+    if (artifact.encoding && artifact.encoding !== "identity") {
+      throw new Error("Stored raw response encoding is unsupported");
+    }
+    if (artifact.storedByteSize > MAX_RECOVERED_RAW_RESPONSE_BYTES) {
+      throw new Error("Stored raw response exceeds the 8 MiB recovery limit");
+    }
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    for await (const chunk of downloadCustomBuildArtifactStream({ ...artifact, signal: opts.signal })) {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      byteLength += chunk.byteLength;
+      if (byteLength > MAX_RECOVERED_RAW_RESPONSE_BYTES) {
+        throw new Error("Stored raw response exceeds the 8 MiB recovery limit");
+      }
+      chunks.push(chunk);
+    }
+    const text = decodeAndVerifyCustomBuildArtifactText({
+      bytes: Buffer.concat(chunks, byteLength),
+      encoding: artifact.encoding,
+      storedSha256: artifact.sha256,
+      sourceSha256: artifact.sourceBuildSha256,
+    });
+    throwIfCustomBuildLeaseLost(opts.signal);
+    const finalizing = await prisma.customBuild.updateMany({
+      where: { id: customBuild.id, removedAt: null, status: "running" },
+      data: { currentStage: "finalizing" },
+    });
+    if (finalizing.count !== 1) throw new CustomBuildLeaseLostError();
+    const stats = artifact.exportStats;
+    const attempt = stats && typeof stats === "object" && !Array.isArray(stats) &&
+      typeof stats.attempt === "number" && Number.isInteger(stats.attempt) && stats.attempt > 0
+      ? stats.attempt
+      : 1;
+    try {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      const responseOptions = {
+        gridSize: assertGridSize(customBuild.gridSize),
+        palette: customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
+        buildOutput: "packed" as const,
+        enableTools: true,
+        minBlocks: MIN_BLOCKS_BY_GRID[assertGridSize(customBuild.gridSize)],
+      };
+      const result = opts.processResponse
+        ? await opts.processResponse(text, responseOptions, opts.signal)
+        : processVoxelBuildResponse(text, responseOptions);
+      throwIfCustomBuildLeaseLost(opts.signal);
+      if (!result.ok) throw new Error(result.error);
+      return {
+        build: result.build,
+        warnings: Array.from(new Set([...persistedWarnings(customBuild.warnings), ...result.warnings])),
+        blockCount: result.blockCount,
+        generationTimeMs: customBuild.generationTimeMs,
+        sourceArtifactSha256: artifact.sourceBuildSha256,
+      };
+    } catch (error) {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      throw new CustomBuildGenerationFailedError(redactSensitiveText(error, 1_000), attempt);
+    }
+  } catch (error) {
+    throwIfCustomBuildLeaseLost(opts.signal);
+    if (isCustomBuildLeaseLostError(error) || error instanceof CustomBuildGenerationFailedError) throw error;
+    throw new CustomBuildArtifactBookkeepingError(error);
+  }
 }
 
 async function recoverStoredBuild(
@@ -405,7 +521,7 @@ async function recoverStoredBuild(
     },
     orderBy: { createdAt: "desc" },
   });
-  if (!artifact) return null;
+  if (!artifact) return recoverStoredRawBuild(customBuild, opts);
   try {
     await opts.acquireBuildProcessing?.();
     throwIfCustomBuildLeaseLost(opts.signal);
@@ -681,7 +797,7 @@ export async function runCustomBuildGenerateJob(
     const manuallyRetryable =
       isCustomBuildArtifactBookkeepingError(effectiveError) ||
       (effectiveError instanceof CustomBuildGenerationFailedError &&
-        (!isTerminalCustomBuildGenerateError(message) || message.includes("heap_limit_exceeded")));
+        (!isTerminalCustomBuildGenerateError(message) || isVoxelBuildResourceError(message)));
     const terminal =
       isCustomBuildArtifactPersistenceError(effectiveError) ||
       effectiveError instanceof CustomBuildGenerationFailedError ||
