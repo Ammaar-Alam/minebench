@@ -85,7 +85,7 @@ async function main() {
   assert.equal(renderer.autoClear, true);
 
   const sanFranciscoWorldFogDistance = getExplorerWorldFogDistance({ x: 8_162, z: 8_171 });
-  assert.equal(sanFranciscoWorldFogDistance, 8_171 * 0.7);
+  assert.equal(sanFranciscoWorldFogDistance, 8_171 * 0.6);
   for (const aspect of [0.5, 16 / 9, 3]) {
     const camera = new THREE.PerspectiveCamera(70, aspect, 0.05, 50_000);
     camera.zoom = 1.4;
@@ -103,8 +103,8 @@ async function main() {
     assert.equal(fog.near, sanFranciscoWorldFogDistance * 0.2, "world fog begins before the mid-distance skyline");
     const twoKilometerFog = THREE.MathUtils.smoothstep(2_000, fog.near, fog.far);
     const fourKilometerFog = THREE.MathUtils.smoothstep(4_000, fog.near, fog.far);
-    assert.ok(twoKilometerFog > 0.09 && twoKilometerFog < 0.1, "world fog is visible at 2km");
-    assert.ok(fourKilometerFog > 0.67 && fourKilometerFog < 0.69, "world fog strongly attenuates the 4km skyline");
+    assert.ok(twoKilometerFog > 0.16 && twoKilometerFog < 0.18, "world fog is visible at 2km");
+    assert.ok(fourKilometerFog > 0.86 && fourKilometerFog < 0.87, "world fog strongly attenuates the 4km skyline");
     assert.ok(camera.far > fog.far, "the camera cannot clip scenery before the fog");
     assert.ok(camera.far <= fog.far * 1.1, "fully fogged geometry must leave the camera frustum");
     const frustum = new THREE.Frustum().setFromProjectionMatrix(camera.projectionMatrix);
