@@ -82,6 +82,7 @@ const SUN_FLARE_COLOR = new THREE.Color(0xffdf9f);
 const STAR_LAYER_COUNT = 3;
 const STARS_PER_LAYER = 560;
 const WORLD_STREAM_UPDATE_DISTANCE = 24;
+const EXPLORER_KEY_CLASS = "mb-kbd inline-flex h-5 min-w-5 items-center justify-center rounded border-current bg-transparent px-1 py-0 text-[10px] leading-none text-inherit";
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
 
@@ -1543,39 +1544,50 @@ function ExplorerScene({
 
       {ready && !buildMenuOpen ? (
         <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center">
-          <div className="pointer-events-auto flex max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-center gap-1 rounded bg-slate-950/60 p-1 text-sm font-medium text-white/70 shadow-lg shadow-slate-950/20 backdrop-blur-sm sm:text-xs">
-            <button
-              type="button"
-              aria-pressed={fogEnabled}
-              onClick={toggleFog}
-              className={`inline-flex min-h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:min-h-9 sm:px-2.5 motion-reduce:transition-none ${fogEnabled ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
-            >
-              <span aria-hidden="true" className="rounded border border-current/25 px-1 text-[10px] font-bold leading-4">
-                G
+          <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-md bg-slate-950/70 p-2 text-sm font-medium text-white/80 backdrop-blur-sm sm:text-xs">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-pressed={fogEnabled}
+                onClick={toggleFog}
+                className={`inline-flex min-h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:min-h-9 sm:px-2.5 motion-reduce:transition-none ${fogEnabled ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
+              >
+                <kbd aria-hidden="true" className={EXPLORER_KEY_CLASS}>
+                  G
+                </kbd>
+                Fog
+              </button>
+              <button
+                type="button"
+                aria-label="Night mode"
+                aria-pressed={night}
+                onClick={toggleNight}
+                className={`inline-flex min-h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:min-h-9 sm:px-2.5 motion-reduce:transition-none ${night ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
+              >
+                <kbd aria-hidden="true" className={EXPLORER_KEY_CLASS}>
+                  T
+                </kbd>
+                {night ? "Night" : "Day"}
+              </button>
+            </div>
+            <div role="group" aria-label="Movement controls" className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+              <span className="flex items-center gap-1.5 whitespace-nowrap">
+                <kbd className={EXPLORER_KEY_CLASS}>WASD</kbd> Move
+                <span aria-hidden="true" className="text-white/35">·</span>
+                <kbd className={EXPLORER_KEY_CLASS}>Shift</kbd> Run
               </span>
-              Fog
-            </button>
-            <button
-              type="button"
-              aria-label="Night mode"
-              aria-pressed={night}
-              onClick={toggleNight}
-              className={`inline-flex min-h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:min-h-9 sm:px-2.5 motion-reduce:transition-none ${night ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
-            >
-              <span aria-hidden="true" className="rounded border border-current/25 px-1 text-[10px] font-bold leading-4">
-                T
+              <span className="flex items-center gap-1.5 whitespace-nowrap">
+                <kbd className={EXPLORER_KEY_CLASS}>F</kbd> Flight
+                {noclip ? <span className="text-white/65">· Scroll speed</span> : null}
               </span>
-              {night ? "Night" : "Day"}
-            </button>
-            <span className="px-1.5 text-white/65">WASD</span>
-            <span className="px-1.5 text-white/65">Shift Run</span>
-            <span className="px-1.5 text-white/65">F Flight</span>
-            <span className="hidden px-1.5 text-white/65 lg:inline">Scroll Speed</span>
-            <span className="hidden px-1.5 text-white/65 md:inline">
-              Space {noclip ? "Up" : "Jump"}
-            </span>
-            {noclip ? <span className="hidden px-1.5 text-white/65 md:inline">Ctrl Down</span> : null}
-            <span className="hidden px-1.5 text-white/65 md:inline">Esc Menu</span>
+              <span className="flex items-center gap-1.5 whitespace-nowrap">
+                <kbd className={EXPLORER_KEY_CLASS}>Space</kbd>
+                {noclip ? <><span>/</span><kbd className={EXPLORER_KEY_CLASS}>Ctrl</kbd> Up / down</> : "Jump / swim"}
+              </span>
+              <span className="flex items-center gap-1.5 whitespace-nowrap">
+                <kbd className={EXPLORER_KEY_CLASS}>Esc</kbd> Menu
+              </span>
+            </div>
           </div>
         </div>
       ) : null}
