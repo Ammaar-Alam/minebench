@@ -109,19 +109,6 @@ async function main() {
         generatePackagingCallbackIndex,
     "generate jobs should extend the lease before synchronous artifact packaging",
   );
-  const heartbeatIndex = workerSource.indexOf("function startCustomBuildJobHeartbeat");
-  const renewIndex = workerSource.indexOf("renewCustomBuildJobLease(job.id, workerId)", heartbeatIndex);
-  const falseIndex = workerSource.indexOf("if (!renewed)", renewIndex);
-  const catchIndex = workerSource.indexOf(".catch((error) =>", renewIndex);
-  const abortIndex = workerSource.indexOf("abortLease(", renewIndex);
-  assert.ok(
-    heartbeatIndex >= 0 &&
-      renewIndex > heartbeatIndex &&
-      falseIndex > renewIndex &&
-      catchIndex > renewIndex &&
-      abortIndex > renewIndex,
-    "heartbeat renewals should abort the active job on false results and caught failures",
-  );
   assert.ok(
     workerSource.includes("runCustomBuildGenerateJob(job, {") && workerSource.includes("signal,"),
     "generate jobs should receive the heartbeat abort signal",

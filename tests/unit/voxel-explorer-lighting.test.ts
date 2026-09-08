@@ -5,6 +5,7 @@ import {
   createExplorerBlockLightGrid,
   getExplorerMeteorOpacity,
   getExplorerBlockLight,
+  getExplorerWorldFogDistance,
   isExplorerSunRayVisible,
   renderExplorerBloomOverlay,
   setExplorerWorldFog,
@@ -83,21 +84,27 @@ async function main() {
   renderExplorerBloomOverlay(renderer, () => assert.equal(renderer.autoClear, false));
   assert.equal(renderer.autoClear, true);
 
+  const sanFranciscoWorldFogDistance = getExplorerWorldFogDistance({ x: 8_162, z: 8_171 });
+  assert.equal(sanFranciscoWorldFogDistance, 8_171 * 0.7);
   for (const aspect of [0.5, 16 / 9, 3]) {
     const camera = new THREE.PerspectiveCamera(70, aspect, 0.05, 50_000);
     camera.zoom = 1.4;
     camera.updateProjectionMatrix();
     const fog = new THREE.Fog(0xaed4ef);
     const bloomFog = new THREE.Fog(0xffffff);
-    setExplorerWorldFog(camera, fog, bloomFog, 10_240);
+    setExplorerWorldFog(camera, fog, bloomFog, sanFranciscoWorldFogDistance);
     assert.ok(fog.near < fog.far);
     const emission = new THREE.Color(10, 8, 2).lerp(
       bloomFog.color,
       THREE.MathUtils.smoothstep(fog.far, bloomFog.near, bloomFog.far),
     );
     assert.deepEqual(emission.toArray(), [0, 0, 0], "bloom cannot reveal geometry beyond the fog");
-    assert.equal(fog.far, 10_240, "whole-world scenery stays visible at every field of view");
-    assert.ok(fog.near > 5_000, "fog begins in the distance instead of enclosing the player");
+    assert.equal(fog.far, sanFranciscoWorldFogDistance, "world fog follows the horizontal skyline span");
+    assert.equal(fog.near, sanFranciscoWorldFogDistance * 0.2, "world fog begins before the mid-distance skyline");
+    const twoKilometerFog = THREE.MathUtils.smoothstep(2_000, fog.near, fog.far);
+    const fourKilometerFog = THREE.MathUtils.smoothstep(4_000, fog.near, fog.far);
+    assert.ok(twoKilometerFog > 0.09 && twoKilometerFog < 0.1, "world fog is visible at 2km");
+    assert.ok(fourKilometerFog > 0.67 && fourKilometerFog < 0.69, "world fog strongly attenuates the 4km skyline");
     assert.ok(camera.far > fog.far, "the camera cannot clip scenery before the fog");
     assert.ok(camera.far <= fog.far * 1.1, "fully fogged geometry must leave the camera frustum");
     const frustum = new THREE.Frustum().setFromProjectionMatrix(camera.projectionMatrix);

@@ -188,11 +188,11 @@ function safeGenerateFailure(error: unknown, message: string) {
   if (message.includes("openai_response_checkpoint_failed")) {
     return { code: "provider_checkpoint_failed", message: "The provider response could not be saved." };
   }
-  if (isCustomBuildArtifactPersistenceError(error) || message.includes("custom_build_artifact_persistence_failed")) {
-    return { code: "artifact_persistence_failed", message: "The generated result could not be saved." };
-  }
   if (isCustomBuildArtifactBookkeepingError(error)) {
     return { code: "artifact_bookkeeping_failed", message: "The saved generation could not be completed." };
+  }
+  if (isCustomBuildArtifactPersistenceError(error) || message.includes("custom_build_artifact_persistence_failed")) {
+    return { code: "artifact_persistence_failed", message: "The generated result could not be saved." };
   }
   if (isTerminalCustomBuildGenerateError(message)) {
     return { code: "provider_rejected", message: "The provider rejected this generation request." };
@@ -821,8 +821,18 @@ export async function runCustomBuildGenerateJob(
     }
   } catch (error) {
     if (isCustomBuildLeaseLostError(error)) throw error;
+    throwIfCustomBuildLeaseLost(opts.signal);
+    const infrastructureFailure = !(error instanceof CustomBuildGenerationFailedError) ||
+      error.reason.includes("custom_build_artifact_persistence_failed");
+    const retryFinalization = artifactsPersisted || (infrastructureFailure && Boolean(
+      await prisma.customBuildArtifact.findFirst({
+        where: { customBuildId: customBuild.id, kind: { in: ["build_json", "raw_text_debug"] } },
+        select: { id: true },
+      }),
+    ));
+    throwIfCustomBuildLeaseLost(opts.signal);
     const effectiveError =
-      artifactsPersisted && !isCustomBuildArtifactPersistenceError(error)
+      retryFinalization && !isCustomBuildArtifactBookkeepingError(error)
         ? new CustomBuildArtifactBookkeepingError(error)
         : error;
     const message = redactSensitiveText(effectiveError);
@@ -834,13 +844,14 @@ export async function runCustomBuildGenerateJob(
       });
     }
     const manuallyRetryable =
-      isCustomBuildArtifactBookkeepingError(effectiveError) ||
+      retryFinalization ||
       (effectiveError instanceof CustomBuildGenerationFailedError &&
         (!isTerminalCustomBuildGenerateError(message) || isVoxelBuildResourceError(message)));
     const terminal =
-      isCustomBuildArtifactPersistenceError(effectiveError) ||
-      effectiveError instanceof CustomBuildGenerationFailedError ||
-      isTerminalCustomBuildGenerateError(message) ||
+      (!retryFinalization && (isCustomBuildArtifactPersistenceError(effectiveError) ||
+        isCustomBuildArtifactBookkeepingError(effectiveError) ||
+        effectiveError instanceof CustomBuildGenerationFailedError ||
+        isTerminalCustomBuildGenerateError(message))) ||
       job.attempts >= job.maxAttempts;
     if (terminal) {
       const failure = safeGenerateFailure(effectiveError, message);
@@ -873,6 +884,7 @@ export async function runCustomBuildGenerateJob(
       emitCustomBuildEvent(customBuild.id, "failed", { code: failure.code });
       throw new Error(failure.code);
     } else {
+      if (retryFinalization) await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
       const requeued = await prisma.customBuild.updateMany({
         where: { id: customBuild.id, removedAt: null, status: "running" },
         data: {

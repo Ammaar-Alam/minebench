@@ -242,8 +242,17 @@ export async function failCustomBuildJob(
     select: { attempts: true, maxAttempts: true, customBuildId: true, type: true },
   });
   if (!job) return { requeued: false };
+  const recoverable = job.type === "generate" && Boolean(await client.customBuildArtifact.findFirst({
+    where: {
+      customBuildId: job.customBuildId,
+      kind: { in: ["build_json", "raw_text_debug"] },
+      customBuild: { removedAt: null, status: { in: ["queued", "running"] } },
+    },
+    select: { id: true },
+  }));
 
   if (!opts.forceTerminal && job.attempts < job.maxAttempts) {
+    if (recoverable) await client.customBuildSecret.deleteMany({ where: { customBuildId: job.customBuildId } });
     await client.customBuildJob.updateMany({
       where: {
         id: jobId,
@@ -286,17 +295,18 @@ export async function failCustomBuildJob(
     await tx.customBuild.updateMany({
       where: {
         id: job.customBuildId,
+        removedAt: null,
         status: { in: ["queued", "running"] },
       },
       data: {
         status: "failed",
         currentStage: "failed",
         completedAt: failedAt,
-        errorCode: error.code,
+        errorCode: recoverable ? "artifact_bookkeeping_failed" : error.code,
         errorMessage: message,
-        errorRetryable: false,
+        errorRetryable: recoverable,
         objectsDeletedAt: null,
-        deletionPendingAt: failedAt,
+        deletionPendingAt: recoverable ? null : failedAt,
         deletionError: null,
       },
     });

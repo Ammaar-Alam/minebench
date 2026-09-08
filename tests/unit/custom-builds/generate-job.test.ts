@@ -68,7 +68,7 @@ const fakePrisma = {
         currentCustomBuild = { ...currentCustomBuild, status: "canceled" };
         return { count: 0 };
       }
-      if (cancelDuringArtifactRecord && args.data.status === "failed") {
+      if (cancelDuringArtifactRecord && ["failed", "queued"].includes(String(args.data.status))) {
         return { count: 0 };
       }
       updates.push(args);
@@ -690,24 +690,23 @@ async function main() {
   txSeq = 0;
   currentCustomBuild = queuedCustomBuild;
   failArtifactKind = "preview_mbv4";
+  const partialArtifactJob = {
+    id: "partial-artifact-failure-job-row",
+    customBuildId,
+    type: "generate",
+    status: "running",
+    attempts: 1,
+    maxAttempts: 3,
+    payload: { stubBuild: { version: "1.0", blocks: [{ x: 3, y: 2, z: 1, type: "stone" }] } },
+  };
   try {
-    await assert.rejects(
-      runCustomBuildGenerateJob({
-        id: "partial-artifact-failure-job-row",
-        customBuildId,
-        type: "generate",
-        status: "running",
-        attempts: 1,
-        maxAttempts: 3,
-        payload: {
-          stubBuild: {
-            version: "1.0",
-            blocks: [{ x: 3, y: 2, z: 1, type: "stone" }],
-          },
-        },
-      } as never),
-      /artifact_persistence_failed/,
-    );
+    await assert.rejects(runCustomBuildGenerateJob(partialArtifactJob as never), /generation_retryable/);
+    assert.equal(currentCustomBuild.status, "queued", "saved canonical output should retry finalization within the remaining budget");
+    assert.ok(operations.some((operation) => operation.name === "customBuildSecret.deleteMany"),
+      "automatic recovery must discard the provider credential");
+    await assert.rejects(runCustomBuildGenerateJob({ ...partialArtifactJob, attempts: 3 } as never), /artifact_bookkeeping_failed/);
+    assert.equal(currentCustomBuild.status, "failed", "exhausting the worker budget must still surface the failure");
+    assert.equal(currentCustomBuild.errorRetryable, true);
   } finally {
     failArtifactKind = null;
   }
@@ -718,9 +717,14 @@ async function main() {
   );
   assert.equal(
     updates.some((update) => update.data.deletionPendingAt instanceof Date),
-    true,
-    "terminal partial artifact failures should schedule recorded objects for cleanup",
+    false,
+    "partial artifact failures must preserve the recorded source for recovery",
   );
+  const partialSourceSha = artifactCreates.find((artifact) => artifact.kind === "build_json")?.sourceBuildSha256;
+  currentCustomBuild = queuedCustomBuild;
+  await runCustomBuildGenerateJob({ ...partialArtifactJob, payload: {} } as never);
+  assert.equal(currentCustomBuild.status, "succeeded", "keyless recovery should finish the retained canonical output");
+  assert.equal(currentCustomBuild.buildSha256, partialSourceSha);
 
   updates.length = 0;
   operations.length = 0;

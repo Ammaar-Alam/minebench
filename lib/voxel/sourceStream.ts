@@ -13,7 +13,7 @@ export async function parseVoxelBuildStream(
   opts: { maxBlocks?: number } = {},
 ): Promise<VoxelBuild> {
   if (opts.maxBlocks !== undefined && (!Number.isSafeInteger(opts.maxBlocks) || opts.maxBlocks < 0)) {
-    throw new Error("Invalid build block limit");
+    throw new RangeError("Invalid build block limit");
   }
   const build: VoxelBuild = {
     version: "1.0",
@@ -63,7 +63,7 @@ export async function parseVoxelBuildStream(
     } else {
       for (const block of parsed.value.blocks) {
         if (block.x < -32768 || block.x > 32767 || block.y < -32768 || block.y > 32767 || block.z < -32768 || block.z > 32767) {
-          throw new Error("Block coordinate is outside the supported integer range");
+          throw new RangeError("Block coordinate is outside the supported integer range");
         }
       }
       appendPackedVoxelBlocks(build.packed!, parsed.value.blocks);
@@ -87,7 +87,10 @@ export async function parseVoxelBuildStream(
           else if (ch === "}" || ch === "]") depth -= 1;
           cursor += 1;
         }
-        if (cursor - tokenStart > 1_000_000) throw new Error("Build entry is too large");
+        if (cursor - tokenStart > 1_000_000) {
+          const EntryError = state === "item" ? RangeError : Error;
+          throw new EntryError("Build entry is too large");
+        }
         if (!primitiveEnded && (primitive || quoted || depth > 0)) continue;
         const tokenLength = cursor - tokenStart;
         const value: unknown = JSON.parse(buffer.slice(tokenStart, cursor));
@@ -145,7 +148,7 @@ export async function parseVoxelBuildStream(
         if (ch === "]" && !afterComma) state = "field-separator";
         else if (ch === "{") {
           if (field === "blocks" && opts.maxBlocks !== undefined && build.packed!.count + batch.length >= opts.maxBlocks) {
-            throw new Error("Stored canonical block count does not match");
+            throw new RangeError("Stored canonical block count does not match");
           }
           tokenStart = cursor;
           depth = 1;

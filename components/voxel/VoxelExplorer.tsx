@@ -29,6 +29,7 @@ import {
   applyExplorerBlockLighting,
   createExplorerBlockLightGrid,
   getExplorerMeteorOpacity,
+  getExplorerWorldFogDistance,
   isExplorerSunRayVisible,
   renderExplorerBloomOverlay,
   setExplorerWorldFog,
@@ -642,7 +643,7 @@ function frameAtmosphere(
 ) {
   const size = bounds.box.getSize(new THREE.Vector3());
   const radius = Math.max(8, bounds.radius);
-  fog.near = viewDistance ? viewDistance * 0.55 : THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.35, 48, 96);
+  fog.near = viewDistance ? viewDistance * 0.2 : THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.35, 48, 96);
   fog.far = viewDistance ?? THREE.MathUtils.clamp(Math.max(size.x, size.z) * 1.5, 160, 512);
   setExplorerCameraFar(camera, atmosphere, cameraFar ?? Math.max(1_000, fog.far * 3));
 
@@ -739,7 +740,7 @@ function ExplorerScene({
     let collisionWorld: ExplorerCollisionWorld | null = null;
     const worldBounds = build.voxelBuild.world?.manifest.bounds;
     const worldFogDistance = worldBounds
-      ? Math.max(2_048, Math.max(worldBounds.size.x, worldBounds.size.z) * 1.25)
+      ? getExplorerWorldFogDistance(worldBounds.size)
       : undefined;
     const worldFullCameraFar = worldBounds
       ? Math.max(2_048, Math.hypot(worldBounds.size.x, worldBounds.size.y, worldBounds.size.z) * 1.25) * 3
