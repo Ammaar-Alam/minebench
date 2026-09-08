@@ -642,7 +642,7 @@ function frameAtmosphere(
   const fog = scene.fog as THREE.Fog;
   fog.near = viewDistance ? viewDistance * 0.55 : THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.35, 48, 96);
   fog.far = viewDistance ?? THREE.MathUtils.clamp(Math.max(size.x, size.z) * 1.5, 160, 512);
-  camera.far = Math.max(1_000, fog.far * 3);
+  camera.far = Math.max(1_000, fog.far * (viewDistance ? 1.1 : 3));
   camera.updateProjectionMatrix();
   atmosphere.sky.scale.setScalar(camera.far * 0.96);
   atmosphere.nightSky.scale.copy(atmosphere.sky.scale);
@@ -725,7 +725,7 @@ function ExplorerScene({
     let collisionWorld: ExplorerCollisionWorld | null = null;
     const worldBounds = build.voxelBuild.world?.manifest.bounds;
     const worldViewDistance = worldBounds
-      ? Math.max(2048, Math.hypot(worldBounds.size.x, worldBounds.size.y, worldBounds.size.z) * 1.25)
+      ? Math.max(2048, Math.max(worldBounds.size.x, worldBounds.size.z) * 1.25)
       : undefined;
     let worldReady = false;
     let isNoclip = true;

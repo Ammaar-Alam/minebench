@@ -123,9 +123,14 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
     RETURNING j.id, j."customBuildId", j.type::text;
   `;
   for (const row of expiredQueuedRows) {
+    const recoverable = Boolean(await client.customBuildArtifact.findFirst({
+      where: { customBuildId: row.customBuildId, kind: { in: ["build_json", "raw_text_debug"] } },
+      select: { id: true },
+    }));
     await client.customBuild.updateMany({
       where: {
         id: row.customBuildId,
+        removedAt: null,
         status: { in: ["queued", "running"] },
       },
       data: {
@@ -134,9 +139,9 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         completedAt: new Date(),
         errorCode: "provider_key_expired",
         errorMessage: "Provider key expired before the worker could start.",
-        errorRetryable: false,
+        errorRetryable: recoverable,
         objectsDeletedAt: null,
-        deletionPendingAt: new Date(),
+        deletionPendingAt: recoverable ? null : new Date(),
         deletionError: null,
       },
     });
@@ -173,9 +178,14 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
   `;
   for (const row of failedRows) {
     if (row.type !== "generate") continue;
+    const recoverable = Boolean(await client.customBuildArtifact.findFirst({
+      where: { customBuildId: row.customBuildId, kind: { in: ["build_json", "raw_text_debug"] } },
+      select: { id: true },
+    }));
     await client.customBuild.updateMany({
       where: {
         id: row.customBuildId,
+        removedAt: null,
         status: { in: ["queued", "running"] },
       },
       data: {
@@ -184,9 +194,9 @@ async function recoverStaleCustomBuildJobLeasesInTransaction(
         completedAt: new Date(),
         errorCode: "lease_expired",
         errorMessage: "Worker lease expired after maximum attempts.",
-        errorRetryable: false,
+        errorRetryable: recoverable,
         objectsDeletedAt: null,
-        deletionPendingAt: new Date(),
+        deletionPendingAt: recoverable ? null : new Date(),
         deletionError: null,
       },
     });

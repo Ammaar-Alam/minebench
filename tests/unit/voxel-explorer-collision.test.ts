@@ -80,7 +80,9 @@ function worldCellCenter(raw: number, boundsOrigin: number, boundsSize: number):
 
 async function main() {
   assert.equal(adjustExplorerNoclipSpeedMultiplier(1, -100), 2);
-  assert.equal(adjustExplorerNoclipSpeedMultiplier(5, -100), 5);
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(5, -100), 6);
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(9, -100), 10);
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(10, -100), 10);
   assert.equal(adjustExplorerNoclipSpeedMultiplier(2, 100), 1);
   assert.equal(adjustExplorerNoclipSpeedMultiplier(1, 100), 1);
   assert.equal(adjustExplorerNoclipSpeedMultiplier(3, 0), 3);
