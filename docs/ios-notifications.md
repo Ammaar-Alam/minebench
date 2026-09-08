@@ -44,6 +44,8 @@ one delivery per registered device. A device/event unique key deduplicates enque
 The generation worker claims batches using `FOR UPDATE SKIP LOCKED` and contacts
 APNs outside the transaction. Notification polling runs independently of generation
 capacity and continues while active generations drain during shutdown.
+The worker reuses an HTTP/2 connection per APNs environment and closes connections
+after its final notification batch finishes.
 
 Delivery rechecks preferences, device ownership, account deletion, generation
 status, and current Gallery visibility. Individual devices retry temporary failures

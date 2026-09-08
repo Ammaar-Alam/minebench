@@ -110,7 +110,11 @@ async function enqueueNotification(tx: Prisma.TransactionClient, event: {
       ${event.kind}::"NotificationKind", ${event.subjectId}, ${event.eventKey},
       ${event.exampleId ?? null}, ${event.windowStart ?? null}::timestamp, ${event.runAfter ?? new Date()}::timestamp
     FROM devices d
-    ON CONFLICT ("deviceId", "eventKey") DO NOTHING
+    ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+    SET "finishedAt" = NULL, "leaseToken" = NULL, "leaseExpiresAt" = NULL
+    WHERE "PushDelivery".kind = 'gallery_upvotes'::"NotificationKind"
+      AND "PushDelivery"."finishedAt" IS NOT NULL
+      AND "PushDelivery"."runAfter" > now()
   `;
 }
 

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PushDelivery } from "@prisma/client";
 import { publicCandidateWhere, publicExampleWhere } from "@/lib/gallery/service";
-import { sendApnsNotification, type PushPayload } from "@/lib/notifications/apns";
+import { closeApnsConnections, sendApnsNotification, type PushPayload } from "@/lib/notifications/apns";
 import { notificationCategory, notificationsEnabled, NOTIFICATION_HOUR_MS } from "@/lib/notifications/service";
 import { prisma } from "@/lib/prisma";
 
@@ -152,5 +152,6 @@ export function startPushNotificationDelivery(): () => Promise<void> {
   return async () => {
     clearInterval(timer);
     await active;
+    closeApnsConnections();
   };
 }
