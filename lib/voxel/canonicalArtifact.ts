@@ -6,7 +6,7 @@ import path from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { constants as zlibConstants, createGzip } from "node:zlib";
-import { isPackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
+import { isPackedVoxelBlocks, voxelBuildBoxes } from "@/lib/voxel/packedBlocks";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 
 const ENCODER = new TextEncoder();
@@ -57,8 +57,8 @@ export function* canonicalBuildJsonChunks(build: BuildJsonSource): Generator<Uin
 
 export function* voxelBuildSourceJsonChunks(build: VoxelBuild): Generator<Uint8Array> {
   yield ENCODER.encode('{"version":"1.0"');
-  if (build.boxes?.length) {
-    yield* jsonArrayChunks(',"boxes":[', objectJson(build.boxes), "]");
+  if ((build.boxes?.length ?? 0) > 0 || (build.packedBoxes?.count ?? 0) > 0) {
+    yield* jsonArrayChunks(',"boxes":[', objectJson(voxelBuildBoxes(build)), "]");
   }
   if (build.lines?.length) {
     yield* jsonArrayChunks(',"lines":[', objectJson(build.lines), "]");

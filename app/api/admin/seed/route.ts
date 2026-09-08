@@ -368,8 +368,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const { packed, ...build } = r.build;
-    if (packed) throw new Error("Benchmark seeds require an expanded build");
+    const { packed, packedBoxes, ...build } = r.build;
+    if (packed || packedBoxes) throw new Error("Benchmark seeds require an expanded build");
     const buildJson = JSON.stringify(build);
     const saved = await prisma.build.create({
       data: {

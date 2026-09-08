@@ -4,6 +4,7 @@ import { generateVoxelBuild } from "../../../lib/ai/generateVoxelBuild";
 import { GRID_SIZES, isGridSize } from "../../../lib/ai/limits";
 import { voxelExecToolCallJsonSchema, voxelExecToolCallSchema } from "../../../lib/ai/tools/voxelExec";
 import { validateGeneratedBuildForArtifacts } from "../../../lib/custom-builds/generateJob";
+import { voxelBuildBoxes } from "../../../lib/voxel/packedBlocks";
 
 async function main() {
   assert.deepEqual(GRID_SIZES, [32, 64, 256, 512, 2048, 8192]);
@@ -47,8 +48,9 @@ async function main() {
       assert.equal(generated.blockCount, width * height * depth);
       if (gridSize > 512) {
         assert.equal(generated.build.blocks.length, 0);
-        assert.equal(generated.build.boxes?.[0]?.x2, edge);
-        assert.equal(generated.build.boxes?.[0]?.z2, edge);
+        const box = Array.from(voxelBuildBoxes(generated.build))[0];
+        assert.equal(box?.x2, edge);
+        assert.equal(box?.z2, edge);
       } else {
         assert.ok(generated.build.blocks.some((block) => block.x === edge && block.z === edge));
       }

@@ -19,6 +19,7 @@ import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
 import { parseExplorerBuildId } from "@/lib/voxel/explorerBuildId";
 import {
   EXPLORER_EYE_HEIGHT,
+  adjustExplorerNoclipSpeedMultiplier,
   createExplorerCollisionWorld,
   moveExplorerPlayerAxis,
   setExplorerMoveDirection,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/voxel/explorerLighting";
 import { createVoxelGroupAsync, type VoxelGroup } from "@/lib/voxel/mesh";
 import { createVoxelWorldScene, isVoxelWorldScene } from "@/lib/voxel/worldScene";
+import { renderWorldQuadDepth } from "@/lib/voxel/worldQuadGeometry";
 import {
   voxelBuildBlockCount,
   type RenderableVoxelBuild,
@@ -727,6 +729,7 @@ function ExplorerScene({
       : undefined;
     let worldReady = false;
     let isNoclip = true;
+    let noclipSpeedMultiplier = 1;
     let verticalVelocity = 0;
     let grounded = false;
     let bobWalking = false;
@@ -847,10 +850,13 @@ function ExplorerScene({
     });
     const sunRayOverlay = new FullScreenQuad(sunRayMaterial);
     let hasEmissiveMeshes = false;
+    const worldQuadMeshes: THREE.Mesh[] = [];
     const prepareVoxelMeshes = (group: THREE.Object3D) => {
       hasEmissiveMeshes = false;
+      worldQuadMeshes.length = 0;
       group.traverse((child) => {
         if (!(child instanceof THREE.Mesh)) return;
+        if (child.customDepthMaterial) worldQuadMeshes.push(child);
         const materials = Array.isArray(child.material) ? child.material : [child.material];
         child.castShadow = materials.every((material) => !material.transparent);
         child.receiveShadow = true;
@@ -894,6 +900,7 @@ function ExplorerScene({
         isNoclip = !isNoclip;
         verticalVelocity = 0;
         grounded = false;
+        lastWorldStreamPosition.set(Number.POSITIVE_INFINITY, 0, 0);
         setNoclip(isNoclip);
       }
       if (event.code === "KeyT" && !event.repeat) {
@@ -908,8 +915,18 @@ function ExplorerScene({
       }
     };
     const onKeyUp = (event: KeyboardEvent) => keys.delete(event.code);
+    const onWheel = (event: WheelEvent) => {
+      if (!controls.isLocked || event.deltaY === 0) return;
+      event.preventDefault();
+      if (!isNoclip) return;
+      noclipSpeedMultiplier = adjustExplorerNoclipSpeedMultiplier(
+        noclipSpeedMultiplier,
+        event.deltaY,
+      );
+    };
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("blur", clearKeys);
     const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reducedMotion = reducedMotionQuery.matches;
@@ -968,7 +985,7 @@ function ExplorerScene({
         renderer.setRenderTarget(bloomTarget);
         camera.layers.set(0);
         scene.overrideMaterial = bloomDepthMaterial;
-        renderer.render(scene, camera);
+        renderWorldQuadDepth(worldQuadMeshes, () => renderer.render(scene, camera));
         scene.overrideMaterial = null;
 
         if (hasSunRays) {
@@ -1105,7 +1122,7 @@ function ExplorerScene({
     let activeWorldCameraUpdate: Promise<void> | null = null;
     const lastWorldStreamPosition = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0);
     const updateWorldStreaming = () => {
-      if (activeWorldCameraUpdate || lastWorldStreamPosition.distanceToSquared(camera.position) < WORLD_STREAM_UPDATE_DISTANCE ** 2) return;
+      if (isNoclip || activeWorldCameraUpdate || lastWorldStreamPosition.distanceToSquared(camera.position) < WORLD_STREAM_UPDATE_DISTANCE ** 2) return;
       const collisionUpdate = collisionWorld?.updateActiveCamera;
       if (!collisionUpdate) return;
       lastWorldStreamPosition.copy(camera.position);
@@ -1151,7 +1168,10 @@ function ExplorerScene({
 
       const running = hasKey(keys, "ShiftLeft", "ShiftRight");
       if (isNoclip) {
-        camera.position.addScaledVector(movement, (running ? FLY_RUN_SPEED : FLY_SPEED) * seconds);
+        camera.position.addScaledVector(
+          movement,
+          (running ? FLY_RUN_SPEED : FLY_SPEED) * noclipSpeedMultiplier * seconds,
+        );
         bobWalking = false;
         return;
       }
@@ -1366,6 +1386,7 @@ function ExplorerScene({
       resizeObserver.disconnect();
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("wheel", onWheel);
       window.removeEventListener("blur", clearKeys);
       reducedMotionQuery.removeEventListener("change", onReducedMotionChange);
       controls.removeEventListener("lock", onLock);

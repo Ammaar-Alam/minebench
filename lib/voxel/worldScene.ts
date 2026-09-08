@@ -14,7 +14,7 @@ import type { PackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelPoint } from "@/lib/voxel/types";
 import { createWorldMeshBatches, packWorldMeshBatch } from "@/lib/voxel/worldMeshSource";
-import { decodeWorldMeshPayload, getWorldMeshVersion } from "@/lib/voxel/worldMesh";
+import { decodeWorldMeshPayload, isWorldMeshVersionSupported } from "@/lib/voxel/worldMesh";
 import {
   parseVoxelWorldManifest,
   parseVoxelWorldRegionPage,
@@ -462,7 +462,7 @@ export async function createVoxelWorldScene(
     processedBlocks = uniformRegions.reduce((sum, region) => sum + region.blockCount, 0);
     progress();
 
-    const preparedMesh = manifest.mesh && manifest.mesh.version === await getWorldMeshVersion() ? manifest.mesh : undefined;
+    const preparedMesh = manifest.mesh && await isWorldMeshVersionSupported(manifest.mesh.version) ? manifest.mesh : undefined;
     const batches = createWorldMeshBatches(regions, !preparedMesh);
     const addBatch = (rendered: VoxelGroup, origin: VoxelPoint, anchor: WorldCenter, blockCount: number) => {
       if (signal.aborted) {

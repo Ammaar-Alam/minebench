@@ -33,7 +33,7 @@ export function exportVoxelBuild(
   palette: BlockDefinition[],
   format: VoxelBuildExportFormat,
 ): VoxelBuildExportArtifact {
-  if (build.boxes?.length || build.lines?.length) {
+  if (build.boxes?.length || build.packedBoxes?.count || build.lines?.length) {
     throw new Error("This build uses compact regions. Download its JSON instead.");
   }
   if (format === "vox") {

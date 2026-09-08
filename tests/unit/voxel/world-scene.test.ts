@@ -99,13 +99,15 @@ async function main() {
     assert.ok(progress.filter((value) => value !== null).every((value) => value.totalBlocks === manifest.exactBlockCount));
     const geometry = meshes(scene.group);
     assert.ok(geometry.length <= 20, "regions share spatial material batches");
-    assert.ok(geometry.reduce((sum, mesh) => sum + mesh.geometry.getAttribute("worldQuad").count, 0) < 3000,
+    assert.ok(geometry.reduce((sum, mesh) => sum + mesh.geometry.userData.worldQuadCount, 0) < 3000,
       "coplanar surfaces merge without replacing source blocks");
     const covered = new Uint8Array(2048 * 64);
     for (const mesh of geometry) {
       assert.deepEqual(mesh.getWorldScale(new THREE.Vector3()).toArray(), [1, 1, 1]);
       assert.equal(mesh.frustumCulled, true);
-      const words = mesh.geometry.getAttribute("worldQuad");
+      const texture = mesh.geometry.userData.worldQuadTexture as THREE.DataTexture;
+      const count = mesh.geometry.userData.worldQuadCount as number;
+      const words = new THREE.BufferAttribute((texture.image.data as Uint32Array).subarray(0, count * 4), 4);
       assert.equal(words.itemSize, 4);
       assert.equal(words.array.byteLength, words.count * 16);
       const shader = {
@@ -187,7 +189,7 @@ async function main() {
       assert.equal(requested.length, 6);
       assert.equal(scene.getResidentStats().mixedRegions, 6);
       assert.deepEqual(new THREE.Box3().setFromObject(scene.group), scene.bounds.box);
-      assert.equal(meshes(scene.group).reduce((sum, mesh) => sum + mesh.geometry.getAttribute("worldQuad").count, 0), 36);
+      assert.equal(meshes(scene.group).reduce((sum, mesh) => sum + mesh.geometry.userData.worldQuadCount, 0), 36);
       scene.dispose();
     } finally {
       globalThis.Worker = previousWorker;

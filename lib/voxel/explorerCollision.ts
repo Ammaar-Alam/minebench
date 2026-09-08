@@ -21,6 +21,8 @@ import {
 export const EXPLORER_PLAYER_WIDTH = 0.6;
 export const EXPLORER_PLAYER_HEIGHT = 1.8;
 export const EXPLORER_EYE_HEIGHT = 1.62;
+const MIN_NOCLIP_SPEED_MULTIPLIER = 1;
+const MAX_NOCLIP_SPEED_MULTIPLIER = 5;
 
 const PLAYER_HALF_WIDTH = EXPLORER_PLAYER_WIDTH / 2;
 const MAX_COLLISION_AXIS = 8192;
@@ -40,6 +42,14 @@ const SPAWN_CLEARANCE = 0.2;
 
 export type ExplorerPosition = { x: number; y: number; z: number };
 export type ExplorerAxis = "x" | "y" | "z";
+
+export function adjustExplorerNoclipSpeedMultiplier(current: number, deltaY: number) {
+  const next = deltaY < 0 ? current + 1 : deltaY > 0 ? current - 1 : current;
+  return Math.min(
+    MAX_NOCLIP_SPEED_MULTIPLIER,
+    Math.max(MIN_NOCLIP_SPEED_MULTIPLIER, next),
+  );
+}
 
 export function setExplorerMoveDirection(
   target: ExplorerPosition,

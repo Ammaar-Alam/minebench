@@ -7,6 +7,7 @@ import {
   DIRS,
   SpatialBlockTable,
   type Direction,
+  type SpatialBlockLookup,
 } from "@/lib/voxel/ambientOcclusion";
 import type { SerializedBuildBounds, TransferableVoxelBlocks, VoxelMeshPayload } from "@/lib/voxel/mesh";
 import type { PackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
@@ -43,8 +44,8 @@ type PreparedWorldRegionMesh = {
   allowed: Set<string>;
   materialOccluding: Uint8Array;
   paletteTypeIds: Uint16Array;
-  table: SpatialBlockTable;
-  emitted: Uint8Array;
+  table: SpatialBlockLookup;
+  visibleFaceMasks: Uint8Array;
   filteredBlockCount: number;
   minX: number;
   minY: number;
@@ -98,6 +99,51 @@ type WorldQuadBuckets = Record<BucketName, WorldQuadBucket>;
 const WATER_BLOCK_ID = "water";
 const INVALID_TYPE = 0xffff;
 const ATLAS_PIXEL_MAX = 0xffff;
+const DENSE_LOOKUP_MAX_BYTES = 96 * 1024 * 1024;
+
+type WorldRegionBlockTable = SpatialBlockLookup & {
+  set(x: number, y: number, z: number, typeId: number): void;
+};
+
+class DenseWorldRegionBlockTable implements WorldRegionBlockTable {
+  private readonly width: number;
+  private readonly height: number;
+  private readonly depth: number;
+  private readonly values: Uint8Array | Uint16Array;
+
+  constructor(size: VoxelPoint, bytesPerCell: 1 | 2) {
+    this.width = size.x + 2;
+    this.height = size.y + 2;
+    this.depth = size.z + 2;
+    const cells = this.width * this.height * this.depth;
+    this.values = bytesPerCell === 1 ? new Uint8Array(cells) : new Uint16Array(cells);
+  }
+
+  set(x: number, y: number, z: number, typeId: number): void {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height || z < 0 || z >= this.depth) return;
+    this.values[(x * this.height + y) * this.depth + z] = typeId + 1;
+  }
+
+  get(x: number, y: number, z: number): number {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height || z < 0 || z >= this.depth) return -1;
+    const value = this.values[(x * this.height + y) * this.depth + z]!;
+    return value === 0 ? -1 : value - 1;
+  }
+}
+
+function createWorldRegionBlockTable(
+  size: VoxelPoint,
+  paletteSize: number,
+  capacity: number,
+): WorldRegionBlockTable {
+  const bytesPerCell = paletteSize <= 0xff ? 1 : paletteSize <= 0xffff ? 2 : null;
+  const cells = (size.x + 2) * (size.y + 2) * (size.z + 2);
+  // ponytail: fixed dense lookup cap fallback sparse if mixed batches exceed it
+  if (bytesPerCell && Number.isSafeInteger(cells) && cells * bytesPerCell <= DENSE_LOOKUP_MAX_BYTES) {
+    return new DenseWorldRegionBlockTable(size, bytesPerCell);
+  }
+  return new SpatialBlockTable(capacity);
+}
 
 function assertRegionSize(size: VoxelPoint): void {
   for (const axis of ["x", "y", "z"] as const) {
@@ -394,8 +440,8 @@ function prepareWorldRegionMesh(
     materialOccluding[typeId] = isVoxelOccluder(allowedBlockIds[typeId]!) ? 1 : 0;
   }
 
-  const table = new SpatialBlockTable(blocks.count + (opts.halo?.count ?? 0));
-  const emitted = new Uint8Array(blocks.count);
+  const table = createWorldRegionBlockTable(opts.size, allowedBlockIds.length, blocks.count + (opts.halo?.count ?? 0));
+  const visibleFaceMasks = new Uint8Array(blocks.count);
   let filteredBlockCount = 0;
   let minX = Infinity;
   let minY = Infinity;
@@ -438,8 +484,9 @@ function prepareWorldRegionMesh(
     const x = blocks.positions[index * 3]!;
     const y = blocks.positions[index * 3 + 1]!;
     const z = blocks.positions[index * 3 + 2]!;
-    if (computeVisibleFaceMask(tableCoordinate(x), tableCoordinate(y), tableCoordinate(z), typeId, table, materialOccluding) === 0) continue;
-    emitted[index] = 1;
+    const visibleFaceMask = computeVisibleFaceMask(tableCoordinate(x), tableCoordinate(y), tableCoordinate(z), typeId, table, materialOccluding);
+    if (visibleFaceMask === 0) continue;
+    visibleFaceMasks[index] = visibleFaceMask;
     filteredBlockCount += 1;
   }
 
@@ -454,7 +501,7 @@ function prepareWorldRegionMesh(
     materialOccluding,
     paletteTypeIds,
     table,
-    emitted,
+    visibleFaceMasks,
     filteredBlockCount,
     minX,
     minY,
@@ -486,7 +533,8 @@ export function buildWorldRegionGreedyMeshPayload(
   const typeMetadata = buildTypeMetadata(packed.typeNames, prepared.allowed, opts.size);
 
   for (let index = 0; index < packed.count; index += 1) {
-    if (prepared.emitted[index] === 0) continue;
+    const visibleFaceMask = prepared.visibleFaceMasks[index]!;
+    if (visibleFaceMask === 0) continue;
     const sourceTypeId = packed.typeIds[index]!;
     const paletteTypeId = paletteTypeIds[sourceTypeId] ?? INVALID_TYPE;
     if (paletteTypeId === INVALID_TYPE) continue;
@@ -497,17 +545,8 @@ export function buildWorldRegionGreedyMeshPayload(
     const z = packed.positions[index * 3 + 2]!;
 
     for (const face of metadata.faces) {
+      if ((visibleFaceMask & (1 << face.directionIndex)) === 0) continue;
       const direction = face.direction;
-      const neighborTypeId = prepared.table.get(
-        tableCoordinate(x + direction.dx),
-        tableCoordinate(y + direction.dy),
-        tableCoordinate(z + direction.dz),
-      );
-      if (neighborTypeId !== -1) {
-        if (neighborTypeId === paletteTypeId) continue;
-        if (prepared.materialOccluding[neighborTypeId] === 1) continue;
-      }
-
       const atlasWord = face.atlasWord;
       if (atlasWord === null) continue;
       const ao = face.bucket === "emissive" || face.bucket === "water"

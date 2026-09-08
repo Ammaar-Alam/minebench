@@ -883,6 +883,11 @@ function collectTransferables(payload: VoxelMeshPayload): Transferable[] {
   for (const quads of Object.values(payload.worldQuads ?? {})) {
     if (quads instanceof Uint32Array) transferables.push(quads.buffer);
   }
+  const depth = payload.worldQuads?.transparentDepth;
+  if (depth?.quads) transferables.push(depth.quads.buffer);
+  for (const page of [...payload.worldQuads?.surfaces ?? [], ...depth?.surfaces ?? []]) {
+    transferables.push(page.quads.buffer, page.texels.buffer);
+  }
   return transferables;
 }
 

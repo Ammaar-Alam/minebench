@@ -9,6 +9,8 @@ import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import {
   createPackedVoxelBlocks,
   isPackedVoxelBlocks,
+  isPackedVoxelBoxes,
+  voxelBuildBoxes,
   type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 
@@ -76,7 +78,7 @@ function normalizeParsedBuild(data: z.infer<typeof buildSchema>): VoxelBuild {
 export function parseVoxelBuildSpec(
   input: unknown,
 ): { ok: true; value: VoxelBuild } | { ok: false; error: string } {
-  if (isRecord(input) && input.packed !== undefined) return parseOwnedVoxelBuildSpec(input);
+  if (isRecord(input) && (input.packed !== undefined || input.packedBoxes !== undefined)) return parseOwnedVoxelBuildSpec(input);
   const parsed = buildSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.message };
 
@@ -143,6 +145,9 @@ function validateVoxelBuildSpecInternal(
 ): VoxelValidationResult {
   if (build.packed !== undefined && !isPackedVoxelBlocks(build.packed)) {
     return { ok: false, error: "Invalid packed blocks" };
+  }
+  if (build.packedBoxes !== undefined && !isPackedVoxelBoxes(build.packedBoxes)) {
+    return { ok: false, error: "Invalid packed boxes" };
   }
   const allowed = new Set(opts.palette.map((b) => b.id));
   const paletteIndex = new Map(opts.palette.map((block, index) => [block.id, index + 1]));
@@ -231,7 +236,7 @@ function validateVoxelBuildSpecInternal(
   };
 
   try {
-    const boxes = build.boxes ?? [];
+    const boxes = voxelBuildBoxes(build);
     const lines = build.lines ?? [];
 
     for (const box of boxes) {
@@ -344,6 +349,7 @@ function validateVoxelBuildSpecInternal(
     if (build.boxes) build.boxes.length = 0;
     if (build.lines) build.lines.length = 0;
     delete build.packed;
+    delete build.packedBoxes;
   }
   const packed = opts.output === "packed" ? createPackedVoxelBlocks(occupiedCount) : undefined;
   const packedTypeIds = packed ? new Int32Array(opts.palette.length).fill(-1) : undefined;
@@ -472,6 +478,9 @@ export function parseOwnedVoxelBuildSpec(
   }
   if (input.packed !== undefined && !isPackedVoxelBlocks(input.packed)) {
     return { ok: false, error: "Invalid packed blocks" };
+  }
+  if (input.packedBoxes !== undefined && !isPackedVoxelBoxes(input.packedBoxes)) {
+    return { ok: false, error: "Invalid packed boxes" };
   }
   return { ok: true, value: input as RenderableVoxelBuild };
 }

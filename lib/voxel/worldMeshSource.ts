@@ -8,6 +8,7 @@ import {
 } from "./packedBlocks";
 import type { VoxelWorldBounds, VoxelWorldMixedRegion, VoxelWorldPartRef, VoxelWorldRegion } from "./world";
 import { buildWorldRegionGreedyMeshPayload } from "./worldRegionMesh";
+import { packWorldSurfaceTiles } from "./worldSurfaceTiles";
 
 export type WorldMeshBatch = {
   bounds: VoxelWorldBounds;
@@ -179,6 +180,13 @@ export async function* buildWorldMeshPayloads(args: {
     parts.clear();
     decodedParts.clear();
     const payload = buildWorldRegionGreedyMeshPayload(packed, args.paletteIds, { size: batch.bounds.size, halo });
+    const surfaces = packWorldSurfaceTiles(payload.worldQuads!.opaque);
+    if (surfaces.surfaces.length > 0) Object.assign(payload.worldQuads!, surfaces);
+    const transparentDepth = packWorldSurfaceTiles(payload.worldQuads!.transparent);
+    const depthQuadWords = (transparentDepth.opaque?.length ?? 0) + transparentDepth.surfaces.reduce((total, page) => total + page.quads.length, 0);
+    if (transparentDepth.surfaces.length > 0 && depthQuadWords < (payload.worldQuads!.transparent?.length ?? 0)) {
+      payload.worldQuads!.transparentDepth = { quads: transparentDepth.opaque, surfaces: transparentDepth.surfaces };
+    }
     args.throwIfCanceled?.();
     yield { bounds: batch.bounds, blockCount: packed.count, payload };
   }

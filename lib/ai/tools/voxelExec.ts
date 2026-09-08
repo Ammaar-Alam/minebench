@@ -9,9 +9,10 @@ import type { PaletteMode } from "@/lib/ai/types";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { voxelBuildSourceJsonChunks } from "@/lib/voxel/canonicalArtifact";
 import {
-  appendCoalescedVoxelBox,
+  appendPackedVoxelBox,
   appendPackedVoxelBlocks,
   createPackedVoxelBlocks,
+  createPackedVoxelBoxes,
 } from "@/lib/voxel/packedBlocks";
 
 export const VOXEL_EXEC_TOOL_NAME = "voxel.exec" as const;
@@ -166,6 +167,7 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
     [];
   const blocks: { x: number; y: number; z: number; type: string }[] = [];
   const packed = params.gridSize > 512 || params.packedOutput ? createPackedVoxelBlocks(0) : undefined;
+  const packedBoxes = packed ? createPackedVoxelBoxes() : undefined;
   const blockBatch: typeof blocks = [];
   let blockCount = 0;
   let boxCount = 0;
@@ -209,7 +211,7 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
       type: toType(type),
     };
     boxCount += 1;
-    if (packed) appendCoalescedVoxelBox(boxes, value);
+    if (packedBoxes) appendPackedVoxelBox(packedBoxes, value);
     else boxes.push(value);
   };
   const line = (...args: unknown[]) => {
@@ -274,6 +276,7 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
     lines,
     blocks,
     ...(packed ? { packed } : {}),
+    ...(packedBoxes ? { packedBoxes } : {}),
   };
 
   const outDir = pickOutputDir(params.outputDir);

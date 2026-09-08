@@ -42,7 +42,7 @@ import {
   type WorldRegionMeshOptions,
 } from "@/lib/voxel/worldRegionMesh";
 import type { WorldQuadPayload } from "@/lib/voxel/worldQuadData";
-import { configureWorldQuadMesh, createWorldQuadGeometry } from "@/lib/voxel/worldQuadGeometry";
+import { configureWorldQuadMesh, createWorldQuadGeometry, WORLD_QUAD_TEXTURE_CAPACITY } from "@/lib/voxel/worldQuadGeometry";
 
 export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
 
@@ -383,6 +383,11 @@ function collectPayloadTransferables(payload: VoxelMeshPayload): Transferable[] 
   }
   for (const quads of Object.values(payload.worldQuads ?? {})) {
     if (quads instanceof Uint32Array) transferables.push(quads.buffer);
+  }
+  const depth = payload.worldQuads?.transparentDepth;
+  if (depth?.quads) transferables.push(depth.quads.buffer);
+  for (const page of [...payload.worldQuads?.surfaces ?? [], ...depth?.surfaces ?? []]) {
+    transferables.push(page.quads.buffer, page.texels.buffer);
   }
   return transferables;
 }
@@ -1067,21 +1072,63 @@ export function createVoxelGroupFromMeshPayload(
   group.name = "VoxelGroup";
 
   const worldQuads = payload.worldQuads;
-  const addMesh = (kind: "opaque" | "cutout" | "transparent" | "water" | "emissive", material: THREE.Material) => {
-    const geometry = worldQuads
-      ? createWorldQuadGeometry(worldQuads[kind], bounds)
-      : buildGeometryFromSerialized(payload[kind], bounds);
-    if (!geometry) return;
-    const mesh = new THREE.Mesh(geometry, material);
-    if (worldQuads) configureWorldQuadMesh(mesh, worldQuads.anchor, kind === "water");
-    if (kind === "water") mesh.renderOrder = 1;
-    group.add(mesh);
+  const addMesh = (
+    kind: "opaque" | "cutout" | "transparent" | "water" | "emissive",
+    material: THREE.Material,
+    words: Uint32Array | null = worldQuads?.[kind] ?? null,
+    depthOnly = false,
+  ) => {
+    const append = (geometry: THREE.BufferGeometry | null, partMaterial: THREE.Material) => {
+      if (!geometry) return;
+      const mesh = new THREE.Mesh(geometry, partMaterial);
+      if (worldQuads) configureWorldQuadMesh(mesh, worldQuads.anchor, kind === "water");
+      if (kind === "water") mesh.renderOrder = 1;
+      if (depthOnly) {
+        mesh.visible = false;
+        mesh.userData.worldDepthRole = "replacement";
+      } else if (kind === "transparent" && worldQuads?.transparentDepth) {
+        mesh.userData.worldDepthRole = "source";
+      }
+      group.add(mesh);
+    };
+    if (!worldQuads) {
+      append(buildGeometryFromSerialized(payload[kind], bounds), material);
+      return;
+    }
+    if (!words) return;
+    const pageWords = WORLD_QUAD_TEXTURE_CAPACITY * 4;
+    for (let offset = 0; offset < words.length; offset += pageWords) {
+      append(createWorldQuadGeometry(words.subarray(offset, offset + pageWords), bounds), offset === 0 ? material : material.clone());
+    }
   };
   addMesh("opaque", matOpaque);
   addMesh("cutout", matCutout);
   addMesh("transparent", matTransparent);
   addMesh("water", matWater);
   addMesh("emissive", matEmissive);
+  if (worldQuads?.transparentDepth) {
+    addMesh("transparent", matTransparent.clone(), worldQuads.transparentDepth.quads, true);
+  }
+
+  for (const [pages, material, depthOnly] of [
+    [worldQuads?.surfaces ?? [], matOpaque, false],
+    [worldQuads?.transparentDepth?.surfaces ?? [], matTransparent, true],
+  ] as const) for (const page of pages) {
+    const geometry = createWorldQuadGeometry(page.quads, bounds);
+    if (!geometry) continue;
+    // keep texture residency from retaining the other decoded mesh buckets
+    const texels = page.texels.byteLength === page.texels.buffer.byteLength ? page.texels : page.texels.slice();
+    const texture = new THREE.DataTexture(texels, page.width, page.height, THREE.RedIntegerFormat, THREE.UnsignedIntType);
+    texture.internalFormat = "R32UI";
+    texture.needsUpdate = true;
+    const mesh = new THREE.Mesh(geometry, material.clone());
+    configureWorldQuadMesh(mesh, worldQuads!.anchor, false, texture);
+    if (depthOnly) {
+      mesh.visible = false;
+      mesh.userData.worldDepthRole = "replacement";
+    }
+    group.add(mesh);
+  }
 
   return {
     group,

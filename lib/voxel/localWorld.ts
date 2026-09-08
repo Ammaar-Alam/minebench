@@ -502,7 +502,7 @@ async function createLocalVoxelWorldWithStorage(
       })) {
         const encoded = encodeWorldMeshPayload(batch.payload);
         const compressed = await gzipBytes(encoded);
-        const meshKey = `${worldId}.mesh.${mesh.batches.length}.mbq1.gz`;
+        const meshKey = `${worldId}.mesh.${mesh.batches.length}.mbq2.gz`;
         await putBytes(meshKey, compressed);
         mesh.batches.push({
           bounds: batch.bounds,

@@ -3,6 +3,7 @@ import { gzipSync } from "node:zlib";
 import {
   EXPLORER_EYE_HEIGHT,
   EXPLORER_PLAYER_WIDTH,
+  adjustExplorerNoclipSpeedMultiplier,
   createExplorerCollisionWorld,
   moveExplorerPlayerAxis,
   readVoxelWorldPartBytes,
@@ -78,6 +79,12 @@ function worldCellCenter(raw: number, boundsOrigin: number, boundsSize: number):
 }
 
 async function main() {
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(1, -100), 2);
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(5, -100), 5);
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(2, 100), 1);
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(1, 100), 1);
+  assert.equal(adjustExplorerNoclipSpeedMultiplier(3, 0), 3);
+
   const movement = { x: 0, y: 0, z: 0 };
   const pitchedForward = { x: 0, y: 0.6, z: -0.8 };
   setExplorerMoveDirection(movement, pitchedForward, { x: 1, y: 0, z: 0 }, 1, 0, 0);

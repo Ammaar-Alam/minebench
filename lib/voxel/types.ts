@@ -1,4 +1,4 @@
-import type { PackedVoxelBlocks } from "./packedBlocks";
+import type { PackedVoxelBlocks, PackedVoxelBoxes } from "./packedBlocks";
 
 export type VoxelBlock = {
   x: number;
@@ -32,6 +32,7 @@ export type VoxelLine = {
 export type VoxelBuild = {
   version: "1.0";
   boxes?: VoxelBox[];
+  packedBoxes?: PackedVoxelBoxes;
   lines?: VoxelLine[];
   blocks: VoxelBlock[];
   packed?: PackedVoxelBlocks;

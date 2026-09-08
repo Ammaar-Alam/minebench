@@ -406,6 +406,7 @@ export async function persistVoxelWorldArtifacts(args: {
       if (args.sourceBuild.boxes) args.sourceBuild.boxes.length = 0;
       if (args.sourceBuild.lines) args.sourceBuild.lines.length = 0;
       delete args.sourceBuild.packed;
+      delete args.sourceBuild.packedBoxes;
     }
     await flushPage();
 

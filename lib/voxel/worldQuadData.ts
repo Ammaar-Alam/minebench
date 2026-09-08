@@ -1,6 +1,13 @@
+import type { WorldSurfaceTilePage } from "@/lib/voxel/worldSurfaceTiles";
+
 export type WorldQuadBucketName = "opaque" | "cutout" | "transparent" | "water" | "emissive";
 export type WorldQuadTintIndex = 0 | 1 | 2 | 3;
 export type WorldQuadAnchor = [number, number, number];
+
+export type WorldQuadTransparentDepthPayload = {
+  quads: Uint32Array | null;
+  surfaces: WorldSurfaceTilePage[];
+};
 
 export type WorldQuadPayload = {
   anchor: WorldQuadAnchor;
@@ -9,6 +16,8 @@ export type WorldQuadPayload = {
   transparent: Uint32Array | null;
   water: Uint32Array | null;
   emissive: Uint32Array | null;
+  surfaces?: WorldSurfaceTilePage[];
+  transparentDepth?: WorldQuadTransparentDepthPayload;
 };
 
 export type WorldQuadBucket = {

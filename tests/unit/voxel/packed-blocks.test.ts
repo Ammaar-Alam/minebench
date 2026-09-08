@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
 import {
   appendCoalescedVoxelBox,
+  appendPackedVoxelBox,
   appendPackedVoxelBlocks,
   copyPackedVoxelBlocks,
   createPackedVoxelBlocks,
+  createPackedVoxelBoxes,
+  isPackedVoxelBoxes,
   packVoxelBlocks,
   packedVoxelBlocksCapacity,
+  readPackedVoxelBox,
   reservePackedVoxelBlocks,
   toObjectBackedVoxelBuild,
+  unpackVoxelBoxes,
   unpackVoxelBlocks,
   voxelBuildBlockCount,
+  voxelBuildBoxes,
   voxelBuildBlocksRef,
+  type PackedVoxelBoxRecord,
 } from "../../../lib/voxel/packedBlocks";
 import type { VoxelBlock, VoxelBox } from "../../../lib/voxel/types";
 import { parseVoxelBuildSpec } from "../../../lib/voxel/validate";
@@ -49,6 +56,47 @@ async function main() {
     assert.equal(parseVoxelBuildSpec({ ...source, packed: { ...packed, count: 2 } }).ok, false);
     assert.equal(parseVoxelBuildSpec({ ...source, packed: { ...packed, typeNames: [] } }).ok, false);
     assert.throws(() => packVoxelBlocks([{ x: 32768, y: 0, z: 0, type: "stone" }]), /coordinate range/);
+
+    const packedBoxes = createPackedVoxelBoxes();
+    for (const x of [0, 1, 2]) appendPackedVoxelBox(packedBoxes, { x1: x, y1: 0, z1: 0, x2: x, y2: 1, z2: 1, type: "stone" });
+    appendPackedVoxelBox(packedBoxes, { x1: 40_000, y1: 0, z1: 0, x2: 40_001, y2: 0, z2: 0, type: "glass" });
+    assert.equal(isPackedVoxelBoxes(packedBoxes), true);
+    assert.deepEqual(unpackVoxelBoxes(packedBoxes), [
+      { x1: 0, y1: 0, z1: 0, x2: 2, y2: 1, z2: 1, type: "stone" },
+      { x1: 40_000, y1: 0, z1: 0, x2: 40_001, y2: 0, z2: 0, type: "glass" },
+    ]);
+    const packedBox: PackedVoxelBoxRecord = { x1: 0, y1: 0, z1: 0, x2: 0, y2: 0, z2: 0, type: "", typeId: 0 };
+    assert.equal(readPackedVoxelBox(packedBoxes, 1, packedBox), true);
+    assert.equal(packedBox.x1, 40_000);
+    assert.equal(packedBoxes.chunks.length, 1);
+    assert.equal(packedBoxes.chunks[0]?.coordinates instanceof Float64Array, true);
+    assert.equal(parseVoxelBuildSpec({ version: "1.0", blocks: [], packedBoxes }).ok, true);
+    assert.equal(isPackedVoxelBoxes({ ...packedBoxes, count: 99 }), false);
+
+    const boundary = createPackedVoxelBoxes();
+    appendPackedVoxelBox(boundary, { x1: 32_767, y1: 0, z1: 0, x2: 32_767, y2: 0, z2: 0, type: "stone" });
+    appendPackedVoxelBox(boundary, { x1: 32_768, y1: 0, z1: 0, x2: 32_768, y2: 0, z2: 0, type: "stone" });
+    assert.equal(boundary.chunks.length, 1);
+    assert.equal(boundary.chunks[0]?.coordinates instanceof Float64Array, true);
+    assert.deepEqual(unpackVoxelBoxes(boundary), [{ x1: 32_767, y1: 0, z1: 0, x2: 32_768, y2: 0, z2: 0, type: "stone" }]);
+
+    const alternating = createPackedVoxelBoxes();
+    for (let index = 0; index < 1_000; index += 1) {
+      const x = index % 2 === 0 ? index : 40_000 + index;
+      appendPackedVoxelBox(alternating, { x1: x, y1: index, z1: 0, x2: x, y2: index, z2: 0, type: index % 2 === 0 ? "stone" : "glass" });
+    }
+    assert.equal(alternating.count, 1_000);
+    assert.equal(alternating.chunks.length, 1);
+    assert.equal(alternating.chunks[0]?.coordinates instanceof Float64Array, true);
+
+    const invalidFloat = createPackedVoxelBoxes();
+    appendPackedVoxelBox(invalidFloat, { x1: 40_000, y1: 0, z1: 0, x2: 40_000, y2: 0, z2: 0, type: "stone" });
+    invalidFloat.chunks[0]!.coordinates[0] = Number.NaN;
+    assert.equal(isPackedVoxelBoxes(invalidFloat), false);
+    assert.equal(parseVoxelBuildSpec({ version: "1.0", blocks: [], packedBoxes: invalidFloat }).ok, false);
+    invalidFloat.chunks[0]!.coordinates[0] = 0.5;
+    assert.equal(isPackedVoxelBoxes(invalidFloat), false);
+    assert.equal(parseVoxelBuildSpec({ version: "1.0", blocks: [], packedBoxes: invalidFloat }).ok, false);
   }
   {
     const blocks = makeBlocks(500);
@@ -125,6 +173,15 @@ async function main() {
     assert.deepEqual(materialized.blocks, blocks);
     assert.equal("packed" in materialized, false);
     assert.equal(toObjectBackedVoxelBuild(objectBuild), objectBuild);
+
+    const packedBoxes = createPackedVoxelBoxes();
+    appendPackedVoxelBox(packedBoxes, { x1: 0, y1: 0, z1: 0, x2: 1, y2: 0, z2: 0, type: "stone" });
+    const boxBuild = { version: "1.0" as const, blocks: [], packedBoxes };
+    assert.equal(voxelBuildBlocksRef(boxBuild), packedBoxes);
+    assert.deepEqual(Array.from(voxelBuildBoxes(boxBuild)), [{ x1: 0, y1: 0, z1: 0, x2: 1, y2: 0, z2: 0, type: "stone" }]);
+    const objectBoxes = toObjectBackedVoxelBuild(boxBuild);
+    assert.deepEqual(objectBoxes.boxes, [{ x1: 0, y1: 0, z1: 0, x2: 1, y2: 0, z2: 0, type: "stone" }]);
+    assert.equal("packedBoxes" in objectBoxes, false);
   }
 
   {

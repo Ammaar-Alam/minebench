@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { packWorldSurfaceTiles } from "../../../lib/voxel/worldSurfaceTiles";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -116,15 +117,18 @@ async function nativePersistence(tempRoot: string) {
           const { packed, halo } = packWorldMeshBatch(batch, parts);
           const expected = buildWorldRegionGreedyMeshPayload(packed, getPalette("simple").map((block) => block.id),
             { size: batch.bounds.size, halo });
+          const surfaces = packWorldSurfaceTiles(expected.worldQuads!.opaque);
+          if (surfaces.surfaces.length > 0) Object.assign(expected.worldQuads!, surfaces);
           const decoded = decodeWorldMeshPayload(gunzipSync(saved.get(reference.data.key)!.bytes!));
           assert.deepEqual(decoded, expected, "stored geometry must retain every quad, bounds, and halo-derived AO value");
           assert.equal(reference.blockCount, packed.count);
           const rendered = createVoxelGroupFromMeshPayload(decoded, texture);
           const expectedQuads = Object.values(decoded.worldQuads!).reduce((sum, value) =>
-            sum + (value instanceof Uint32Array ? value.length / 4 : 0), 0);
+            sum + (value instanceof Uint32Array ? value.length / 4 : 0), 0) +
+            (decoded.worldQuads!.surfaces ?? []).reduce((sum, page) => sum + page.quads.length / 4, 0);
           const renderedQuads = rendered.group.children.reduce((sum, child) =>
             sum + (child instanceof THREE.Mesh && child.geometry instanceof THREE.InstancedBufferGeometry
-              ? child.geometry.instanceCount : 0), 0);
+              ? child.geometry.userData.worldQuadCount : 0), 0);
           assert.equal(renderedQuads, expectedQuads);
           assert.equal(rendered.stats.blockCount, decoded.filteredBlockCount);
           rendered.dispose();

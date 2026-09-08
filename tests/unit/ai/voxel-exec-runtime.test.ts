@@ -9,7 +9,7 @@ import {
   LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS,
   runVoxelExec,
 } from "../../../lib/ai/tools/voxelExec";
-import { unpackVoxelBlocks } from "../../../lib/voxel/packedBlocks";
+import { unpackVoxelBlocks, unpackVoxelBoxes } from "../../../lib/voxel/packedBlocks";
 
 const originalOutputDir = process.env.MINEBENCH_TOOL_OUTPUT_DIR;
 const originalTmpDir = process.env.TMPDIR;
@@ -59,7 +59,10 @@ try {
     gridSize: 8192, palette: "simple",
   });
   assert.deepEqual([compact.boxCount, compact.lineCount, compact.blockCount], [2, 1, 2]);
-  assert.equal(compact.build.boxes?.length, 1);
+  assert.deepEqual(unpackVoxelBoxes(compact.build.packedBoxes!), [
+    { x1: 0, y1: 0, z1: 0, x2: 2, y2: 1, z2: 1, type: "stone" },
+  ]);
+  assert.deepEqual(compact.build.boxes, []);
   assert.deepEqual(compact.build.blocks, []);
   assert.deepEqual(unpackVoxelBlocks(compact.build.packed!), [
     { x: 0, y: 0, z: 0, type: "gold_block" },

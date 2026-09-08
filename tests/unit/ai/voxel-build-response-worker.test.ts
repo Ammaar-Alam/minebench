@@ -64,7 +64,7 @@ async function main() {
   assert.equal(world.blockCount, 8192 ** 3);
   assert.equal(world.build.blocks.length, 0);
   assert.equal(world.build.packed?.count ?? 0, 0);
-  assert.equal(world.build.boxes?.length, 1, "whole worlds retain compact primitives across the thread boundary");
+  assert.equal(world.build.packedBoxes?.count, 1, "whole worlds retain compact primitives across the thread boundary");
 
   const overCapacity = await processVoxelBuildResponseInWorker(
     response('box(0, 0, 0, 511, 511, 511, "stone");', 512),

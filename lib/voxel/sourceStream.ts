@@ -1,4 +1,9 @@
-import { appendCoalescedVoxelBox, appendPackedVoxelBlocks, createPackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
+import {
+  appendPackedVoxelBox,
+  appendPackedVoxelBlocks,
+  createPackedVoxelBlocks,
+  createPackedVoxelBoxes,
+} from "@/lib/voxel/packedBlocks";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseOwnedVoxelBuildSpec } from "@/lib/voxel/validate";
 
@@ -10,7 +15,14 @@ export async function parseVoxelBuildStream(
   if (opts.maxBlocks !== undefined && (!Number.isSafeInteger(opts.maxBlocks) || opts.maxBlocks < 0)) {
     throw new Error("Invalid build block limit");
   }
-  const build: VoxelBuild = { version: "1.0", boxes: [], lines: [], blocks: [], packed: createPackedVoxelBlocks(0) };
+  const build: VoxelBuild = {
+    version: "1.0",
+    boxes: [],
+    packedBoxes: createPackedVoxelBoxes(),
+    lines: [],
+    blocks: [],
+    packed: createPackedVoxelBlocks(0),
+  };
   const batch: unknown[] = [];
   let batchChars = 0;
   const fields = new Set<string>();
@@ -38,7 +50,7 @@ export async function parseVoxelBuildStream(
     if (!parsed.ok) throw new Error(`Invalid ${field} entry: ${parsed.error}`);
     if (field === "boxes") {
       for (const { x1, y1, z1, x2, y2, z2, type } of parsed.value.boxes!) {
-        appendCoalescedVoxelBox(build.boxes!, { x1, y1, z1, x2, y2, z2, type });
+        appendPackedVoxelBox(build.packedBoxes!, { x1, y1, z1, x2, y2, z2, type });
       }
     } else if (field === "lines") {
       for (const { from, to, type } of parsed.value.lines!) {

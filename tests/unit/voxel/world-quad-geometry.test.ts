@@ -3,7 +3,9 @@ import { runInNewContext } from "node:vm";
 import * as THREE from "three";
 import { DIRS } from "../../../lib/voxel/ambientOcclusion";
 import { WORLD_QUAD_COLORS } from "../../../lib/voxel/worldQuadData";
-import { configureWorldQuadMesh, createWorldQuadGeometry } from "../../../lib/voxel/worldQuadGeometry";
+import { configureWorldQuadMesh, createWorldQuadGeometry, renderWorldQuadDepth } from "../../../lib/voxel/worldQuadGeometry";
+import { createVoxelGroupFromMeshPayload } from "../../../lib/voxel/mesh";
+import { packWorldSurfaceTiles } from "../../../lib/voxel/worldSurfaceTiles";
 
 const bounds = {
   box: new THREE.Box3(new THREE.Vector3(98, -2, -12), new THREE.Vector3(102, 2, -8)),
@@ -54,20 +56,19 @@ function shaderDecoder(vertexShader: string) {
   assert.throws(() => createWorldQuadGeometry(new Uint32Array(3), bounds), /four words/);
   const quads = new Uint32Array([...quad(), ...quad(5)]);
   const geometry = createWorldQuadGeometry(quads, bounds)!;
-  const attribute = geometry.getAttribute("worldQuad") as THREE.InstancedBufferAttribute;
+  const texture = geometry.userData.worldQuadTexture as THREE.DataTexture;
+  const data = texture.image.data as Uint32Array;
   assert.equal(geometry.isInstancedBufferGeometry, true);
-  assert.equal(geometry.instanceCount, 2);
-  assert.equal(attribute.isInstancedBufferAttribute, true);
-  assert.equal(attribute.meshPerAttribute, 1);
-  assert.equal(attribute.gpuType, THREE.IntType);
-  assert.equal(attribute.normalized, false);
-  assert.equal(attribute.array, quads);
-  assert.equal(attribute.array.byteLength, geometry.instanceCount * 16);
-  assert.equal(attribute.itemSize, 4);
-  assert.equal(attribute.count, 2);
-  assert.deepEqual(Array.from(geometry.index!.array), [0, 1, 2, 0, 2, 3]);
-  for (const name of ["position", "normal", "uv", "color"]) assert.equal(geometry.getAttribute(name).count, 4);
+  assert.equal(geometry.instanceCount, 1);
+  assert.equal(geometry.userData.worldQuadCount, 2);
+  assert.equal(texture.format, THREE.RGBAIntegerFormat);
+  assert.equal(texture.type, THREE.UnsignedIntType);
+  assert.deepEqual(data.subarray(0, quads.length), quads);
+  assert.ok(data.subarray(quads.length).every((word) => word === 0), "padding creates only degenerate faces");
+  assert.deepEqual(Array.from(geometry.index!.array).slice(0, 12), [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
+  for (const name of ["position", "normal", "uv", "color"]) assert.equal(geometry.getAttribute(name).count, 256);
   assert.deepEqual([0, 1, 2, 3].map((i) => geometry.getAttribute("position").getX(i)), [0, 1, 2, 3]);
+  assert.equal(geometry.getAttribute("position").getX(255), 255, "the final corner must fit the vertex index attribute");
   assert.ok(geometry.boundingBox!.equals(bounds.box));
   assert.ok(geometry.boundingSphere!.center.equals(bounds.center));
   assert.equal(geometry.boundingSphere!.radius, bounds.radius);
@@ -81,6 +82,18 @@ function shaderDecoder(vertexShader: string) {
   assert.equal(frustum.intersectsObject(mesh), true, "batch bounds must remain visible when the base quad is outside the camera");
   geometry.dispose();
   mesh.material.dispose();
+}
+
+{
+  const quads = new Uint32Array(65 * 4);
+  for (let index = 0; index < 65; index += 1) quads.set(quad(index % 6), index * 4);
+  const geometry = createWorldQuadGeometry(quads, bounds)!;
+  const texture = geometry.userData.worldQuadTexture as THREE.DataTexture;
+  const data = texture.image.data as Uint32Array;
+  assert.equal(geometry.instanceCount, 2);
+  assert.deepEqual(data.subarray(0, quads.length), quads);
+  assert.ok(data.subarray(quads.length).every((word) => word === 0));
+  geometry.dispose();
 }
 
 for (const water of [false, true]) {
@@ -105,7 +118,8 @@ for (const water of [false, true]) {
 
     for (const [patchedMaterial, shaderKind] of [[material, kind], [depth, "depth"]] as const) {
       const shader = compile(patchedMaterial, shaderKind);
-      assert.match(shader.vertexShader, /attribute uvec4 worldQuad/);
+      assert.ok(shader.vertexShader.includes("uniform highp usampler2D worldQuadData"));
+      assert.equal(shader.uniforms.worldQuadData.value, geometry.userData.worldQuadTexture);
       assert.match(shader.vertexShader, /transformed = worldQuadPosition - worldQuadAnchor/);
       assert.match(shader.vertexShader, /objectNormal = worldQuadNormal/);
       assert.match(shader.vertexShader, /vMapUv = \(mapTransform \* vec3\(worldQuadUv, 1\.0\)\)\.xy/);
@@ -163,36 +177,75 @@ for (const water of [false, true]) {
 
 {
   const geometry = createWorldQuadGeometry(quad(), bounds)!;
-  const material = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false });
+  const material = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false, side: THREE.DoubleSide });
   const mesh = new THREE.Mesh(geometry, material);
-  const scene = new THREE.Scene();
-  const camera = new THREE.Camera();
-  const override = new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true });
-  let beforeRenderCalls = 0;
-  material.onBeforeRender = () => { beforeRenderCalls += 1; };
   configureWorldQuadMesh(mesh, anchor, true);
-  const render = () => material.onBeforeRender({} as THREE.WebGLRenderer, scene, camera, geometry, mesh, {} as THREE.Group);
-  scene.overrideMaterial = override;
-  render();
-  render();
-  assert.equal(material.colorWrite, false);
-  assert.equal(material.depthWrite, true);
-  scene.overrideMaterial = null;
-  render();
+  const depth = mesh.customDepthMaterial!;
+  depth.side = THREE.BackSide;
+  const checkDepth = () => {
+    assert.equal(mesh.material, depth, "the occlusion pass must run the quad depth shader");
+    assert.equal(depth.allowOverride, false);
+    assert.equal(depth.colorWrite, false);
+    assert.equal(depth.depthWrite, true);
+    assert.equal(depth.transparent, false, "double-sided water needs one depth draw");
+    assert.equal(depth.side, THREE.DoubleSide);
+    assert.ok(compile(depth, "depth").vertexShader.includes("transformed = worldQuadPosition - worldQuadAnchor"));
+  };
+  renderWorldQuadDepth([mesh], checkDepth);
+  assert.throws(() => renderWorldQuadDepth([mesh], () => { checkDepth(); throw new Error("draw failed"); }), /draw failed/);
+  assert.equal(mesh.material, material);
   assert.equal(material.colorWrite, true);
   assert.equal(material.depthWrite, false);
-  material.colorWrite = false;
-  material.depthWrite = true;
-  scene.overrideMaterial = override;
-  render();
-  scene.overrideMaterial = null;
-  render();
-  assert.equal(material.colorWrite, false, "normal-pass state changes must survive the next override");
-  assert.equal(material.depthWrite, true);
-  assert.equal(beforeRenderCalls, 5);
+  assert.equal(depth.colorWrite, true);
+  assert.equal(depth.allowOverride, true);
+  assert.equal(depth.side, THREE.BackSide, "later shadow draws retain their original state");
   geometry.dispose();
   material.dispose();
-  override.dispose();
+}
+
+{
+  const transparent = new Uint32Array([
+    31 | (112 << 10) | (211 << 20), 1 | (1 << 10), 56 | (728 << 16), 0xff << 2,
+    31 | (113 << 10) | (211 << 20), 1 | (1 << 10), 56 | (728 << 16), 0xff << 2,
+  ]);
+  const packed = packWorldSurfaceTiles(transparent);
+  const page = packed.surfaces[0]!;
+  const shared = new Uint32Array(page.texels.length + 4);
+  shared.set(page.texels, 4);
+  page.texels = shared.subarray(4);
+  const texture = new THREE.Texture();
+  const rendered = createVoxelGroupFromMeshPayload({
+    opaque: null, cutout: null, transparent: null, water: null, emissive: null,
+    filteredBlockCount: 2,
+    bounds: { min: bounds.box.min.toArray(), max: bounds.box.max.toArray(), center: bounds.center.toArray(), radius: bounds.radius },
+    worldQuads: { anchor: [...anchor], opaque: null, cutout: null, transparent, water: null, emissive: null,
+      transparentDepth: { quads: packed.opaque, surfaces: packed.surfaces } },
+  }, texture);
+  const meshes = rendered.group.children as THREE.Mesh[];
+  const source = meshes.find((mesh) => mesh.userData.worldDepthRole === "source")!;
+  const replacement = meshes.find((mesh) => mesh.userData.worldDepthRole === "replacement")!;
+  assert.ok(source && replacement);
+  assert.equal(source.visible, true);
+  assert.equal(replacement.visible, false);
+  assert.equal((source.material as THREE.Material).transparent, true);
+  const data = source.geometry.userData.worldQuadTexture.image.data as Uint32Array;
+  assert.deepEqual(data.subarray(0, transparent.length), transparent, "main alpha drawing retains its original face order");
+  assert.equal(replacement.geometry.userData.worldQuadCount, 1);
+  const depthTexture = compile(replacement.customDepthMaterial!, "depth").uniforms.worldSurfaceData.value as THREE.DataTexture;
+  assert.deepEqual(depthTexture.image.data, page.texels);
+  assert.notEqual(depthTexture.image.data.buffer, shared.buffer, "a surface texture must not retain other decoded buckets");
+  const check = () => {
+    assert.equal(source.visible, false);
+    assert.equal(replacement.visible, true);
+    assert.equal(replacement.material, replacement.customDepthMaterial);
+  };
+  renderWorldQuadDepth(meshes, check);
+  assert.throws(() => renderWorldQuadDepth(meshes, () => { check(); throw new Error("depth failed"); }), /depth failed/);
+  assert.equal(source.visible, true);
+  assert.equal(replacement.visible, false);
+  assert.equal((source.material as THREE.Material).transparent, true);
+  rendered.dispose();
+  texture.dispose();
 }
 
 console.log("world-quad-geometry tests passed");

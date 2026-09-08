@@ -23,6 +23,10 @@ export type Direction = {
   readonly corners: readonly [CornerOffset, CornerOffset, CornerOffset, CornerOffset];
 };
 
+export type SpatialBlockLookup = {
+  get(x: number, y: number, z: number): number;
+};
+
 export const DIRS: readonly Direction[] = [
   {
     face: "east",
@@ -274,7 +278,7 @@ export class SpatialBlockTable {
 }
 
 export function isOccludingAt(
-  table: SpatialBlockTable,
+  table: SpatialBlockLookup,
   materialOccluding: Uint8Array,
   x: number,
   y: number,
@@ -289,7 +293,7 @@ export function computeVisibleFaceMask(
   y: number,
   z: number,
   typeId: number,
-  table: SpatialBlockTable,
+  table: SpatialBlockLookup,
   materialOccluding: Uint8Array,
 ): number {
   let mask = 0;
@@ -315,7 +319,7 @@ function cornerFactor(
   ox: number,
   oy: number,
   oz: number,
-  table: SpatialBlockTable,
+  table: SpatialBlockLookup,
   materialOccluding: Uint8Array,
 ): number {
   const sA = isOccludingAt(table, materialOccluding, ox + corner.sideA[0], oy + corner.sideA[1], oz + corner.sideA[2]);
@@ -331,7 +335,7 @@ export function computeFaceAO(
   bx: number,
   by: number,
   bz: number,
-  table: SpatialBlockTable,
+  table: SpatialBlockLookup,
   materialOccluding: Uint8Array,
 ): readonly [number, number, number, number] {
   const ox = bx + d.dx;
@@ -351,7 +355,7 @@ export function canBlockEmitAnyFace(
   y: number,
   z: number,
   typeId: number,
-  table: SpatialBlockTable,
+  table: SpatialBlockLookup,
   materialOccluding: Uint8Array,
 ): boolean {
   for (const d of DIRS) {

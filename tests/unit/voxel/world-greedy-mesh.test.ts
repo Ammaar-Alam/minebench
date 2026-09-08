@@ -592,4 +592,16 @@ function decodeCompactPayload(payload: CompactMeshPayload): DecodedMeshPayload {
   assert.equal(compact.worldQuads.opaque?.length, 6 * WORLD_QUAD_WORDS);
 }
 
+{
+  const compact = compactPayload(buildWorldRegionGreedyMeshPayload(
+    packVoxelBlocks([{ x: 1022, y: 1022, z: 1022, type: "stone" }]),
+    allowed,
+    { size: { x: 1023, y: 1023, z: 1023 } },
+  ));
+
+  assertLegacyBucketsNull(compact);
+  assert.equal(compact.filteredBlockCount, 1);
+  assert.equal(compact.worldQuads.opaque?.length, 6 * WORLD_QUAD_WORDS);
+}
+
 console.log("world greedy mesh checks passed");

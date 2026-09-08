@@ -666,8 +666,8 @@ async function main() {
       }
 
       const blockCount = validated.value.build.blocks.length;
-      const { packed, ...jsonSpec } = spec.value;
-      if (packed) throw new Error("Prompt imports require JSON build data");
+      const { packed, packedBoxes, ...jsonSpec } = spec.value;
+      if (packed || packedBoxes) throw new Error("Prompt imports require JSON build data");
       const specJson = JSON.stringify(jsonSpec);
       const voxelByteSize = Buffer.byteLength(specJson);
       const voxelSha256 = createHash("sha256").update(specJson).digest("hex");
