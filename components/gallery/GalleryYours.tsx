@@ -122,9 +122,6 @@ function GenerationActions({
       const retryProvider = generation.model.transport === "openrouter"
         ? "openrouter"
         : generation.model.provider as keyof ProviderApiKeys;
-      if (generation.model.transport === "custom") {
-        throw new Error("Reconnect this model in Generate.");
-      }
       const providerKey = loadProviderKeysFromStorage()[retryProvider]?.trim();
       const profileKey = generation.model.key
         ? `catalog:${generation.model.key}`

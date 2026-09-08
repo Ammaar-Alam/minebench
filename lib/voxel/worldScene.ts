@@ -8,6 +8,7 @@ import {
   configureAtlasTexture,
   createVoxelGroupAsync,
   createVoxelGroupFromMeshPayload,
+  createWaterSurfaceMaterial,
   type VoxelGroup,
 } from "@/lib/voxel/mesh";
 import type { PackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
@@ -15,6 +16,7 @@ import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelPoint } from "@/lib/voxel/types";
 import { createWorldMeshBatches, packWorldMeshBatch } from "@/lib/voxel/worldMeshSource";
 import { decodeWorldMeshPayload, isWorldMeshVersionSupported } from "@/lib/voxel/worldMesh";
+import { WORLD_QUAD_TINT_WATER, WORLD_QUAD_TINTS } from "@/lib/voxel/worldQuadData";
 import {
   parseVoxelWorldManifest,
   parseVoxelWorldRegionPage,
@@ -44,13 +46,14 @@ export type VoxelWorldSceneOptions = {
 };
 
 type WorldCenter = { x: number; y: number; z: number };
+type UniformMaterialKind = RenderKind | "water";
 const PART_LOAD_CONCURRENCY = 2;
 const MESH_LOAD_CONCURRENCY = 4;
 
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
 const TINT_GRASS: [number, number, number] = [0.7, 1, 0.42];
 const TINT_LEAVES: [number, number, number] = [0.45, 0.85, 0.28];
-const TINT_WATER: [number, number, number] = [0.35, 0.55, 1];
+const TINT_WATER = WORLD_QUAD_TINTS[WORLD_QUAD_TINT_WATER];
 
 function worldCenterFromBounds(bounds: VoxelWorldBounds): WorldCenter {
   return {
@@ -101,14 +104,15 @@ function regionBounds(region: Pick<VoxelWorldRegion, "origin" | "size">): VoxelW
   return { origin: region.origin, size: region.size };
 }
 
-function faceTint(blockType: string, face: Face): [number, number, number] {
+function faceTint(blockType: string, face: Face): readonly [number, number, number] {
   if (blockType === "oak_leaves") return TINT_LEAVES;
   if (blockType === "water") return TINT_WATER;
   if (blockType === "grass_block" && face === "up") return TINT_GRASS;
   return TINT_WHITE;
 }
 
-function materialKind(blockType: string): RenderKind {
+function materialKind(blockType: string): UniformMaterialKind {
+  if (blockType === "water") return "water";
   return getRenderKind(blockType) ?? "opaque";
 }
 
@@ -143,7 +147,8 @@ function patchRepeatingAtlasMaterial(material: THREE.Material) {
   material.customProgramCacheKey = () => "voxel-world-repeating-atlas-v2";
 }
 
-function makeUniformMaterial(kind: RenderKind, atlasTexture: THREE.Texture): THREE.Material {
+function makeUniformMaterial(kind: UniformMaterialKind, atlasTexture: THREE.Texture): THREE.Material {
+  if (kind === "water") return createWaterSurfaceMaterial(atlasTexture);
   const material =
     kind === "emissive"
       ? new THREE.MeshBasicMaterial({ map: atlasTexture, vertexColors: true })
@@ -243,7 +248,8 @@ function fullyOccludedByUniformNeighbor(
 ): boolean {
   const regionEnd = endOf(regionBounds(region));
   for (const candidate of knownRegions) {
-    if (candidate.key === region.key || candidate.kind !== "uniform" || !isVoxelOccluder(candidate.type)) continue;
+    if (candidate.key === region.key || candidate.kind !== "uniform") continue;
+    if (!isVoxelOccluder(candidate.type) && !(region.type === "water" && candidate.type === "water")) continue;
     const candidateEnd = endOf(regionBounds(candidate));
     const coversY = candidate.origin.y <= region.origin.y && candidateEnd.y >= regionEnd.y;
     const coversX = candidate.origin.x <= region.origin.x && candidateEnd.x >= regionEnd.x;
@@ -260,7 +266,7 @@ function fullyOccludedByUniformNeighbor(
 }
 
 function appendUniformRegion(
-  buckets: Map<RenderKind, UniformGeometryData>,
+  buckets: Map<UniformMaterialKind, UniformGeometryData>,
   region: VoxelWorldUniformRegion,
   center: WorldCenter,
   knownRegions: readonly VoxelWorldRegion[],
@@ -312,7 +318,7 @@ function buildUniformGroup(
 ): THREE.Group | null {
   if (regions.length === 0) return null;
   configureAtlasTexture(atlasTexture);
-  const buckets = new Map<RenderKind, UniformGeometryData>();
+  const buckets = new Map<UniformMaterialKind, UniformGeometryData>();
   for (const region of regions) appendUniformRegion(buckets, region, center, regions);
 
   const group = new THREE.Group();
@@ -321,7 +327,7 @@ function buildUniformGroup(
     const geometry = buildGeometry(data);
     if (!geometry) continue;
     const mesh = new THREE.Mesh(geometry, makeUniformMaterial(kind, atlasTexture));
-    if (kind === "transparent") mesh.renderOrder = 1;
+    if (kind === "transparent" || kind === "water") mesh.renderOrder = 1;
     group.add(mesh);
   }
   return group.children.length > 0 ? group : null;

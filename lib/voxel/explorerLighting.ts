@@ -317,10 +317,8 @@ export function setExplorerWorldFog(
 ): void {
   fog.far = Math.max(camera.near, viewDistance);
   fog.near = fog.far * 0.55;
-  if (camera.far <= fog.far) {
-    camera.far = fog.far * 1.5;
-    camera.updateProjectionMatrix();
-  }
+  camera.far = Math.max(camera.near * 2, fog.far * 1.1);
+  camera.updateProjectionMatrix();
   bloomFog.near = fog.near;
   bloomFog.far = fog.far;
   bloomFog.color.set(0x000000);

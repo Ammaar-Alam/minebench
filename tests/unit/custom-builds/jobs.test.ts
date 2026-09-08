@@ -26,6 +26,8 @@ async function main() {
   const operations: string[] = [];
   const customBuildUpdates: Array<{ data: Record<string, unknown> }> = [];
   let queryCount = 0;
+  let artifactKind: string | undefined;
+  let parent = { status: "running", removedAt: null as Date | null };
   const txClient = {
     $queryRaw: async () => {
       queryCount += 1;
@@ -38,9 +40,18 @@ async function main() {
       }
       return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate" }];
     },
+    customBuildArtifact: {
+      findFirst: async (args: { where: { kind: { in: string[] } } }) =>
+        artifactKind && args.where.kind.in.includes(artifactKind) ? { id: "saved-source" } : null,
+    },
     customBuild: {
-      updateMany: async (args: { data: Record<string, unknown> }) => {
+      updateMany: async (args: {
+        where: { status: { in: string[] }; removedAt?: null };
+        data: Record<string, unknown>;
+      }) => {
         operations.push("customBuild.updateMany");
+        if (!args.where.status.in.includes(parent.status) ||
+          (args.where.removedAt === null && parent.removedAt !== null)) return { count: 0 };
         customBuildUpdates.push(args);
         return { count: 1 };
       },
@@ -67,7 +78,7 @@ async function main() {
   assert.equal(
     customBuildUpdates.every((update) => update.data.deletionPendingAt instanceof Date),
     true,
-    "terminal lease recovery should schedule cleanup for any partially persisted artifacts",
+    "expired jobs without reusable output should keep terminal cleanup",
   );
   assert.deepEqual(operations, [
     "$transaction.begin",
@@ -81,6 +92,30 @@ async function main() {
     "customBuildSecret.deleteMany",
     "$transaction.commit",
   ]);
+
+  for (const kind of ["preview_svg", "raw_text_debug", "build_json"]) {
+    artifactKind = kind;
+    queryCount = 0;
+    customBuildUpdates.length = 0;
+    operations.length = 0;
+    await recoverStaleCustomBuildJobLeases(rootClient as never);
+    const recoverable = kind !== "preview_svg";
+    assert.deepEqual(customBuildUpdates.map((update) => update.data.errorCode), ["provider_key_expired", "lease_expired"]);
+    for (const { data } of customBuildUpdates) {
+      assert.equal(data.status, "failed");
+      assert.equal(data.errorRetryable, recoverable, `${kind} recovery eligibility`);
+      assert.equal(data.deletionPendingAt === null, recoverable, `${kind} source retention`);
+    }
+    assert.equal(operations.filter((operation) => operation === "customBuildSecret.deleteMany").length, 3,
+      "retaining output must not retain expired provider credentials");
+  }
+  for (const state of [{ status: "canceled", removedAt: null }, { status: "running", removedAt: new Date() }]) {
+    parent = state;
+    queryCount = 0;
+    customBuildUpdates.length = 0;
+    await recoverStaleCustomBuildJobLeases(rootClient as never);
+    assert.equal(customBuildUpdates.length, 0, "lease recovery must preserve cancellation and removal");
+  }
 
   const terminalOperations: string[] = [];
   const parentFailures: Array<Record<string, unknown>> = [];

@@ -323,6 +323,20 @@ function getWaterSurfaceTexture(atlasTexture: THREE.Texture): THREE.Texture | nu
   return texture;
 }
 
+export function createWaterSurfaceMaterial(atlasTexture: THREE.Texture): THREE.MeshLambertMaterial {
+  return new THREE.MeshLambertMaterial({
+    map: getWaterSurfaceTexture(atlasTexture),
+    color: 0xffffff,
+    transparent: true,
+    opacity: WATER_SURFACE_OPACITY,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    emissive: new THREE.Color(0x0b214f),
+    emissiveIntensity: 0.18,
+    vertexColors: true,
+  });
+}
+
 function buildBoundsFromPrepared(prepared: PreparedMeshData) {
   const box = new THREE.Box3(
     new THREE.Vector3(
@@ -935,7 +949,6 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
   const water = buildWaterSurfaceBucket(prepared);
 
   configureAtlasTexture(atlasTexture);
-  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -950,17 +963,7 @@ export function createVoxelGroup(build: VoxelBuild, palette: BlockDefinition[], 
     depthWrite: false,
     vertexColors: true,
   });
-  const matWater = new THREE.MeshLambertMaterial({
-    map: waterTexture ?? undefined,
-    color: 0xffffff,
-    transparent: true,
-    opacity: WATER_SURFACE_OPACITY,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    emissive: new THREE.Color(0x0b214f),
-    emissiveIntensity: 0.18,
-    vertexColors: true,
-  });
+  const matWater = createWaterSurfaceMaterial(atlasTexture);
   const matEmissive = new THREE.MeshBasicMaterial({
     map: atlasTexture,
     vertexColors: true,
@@ -1037,7 +1040,6 @@ export function createVoxelGroupFromMeshPayload(
 ): VoxelGroup {
   const bounds = deserializeBounds(payload.bounds);
   configureAtlasTexture(atlasTexture);
-  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -1052,17 +1054,7 @@ export function createVoxelGroupFromMeshPayload(
     depthWrite: false,
     vertexColors: true,
   });
-  const matWater = new THREE.MeshLambertMaterial({
-    map: waterTexture ?? undefined,
-    color: 0xffffff,
-    transparent: true,
-    opacity: WATER_SURFACE_OPACITY,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    emissive: new THREE.Color(0x0b214f),
-    emissiveIntensity: 0.18,
-    vertexColors: true,
-  });
+  const matWater = createWaterSurfaceMaterial(atlasTexture);
   const matEmissive = new THREE.MeshBasicMaterial({
     map: atlasTexture,
     vertexColors: true,
@@ -1385,7 +1377,6 @@ async function createVoxelGroupAsyncLocal(
   });
 
   configureAtlasTexture(atlasTexture);
-  const waterTexture = getWaterSurfaceTexture(atlasTexture);
 
   const matOpaque = new THREE.MeshLambertMaterial({ map: atlasTexture, vertexColors: true });
   const matCutout = new THREE.MeshLambertMaterial({
@@ -1400,17 +1391,7 @@ async function createVoxelGroupAsyncLocal(
     depthWrite: false,
     vertexColors: true,
   });
-  const matWater = new THREE.MeshLambertMaterial({
-    map: waterTexture ?? undefined,
-    color: 0xffffff,
-    transparent: true,
-    opacity: WATER_SURFACE_OPACITY,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    emissive: new THREE.Color(0x0b214f),
-    emissiveIntensity: 0.18,
-    vertexColors: true,
-  });
+  const matWater = createWaterSurfaceMaterial(atlasTexture);
   const matEmissive = new THREE.MeshBasicMaterial({
     map: atlasTexture,
     vertexColors: true,
