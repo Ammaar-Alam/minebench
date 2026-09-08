@@ -1,11 +1,9 @@
-import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
   customProviderMaxOutputTokens,
   type CustomRequestBody,
   type CustomRequestHeaders,
 } from "@/lib/ai/customProviderConfig";
-import { extractBestVoxelBuildJson, extractFirstJsonObject } from "@/lib/ai/jsonExtract";
 import { modelOutputCeiling, modelUsesDefaultSampling } from "@/lib/ai/modelRequestProfiles";
 import { buildRepairPrompt, buildSystemPrompt, buildUserPrompt } from "@/lib/ai/prompts";
 import { getModelByKey, ModelKey, ModelCatalogEntry } from "@/lib/ai/modelCatalog";
@@ -39,13 +37,8 @@ import {
   xaiReasoningEffortAttempts,
   zaiReasoningEffortAttempts,
 } from "@/lib/ai/reasoningProfiles";
-import {
-  parseVoxelBuildSpec,
-  validateVoxelBuild,
-  validateVoxelBuildSpec,
-} from "@/lib/voxel/validate";
+import { processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import type { VoxelBuild } from "@/lib/voxel/types";
-import { summarizeVoxelWorldRegions } from "@/lib/voxel/worldRegions";
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
 import type {
   AcceptedProviderRequestConfiguration,
@@ -55,10 +48,8 @@ import type {
 } from "@/lib/ai/types";
 import { DEFAULT_MAX_OUTPUT_TOKENS } from "@/lib/ai/tokenBudgets";
 import {
-  runVoxelExec,
   VOXEL_EXEC_TOOL_NAME,
   voxelExecToolCallJsonSchema,
-  voxelExecToolCallSchema,
 } from "@/lib/ai/tools/voxelExec";
 import { getErrorMessage } from "@/lib/errorMessage";
 
@@ -506,7 +497,8 @@ export type GenerateVoxelBuildParams = {
   onDelta?: (delta: string) => void;
   onProviderTrace?: (message: string) => void;
   acquireBuildProcessing?: () => Promise<() => void>;
-  returnExpandedBuild?: boolean;
+  buildOutput?: "source" | "objects" | "packed";
+  processResponse?: ProcessVoxelBuildResponse;
 };
 
 export type GenerateVoxelBuildResult =
@@ -1067,120 +1059,6 @@ async function providerGenerateText(args: {
   });
 }
 
-function validateParsedJson(json: unknown, palette: BlockDefinition[], gridSize: GridSize) {
-  return validateVoxelBuild(json, {
-    palette,
-    gridSize,
-    maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
-  });
-}
-
-function buildBounds(build: VoxelBuild) {
-  if (build.blocks.length === 0) return null;
-  let minX = Infinity;
-  let minY = Infinity;
-  let minZ = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  let maxZ = -Infinity;
-
-  for (const b of build.blocks) {
-    if (b.x < minX) minX = b.x;
-    if (b.y < minY) minY = b.y;
-    if (b.z < minZ) minZ = b.z;
-    if (b.x > maxX) maxX = b.x;
-    if (b.y > maxY) maxY = b.y;
-    if (b.z > maxZ) maxZ = b.z;
-  }
-
-  const spanX = maxX - minX + 1;
-  const spanY = maxY - minY + 1;
-  const spanZ = maxZ - minZ + 1;
-  return { minX, minY, minZ, maxX, maxY, maxZ, spanX, spanY, spanZ };
-}
-
-export function processVoxelBuildResponse(
-  text: string,
-  params: Pick<GenerateVoxelBuildParams, "gridSize" | "palette" | "enableTools" | "returnExpandedBuild">,
-):
-  | { ok: true; build: VoxelBuild; warnings: string[]; blockCount: number }
-  | { ok: false; error: string } {
-  const enableTools = params.enableTools ?? true;
-  const paletteDefs = getPalette(params.palette);
-  const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
-  const json = enableTools ? extractFirstJsonObject(text) : extractBestVoxelBuildJson(text);
-  if (!json) return { ok: false, error: "Could not find a valid JSON object in the response" };
-
-  let buildJson: unknown = json;
-  if (enableTools) {
-    const parsedCall = voxelExecToolCallSchema.safeParse(json);
-    if (!parsedCall.success) return { ok: false, error: parsedCall.error.message };
-    const call = parsedCall.data;
-    if (call.input.gridSize !== params.gridSize) {
-      return { ok: false, error: `Tool call gridSize mismatch (${call.input.gridSize} vs ${params.gridSize})` };
-    }
-    if (call.input.palette !== params.palette) {
-      return { ok: false, error: `Tool call palette mismatch (${call.input.palette} vs ${params.palette})` };
-    }
-    buildJson = runVoxelExec({
-      code: call.input.code,
-      gridSize: params.gridSize,
-      palette: params.palette,
-      seed: call.input.seed,
-    }).build;
-  }
-
-  const world = params.gridSize > 512
-    ? summarizeVoxelWorldRegions(buildJson, { palette: paletteDefs, gridSize: params.gridSize })
-    : null;
-  const validated = world ?? (enableTools
-    ? validateVoxelBuildSpec(buildJson as VoxelBuild, {
-        palette: paletteDefs,
-        gridSize: params.gridSize,
-        maxBlocks: MAX_BLOCKS_BY_GRID[params.gridSize],
-      })
-    : validateParsedJson(buildJson, paletteDefs, params.gridSize));
-  if (!validated.ok) return { ok: false, error: validated.error };
-
-  const validatedBuild = validated.value.build;
-  const blockCount = world?.ok ? world.value.blockCount : validatedBuild.blocks.length;
-  if (blockCount === 0) {
-    return {
-      ok: false,
-      error: "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.",
-    };
-  }
-  if (blockCount < minBlocks) {
-    return { ok: false, error: `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.` };
-  }
-
-  const worldBounds = world?.ok ? world.value.bounds : null;
-  const bounds = worldBounds
-    ? { spanX: worldBounds.size.x, spanY: worldBounds.size.y, spanZ: worldBounds.size.z }
-    : buildBounds(validatedBuild);
-  if (bounds) {
-    // wider worlds should not force every subject to be hundreds of blocks tall
-    const detailGridSize = Math.min(params.gridSize, 512);
-    const minFootprint = Math.max(6, Math.floor(detailGridSize * 0.15));
-    const minHeight = Math.max(4, Math.floor(detailGridSize * 0.1));
-    const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
-    if (maxFootprintSpan < minFootprint) {
-      return { ok: false, error: `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.` };
-    }
-    if (bounds.spanY < minHeight) {
-      return { ok: false, error: `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.` };
-    }
-  }
-
-  let build = validatedBuild;
-  if (!world && !params.returnExpandedBuild) {
-    const spec = parseVoxelBuildSpec(buildJson);
-    if (!spec.ok) return { ok: false, error: spec.error };
-    build = spec.value;
-  }
-  return { ok: true, build, warnings: validated.value.warnings, blockCount };
-}
-
 export async function generateVoxelBuild(
   params: GenerateVoxelBuildParams,
 ): Promise<GenerateVoxelBuildResult> {
@@ -1348,6 +1226,7 @@ export async function generateVoxelBuild(
         await params.onRawResponse?.(attempt, text);
       } catch (err) {
         const message = getErrorMessage(err, String(err));
+        if (message.includes("custom_build_artifact_persistence_failed")) throw err;
         invokeCallback(
           params.onProviderTrace,
           `Raw response callback failed for attempt ${attempt}: ${message}`,
@@ -1369,9 +1248,12 @@ export async function generateVoxelBuild(
       let keepBuildProcessingLease = false;
       try {
         params.abortSignal?.throwIfAborted();
-        const processed = processVoxelBuildResponse(text, params);
+        const processed = params.processResponse
+          ? await params.processResponse(text, params, params.abortSignal)
+          : processVoxelBuildResponse(text, params);
         if (!processed.ok) {
           lastError = processed.error;
+          if (lastError.includes("heap_limit_exceeded")) break;
           continue;
         }
 
@@ -1392,6 +1274,8 @@ export async function generateVoxelBuild(
     } catch (err) {
       lastError = getErrorMessage(err, "Provider request failed");
       if (params.abortSignal?.aborted) break;
+      if (lastError.includes("heap_limit_exceeded")) break;
+      if (lastError.includes("custom_build_artifact_persistence_failed")) break;
       // preserve the response for execution recovery instead of buying another generation
       if (err && typeof err === "object" && "code" in err && err.code === "ERR_SCRIPT_EXECUTION_TIMEOUT") break;
       // Retry transient work that failed safely before an outbound request

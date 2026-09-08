@@ -67,6 +67,10 @@ async function main() {
     '{"version":"1.0","blocks":[{"x":0.5,"y":0,"z":0,"type":"stone"}]}',
     '{"version":"1.0","blocks":[]',
   ]) await assert.rejects(parseVoxelBuildStream(chunks(text, 3)));
+  const bounded = JSON.stringify({ version: "1.0", blocks: repeatedBlocks });
+  await assert.rejects(parseVoxelBuildStream(chunks(bounded, 17), { maxBlocks: 4099 }), /block count/);
+  const exact = await parseVoxelBuildStream(chunks(bounded, 17), { maxBlocks: 4100 });
+  assert.equal(exact.packed?.count, 4100);
   console.log("streamed build source checks passed");
 }
 

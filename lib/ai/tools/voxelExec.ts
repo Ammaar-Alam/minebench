@@ -58,6 +58,7 @@ export type VoxelExecRunParams = {
   gridSize: GridSize;
   palette: PaletteMode;
   seed?: number;
+  packedOutput?: boolean;
   // Optional: for deterministic file layout in scripts.
   outputDir?: string;
 };
@@ -161,7 +162,7 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const lines: { from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number }; type: string }[] =
     [];
   const blocks: { x: number; y: number; z: number; type: string }[] = [];
-  const packed = params.gridSize > 512 ? createPackedVoxelBlocks(0) : undefined;
+  const packed = params.gridSize > 512 || params.packedOutput ? createPackedVoxelBlocks(0) : undefined;
   const blockBatch: typeof blocks = [];
   let blockCount = 0;
   let boxCount = 0;

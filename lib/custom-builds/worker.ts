@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { Prisma, type CustomBuildJob } from "@prisma/client";
+import type { ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import { isDatabaseUnavailableError } from "@/lib/db/errors";
 import {
   claimNextCustomBuildJob,
@@ -184,6 +185,7 @@ async function runJob(
   workerId: string,
   signal: AbortSignal,
   processingGate: ReturnType<typeof createCustomBuildProcessingGate>,
+  processResponse?: ProcessVoxelBuildResponse,
 ): Promise<void> {
   let releaseProcessing: (() => void) | undefined;
   const acquireProcessing = async () => {
@@ -206,6 +208,7 @@ async function runJob(
       await runCustomBuildGenerateJob(job, {
         signal,
         acquireBuildProcessing: acquireProcessing,
+        processResponse,
         beforeSynchronousArtifactPackaging: async () => {
           throwIfCustomBuildLeaseLost(signal);
           await extendLeaseForSynchronousWork(job, workerId);
@@ -231,6 +234,7 @@ async function processClaimedJob(
   job: CustomBuildJob,
   workerId: string,
   processingGate: ReturnType<typeof createCustomBuildProcessingGate>,
+  processResponse?: ProcessVoxelBuildResponse,
 ): Promise<{
   processed: boolean;
   jobId?: string;
@@ -240,7 +244,7 @@ async function processClaimedJob(
   const heartbeat = startCustomBuildJobHeartbeat(job, workerId, leaseAbort);
 
   try {
-    await runJob(job, workerId, leaseAbort.signal, processingGate);
+    await runJob(job, workerId, leaseAbort.signal, processingGate, processResponse);
     throwIfCustomBuildLeaseLost(leaseAbort.signal);
     await completeCustomBuildJob(job.id, workerId);
     return { processed: true, jobId: job.id, jobType: job.type };
@@ -267,6 +271,7 @@ async function processClaimedStealthJob(
   job: StealthGenerationJob,
   workerId: string,
   processingGate: ReturnType<typeof createCustomBuildProcessingGate>,
+  processResponse?: ProcessVoxelBuildResponse,
 ): Promise<void> {
   const leaseAbort = new AbortController();
   const heartbeat = startStealthGenerationJobHeartbeat(job, workerId, leaseAbort);
@@ -292,6 +297,7 @@ async function processClaimedStealthJob(
       workerId,
       signal: leaseAbort.signal,
       acquireBuildProcessing: acquireProcessing,
+      processResponse,
     });
     throwIfGenerationWorkerLeaseLost(leaseAbort.signal);
     await finishStealthGenerationRun(job.runId);
@@ -361,7 +367,10 @@ async function checkAndReportQueueHealth(): Promise<void> {
   }
 }
 
-export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId()): Promise<void> {
+export async function runCustomBuildWorkerLoop(
+  workerId = getCustomBuildWorkerId(),
+  opts: { processResponse?: ProcessVoxelBuildResponse } = {},
+): Promise<void> {
   let shutdownRequested = false;
   const pollAbort = new AbortController();
   let retryDelayMs = getCustomBuildWorkerPollMs();
@@ -431,8 +440,8 @@ export async function runCustomBuildWorkerLoop(workerId = getCustomBuildWorkerId
           claimed = true;
           const privateJob = stealthJob ?? fallbackStealthJob;
           const active = privateJob
-            ? processClaimedStealthJob(privateJob, workerId, processingGate)
-            : processClaimedJob(customJob!, workerId, processingGate);
+            ? processClaimedStealthJob(privateJob, workerId, processingGate, opts.processResponse)
+            : processClaimedJob(customJob!, workerId, processingGate, opts.processResponse);
           activeJobs.add(active);
           void active.then(
             () => activeJobs.delete(active),

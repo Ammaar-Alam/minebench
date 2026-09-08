@@ -4,15 +4,25 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { createPackedVoxelBlocks } from "../../../lib/voxel/packedBlocks";
+
 const MEMORY_CHILD = "MINEBENCH_CANONICAL_ARTIFACT_MEMORY_CHILD";
 const FAILURE_CHILD = "MINEBENCH_CANONICAL_ARTIFACT_FAILURE_CHILD";
 
 async function streamLargeArtifact() {
   const { writeCanonicalBuildArtifact } = await import("../../../lib/custom-builds/artifacts");
-  const block = { x: 511, y: 511, z: 511, type: "oak_planks" };
+  const packed = createPackedVoxelBlocks(1_500_000);
+  packed.count = 1_500_000;
+  packed.typeNames.push("oak_planks");
+  for (let index = 0; index < packed.count; index += 1) {
+    packed.positions[index * 3] = index >> 18;
+    packed.positions[index * 3 + 1] = (index >> 9) & 511;
+    packed.positions[index * 3 + 2] = index & 511;
+  }
   const artifact = await writeCanonicalBuildArtifact({
     version: "1.0",
-    blocks: Array(1_500_000).fill(block),
+    blocks: [],
+    packed,
   });
   try {
     assert.ok(artifact.byteSize > 60 * 1024 * 1024);

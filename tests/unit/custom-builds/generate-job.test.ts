@@ -208,7 +208,7 @@ async function main() {
 
   assert.ok(
     generateJobSource.includes("buildGalleryPreviewSvg(useWorldArtifacts ? preview : canonicalBuild)") &&
-      generateJobSource.includes("blockCount: canonicalBuild.blocks.length"),
+      generateJobSource.includes("blockCount: canonicalBlockCount"),
     "static thumbnails should derive from the canonical build, except compact worlds which use the world preview",
   );
   assert.ok(

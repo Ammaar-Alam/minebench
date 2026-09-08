@@ -1,4 +1,5 @@
 import { isGridSize, type GridSize } from "@/lib/ai/limits";
+import { encodeVoxelPositionKey } from "@/lib/voxel/coordinateKeys";
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { getPalette } from "@/lib/blocks/palettes";
@@ -8,8 +9,13 @@ import {
   shouldPreferPreviewVariant,
 } from "@/lib/arena/buildDeliveryPolicy";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
-import { encodeVoxelPositionKey } from "@/lib/voxel/coordinateKeys";
 import { filterRenderableVoxelBuild } from "@/lib/voxel/renderVisibility";
+import { SpatialBlockTable } from "@/lib/voxel/ambientOcclusion";
+import {
+  voxelBuildBlockAt,
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { parseVoxelBuildSpec, validateVoxelBuild } from "@/lib/voxel/validate";
 import { resolveBuildPayload } from "@/lib/storage/buildPayload";
 import { normalizeArenaBuildChecksum } from "@/lib/arena/buildChecksum";
@@ -94,8 +100,8 @@ export type PreparedArenaBuild = {
   buildId: string;
   payloadIdentity: ArenaBuildPayloadIdentity;
   checksum: string | null;
-  fullBuild: VoxelBuild;
-  previewBuild: VoxelBuild;
+  fullBuild: RenderableVoxelBuild;
+  previewBuild: RenderableVoxelBuild;
   hints: ArenaBuildLoadHints;
   buildRef: ArenaBuildRef;
   previewRef: ArenaBuildRef;
@@ -109,7 +115,7 @@ type CachedArtifact = {
 };
 
 type ParsedArenaBuild = {
-  build: VoxelBuild;
+  build: RenderableVoxelBuild;
   payloadEstimatedBytes: number | null;
 };
 
@@ -338,83 +344,103 @@ function hashBlock(block: VoxelBlock): number {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
-function extractSurfaceBlocks(blocks: VoxelBlock[]): VoxelBlock[] {
-  // previews should show visible shape, not hidden interior volume
-  const occupied = new Set<number>();
-  for (const block of blocks) {
-    occupied.add(encodeVoxelPositionKey(block.x, block.y, block.z));
+function buildBlockAt(build: RenderableVoxelBuild, index: number): VoxelBlock {
+  const block = voxelBuildBlockAt(build, index);
+  if (!block) throw new Error(`Missing voxel block at index ${index}`);
+  return block;
+}
+
+function hashBuildBlockAt(build: RenderableVoxelBuild, index: number): number {
+  return hashBlock(buildBlockAt(build, index));
+}
+
+function extractSurfaceBlockIndices(build: RenderableVoxelBuild): number[] {
+  const blockCount = voxelBuildBlockCount(build);
+  const occupied = new SpatialBlockTable(blockCount);
+  for (let index = 0; index < blockCount; index += 1) {
+    const block = buildBlockAt(build, index);
+    occupied.set(block.x, block.y, block.z, 0);
   }
 
-  const surface: VoxelBlock[] = [];
-  for (const block of blocks) {
+  const surface: number[] = [];
+  for (let index = 0; index < blockCount; index += 1) {
+    const block = buildBlockAt(build, index);
     let exposed = false;
     for (const [dx, dy, dz] of NEIGHBOR_DIRS) {
-      const neighborKey = encodeVoxelPositionKey(block.x + dx, block.y + dy, block.z + dz);
-      if (!occupied.has(neighborKey)) {
+      if (occupied.get(block.x + dx, block.y + dy, block.z + dz) === -1) {
         exposed = true;
         break;
       }
     }
-
-    if (exposed) {
-      surface.push(block);
-    }
+    if (exposed) surface.push(index);
   }
-
   return surface;
 }
 
-function deterministicSampleBlocks(blocks: VoxelBlock[], targetBlockCount: number): VoxelBlock[] {
-  if (blocks.length <= targetBlockCount) return blocks;
+function deterministicSampleBlockIndices(
+  build: RenderableVoxelBuild,
+  indices: number[],
+  targetBlockCount: number,
+): number[] {
+  if (indices.length <= targetBlockCount) return indices;
   if (targetBlockCount <= 0) return [];
 
   // stable sampling avoids preview churn between requests
-  const keepRatio = targetBlockCount / blocks.length;
-  const sampled = blocks.filter((block) => hashBlock(block) / 0xffffffff <= keepRatio);
-  if (sampled.length >= targetBlockCount) {
-    return sampled.slice(0, targetBlockCount);
-  }
+  const keepRatio = targetBlockCount / indices.length;
+  const sampled = indices.filter(
+    (index) => hashBuildBlockAt(build, index) / 0xffffffff <= keepRatio,
+  );
+  if (sampled.length >= targetBlockCount) return sampled.slice(0, targetBlockCount);
 
-  const sampledKeys = new Set(sampled.map((block) => encodeVoxelPositionKey(block.x, block.y, block.z)));
+  const sampledIndices = new Set(sampled);
   const remainder = targetBlockCount - sampled.length;
-  const stride = Math.max(1, Math.floor(blocks.length / Math.max(1, remainder)));
-  for (let i = 0; i < blocks.length && sampled.length < targetBlockCount; i += stride) {
-    const block = blocks[i];
-    if (!block) continue;
-    const key = encodeVoxelPositionKey(block.x, block.y, block.z);
-    if (sampledKeys.has(key)) continue;
-    sampled.push(block);
-    sampledKeys.add(key);
+  const stride = Math.max(1, Math.floor(indices.length / Math.max(1, remainder)));
+  for (let i = 0; i < indices.length && sampled.length < targetBlockCount; i += stride) {
+    const index = indices[i]!;
+    if (sampledIndices.has(index)) continue;
+    sampled.push(index);
+    sampledIndices.add(index);
   }
 
   return sampled.slice(0, targetBlockCount);
 }
 
-function buildPreviewBuild(fullBuild: VoxelBuild, targetBlockCount: number): { build: VoxelBuild; stride: number } {
-  const sourceBlocks = fullBuild.blocks;
-  if (sourceBlocks.length <= targetBlockCount) {
+function buildPreviewSubset(
+  build: RenderableVoxelBuild,
+  indices: readonly number[],
+): VoxelBuild {
+  const blocks: VoxelBlock[] = [];
+  for (const index of indices) blocks.push(buildBlockAt(build, index));
+  return { version: "1.0", blocks };
+}
+
+function buildPreviewBuild(
+  fullBuild: RenderableVoxelBuild,
+  targetBlockCount: number,
+): { build: RenderableVoxelBuild; stride: number } {
+  const sourceBlockCount = voxelBuildBlockCount(fullBuild);
+  if (sourceBlockCount <= targetBlockCount) {
     return { build: fullBuild, stride: 1 };
   }
 
-  const surfaceBlocks = extractSurfaceBlocks(sourceBlocks);
-  const previewBlocks =
-    surfaceBlocks.length > targetBlockCount
-      ? deterministicSampleBlocks(surfaceBlocks, targetBlockCount)
-      : surfaceBlocks;
+  const surfaceIndices = extractSurfaceBlockIndices(fullBuild);
+  const previewIndices =
+    surfaceIndices.length > targetBlockCount
+      ? deterministicSampleBlockIndices(fullBuild, surfaceIndices, targetBlockCount)
+      : surfaceIndices;
 
   return {
-    build: {
-      version: "1.0",
-      blocks: previewBlocks,
-    },
+    build: buildPreviewSubset(fullBuild, previewIndices),
     stride: 1,
   };
 }
 
-function computeBuildChecksum(fullBuild: VoxelBuild): string {
+function computeBuildChecksum(fullBuild: RenderableVoxelBuild): string {
+  const blockCount = voxelBuildBlockCount(fullBuild);
   const hash = createHash("sha256");
-  hash.update(`v=${fullBuild.version};n=${fullBuild.blocks.length};`);
-  for (const block of fullBuild.blocks) {
+  hash.update(`v=${fullBuild.version};n=${blockCount};`);
+  for (let index = 0; index < blockCount; index += 1) {
+    const block = buildBlockAt(fullBuild, index);
     hash.update(`${block.x},${block.y},${block.z},${block.type};`);
   }
   return hash.digest("hex");
@@ -422,13 +448,13 @@ function computeBuildChecksum(fullBuild: VoxelBuild): string {
 
 function createPrepared(
   source: ArenaBuildSource,
-  fullBuild: VoxelBuild,
+  fullBuild: RenderableVoxelBuild,
   payloadEstimatedBytes: number | null,
   checksumOverride?: string | null,
 ): PreparedArenaBuild {
   const renderBuild = filterRenderableVoxelBuild(fullBuild);
   const hintsFromMetadata = deriveArenaBuildLoadHints({
-    blockCount: renderBuild.blocks.length,
+    blockCount: voxelBuildBlockCount(renderBuild),
     voxelByteSize: source.voxelByteSize,
     voxelCompressedByteSize: source.voxelCompressedByteSize,
   });
@@ -439,13 +465,16 @@ function createPrepared(
     ? buildPreviewBuild(renderBuild, PREVIEW_TARGET_BLOCKS)
     : { build: renderBuild, stride: 1 };
   const initialVariant: ArenaBuildVariant =
-    preferPreview && preview.build.blocks.length < renderBuild.blocks.length ? "preview" : "full";
+    preferPreview && voxelBuildBlockCount(preview.build) < voxelBuildBlockCount(renderBuild)
+      ? "preview"
+      : "full";
   const previewEstimatedBytes = estimateArenaBuildBytes({
-    blockCount: preview.build.blocks.length,
+    blockCount: voxelBuildBlockCount(preview.build),
   });
   const initialEstimatedBytes =
     initialVariant === "preview" ? previewEstimatedBytes : fullEstimatedBytes;
-  const checksum = checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(renderBuild);
+  const checksum =
+    checksumOverride ?? normalizeStoredChecksum(source) ?? computeBuildChecksum(renderBuild);
 
   return {
     buildId: source.id,
@@ -459,7 +488,7 @@ function createPrepared(
       fullEstimatedBytes,
       deliveryClass,
       initialVariant,
-      previewBlockCount: preview.build.blocks.length,
+      previewBlockCount: voxelBuildBlockCount(preview.build),
       previewStride: preview.stride,
       initialEstimatedBytes,
     },
@@ -478,7 +507,7 @@ function createPrepared(
 
 export function prepareArenaBuildFromBuild(
   source: ArenaBuildSource,
-  fullBuild: VoxelBuild,
+  fullBuild: RenderableVoxelBuild,
   opts?: { payloadEstimatedBytes?: number | null; checksum?: string | null },
 ): PreparedArenaBuild {
   return createPrepared(
@@ -685,13 +714,13 @@ export async function prepareArenaBuild(
   return awaitPreparedWithCallerAbort(promise, opts?.signal);
 }
 
-export function pickInitialBuild(prepared: PreparedArenaBuild): VoxelBuild {
+export function pickInitialBuild(prepared: PreparedArenaBuild): RenderableVoxelBuild {
   return prepared.hints.initialVariant === "preview" ? prepared.previewBuild : prepared.fullBuild;
 }
 
 export function pickBuildVariant(
   prepared: PreparedArenaBuild,
   variant: ArenaBuildVariant,
-): VoxelBuild {
+): RenderableVoxelBuild {
   return variant === "preview" ? prepared.previewBuild : prepared.fullBuild;
 }

@@ -1,18 +1,26 @@
+import { createHash } from "node:crypto";
+import { PassThrough } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
 import type { CustomBuildArtifact, Prisma, PrismaClient } from "@prisma/client";
 import { gzipSync } from "fflate";
 import { sha256Hex } from "@/lib/custom-builds/hash";
+import { customBuildJsonNumber } from "@/lib/custom-builds/numericMetadata";
 import { prisma } from "@/lib/prisma";
 import {
   getCustomBuildArtifactDescriptor,
   getCustomBuildArtifactPath,
   getCustomBuildStorageBucket,
   deleteCustomBuildArtifact,
+  downloadCustomBuildArtifactStream,
   uploadCustomBuildArtifact,
   uploadCustomBuildArtifactFile,
 } from "@/lib/custom-builds/storage";
 import type { CustomBuildArtifactKind, CustomBuildStorageEncoding } from "@/lib/custom-builds/types";
 import { decodeStoredBuildText } from "@/lib/storage/buildPayload";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { voxelBuildBlockAt, voxelBuildBlockCount, type RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
+import { parseVoxelBuildStream } from "@/lib/voxel/sourceStream";
 
 export {
   writeCanonicalBuildArtifact,
@@ -72,12 +80,82 @@ export function decodeAndVerifyCustomBuildArtifactText(args: {
   return text;
 }
 
-export function buildCustomBuildPreview(build: VoxelBuild, targetBlocks = getCustomBuildPreviewTargetBlocks()): VoxelBuild {
-  if (build.blocks.length <= targetBlocks) return build;
+export async function readStoredBuildSource(
+  artifact: Pick<CustomBuildArtifact,
+    "bucket" | "path" | "encoding" | "sha256" | "sourceBuildSha256" | "blockCount" | "byteSize" | "storedByteSize"
+  >,
+  opts: { signal?: AbortSignal; maxBlocks?: number },
+): Promise<RenderableVoxelBuild> {
+  opts.signal?.throwIfAborted();
+  const blockCount = customBuildJsonNumber(artifact.blockCount, "blockCount");
+  const sourceByteSize = customBuildJsonNumber(artifact.byteSize, "byteSize");
+  const compressedByteSize = customBuildJsonNumber(artifact.storedByteSize, "storedByteSize");
+  if (
+    artifact.encoding !== "gzip" || !artifact.sha256 || !artifact.sourceBuildSha256 ||
+    blockCount == null || !sourceByteSize || !compressedByteSize ||
+    (opts.maxBlocks !== undefined && blockCount > opts.maxBlocks)
+  ) throw new Error("Stored canonical artifact metadata is incomplete or invalid");
+  const chunks = downloadCustomBuildArtifactStream({ ...artifact, signal: opts.signal });
+  const storedHash = createHash("sha256");
+  const sourceHash = createHash("sha256");
+  let storedByteSize = 0;
+  let byteSize = 0;
+  try {
+    let header = Buffer.alloc(0);
+    while (header.length < 2) {
+      const next = await chunks.next();
+      if (next.done) break;
+      header = Buffer.concat([header, next.value]);
+    }
+    const isGzip = hasGzipMagic(header);
+    const build = await pipeline(
+      (async function* () {
+        for await (const bytes of (async function* () { yield header; yield* chunks; })()) {
+          storedByteSize += bytes.byteLength;
+          if (storedByteSize > (isGzip ? compressedByteSize : sourceByteSize)) {
+            throw new Error("Stored custom build artifact byte size does not match");
+          }
+          storedHash.update(bytes);
+          yield bytes;
+        }
+      })(),
+      isGzip ? createGunzip() : new PassThrough(),
+      async (source) => parseVoxelBuildStream((async function* () {
+        for await (const bytes of source) {
+          byteSize += bytes.byteLength;
+          if (byteSize > sourceByteSize) {
+            throw new Error("Stored custom build source byte size does not match");
+          }
+          sourceHash.update(bytes);
+          yield bytes;
+        }
+      })(), { maxBlocks: opts.maxBlocks === undefined ? undefined : blockCount }),
+      { signal: opts.signal },
+    );
+    // fetch may already have decoded a gzip response
+    if (isGzip && storedHash.digest("hex") !== artifact.sha256) {
+      throw new Error("Stored custom build artifact checksum does not match");
+    }
+    if (sourceHash.digest("hex") !== artifact.sourceBuildSha256) {
+      throw new Error("Stored custom build source checksum does not match");
+    }
+    if (byteSize !== sourceByteSize || (isGzip && storedByteSize !== compressedByteSize)) {
+      throw new Error("Stored custom build artifact byte size does not match");
+    }
+    return build;
+  } finally {
+    await chunks.return(undefined);
+  }
+}
+
+export function buildCustomBuildPreview(build: RenderableVoxelBuild, targetBlocks = getCustomBuildPreviewTargetBlocks()): VoxelBuild {
+  const count = voxelBuildBlockCount(build);
+  if (!build.packed && count <= targetBlocks) return build;
   const blocks = [];
-  const stride = build.blocks.length / targetBlocks;
-  for (let i = 0; i < targetBlocks; i += 1) {
-    const block = build.blocks[Math.floor(i * stride)];
+  const previewCount = Math.min(count, targetBlocks);
+  const stride = count / previewCount;
+  for (let i = 0; i < previewCount; i += 1) {
+    const block = voxelBuildBlockAt(build, Math.floor(i * stride));
     if (block) blocks.push(block);
   }
   return { version: "1.0", blocks };

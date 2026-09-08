@@ -3,9 +3,16 @@ import type { VoxelBuild } from "@/lib/voxel/types";
 import { parseOwnedVoxelBuildSpec } from "@/lib/voxel/validate";
 
 // read one primitive at a time so source files never become a single JS string
-export async function parseVoxelBuildStream(chunks: AsyncIterable<Uint8Array>): Promise<VoxelBuild> {
+export async function parseVoxelBuildStream(
+  chunks: AsyncIterable<Uint8Array>,
+  opts: { maxBlocks?: number } = {},
+): Promise<VoxelBuild> {
+  if (opts.maxBlocks !== undefined && (!Number.isSafeInteger(opts.maxBlocks) || opts.maxBlocks < 0)) {
+    throw new Error("Invalid build block limit");
+  }
   const build: VoxelBuild = { version: "1.0", boxes: [], lines: [], blocks: [], packed: createPackedVoxelBlocks(0) };
   const batch: unknown[] = [];
+  let batchChars = 0;
   const fields = new Set<string>();
   const decoder = new TextDecoder("utf-8", { fatal: true });
   let buffer = "";
@@ -50,6 +57,7 @@ export async function parseVoxelBuildStream(chunks: AsyncIterable<Uint8Array>): 
       appendPackedVoxelBlocks(build.packed!, parsed.value.blocks);
     }
     batch.length = 0;
+    batchChars = 0;
   };
 
   const scan = () => {
@@ -69,6 +77,7 @@ export async function parseVoxelBuildStream(chunks: AsyncIterable<Uint8Array>): 
         }
         if (cursor - tokenStart > 1_000_000) throw new Error("Build entry is too large");
         if (!primitiveEnded && (primitive || quoted || depth > 0)) continue;
+        const tokenLength = cursor - tokenStart;
         const value: unknown = JSON.parse(buffer.slice(tokenStart, cursor));
         tokenStart = -1;
         primitive = false;
@@ -85,7 +94,8 @@ export async function parseVoxelBuildStream(chunks: AsyncIterable<Uint8Array>): 
           state = "field-separator";
         } else {
           batch.push(value);
-          if (batch.length >= 4096) flush();
+          batchChars += tokenLength;
+          if (batch.length >= 4096 || batchChars >= 64 * 1024) flush();
           state = "separator";
         }
         continue;
@@ -122,6 +132,9 @@ export async function parseVoxelBuildStream(chunks: AsyncIterable<Uint8Array>): 
       } else if (state === "item") {
         if (ch === "]" && !afterComma) state = "field-separator";
         else if (ch === "{") {
+          if (field === "blocks" && opts.maxBlocks !== undefined && build.packed!.count + batch.length >= opts.maxBlocks) {
+            throw new Error("Stored canonical block count does not match");
+          }
           tokenStart = cursor;
           depth = 1;
           quoted = false;

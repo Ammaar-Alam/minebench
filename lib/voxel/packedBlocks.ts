@@ -15,9 +15,7 @@ export type PackedVoxelBlocks = {
   count: number;
 };
 
-// A build whose blocks may live in packed form. Server-side builds and anything
-// coming out of validation stay object-backed, so both shapes flow through the
-// same viewer and mesh entry points.
+// A build whose blocks may live in packed form
 export type RenderableVoxelBuild = VoxelBuild & {
   meshFacts?: VoxelMeshFacts;
   world?: VoxelWorldDelivery;
@@ -187,6 +185,59 @@ export function voxelBuildBlockCount(build: RenderableVoxelBuild | null | undefi
   if (!build) return 0;
   if (build.world) return build.world.manifest.exactBlockCount;
   return build.packed ? build.packed.count : build.blocks.length;
+}
+
+export function voxelBuildBlockAt(
+  build: RenderableVoxelBuild,
+  index: number,
+): VoxelBlock | undefined {
+  if (!Number.isInteger(index) || index < 0 || index >= voxelBuildBlockCount(build)) {
+    return undefined;
+  }
+  if (!build.packed) return build.blocks[index];
+  const { positions, typeIds, typeNames } = build.packed;
+  return {
+    x: positions[index * 3]!,
+    y: positions[index * 3 + 1]!,
+    z: positions[index * 3 + 2]!,
+    type: typeNames[typeIds[index]!]!,
+  };
+}
+
+export function sortPackedVoxelBlocks(packed: PackedVoxelBlocks): void {
+  const { positions, typeIds, typeNames, count } = packed;
+  const order = new Uint32Array(count);
+  for (let index = 0; index < count; index += 1) order[index] = index;
+  order.sort((a, b) =>
+    positions[a * 3]! - positions[b * 3]! ||
+    positions[a * 3 + 1]! - positions[b * 3 + 1]! ||
+    positions[a * 3 + 2]! - positions[b * 3 + 2]! ||
+    typeNames[typeIds[a]!]!.localeCompare(typeNames[typeIds[b]!]!),
+  );
+
+  // Apply permutation cycles without allocating another set of block buffers
+  for (let start = 0; start < count; start += 1) {
+    if (order[start] === start) continue;
+    const x = positions[start * 3]!;
+    const y = positions[start * 3 + 1]!;
+    const z = positions[start * 3 + 2]!;
+    const typeId = typeIds[start]!;
+    let current = start;
+    while (order[current] !== start) {
+      const next = order[current]!;
+      positions[current * 3] = positions[next * 3]!;
+      positions[current * 3 + 1] = positions[next * 3 + 1]!;
+      positions[current * 3 + 2] = positions[next * 3 + 2]!;
+      typeIds[current] = typeIds[next]!;
+      order[current] = current;
+      current = next;
+    }
+    positions[current * 3] = x;
+    positions[current * 3 + 1] = y;
+    positions[current * 3 + 2] = z;
+    typeIds[current] = typeId;
+    order[current] = current;
+  }
 }
 
 // Reference used to tell one build apart from another. Streaming mutates the

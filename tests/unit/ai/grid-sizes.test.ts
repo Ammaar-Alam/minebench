@@ -41,7 +41,7 @@ async function main() {
         maxAttempts: 1,
         providerKeys: { openrouter: "test-openrouter-key" },
         allowServerKeys: false,
-        returnExpandedBuild: true,
+        buildOutput: "objects",
       });
       if (!generated.ok) throw new Error(generated.error);
       assert.equal(generated.blockCount, width * height * depth);

@@ -128,7 +128,7 @@ async function main() {
   process.env.OPENROUTER_BASE_URL = "https://openrouter.test/api";
   globalThis.fetch = async () => Response.json({ choices: [{ message: { content: validText } }] });
   const fresh = await generateVoxelBuild({ modelKey: "qwen_qwen3_8_max", prompt: initial.promptText,
-    gridSize: 8192, palette: "simple", maxAttempts: 1, returnExpandedBuild: true,
+    gridSize: 8192, palette: "simple", maxAttempts: 1, buildOutput: "packed",
     providerKeys: { openrouter: "unit-raw-recovery-key" }, allowServerKeys: false,
   });
   if (!fresh.ok) throw new Error(fresh.error);
