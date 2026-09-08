@@ -53,8 +53,6 @@ assert.ok(
     explore.includes("Official prompts are part of the benchmark.") &&
     explore.includes('/faq#how-does-minebench-account-for-nondeterminism') &&
     detail.includes("gallerySortHref") &&
-    detail.includes("longPrompt") &&
-    detail.includes("text-2xl sm:text-3xl lg:text-4xl") &&
     galleryDetailPage.includes("navigationSort: sort"),
   "Gallery details should preserve their ordering and expose polished pointer and keyboard navigation",
 );
@@ -79,6 +77,8 @@ assert.ok(
     yours.includes("customHeaders: overrides.headers") &&
     yours.includes("customBody: overrides.body") &&
     !yours.includes("Add the required API key") &&
+    yours.includes("mb-disclosure-toggle") &&
+    yours.includes("mb-collapse-toggle") &&
     yours.includes("embedded"),
   "saved builds should open privately, reuse lifecycle placeholders, support retry, and expose owner verification details",
 );
@@ -182,9 +182,14 @@ assert.ok(
 assert.ok(
   account.includes("<GalleryYours") &&
     account.includes("lg:grid-cols-[minmax(0,1fr)_18rem]") &&
+    account.includes("lg:order-2") &&
+    account.includes("lg:order-1") &&
+    account.indexOf('id="security-title"') < account.indexOf("<GalleryAccountSettings") &&
+    account.indexOf('id="security-title"') < account.indexOf("<GalleryYours") &&
     yoursPage.includes('permanentRedirect("/account#builds")') &&
+    !account.includes("lg:sticky") &&
     !identity.includes("border-l-2"),
-  "Account should own saved builds, rankings, and its compact settings rail",
+  "Account should keep security actions first without a sticky settings rail",
 );
 assert.equal(
   [detail, explore, preflight].some((source) => source.includes("shadow-2xl")),

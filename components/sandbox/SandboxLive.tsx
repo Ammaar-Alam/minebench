@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { GRID_SIZES, type GridSize } from "@/lib/ai/limits";
 import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
 import type { GenerateEvent, GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
@@ -41,7 +42,10 @@ import { enqueueVoxelMetric } from "@/lib/observability/clientMetrics";
 import type { SavedGenerationPayload } from "@/lib/generations/service";
 
 type Palette = "simple" | "advanced";
-type GridSize = 64 | 256 | 512;
+const PALETTE_OPTIONS: Array<{ value: Palette; label: string }> = [
+  { value: "simple", label: "Simple" },
+  { value: "advanced", label: "Advanced" },
+];
 type SelectedModelValue =
   | ModelKey
   | typeof OPENROUTER_MODEL_VALUE
@@ -1847,31 +1851,41 @@ export function SandboxLive({
 
         <section>
           <div className="mb-eyebrow">Build</div>
-          <div className="mt-3 grid grid-cols-2 gap-3">
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex min-w-0 flex-col gap-1">
               <div className="text-xs font-medium text-muted">Size</div>
               <select
-                className="mb-field h-10 w-full"
+                className="mb-field h-12 w-full"
                 value={gridSize}
                 onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
               >
-                <option value={64}>64</option>
-                <option value={256}>256</option>
-                <option value={512}>512</option>
+                {GRID_SIZES.map((size) => (
+                  <option key={size} value={size}>{size}³</option>
+                ))}
               </select>
             </label>
 
-            <label className="flex min-w-0 flex-col gap-1">
-              <div className="text-xs font-medium text-muted">Palette</div>
-              <select
-                className="mb-field h-10 w-full"
-                value={palette}
-                onChange={(e) => setPalette(e.target.value as Palette)}
+            <div className="flex min-w-0 flex-col gap-1">
+              <div id="sandbox-palette-label" className="text-xs font-medium text-muted">Palette</div>
+              <div
+                role="group"
+                aria-labelledby="sandbox-palette-label"
+                data-stretch="true"
+                className="mb-choice-group w-full"
               >
-                <option value="simple">Simple</option>
-                <option value="advanced">Advanced</option>
-              </select>
-            </label>
+                {PALETTE_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={palette === option.value}
+                    className="mb-choice-option mb-choice-option-stretch"
+                    onClick={() => setPalette(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </section>
 
@@ -2139,7 +2153,7 @@ export function SandboxLive({
           type="button"
           aria-expanded={apiKeysOpen}
           aria-controls="sandbox-api-keys"
-          className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          className="mb-disclosure-toggle"
           onClick={() => setApiKeysOpen((open) => !open)}
         >
           <span className="flex min-w-0 items-baseline gap-2">
@@ -2209,7 +2223,7 @@ export function SandboxLive({
                 type="button"
                 aria-expanded={providerKeysOpen}
                 aria-controls="sandbox-provider-keys"
-                className="flex min-h-11 w-full items-center justify-between gap-3 rounded-sm px-1 text-left text-xs font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none"
+                className="mb-disclosure-toggle text-xs font-medium text-muted hover:text-fg"
                 onClick={() => setProviderKeysOpen((open) => !open)}
               >
                 Provider keys

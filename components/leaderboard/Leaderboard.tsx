@@ -567,7 +567,7 @@ export function Leaderboard({
         </div>
       </div>
 
-      <div role="group" aria-label="Leaderboard view" className="mb-leaderboard-switch shrink-0 self-start">
+      <div role="group" aria-label="Leaderboard view" className="mb-choice-group shrink-0 self-start">
         {(["rankings", "efficiency"] as const).map((item) => (
           <button
             key={item}
@@ -575,7 +575,7 @@ export function Leaderboard({
             aria-pressed={view === item}
             aria-controls="leaderboard-models"
             onClick={() => setView(item)}
-            className="mb-leaderboard-option"
+            className="mb-choice-option"
           >
             {item === "rankings" ? "Rankings" : "Efficiency"}
           </button>

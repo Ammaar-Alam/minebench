@@ -40,14 +40,12 @@ const FRAMING_OPTIONS: ReadonlyArray<{
 
 function CreatorOptionGroup<T extends string>({
   legend,
-  name,
   value,
   options,
   disabled,
   onChange,
 }: {
   legend: string;
-  name: string;
   value: T;
   options: ReadonlyArray<{ value: T; label: string; detail: string }>;
   disabled: boolean;
@@ -56,30 +54,21 @@ function CreatorOptionGroup<T extends string>({
   return (
     <fieldset disabled={disabled}>
       <legend className="mb-2 text-xs font-medium text-muted">{legend}</legend>
-      <div className="grid grid-cols-2 overflow-hidden rounded-md border border-border/75">
-        {options.map((option, index) => {
+      <div data-stretch="true" className="mb-choice-group mb-choice-group-compact w-full">
+        {options.map((option) => {
           const selected = value === option.value;
           return (
-            <label key={option.value} className="cursor-pointer">
-              <input
-                type="radio"
-                name={name}
-                value={option.value}
-                checked={selected}
-                onChange={() => onChange(option.value)}
-                className="peer sr-only"
-              />
-              <span
-                className={`flex min-h-14 flex-col justify-center px-3 py-2 text-center transition-colors duration-200 peer-focus-visible:ring-2 peer-focus-visible:ring-inset peer-focus-visible:ring-accent/45 motion-reduce:transition-none ${
-                  index > 0 ? "border-l border-border/75" : ""
-                } ${selected ? "bg-fg text-bg" : "bg-transparent text-muted hover:text-fg"}`}
-              >
-                <span className="text-xs font-semibold">{option.label}</span>
-                <span className={`mt-0.5 text-[10px] ${selected ? "text-bg/70" : "text-muted"}`}>
-                  {option.detail}
-                </span>
-              </span>
-            </label>
+            <button
+              key={option.value}
+              type="button"
+              aria-pressed={selected}
+              aria-label={`${option.label}: ${option.detail}`}
+              disabled={disabled}
+              className="mb-choice-option mb-choice-option-stretch mb-choice-option-compact grid min-h-10 place-items-center text-center"
+              onClick={() => onChange(option.value)}
+            >
+              <span className="text-xs">{option.label}</span>
+            </button>
           );
         })}
       </div>
@@ -107,6 +96,8 @@ export function MediaExportSettings() {
   }
 
   const creator = preference.quality === "creator";
+  const selectedQuality = QUALITY_OPTIONS.find((option) => option.value === preference.quality)
+    ?? QUALITY_OPTIONS[0];
 
   return (
     <section
@@ -119,57 +110,26 @@ export function MediaExportSettings() {
       </h2>
       <p className="mt-2 text-sm text-muted">Saved on this device.</p>
 
-      <fieldset className="mt-5 space-y-2">
+      <fieldset className="mt-5">
         <legend className="sr-only">Export quality</legend>
-        {QUALITY_OPTIONS.map((option) => {
-          const selected = preference.quality === option.value;
-          return (
-            <label key={option.value} className="block cursor-pointer">
-              <input
-                type="radio"
-                name="media-export-quality"
-                value={option.value}
-                checked={selected}
-                onChange={() => save({ ...preference, quality: option.value })}
-                className="peer sr-only"
-              />
-              <span
-                className={`flex min-h-14 items-center justify-between gap-3 rounded-md border px-3 py-2.5 transition-[background-color,border-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] peer-focus-visible:ring-2 peer-focus-visible:ring-accent/45 motion-reduce:transition-none ${
-                  selected
-                    ? "border-accent/55 bg-accent/[0.07]"
-                    : "border-border/75 hover:border-border hover:bg-card/25"
-                }`}
+        <div data-stretch="true" className="mb-choice-group w-full">
+          {QUALITY_OPTIONS.map((option) => {
+            const selected = preference.quality === option.value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                aria-pressed={selected}
+                aria-label={`${option.label}: ${option.detail}`}
+                className="mb-choice-option mb-choice-option-stretch grid min-h-11 place-items-center text-center"
+                onClick={() => save({ ...preference, quality: option.value })}
               >
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-fg">{option.label}</span>
-                  <span className="mt-0.5 block text-xs text-muted">{option.detail}</span>
-                </span>
-                <span
-                  aria-hidden="true"
-                  className={`grid h-5 w-5 shrink-0 place-items-center rounded-full border transition-[background-color,border-color] duration-200 motion-reduce:transition-none ${
-                    selected ? "border-accent bg-accent text-bg" : "border-border text-transparent"
-                  }`}
-                >
-                  <svg
-                    viewBox="0 0 20 20"
-                    className={`h-3.5 w-3.5 transition-[opacity,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
-                      selected ? "scale-100 opacity-100" : "scale-75 opacity-0"
-                    }`}
-                  >
-                    <path
-                      d="m5.25 10.25 3 3 6.5-6.5"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                    />
-                  </svg>
-                </span>
-              </span>
-            </label>
-          );
-        })}
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-muted">{selectedQuality.detail}</p>
       </fieldset>
 
       <div
@@ -183,7 +143,6 @@ export function MediaExportSettings() {
           <div className="space-y-4 pt-4">
             <CreatorOptionGroup
               legend="Format"
-              name="media-export-file-type"
               value={preference.fileType}
               options={FILE_TYPE_OPTIONS}
               disabled={!creator}
@@ -191,7 +150,6 @@ export function MediaExportSettings() {
             />
             <CreatorOptionGroup
               legend="Framing"
-              name="media-export-framing"
               value={preference.framing}
               options={FRAMING_OPTIONS}
               disabled={!creator}

@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Fragment, useEffect, useDeferredValue, useId, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useDeferredValue, useId, useRef, useState } from "react";
 import type { GalleryCandidatePayload } from "@/lib/gallery/service";
 import { GalleryVoteButton } from "@/components/gallery/GalleryVoteButton";
 import { VoxelEmptyState } from "@/components/voxel/VoxelEmptyState";
@@ -11,35 +11,35 @@ import { formatBuildDuration, formatBuildJsonSize } from "@/lib/buildMetrics";
 
 type GallerySort = "top" | "new" | "official";
 
-export function GalleryCardSkeleton({ delayed = false }: { delayed?: boolean }) {
+export function GalleryCardSkeleton() {
   return (
     <article
       aria-hidden="true"
-      className={`flex min-w-0 flex-col overflow-hidden rounded-md border border-border/70 bg-card/10 ${delayed ? "mb-card-enter-delay" : ""}`}
+      className="flex min-w-0 animate-pulse flex-col overflow-hidden rounded-md border border-border/70 bg-card/10 motion-reduce:animate-none"
     >
       <div className="relative aspect-[4/3] overflow-hidden bg-bg/40">
-        <div className="absolute inset-0 animate-pulse bg-card/25" />
+        <div className="absolute inset-0 bg-card/25" />
       </div>
       <div className="flex flex-1 flex-col gap-3 p-5">
         <div className="flex items-center justify-between gap-3">
-          <div className="h-3 w-20 animate-pulse rounded bg-border/50" />
-          <div className="h-3 w-12 animate-pulse rounded bg-border/30" />
+          <div className="h-3 w-20 rounded bg-border/50" />
+          <div className="h-3 w-12 rounded bg-border/30" />
         </div>
         <div className="space-y-2">
-          <div className="h-5 w-4/5 animate-pulse rounded bg-border/45" />
-          <div className="h-5 w-3/5 animate-pulse rounded bg-border/35" />
+          <div className="h-5 w-4/5 rounded bg-border/45" />
+          <div className="h-5 w-3/5 rounded bg-border/35" />
         </div>
         <div className="mt-auto flex items-center gap-2 pt-3">
-          <div className="h-3.5 w-32 animate-pulse rounded bg-border/30" />
+          <div className="h-3.5 w-32 rounded bg-border/30" />
         </div>
         <div className="flex flex-wrap gap-x-3 gap-y-1">
-          <div className="h-3 w-16 animate-pulse rounded bg-border/25" />
-          <div className="h-3 w-14 animate-pulse rounded bg-border/25" />
+          <div className="h-3 w-16 rounded bg-border/25" />
+          <div className="h-3 w-14 rounded bg-border/25" />
         </div>
       </div>
       <div className="flex items-center justify-between border-t border-border/40 px-3 py-2">
-        <div className="h-7 w-12 animate-pulse rounded bg-border/30" />
-        <div className="h-7 w-20 animate-pulse rounded bg-border/30" />
+        <div className="h-7 w-12 rounded bg-border/30" />
+        <div className="h-7 w-20 rounded bg-border/30" />
       </div>
     </article>
   );
@@ -49,7 +49,7 @@ export function GallerySkeletonGrid({ count = 8 }: { count?: number }) {
   return (
     <div className="mt-7 grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4" aria-busy="true" aria-label="Loading gallery prompts">
       {Array.from({ length: count }, (_, i) => (
-        <GalleryCardSkeleton key={i} delayed={i % 2 === 1} />
+        <GalleryCardSkeleton key={i} />
       ))}
     </div>
   );
@@ -140,7 +140,7 @@ function SubmissionDialog({
   );
 }
 
-function GalleryCard({
+const GalleryCard = memo(function GalleryCard({
   candidate,
   delayed,
   sort,
@@ -236,7 +236,7 @@ function GalleryCard({
       </article>
     </div>
   );
-}
+});
 
 export function GalleryExplore({
   initialItems,
@@ -496,7 +496,7 @@ export function GalleryExplore({
             {items.map((candidate, index) => <GalleryCard key={candidate.id} candidate={candidate} delayed={index % 2 === 1} sort={activeSort} />)}
             {loadingMore ? (
               Array.from({ length: 4 }, (_, i) => (
-                <GalleryCardSkeleton key={`loading-more-${i}`} delayed={i % 2 === 1} />
+                <GalleryCardSkeleton key={`loading-more-${i}`} />
               ))
             ) : null}
           </div>
@@ -522,8 +522,9 @@ export function GalleryExplore({
 
       {cursor && !loading && !searchPending ? (
         <div className="mt-12 flex justify-center">
-          <button type="button" className="mb-btn h-11 min-w-36" disabled={loadingMore} onClick={() => void loadMore()}>
-            {loadingMore ? "Loading…" : "More"}
+          <button type="button" className="mb-collapse-toggle" disabled={loadingMore} aria-busy={loadingMore} onClick={() => void loadMore()}>
+            <span>{loadingMore ? "Loading…" : "More"}</span>
+            <svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
           </button>
         </div>
       ) : null}
