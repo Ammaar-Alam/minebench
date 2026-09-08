@@ -31,7 +31,7 @@ const transaction = {
   $transaction: async (callback: (tx: unknown) => unknown) => callback(transaction),
   $queryRaw: async (parts: TemplateStringsArray) => {
     const sql = parts.join("?");
-    if (sql.includes('FROM "PushDelivery"')) {
+    if (sql.includes('FROM "NotificationDelivery"')) {
       claims += 1;
       if (claims === 1) throw new Error("temporary database outage");
       return new Promise<never[]>((resolve) => { releaseClaim = resolve; });
@@ -45,7 +45,7 @@ const transaction = {
   customBuildArtifact: { findFirst: async () => ({ id: "existing-export" }) },
   customBuildJob: { findFirst: async () => null, count: async () => 0, updateMany: async () => ({ count: 1 }) },
   stealthGenerationResult: { findFirst: async () => null, count: async () => 0 },
-  pushDelivery: { updateMany: async () => ({ count: 0 }) },
+  notificationDelivery: { updateMany: async () => ({ count: 0 }) },
   $disconnect: async () => { disconnected = true; },
 };
 

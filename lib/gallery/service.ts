@@ -18,7 +18,7 @@ import {
   resolveGalleryModelLabel,
 } from "@/lib/gallery/policy";
 import { prisma } from "@/lib/prisma";
-import { enqueueGalleryContribution, enqueueGalleryUpvotes } from "@/lib/notifications/service";
+import { enqueueGalleryContribution, enqueueGalleryUpvotes, lockNotificationAccounts } from "@/lib/notifications/service";
 import {
   PUBLIC_SESSION_ONLINE_MS,
   PUBLIC_SESSION_RETENTION_MS,
@@ -682,6 +682,7 @@ export async function addGalleryExample(
   }
   const id = randomBytes(16).toString("hex");
   return prisma.$transaction(async (tx) => {
+    await lockNotificationAccounts(tx, [userId, candidate.uploaderId]);
     const example = await tx.galleryExample.upsert({
       where: {
         candidateId_customBuildId: {
@@ -794,6 +795,7 @@ export async function setGalleryVote(input: {
     return { upvoted: input.upvoted, count: candidate.upvoteCount };
   }
   return prisma.$transaction(async (tx) => {
+    await lockNotificationAccounts(tx, [input.userId, candidate.uploaderId]);
     if (input.upvoted) {
       const inserted = await tx.$queryRaw<Array<{ id: string; createdAt: Date }>>`
         INSERT INTO "GalleryVote" (id, "candidateId", "sessionId", "userId", "createdAt")

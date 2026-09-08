@@ -58,14 +58,14 @@ async function main() {
       subjectId: futureSubjectId,
       createdAt: futureAt,
     }));
-    const suppressedFuture = await db.pushDelivery.findFirstOrThrow({
+    const suppressedFuture = await db.notificationDelivery.findFirstOrThrow({
       where: { userId: ownerId, subjectId: futureSubjectId, kind: "gallery_upvotes" },
     });
     assert.equal(suppressedFuture.finishedAt, null);
     assert.ok(suppressedFuture.runAfter > new Date());
 
     await updateNotificationSettings(ownerId, { generations: true, upvotes: false, contributions: true });
-    assert.ok((await db.pushDelivery.findUniqueOrThrow({ where: { id: suppressedFuture.id } })).finishedAt);
+    assert.ok((await db.notificationDelivery.findUniqueOrThrow({ where: { id: suppressedFuture.id } })).finishedAt);
     await updateNotificationSettings(ownerId, { generations: true, upvotes: true, contributions: true });
     await db.$transaction((tx) => enqueueGalleryUpvotes(tx, {
       userId: ownerId,
@@ -73,7 +73,7 @@ async function main() {
       subjectId: futureSubjectId,
       createdAt: new Date(futureAt.getTime() + 5 * 60_000),
     }));
-    const reopenedFuture = await db.pushDelivery.findUniqueOrThrow({ where: { id: suppressedFuture.id } });
+    const reopenedFuture = await db.notificationDelivery.findUniqueOrThrow({ where: { id: suppressedFuture.id } });
     assert.equal(reopenedFuture.finishedAt, null);
     assert.equal(reopenedFuture.leaseToken, null);
     assert.equal(reopenedFuture.leaseExpiresAt, null);
@@ -85,10 +85,10 @@ async function main() {
       subjectId: pastSubjectId,
       createdAt: futureAt,
     }));
-    const sentPast = await db.pushDelivery.findFirstOrThrow({
+    const sentPast = await db.notificationDelivery.findFirstOrThrow({
       where: { userId: ownerId, subjectId: pastSubjectId, kind: "gallery_upvotes" },
     });
-    await db.pushDelivery.update({
+    await db.notificationDelivery.update({
       where: { id: sentPast.id },
       data: { finishedAt: past, runAfter: past, leaseToken: "finished-lease", leaseExpiresAt: past },
     });
@@ -100,10 +100,10 @@ async function main() {
       subjectId: pastSubjectId,
       createdAt: new Date(futureAt.getTime() + 10 * 60_000),
     }));
-    const retainedPast = await db.pushDelivery.findUniqueOrThrow({ where: { id: sentPast.id } });
+    const retainedPast = await db.notificationDelivery.findUniqueOrThrow({ where: { id: sentPast.id } });
     assert.ok(retainedPast.finishedAt);
     assert.equal(retainedPast.leaseToken, "finished-lease");
-    assert.equal(await db.pushDelivery.count({ where: { userId: ownerId, subjectId: pastSubjectId, finishedAt: null } }), 0);
+    assert.equal(await db.notificationDelivery.count({ where: { userId: ownerId, subjectId: pastSubjectId, finishedAt: null } }), 0);
 
     console.log("notification preference PostgreSQL checks passed");
   } finally {

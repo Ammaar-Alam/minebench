@@ -113,7 +113,7 @@ assert.ok(
 );
 assert.ok(
   yours.includes('fetch("/api/generations", { cache: "no-store", signal: controller.signal })') &&
-    yours.includes("setItems(page.items)") &&
+    yours.includes("setItems((current) => mergeGenerations(") &&
     yours.includes("setCursor(page.nextCursor)"),
   "saved builds should refresh their first page on mount instead of trusting stale route props",
 );

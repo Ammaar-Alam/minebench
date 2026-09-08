@@ -27,7 +27,7 @@ async function main() {
     removePushDevice,
     updateNotificationSettings,
   } = await import("../../lib/notifications/service");
-  const { claimPushDeliveries, drainPushNotifications } = await import("../../lib/notifications/delivery");
+  const { claimNotificationDeliveries, drainNotifications } = await import("../../lib/notifications/delivery");
   const { prisma: appPrisma } = await import("../../lib/prisma");
   const { deleteMineBenchAccount } = await import("../../lib/account/service");
   const { failCustomBuildJob } = await import("../../lib/custom-builds/jobs");
@@ -113,8 +113,8 @@ async function main() {
     });
   }
 
-  async function createDelivery(deviceId: string, userId: string, label: string, data: Partial<Prisma.PushDeliveryUncheckedCreateInput>) {
-    return db.pushDelivery.create({
+  async function createDelivery(deviceId: string, userId: string, label: string, data: Partial<Prisma.NotificationDeliveryUncheckedCreateInput>) {
+    return db.notificationDelivery.create({
       data: {
         deviceId,
         userId,
@@ -138,7 +138,7 @@ async function main() {
   }
 
   async function clearQueue() {
-    await db.pushDelivery.deleteMany({});
+    await db.notificationDelivery.deleteMany({});
   }
 
   async function withExpectedPushWarnings(callback: () => Promise<void>) {
@@ -171,7 +171,7 @@ async function main() {
     const ownerDeviceA = await createDevice(ownerId, "owner-a");
     const ownerDeviceB = await createDevice(ownerId, "owner-b");
     assert.deepEqual(await getNotificationSettings(ownerId), {
-      settings: { generations: true, upvotes: true, contributions: true },
+      settings: { generations: true, upvotes: true, contributions: true, email: true },
       available: true,
     });
 
@@ -183,11 +183,11 @@ async function main() {
       }),
       /rollback/,
     );
-    assert.equal(await db.pushDelivery.count({ where: { userId: ownerId } }), 0);
+    assert.equal(await db.notificationDelivery.count({ where: { userId: ownerId } }), 0);
 
     await db.$transaction((tx) => enqueueGenerationNotification(tx, succeededBuild.id));
     await db.$transaction((tx) => enqueueGenerationNotification(tx, succeededBuild.id));
-    let deliveries = await db.pushDelivery.findMany({
+    let deliveries = await db.notificationDelivery.findMany({
       where: { userId: ownerId, kind: "generation_succeeded", subjectId: succeededBuild.publicId },
       orderBy: { deviceId: "asc" },
     });
@@ -211,14 +211,14 @@ async function main() {
       requeued: false,
     });
     assert.equal(
-      await db.pushDelivery.count({ where: { userId: ownerId, kind: "generation_failed", subjectId: failedBuild.publicId } }),
+      await db.notificationDelivery.count({ where: { userId: ownerId, kind: "generation_failed", subjectId: failedBuild.publicId } }),
       2,
       "terminal generation failure should enqueue through the job entrypoint",
     );
 
     await updateNotificationSettings(ownerId, { generations: false, upvotes: true, contributions: false });
     assert.equal(
-      await db.pushDelivery.count({ where: { userId: ownerId, kind: { in: ["generation_succeeded", "generation_failed"] }, finishedAt: null } }),
+      await db.notificationDelivery.count({ where: { userId: ownerId, kind: { in: ["generation_succeeded", "generation_failed"] }, finishedAt: null } }),
       0,
       "disabling generation notifications should finish queued generation deliveries",
     );
@@ -230,7 +230,7 @@ async function main() {
       subjectId: "gal_disabled",
       exampleId: "disabled-example",
     }));
-    assert.equal(await db.pushDelivery.count({ where: { userId: ownerId, subjectId: { in: [disabledBuild.publicId, "gal_disabled"] } } }), 0);
+    assert.equal(await db.notificationDelivery.count({ where: { userId: ownerId, subjectId: { in: [disabledBuild.publicId, "gal_disabled"] } } }), 0);
     await updateNotificationSettings(ownerId, { generations: true, upvotes: true, contributions: true });
 
     await clearQueue();
@@ -245,7 +245,7 @@ async function main() {
       where: { token_environment: { token: token("shared"), environment: "production" } },
     });
     assert.equal(rebound.userId, ownerId);
-    assert.equal(await db.pushDelivery.count({ where: { deviceId: rebound.id, userId: reboundUserId } }), 0);
+    assert.equal(await db.notificationDelivery.count({ where: { deviceId: rebound.id, userId: reboundUserId } }), 0);
     await removePushDevice(reboundUserId, { token: token("shared"), environment: "production" });
     assert.equal(await db.pushDevice.count({ where: { id: rebound.id, userId: ownerId } }), 1);
 
@@ -271,7 +271,7 @@ async function main() {
     );
     assert.equal(await db.pushDevice.count({ where: { userId: cappedUserId } }), 20);
     assert.equal((await db.pushDevice.findUniqueOrThrow({ where: { id: capSharedDevice.id } })).userId, capTokenOwnerId);
-    assert.equal(await db.pushDelivery.count({ where: { deviceId: capSharedDevice.id, userId: capTokenOwnerId } }), 1);
+    assert.equal(await db.notificationDelivery.count({ where: { deviceId: capSharedDevice.id, userId: capTokenOwnerId } }), 1);
 
     await clearQueue();
     const voteOwnerId = await createUser("notification-vote-owner");
@@ -284,7 +284,7 @@ async function main() {
       userId: firstVoterId,
       upvoted: true,
     });
-    const voteDelivery = await db.pushDelivery.findFirstOrThrow({
+    const voteDelivery = await db.notificationDelivery.findFirstOrThrow({
       where: { userId: voteOwnerId, kind: "gallery_upvotes", subjectId: candidate.publicId },
     });
     assert.ok(voteDelivery.windowStart);
@@ -318,9 +318,9 @@ async function main() {
       ],
     });
     await db.galleryVote.deleteMany({ where: { sessionId: `vote-session-removed-${suffix}` } });
-    await db.pushDelivery.update({ where: { id: voteDelivery.id }, data: { runAfter: past } });
+    await db.notificationDelivery.update({ where: { id: voteDelivery.id }, data: { runAfter: past } });
     const voteSend = fakeSend();
-    await drainPushNotifications(voteSend.send);
+    await drainNotifications(voteSend.send);
     assert.equal(voteSend.calls.length, 1);
     assert.equal(voteSend.calls[0].payload.aps.alert.body, "Your prompt received 2 new upvotes.");
 
@@ -339,7 +339,7 @@ async function main() {
     });
     assert.equal(contribution.created, true);
     assert.equal(
-      await db.pushDelivery.count({ where: { userId: contributionOwnerId, kind: "gallery_contribution", exampleId: contribution.id } }),
+      await db.notificationDelivery.count({ where: { userId: contributionOwnerId, kind: "gallery_contribution", exampleId: contribution.id } }),
       1,
     );
     assert.equal((await addGalleryExample(contributorId, contributionCandidate.publicId, {
@@ -351,13 +351,13 @@ async function main() {
       generationId: ownerContributionBuild.publicId,
       postAnonymously: true,
     })).created, true);
-    assert.equal(await db.pushDelivery.count({ where: { userId: contributionOwnerId, kind: "gallery_contribution" } }), 1);
-    await db.pushDelivery.updateMany({
+    assert.equal(await db.notificationDelivery.count({ where: { userId: contributionOwnerId, kind: "gallery_contribution" } }), 1);
+    await db.notificationDelivery.updateMany({
       where: { userId: contributionOwnerId, kind: "gallery_contribution" },
       data: { runAfter: past },
     });
     const contributionSend = fakeSend();
-    await drainPushNotifications(contributionSend.send);
+    await drainNotifications(contributionSend.send);
     assert.equal(contributionSend.calls.length, 1);
     assert.equal(contributionSend.calls[0].payload.kind, "gallery_contribution");
 
@@ -367,7 +367,7 @@ async function main() {
     await Promise.all(Array.from({ length: 12 }, (_, index) => createDelivery(claimDevice.id, claimOwnerId, `claim-${index}`, {
       eventKey: `claim-${index}-${suffix}`,
     })));
-    const [claimA, claimB] = await Promise.all([claimPushDeliveries(), claimPushDeliveries()]);
+    const [claimA, claimB] = await Promise.all([claimNotificationDeliveries(), claimNotificationDeliveries()]);
     assert.equal(new Set([...claimA, ...claimB].map((delivery) => delivery.id)).size, claimA.length + claimB.length);
     assert.equal(claimA.length + claimB.length, 12);
     assert.ok([...claimA, ...claimB].every((delivery) => delivery.leaseToken && delivery.leaseExpiresAt));
@@ -379,7 +379,7 @@ async function main() {
       leaseExpiresAt: past,
       eventKey: `stale-${suffix}`,
     });
-    const staleClaim = await claimPushDeliveries();
+    const staleClaim = await claimNotificationDeliveries();
     assert.deepEqual(staleClaim.map((delivery) => delivery.id), [stale.id]);
     assert.equal(staleClaim[0].attempts, 2);
     assert.notEqual(staleClaim[0].leaseToken, "stale-token");
@@ -410,14 +410,14 @@ async function main() {
       }
       return { status: 200 };
     };
-    await withExpectedPushWarnings(() => drainPushNotifications(retrySend));
+    await withExpectedPushWarnings(() => drainNotifications(retrySend));
     assert.equal(retryCalls.length, 2);
-    assert.ok((await db.pushDelivery.findUniqueOrThrow({ where: { id: retryDeliveryA.id } })).finishedAt);
-    const transient = await db.pushDelivery.findUniqueOrThrow({ where: { id: retryDeliveryB.id } });
+    assert.ok((await db.notificationDelivery.findUniqueOrThrow({ where: { id: retryDeliveryA.id } })).finishedAt);
+    const transient = await db.notificationDelivery.findUniqueOrThrow({ where: { id: retryDeliveryB.id } });
     assert.equal(transient.finishedAt, null);
     assert.equal(transient.attempts, 1);
-    await db.pushDelivery.update({ where: { id: retryDeliveryB.id }, data: { runAfter: past } });
-    await drainPushNotifications(retrySend);
+    await db.notificationDelivery.update({ where: { id: retryDeliveryB.id }, data: { runAfter: past } });
+    await drainNotifications(retrySend);
     assert.equal(retryCalls.length, 3);
     assert.equal(retryCalls[2].token, retryDeviceB.token);
 
@@ -437,10 +437,10 @@ async function main() {
       subjectId: bookkeepingBuild.publicId,
       eventKey: bookkeepingEventKey,
     });
-    const pushDelivery = appPrisma.pushDelivery as unknown as {
-      updateMany: typeof appPrisma.pushDelivery.updateMany;
+    const notificationDelivery = appPrisma.notificationDelivery as unknown as {
+      updateMany: typeof appPrisma.notificationDelivery.updateMany;
     };
-    const originalUpdateMany = pushDelivery.updateMany;
+    const originalUpdateMany = notificationDelivery.updateMany;
     let rejectBookkeepingUpdate: () => void = () => {};
     const bookkeepingUpdateRejected = new Promise<void>((resolve) => {
       rejectBookkeepingUpdate = resolve;
@@ -455,13 +455,13 @@ async function main() {
     });
     let drainSettled = false;
     try {
-      pushDelivery.updateMany = (async (...args: Parameters<typeof originalUpdateMany>) => {
+      notificationDelivery.updateMany = (async (...args: Parameters<typeof originalUpdateMany>) => {
         const where = args[0]?.where as { id?: string } | undefined;
         if (where?.id === failedBookkeepingDelivery.id) {
           rejectBookkeepingUpdate();
           throw new Error("bookkeeping update failed");
         }
-        return originalUpdateMany.apply(appPrisma.pushDelivery, args);
+        return originalUpdateMany.apply(appPrisma.notificationDelivery, args);
       }) as unknown as typeof originalUpdateMany;
       const bookkeepingSend: PushSend = async (input) => {
         if (input.token === bookkeepingDeviceB.token) {
@@ -470,24 +470,24 @@ async function main() {
         }
         return { status: 200 };
       };
-      const drain = withExpectedPushWarnings(() => drainPushNotifications(bookkeepingSend));
+      const drain = withExpectedPushWarnings(() => drainNotifications(bookkeepingSend));
       drain.finally(() => { drainSettled = true; }).catch(() => {});
       await waitFor(Promise.all([bookkeepingUpdateRejected, deferredSendStarted]), "bookkeeping regression setup");
       await new Promise((resolve) => setTimeout(resolve, 20));
       assert.equal(drainSettled, false, "drain should wait for every claimed delivery to settle");
-      let failedBookkeeping = await db.pushDelivery.findUniqueOrThrow({ where: { id: failedBookkeepingDelivery.id } });
+      let failedBookkeeping = await db.notificationDelivery.findUniqueOrThrow({ where: { id: failedBookkeepingDelivery.id } });
       assert.equal(failedBookkeeping.finishedAt, null);
       assert.ok(failedBookkeeping.leaseToken);
       assert.ok(failedBookkeeping.leaseExpiresAt);
       resolveDeferredSend({ status: 200 });
       await waitFor(drain, "bookkeeping regression drain");
-      failedBookkeeping = await db.pushDelivery.findUniqueOrThrow({ where: { id: failedBookkeepingDelivery.id } });
+      failedBookkeeping = await db.notificationDelivery.findUniqueOrThrow({ where: { id: failedBookkeepingDelivery.id } });
       assert.equal(failedBookkeeping.finishedAt, null);
       assert.ok(failedBookkeeping.leaseToken);
-      assert.ok((await db.pushDelivery.findUniqueOrThrow({ where: { id: deferredBookkeepingDelivery.id } })).finishedAt);
+      assert.ok((await db.notificationDelivery.findUniqueOrThrow({ where: { id: deferredBookkeepingDelivery.id } })).finishedAt);
     } finally {
       resolveDeferredSend({ status: 200 });
-      pushDelivery.updateMany = originalUpdateMany;
+      notificationDelivery.updateMany = originalUpdateMany;
     }
 
     await clearQueue();
@@ -506,7 +506,7 @@ async function main() {
       reason: "Unregistered",
       invalidatedAt: freshDevice.updatedAt.getTime() - 1_000,
     }]);
-    await withExpectedPushWarnings(() => drainPushNotifications(freshSend.send));
+    await withExpectedPushWarnings(() => drainNotifications(freshSend.send));
     assert.equal(await db.pushDevice.count({ where: { id: freshDevice.id } }), 1);
 
     await clearQueue();
@@ -550,9 +550,9 @@ async function main() {
       exampleId: removedExample.id,
     });
     const invalidSend = fakeSend();
-    await drainPushNotifications(invalidSend.send);
+    await drainNotifications(invalidSend.send);
     assert.equal(invalidSend.calls.length, 0);
-    assert.equal(await db.pushDelivery.count({ where: { finishedAt: null } }), 0);
+    assert.equal(await db.notificationDelivery.count({ where: { finishedAt: null } }), 0);
 
     await clearQueue();
     const deletingUserId = await createUser("notification-delete-account");
@@ -566,7 +566,7 @@ async function main() {
     }), { deleted: true });
     assert.deepEqual(deletedAuthUsers, [deletingUserId]);
     assert.equal(await db.pushDevice.count({ where: { userId: deletingUserId } }), 0);
-    assert.equal(await db.pushDelivery.count({ where: { userId: deletingUserId } }), 0);
+    assert.equal(await db.notificationDelivery.count({ where: { userId: deletingUserId } }), 0);
     assert.equal(await db.notificationPreference.count({ where: { userId: deletingUserId } }), 0);
 
     console.log("notification PostgreSQL checks passed");

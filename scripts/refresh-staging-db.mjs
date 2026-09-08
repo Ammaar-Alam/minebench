@@ -148,7 +148,7 @@ function main() {
     "--schema=public",
     '--exclude-table-data=public."PushDevice"',
     '--exclude-table-data=public."NotificationPreference"',
-    '--exclude-table-data=public."PushDelivery"',
+    '--exclude-table-data=public."NotificationDelivery"',
     "--file",
     tmpDumpPath,
     prodCli.safeUrl,

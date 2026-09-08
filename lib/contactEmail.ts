@@ -226,6 +226,7 @@ export async function sendMineBenchEmail(message: {
   text: string;
   html: string;
   replyTo?: string;
+  messageId?: string;
 }): Promise<void> {
   await getTransporter().sendMail({
     from: { name: "MineBench", address: SUPPORT_EMAIL },

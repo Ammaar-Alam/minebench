@@ -1,5 +1,5 @@
 import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
-import { enqueueGenerationNotification } from "@/lib/notifications/service";
+import { enqueueGenerationNotification, lockNotificationAccounts } from "@/lib/notifications/service";
 import {
   deserializeSavedGenerationRequestConfig,
   requestOverrideSecretValues,
@@ -566,6 +566,7 @@ export async function runCustomBuildGenerateJob(
 
     throwIfCustomBuildLeaseLost(opts.signal);
     await prisma.$transaction(async (tx) => {
+      await lockNotificationAccounts(tx, [customBuild.ownerId]);
       const stored = await tx.customBuildArtifact.aggregate({
         where: { customBuildId: customBuild.id },
         _sum: { storedByteSize: true },
@@ -645,6 +646,7 @@ export async function runCustomBuildGenerateJob(
     if (terminal) {
       const failure = safeGenerateFailure(effectiveError, message);
       await prisma.$transaction(async (tx) => {
+        await lockNotificationAccounts(tx, [customBuild.ownerId]);
         const failed = await tx.customBuild.updateMany({
           where: { id: customBuild.id, removedAt: null, status: "running" },
           data: {

@@ -52,8 +52,9 @@ whenever a test needs current production shape — typically before validating a
 migration.
 
 Notification preferences, device registrations, and queued deliveries are excluded
-from database snapshots. Alpha push configuration is isolated through `STAGING_APNS_*`;
-see [iOS notifications](ios-notifications.md) before enabling delivery.
+from database snapshots. Alpha uses separate `STAGING_APNS_*` and email configuration;
+activity emails require an explicit test recipient. See
+[account notifications](ios-notifications.md) before enabling delivery.
 
 ## Testing a change in alpha
 

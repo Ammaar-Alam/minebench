@@ -94,7 +94,7 @@ model User {
   galleryVoteBlocksReversed GalleryVoteBlock[]       @relation("GalleryVoteBlockReverser")
   notificationPreference   NotificationPreference?
   pushDevices              PushDevice[]
-  pushDeliveries           PushDelivery[]
+  notificationDeliveries   NotificationDelivery[]
 
   @@index([gallerySuspendedById])
   @@index([deletedAt, authDeletedAt])
@@ -117,6 +117,7 @@ model NotificationPreference {
   generations   Boolean @default(true)
   upvotes       Boolean @default(true)
   contributions Boolean @default(true)
+  email         Boolean @default(true)
   user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
@@ -127,15 +128,16 @@ model PushDevice {
   environment PushEnvironment
   updatedAt   DateTime        @updatedAt
   user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  deliveries  PushDelivery[]
+  deliveries  NotificationDelivery[]
 
   @@unique([token, environment])
   @@index([userId])
 }
 
-model PushDelivery {
+model NotificationDelivery {
   id             String           @id @default(cuid())
-  deviceId       String
+  // no device means an email to the account
+  deviceId       String?
   userId         String           @db.Uuid
   kind           NotificationKind
   subjectId      String
@@ -148,7 +150,7 @@ model PushDelivery {
   attempts       Int              @default(0)
   finishedAt     DateTime?
   createdAt      DateTime         @default(now())
-  device         PushDevice       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  device         PushDevice?      @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([deviceId, eventKey])

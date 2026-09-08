@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { NotificationKind, Prisma } from "@prisma/client";
+import { Prisma, type NotificationKind } from "@prisma/client";
 import { z } from "zod";
 import { AccountServiceError } from "@/lib/account/service";
 import { prisma } from "@/lib/prisma";
@@ -8,6 +8,7 @@ export const notificationSettingsSchema = z.object({
   generations: z.boolean(),
   upvotes: z.boolean(),
   contributions: z.boolean(),
+  email: z.boolean().optional(),
 }).strict();
 
 export const pushDeviceSchema = z.object({
@@ -15,23 +16,42 @@ export const pushDeviceSchema = z.object({
   environment: z.enum(["development", "production"]),
 }).strict();
 
-export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
-const settingsSelect = { generations: true, upvotes: true, contributions: true } as const;
-const defaultSettings: NotificationSettings = { generations: true, upvotes: true, contributions: true };
+export type NotificationSettings = Required<z.infer<typeof notificationSettingsSchema>>;
+const settingsSelect = { generations: true, upvotes: true, contributions: true, email: true } as const;
+const defaultSettings: NotificationSettings = { generations: true, upvotes: true, contributions: true, email: true };
 export const NOTIFICATION_HOUR_MS = 60 * 60 * 1000;
 
-export function notificationsEnabled(): boolean {
+export function pushNotificationsEnabled(): boolean {
   return process.env.APNS_ENABLED === "true";
 }
 
-export function notificationCategory(kind: NotificationKind): keyof NotificationSettings {
+export function emailNotificationsEnabled(): boolean {
+  return process.env.EMAIL_NOTIFICATIONS_ENABLED === "true";
+}
+
+export function notificationsEnabled(): boolean {
+  return pushNotificationsEnabled() || emailNotificationsEnabled();
+}
+
+export function notificationCategory(kind: NotificationKind): Exclude<keyof NotificationSettings, "email"> {
   return kind === "gallery_upvotes" ? "upvotes"
     : kind === "gallery_contribution" ? "contributions" : "generations";
 }
 
 export async function getNotificationSettings(userId: string) {
   const settings = await prisma.notificationPreference.findUnique({ where: { userId }, select: settingsSelect });
-  return { settings: settings ?? defaultSettings, available: notificationsEnabled() };
+  return { settings: settings ?? defaultSettings, available: pushNotificationsEnabled() };
+}
+
+export async function lockNotificationAccounts(tx: Prisma.TransactionClient, userIds: Array<string | null | undefined>) {
+  if (!notificationsEnabled()) return;
+  const ids = [...new Set(userIds.filter((id): id is string => Boolean(id)))].sort();
+  if (!ids.length) return;
+  // match account deletion's account-first lock order before touching business rows
+  await tx.$queryRaw(Prisma.sql`
+    SELECT id FROM "User" WHERE id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+      AND "deletedAt" IS NULL ORDER BY id FOR KEY SHARE
+  `);
 }
 
 async function lockActiveAccount(tx: Prisma.TransactionClient, userId: string) {
@@ -41,23 +61,28 @@ async function lockActiveAccount(tx: Prisma.TransactionClient, userId: string) {
   if (!rows.length) throw new AccountServiceError("not_found", "Account unavailable.");
 }
 
-export async function updateNotificationSettings(userId: string, settings: NotificationSettings) {
-  await prisma.$transaction(async (tx) => {
+export async function updateNotificationSettings(userId: string, settings: z.infer<typeof notificationSettingsSchema>) {
+  const updated = await prisma.$transaction(async (tx) => {
     await lockActiveAccount(tx, userId);
-    await tx.notificationPreference.upsert({
+    const preference = await tx.notificationPreference.upsert({
       where: { userId }, create: { userId, ...settings }, update: settings,
+      select: settingsSelect,
     });
     const disabledKinds: NotificationKind[] = [
       ...(!settings.generations ? ["generation_succeeded", "generation_failed"] as const : []),
       ...(!settings.upvotes ? ["gallery_upvotes"] as const : []),
       ...(!settings.contributions ? ["gallery_contribution"] as const : []),
     ];
-    await tx.pushDelivery.updateMany({
-      where: { userId, finishedAt: null, kind: { in: disabledKinds } },
+    await tx.notificationDelivery.updateMany({
+      where: {
+        userId, finishedAt: null,
+        OR: [{ kind: { in: disabledKinds } }, ...(settings.email === false ? [{ deviceId: null }] : [])],
+      },
       data: { finishedAt: new Date() },
     });
+    return preference;
   });
-  return { settings, available: notificationsEnabled() };
+  return { settings: updated, available: pushNotificationsEnabled() };
 }
 
 export async function registerPushDevice(userId: string, device: z.infer<typeof pushDeviceSchema>) {
@@ -68,7 +93,7 @@ export async function registerPushDevice(userId: string, device: z.infer<typeof 
       create: { userId, ...device },
       update: { userId, updatedAt: new Date() },
     });
-    await tx.pushDelivery.deleteMany({ where: { deviceId: registered.id, userId: { not: userId } } });
+    await tx.notificationDelivery.deleteMany({ where: { deviceId: registered.id, userId: { not: userId } } });
     if (await tx.pushDevice.count({ where: { userId } }) > 20) {
       throw new AccountServiceError("device_limit_reached", "Too many registered devices.");
     }
@@ -91,31 +116,39 @@ async function enqueueNotification(tx: Prisma.TransactionClient, event: {
   runAfter?: Date;
 }) {
   if (!notificationsEnabled()) return;
-  // lock registrations until enqueue commits so sign-out cannot race the foreign key
-  await tx.$executeRaw`
-    WITH devices AS (
-      SELECT d.id FROM "PushDevice" d
-      JOIN "User" u ON u.id = d."userId"
-      LEFT JOIN "NotificationPreference" p ON p."userId" = u.id
-      WHERE d."userId" = ${event.userId}::uuid AND u."deletedAt" IS NULL
-        AND COALESCE(CASE ${notificationCategory(event.kind)}
-          WHEN 'upvotes' THEN p.upvotes
-          WHEN 'contributions' THEN p.contributions
-          ELSE p.generations END, true)
-      FOR SHARE OF d
-    )
-    INSERT INTO "PushDelivery"
-      (id, "deviceId", "userId", kind, "subjectId", "eventKey", "exampleId", "windowStart", "runAfter")
-    SELECT ${randomUUID()} || ':' || d.id, d.id, ${event.userId}::uuid,
-      ${event.kind}::"NotificationKind", ${event.subjectId}, ${event.eventKey},
-      ${event.exampleId ?? null}, ${event.windowStart ?? null}::timestamp, ${event.runAfter ?? new Date()}::timestamp
-    FROM devices d
-    ON CONFLICT ("deviceId", "eventKey") DO UPDATE
+  const account = await tx.user.findFirst({
+    where: { id: event.userId, deletedAt: null },
+    select: { notificationPreference: true },
+  });
+  if (!account || account.notificationPreference?.[notificationCategory(event.kind)] === false) return;
+  const values = Prisma.sql`${event.userId}::uuid, ${event.kind}::"NotificationKind", ${event.subjectId}, ${event.eventKey},
+    ${event.exampleId ?? null}, ${event.windowStart ?? null}::timestamp, ${event.runAfter ?? new Date()}::timestamp`;
+  const reopenSummary = Prisma.sql`
     SET "finishedAt" = NULL, "leaseToken" = NULL, "leaseExpiresAt" = NULL
-    WHERE "PushDelivery".kind = 'gallery_upvotes'::"NotificationKind"
-      AND "PushDelivery"."finishedAt" IS NOT NULL
-      AND "PushDelivery"."runAfter" > now()
+    WHERE "NotificationDelivery".kind = 'gallery_upvotes'::"NotificationKind"
+      AND "NotificationDelivery"."finishedAt" IS NOT NULL
+      AND "NotificationDelivery"."runAfter" > now()
   `;
+  if (pushNotificationsEnabled()) {
+    // hold registrations until enqueue commits so sign-out cannot race the foreign key
+    await tx.$executeRaw(Prisma.sql`
+      WITH devices AS (
+        SELECT id FROM "PushDevice" WHERE "userId" = ${event.userId}::uuid FOR SHARE
+      )
+      INSERT INTO "NotificationDelivery"
+        (id, "deviceId", "userId", kind, "subjectId", "eventKey", "exampleId", "windowStart", "runAfter")
+      SELECT ${randomUUID()} || ':' || d.id, d.id, ${values} FROM devices d
+      ON CONFLICT ("deviceId", "eventKey") DO UPDATE ${reopenSummary}
+    `);
+  }
+  if (emailNotificationsEnabled() && account.notificationPreference?.email !== false) {
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO "NotificationDelivery"
+        (id, "deviceId", "userId", kind, "subjectId", "eventKey", "exampleId", "windowStart", "runAfter")
+      VALUES (${randomUUID()}, NULL, ${values})
+      ON CONFLICT ("userId", "eventKey") WHERE "deviceId" IS NULL DO UPDATE ${reopenSummary}
+    `);
+  }
 }
 
 export async function enqueueGenerationNotification(tx: Prisma.TransactionClient, customBuildId: string) {

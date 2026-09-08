@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const directory = mkdtempSync(join(tmpdir(), "minebench-push-staging-"));
-const names = ["APNS_ENABLED", "APNS_KEY_ID", "APNS_TEAM_ID", "APNS_PRIVATE_KEY"];
+const names = ["APNS_ENABLED", "APNS_KEY_ID", "APNS_TEAM_ID", "APNS_PRIVATE_KEY",
+  "EMAIL_NOTIFICATIONS_ENABLED", "NOTIFICATION_EMAIL_TEST_RECIPIENT", "CONTACT_SMTP_PASSWORD", "MINEBENCH_ENVIRONMENT"];
 const staging = {
   STAGING_DIRECT_URL: "postgresql://minebench:minebench@127.0.0.1:54327/minebench",
   STAGING_SITE_URL: "http://localhost:3000",
@@ -26,9 +27,9 @@ try {
     env: { ...process.env, ...Object.fromEntries(names.map((name) => [name, "production-only"])) },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout.trim().split("\n").at(-1)!), ["false", "", "", ""]);
+  assert.deepEqual(JSON.parse(result.stdout.trim().split("\n").at(-1)!), ["false", "", "", "", "false", "", "", "alpha"]);
   const refresh = readFileSync("scripts/refresh-staging-db.mjs", "utf8");
-  for (const table of ["PushDevice", "NotificationPreference", "PushDelivery"]) {
+  for (const table of ["PushDevice", "NotificationPreference", "NotificationDelivery"]) {
     assert.ok(refresh.includes(`--exclude-table-data=public."${table}"`), `${table} must never be cloned into Alpha`);
   }
   console.log("notification staging isolation checks passed");

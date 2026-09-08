@@ -17,7 +17,7 @@ const privateTables = [
   "PublicSessionActivity",
   "NotificationPreference",
   "PushDevice",
-  "PushDelivery",
+  "NotificationDelivery",
 ];
 
 async function main() {

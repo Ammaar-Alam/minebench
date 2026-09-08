@@ -6,6 +6,8 @@ import { notificationSettingsSchema, pushDeviceSchema } from "../../../lib/notif
 async function main() {
   const settings = { generations: true, upvotes: false, contributions: true };
   assert.deepEqual(notificationSettingsSchema.parse(settings), settings);
+  assert.deepEqual(notificationSettingsSchema.parse({ ...settings, email: false }), { ...settings, email: false });
+  assert.equal(notificationSettingsSchema.safeParse({ ...settings, email: "false" }).success, false);
   for (const invalid of [{ settings }, { ...settings, generations: "true" }, { generations: true }, { ...settings, userId: "other" }]) {
     assert.equal(notificationSettingsSchema.safeParse(invalid).success, false);
   }

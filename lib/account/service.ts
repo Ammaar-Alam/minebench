@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { Prisma } from "@prisma/client";
 import type { PublicAccount } from "@/lib/auth/account";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
@@ -6,6 +7,8 @@ import { prisma } from "@/lib/prisma";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const DEFAULT_AUTH_DELETION_BATCH_SIZE = 100;
+const ACCOUNT_DELETION_TRANSACTION_ATTEMPTS = 3;
+const ACCOUNT_DELETION_RETRY_DELAY_MS = 40;
 
 export class AccountServiceError extends Error {
   constructor(
@@ -53,6 +56,31 @@ async function markAuthDeleted(userId: string, now: Date): Promise<void> {
   });
 }
 
+function isAccountDeletionSerializationConflict(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (error.code === "P2034") return true;
+  const meta = error.meta as { code?: unknown } | null;
+  return meta?.code === "40001";
+}
+
+async function withAccountDeletionTransactionRetry(run: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; attempt < ACCOUNT_DELETION_TRANSACTION_ATTEMPTS; attempt += 1) {
+    try {
+      await run();
+      return;
+    } catch (error) {
+      if (
+        attempt + 1 < ACCOUNT_DELETION_TRANSACTION_ATTEMPTS &&
+        isAccountDeletionSerializationConflict(error)
+      ) {
+        await delay(ACCOUNT_DELETION_RETRY_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export async function deleteMineBenchAccount(
   userId: string,
   options: {
@@ -61,7 +89,7 @@ export async function deleteMineBenchAccount(
   } = {},
 ) {
   const now = options.now ?? new Date();
-  await prisma.$transaction(async (tx) => {
+  await withAccountDeletionTransactionRetry(() => prisma.$transaction(async (tx) => {
     const [account] = await tx.$queryRaw<Array<{ id: string; email: string }>>(Prisma.sql`
       SELECT id, email
       FROM "User"
@@ -72,6 +100,7 @@ export async function deleteMineBenchAccount(
     if (!account) throw new AccountServiceError("not_found", "Account not found.");
 
     await tx.pushDevice.deleteMany({ where: { userId } });
+    await tx.notificationDelivery.deleteMany({ where: { userId } });
     await tx.notificationPreference.deleteMany({ where: { userId } });
 
     const retainedBuilds = await tx.customBuild.findMany({
@@ -256,7 +285,7 @@ export async function deleteMineBenchAccount(
         authDeletedAt: null,
       },
     });
-  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
 
   try {
     await (options.deleteAuthUser ?? deleteSupabaseAuthUser)(userId);
