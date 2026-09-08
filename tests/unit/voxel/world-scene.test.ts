@@ -5,12 +5,15 @@ import { decodeBinaryVoxelBuild, encodeBinaryVoxelBuild } from "../../../lib/vox
 import { createVoxelWorldScene, isVoxelWorldScene } from "../../../lib/voxel/worldScene";
 import { encodeWorldMeshPayload, getWorldMeshVersion } from "../../../lib/voxel/worldMesh";
 import { buildWorldRegionGreedyMeshPayload } from "../../../lib/voxel/worldRegionMesh";
+import { buildWorldMeshPayloads } from "../../../lib/voxel/worldMeshSource";
+import { WORLD_QUAD_COLORS } from "../../../lib/voxel/worldQuadData";
 import type {
   VoxelWorldDelivery,
   VoxelWorldManifest,
   VoxelWorldPartRef,
   VoxelWorldRegionPage,
   VoxelWorldRegionPageRef,
+  VoxelWorldRegion,
 } from "../../../lib/voxel/world";
 
 const SHA = "a".repeat(64);
@@ -65,6 +68,71 @@ async function main() {
     scene.dispose();
     assert.equal(scene.group.children.length, 0);
     assert.equal(scene.getResidentStats().residentRegions, 0);
+  }
+
+  {
+    const source = encodeBinaryVoxelBuild([
+      { x: 0, y: 0, z: 0, type: "water" }, { x: 0, y: 0, z: 1, type: "water" },
+      { x: 1, y: 0, z: 0, type: "water" }, { x: 1, y: 0, z: 1, type: "stone" },
+    ], SHA);
+    const regions: VoxelWorldRegion[] = [
+      ...[0, 2].map((x) => ({
+        kind: "uniform" as const, key: `water-${x}`, origin: { x, y: 0, z: 0 },
+        size: { x: 2, y: 1, z: 2 }, type: "water", blockCount: 4,
+      })),
+      { kind: "uniform", key: "shore", origin: { x: 0, y: 0, z: 2 }, size: { x: 1, y: 1, z: 1 }, type: "stone", blockCount: 1 },
+      { kind: "uniform", key: "glass", origin: { x: 2, y: 0, z: 2 }, size: { x: 2, y: 1, z: 1 }, type: "glass", blockCount: 2 },
+      { kind: "mixed", key: "boat", origin: { x: 4, y: 0, z: 0 }, size: { x: 2, y: 1, z: 2 }, blockCount: 4,
+        format: "mbv4", coordinateSpace: "local", data: localPart("source") },
+    ];
+    const meshParts = new Map<string, Uint8Array>();
+    const batches = [];
+    for await (const batch of buildWorldMeshPayloads({ regions, sourceBuildSha256: SHA,
+      paletteIds: ["water", "stone", "glass"], readPart: async () => source })) {
+      const key: string = `mesh-${batches.length}`;
+      meshParts.set(key, encodeWorldMeshPayload(batch.payload));
+      batches.push({ bounds: batch.bounds, blockCount: batch.blockCount, data: localPart(key) });
+    }
+    const manifest: VoxelWorldManifest = {
+      ...BASE, bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 6, y: 1, z: 3 } },
+      exactBlockCount: 15, regions, mesh: { version: await getWorldMeshVersion(), batches },
+    };
+    const scene = await createScene({ manifest, resolvePart: async (key) => {
+      assert.ok(meshParts.has(key), "prepared water does not read source parts");
+      return meshParts.get(key)!;
+    } });
+    try {
+      const uniformMeshes = meshes(scene.group.getObjectByName("VoxelWorldUniformRegions")!);
+      const uniform = uniformMeshes.find((mesh) => mesh.geometry.getAttribute("color").getX(0) !== 1)!;
+      const mixed = meshes(scene.group.getObjectByName("VoxelWorldMeshBatch")!)
+        .find((mesh) => mesh.renderOrder === 1)!;
+      const uniformMaterial = uniform.material as THREE.MeshLambertMaterial;
+      const mixedMaterial = mixed.material as THREE.MeshLambertMaterial;
+      assert.equal(uniformMaterial.opacity, mixedMaterial.opacity, "water opacity cannot depend on region kind");
+      assert.equal(uniformMaterial.side, mixedMaterial.side, "water face policy cannot depend on region kind");
+      assert.equal(uniformMaterial.map, mixedMaterial.map, "water uses its dedicated texture in both paths");
+      assert.equal(uniformMaterial.emissive.getHex(), mixedMaterial.emissive.getHex());
+      assert.equal(uniformMaterial.emissiveIntensity, mixedMaterial.emissiveIntensity);
+      const colors = uniform.geometry.getAttribute("color");
+      for (let channel = 0; channel < 3; channel += 1) {
+        assert.ok(Math.abs(colors.getComponent(0, channel) - WORLD_QUAD_COLORS[45 + channel]) < 1e-6,
+          "uniform water retains the mixed mesh's linear tint");
+      }
+      assert.equal(uniformMeshes.filter((mesh) => (mesh.material as THREE.MeshLambertMaterial).opacity === 0.85).length, 1,
+        "glass keeps its own transparent material");
+      const positions = uniform.geometry.getAttribute("position");
+      const normals = uniform.geometry.getAttribute("normal");
+      let internalFaces = 0;
+      let shorelineFaces = 0;
+      for (let vertex = 0; vertex < positions.count; vertex += 4) {
+        if (Math.abs(normals.getX(vertex)) === 1 && positions.getX(vertex) === -1) internalFaces += 1;
+        if (normals.getZ(vertex) === 1 && positions.getZ(vertex) === 0.5) shorelineFaces += 1;
+      }
+      assert.equal(internalFaces, 0, "fully adjacent uniform water emits no internal faces");
+      assert.equal(shorelineFaces, 2, "partial shoreline coverage and different transparent neighbors retain exposed water faces");
+    } finally {
+      scene.dispose();
+    }
   }
 
   {

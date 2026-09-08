@@ -263,6 +263,10 @@ async function main() {
   assert.equal(artifacts.length, 1);
   assert.equal(updates.some((update) => ["queued", "failed", "succeeded"].includes(String(update.status))), false);
   reset();
+  await assert.rejects(runCustomBuildGenerateJob(job as never), /provider_key_expired/);
+  assert.equal(providerRequests, 0, "missing output after a keyless retry must not buy another generation");
+  assert.equal(current.status, "failed");
+  reset();
   process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-background-response-recovery-secret";
   process.env.OPENAI_BACKGROUND_POLL_MS = "0";
   process.env.OPENAI_USE_BACKGROUND_MODE = "1";

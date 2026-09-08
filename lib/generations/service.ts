@@ -639,6 +639,7 @@ export async function retrySavedGeneration(
     select: {
       id: true,
       status: true,
+      errorCode: true,
       errorRetryable: true,
       modelKind: true,
       modelKey: true,
@@ -651,19 +652,26 @@ export async function retrySavedGeneration(
   if (build.status !== "failed" || build.errorRetryable !== true) {
     throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
   }
+  const recoveryOnly = ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed"].includes(build.errorCode ?? "");
+  if (recoveryOnly && !await prisma.customBuildArtifact.findFirst({
+    where: { customBuildId: build.id, kind: { in: ["build_json", "raw_text_debug"] } },
+    select: { id: true },
+  })) {
+    throw new GenerationServiceError("not_retryable", "The saved generation output is no longer available.");
+  }
   const provider = retryCredentialProvider(build);
-  const providerKey = input.providerKey?.trim() || (
+  const providerKey = recoveryOnly ? undefined : input.providerKey?.trim() || (
     build.usesHostedGeneration &&
     HOSTED_GEMINI_RETRY_MODEL_KEYS.has(build.modelKey ?? "") &&
     provider === "openrouter"
       ? process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim()
       : undefined
   );
-  if (!provider || !providerKey) {
+  if (!recoveryOnly && (!provider || !providerKey)) {
     throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
   }
   let requestConfig: SavedGenerationRequestConfig | undefined;
-  if (provider === "custom") {
+  if (!recoveryOnly && provider === "custom") {
     if (!input.customBaseUrl?.trim()) {
       throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
     }
@@ -677,7 +685,7 @@ export async function retrySavedGeneration(
     } catch {
       throw new GenerationServiceError("invalid_model", "Check the custom model endpoint.");
     }
-  } else {
+  } else if (!recoveryOnly) {
     try {
       requestConfig = normalizeProviderRequestOverrides({
         headers: input.customHeaders,
@@ -687,7 +695,7 @@ export async function retrySavedGeneration(
       throw new GenerationServiceError("invalid_model", "Check the request overrides.");
     }
   }
-  const credential = encryptProviderKey(providerKey, { provider, binding: build.id });
+  const credential = providerKey && provider ? encryptProviderKey(providerKey, { provider, binding: build.id }) : null;
   const endpoint = requestConfig && (requestConfig.baseUrl || requestConfig.headers || requestConfig.body)
     ? encryptSecretValue(serializeSavedGenerationRequestConfig(requestConfig), build.id)
     : null;
@@ -718,7 +726,7 @@ export async function retrySavedGeneration(
       throw new GenerationServiceError("already_retried", "This generation is already retrying.");
     }
     await tx.customBuildSecret.deleteMany({ where: { customBuildId: build.id } });
-    await tx.customBuildSecret.create({
+    if (credential) await tx.customBuildSecret.create({
       data: {
         customBuildId: build.id,
         provider: credential.provider,

@@ -84,7 +84,7 @@ async function main() {
   assert.equal(renderer.autoClear, true);
 
   for (const aspect of [0.5, 16 / 9, 3]) {
-    const camera = new THREE.PerspectiveCamera(70, aspect, 0.05, 1000);
+    const camera = new THREE.PerspectiveCamera(70, aspect, 0.05, 50_000);
     camera.zoom = 1.4;
     camera.updateProjectionMatrix();
     const fog = new THREE.Fog(0xaed4ef);
@@ -99,6 +99,9 @@ async function main() {
     assert.equal(fog.far, 10_240, "whole-world scenery stays visible at every field of view");
     assert.ok(fog.near > 5_000, "fog begins in the distance instead of enclosing the player");
     assert.ok(camera.far > fog.far, "the camera cannot clip scenery before the fog");
+    assert.ok(camera.far <= fog.far * 1.1, "fully fogged geometry must leave the camera frustum");
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(camera.projectionMatrix);
+    assert.equal(frustum.containsPoint(new THREE.Vector3(0, 0, -fog.far * 1.2)), false);
     assert.equal(bloomFog.near, fog.near);
     assert.equal(bloomFog.far, fog.far);
   }
