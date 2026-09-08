@@ -83,6 +83,7 @@ const STAR_LAYER_COUNT = 3;
 const STARS_PER_LAYER = 560;
 const WORLD_STREAM_UPDATE_DISTANCE = 24;
 const EXPLORER_KEY_CLASS = "mb-kbd inline-flex h-5 min-w-5 items-center justify-center rounded border-current bg-transparent px-1 py-0 text-[10px] leading-none text-inherit";
+const EXPLORER_HINT_CLASS = "flex h-11 flex-col items-center justify-center gap-1";
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
 
@@ -1544,13 +1545,13 @@ function ExplorerScene({
 
       {ready && !buildMenuOpen ? (
         <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center">
-          <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-x-4 gap-y-2 rounded-md bg-slate-950/70 p-2 text-sm font-medium text-white/80 backdrop-blur-sm sm:text-xs">
+          <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-x-3 gap-y-2 rounded-md bg-slate-950/70 p-1 text-sm font-medium text-white/80 backdrop-blur-sm sm:text-xs">
             <div className="flex items-center gap-1">
               <button
                 type="button"
                 aria-pressed={fogEnabled}
                 onClick={toggleFog}
-                className={`inline-flex min-h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:min-h-9 sm:px-2.5 motion-reduce:transition-none ${fogEnabled ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
+                className={`inline-flex h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:px-2.5 motion-reduce:transition-none ${fogEnabled ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
               >
                 <kbd aria-hidden="true" className={EXPLORER_KEY_CLASS}>
                   G
@@ -1562,7 +1563,7 @@ function ExplorerScene({
                 aria-label="Night mode"
                 aria-pressed={night}
                 onClick={toggleNight}
-                className={`inline-flex min-h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:min-h-9 sm:px-2.5 motion-reduce:transition-none ${night ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
+                className={`inline-flex h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:px-2.5 motion-reduce:transition-none ${night ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
               >
                 <kbd aria-hidden="true" className={EXPLORER_KEY_CLASS}>
                   T
@@ -1570,22 +1571,40 @@ function ExplorerScene({
                 {night ? "Night" : "Day"}
               </button>
             </div>
-            <div role="group" aria-label="Movement controls" className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
-              <span className="flex items-center gap-1.5 whitespace-nowrap">
-                <kbd className={EXPLORER_KEY_CLASS}>WASD</kbd> Move
-                <span aria-hidden="true" className="text-white/35">·</span>
-                <kbd className={EXPLORER_KEY_CLASS}>Shift</kbd> Run
+            <div role="group" aria-label="Movement controls" className="flex max-w-full flex-wrap justify-center gap-x-4 gap-y-2 px-2 text-white/65">
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>WASD</kbd>
+                <span>Move</span>
               </span>
-              <span className="flex items-center gap-1.5 whitespace-nowrap">
-                <kbd className={EXPLORER_KEY_CLASS}>F</kbd> Flight
-                {noclip ? <span className="text-white/65">· Scroll speed</span> : null}
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>Shift</kbd>
+                <span>Run</span>
               </span>
-              <span className="flex items-center gap-1.5 whitespace-nowrap">
-                <kbd className={EXPLORER_KEY_CLASS}>Space</kbd>
-                {noclip ? <><span>/</span><kbd className={EXPLORER_KEY_CLASS}>Ctrl</kbd> Up / down</> : "Jump / swim"}
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>F</kbd>
+                <span>Flight</span>
               </span>
-              <span className="flex items-center gap-1.5 whitespace-nowrap">
-                <kbd className={EXPLORER_KEY_CLASS}>Esc</kbd> Menu
+              {noclip ? (
+                <span className={EXPLORER_HINT_CLASS}>
+                  <span className="inline-flex h-5 items-center text-[10px]">Scroll</span>
+                  <span>Speed</span>
+                </span>
+              ) : null}
+              <span className="flex items-center gap-1">
+                <span className={EXPLORER_HINT_CLASS}>
+                  <kbd className={EXPLORER_KEY_CLASS}>Space</kbd>
+                  <span>{noclip ? "Up" : "Jump / swim"}</span>
+                </span>
+                {noclip ? (
+                  <span className={EXPLORER_HINT_CLASS}>
+                    <kbd className={EXPLORER_KEY_CLASS}>Ctrl</kbd>
+                    <span>Down</span>
+                  </span>
+                ) : null}
+              </span>
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>Esc</kbd>
+                <span>Menu</span>
               </span>
             </div>
           </div>
