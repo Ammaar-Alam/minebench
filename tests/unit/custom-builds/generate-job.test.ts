@@ -205,7 +205,7 @@ async function main() {
 
   assert.ok(
     generateJobSource.includes("buildGalleryPreviewSvg(canonicalBuild)") &&
-      generateJobSource.includes("blockCount: canonicalBuild.blocks.length"),
+      generateJobSource.includes("blockCount: canonicalBlockCount"),
     "static thumbnails should derive from the canonical build rather than the sampled viewer preview",
   );
   assert.ok(

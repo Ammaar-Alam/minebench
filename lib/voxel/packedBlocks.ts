@@ -14,15 +14,36 @@ export type PackedVoxelBlocks = {
   count: number;
 };
 
-// A build whose blocks may live in packed form. Server-side builds and anything
-// coming out of validation stay object-backed, so both shapes flow through the
-// same viewer and mesh entry points.
+// A build whose blocks may live in packed form
 export type RenderableVoxelBuild = VoxelBuild & {
   packed?: PackedVoxelBlocks;
   meshFacts?: VoxelMeshFacts;
 };
 
 const MIN_PACKED_CAPACITY = 1024;
+
+export function isPackedVoxelBlocks(value: unknown): value is PackedVoxelBlocks {
+  if (typeof value !== "object" || value === null) return false;
+  const packed = value as Partial<PackedVoxelBlocks>;
+  if (
+    !(packed.positions instanceof Int16Array) ||
+    !(packed.typeIds instanceof Uint16Array) ||
+    !Array.isArray(packed.typeNames) ||
+    packed.typeNames.length > 65_536 ||
+    !Number.isSafeInteger(packed.count) ||
+    packed.count === undefined ||
+    packed.count < 0 ||
+    packed.count > packed.typeIds.length ||
+    packed.count * 3 > packed.positions.length
+  ) return false;
+  for (const type of packed.typeNames) {
+    if (typeof type !== "string" || !type) return false;
+  }
+  for (let index = 0; index < packed.count; index += 1) {
+    if (packed.typeIds[index]! >= packed.typeNames.length) return false;
+  }
+  return true;
+}
 
 // An exact request is honoured exactly: consumers that transfer these arrays
 // read them to their full length, so trailing slack would render as blocks that
@@ -143,6 +164,59 @@ export function copyPackedVoxelBlocks(
 export function voxelBuildBlockCount(build: RenderableVoxelBuild | null | undefined): number {
   if (!build) return 0;
   return build.packed ? build.packed.count : build.blocks.length;
+}
+
+export function voxelBuildBlockAt(
+  build: RenderableVoxelBuild,
+  index: number,
+): VoxelBlock | undefined {
+  if (!Number.isInteger(index) || index < 0 || index >= voxelBuildBlockCount(build)) {
+    return undefined;
+  }
+  if (!build.packed) return build.blocks[index];
+  const { positions, typeIds, typeNames } = build.packed;
+  return {
+    x: positions[index * 3]!,
+    y: positions[index * 3 + 1]!,
+    z: positions[index * 3 + 2]!,
+    type: typeNames[typeIds[index]!]!,
+  };
+}
+
+export function sortPackedVoxelBlocks(packed: PackedVoxelBlocks): void {
+  const { positions, typeIds, typeNames, count } = packed;
+  const order = new Uint32Array(count);
+  for (let index = 0; index < count; index += 1) order[index] = index;
+  order.sort((a, b) =>
+    positions[a * 3]! - positions[b * 3]! ||
+    positions[a * 3 + 1]! - positions[b * 3 + 1]! ||
+    positions[a * 3 + 2]! - positions[b * 3 + 2]! ||
+    typeNames[typeIds[a]!]!.localeCompare(typeNames[typeIds[b]!]!),
+  );
+
+  // Apply permutation cycles without allocating another set of block buffers
+  for (let start = 0; start < count; start += 1) {
+    if (order[start] === start) continue;
+    const x = positions[start * 3]!;
+    const y = positions[start * 3 + 1]!;
+    const z = positions[start * 3 + 2]!;
+    const typeId = typeIds[start]!;
+    let current = start;
+    while (order[current] !== start) {
+      const next = order[current]!;
+      positions[current * 3] = positions[next * 3]!;
+      positions[current * 3 + 1] = positions[next * 3 + 1]!;
+      positions[current * 3 + 2] = positions[next * 3 + 2]!;
+      typeIds[current] = typeIds[next]!;
+      order[current] = current;
+      current = next;
+    }
+    positions[current * 3] = x;
+    positions[current * 3 + 1] = y;
+    positions[current * 3 + 2] = z;
+    typeIds[current] = typeId;
+    order[current] = current;
+  }
 }
 
 // Reference used to tell one build apart from another. Streaming mutates the

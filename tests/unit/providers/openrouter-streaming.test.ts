@@ -8,10 +8,10 @@ async function main() {
 
   // 1. Verify stream: true is sent and SSE stream is accumulated without onDelta
   {
-    let capturedBody: Record<string, unknown> | null = null;
+    const captured: { body: Record<string, unknown> | null } = { body: null };
 
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      capturedBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      captured.body = JSON.parse(init?.body as string) as Record<string, unknown>;
 
       const ssePayload = [
         ": OPENROUTER PROCESSING\n\n",
@@ -35,7 +35,7 @@ async function main() {
         user: "Build a shrine.",
       });
 
-      assert.equal(capturedBody?.stream, true, "OpenRouter request should have stream: true");
+      assert.equal(captured.body?.stream, true, "OpenRouter request should have stream: true");
       assert.equal(
         result.text,
         '{"version":"1.0","blocks":[]}',

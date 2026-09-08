@@ -6,14 +6,15 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
-import type { VoxelBuild } from "@/lib/voxel/types";
+import { voxelBuildBlockAt, voxelBuildBlockCount, type RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 const ENCODER = new TextEncoder();
 
-function* canonicalBuildJsonChunks(build: VoxelBuild): Generator<Uint8Array> {
+function* canonicalBuildJsonChunks(build: RenderableVoxelBuild): Generator<Uint8Array> {
   let chunk = '{"version":"1.0","blocks":[';
-  for (let index = 0; index < build.blocks.length; index += 1) {
-    const block = `${index === 0 ? "" : ","}${JSON.stringify(build.blocks[index])}`;
+  const count = voxelBuildBlockCount(build);
+  for (let index = 0; index < count; index += 1) {
+    const block = `${index === 0 ? "" : ","}${JSON.stringify(voxelBuildBlockAt(build, index))}`;
     if (chunk.length + block.length > 64 * 1024) {
       yield ENCODER.encode(chunk);
       chunk = block;
@@ -41,7 +42,7 @@ async function removeArtifactFile(directory: string, filePath: string): Promise<
   }
 }
 
-export async function writeCanonicalBuildArtifact(build: VoxelBuild): Promise<{
+export async function writeCanonicalBuildArtifact(build: RenderableVoxelBuild): Promise<{
   filePath: string;
   byteSize: number;
   storedByteSize: number;

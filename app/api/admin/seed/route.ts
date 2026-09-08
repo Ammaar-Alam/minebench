@@ -12,6 +12,7 @@ import {
   modelCatalogSeedUpsertArgs,
 } from "@/lib/admin/seedModelCatalog";
 import { isLoopbackDatabaseUrl } from "@/lib/db/identity";
+import { toObjectBackedVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 export const runtime = "nodejs";
 
@@ -368,7 +369,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const buildJson = JSON.stringify(r.build);
+    const build = toObjectBackedVoxelBuild(r.build);
+    const buildJson = JSON.stringify(build);
     const saved = await prisma.build.create({
       data: {
         promptId: job.promptId,
@@ -376,7 +378,7 @@ export async function POST(req: Request) {
         gridSize: ARENA_SETTINGS.gridSize,
         palette: ARENA_SETTINGS.palette,
         mode: ARENA_SETTINGS.mode,
-        voxelData: r.build,
+        voxelData: build,
         voxelByteSize: Buffer.byteLength(buildJson),
         voxelSha256: createHash("sha256").update(buildJson).digest("hex"),
         blockCount: r.blockCount,
