@@ -222,31 +222,14 @@ function SegmentedControl({
   options: Array<{ value: string; label: ReactNode }>;
   className?: string;
 }) {
-  const safeCount = Math.max(1, options.length);
-  const activeIndex = Math.max(
-    0,
-    options.findIndex((option) => option.value === value),
-  );
-  const segmentWidth = `${100 / safeCount}%`;
-  const segmentTranslate = `${activeIndex * 100}%`;
-
   return (
     <div
+      data-stretch="true"
       className={cx(
-        "relative flex rounded-md bg-bg/60 p-1 ring-1 ring-border",
+        "mb-choice-group w-full",
         className,
       )}
     >
-      <div className="pointer-events-none absolute inset-1 rounded-lg">
-        <span
-          aria-hidden="true"
-          className="absolute inset-y-0 left-0 rounded-lg bg-accent/15 ring-1 ring-accent/40 transition-transform duration-200 ease-out"
-          style={{
-            width: segmentWidth,
-            transform: `translateX(${segmentTranslate})`,
-          }}
-        />
-      </div>
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -254,10 +237,7 @@ function SegmentedControl({
             key={option.value}
             type="button"
             aria-pressed={active}
-            className={cx(
-              "relative z-10 flex h-9 min-w-0 flex-1 items-center justify-center rounded-lg px-3 text-sm font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-10",
-              active ? "text-fg" : "text-muted hover:text-fg",
-            )}
+            className="mb-choice-option mb-choice-option-stretch"
             onClick={() => onChange(option.value)}
           >
             {option.label}
@@ -699,16 +679,19 @@ export function LocalLab() {
               hint="Larger grids allow more detail."
               className="min-w-[220px] flex-1 sm:min-w-[240px]"
             >
-              <select
-                aria-label="Grid size"
-                className="mb-field h-11 w-full"
-                value={gridSize}
-                onChange={(event) => setGridSize(Number(event.target.value) as GridSize)}
-              >
-                {GRID_SIZES.map((size) => (
-                  <option key={size} value={size}>{size}³</option>
-                ))}
-              </select>
+              <SegmentedControl
+                value={String(gridSize)}
+                onChange={(value) => setGridSize(Number(value) as GridSize)}
+                options={GRID_SIZES.map((size) => ({
+                  value: String(size),
+                  label: (
+                    <span className="inline-flex items-start">
+                      <span>{size}</span>
+                      <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
+                    </span>
+                  ),
+                }))}
+              />
             </SegmentedField>
             <SegmentedField
               label="Block palette"

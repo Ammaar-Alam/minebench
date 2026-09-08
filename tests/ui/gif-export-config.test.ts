@@ -293,6 +293,9 @@ assert.ok(
     settingsSourceText.includes('value: "gif"') &&
     settingsSourceText.includes('value: "social-safe"') &&
     settingsSourceText.includes('value: "full"') &&
+    settingsSourceText.includes("mb-choice-group") &&
+    settingsSourceText.includes("mb-choice-option") &&
+    settingsSourceText.includes("selectedQuality.detail") &&
     settingsSourceText.includes("grid-rows-[1fr]") &&
     settingsSourceText.includes("motion-reduce:transition-none"),
   "Account should expose accessible Standard and Creator choices with a reduced-motion format reveal",

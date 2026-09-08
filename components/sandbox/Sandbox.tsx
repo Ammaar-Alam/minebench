@@ -33,30 +33,19 @@ function SandboxModeTabs({
     { value: "import", label: "Import" },
   ];
 
-  const activeIndex = Math.max(
-    0,
-    options.findIndex((option) => option.value === value),
-  );
-
   return (
     <nav
       aria-label="Sandbox modes"
-      className={`relative grid grid-cols-3 border-b border-border/70 ${className ?? ""}`}
+      data-stretch="true"
+      className={`mb-choice-group ${className ?? ""}`}
     >
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute -bottom-px left-0 h-0.5 w-1/3 bg-accent transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none"
-        style={{ transform: `translateX(${activeIndex * 100}%)` }}
-      />
       {options.map((option) => {
         const active = option.value === value;
         return (
           <a
             key={option.value}
             aria-current={active ? "page" : undefined}
-            className={`grid min-h-11 min-w-0 place-items-center px-3 text-sm font-semibold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50 motion-reduce:transition-none ${
-              active ? "text-fg" : "text-muted hover:text-fg"
-            }`}
+            className="mb-choice-option mb-choice-option-stretch"
             href={hrefFor(option.value)}
             onClick={(event) => {
               if (
