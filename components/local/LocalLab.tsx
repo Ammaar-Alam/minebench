@@ -679,19 +679,16 @@ export function LocalLab() {
               hint="Larger grids allow more detail."
               className="min-w-[220px] flex-1 sm:min-w-[240px]"
             >
-              <SegmentedControl
-                value={String(gridSize)}
-                onChange={(value) => setGridSize(Number(value) as GridSize)}
-                options={GRID_SIZES.map((size) => ({
-                  value: String(size),
-                  label: (
-                    <span className="inline-flex items-start">
-                      <span>{size}</span>
-                      <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                    </span>
-                  ),
-                }))}
-              />
+              <select
+                aria-label="Grid size"
+                className="mb-field h-12 w-full"
+                value={gridSize}
+                onChange={(event) => setGridSize(Number(event.target.value) as GridSize)}
+              >
+                {GRID_SIZES.map((size) => (
+                  <option key={size} value={size}>{size}³</option>
+                ))}
+              </select>
             </SegmentedField>
             <SegmentedField
               label="Block palette"

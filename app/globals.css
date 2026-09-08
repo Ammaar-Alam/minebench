@@ -1822,8 +1822,7 @@
     background: hsl(var(--fg) / 0.045);
   }
 
-  .mb-choice-option[aria-pressed="true"],
-  .mb-choice-option[aria-current="page"] {
+  .mb-choice-option[aria-pressed="true"] {
     color: hsl(var(--fg));
     background: hsl(var(--accent) / 0.12);
     box-shadow: inset 0 0 0 1px hsl(var(--accent) / 0.35);
