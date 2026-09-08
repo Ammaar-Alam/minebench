@@ -210,10 +210,11 @@ async function preserveOrderWithConcurrentUploads() {
     expectedRegionKeys,
   );
   assert.deepEqual(
-    state.startedKeys.filter((key) => !key.startsWith("mesh-")).slice(-3).map((key) => key.startsWith("page-") ? "page" : key),
-    ["page", "overview", "manifest"],
+    state.startedKeys.filter((key) => !key.startsWith("mesh-")).slice(-2).map((key) => key.startsWith("page-") ? "page" : key),
+    ["page", "manifest"],
   );
   assert.equal(state.startedKeys.at(-1), "manifest");
+  assert.ok(!state.startedKeys.includes("overview"));
   assert.equal(state.startedKeys.filter((key) => key.startsWith("mesh-")).length, result.manifest.mesh?.batches.length);
 }
 

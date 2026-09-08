@@ -1,8 +1,7 @@
 import { getPalette } from "@/lib/blocks/palettes";
-import { encodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
+import { encodeBinaryVoxelWorldRegion } from "@/lib/voxel/binaryBuild";
 import { encodeWorldMeshPayload, getWorldMeshVersion } from "@/lib/voxel/worldMesh";
 import { buildWorldMeshPayloads } from "@/lib/voxel/worldMeshSource";
-import { createPackedVoxelBlocks } from "@/lib/voxel/packedBlocks";
 import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 import { parseVoxelBuildStream } from "@/lib/voxel/sourceStream";
 import type { VoxelBuild, VoxelPoint } from "@/lib/voxel/types";
@@ -25,16 +24,8 @@ import {
 } from "@/lib/voxel/world";
 import {
   evaluateVoxelWorldRegions,
-  type MixedVoxelWorldRegion,
   type VoxelWorldRegion as EvaluatedVoxelWorldRegion,
 } from "@/lib/voxel/worldRegions";
-import {
-  VOXEL_WORLD_OVERVIEW_SCALE,
-  createVoxelWorldOverviewState,
-  encodeVoxelWorldOverviewBuild,
-  markMixedVoxelWorldOverviewRegion,
-  markUniformVoxelWorldOverviewRegion,
-} from "@/lib/voxel/worldOverview";
 import { parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 type Palette = "simple" | "advanced";
@@ -327,41 +318,6 @@ function includeBounds(bounds: VoxelWorldBounds | null, next: VoxelWorldBounds):
   };
 }
 
-function encodeMixedRegion(region: MixedVoxelWorldRegion, palette: ReturnType<typeof getPalette>, sourceSha: string): Uint8Array {
-  const packed = createPackedVoxelBlocks(region.blockCount);
-  const typeIdByName = new Map<string, number>();
-  const strideZ = region.size.x * region.size.y;
-  let write = 0;
-
-  for (let z = 0; z < region.size.z; z += 1) {
-    for (let y = 0; y < region.size.y; y += 1) {
-      for (let x = 0; x < region.size.x; x += 1) {
-        const material = region.materialIndexes[x + y * region.size.x + z * strideZ]!;
-        if (material === 0) continue;
-        const type = palette[material - 1]?.id;
-        if (!type) throw new Error("Mixed region referenced an unknown palette entry");
-        let typeId = typeIdByName.get(type);
-        if (typeId === undefined) {
-          typeId = packed.typeNames.length;
-          packed.typeNames.push(type);
-          typeIdByName.set(type, typeId);
-        }
-        packed.positions[write * 3] = x;
-        packed.positions[write * 3 + 1] = y;
-        packed.positions[write * 3 + 2] = z;
-        packed.typeIds[write] = typeId;
-        write += 1;
-      }
-    }
-  }
-
-  if (write !== region.blockCount) {
-    throw new Error("Mixed region block count changed during encoding");
-  }
-  packed.count = write;
-  return encodeBinaryVoxelBuild(packed, sourceSha);
-}
-
 function localPartRef(
   key: string,
   byteSize: number,
@@ -406,8 +362,6 @@ async function createLocalVoxelWorldWithStorage(
 
   const sourceSha = prepared.sourceSha;
   const paletteIds = palette.map((block) => block.id);
-  const materialByType = new Map(paletteIds.map((type, index) => [type, index + 1]));
-  const overview = createVoxelWorldOverviewState(opts.gridSize, palette.length);
   const worldId = opts.worldId?.trim() || makeWorldId();
   const partKeys: string[] = [];
   let totalPartBytes = 0;
@@ -442,8 +396,6 @@ async function createLocalVoxelWorldWithStorage(
       bounds = includeBounds(bounds, regionBounds(region));
 
       if (region.kind === "uniform") {
-        const material = materialByType.get(region.type);
-        if (overview && material) markUniformVoxelWorldOverviewRegion(overview, region, material);
         regions.push({
           kind: "uniform",
           key,
@@ -454,9 +406,8 @@ async function createLocalVoxelWorldWithStorage(
         });
       } else {
         mixedBlockCount += region.blockCount;
-        if (overview) markMixedVoxelWorldOverviewRegion(overview, region);
         const dataKey = `${worldId}.part.${regionIndex}.mbv4`;
-        const bytes = encodeMixedRegion(region, palette, sourceSha);
+        const bytes = encodeBinaryVoxelWorldRegion(region, paletteIds, sourceSha);
         await putBytes(dataKey, bytes);
         regions.push({
           kind: "mixed",
@@ -479,14 +430,6 @@ async function createLocalVoxelWorldWithStorage(
     const totalBuildBlocks = blockCount + mixedBlockCount;
     emitBuildingProgress(processedBuildBlocks, totalBuildBlocks);
 
-    let overviewData: VoxelWorldPartRef | undefined;
-    if (overview && blockCount > 0) {
-      const overviewBuild = encodeVoxelWorldOverviewBuild(overview, paletteIds, sourceSha);
-      const overviewKey = `${worldId}.overview.mbv4`;
-      await putBytes(overviewKey, overviewBuild.bytes);
-      overviewData = localPartRef(overviewKey, overviewBuild.bytes.byteLength);
-    }
-
     const manifestBase: Omit<VoxelWorldManifest, "regions" | "regionPages"> = {
       kind: "voxel_world" as const,
       version: VOXEL_WORLD_MANIFEST_VERSION as typeof VOXEL_WORLD_MANIFEST_VERSION,
@@ -500,7 +443,6 @@ async function createLocalVoxelWorldWithStorage(
         sha256: sourceSha,
         evaluatorVersion: VOXEL_WORLD_EVALUATOR_VERSION,
       },
-      ...(overviewData ? { overview: { data: overviewData, scale: VOXEL_WORLD_OVERVIEW_SCALE } } : {}),
     };
     let manifest: VoxelWorldManifest;
 

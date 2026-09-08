@@ -71,7 +71,6 @@ async function nativePersistence(tempRoot: string) {
         if (mode === "mesh-failure") throw new Error("mesh persistence failed");
         if (mode === "cancel-after-mesh") canceled = true;
       }
-      if (key === "overview" && mode === "cancel-before-mesh") canceled = true;
       if (role === "manifest") {
         assert.ok(args.bytes);
         const manifest = JSON.parse(gunzipSync(args.bytes).toString("utf8")) as VoxelWorldManifest;
@@ -88,7 +87,10 @@ async function nativePersistence(tempRoot: string) {
     };
     const run = persistVoxelWorldArtifacts({ ...identity, sourceBuild: ownedSource, consumeSource: true, gridSize: 2048,
       previewTargetBlocks: 16, persistArtifact,
-      throwIfCanceled: () => { if (canceled) throw new DOMException("Aborted", "AbortError"); },
+      throwIfCanceled: () => {
+        if (mode === "cancel-before-mesh" && ownedSource.blocks.length === 0) canceled = true;
+        if (canceled) throw new DOMException("Aborted", "AbortError");
+      },
     });
     if (mode !== "success") {
       await assert.rejects(run, /persistence failed|Aborted/);
@@ -96,6 +98,8 @@ async function nativePersistence(tempRoot: string) {
     } else {
       const { manifest } = await run;
       assert.equal(manifest.exactBlockCount, sourceBuild.blocks.length);
+      assert.equal(manifest.overview, undefined);
+      assert.ok(!saved.has("overview"));
       assert.equal(manifest.mesh?.version, await getWorldMeshVersion());
       assert.equal([...saved.keys()].at(-1), "manifest");
       const batches = createWorldMeshBatches(manifest.regions!);

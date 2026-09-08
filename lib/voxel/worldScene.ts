@@ -462,7 +462,8 @@ export async function createVoxelWorldScene(
     processedBlocks = uniformRegions.reduce((sum, region) => sum + region.blockCount, 0);
     progress();
 
-    const batches = createWorldMeshBatches(regions);
+    const preparedMesh = manifest.mesh && manifest.mesh.version === await getWorldMeshVersion() ? manifest.mesh : undefined;
+    const batches = createWorldMeshBatches(regions, !preparedMesh);
     const addBatch = (rendered: VoxelGroup, origin: VoxelPoint, anchor: WorldCenter, blockCount: number) => {
       if (signal.aborted) {
         rendered.dispose();
@@ -478,7 +479,6 @@ export async function createVoxelWorldScene(
       processedBlocks += blockCount;
       progress();
     };
-    const preparedMesh = manifest.mesh && manifest.mesh.version === await getWorldMeshVersion() ? manifest.mesh : undefined;
     if (preparedMesh) {
       if (preparedMesh.batches.length !== batches.length || preparedMesh.batches.some((ref, index) => {
         const batch = batches[index];

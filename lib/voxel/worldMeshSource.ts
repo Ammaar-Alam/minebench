@@ -23,7 +23,7 @@ function intersects(a: VoxelWorldBounds, b: VoxelWorldBounds, padding = 0): bool
     a.origin[axis] + a.size[axis] + padding > b.origin[axis]);
 }
 
-export function createWorldMeshBatches(allRegions: readonly VoxelWorldRegion[]): WorldMeshBatch[] {
+export function createWorldMeshBatches(allRegions: readonly VoxelWorldRegion[], includeNeighbors = true): WorldMeshBatch[] {
   const batches = new Map<string, WorldMeshBatch>();
   for (const region of allRegions) {
     if (region.kind !== "mixed") continue;
@@ -40,7 +40,7 @@ export function createWorldMeshBatches(allRegions: readonly VoxelWorldRegion[]):
       batch.bounds.size[axis] = end - batch.bounds.origin[axis];
     }
   }
-  for (const batch of batches.values()) {
+  if (includeNeighbors) for (const batch of batches.values()) {
     const owned = new Set(batch.regions.map((region) => region.key));
     batch.neighbors = allRegions.filter((region) => !owned.has(region.key) && intersects(batch.bounds, region, 1));
   }

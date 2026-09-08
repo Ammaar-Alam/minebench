@@ -47,6 +47,7 @@ function main() {
     ]);
     const originals = structuredClone(parts);
     const batches = createWorldMeshBatches(regions);
+    assert.deepEqual(createWorldMeshBatches(regions, false), batches.map((batch) => ({ ...batch, neighbors: [] })));
     assert.equal(batches.length, 3);
     const batch = batches.find((candidate) => candidate.regions.includes(lower))!;
     assert.deepEqual(batch.bounds, { origin: { x: 500, y: 100, z: 100 }, size: { x: 40, y: 12, z: 4 } });

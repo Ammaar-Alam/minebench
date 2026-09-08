@@ -410,7 +410,7 @@ async function main() {
   );
   assert.deepEqual(
     artifactCreates.map((artifact) => artifact.kind).sort(),
-    ["build_json", "preview_mbv4", "preview_svg", "viewer_world", "world_part"],
+    ["build_json", "preview_mbv4", "preview_svg", "viewer_world"],
   );
   const cubeManifestArtifact = artifactCreates.find((artifact) => artifact.kind === "viewer_world");
   assert.equal(cubeManifestArtifact?.blockCount, 8192 ** 3);

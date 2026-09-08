@@ -10,7 +10,7 @@ import {
   sha256Hex,
   uploadAndRecordCustomBuildArtifact,
 } from "@/lib/custom-builds/artifacts";
-import { encodeBinaryVoxelBuild } from "@/lib/voxel/binaryBuild";
+import { encodeBinaryVoxelWorldRegion } from "@/lib/voxel/binaryBuild";
 import { encodeWorldMeshPayload, getWorldMeshVersion } from "@/lib/voxel/worldMesh";
 import { buildWorldMeshPayloads } from "@/lib/voxel/worldMeshSource";
 import type { VoxelBuild, VoxelBlock, VoxelPoint } from "@/lib/voxel/types";
@@ -37,13 +37,6 @@ import {
   type MixedVoxelWorldRegion,
   type VoxelWorldRegion as EvaluatedVoxelWorldRegion,
 } from "@/lib/voxel/worldRegions";
-import {
-  VOXEL_WORLD_OVERVIEW_SCALE,
-  createVoxelWorldOverviewState,
-  encodeVoxelWorldOverviewBuild,
-  markMixedVoxelWorldOverviewRegion,
-  markUniformVoxelWorldOverviewRegion,
-} from "@/lib/voxel/worldOverview";
 
 type PaletteName = "simple" | "advanced";
 export type PersistedVoxelWorldArtifact = Pick<
@@ -55,7 +48,6 @@ export type PersistVoxelWorldArtifact = (
 ) => Promise<PersistedVoxelWorldArtifact>;
 
 const PAGE_KEY_PREFIX = "page-";
-const OVERVIEW_PART_KEY = "overview";
 const MIXED_PART_PERSIST_CONCURRENCY = 4;
 
 export function voxelWorldPartSourceSha256(sourceBuildSha256: string, partKey: string): string {
@@ -139,24 +131,6 @@ function appendMixedPreviewBlocks(
       type: paletteIds[material - 1] ?? "stone",
     });
   }
-}
-
-function mixedRegionBlocks(region: MixedVoxelWorldRegion, paletteIds: string[]): VoxelBlock[] {
-  const blocks: VoxelBlock[] = [];
-  const sx = region.size.x;
-  const sy = region.size.y;
-  const plane = sx * sy;
-  for (let index = 0; index < region.materialIndexes.length; index += 1) {
-    const material = region.materialIndexes[index]!;
-    if (material === 0) continue;
-    blocks.push({
-      x: index % sx,
-      y: Math.floor(index / sx) % sy,
-      z: Math.floor(index / plane),
-      type: paletteIds[material - 1] ?? "stone",
-    });
-  }
-  return blocks;
 }
 
 function storedPartRef(key: string, artifact: PersistedVoxelWorldArtifact): StoredVoxelWorldPartRef {
@@ -288,8 +262,6 @@ export async function persistVoxelWorldArtifacts(args: {
   const regionPages: VoxelWorldRegionPageRef[] = [];
   const previewBlocks: VoxelBlock[] = [];
   const mixedPartsBySha = new Map<string, Promise<StoredVoxelWorldPartRef>>();
-  const overview = createVoxelWorldOverviewState(args.gridSize, palette.length);
-  const materialByType = new Map(paletteIds.map((type, index) => [type, index + 1]));
   const queuedRegions: Array<Promise<VoxelWorldRegion>> = [];
   const meshRegions: VoxelWorldRegion[] = [];
   let spoolDirectory: string | undefined;
@@ -381,8 +353,6 @@ export async function persistVoxelWorldArtifacts(args: {
       exactBlockCount += region.blockCount;
       bounds = extendBounds(bounds, region.origin, region.size);
       if (region.kind === "uniform") {
-        const material = materialByType.get(region.type);
-        if (overview && material) markUniformVoxelWorldOverviewRegion(overview, region, material);
         appendUniformPreviewBlocks(previewBlocks, region, args.previewTargetBlocks);
         await queueRegion({
           kind: "uniform",
@@ -396,8 +366,7 @@ export async function persistVoxelWorldArtifacts(args: {
       }
 
       appendMixedPreviewBlocks(previewBlocks, region, paletteIds, args.previewTargetBlocks);
-      if (overview) markMixedVoxelWorldOverviewRegion(overview, region);
-      const bytes = encodeBinaryVoxelBuild(mixedRegionBlocks(region, paletteIds), args.sourceBuildSha256);
+      const bytes = encodeBinaryVoxelWorldRegion(region, paletteIds, args.sourceBuildSha256);
       const gzip = gzipSync(bytes, { level: zlibConstants.Z_BEST_SPEED });
       const gzipSha = sha256Hex(gzip);
       const key = `mixed-${gzipSha}`;
@@ -440,24 +409,6 @@ export async function persistVoxelWorldArtifacts(args: {
     }
     await flushPage();
 
-    let overviewData: StoredVoxelWorldPartRef | undefined;
-    if (overview && exactBlockCount > 0) {
-      const overviewBuild = encodeVoxelWorldOverviewBuild(overview, paletteIds, args.sourceBuildSha256);
-      const overviewBytes = gzipBytes(overviewBuild.bytes);
-      const artifact = await persistBytes({
-        persistArtifact,
-        customBuildId: args.customBuildId,
-        publicId: args.publicId,
-        sourceBuildSha256: args.sourceBuildSha256,
-        key: OVERVIEW_PART_KEY,
-        bytes: overviewBytes,
-        uncompressedByteSize: overviewBuild.bytes.byteLength,
-        blockCount: overviewBuild.blockCount,
-        role: "mixed_region",
-      });
-      overviewData = storedPartRef(OVERVIEW_PART_KEY, artifact);
-    }
-
     const mesh = await persistVoxelWorldMeshArtifacts({
       customBuildId: args.customBuildId,
       publicId: args.publicId,
@@ -486,7 +437,6 @@ export async function persistVoxelWorldArtifacts(args: {
         evaluatorVersion: VOXEL_WORLD_EVALUATOR_VERSION,
       },
       mesh,
-      ...(overviewData ? { overview: { data: overviewData, scale: VOXEL_WORLD_OVERVIEW_SCALE } } : {}),
       ...(paged ? { regionPages } : { regions: inlineRegions }),
     };
     const parsed = parseVoxelWorldManifest(manifest, { allowStoredRefs: true });
