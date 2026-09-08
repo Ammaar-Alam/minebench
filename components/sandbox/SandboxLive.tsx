@@ -1852,30 +1852,18 @@ export function SandboxLive({
         <section>
           <div className="mb-eyebrow">Build</div>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="flex min-w-0 flex-col gap-1">
-              <div id="sandbox-grid-size-label" className="text-xs font-medium text-muted">Size</div>
-              <div
-                role="group"
-                aria-labelledby="sandbox-grid-size-label"
-                data-stretch="true"
-                className="mb-choice-group w-full"
+            <label className="flex min-w-0 flex-col gap-1">
+              <div className="text-xs font-medium text-muted">Size</div>
+              <select
+                className="mb-field h-12 w-full"
+                value={gridSize}
+                onChange={(e) => setGridSize(Number(e.target.value) as GridSize)}
               >
-                {GRID_SIZES.map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={gridSize === value}
-                    className="mb-choice-option mb-choice-option-stretch"
-                    onClick={() => setGridSize(value)}
-                  >
-                    <span className="inline-flex items-start">
-                      <span>{value}</span>
-                      <span className="relative -top-[0.38em] ml-px text-[0.58em] font-semibold opacity-90">3</span>
-                    </span>
-                  </button>
+                {GRID_SIZES.map((size) => (
+                  <option key={size} value={size}>{size}³</option>
                 ))}
-              </div>
-            </div>
+              </select>
+            </label>
 
             <div className="flex min-w-0 flex-col gap-1">
               <div id="sandbox-palette-label" className="text-xs font-medium text-muted">Palette</div>
