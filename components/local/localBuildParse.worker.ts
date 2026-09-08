@@ -3,6 +3,7 @@ import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
   createLocalVoxelWorld,
+  LocalVoxelWorldSourceError,
   type LocalVoxelWorldProgress,
   type LocalVoxelWorldOwnership,
 } from "@/lib/voxel/localWorld";
@@ -517,9 +518,9 @@ async function runParse(request: ParseRequest) {
         ...(localWorld ? { localWorld } : {}),
       } satisfies CompleteMessage);
     };
-    if (request.file) {
-      if (request.gridSize > 512) {
-        const world = await createLocalVoxelWorld(request.file, {
+    if (request.gridSize > 512) {
+      try {
+        const world = await createLocalVoxelWorld(request.file ?? new Blob([request.rawText]), {
           gridSize: request.gridSize,
           palette: request.palette,
           signal: abortController.signal,
@@ -534,8 +535,18 @@ async function runParse(request: ParseRequest) {
           partKeys: world.partKeys,
         });
         return;
+      } catch (error) {
+        if (request.file || !(error instanceof LocalVoxelWorldSourceError)) throw error;
+        postProgress({
+          type: "progress",
+          requestId: request.requestId,
+          deltaBlocks: [],
+          receivedBlocks: 0,
+          totalBlocks: null,
+        });
       }
-
+    }
+    if (request.file) {
       postProgress({
         type: "progress",
         requestId: request.requestId,

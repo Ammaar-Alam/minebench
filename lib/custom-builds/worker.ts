@@ -86,60 +86,60 @@ function abortLease(controller: AbortController, message: string): void {
   controller.abort(new CustomBuildLeaseLostError(message));
 }
 
-function startCustomBuildJobHeartbeat(
-  job: CustomBuildJob,
-  workerId: string,
+export function startGenerationJobHeartbeat(
+  job: Pick<CustomBuildJob, "id" | "leaseExpiresAt">,
   controller: AbortController,
+  renew: () => Promise<boolean>,
 ): NodeJS.Timeout {
   let renewalInFlight = false;
+  let retrying = false;
+  const heartbeatMs = getCustomBuildWorkerHeartbeatMs();
+  const leaseMs = getCustomBuildJobLeaseSeconds() * 1000;
   return setInterval(() => {
-    if (renewalInFlight || controller.signal.aborted) return;
+    if (controller.signal.aborted) return;
+    const startedAt = Date.now();
+    if ((job.leaseExpiresAt?.getTime() ?? 0) <= startedAt) {
+      abortLease(controller, "Generation job lease expired before renewal was confirmed.");
+      return;
+    }
+    if (renewalInFlight) return;
     renewalInFlight = true;
-    void renewCustomBuildJobLease(job.id, workerId)
+    void renew()
       .then((renewed) => {
+        if (controller.signal.aborted) return;
         if (!renewed) {
-          abortLease(controller, "Custom build job lease is no longer owned by this worker.");
+          abortLease(controller, "Generation job lease is no longer owned by this worker.");
+          return;
         }
+        if ((job.leaseExpiresAt?.getTime() ?? 0) <= Date.now()) {
+          abortLease(controller, "Generation job lease expired before renewal was confirmed.");
+          return;
+        }
+        job.leaseExpiresAt = new Date(Math.max(job.leaseExpiresAt?.getTime() ?? 0, startedAt + leaseMs));
+        retrying = false;
       })
       .catch((error) => {
+        if (controller.signal.aborted) return;
+        const transient = isDatabaseUnavailableError(error) ||
+          (error instanceof Prisma.PrismaClientKnownRequestError && ["P2028", "P2034"].includes(error.code));
+        if (!retrying && transient && (job.leaseExpiresAt?.getTime() ?? 0) > Date.now() + heartbeatMs) {
+          retrying = true;
+          console.warn(`generation job ${job.id} lease renewal failed; retrying: ${redactSensitiveText(error)}`);
+          return;
+        }
         abortLease(
           controller,
-          `Custom build job lease renewal failed: ${redactSensitiveText(error)}`,
+          `Generation job lease renewal failed: ${redactSensitiveText(error)}`,
         );
       })
       .finally(() => {
         renewalInFlight = false;
       });
-  }, getCustomBuildWorkerHeartbeatMs());
-}
-
-function startStealthGenerationJobHeartbeat(
-  job: StealthGenerationJob,
-  workerId: string,
-  controller: AbortController,
-): NodeJS.Timeout {
-  let renewalInFlight = false;
-  return setInterval(() => {
-    if (renewalInFlight || controller.signal.aborted) return;
-    renewalInFlight = true;
-    void renewStealthGenerationJobLease(
-      job.id,
-      workerId,
-      getCustomBuildJobLeaseSeconds(),
-    )
-      .then((renewed) => {
-        if (!renewed) abortLease(controller, "Private generation lease is no longer owned by this worker.");
-      })
-      .catch((error) => {
-        abortLease(controller, `Private generation lease renewal failed: ${redactSensitiveText(error)}`);
-      })
-      .finally(() => {
-        renewalInFlight = false;
-      });
-  }, getCustomBuildWorkerHeartbeatMs());
+  }, heartbeatMs);
 }
 
 async function extendLeaseForSynchronousWork(job: CustomBuildJob, workerId: string): Promise<void> {
+  const startedAt = Date.now();
   let extended = false;
   try {
     extended = await extendCustomBuildJobLease(
@@ -155,12 +155,14 @@ async function extendLeaseForSynchronousWork(job: CustomBuildJob, workerId: stri
   if (!extended) {
     throw new CustomBuildLeaseLostError("Custom build job lease is no longer owned by this worker.");
   }
+  job.leaseExpiresAt = new Date(startedAt + getCustomBuildSynchronousExportLeaseMs());
 }
 
 async function extendStealthLeaseForSynchronousWork(
   job: StealthGenerationJob,
   workerId: string,
 ): Promise<void> {
+  const startedAt = Date.now();
   let extended = false;
   try {
     extended = await extendStealthGenerationJobLease(
@@ -178,6 +180,7 @@ async function extendStealthLeaseForSynchronousWork(
       "Private generation lease is no longer owned by this worker.",
     );
   }
+  job.leaseExpiresAt = new Date(startedAt + getCustomBuildSynchronousExportLeaseMs());
 }
 
 async function runJob(
@@ -241,7 +244,7 @@ async function processClaimedJob(
   jobType?: string;
 }> {
   const leaseAbort = new AbortController();
-  const heartbeat = startCustomBuildJobHeartbeat(job, workerId, leaseAbort);
+  const heartbeat = startGenerationJobHeartbeat(job, leaseAbort, () => renewCustomBuildJobLease(job.id, workerId));
 
   try {
     await runJob(job, workerId, leaseAbort.signal, processingGate, processResponse);
@@ -274,7 +277,8 @@ async function processClaimedStealthJob(
   processResponse?: ProcessVoxelBuildResponse,
 ): Promise<void> {
   const leaseAbort = new AbortController();
-  const heartbeat = startStealthGenerationJobHeartbeat(job, workerId, leaseAbort);
+  const heartbeat = startGenerationJobHeartbeat(job, leaseAbort, () =>
+    renewStealthGenerationJobLease(job.id, workerId, getCustomBuildJobLeaseSeconds()));
   let releaseProcessing: (() => void) | undefined;
   const acquireProcessing = async () => {
     const release = await processingGate.acquire(leaseAbort.signal);

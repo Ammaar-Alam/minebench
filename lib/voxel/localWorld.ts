@@ -41,6 +41,8 @@ export type LocalVoxelWorldResult = LocalVoxelWorldOwnership & {
   blockCount: number;
 };
 
+export class LocalVoxelWorldSourceError extends Error {}
+
 export type LocalVoxelWorldProgress = {
   stage: "reading" | "building";
   bytesRead?: number;
@@ -151,7 +153,7 @@ const indexedDbStorage: LocalWorldStorage = {
   },
   async readPart(ref) {
     if (ref.kind !== "localBlob") throw new Error("Local world part is not available.");
-    return readLocalVoxelWorldPart(ref.key);
+    return readLocalVoxelWorldPart(ref.key, undefined, { touchOwner: false });
   },
   async finishWorld(record) {
     const db = await openDb();
@@ -246,9 +248,10 @@ async function prepareLocalVoxelWorldInput(
     ? input.size
     : undefined;
   let bytesRead = 0;
+  let readFailed = false;
+  const reader = input.stream().getReader();
 
   const chunks = (async function* () {
-    const reader = input.stream().getReader();
     let completed = false;
     const cancelReader = () => {
       void reader.cancel().catch(() => undefined);
@@ -273,6 +276,9 @@ async function prepareLocalVoxelWorldInput(
         });
         yield result.value;
       }
+    } catch (error) {
+      readFailed = true;
+      throw error;
     } finally {
       opts.signal?.removeEventListener("abort", cancelReader);
       if (!completed) {
@@ -282,7 +288,14 @@ async function prepareLocalVoxelWorldInput(
     }
   })();
 
-  const sourceBuild = await parseVoxelBuildStream(chunks);
+  let sourceBuild: VoxelBuild;
+  try {
+    sourceBuild = await parseVoxelBuildStream(chunks);
+  } catch (error) {
+    const isParseError = error instanceof SyntaxError || error instanceof Error && error.constructor === Error;
+    if (readFailed || opts.signal?.aborted || !isParseError) throw error;
+    throw new LocalVoxelWorldSourceError(error.message, { cause: error });
+  }
   return {
     sourceBuild,
     sourceSha: hash.digest("hex"),
@@ -558,28 +571,47 @@ export async function createLocalVoxelWorld(
 
 export function attachLocalVoxelWorldResolver(build: RenderableVoxelBuild): RenderableVoxelBuild {
   if (!build.world || build.world.partBaseUrl) return build;
+  const touchedSignals = new WeakSet<AbortSignal>();
   return {
     ...build,
     world: {
       ...build.world,
-      resolvePart: readLocalVoxelWorldPart,
+      resolvePart: async (key, signal) => {
+        throwIfAborted(signal);
+        const touchOwner = !signal || !touchedSignals.has(signal);
+        if (signal && touchOwner) touchedSignals.add(signal);
+        try {
+          return await readLocalVoxelWorldPart(key, signal, { touchOwner });
+        } catch (error) {
+          if (signal && touchOwner) touchedSignals.delete(signal);
+          throw error;
+        }
+      },
     },
   };
 }
 
-export async function readLocalVoxelWorldPart(key: string, signal?: AbortSignal): Promise<Uint8Array> {
+export async function readLocalVoxelWorldPart(
+  key: string,
+  signal?: AbortSignal,
+  opts: { touchOwner?: boolean } = {},
+): Promise<Uint8Array> {
   throwIfAborted(signal);
   const db = await openDb();
-  const tx = db.transaction([PART_STORE, WORLD_STORE], "readwrite");
+  const tx = db.transaction(PART_STORE, "readonly");
   const partStore = tx.objectStore(PART_STORE);
-  const worldStore = tx.objectStore(WORLD_STORE);
   const record = (await promisifyRequest(partStore.get(key))) as LocalWorldPartRecord | undefined;
   if (!record?.bytes) throw new Error("Local world part is missing.");
-  const world = (await promisifyRequest(worldStore.get(record.worldId))) as LocalWorldMetaRecord | undefined;
-  if (world) {
-    worldStore.put({ ...world, touchedAt: Date.now() } satisfies LocalWorldMetaRecord);
-  }
   await waitForTransaction(tx);
+  throwIfAborted(signal);
+  if (opts.touchOwner !== false) {
+    const touchTx = db.transaction(WORLD_STORE, "readwrite");
+    const worldStore = touchTx.objectStore(WORLD_STORE);
+    const world = (await promisifyRequest(worldStore.get(record.worldId))) as LocalWorldMetaRecord | undefined;
+    throwIfAborted(signal);
+    if (world) worldStore.put({ ...world, touchedAt: Date.now() } satisfies LocalWorldMetaRecord);
+    await waitForTransaction(touchTx);
+  }
   throwIfAborted(signal);
   return record.bytes;
 }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import * as THREE from "three";
 import { getPalette } from "../../../lib/blocks/palettes";
 import { decodeBinaryVoxelBuild, encodeBinaryVoxelBuild } from "../../../lib/voxel/binaryBuild";
@@ -30,6 +31,19 @@ function meshes(object: THREE.Object3D): THREE.Mesh[] {
   const result: THREE.Mesh[] = [];
   object.traverse((child) => { if (child instanceof THREE.Mesh) result.push(child); });
   return result;
+}
+
+function geometryHash(object: THREE.Object3D): string {
+  const hash = createHash("sha256");
+  for (const mesh of meshes(object)) {
+    const attributes = [...Object.entries(mesh.geometry.attributes).sort(([a], [b]) => a.localeCompare(b)),
+      ["index", mesh.geometry.index!]] as [string, THREE.BufferAttribute][];
+    for (const [name, attribute] of attributes) {
+      hash.update(JSON.stringify([name, attribute.array.constructor.name, attribute.itemSize, attribute.normalized]));
+      hash.update(Buffer.from(attribute.array.buffer, attribute.array.byteOffset, attribute.array.byteLength));
+    }
+  }
+  return hash.digest("hex");
 }
 
 function createScene(delivery: VoxelWorldDelivery, opts?: Parameters<typeof createVoxelWorldScene>[3]) {
@@ -130,6 +144,34 @@ async function main() {
       }
       assert.equal(internalFaces, 0, "fully adjacent uniform water emits no internal faces");
       assert.equal(shorelineFaces, 2, "partial shoreline coverage and different transparent neighbors retain exposed water faces");
+      assert.equal(geometryHash(scene.group.getObjectByName("VoxelWorldUniformRegions")!),
+        "23d4377d2cb9a3146b00a52dc9fa7a65b4f8bd6f8f6b5d3dfeac274953bfd4d7",
+        "water and partial shoreline geometry remain byte-identical");
+    } finally {
+      scene.dispose();
+    }
+  }
+
+  {
+    const regions = [
+      { origin: { x: 6, y: 8, z: 8 }, size: { x: 2, y: 4, z: 4 }, type: "glass" },
+      { origin: { x: 12, y: 7, z: 7 }, size: { x: 2, y: 6, z: 6 }, type: "stone" },
+      { origin: { x: 8, y: 12, z: 8 }, size: { x: 4, y: 2, z: 2 }, type: "stone" },
+      { origin: { x: 8, y: 6, z: 8 }, size: { x: 4, y: 2, z: 4 }, type: "glowstone" },
+      { origin: { x: 8, y: 8, z: 6 }, size: { x: 4, y: 4, z: 2 }, type: "water" },
+      { origin: { x: 20, y: 8, z: 12 }, size: { x: 4, y: 4, z: 2 }, type: "stone" },
+      { origin: { x: 30, y: 8, z: 8 }, size: { x: 4, y: 1, z: 4 }, type: "water" },
+      { origin: { x: 34, y: 8, z: 8 }, size: { x: 4, y: 1, z: 4 }, type: "water" },
+      { origin: { x: 8, y: 8, z: 8 }, size: { x: 4, y: 4, z: 4 }, type: "stone" },
+    ].map((region, index) => ({ ...region, kind: "uniform" as const, key: `region-${index}`,
+      blockCount: region.size.x * region.size.y * region.size.z }));
+    const scene = await createScene({ manifest: {
+      ...BASE, bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 41, y: 21, z: 21 } },
+      exactBlockCount: regions.reduce((total, region) => total + region.blockCount, 0), regions,
+    }, resolvePart: async () => { throw new Error("uniform geometry must not read source parts"); } });
+    try {
+      assert.equal(geometryHash(scene.group), "d175a145c0be6ce4749d89242e1b68b31a85f416121fb3b41e67636f2e1c2b62",
+        "uneven neighbors, disjoint faces, and material boundaries retain geometry and order");
     } finally {
       scene.dispose();
     }

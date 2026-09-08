@@ -378,9 +378,9 @@ function validateSurfacePage(page: WorldSurfaceTilePage, bounds: RawMeshBounds, 
       assertWorldMesh(valueOffset + occupiedCells + rowCells <= page.texels.length, `surface page ${pageIndex} cell data is out of bounds`);
       for (let cell = 0; cell < rowCells; cell += 1) {
         const cellWord = page.texels[valueOffset + occupiedCells + cell]!;
-        assertWorldMesh((cellWord & 0x80000000) === 0, `surface page ${pageIndex} cell has unsupported reserved bits`);
+        if ((cellWord & 0x80000000) !== 0) invalidWorldMesh(`surface page ${pageIndex} cell has unsupported reserved bits`);
         const atlasWord = ((cellWord & COORD_MASK) | (((cellWord >>> 10) & COORD_MASK) << 16)) >>> 0;
-        assertWorldMesh(validAtlasWords.has(atlasWord), `surface page ${pageIndex} cell atlas word is invalid`);
+        if (!validAtlasWords.has(atlasWord)) invalidWorldMesh(`surface page ${pageIndex} cell atlas word is invalid`);
       }
       occupiedCells += rowCells;
     }

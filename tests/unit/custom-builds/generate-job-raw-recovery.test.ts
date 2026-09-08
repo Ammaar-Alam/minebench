@@ -15,6 +15,8 @@ const updates: Array<Record<string, unknown>> = [];
 const queries: string[] = [];
 let keyLookups = 0;
 let providerRequests = 0;
+let keyDeletions = 0;
+let failArtifactKind: string | null = null;
 let expiredKey = false;
 let savedSecret: Record<string, unknown> | null = null;
 let savedJobPayload: Record<string, unknown> = {};
@@ -43,7 +45,11 @@ const fakePrisma = {
     },
   },
   customBuildArtifact: {
-    findFirst: async (args: { where: { kind: string }; orderBy: unknown }) => {
+    findFirst: async (args: { where: { kind: string | { in: string[] } }; orderBy: unknown }) => {
+      if (typeof args.where.kind !== "string") {
+        const kinds = args.where.kind.in;
+        return artifacts.findLast((artifact) => kinds.includes(String(artifact.kind))) ?? null;
+      }
       queries.push(args.where.kind);
       if (args.where.kind === "raw_text_debug") {
         assert.deepEqual(args.orderBy, [{ createdAt: "desc" }, { id: "desc" }]);
@@ -52,6 +58,7 @@ const fakePrisma = {
     },
     findUnique: async () => null,
     upsert: async ({ create }: { create: Record<string, unknown> }) => {
+      if (create.kind === failArtifactKind) throw new Error("artifact upload bookkeeping unavailable");
       const index = artifacts.findIndex((artifact) => artifact.kind === create.kind &&
         artifact.sourceBuildSha256 === create.sourceBuildSha256);
       if (index < 0) artifacts.push(create);
@@ -67,7 +74,7 @@ const fakePrisma = {
       keyLookups += 1;
       return savedSecret ?? (expiredKey ? { expiresAt: new Date(0) } : null);
     },
-    deleteMany: async () => ({ count: 0 }),
+    deleteMany: async () => { keyDeletions += 1; savedSecret = null; return { count: 1 }; },
   },
   customBuildJob: {
     updateMany: async ({ where, data }: { where: Record<string, unknown>; data: { payload: Record<string, unknown> } }) => {
@@ -104,6 +111,8 @@ function reset() {
   queries.length = 0;
   keyLookups = 0;
   providerRequests = 0;
+  keyDeletions = 0;
+  failArtifactKind = null;
   savedSecret = null;
   savedJobPayload = {};
   globalThis.fetch = async () => {
@@ -192,6 +201,28 @@ async function main() {
   await runCustomBuildGenerateJob(job as never);
   assertNoProvider();
   assert.deepEqual(queries, ["build_json"], "canonical recovery must take precedence over raw responses");
+  assert.equal(current.buildSha256, expectedSourceSha);
+
+  reset();
+  const retainedRaw = await saveRaw(validText);
+  savedSecret = { expiresAt: new Date(Date.now() + 60_000) };
+  failArtifactKind = "build_json";
+  await assert.rejects(runCustomBuildGenerateJob({ ...job, attempts: 1, maxAttempts: 2 } as never), /generation_retryable/);
+  assertNoProvider();
+  assert.equal(keyDeletions, 1, "canonical write failure must delete the credential only after finding retained raw output");
+  assert.equal(savedSecret, null);
+  assert.equal(current.status, "queued");
+  await assert.rejects(runCustomBuildGenerateJob({ ...job, attempts: 2, maxAttempts: 2 } as never), /artifact_bookkeeping_failed/);
+  assertNoProvider();
+  assert.equal(current.status, "failed");
+  assert.equal(current.errorRetryable, true);
+  assert.equal(current.deletionPendingAt, null);
+  assert.deepEqual(artifacts, [retainedRaw], "exhausted finalization must retain the original raw artifact");
+  failArtifactKind = null;
+  current = { ...current, status: "queued" };
+  await runCustomBuildGenerateJob(job as never);
+  assertNoProvider();
+  assert.equal(current.status, "succeeded");
   assert.equal(current.buildSha256, expectedSourceSha);
 
   for (const text of ["invalid JSON", "{}", toolCall("block(0,0,0,'stone');"),

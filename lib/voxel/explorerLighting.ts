@@ -316,12 +316,16 @@ export function setExplorerWorldFog(
   viewDistance: number,
 ): void {
   fog.far = Math.max(camera.near, viewDistance);
-  fog.near = fog.far * 0.55;
+  fog.near = fog.far * 0.2;
   camera.far = Math.max(camera.near * 2, fog.far * 1.1);
   camera.updateProjectionMatrix();
   bloomFog.near = fog.near;
   bloomFog.far = fog.far;
   bloomFog.color.set(0x000000);
+}
+
+export function getExplorerWorldFogDistance(size: { x: number; z: number }): number {
+  return Math.max(2_048, Math.max(size.x, size.z) * 0.7);
 }
 
 export function renderExplorerBloomOverlay(

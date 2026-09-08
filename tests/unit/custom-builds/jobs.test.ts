@@ -41,8 +41,14 @@ async function main() {
       return [{ id: "failed-job", customBuildId: "custom-build-row", type: "generate" }];
     },
     customBuildArtifact: {
-      findFirst: async (args: { where: { kind: { in: string[] } } }) =>
-        artifactKind && args.where.kind.in.includes(artifactKind) ? { id: "saved-source" } : null,
+      findFirst: async (args: { where: {
+        kind: { in: string[] };
+        customBuild?: { removedAt: null; status: { in: string[] } };
+      } }) => {
+        const active = args.where.customBuild;
+        if (active && (parent.removedAt !== null || !active.status.in.includes(parent.status))) return null;
+        return artifactKind && args.where.kind.in.includes(artifactKind) ? { id: "saved-source" } : null;
+      },
     },
     customBuild: {
       updateMany: async (args: {
@@ -119,6 +125,9 @@ async function main() {
 
   const terminalOperations: string[] = [];
   const parentFailures: Array<Record<string, unknown>> = [];
+  let attempts = 3;
+  artifactKind = undefined;
+  parent = { status: "running", removedAt: null };
   const terminalTx = {
     customBuildJob: {
       updateMany: async () => {
@@ -127,8 +136,13 @@ async function main() {
       },
     },
     customBuild: {
-      updateMany: async (args: { data: Record<string, unknown> }) => {
+      updateMany: async (args: {
+        where: { status: { in: string[] }; removedAt?: null };
+        data: Record<string, unknown>;
+      }) => {
         terminalOperations.push("customBuild.updateMany");
+        if (!args.where.status.in.includes(parent.status) ||
+          (args.where.removedAt === null && parent.removedAt !== null)) return { count: 0 };
         parentFailures.push(args.data);
         return { count: 1 };
       },
@@ -141,9 +155,11 @@ async function main() {
     },
   };
   const terminalRoot = {
+    customBuildArtifact: txClient.customBuildArtifact,
+    customBuildSecret: terminalTx.customBuildSecret,
     customBuildJob: {
       findFirst: async () => ({
-        attempts: 3,
+        attempts,
         maxAttempts: 3,
         customBuildId: "terminal-build-row",
         type: "generate",
@@ -179,6 +195,31 @@ async function main() {
   assert.equal(parentFailure?.status, "failed");
   assert.equal(parentFailure?.errorRetryable, false);
   assert.ok(parentFailure?.deletionPendingAt instanceof Date);
+
+  for (const kind of ["raw_text_debug", "build_json"]) {
+    artifactKind = kind;
+    terminalOperations.length = 0;
+    parentFailures.length = 0;
+    await failCustomBuildJob("terminal-job-row", "worker-row", { code: "worker_failed", message: "database write failed" }, terminalRoot as never);
+    assert.equal(parentFailures[0]?.errorCode, "artifact_bookkeeping_failed");
+    assert.equal(parentFailures[0]?.errorMessage, "database write failed", "the underlying failure must remain visible");
+    assert.equal(parentFailures[0]?.errorRetryable, true);
+    assert.equal(parentFailures[0]?.deletionPendingAt, null, `${kind} must survive a terminal worker failure`);
+    attempts = 1;
+    terminalOperations.length = 0;
+    parentFailures.length = 0;
+    assert.deepEqual(await failCustomBuildJob("retry-job", "worker-row", { code: "worker_failed", message: "write failed" }, terminalRoot as never), { requeued: true });
+    assert.deepEqual(terminalOperations, ["customBuildSecret.deleteMany", "customBuildJob.updateMany.outsideTransaction"],
+      "automatic source recovery must discard credentials before queueing");
+    assert.equal(parentFailures.length, 0);
+    attempts = 3;
+  }
+  for (const state of [{ status: "canceled", removedAt: null }, { status: "running", removedAt: new Date() }]) {
+    parent = state;
+    parentFailures.length = 0;
+    await failCustomBuildJob("terminal-job-row", "worker-row", { code: "worker_failed", message: "write failed" }, terminalRoot as never);
+    assert.equal(parentFailures.length, 0, "fallback failure handling must preserve cancellation and removal");
+  }
 
   console.log("custom build stale job recovery checks passed");
 }

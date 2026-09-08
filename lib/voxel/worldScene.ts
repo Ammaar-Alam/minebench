@@ -47,6 +47,7 @@ export type VoxelWorldSceneOptions = {
 
 type WorldCenter = { x: number; y: number; z: number };
 type UniformMaterialKind = RenderKind | "water";
+type UniformFaceIndex = Map<string, VoxelWorldUniformRegion[]>;
 const PART_LOAD_CONCURRENCY = 2;
 const MESH_LOAD_CONCURRENCY = 4;
 
@@ -244,10 +245,12 @@ function buildGeometry(data: UniformGeometryData): THREE.BufferGeometry | null {
 function fullyOccludedByUniformNeighbor(
   region: VoxelWorldUniformRegion,
   face: Face,
-  knownRegions: readonly VoxelWorldRegion[],
+  faceIndex: UniformFaceIndex,
 ): boolean {
   const regionEnd = endOf(regionBounds(region));
-  for (const candidate of knownRegions) {
+  const axis = face === "east" || face === "west" ? "x" : face === "up" || face === "down" ? "y" : "z";
+  const plane = face === "east" || face === "up" || face === "south" ? regionEnd[axis] : region.origin[axis];
+  for (const candidate of faceIndex.get(`${face}:${plane}`) ?? []) {
     if (candidate.key === region.key || candidate.kind !== "uniform") continue;
     if (!isVoxelOccluder(candidate.type) && !(region.type === "water" && candidate.type === "water")) continue;
     const candidateEnd = endOf(regionBounds(candidate));
@@ -269,7 +272,7 @@ function appendUniformRegion(
   buckets: Map<UniformMaterialKind, UniformGeometryData>,
   region: VoxelWorldUniformRegion,
   center: WorldCenter,
-  knownRegions: readonly VoxelWorldRegion[],
+  faceIndex: UniformFaceIndex,
 ) {
   const kind = materialKind(region.type);
   const data = buckets.get(kind) ?? makeUniformGeometryData();
@@ -296,7 +299,7 @@ function appendUniformRegion(
   ];
 
   for (const face of faces) {
-    if (fullyOccludedByUniformNeighbor(region, face.face, knownRegions)) continue;
+    if (fullyOccludedByUniformNeighbor(region, face.face, faceIndex)) continue;
     const textureKey = getTextureKey(region.type, face.face);
     if (!hasAtlasKey(textureKey)) continue;
     const uv = getAtlasUv(textureKey);
@@ -318,8 +321,22 @@ function buildUniformGroup(
 ): THREE.Group | null {
   if (regions.length === 0) return null;
   configureAtlasTexture(atlasTexture);
+  const faceIndex: UniformFaceIndex = new Map();
+  for (const region of regions) {
+    const end = endOf(regionBounds(region));
+    for (const [face, plane] of [
+      ["east", region.origin.x], ["west", end.x],
+      ["up", region.origin.y], ["down", end.y],
+      ["south", region.origin.z], ["north", end.z],
+    ] as const) {
+      const key = `${face}:${plane}`;
+      const candidates = faceIndex.get(key);
+      if (candidates) candidates.push(region);
+      else faceIndex.set(key, [region]);
+    }
+  }
   const buckets = new Map<UniformMaterialKind, UniformGeometryData>();
-  for (const region of regions) appendUniformRegion(buckets, region, center, regions);
+  for (const region of regions) appendUniformRegion(buckets, region, center, faceIndex);
 
   const group = new THREE.Group();
   group.name = "VoxelWorldUniformRegions";
