@@ -7,6 +7,7 @@ const storageDir = ".custom-build-storage/unit-raw-recovery";
 const previousEnv = Object.fromEntries([
   "CUSTOM_BUILD_STORAGE_BUCKET", "CUSTOM_BUILD_LOCAL_STORAGE_DIR", "CUSTOM_BUILD_STUB_PROVIDER",
   "SUPABASE_URL", "SUPABASE_SECRET_KEY", "OPENROUTER_BASE_URL", "MINEBENCH_TOOL_TIMEOUT_MS",
+  "CUSTOM_BUILD_KEY_ENCRYPTION_SECRET", "OPENAI_BACKGROUND_POLL_MS", "OPENAI_USE_BACKGROUND_MODE",
 ].map((name) => [name, process.env[name]]));
 const originalFetch = globalThis.fetch;
 const artifacts: Array<Record<string, unknown>> = [];
@@ -15,6 +16,8 @@ const queries: string[] = [];
 let keyLookups = 0;
 let providerRequests = 0;
 let expiredKey = false;
+let savedSecret: Record<string, unknown> | null = null;
+let savedJobPayload: Record<string, unknown> = {};
 let eventSeq = 0;
 let current: Record<string, unknown>;
 const initial = {
@@ -62,9 +65,16 @@ const fakePrisma = {
   customBuildSecret: {
     findUnique: async () => {
       keyLookups += 1;
-      return expiredKey ? { expiresAt: new Date(0) } : null;
+      return savedSecret ?? (expiredKey ? { expiresAt: new Date(0) } : null);
     },
     deleteMany: async () => ({ count: 0 }),
+  },
+  customBuildJob: {
+    updateMany: async ({ where, data }: { where: Record<string, unknown>; data: { payload: Record<string, unknown> } }) => {
+      assert.deepEqual(where, { id: job.id, status: "running", lockedBy: "unit-background-worker" });
+      savedJobPayload = data.payload;
+      return { count: 1 };
+    },
   },
   customBuildStatsDaily: { upsert: async () => ({}) },
   customBuildEvent: {
@@ -94,6 +104,8 @@ function reset() {
   queries.length = 0;
   keyLookups = 0;
   providerRequests = 0;
+  savedSecret = null;
+  savedJobPayload = {};
   globalThis.fetch = async () => {
     providerRequests += 1;
     throw new Error("Replay must not contact a provider");
@@ -105,6 +117,7 @@ async function main() {
   process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = storageDir;
   delete process.env.CUSTOM_BUILD_STUB_PROVIDER;
   process.env.MINEBENCH_TOOL_TIMEOUT_MS = "250";
+  const { processVoxelBuildResponseInWorker } = await import("../../../scripts/process-voxel-build-response");
   const { runCustomBuildGenerateJob } = await import("../../../lib/custom-builds/generateJob");
   const { generateVoxelBuild } = await import("../../../lib/ai/generateVoxelBuild");
   const { uploadAndRecordCustomBuildArtifact, writeVoxelBuildSourceArtifact, gzipBytes, sha256Hex } =
@@ -156,6 +169,7 @@ async function main() {
     }
     await runCustomBuildGenerateJob(job as never, {
       acquireBuildProcessing: async () => { gateCalls += 1; return () => {}; },
+      processResponse: processVoxelBuildResponseInWorker,
     });
     assertNoProvider();
     assert.equal(gateCalls, 1);
@@ -248,6 +262,45 @@ async function main() {
   assertNoProvider();
   assert.equal(artifacts.length, 1);
   assert.equal(updates.some((update) => ["queued", "failed", "succeeded"].includes(String(update.status))), false);
+  reset();
+  process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-background-response-recovery-secret";
+  process.env.OPENAI_BACKGROUND_POLL_MS = "0";
+  process.env.OPENAI_USE_BACKGROUND_MODE = "1";
+  const { encryptProviderKey } = await import("../../../lib/custom-builds/secrets");
+  savedSecret = { ...encryptProviderKey("unit-openai-background-key", { provider: "openai", binding: customBuildId }),
+    expiresAt: new Date(Date.now() + 60_000) };
+  current = { ...initial, modelKey: "openai_gpt_6_astra", modelProvider: "openai",
+    modelId: "gpt-6-astra", preferOpenRouter: false, generationTimeMs: null };
+  const interrupted = new AbortController();
+  const backgroundJob = { ...job, lockedBy: "unit-background-worker" };
+  const responseId = "resp_interrupted_generation";
+  const methods: string[] = [];
+  globalThis.fetch = async (_input, init) => {
+    methods.push(init?.method ?? "GET");
+    if (init?.method === "POST") return Response.json({ id: responseId, status: "queued" });
+    assert.equal(savedJobPayload.openaiResponseId, responseId, "the response ID must be durable before polling");
+    interrupted.abort(new CustomBuildLeaseLostError());
+    throw new DOMException("Interrupted", "AbortError");
+  };
+  await assert.rejects(runCustomBuildGenerateJob(backgroundJob as never, { signal: interrupted.signal }), /lease is no longer owned/);
+  assert.deepEqual(methods, ["POST", "GET"]);
+  assert.equal(artifacts.length, 0);
+  methods.length = 0;
+  current = { ...current, status: "queued", currentStage: "queued" };
+  globalThis.fetch = async (input, init) => {
+    methods.push(init?.method ?? "GET");
+    assert.equal(String(input), `https://api.openai.com/v1/responses/${responseId}`);
+    return Response.json({ id: responseId, status: "completed", output_text: validText });
+  };
+  await runCustomBuildGenerateJob({ ...backgroundJob, payload: savedJobPayload } as never, {
+    processResponse: processVoxelBuildResponseInWorker,
+  });
+  assert.deepEqual(methods, ["GET"], "reclaimed jobs must retrieve the original response without a new generation");
+  assert.equal(current.status, "succeeded");
+  assert.equal(current.buildSha256, expectedSourceSha);
+  assert.equal(current.generationTimeMs, null, "interrupted inference timing is unknown");
+  assert.ok(artifacts.some((artifact) => artifact.kind === "raw_text_debug"));
+  assert.ok(artifacts.some((artifact) => artifact.kind === "viewer_world"));
   console.log("saved raw response recovery checks passed");
 }
 

@@ -48,6 +48,7 @@ import { generationProviderSignal } from "@/lib/generation-worker/providerSignal
 
 type GenerateJobPayload = {
   stubBuild?: unknown;
+  openaiResponseId?: string;
 };
 
 type GenerateVoxelBuildModel = NonNullable<GenerateVoxelBuildParams["model"]>;
@@ -89,6 +90,10 @@ class CustomBuildGenerationFailedError extends Error {
 
 function asGenerateJobPayload(payload: Prisma.JsonValue | null): GenerateJobPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  if (payload.openaiResponseId !== undefined &&
+      (typeof payload.openaiResponseId !== "string" || !/^resp_[A-Za-z0-9_-]{1,200}$/.test(payload.openaiResponseId))) {
+    throw new Error("Invalid saved OpenAI response id");
+  }
   return payload as GenerateJobPayload;
 }
 
@@ -179,6 +184,9 @@ function safeGenerateFailure(error: unknown, message: string) {
   }
   if (message.includes("processing_capacity_exceeded")) {
     return { code: "processing_capacity_exceeded", message: "This build exceeds the current processing capacity." };
+  }
+  if (message.includes("openai_response_checkpoint_failed")) {
+    return { code: "provider_checkpoint_failed", message: "The provider response could not be saved." };
   }
   if (isCustomBuildArtifactPersistenceError(error) || message.includes("custom_build_artifact_persistence_failed")) {
     return { code: "artifact_persistence_failed", message: "The generated result could not be saved." };
@@ -352,6 +360,15 @@ async function generateBuild(
       onProviderRequest: (attempt) => {
         providerAttempts = Math.max(providerAttempts, attempt);
       },
+      openaiResponseId: payload.openaiResponseId,
+      onOpenAIResponseCreated: async (responseId) => {
+        throwIfCustomBuildLeaseLost(opts.signal);
+        const checkpoint = await prisma.customBuildJob.updateMany({
+          where: { id: job.id, status: "running", lockedBy: job.lockedBy },
+          data: { payload: { ...(job.payload as Prisma.InputJsonObject), openaiResponseId: responseId } },
+        });
+        if (checkpoint.count !== 1) throw new CustomBuildLeaseLostError();
+      },
       onRawResponse: async (attempt, text) => {
         const bytes = new TextEncoder().encode(text);
         const sha256 = sha256Hex(bytes);
@@ -399,7 +416,7 @@ async function generateBuild(
     build: result.build,
     warnings: result.warnings,
     blockCount: result.blockCount,
-    generationTimeMs: result.generationTimeMs,
+    generationTimeMs: payload.openaiResponseId ? null : result.generationTimeMs,
   };
 }
 

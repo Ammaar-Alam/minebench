@@ -15,7 +15,7 @@ import { minimaxGenerateText } from "@/lib/ai/providers/minimax";
 import { metaGenerateText } from "@/lib/ai/providers/meta";
 import { moonshotGenerateText } from "@/lib/ai/providers/moonshot";
 import { openAiCompatibleGenerateText } from "@/lib/ai/providers/openaiCompatible";
-import { openaiGenerateText } from "@/lib/ai/providers/openai";
+import { openaiGenerateText, OpenAIResponseCheckpointError, type OpenAIBackgroundResponseOptions } from "@/lib/ai/providers/openai";
 import { openrouterGenerateText } from "@/lib/ai/providers/openrouter";
 import { xaiGenerateText } from "@/lib/ai/providers/xai";
 import { zaiGenerateText } from "@/lib/ai/providers/zai";
@@ -499,7 +499,7 @@ export type GenerateVoxelBuildParams = {
   acquireBuildProcessing?: () => Promise<() => void>;
   buildOutput?: "source" | "objects" | "packed";
   processResponse?: ProcessVoxelBuildResponse;
-};
+} & OpenAIBackgroundResponseOptions;
 
 export type GenerateVoxelBuildResult =
   | {
@@ -560,7 +560,7 @@ async function callDirectProvider(args: {
   onDelta?: (delta: string) => void;
   onTrace?: (message: string) => void;
   onAcceptedOutputTokens?: (tokens: number) => void;
-} & ProviderTelemetryCallbacks): Promise<{ text: string }> {
+} & ProviderTelemetryCallbacks & OpenAIBackgroundResponseOptions): Promise<{ text: string }> {
   if (args.provider === "openai") {
     return openaiGenerateText({
       modelId: args.modelId,
@@ -579,6 +579,8 @@ async function callDirectProvider(args: {
       onTrace: args.onTrace,
       onAcceptedOutputTokens: args.onAcceptedOutputTokens,
       onProviderRequest: args.onProviderRequest,
+      openaiResponseId: args.openaiResponseId,
+      onOpenAIResponseCreated: args.onOpenAIResponseCreated,
       onAcceptedRequestConfiguration: args.onAcceptedRequestConfiguration,
     });
   }
@@ -801,7 +803,7 @@ async function providerGenerateText(args: {
     configuration: AcceptedRequestConfigurationRecord,
   ) => void;
   onProviderRequest?: () => void;
-}): Promise<{ text: string }> {
+} & OpenAIBackgroundResponseOptions): Promise<{ text: string }> {
   const { model } = args;
   const forceOpenRouter = Boolean(model.forceOpenRouter);
   const preferOpenRouter = Boolean(args.preferOpenRouter);
@@ -819,6 +821,10 @@ async function providerGenerateText(args: {
   });
   const hasDirect = Boolean(directKey);
   const hasOpenRouter = Boolean(openRouterKey);
+
+  if (args.openaiResponseId && (model.provider !== "openai" || !hasDirect || forceOpenRouter || preferOpenRouter)) {
+    throw new Error("Stored OpenAI responses require the original direct provider route");
+  }
 
   if (preferOpenRouter && !model.openRouterModelId) {
     throw new Error(
@@ -946,6 +952,8 @@ async function providerGenerateText(args: {
         onTrace: args.onProviderTrace,
         onAcceptedOutputTokens: args.onAcceptedOutputTokens,
         onProviderRequest: args.onProviderRequest,
+        openaiResponseId: args.openaiResponseId,
+        onOpenAIResponseCreated: args.onOpenAIResponseCreated,
         onAcceptedRequestConfiguration: (configuration) => {
           args.onAcceptedRequestConfiguration?.(
             acceptedProviderRequestConfigurationLine(configuration),
@@ -1087,7 +1095,7 @@ export async function generateVoxelBuild(
     };
   }
   const enableTools = params.enableTools ?? true;
-  const maxAttempts = params.maxAttempts ?? (enableTools ? 8 : 3);
+  const maxAttempts = params.openaiResponseId ? 1 : (params.maxAttempts ?? (enableTools ? 8 : 3));
   const allowServerKeys = params.allowServerKeys ?? true;
 
   const minBlocks = MIN_BLOCKS_BY_GRID[params.gridSize] ?? 80;
@@ -1197,6 +1205,17 @@ export async function generateVoxelBuild(
         allowServerKeys,
         preferOpenRouter: params.preferOpenRouter,
         signal: params.abortSignal,
+        openaiResponseId: params.openaiResponseId,
+        onOpenAIResponseCreated: params.onOpenAIResponseCreated
+          ? async (responseId) => {
+              const callbackStartedAt = performance.now();
+              try {
+                await params.onOpenAIResponseCreated!(responseId);
+              } finally {
+                callbackDurationMs += performance.now() - callbackStartedAt;
+              }
+            }
+          : undefined,
         onDelta: params.onDelta
           ? (delta) => invokeCallback(params.onDelta, delta)
           : undefined,
@@ -1273,7 +1292,7 @@ export async function generateVoxelBuild(
       }
     } catch (err) {
       lastError = getErrorMessage(err, "Provider request failed");
-      if (params.abortSignal?.aborted) break;
+      if (params.abortSignal?.aborted || err instanceof OpenAIResponseCheckpointError) break;
       if (isVoxelBuildResourceError(lastError)) break;
       if (lastError.includes("custom_build_artifact_persistence_failed")) break;
       // preserve the response for execution recovery instead of buying another generation
