@@ -154,9 +154,9 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
         (params.gridSize > 512 ? LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS : DEFAULT_VOXEL_EXEC_TIMEOUT_MS),
     ),
   );
-  const maxBoxes = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
-  const maxLines = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_LINES");
-  const maxBlocks = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BLOCKS");
+  const maxBoxes = params.gridSize > 512 ? null : readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
+  const maxLines = params.gridSize > 512 ? null : readOptionalLimitEnv("MINEBENCH_TOOL_MAX_LINES");
+  const maxBlocks = params.gridSize > 512 ? null : readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BLOCKS");
   const packedBlockLimit = params.packedOutput && params.gridSize <= 512
     ? Math.min(MAX_BLOCKS_BY_GRID[params.gridSize], MAX_BLOCKS_BY_GRID[256]) * 2
     : Infinity;
