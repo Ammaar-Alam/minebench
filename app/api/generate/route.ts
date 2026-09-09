@@ -1,4 +1,4 @@
-import { isGridSize, type GridSize } from "@/lib/ai/limits";
+import { isGridSize, MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
@@ -69,7 +69,7 @@ const modelRequestSchema = z.union([
 ]);
 
 const reqSchema = z.object({
-  prompt: z.string().min(1).max(800),
+  prompt: z.string().min(1).max(MAX_GENERATION_PROMPT_CHARS, `Keep the prompt to ${MAX_GENERATION_PROMPT_CHARS} characters or fewer.`),
   gridSize: z.custom<GridSize>(isGridSize),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   modelKeys: z.array(z.string()).min(1).max(8).optional(),

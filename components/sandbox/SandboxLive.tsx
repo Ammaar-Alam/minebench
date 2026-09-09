@@ -1,6 +1,6 @@
 "use client";
 
-import { GRID_SIZES, isGridSize, type GridSize } from "@/lib/ai/limits";
+import { GRID_SIZES, isGridSize, MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { MODEL_CATALOG, ModelKey } from "@/lib/ai/modelCatalog";
@@ -1389,6 +1389,10 @@ export function SandboxLive({
   async function runGenerate(continueTransient = false) {
     if (!prompt.trim() || selectedModels.length === 0) return;
     const submittedPrompt = prompt.trim();
+    if (submittedPrompt.length > MAX_GENERATION_PROMPT_CHARS) {
+      setRequestError(`Keep the prompt to ${MAX_GENERATION_PROMPT_CHARS} characters or fewer.`);
+      return;
+    }
 
     const invalidCustomModel = selectedModels.find(
       (model) => model.kind === "custom" && !model.modelId.trim()
@@ -1684,10 +1688,24 @@ export function SandboxLive({
         return next;
       });
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
+      if (
+        isAbortError(err) || abortController.signal.aborted ||
+        generateAbortRef.current !== abortController ||
+        (durableRunId !== null && canceledDurableRunsRef.current.has(durableRunId))
+      ) {
         return;
       }
-      setRequestError(err instanceof Error ? err.message : "Request failed");
+      const message = err instanceof Error ? err.message : "Request failed";
+      setRequestError(message);
+      setResults((prev) => {
+        const next = new Map(prev);
+        for (const model of selectedModels) {
+          const result = next.get(model.id);
+          if (result?.status !== "loading") continue;
+          next.set(model.id, { ...result, status: "error", voxelBuild: null, error: message });
+        }
+        return next;
+      });
     } finally {
       if (customBuildAbortRef.current === abortController) {
         customBuildAbortRef.current = null;
@@ -1939,7 +1957,12 @@ export function SandboxLive({
         ) : null}
 
         <label className="flex flex-col gap-2">
-          <span className="mb-eyebrow">Prompt</span>
+          <span className="flex items-baseline justify-between gap-3">
+            <span className="mb-eyebrow">Prompt</span>
+            <span className="text-xs tabular-nums text-muted">
+              {prompt.trim().length} / {MAX_GENERATION_PROMPT_CHARS} characters
+            </span>
+          </span>
           <textarea
             className="mb-field min-h-36 resize-none py-3"
             placeholder="Describe the build..."
