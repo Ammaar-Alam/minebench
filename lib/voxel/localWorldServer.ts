@@ -159,7 +159,7 @@ export async function persistLocalVoxelWorld(args: {
       consumeSource: true,
       gridSize: args.gridSize,
       palette: args.palette,
-      previewTargetBlocks: 3_000,
+      previewTargetBlocks: 0,
       persistArtifact,
       throwIfCanceled: () => throwIfAborted(args.signal),
     });
@@ -267,9 +267,12 @@ export async function localVoxelWorldPartResponse(request: Request): Promise<Res
     });
   }
 
-  if (manifest.overview?.data.key === partKey) {
-    const overviewSha = "sha256" in manifest.overview.data ? manifest.overview.data.sha256 : null;
-    return overviewSha && sha256Hex(bytes) === overviewSha.toLowerCase()
+  const manifestPart = manifest.overview?.data.key === partKey
+    ? manifest.overview.data
+    : manifest.mesh?.batches.find((batch) => batch.data.key === partKey)?.data;
+  if (manifestPart) {
+    const partSha = "sha256" in manifestPart ? manifestPart.sha256 : null;
+    return partSha && sha256Hex(bytes) === partSha.toLowerCase()
       ? gzipBytesResponse(bytes)
       : new Response("Artifact not found", { status: 404 });
   }

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { gunzipSync } from "node:zlib";
+import { decodeBinaryArtifact, encodeBinaryArtifact } from "../../../lib/arena/binaryArtifact";
+import { buildGalleryPreviewSvg } from "../../../lib/gallery/preview";
 import {
   persistVoxelWorldArtifacts,
   type PersistVoxelWorldArtifact,
@@ -179,6 +181,7 @@ function persistWorld(
   sourceBuild: VoxelBuild,
   persistArtifact: PersistVoxelWorldArtifact,
   throwIfCanceled?: () => void,
+  previewTargetBlocks = 16,
 ) {
   return persistVoxelWorldArtifacts({
     customBuildId: CUSTOM_BUILD_ID,
@@ -187,10 +190,47 @@ function persistWorld(
     sourceBuild,
     gridSize: 8192,
     palette: "simple",
-    previewTargetBlocks: 16,
+    previewTargetBlocks,
     persistArtifact,
     throwIfCanceled,
   });
+}
+
+async function distributePreviewAcrossRegions() {
+  const farBox = { x1: 1536, y1: 0, z1: 0, x2: 2047, y2: 63, z2: 63, type: "gold_block" };
+  const goldSvg = buildGalleryPreviewSvg({ version: "1.0", blocks: [{ x: 0, y: 0, z: 0, type: "gold_block" }] });
+  const goldFills = [...goldSvg.matchAll(/fill="(#[a-f0-9]+)"/g)].map((match) => match[1]!);
+  const persist: PersistVoxelWorldArtifact = async (args) => artifactFor(args);
+  for (const source of [
+    { version: "1.0", blocks: [], boxes: [
+      { x1: 0, y1: 0, z1: 0, x2: 511, y2: 63, z2: 63, type: "stone" }, farBox,
+    ] },
+    { version: "1.0", boxes: [farBox], blocks: Array.from({ length: 4096 }, (_, index) => ({
+      x: index % 64, y: 0, z: Math.floor(index / 64), type: index % 2 === 0 ? "stone" : "glass",
+    })) },
+  ] satisfies VoxelBuild[]) {
+    const { previewBuild, manifest } = await persistWorld(source, persist);
+    assert.equal(manifest.regions?.length, 2);
+    assert.equal(previewBuild.blocks.length, 16);
+    assert.equal(previewBuild.blocks.filter((block) => block.x < 512).length, 8);
+    assert.equal(previewBuild.blocks.filter((block) => block.x >= 1536).length, 8,
+      "a full first region must not consume the later region's preview budget");
+    const binary = decodeBinaryArtifact(encodeBinaryArtifact({ version: "1.0", variant: "preview" }, previewBuild.blocks, SOURCE_SHA));
+    assert.ok(binary.blocks.typeNames.includes("gold_block"));
+    const svg = buildGalleryPreviewSvg(previewBuild);
+    assert.ok(goldFills.some((fill) => svg.includes(`fill="${fill}"`)));
+    assert.deepEqual((await persistWorld(source, persist)).previewBuild, previewBuild);
+    assert.equal((await persistWorld(source, persist, undefined, 0)).previewBuild.blocks.length, 0);
+  }
+  const small = await persistWorld({ version: "1.0", boxes: [
+    { x1: 0, y1: 0, z1: 0, x2: 9, y2: 0, z2: 0, type: "stone" },
+  ], blocks: [{ x: 1536, y: 0, z: 0, type: "gold_block" }] }, persist);
+  assert.equal(small.previewBuild.blocks.length, 11, "worlds that fit the budget should retain every block");
+  const many = await persistWorld(mixedBuild(32, repeatedMixedBlockPair), persist);
+  assert.equal(many.previewBuild.blocks.length, 16);
+  assert.equal(Math.min(...many.previewBuild.blocks.map((block) => block.x)), 0);
+  assert.equal(Math.max(...many.previewBuild.blocks.map((block) => block.x)), 31 * MIXED_LEAF_SIZE,
+    "when regions outnumber samples, selection must span the complete region list");
 }
 
 async function preserveOrderWithConcurrentUploads() {
@@ -271,6 +311,7 @@ async function drainQueuedUploadsAfterCancellation() {
 }
 
 async function main() {
+  await distributePreviewAcrossRegions();
   await preserveOrderWithConcurrentUploads();
   await dedupePendingMixedUploads();
   await drainQueuedUploadsAfterFailure();
