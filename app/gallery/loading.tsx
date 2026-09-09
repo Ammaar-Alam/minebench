@@ -15,9 +15,7 @@ export default function GalleryLoading() {
           <Link href="/account#builds" className="inline-flex min-h-11 items-center px-2 text-sm font-semibold text-muted transition-colors hover:text-fg motion-reduce:transition-none">
             Builds
           </Link>
-          <Link href="/sign-in?next=/gallery" className="mb-btn mb-btn-primary h-11">
-            Sign in
-          </Link>
+          <span aria-hidden="true" className="h-11 w-28 animate-pulse rounded-md bg-border/30 motion-reduce:animate-none" />
         </div>
       </header>
 

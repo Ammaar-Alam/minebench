@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { createRef, useCallback, useEffect, useRef, useState } from "react";
+import { createRef, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { VoxelViewerHandle } from "@/components/voxel/VoxelViewer";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
@@ -46,6 +46,19 @@ const RUN_DATE_FORMAT = new Intl.DateTimeFormat("en-US", {
   dateStyle: "medium",
   timeZone: "UTC",
 });
+
+export function fitGalleryPromptHeading(heading: HTMLHeadingElement) {
+  const container = heading.parentElement;
+  if (!heading.isConnected || !container?.clientHeight) return null;
+  const maximum = parseFloat(getComputedStyle(container).fontSize);
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  for (const size of [3, 2.25, 1.875, 1.5, 1.25, 1.125]) {
+    if (size * rem > maximum) continue;
+    heading.style.fontSize = `${size}rem`;
+    if (heading.scrollHeight <= container.clientHeight) break;
+  }
+  return heading.scrollHeight > container.clientHeight;
+}
 
 function gallerySortHref(sort?: GallerySort) {
   return sort === "top" || !sort ? "/gallery" : `/gallery?sort=${sort}`;
@@ -178,11 +191,55 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   const viewerRefs = useRef(new Map<string, RefObject<VoxelViewerHandle | null>>());
   const viewerControllers = useRef(new Map<string, AbortController>());
   const [reportOpen, setReportOpen] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [promptTruncated, setPromptTruncated] = useState(false);
+  const promptRef = useRef<HTMLElement>(null);
+  const promptTextRef = useRef<HTMLHeadingElement>(null);
+  const promptToggleRef = useRef<HTMLButtonElement>(null);
   const [removing, setRemoving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const examplesScrollRef = useRef<HTMLDivElement>(null);
   const [canScrollUp, setCanScrollUp] = useState(false);
   const [canScrollDown, setCanScrollDown] = useState(false);
+
+  useLayoutEffect(() => {
+    const heading = promptTextRef.current;
+    const container = heading?.parentElement;
+    if (!heading || !container) return;
+    const fit = () => {
+      const truncated = fitGalleryPromptHeading(heading);
+      if (truncated === null) return;
+      setPromptTruncated(truncated);
+      if (!truncated) setPromptOpen(false);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(container);
+    window.addEventListener("resize", fit);
+    void document.fonts.ready.then(fit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", fit);
+    };
+  }, [candidate.prompt]);
+
+  useEffect(() => {
+    if (!promptOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setPromptOpen(false);
+      promptToggleRef.current?.focus({ preventScroll: true });
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && !promptRef.current?.contains(event.target)) setPromptOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [promptOpen]);
 
   const updateScrollState = useCallback(() => {
     const el = examplesScrollRef.current;
@@ -351,7 +408,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
   }, []);
 
   useEffect(() => {
-    if (!navigation || reportOpen) return;
+    if (!navigation || reportOpen || promptOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || event.isComposing) return;
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
@@ -371,7 +428,7 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigation, reportOpen, router]);
+  }, [navigation, reportOpen, promptOpen, router]);
 
   function selectExample(event: React.MouseEvent<HTMLButtonElement>, exampleId: string) {
     const additive = event.metaKey || event.ctrlKey;
@@ -456,8 +513,6 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         jsonBytes: example.jsonBytes,
       }))
     : [];
-  const longPrompt = candidate.prompt.length > 140;
-
   return (
     <article className="mb-fade-in mx-auto w-full max-w-7xl py-4 sm:py-8">
       <nav aria-label="Gallery navigation" className="flex items-center justify-between gap-4">
@@ -473,13 +528,26 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
         ) : null}
       </nav>
 
-      <header className="mt-6 max-w-4xl sm:mt-8">
+      <header ref={promptRef} className="relative mt-6 max-w-4xl sm:mt-8">
         <div className="flex flex-wrap items-center gap-3 text-xs uppercase tracking-[0.12em] text-muted"><span>By {candidate.attribution}</span>{candidate.selected ? <span className="text-accent">Official prompt</span> : null}</div>
-        <h1 className={`mt-3 text-balance font-display font-semibold leading-tight tracking-tight text-fg ${longPrompt ? "text-2xl sm:text-3xl lg:text-4xl" : "text-3xl sm:text-4xl lg:text-5xl"}`}>{candidate.prompt}</h1>
+        <div className="mt-3 h-32 overflow-hidden text-3xl sm:text-4xl lg:text-5xl">
+          <h1 ref={promptTextRef} className={`break-words font-display font-semibold leading-[1.2] tracking-tight text-fg ${promptTruncated ? "line-clamp-5" : ""}`}>{candidate.prompt}</h1>
+        </div>
         <div className="mt-6 flex flex-wrap items-center gap-2">
           <GalleryVoteButton candidateId={candidate.id} initialCount={candidate.upvoteCount} initialUpvoted={candidate.upvoted} />
           <Link href={`/sandbox?mode=live&prompt=${encodeURIComponent(candidate.prompt)}`} className="mb-btn mb-btn-primary h-11">Use prompt</Link>
+          {promptTruncated ? (
+            <button ref={promptToggleRef} type="button" aria-expanded={promptOpen} aria-controls={`gallery-prompt-${candidate.id}`} onClick={() => setPromptOpen((open) => !open)} className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 motion-reduce:transition-none">
+              Full prompt
+              <svg aria-hidden="true" className={`mb-disclosure-chevron h-3.5 w-3.5 ${promptOpen ? "is-open" : ""}`} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
+            </button>
+          ) : null}
         </div>
+        {promptTruncated ? (
+          <div id={`gallery-prompt-${candidate.id}`} role="region" aria-label="Full prompt" aria-hidden={!promptOpen} tabIndex={promptOpen ? 0 : -1} className={`mb-prompt-reveal absolute inset-x-0 top-full z-30 mt-3 max-h-[min(45svh,22rem)] max-w-[70ch] overflow-y-auto overscroll-contain whitespace-pre-wrap break-words rounded-md border border-border bg-bg p-4 text-base leading-relaxed text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 sm:p-5 ${promptOpen ? "is-open" : ""}`}>
+            {candidate.prompt}
+          </div>
+        ) : null}
       </header>
 
       {actionError ? <p role="alert" className="mt-5 text-sm text-danger">{actionError}</p> : null}

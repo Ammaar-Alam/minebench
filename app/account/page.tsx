@@ -5,10 +5,12 @@ import { Suspense } from "react";
 import { signOutAccount } from "@/app/(auth)/actions";
 import { GalleryYours } from "@/components/gallery/GalleryYours";
 import { getCurrentAccount } from "@/lib/auth/account";
-import { listSavedGenerations } from "@/lib/generations/service";
+import { getSavedGeneration, listSavedGenerations } from "@/lib/generations/service";
+import { getNotificationSettings } from "@/lib/notifications/service";
 import { PersonalRanking, PersonalRankingSkeleton } from "./PersonalRanking";
 import { GalleryAccountSettings } from "./GalleryAccountSettings";
 import { MediaExportSettings } from "./MediaExportSettings";
+import { NotificationSettings } from "./NotificationSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -20,13 +22,18 @@ export const metadata: Metadata = {
 export default async function AccountPage({
   searchParams,
 }: {
-  searchParams: Promise<{ notice?: string }>;
+  searchParams: Promise<{ notice?: string; generation?: string }>;
 }) {
-  const account = await getCurrentAccount();
-  if (!account) redirect("/sign-in?next=/account");
-  const [params, generations] = await Promise.all([
-    searchParams,
+  const [params, account] = await Promise.all([searchParams, getCurrentAccount()]);
+  const targetGenerationId = typeof params.generation === "string" ? params.generation.trim() || null : null;
+  if (!account) {
+    const next = targetGenerationId ? `/account?generation=${encodeURIComponent(targetGenerationId)}` : "/account";
+    redirect(`/sign-in?next=${encodeURIComponent(next)}`);
+  }
+  const [generations, notificationPreferences, targetGeneration] = await Promise.all([
     listSavedGenerations(account.id),
+    getNotificationSettings(account.id),
+    targetGenerationId ? getSavedGeneration(account.id, targetGenerationId) : Promise.resolve(null),
   ]);
 
   return (
@@ -55,33 +62,7 @@ export default async function AccountPage({
       ) : null}
 
       <div className="grid gap-12 lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start xl:gap-16">
-        <div className="min-w-0 space-y-12">
-          <section className="space-y-4" aria-labelledby="ranking-title">
-            <h2 id="ranking-title" className="text-xl font-semibold tracking-tight text-fg">
-              Your ranking
-            </h2>
-            <Suspense fallback={<PersonalRankingSkeleton />}>
-              <PersonalRanking userId={account.id} />
-            </Suspense>
-          </section>
-
-          <GalleryYours
-            initialItems={generations.items}
-            initialCursor={generations.nextCursor}
-            hasNickname={Boolean(account.publicNickname)}
-            suspended={Boolean(account.gallerySuspendedAt)}
-          />
-        </div>
-
-        <aside className="space-y-5 lg:sticky lg:top-24">
-          <GalleryAccountSettings
-            publicNickname={account.publicNickname}
-            suspendedAt={account.gallerySuspendedAt?.toISOString() ?? null}
-            suspensionReason={account.gallerySuspensionReason}
-          />
-
-          <MediaExportSettings />
-
+        <aside className="space-y-5 lg:order-2">
           <section className="rounded-md border border-border/80 bg-card/10 p-5" aria-labelledby="security-title">
             <p className="mb-eyebrow">Account</p>
             <h2 id="security-title" className="mt-2 text-lg font-semibold tracking-tight text-fg">
@@ -113,7 +94,38 @@ export default async function AccountPage({
               </form>
             </div>
           </section>
+
+          <GalleryAccountSettings
+            publicNickname={account.publicNickname}
+            suspendedAt={account.gallerySuspendedAt?.toISOString() ?? null}
+            suspensionReason={account.gallerySuspensionReason}
+          />
+
+          <NotificationSettings initialSettings={notificationPreferences.settings} />
+
+          <MediaExportSettings />
         </aside>
+
+        <div className="min-w-0 space-y-12 lg:order-1">
+          <section className="space-y-4" aria-labelledby="ranking-title">
+            <h2 id="ranking-title" className="text-xl font-semibold tracking-tight text-fg">
+              Your ranking
+            </h2>
+            <Suspense fallback={<PersonalRankingSkeleton />}>
+              <PersonalRanking userId={account.id} />
+            </Suspense>
+          </section>
+
+          <GalleryYours
+            key={targetGenerationId ?? "saved-builds"}
+            initialItems={generations.items}
+            initialCursor={generations.nextCursor}
+            hasNickname={Boolean(account.publicNickname)}
+            suspended={Boolean(account.gallerySuspendedAt)}
+            targetGeneration={targetGeneration}
+            targetGenerationId={targetGenerationId}
+          />
+        </div>
       </div>
     </div>
   );

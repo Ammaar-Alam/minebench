@@ -136,15 +136,3 @@ function getServerSnapshot(): Health {
 export function useSiteHealth(): Health {
   return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 }
-
-/** test-only reset hook — not exported publicly, but useful in dev tools */
-export function __resetApiHealth(): void {
-  failures.length = 0;
-  degradedSince = null;
-  if (recoveryTimer) {
-    clearTimeout(recoveryTimer);
-    recoveryTimer = null;
-  }
-  health = { degraded: false, failureCount: 0, lastFailureAt: null };
-  emit();
-}

@@ -535,8 +535,59 @@ function topWeakest(prompts: ModelPromptBreakdown[]) {
     .slice(0, 6);
 }
 
-function topOpponents(opponents: ModelOpponentBreakdown[]) {
-  return [...opponents].sort((a, b) => b.votes - a.votes || b.averageScore - a.averageScore);
+function hasOpponentScore(opponent: ModelOpponentBreakdown) {
+  return opponent.votes > 0 && Number.isFinite(opponent.averageScore);
+}
+
+export function sortModelOpponentsForDetail(opponents: ModelOpponentBreakdown[]) {
+  return [...opponents].sort((a, b) => {
+    const aScored = hasOpponentScore(a);
+    const bScored = hasOpponentScore(b);
+    if (aScored !== bScored) return aScored ? -1 : 1;
+    if (!aScored) return a.displayName.localeCompare(b.displayName);
+    return (
+      a.averageScore - b.averageScore ||
+      b.votes - a.votes ||
+      a.displayName.localeCompare(b.displayName)
+    );
+  });
+}
+
+function DisclosureChevron({ open }: { open: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={`mb-disclosure-chevron h-3 w-3 shrink-0 text-muted ${open ? "is-open" : ""}`}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 6.5L8 10.5L12 6.5" />
+    </svg>
+  );
+}
+
+function FullContextToggle({
+  expanded,
+  onClick,
+}: {
+  expanded: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      className="mb-collapse-toggle"
+      onClick={onClick}
+    >
+      <span>{expanded ? "Hide full context" : "View full context"}</span>
+      <DisclosureChevron open={expanded} />
+    </button>
+  );
 }
 
 function buildCurve(values: number[]): {
@@ -959,7 +1010,7 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
 
   const strongest = topStrongest(data.prompts);
   const weakest = topWeakest(data.prompts);
-  const opponents = topOpponents(data.opponents);
+  const opponents = useMemo(() => sortModelOpponentsForDetail(data.opponents), [data.opponents]);
 
   const promptCurveSource = useMemo(
     () =>
@@ -1806,14 +1857,10 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           </div>
           {hasHiddenOpponents ? (
             <div className="flex justify-center pt-0.5">
-              <button
-                type="button"
-                aria-expanded={showAllOpponents}
-                className="mb-collapse-toggle"
+              <FullContextToggle
+                expanded={showAllOpponents}
                 onClick={() => setShowAllOpponents((current) => !current)}
-              >
-                {showAllOpponents ? "Hide full context" : "View full context"}
-              </button>
+              />
             </div>
           ) : null}
         </div>
@@ -1941,14 +1988,10 @@ export function ModelDetail({ data }: { data: ModelDetailStats }) {
           </div>
           {hasHiddenPrompts ? (
             <div className="flex justify-center pt-0.5">
-              <button
-                type="button"
-                aria-expanded={showAllPrompts}
-                className="mb-collapse-toggle"
+              <FullContextToggle
+                expanded={showAllPrompts}
                 onClick={() => setShowAllPrompts((current) => !current)}
-              >
-                {showAllPrompts ? "Hide full context" : "View full context"}
-              </button>
+              />
             </div>
           ) : null}
         </div>

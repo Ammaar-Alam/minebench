@@ -22,16 +22,15 @@ let recovered!: () => void;
 const build = new Promise((resolve) => { releaseBuild = resolve; });
 const retried = new Promise<void>((resolve) => { recovered = resolve; });
 const transaction = {
-  customBuildSecret: {
-    deleteMany: async () => {
-      recoveries.push(Date.now());
-      if (fatal) throw new Error("Invalid queue configuration");
-      if (unavailable || recoveries.length === 2) throw transient("P2028");
-      if (recoveries.length === 4) recovered();
-      return { count: 0 };
-    },
+  customBuildSecret: { deleteMany: async () => ({ count: 0 }) },
+  $queryRaw: async (parts: TemplateStringsArray) => {
+    if (!parts.join("?").includes('FROM "CustomBuildSecret" s')) return [];
+    recoveries.push(Date.now());
+    if (fatal) throw new Error("Invalid queue configuration");
+    if (unavailable || recoveries.length === 2) throw transient("P2028");
+    if (recoveries.length === 4) recovered();
+    return [];
   },
-  $queryRaw: async () => [],
   customBuildEvent: {
     aggregate: async () => ({ _max: { seq: 0 } }),
     create: async () => { operations.push("export_complete"); return {}; },
@@ -58,6 +57,8 @@ const fakePrisma = {
     updateMany: async () => { operations.push("job_complete"); return { count: 1 }; },
   },
   stealthGenerationResult: { findFirst: async () => null, count: async () => 0 },
+  notificationDelivery: { updateMany: async () => ({ count: 0 }) },
+  $executeRaw: async () => 0,
   $disconnect: async () => { disconnects += 1; operations.push("disconnect"); },
 };
 (globalThis as unknown as { prisma?: unknown }).prisma = fakePrisma;

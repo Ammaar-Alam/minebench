@@ -49,18 +49,6 @@ function resolveSourceBytes(source: ArenaBuildSource): number | null {
   return null;
 }
 
-export async function maybePrecomputeArenaStreamArtifactsForBuild(
-  source: ArenaBuildSource,
-): Promise<{ uploaded: number; skipped: boolean; reason?: string }> {
-  const estimatedBytes = resolveSourceBytes(source);
-  if (!isArtifactEligibleBuild(estimatedBytes)) {
-    return { uploaded: 0, skipped: true, reason: "below_threshold" };
-  }
-
-  const prepared = await prepareArenaBuild(source);
-  return maybePrecomputeArenaStreamArtifactsForPrepared(prepared);
-}
-
 export async function maybePrecomputeArenaArtifactsForBuild(
   source: ArenaBuildSource,
 ): Promise<{ streamUploaded: number; snapshotUploaded: boolean; streamSkipped: boolean; reason?: string }> {

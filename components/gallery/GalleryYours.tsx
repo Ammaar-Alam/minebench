@@ -336,9 +336,9 @@ export function SavedBuildDialog({
           {downloadError ? <p role="status" className="mt-2 px-1 text-sm text-danger">{downloadError}</p> : null}
           {generation.retryReason ? (
             <details className="mt-3 w-full max-w-xl px-1 text-xs text-muted">
-              <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
-                <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px] font-semibold">i</span>
-                Retry details
+              <summary className="mb-disclosure-toggle">
+                <span>Retry details</span>
+                <svg aria-hidden="true" className="mb-disclosure-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
               </summary>
               <pre className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 font-mono text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
                 {generation.retryReason}
@@ -346,8 +346,11 @@ export function SavedBuildDialog({
             </details>
           ) : null}
           {generation.sha256 ? (
-            <details className="mt-3 w-fit px-1 text-xs text-muted">
-              <summary className="cursor-pointer list-none py-1 hover:text-fg">Build details</summary>
+            <details className="mt-3 w-full max-w-xl px-1 text-xs text-muted">
+              <summary className="mb-disclosure-toggle">
+                <span>Build details</span>
+                <svg aria-hidden="true" className="mb-disclosure-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
+              </summary>
               <p className="mt-1 break-all font-mono">SHA-256 {generation.sha256}</p>
             </details>
           ) : null}
@@ -357,22 +360,39 @@ export function SavedBuildDialog({
   );
 }
 
+function mergeGenerations(
+  current: SavedGenerationPayload[],
+  next: SavedGenerationPayload[],
+): SavedGenerationPayload[] {
+  const byId = new Map(current.map((item) => [item.id, item]));
+  for (const item of next) byId.set(item.id, item);
+  return [...byId.values()];
+}
+
 export function GalleryYours({
   initialItems,
   initialCursor,
   hasNickname,
   suspended,
+  targetGeneration,
+  targetGenerationId,
 }: {
   initialItems: SavedGenerationPayload[];
   initialCursor: string | null;
   hasNickname: boolean;
   suspended: boolean;
+  targetGeneration?: SavedGenerationPayload | null;
+  targetGenerationId?: string | null;
 }) {
-  const [items, setItems] = useState(initialItems);
+  const [items, setItems] = useState(() => mergeGenerations(
+    initialItems,
+    targetGeneration ? [targetGeneration] : [],
+  ));
   const [cursor, setCursor] = useState(initialCursor);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(targetGeneration?.viewerUrl ? targetGeneration.id : null);
+  const scrolledTargetRef = useRef<string | null>(null);
   const selected = items.find((item) => item.id === selectedId) ?? null;
 
   useEffect(() => {
@@ -381,12 +401,27 @@ export function GalleryYours({
       .then(async (response) => {
         if (!response.ok) return;
         const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
-        setItems(page.items);
+        setItems((current) => mergeGenerations(
+          page.items,
+          targetGenerationId && !page.items.some((item) => item.id === targetGenerationId)
+            ? current.filter((item) => item.id === targetGenerationId)
+            : [],
+        ));
         setCursor(page.nextCursor);
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, []);
+  }, [targetGenerationId]);
+
+  useEffect(() => {
+    if (!targetGenerationId || scrolledTargetRef.current === targetGenerationId) return;
+    if (!items.some((item) => item.id === targetGenerationId)) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(targetGenerationId)?.scrollIntoView({ block: "start" });
+      scrolledTargetRef.current = targetGenerationId;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [items, targetGenerationId]);
 
   useEffect(() => {
     if (!items.some((item) => item.status === "queued" || item.status === "running")) return;
@@ -410,7 +445,7 @@ export function GalleryYours({
       const response = await fetch(`/api/generations?cursor=${encodeURIComponent(cursor)}`, { cache: "no-store" });
       if (!response.ok) throw new Error("Saved generations unavailable");
       const page = (await response.json()) as { items: SavedGenerationPayload[]; nextCursor: string | null };
-      setItems((current) => [...current, ...page.items]);
+      setItems((current) => mergeGenerations(current, page.items));
       setCursor(page.nextCursor);
     } catch {
       setLoadError("Saved generations unavailable");
@@ -426,6 +461,11 @@ export function GalleryYours({
         <div className="flex gap-2"><Link href="/gallery" className="mb-btn h-11">Explore</Link><Link href="/sandbox?mode=live" className="mb-btn mb-btn-primary h-11">Generate</Link></div>
       </header>
       {suspended ? <div className="mt-6 rounded-md border border-danger/40 bg-danger/5 px-4 py-3"><p className="font-semibold text-fg">Gallery access suspended</p><p className="mt-1 text-sm text-muted">Your private builds remain available.</p></div> : null}
+      {targetGenerationId && !items.some((item) => item.id === targetGenerationId) ? (
+        <p role="status" className="mt-6 mb-feedback mb-feedback-error">
+          Saved build unavailable.
+        </p>
+      ) : null}
 
       <div className="mt-6 grid gap-4">
         {items.map((generation, index) => (
@@ -446,9 +486,9 @@ export function GalleryYours({
                 </button>
                 {generation.retryReason ? (
                   <details className="mt-3 w-full max-w-xl text-xs text-muted">
-                    <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded py-1 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 [&::-webkit-details-marker]:hidden">
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full border border-current text-[9px] font-semibold">i</span>
-                      Details
+                    <summary className="mb-disclosure-toggle">
+                      <span>Details</span>
+                      <svg aria-hidden="true" className="mb-disclosure-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg>
                     </summary>
                     <pre className="mt-2 max-h-48 overflow-y-auto overscroll-contain whitespace-pre-wrap rounded-md border border-border/70 bg-bg/45 p-3 font-mono text-[11px] leading-relaxed text-muted [overflow-wrap:anywhere]">
                       {generation.retryReason}
@@ -462,7 +502,7 @@ export function GalleryYours({
         ))}
         {items.length === 0 ? <div className="rounded-md border border-border/80 px-5 py-12 text-center"><p className="text-sm text-muted">No saved builds.</p></div> : null}
       </div>
-      {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-btn h-11 min-w-36" onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "More"}</button></div> : null}
+      {cursor ? <div className="mt-12 flex justify-center"><button type="button" disabled={loadingMore} className="mb-collapse-toggle" onClick={() => void loadMore()}><span>{loadingMore ? "Loading…" : "More"}</span><svg aria-hidden="true" className="mb-disclosure-chevron h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6.5L8 10.5L12 6.5" /></svg></button></div> : null}
       {loadError ? <p role="status" className="mt-6 text-center text-sm text-danger">{loadError}</p> : null}
       {selected ? (
         <SavedBuildDialog

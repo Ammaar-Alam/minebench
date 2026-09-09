@@ -8,11 +8,13 @@ const previousEnv = Object.fromEntries([
   "CUSTOM_BUILD_STORAGE_BUCKET", "CUSTOM_BUILD_LOCAL_STORAGE_DIR", "CUSTOM_BUILD_STUB_PROVIDER",
   "SUPABASE_URL", "SUPABASE_SECRET_KEY", "OPENROUTER_BASE_URL", "MINEBENCH_TOOL_TIMEOUT_MS",
   "CUSTOM_BUILD_KEY_ENCRYPTION_SECRET", "OPENAI_BACKGROUND_POLL_MS", "OPENAI_USE_BACKGROUND_MODE",
+  "EMAIL_NOTIFICATIONS_ENABLED", "APNS_ENABLED",
 ].map((name) => [name, process.env[name]]));
 const originalFetch = globalThis.fetch;
 const artifacts: Array<Record<string, unknown>> = [];
 const updates: Array<Record<string, unknown>> = [];
 const queries: string[] = [];
+const notifications: string[] = [];
 let keyLookups = 0;
 let providerRequests = 0;
 let keyDeletions = 0;
@@ -24,6 +26,7 @@ let eventSeq = 0;
 let current: Record<string, unknown>;
 const initial = {
   id: customBuildId, publicId, status: "queued", currentStage: "queued", removedAt: null,
+  ownerId: "00000000-0000-4000-8000-000000000001",
   promptText: "A seeded stone tower", promptSha256: "raw-recovery-prompt",
   gridSize: 8192, palette: "simple", modelKind: "catalog", modelKey: "qwen_qwen3_8_max",
   modelProvider: "openrouter", modelId: "qwen/qwen3.8-max", modelDisplayName: "Qwen 3.8 Max",
@@ -33,6 +36,9 @@ const initial = {
 const fakePrisma = {
   customBuild: {
     findUnique: async () => current,
+    findFirst: async ({ where }: { where: { id: string; removedAt: null; status: { in: string[] } } }) =>
+      current.id === where.id && current.removedAt === where.removedAt && where.status.in.includes(String(current.status))
+        ? current : null,
     update: async ({ data }: { data: Record<string, unknown> }) => {
       updates.push(data);
       current = { ...current, ...data };
@@ -84,11 +90,19 @@ const fakePrisma = {
     },
   },
   customBuildStatsDaily: { upsert: async () => ({}) },
+  user: { findFirst: async () => ({ notificationPreference: null }) },
   customBuildEvent: {
     aggregate: async () => ({ _max: { seq: eventSeq } }),
     create: async ({ data }: { data: { seq: number } }) => { eventSeq = data.seq; return data; },
   },
   $queryRaw: async () => [{ id: customBuildId }],
+  $executeRaw: async (query: { values: unknown[] }) => {
+    const kind = query.values.find((value) => value === "generation_succeeded" || value === "generation_failed");
+    assert.ok(kind === "generation_succeeded" || kind === "generation_failed");
+    assert.ok(query.values.includes(initial.ownerId), "notifications must target the recovered build's owner");
+    notifications.push(kind);
+    return 1;
+  },
   $transaction: async <T>(callback: (tx: unknown) => Promise<T>) => callback(fakePrisma),
 };
 (globalThis as unknown as { prisma?: unknown }).prisma = fakePrisma;
@@ -109,6 +123,7 @@ function reset() {
   artifacts.length = 0;
   updates.length = 0;
   queries.length = 0;
+  notifications.length = 0;
   keyLookups = 0;
   providerRequests = 0;
   keyDeletions = 0;
@@ -126,6 +141,8 @@ async function main() {
   process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = storageDir;
   delete process.env.CUSTOM_BUILD_STUB_PROVIDER;
   process.env.MINEBENCH_TOOL_TIMEOUT_MS = "250";
+  process.env.EMAIL_NOTIFICATIONS_ENABLED = "true";
+  process.env.APNS_ENABLED = "false";
   const { processVoxelBuildResponseInWorker } = await import("../../../scripts/process-voxel-build-response");
   const { runCustomBuildGenerateJob } = await import("../../../lib/custom-builds/generateJob");
   const { generateVoxelBuild } = await import("../../../lib/ai/generateVoxelBuild");
@@ -183,6 +200,7 @@ async function main() {
     assertNoProvider();
     assert.equal(gateCalls, 1);
     assert.equal(current.status, "succeeded");
+    assert.deepEqual(notifications, ["generation_succeeded"], "successful raw recovery must notify once");
     assert.equal(current.blockCount, fresh.blockCount);
     assert.equal(current.buildSha256, expectedSourceSha, "replay must match fresh seeded generation exactly");
     assert.equal(current.generationTimeMs, mode === "missing-key" ? null : 1234);
@@ -202,6 +220,7 @@ async function main() {
   assertNoProvider();
   assert.deepEqual(queries, ["build_json"], "canonical recovery must take precedence over raw responses");
   assert.equal(current.buildSha256, expectedSourceSha);
+  assert.deepEqual(notifications, ["generation_succeeded"], "canonical recovery must notify once");
 
   reset();
   const retainedRaw = await saveRaw(validText);
@@ -212,11 +231,13 @@ async function main() {
   assert.equal(keyDeletions, 1, "canonical write failure must delete the credential only after finding retained raw output");
   assert.equal(savedSecret, null);
   assert.equal(current.status, "queued");
+  assert.equal(notifications.length, 0, "temporary finalization failure must not notify");
   await assert.rejects(runCustomBuildGenerateJob({ ...job, attempts: 2, maxAttempts: 2 } as never), /artifact_bookkeeping_failed/);
   assertNoProvider();
   assert.equal(current.status, "failed");
   assert.equal(current.errorRetryable, true);
   assert.equal(current.deletionPendingAt, null);
+  assert.deepEqual(notifications, ["generation_failed"], "exhausted recovery must notify without discarding the source");
   assert.deepEqual(artifacts, [retainedRaw], "exhausted finalization must retain the original raw artifact");
   failArtifactKind = null;
   current = { ...current, status: "queued" };
@@ -224,6 +245,7 @@ async function main() {
   assertNoProvider();
   assert.equal(current.status, "succeeded");
   assert.equal(current.buildSha256, expectedSourceSha);
+  assert.deepEqual(notifications, ["generation_failed", "generation_succeeded"]);
 
   for (const text of ["invalid JSON", "{}", toolCall("block(0,0,0,'stone');"),
     toolCall("box(0,0,0,15,60,1,'stone');"), toolCall("box(0,0,0,79,5,1,'stone');"),
@@ -242,6 +264,7 @@ async function main() {
     assert.equal(artifacts.length, 2, "recovery should neither replace the raw response nor package invalid geometry");
     assert.equal(artifacts[1], raw, "recovery must use the latest response");
     assert.equal(updates.some((update) => update.status === "queued"), false);
+    assert.deepEqual(notifications, ["generation_failed"]);
   }
 
   for (const mode of ["stored-sha", "source-sha", "missing-sha", "stored-size", "gzip-size"] as const) {
@@ -255,6 +278,7 @@ async function main() {
     assertNoProvider();
     assert.equal(current.status, "queued", `${mode} should retry only saved artifact recovery`);
     assert.equal(artifacts.length, 1);
+    assert.equal(notifications.length, 0, "retryable recovery failures must not notify");
   }
 
   for (const mode of ["stream-size", "stream-error", "stream-abort"] as const) {
@@ -277,6 +301,7 @@ async function main() {
       mode === "stream-abort" ? /lease is no longer owned/ : /generation_retryable/);
     assertNoProvider();
     assert.equal(artifacts.length, 1);
+    assert.equal(notifications.length, 0, "interrupted recovery must not notify");
     if (mode !== "stream-error") assert.equal(canceled, true, "incomplete recovery must cancel its reader");
     if (mode === "stream-abort") {
       assert.equal(updates.some((update) => ["queued", "failed", "succeeded"].includes(String(update.status))), false);
@@ -293,10 +318,12 @@ async function main() {
   assertNoProvider();
   assert.equal(artifacts.length, 1);
   assert.equal(updates.some((update) => ["queued", "failed", "succeeded"].includes(String(update.status))), false);
+  assert.equal(notifications.length, 0, "lease loss must not notify");
   reset();
   await assert.rejects(runCustomBuildGenerateJob(job as never), /provider_key_expired/);
   assert.equal(providerRequests, 0, "missing output after a keyless retry must not buy another generation");
   assert.equal(current.status, "failed");
+  assert.deepEqual(notifications, ["generation_failed"]);
   reset();
   process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-background-response-recovery-secret";
   process.env.OPENAI_BACKGROUND_POLL_MS = "0";
@@ -320,6 +347,7 @@ async function main() {
   await assert.rejects(runCustomBuildGenerateJob(backgroundJob as never, { signal: interrupted.signal }), /lease is no longer owned/);
   assert.deepEqual(methods, ["POST", "GET"]);
   assert.equal(artifacts.length, 0);
+  assert.equal(notifications.length, 0);
   methods.length = 0;
   current = { ...current, status: "queued", currentStage: "queued" };
   globalThis.fetch = async (input, init) => {
@@ -336,6 +364,7 @@ async function main() {
   assert.equal(current.generationTimeMs, null, "interrupted inference timing is unknown");
   assert.ok(artifacts.some((artifact) => artifact.kind === "raw_text_debug"));
   assert.ok(artifacts.some((artifact) => artifact.kind === "viewer_world"));
+  assert.deepEqual(notifications, ["generation_succeeded"]);
   console.log("saved raw response recovery checks passed");
 }
 
