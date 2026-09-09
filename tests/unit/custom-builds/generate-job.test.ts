@@ -10,14 +10,19 @@ const customBuildId = "custom-build-row";
 const previousStorageBucket = process.env.CUSTOM_BUILD_STORAGE_BUCKET;
 const previousStorageDir = process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
 const previousStubProvider = process.env.CUSTOM_BUILD_STUB_PROVIDER;
+const previousEmailNotificationsEnabled = process.env.EMAIL_NOTIFICATIONS_ENABLED;
+const previousApnsEnabled = process.env.APNS_ENABLED;
 
 process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
 process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-generate-job";
 process.env.CUSTOM_BUILD_STUB_PROVIDER = "1";
+process.env.EMAIL_NOTIFICATIONS_ENABLED = "true";
+process.env.APNS_ENABLED = "false";
 
 const queuedCustomBuild = {
   id: customBuildId,
   publicId,
+  ownerId: "2b9b756c-b3d1-4c59-93ad-274acb902418",
   status: "queued",
   currentStage: "queued",
   completedAt: null as Date | null,
@@ -53,6 +58,17 @@ let failEventWrites = false;
 let failSuccessBookkeeping = false;
 let cancelDuringArtifactRecord = false;
 let failArtifactKind: string | null = null;
+
+function sqlText(args: unknown[]) {
+  const first = args[0];
+  if (!first) return "";
+  if (Array.isArray(first)) return first.join("?");
+  if (typeof first !== "object") return "";
+  const query = first as { sql?: unknown; text?: unknown; strings?: unknown };
+  if (typeof query.sql === "string") return query.sql;
+  if (typeof query.text === "string") return query.text;
+  return Array.isArray(query.strings) ? query.strings.join("?") : "";
+}
 
 const fakePrisma = {
   customBuild: {
@@ -120,14 +136,40 @@ const fakePrisma = {
   $transaction: async <T>(callback: (tx: unknown) => Promise<T>) => {
     const txId = (txSeq += 1);
     return callback({
-      $queryRaw: async () => [{ id: customBuildId }],
+      $queryRaw: async (...args: unknown[]) => {
+        if (sqlText(args).includes('FROM "User"')) {
+          operations.push({ name: "lockNotificationAccounts", txId });
+          return [{ id: currentCustomBuild.ownerId }];
+        }
+        return [{ id: customBuildId }];
+      },
+      $executeRaw: async () => {
+        operations.push({ name: "notificationDelivery.insert", txId });
+        return 0;
+      },
+      user: {
+        findFirst: async () => ({ notificationPreference: null }),
+      },
       customBuild: {
+        findFirst: async () => {
+          operations.push({ name: "customBuild.findFirst", txId });
+          return ["succeeded", "failed"].includes(String(currentCustomBuild.status)) && currentCustomBuild.completedAt
+            ? {
+                id: currentCustomBuild.id,
+                publicId: currentCustomBuild.publicId,
+                ownerId: currentCustomBuild.ownerId,
+                status: currentCustomBuild.status,
+                completedAt: currentCustomBuild.completedAt,
+              }
+            : null;
+        },
         update: async (args: { data: Record<string, unknown> }) => {
           if (args.data.status === "succeeded" && failSuccessBookkeeping) {
             throw new Error("bookkeeping update failed");
           }
           updates.push(args);
           if (args.data.status === "succeeded") operations.push({ name: "customBuild.update.succeeded", txId });
+          if (args.data.status === "failed") operations.push({ name: "customBuild.update.failed", txId });
           currentCustomBuild = { ...currentCustomBuild, ...args.data };
           return currentCustomBuild;
         },
@@ -140,6 +182,7 @@ const fakePrisma = {
           }
           updates.push(args);
           if (args.data.status === "succeeded") operations.push({ name: "customBuild.update.succeeded", txId });
+          if (args.data.status === "failed") operations.push({ name: "customBuild.update.failed", txId });
           currentCustomBuild = { ...currentCustomBuild, ...args.data };
           return { count: 1 };
         },
@@ -309,8 +352,17 @@ async function main() {
   assert.equal(successUpdate.data.errorCode, null);
   assert.equal(successUpdate.data.errorMessage, null);
   assert.equal(successUpdate.data.errorRetryable, null);
-  const successTxId = operations.find((op) => op.name === "customBuild.update.succeeded")?.txId;
+  const successUpdateIndex = operations.findIndex((op) => op.name === "customBuild.update.succeeded");
+  assert.notEqual(successUpdateIndex, -1, "generate job should record the success update operation");
+  const successTxId = operations[successUpdateIndex]?.txId;
   assert.notEqual(successTxId, null, "success update should run inside the bookkeeping transaction");
+  assert.notEqual(
+    operations.findIndex((op, index) =>
+      op.name === "lockNotificationAccounts" && op.txId === successTxId && index < successUpdateIndex
+    ),
+    -1,
+    "success bookkeeping should lock the owner account before mutating the build",
+  );
   assert.equal(operations.find((op) => op.name === "customBuildStatsDaily.upsert")?.txId, successTxId);
   assert.equal(operations.find((op) => op.name === "customBuildSecret.deleteMany")?.txId, successTxId);
   const expectedFullBytes = jsonBytes({
@@ -681,6 +733,16 @@ async function main() {
   assert.ok(artifactFailureUpdate, "artifact persistence failures should fail the custom build");
   assert.equal(artifactFailureUpdate.data.errorCode, "artifact_persistence_failed");
   assert.equal(artifactFailureUpdate.data.errorRetryable, false);
+  const failureUpdateIndex = operations.findIndex((op) => op.name === "customBuild.update.failed");
+  assert.notEqual(failureUpdateIndex, -1, "generate job should record the terminal failure update operation");
+  const failureTxId = operations[failureUpdateIndex]?.txId;
+  assert.notEqual(
+    operations.findIndex((op, index) =>
+      op.name === "lockNotificationAccounts" && op.txId === failureTxId && index < failureUpdateIndex
+    ),
+    -1,
+    "terminal failure bookkeeping should lock the owner account before mutating the build",
+  );
   process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-generate-job";
 
   updates.length = 0;
@@ -906,6 +968,16 @@ main()
       delete process.env.CUSTOM_BUILD_STUB_PROVIDER;
     } else {
       process.env.CUSTOM_BUILD_STUB_PROVIDER = previousStubProvider;
+    }
+    if (previousEmailNotificationsEnabled === undefined) {
+      delete process.env.EMAIL_NOTIFICATIONS_ENABLED;
+    } else {
+      process.env.EMAIL_NOTIFICATIONS_ENABLED = previousEmailNotificationsEnabled;
+    }
+    if (previousApnsEnabled === undefined) {
+      delete process.env.APNS_ENABLED;
+    } else {
+      process.env.APNS_ENABLED = previousApnsEnabled;
     }
   })
   .catch((error) => {

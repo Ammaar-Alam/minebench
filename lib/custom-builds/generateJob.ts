@@ -1,4 +1,5 @@
 import { Prisma, type CustomBuild, type CustomBuildJob } from "@prisma/client";
+import { enqueueGenerationNotification, lockNotificationAccounts } from "@/lib/notifications/service";
 import {
   deserializeSavedGenerationRequestConfig,
   requestOverrideSecretValues,
@@ -176,6 +177,9 @@ function isCustomBuildArtifactBookkeepingError(error: unknown): error is CustomB
 }
 
 function safeGenerateFailure(error: unknown, message: string) {
+  if (message === "import_source_missing") {
+    return { code: "import_source_missing", message: "The imported source is no longer available. Paste the tool call again." };
+  }
   if (message === "provider_key_expired") {
     return { code: "provider_key_expired", message: "Provider key expired before the worker could start." };
   }
@@ -216,6 +220,7 @@ export function isTerminalCustomBuildGenerateError(message: string): boolean {
   if (normalized.includes("custom_build_artifact_persistence_failed")) return true;
   if (isVoxelBuildResourceError(normalized)) return true;
   if (normalized === "provider_key_expired") return true;
+  if (normalized === "import_source_missing") return true;
   if (normalized.includes("invalid_api_key")) return true;
   if (normalized.includes("invalid api key") || normalized.includes("incorrect api key")) return true;
   if (normalized.includes("api key") && normalized.includes("invalid")) return true;
@@ -491,6 +496,7 @@ async function recoverStoredRawBuild(
         gridSize: assertGridSize(customBuild.gridSize),
         palette: customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
         buildOutput: "packed" as const,
+        validationMode: customBuild.generationMode === "import" ? "import" as const : undefined,
       };
       const result = opts.processResponse
         ? await opts.processResponse(text, responseOptions, opts.signal)
@@ -590,6 +596,7 @@ export async function runCustomBuildGenerateJob(
   });
   if (!customBuild) throw new Error("Custom build not found");
   if (customBuild.status === "succeeded") return;
+  const isImport = Boolean(opts.importedBuild) || customBuild.generationMode === "import";
   throwIfCustomBuildLeaseLost(opts.signal);
 
   const started = await prisma.customBuild.updateMany({
@@ -601,12 +608,12 @@ export async function runCustomBuildGenerateJob(
     data: {
       status: "running",
       startedAt: customBuild.startedAt ?? new Date(),
-      currentStage: opts.importedBuild ? "finalizing" : "generating",
+      currentStage: isImport ? "finalizing" : "generating",
     },
   });
   if (started.count !== 1) throw new CustomBuildLeaseLostError();
   emitCustomBuildEvent(customBuild.id, "started", {
-    stage: opts.importedBuild ? "finalizing" : "generating",
+    stage: isImport ? "finalizing" : "generating",
   });
 
   let artifactsPersisted = false;
@@ -617,6 +624,7 @@ export async function runCustomBuildGenerateJob(
       throw new CustomBuildArtifactPersistenceError(error);
     }
     const recovered = opts.importedBuild ? null : await recoverStoredBuild(customBuild, opts);
+    if (isImport && !opts.importedBuild && !recovered) throw new Error("import_source_missing");
     const generated: GeneratedBuildResult = opts.importedBuild ?? recovered ?? await generateBuild(customBuild, job, opts);
     if (recovered) {
       const finalizing = await prisma.customBuild.updateMany({
@@ -766,6 +774,7 @@ export async function runCustomBuildGenerateJob(
 
     throwIfCustomBuildLeaseLost(opts.signal);
     await prisma.$transaction(async (tx) => {
+      await lockNotificationAccounts(tx, [customBuild.ownerId]);
       const stored = await tx.customBuildArtifact.aggregate({
         where: { customBuildId: customBuild.id },
         _sum: { storedByteSize: true },
@@ -807,12 +816,13 @@ export async function runCustomBuildGenerateJob(
         update: { succeeded: { increment: 1 } },
       });
       await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+      if (!isImport) await enqueueGenerationNotification(tx, customBuild.id);
     });
 
     throwIfCustomBuildLeaseLost(opts.signal);
     throwIfCustomBuildLeaseLost(opts.signal);
     emitCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
-    if (!opts.importedBuild) {
+    if (!isImport) {
       recordGenerationSuccess({
         jobType: "worker",
         model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
@@ -836,7 +846,7 @@ export async function runCustomBuildGenerateJob(
         ? new CustomBuildArtifactBookkeepingError(error)
         : error;
     const message = redactSensitiveText(effectiveError);
-    if (!opts.importedBuild) {
+    if (!isImport) {
       recordGenerationError({
         jobType: "worker",
         model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
@@ -856,6 +866,7 @@ export async function runCustomBuildGenerateJob(
     if (terminal) {
       const failure = safeGenerateFailure(effectiveError, message);
       await prisma.$transaction(async (tx) => {
+        await lockNotificationAccounts(tx, [customBuild.ownerId]);
         const failed = await tx.customBuild.updateMany({
           where: { id: customBuild.id, removedAt: null, status: "running" },
           data: {
@@ -880,6 +891,7 @@ export async function runCustomBuildGenerateJob(
           update: { failed: { increment: 1 } },
         });
         await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
+        if (!isImport) await enqueueGenerationNotification(tx, customBuild.id);
       });
       emitCustomBuildEvent(customBuild.id, "failed", { code: failure.code });
       throw new Error(failure.code);

@@ -89,6 +89,18 @@ async function main() {
   await assert.rejects(retry(), codeIs("missing_provider_key"));
   assert.equal(jobs.length, 0, "invalid model output keeps its existing credential requirement");
 
+  for (const kind of ["raw_text_debug", "build_json", undefined]) {
+    reset("generation_failed", kind);
+    Object.assign(current, { generationMode: "import", modelKind: "import", modelProvider: "import" });
+    if (kind) {
+      assert.equal((await retry()).status, "queued");
+      assert.equal(credentials.length, 0, "import retries use saved source without a provider key");
+    } else {
+      await assert.rejects(retry(), codeIs("not_retryable"));
+      assert.equal(jobs.length, 0, "missing import source must not queue a provider request");
+    }
+  }
+
   const previousSecret = process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET;
   const previousHostedKey = process.env.MINEBENCH_FREE_OPENROUTER_API_KEY;
   process.env.CUSTOM_BUILD_KEY_ENCRYPTION_SECRET = "unit-retry-recovery-encryption-secret";

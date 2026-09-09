@@ -10,6 +10,7 @@ import {
   type CustomRequestHeaders,
 } from "@/lib/ai/customProviderConfig";
 import type { GenerateModelRequest, PaletteMode, ProviderApiKeys } from "@/lib/ai/types";
+import type { VoxelExecToolCall } from "@/lib/ai/tools/voxelExec";
 import { isProviderApiKeyName } from "@/lib/ai/providerKeys";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import { sha256Hex } from "@/lib/custom-builds/hash";
@@ -18,7 +19,13 @@ import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-bu
 import { safeCustomBuildRetryReason } from "@/lib/custom-builds/sanitize";
 import { encryptProviderKey, encryptSecretValue } from "@/lib/custom-builds/secrets";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
-import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
+import {
+  deleteCustomBuildArtifact,
+  getCustomBuildArtifactDescriptor,
+  getCustomBuildArtifactPath,
+  getCustomBuildStorageBucket,
+  uploadCustomBuildArtifact,
+} from "@/lib/custom-builds/storage";
 import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
 import { resolveSavedGenerationModel } from "@/lib/generations/model";
 import { prisma } from "@/lib/prisma";
@@ -78,6 +85,7 @@ const generationSelect = {
   promptText: true,
   gridSize: true,
   palette: true,
+  generationMode: true,
   modelKind: true,
   modelKey: true,
   modelProvider: true,
@@ -210,6 +218,72 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
       "Remove a saved generation before starting another.",
     );
   }
+}
+
+export async function createImportedGeneration(ownerId: string, input: VoxelExecToolCall["input"]) {
+  await assertSavedGenerationStorageAvailable(ownerId);
+  const publicId = generateCustomBuildPublicId();
+  const bytes = new TextEncoder().encode(JSON.stringify({ tool: "voxel.exec", input }));
+  const sha256 = sha256Hex(bytes);
+  const descriptor = getCustomBuildArtifactDescriptor("raw_text_debug");
+  const bucket = getCustomBuildStorageBucket();
+  const path = getCustomBuildArtifactPath({ publicId, kind: "raw_text_debug", sha256 });
+  const promptText = "Imported build";
+  await uploadCustomBuildArtifact({ bucket, path, bytes, contentType: descriptor.contentType });
+  let row: GenerationRow;
+  try {
+    row = await prisma.$transaction(async (tx) => {
+      const created = await tx.customBuild.create({
+        data: {
+          publicId,
+          ownerId,
+          status: "queued",
+          currentStage: "queued",
+          promptText,
+          promptSha256: sha256Hex(promptText),
+          gridSize: input.gridSize,
+          palette: input.palette,
+          generationMode: "import",
+          modelKind: "import",
+          modelProvider: "import",
+          modelId: "voxel.exec",
+          modelDisplayName: promptText,
+          storedByteSize: bytes.byteLength,
+          artifacts: {
+            create: {
+              kind: "raw_text_debug",
+              format: descriptor.format,
+              bucket,
+              path,
+              encoding: "identity",
+              contentType: descriptor.contentType,
+              fileName: `${publicId}.txt`,
+              sha256,
+              sourceBuildSha256: sha256,
+              byteSize: bytes.byteLength,
+              storedByteSize: bytes.byteLength,
+            },
+          },
+          jobs: { create: { type: "generate", status: "queued", maxAttempts: GENERATE_JOB_MAX_ATTEMPTS } },
+          events: { create: { seq: 1, type: "queued", data: { stage: "queued" } } },
+        },
+        select: generationSelect,
+      });
+      const day = dayKey(new Date());
+      await tx.customBuildStatsDaily.upsert({
+        where: { day }, create: { day, created: 1 }, update: { created: { increment: 1 } },
+      });
+      return created;
+    });
+  } catch (error) {
+    try {
+      await deleteCustomBuildArtifact({ bucket, path });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Build import queueing and source cleanup failed");
+    }
+    throw error;
+  }
+  return serializeGeneration(row);
 }
 
 export async function createSavedGenerations(input: CreateSavedGenerationsInput) {
@@ -470,6 +544,7 @@ export async function listAdminGenerations(
         canPublish: Boolean(
           row.owner &&
           !row.owner.gallerySuspendedAt &&
+          row.generationMode !== "import" &&
           generation.status === "succeeded" &&
           generation.viewerUrl &&
           row._count.galleryExamples === 0
@@ -493,6 +568,7 @@ export async function publishAdminGeneration(adminId: string, publicId: string) 
       removedAt: true,
       objectsDeletedAt: true,
       promptText: true,
+      generationMode: true,
       modelKind: true,
       modelDisplayName: true,
       modelId: true,
@@ -519,6 +595,7 @@ export async function publishAdminGeneration(adminId: string, publicId: string) 
   if (!build) throw new GalleryServiceError("not_found", "Saved generation not found.");
   if (
     !build.ownerId ||
+    build.generationMode === "import" ||
     build.status !== "succeeded" ||
     build.removedAt ||
     build.objectsDeletedAt ||
@@ -641,6 +718,7 @@ export async function retrySavedGeneration(
       status: true,
       errorCode: true,
       errorRetryable: true,
+      generationMode: true,
       modelKind: true,
       modelKey: true,
       modelProvider: true,
@@ -652,7 +730,8 @@ export async function retrySavedGeneration(
   if (build.status !== "failed" || build.errorRetryable !== true) {
     throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
   }
-  const recoveryOnly = ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed"].includes(build.errorCode ?? "");
+  const recoveryOnly = build.generationMode === "import" ||
+    ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed"].includes(build.errorCode ?? "");
   if (recoveryOnly && !await prisma.customBuildArtifact.findFirst({
     where: { customBuildId: build.id, kind: { in: ["build_json", "raw_text_debug"] } },
     select: { id: true },

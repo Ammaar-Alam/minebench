@@ -21,6 +21,7 @@ export type VoxelBuildResponseOptions = {
   palette: "simple" | "advanced";
   enableTools?: boolean;
   buildOutput?: "source" | "objects" | "packed";
+  validationMode?: "generation" | "import";
 };
 
 export type ProcessedVoxelBuildResponse =
@@ -119,7 +120,7 @@ export function processVoxelBuildResponse(
       error: "No valid blocks after validation. Use ONLY in-bounds coordinates and ONLY block IDs from the available list.",
     };
   }
-  if (blockCount < minBlocks) {
+  if (opts.validationMode !== "import" && blockCount < minBlocks) {
     return { ok: false, error: `Build too small (${blockCount} blocks). Create at least ~${minBlocks} blocks so the result is recognizable.` };
   }
 
@@ -131,10 +132,10 @@ export function processVoxelBuildResponse(
   const minFootprint = Math.max(6, Math.floor(detailGridSize * 0.15));
   const minHeight = Math.max(4, Math.floor(detailGridSize * 0.1));
   const maxFootprintSpan = Math.max(bounds.spanX, bounds.spanZ);
-  if (maxFootprintSpan < minFootprint) {
+  if (opts.validationMode !== "import" && maxFootprintSpan < minFootprint) {
     return { ok: false, error: `Build footprint too small (span ${maxFootprintSpan}). Expand the build to span at least ~${minFootprint} blocks across x or z for more detail.` };
   }
-  if (bounds.spanY < minHeight) {
+  if (opts.validationMode !== "import" && bounds.spanY < minHeight) {
     return { ok: false, error: `Build height too small (span ${bounds.spanY}). Add more vertical structure (span at least ~${minHeight}) so it reads clearly.` };
   }
 

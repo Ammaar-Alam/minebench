@@ -1,6 +1,8 @@
 import { isGridSize, type GridSize } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { getPalette } from "@/lib/blocks/palettes";
+import type { SavedGenerationPayload } from "@/lib/generations/service";
 import {
   createLocalVoxelWorld,
   LocalVoxelWorldSourceError,
@@ -245,7 +247,9 @@ function parseTopLevelJsonObjects(text: string, limit = 4): unknown[] {
   return parsed;
 }
 
-async function executeVoxelExecToolCall(input: ToolCallInput, signal: AbortSignal): Promise<{ build: unknown; warnings: string[] }> {
+type ExecutionResult = { build: unknown; warnings: string[]; generationId?: string };
+
+async function executeVoxelExecToolCall(input: ToolCallInput, signal: AbortSignal): Promise<ExecutionResult> {
   const response = await fetch("/api/local/voxel-exec", {
     method: "POST",
     headers: {
@@ -254,10 +258,73 @@ async function executeVoxelExecToolCall(input: ToolCallInput, signal: AbortSigna
     body: JSON.stringify(input),
     signal,
   });
-  return readExecutionResponse(response);
+  return readExecutionResponse(response, signal);
 }
 
-async function readExecutionResponse(response: Response): Promise<{ build: unknown; warnings: string[] }> {
+function executionDelay(ms: number, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function readQueuedExecution(generation: SavedGenerationPayload, signal: AbortSignal): Promise<ExecutionResult> {
+  if (!generation || typeof generation.id !== "string" || !generation.id) {
+    throw new Error("Import returned an invalid generation");
+  }
+  const generationId = generation.id;
+  const statusPath = `/api/generations/${encodeURIComponent(generationId)}`;
+  const viewerPath = `${statusPath}/artifacts/viewer`;
+  let failures = 0;
+  for (;;) {
+    signal.throwIfAborted();
+    if (generation.status === "failed" || generation.status === "canceled") {
+      throw new Error(generation.error?.message ?? "Import could not be completed");
+    }
+    if (!["queued", "running", "succeeded"].includes(generation.status)) {
+      throw new Error("Import returned an invalid status");
+    }
+    try {
+      const ready = generation.status === "succeeded";
+      const response = await fetch(ready ? viewerPath : statusPath, { cache: "no-store", signal });
+      if (!response.ok) {
+        if (response.status === 408 || response.status === 429 || response.status >= 500) {
+          throw new TypeError(`Import temporarily unavailable (${response.status})`);
+        }
+        return readExecutionResponse(response, signal);
+      }
+      if (ready) {
+        const result = await readBuildVariantPayload(response, {
+          fallbackIdentity: { buildId: generationId, variant: "full", checksum: generation.sha256 },
+        });
+        return {
+          build: result.payload.voxelBuild,
+          warnings: Array.isArray(generation.warnings) ? generation.warnings.filter((warning) => typeof warning === "string") : [],
+          generationId,
+        };
+      }
+      const body = await response.json() as { generation?: SavedGenerationPayload };
+      if (!body?.generation || body.generation.id !== generationId) throw new Error("Import returned an invalid generation");
+      generation = body.generation;
+      failures = 0;
+    } catch (error) {
+      if (!(error instanceof TypeError) || signal.aborted || ++failures >= 5) throw error;
+    }
+    if (failures || generation.status === "queued" || generation.status === "running") {
+      await executionDelay(failures ? Math.min(10_000, 1_000 * 2 ** (failures - 1)) : 2500, signal);
+    }
+  }
+}
+
+async function readExecutionResponse(response: Response, signal: AbortSignal): Promise<ExecutionResult> {
   const bodyText = await response.text();
   let parsed: unknown = null;
   try {
@@ -267,10 +334,10 @@ async function readExecutionResponse(response: Response): Promise<{ build: unkno
   }
 
   if (!response.ok) {
-    const serverError =
-      parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string"
-        ? ((parsed as { error: string }).error ?? "")
-        : "";
+    const error = parsed && typeof parsed === "object" ? (parsed as { error?: unknown }).error : null;
+    const serverError = typeof error === "string" ? error
+      : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+        ? error.message : "";
 
     if (response.status === 429) {
       const retryAfterRaw = response.headers.get("retry-after") ?? "";
@@ -301,6 +368,10 @@ async function readExecutionResponse(response: Response): Promise<{ build: unkno
     throw new Error("Tool execution returned an invalid response");
   }
 
+  if (response.status === 202) {
+    return readQueuedExecution((parsed as { generation: SavedGenerationPayload }).generation, signal);
+  }
+
   const build = (parsed as { build?: unknown }).build;
   if (!build) {
     throw new Error("Tool execution returned no build");
@@ -315,12 +386,13 @@ async function readExecutionResponse(response: Response): Promise<{ build: unkno
   return { build, warnings };
 }
 
-function readServerWorld(build: unknown): RenderableVoxelBuild | null {
+function readServerWorld(build: unknown, generationId?: string): RenderableVoxelBuild | null {
   if (!build || typeof build !== "object" || !("world" in build)) return null;
   const world = build.world as { manifest?: unknown; partBaseUrl?: unknown } | null;
   if (!world || typeof world.partBaseUrl !== "string") throw new Error("World delivery URL is missing");
   const url = new URL(world.partBaseUrl, self.location.origin);
-  if (url.origin !== self.location.origin || url.pathname !== "/api/local/voxel-exec") {
+  const expectedPath = generationId ? `/api/generations/${encodeURIComponent(generationId)}/artifacts/viewer` : "/api/local/voxel-exec";
+  if (url.origin !== self.location.origin || url.pathname !== expectedPath || (generationId && (url.search || url.hash || url.username || url.password))) {
     throw new Error("Invalid local world delivery URL");
   }
   const parsed = parseVoxelWorldManifest(world.manifest);
@@ -615,11 +687,12 @@ async function runParse(request: ParseRequest) {
         resolvedPalette = toolCall.palette;
         sourceWarnings.push(...executed.warnings);
 
-        const serverWorld = readServerWorld(executed.build);
+        const serverWorld = readServerWorld(executed.build, executed.generationId);
         if (serverWorld) {
           finishWorld(serverWorld, sourceWarnings, source);
           return;
         }
+        if (executed.generationId) throw new Error("Import returned no prepared world");
 
         if (resolvedGridSize > 512) {
           const world = await createLocalVoxelWorld(executed.build, {

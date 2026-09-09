@@ -6,6 +6,7 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import * as localWorld from "../../lib/voxel/localWorld";
 import type { RenderableVoxelBuild } from "../../lib/voxel/packedBlocks";
+import { toOpaqueVoxelWorldManifest } from "../../lib/voxel/world";
 
 type WorldOptions = Parameters<typeof localWorld.createLocalVoxelWorldForTest>[1];
 type WorldResult = localWorld.LocalVoxelWorldResult;
@@ -24,10 +25,13 @@ function startWorker(
 ) {
   const messages: Message[] = [];
   const inputs: unknown[] = [];
-  const scope = { onmessage: async (_event: { data: Record<string, unknown> }) => {}, close() {} };
+  const scope = { onmessage: async (_event: { data: Record<string, unknown> }) => {}, close() {}, location: { origin: "https://minebench.test" } };
+  const delays: number[] = [];
   let maxJsonParseChars = 0;
   runInNewContext(workerCode, {
-    exports: {}, self: scope, AbortController, Error, performance, Blob,
+    exports: {}, self: scope, AbortController, Error, TypeError, performance, Blob, URL,
+    setTimeout(callback: () => void, ms: number) { delays.push(ms); return setTimeout(callback, 0); },
+    clearTimeout,
     fetch: fetchResponse,
     JSON: {
       stringify: JSON.stringify,
@@ -47,6 +51,7 @@ function startWorker(
   return {
     messages,
     inputs,
+    delays,
     get maxJsonParseChars() { return maxJsonParseChars; },
     parse: (rawText: string) => scope.onmessage({ data: {
       type: "parse", requestId: 1, rawText, gridSize: 2048, palette: "simple", maxBlocksByGrid: { 2048: Number.MAX_SAFE_INTEGER },
@@ -112,6 +117,103 @@ async function main() {
   assert.equal(toolBuild.world!.manifest.gridSize, 8192);
   assert.equal(toolBuild.world!.manifest.palette, "advanced");
   assert.equal(toolBuild.world!.manifest.exactBlockCount, 1);
+
+  const generation = { id: "cb_queued_import", status: "queued", warnings: ["Prepared on worker"], sha256: toolBuild.world!.manifest.source.sha256 };
+  const statusPath = `/api/generations/${generation.id}`;
+  const viewerPath = `${statusPath}/artifacts/viewer`;
+  const delivery = { version: "1.0", blocks: [], world: { manifest: toOpaqueVoxelWorldManifest(toolBuild.world!.manifest), partBaseUrl: viewerPath } };
+  const requests: string[] = [];
+  const queued = startWorker(undefined, async (url, init) => {
+    requests.push(String(url));
+    assert.ok(init?.signal);
+    if (init?.method === "POST") return Response.json({ generation }, { status: 202 });
+    if (String(url) === viewerPath) return Response.json({ voxelBuild: delivery });
+    assert.equal(String(url), statusPath);
+    return Response.json({ generation: { ...generation, status: requests.length === 2 ? "running" : "succeeded" } });
+  });
+  await queued.parse(JSON.stringify(tool));
+  assert.equal(completedBuild(queued.messages).world!.partBaseUrl, viewerPath);
+  assert.deepEqual(requests, ["/api/local/voxel-exec", statusPath, statusPath, viewerPath]);
+  assert.deepEqual(queued.delays, [2500]);
+  assert.equal(queued.inputs.length, 1, "queued execution must not prepare the returned world again");
+  assert.deepEqual(queued.messages.find((message) => message.type === "complete")?.warnings, generation.warnings);
+
+  const localPath = "/api/local/voxel-exec?world=local-import";
+  const localDelivery = startWorker(undefined, async () => Response.json({ build: { ...delivery, world: { ...delivery.world, partBaseUrl: localPath } } }));
+  await localDelivery.parse(JSON.stringify(tool));
+  assert.equal(completedBuild(localDelivery.messages).world!.partBaseUrl, localPath);
+
+  const unprepared = startWorker(undefined, async (_url, init) => init?.method === "POST"
+    ? Response.json({ generation: { ...generation, status: "succeeded" } }, { status: 202 })
+    : Response.json({ voxelBuild: smallBuild }));
+  await unprepared.parse(JSON.stringify(tool));
+  assert.equal(unprepared.messages.find((message) => message.type === "error")?.message, "Import returned no prepared world");
+  assert.equal(unprepared.inputs.length, 1);
+
+  let statusReads = 0;
+  let viewerReads = 0;
+  const retried = startWorker(undefined, async (url, init) => {
+    if (init?.method === "POST") return Response.json({ generation }, { status: 202 });
+    if (String(url) === viewerPath) {
+      return ++viewerReads === 1 ? new Response("unavailable", { status: 503 }) : Response.json({ voxelBuild: delivery });
+    }
+    statusReads += 1;
+    if (statusReads === 1) throw new TypeError("network unavailable");
+    if (statusReads === 2) return new Response("unavailable", { status: 429 });
+    return Response.json({ generation: { ...generation, status: "succeeded" } });
+  });
+  await retried.parse(JSON.stringify(tool));
+  assert.equal(completedBuild(retried.messages).world!.partBaseUrl, viewerPath);
+  assert.deepEqual(retried.delays, [1000, 2000, 1000]);
+
+  for (const status of ["failed", "canceled"]) {
+    const terminal = startWorker(undefined, async (_url, init) => Response.json({
+      generation: init?.method === "POST" ? generation : { ...generation, status, error: { message: `Import ${status}` } },
+    }, { status: init?.method === "POST" ? 202 : 200 }));
+    await terminal.parse(JSON.stringify(tool));
+    assert.equal(terminal.messages.find((message) => message.type === "error")?.message, `Import ${status}`);
+    assert.deepEqual(terminal.delays, []);
+  }
+  for (const status of [401, 403, 503]) {
+    let reads = 0;
+    const unavailable = startWorker(undefined, async (_url, init) => {
+      if (init?.method === "POST") return Response.json({ generation }, { status: 202 });
+      reads += 1;
+      return Response.json({ error: { message: "Sign in to view this generation." } }, { status });
+    });
+    await unavailable.parse(JSON.stringify(tool));
+    assert.equal(reads, status === 503 ? 5 : 1, "authentication failures must not retry and transient retries must stop");
+    assert.equal(unavailable.messages.find((message) => message.type === "error")?.message,
+      status === 503 ? "Import temporarily unavailable (503)" : "Sign in to view this generation.");
+  }
+  for (const partBaseUrl of [
+    `https://other.test${viewerPath}`, "/api/generations/cb_other/artifacts/viewer",
+    "/api/local/voxel-exec?world=other", `${viewerPath}?part=other`,
+  ]) {
+    const invalidDelivery = startWorker(undefined, async (_url, init) => init?.method === "POST"
+      ? Response.json({ generation: { ...generation, status: "succeeded" } }, { status: 202 })
+      : Response.json({ voxelBuild: { ...delivery, world: { ...delivery.world, partBaseUrl } } }));
+    await invalidDelivery.parse(JSON.stringify(tool));
+    assert.equal(invalidDelivery.messages.find((message) => message.type === "error")?.message, "Invalid local world delivery URL");
+  }
+
+  let pollingStarted!: () => void;
+  const startedPolling = new Promise<void>((resolve) => { pollingStarted = resolve; });
+  const canceledRequests: string[] = [];
+  const canceledQueued = startWorker(undefined, async (url, init) => {
+    canceledRequests.push(String(url));
+    if (init?.method === "POST") return Response.json({ generation }, { status: 202 });
+    pollingStarted();
+    await new Promise<void>((resolve) => init!.signal!.addEventListener("abort", () => resolve(), { once: true }));
+    init!.signal!.throwIfAborted();
+    throw new Error("cancellation did not abort polling");
+  });
+  const waitingForQueued = canceledQueued.parse(JSON.stringify(tool));
+  await startedPolling;
+  await canceledQueued.cancel();
+  await waitingForQueued;
+  assert.ok(canceledQueued.messages.every((message) => message.type !== "complete"));
+  assert.deepEqual(canceledRequests, ["/api/local/voxel-exec", statusPath], "canceling the view leaves the saved job running");
 
   let largeToolCalls = 0;
   const largeTool = startWorker(undefined, async () => {
