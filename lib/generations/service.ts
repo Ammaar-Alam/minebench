@@ -1,4 +1,4 @@
-import { type GridSize } from "@/lib/ai/limits";
+import { MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
 import { randomUUID } from "node:crypto";
 import { Prisma, type CustomBuildArtifactKind } from "@prisma/client";
 import {
@@ -214,7 +214,7 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
 
 export async function createSavedGenerations(input: CreateSavedGenerationsInput) {
   const prompt = input.prompt.trim();
-  if (!prompt || prompt.length > 800 || input.models.length < 1 || input.models.length > 8) {
+  if (!prompt || prompt.length > MAX_GENERATION_PROMPT_CHARS || input.models.length < 1 || input.models.length > 8) {
     throw new GenerationServiceError("invalid_request", "Check the prompt and model selection.");
   }
   if (new Set(input.models.map((model) => model.id)).size !== input.models.length) {

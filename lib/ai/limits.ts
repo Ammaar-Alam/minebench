@@ -9,6 +9,8 @@ export function isGridSize(value: unknown): value is GridSize {
   return GRID_SIZES.some((size) => size === value);
 }
 
+export const MAX_GENERATION_PROMPT_CHARS = 800;
+
 export const MAX_BLOCKS_BY_GRID: Record<GridSize, number> = {
   32: 32 ** 3,
   64: 64 ** 3,

@@ -1,4 +1,4 @@
-import { isGridSize, type GridSize } from "@/lib/ai/limits";
+import { isGridSize, MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
 import { z } from "zod";
 import type { GenerateModelRequest, ProviderApiKeys } from "@/lib/ai/types";
 import { getAuthenticatedUserId } from "@/lib/auth/request";
@@ -60,7 +60,7 @@ const model = z.union([
 ]);
 
 const createRequest = z.object({
-  prompt: z.string().trim().min(1).max(800),
+  prompt: z.string().trim().min(1).max(MAX_GENERATION_PROMPT_CHARS, `Keep the prompt to ${MAX_GENERATION_PROMPT_CHARS} characters or fewer.`),
   gridSize: z.custom<GridSize>(isGridSize),
   palette: z.union([z.literal("simple"), z.literal("advanced")]),
   models: z.array(model).min(1).max(8),
@@ -72,7 +72,10 @@ export async function POST(request: Request) {
   const ownerId = await getAuthenticatedUserId(request);
   if (!ownerId) return apiJson({ error: { code: "authentication_required", message: "Sign in to save generations." } }, 401);
   const parsed = createRequest.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) return apiJson({ error: { code: "invalid_request", message: "Check the generation settings." } }, 400);
+  if (!parsed.success) {
+    const message = parsed.error.flatten().fieldErrors.prompt?.[0] ?? "Check the generation settings.";
+    return apiJson({ error: { code: "invalid_request", message } }, 400);
+  }
   try {
     const generations = await createSavedGenerations({
       ownerId,
