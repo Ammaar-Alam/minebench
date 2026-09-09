@@ -12,7 +12,6 @@ import {
 import { normalizeBlockType, parseVoxelBuildSpec } from "@/lib/voxel/validate";
 
 const DEFAULT_MIXED_LEAF_SIZE = 64;
-const MAX_LINE_SAMPLES = 1_000_000;
 
 type Bounds = {
   x1: number;
@@ -272,7 +271,6 @@ function preprocessBuild(
   const droppedUnknownTypeCounts = new Map<string, number>();
   let droppedNegative = 0;
   let droppedOutOfBounds = 0;
-  let lineSamples = 0;
   let root: Bounds | null = null;
 
   const addOperation = (bounds: Bounds, type: string) => {
@@ -367,10 +365,6 @@ function preprocessBuild(
     const dz = z2 - z1;
     const steps = Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz));
     const count = Math.max(1, steps + 1);
-    lineSamples += count;
-    if (lineSamples > MAX_LINE_SAMPLES) {
-      return { ok: false, error: `Too many line samples (${lineSamples})` };
-    }
 
     const normalizedType = normalizeBlockType(line.type, allowed);
     if (!normalizedType) {

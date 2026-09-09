@@ -258,7 +258,7 @@ async function main() {
     `large-world region evaluation exceeded its heap envelope\n${memoryResult.stderr}`,
   );
 
-  const tooManyLineSamples = evaluateVoxelWorldRegions(
+  const longLine = summarizeVoxelWorldRegions(
     {
       version: "1.0",
       blocks: [],
@@ -266,7 +266,23 @@ async function main() {
     },
     { gridSize: 8192, palette: getPalette("simple") },
   );
-  assert.deepEqual(tooManyLineSamples, { ok: false, error: "Too many line samples (1000001)" });
+  if (!longLine.ok) throw new Error(longLine.error);
+  assert.equal(longLine.value.blockCount, 8192);
+  assert.deepEqual(longLine.value.warnings, ["Dropped 991809 blocks outside the grid bounds"]);
+
+  const manyLines = summarizeVoxelWorldRegions(
+    {
+      version: "1.0",
+      blocks: [],
+      lines: Array.from({ length: 128 }, (_, y) => ({
+        from: { x: 0, y, z: 0 }, to: { x: 8191, y, z: 0 }, type: "stone",
+      })),
+    },
+    { gridSize: 8192, palette: getPalette("simple") },
+  );
+  if (!manyLines.ok) throw new Error(manyLines.error);
+  assert.equal(manyLines.value.blockCount, 128 * 8192);
+  assert.deepEqual(manyLines.value.warnings, []);
 
   console.log("voxel world region checks passed");
 }

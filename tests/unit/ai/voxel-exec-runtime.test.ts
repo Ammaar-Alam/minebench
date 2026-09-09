@@ -45,6 +45,25 @@ try {
     else process.env.MINEBENCH_TOOL_TIMEOUT_MS = originalTimeout;
   }
 
+  for (const [name, code, countKey] of [
+    ["MINEBENCH_TOOL_MAX_BLOCKS", 'block(0,0,0,"stone");', "blockCount"],
+    ["MINEBENCH_TOOL_MAX_BOXES", 'box(0,0,0,1,1,1,"stone");', "boxCount"],
+    ["MINEBENCH_TOOL_MAX_LINES", 'line(0,0,0,1,1,1,"stone");', "lineCount"],
+  ] as const) {
+    const originalLimit = process.env[name];
+    try {
+      process.env[name] = "1";
+      assert.throws(() => runVoxelExec({ code: code.repeat(2), gridSize: 512, palette: "simple" }), /Too many/);
+      for (const gridSize of [2048, 8192] as const) {
+        const result = runVoxelExec({ code: code.repeat(2), gridSize, palette: "simple" });
+        assert.equal(result[countKey], 2);
+      }
+    } finally {
+      if (originalLimit === undefined) delete process.env[name];
+      else process.env[name] = originalLimit;
+    }
+  }
+
   const inMemoryRun = runVoxelExec({
     code: 'block(1, 2, 3, "stone");',
     gridSize: 64,
