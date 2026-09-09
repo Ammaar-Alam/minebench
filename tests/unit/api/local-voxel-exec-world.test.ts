@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readdir } from "node:fs/promises";
+import { readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { gunzipSync as browserGunzipSync } from "fflate";
 import { GET, POST } from "../../../app/api/local/voxel-exec/route";
@@ -9,6 +10,7 @@ import { decodeBinaryVoxelBuild } from "../../../lib/voxel/binaryBuild";
 import { LOCAL_VOXEL_WORLD_SOURCE_PART_KEY } from "../../../lib/voxel/localWorldServer";
 import { unpackVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 import { voxelWorldPartUrl, type VoxelWorldDelivery } from "../../../lib/voxel/world";
+import { decodeWorldMeshPayload } from "../../../lib/voxel/worldMesh";
 
 type LocalWorldBody = {
   build: {
@@ -177,6 +179,32 @@ async function main() {
   assert.equal(rawSourceResponse.status, 200);
   const rawSource = gunzipSync(new Uint8Array(await rawSourceResponse.arrayBuffer())).toString("utf8");
   assert.equal(rawSource, rawUpload);
+
+  for (const world of [body.build.world, rawBody.build.world]) {
+    const mesh = world.manifest.mesh?.batches[0];
+    assert.ok(mesh, "mixed local worlds prepare mesh artifacts");
+    const meshResponse = await getWorldPart(world, mesh.data.key);
+    assert.equal(meshResponse.status, 200, "JSON execution and raw upload deliver their prepared meshes");
+    assert.equal(meshResponse.headers.get("Content-Encoding"), "gzip");
+    const meshBytes = new Uint8Array(await meshResponse.arrayBuffer());
+    assert.equal(createHash("sha256").update(meshBytes).digest("hex"), mesh.data.sha256);
+    assert.equal(decodeWorldMeshPayload(browserGunzipSync(meshBytes)).filteredBlockCount, mesh.blockCount);
+
+    const worldId = new URL(world.partBaseUrl!, "http://localhost:3000").searchParams.get("world")!;
+    const directory = join(tmpdir(), "minebench-local-voxel-worlds", worldId);
+    const unlistedKey = `mesh-${world.manifest.mesh!.version}-${world.manifest.mesh!.batches.length}`;
+    try {
+      await writeFile(join(directory, unlistedKey), meshBytes);
+      assert.equal((await getWorldPart(world, unlistedKey)).status, 404, "mesh delivery requires a manifest reference");
+      const corruptBytes = meshBytes.slice();
+      corruptBytes[corruptBytes.length - 1] ^= 1;
+      await writeFile(join(directory, mesh.data.key), corruptBytes);
+      assert.equal((await getWorldPart(world, mesh.data.key)).status, 404, "mesh delivery rejects checksum mismatches");
+    } finally {
+      await writeFile(join(directory, mesh.data.key), meshBytes);
+      await rm(join(directory, unlistedKey), { force: true });
+    }
+  }
 
   const beforeFailure = await sourceTempDirs();
   const failedRawResponse = await rawUploadPost('{"version":"1.0","blocks":[{"x":0,"y":0,"z":0}]}');

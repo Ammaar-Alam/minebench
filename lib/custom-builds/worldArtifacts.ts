@@ -5,12 +5,13 @@ import { join } from "node:path";
 import { constants as zlibConstants, gzipSync } from "node:zlib";
 import { getPalette } from "@/lib/blocks/palettes";
 import {
+  buildCustomBuildPreview,
   gzipBytes,
   jsonBytes,
   sha256Hex,
   uploadAndRecordCustomBuildArtifact,
 } from "@/lib/custom-builds/artifacts";
-import { encodeBinaryVoxelWorldRegion } from "@/lib/voxel/binaryBuild";
+import { decodeBinaryVoxelBuild, encodeBinaryVoxelWorldRegion } from "@/lib/voxel/binaryBuild";
 import { encodeWorldMeshPayload, getWorldMeshVersion } from "@/lib/voxel/worldMesh";
 import { buildWorldMeshPayloads } from "@/lib/voxel/worldMeshSource";
 import type { VoxelBuild, VoxelBlock, VoxelPoint } from "@/lib/voxel/types";
@@ -32,11 +33,7 @@ import {
   type VoxelWorldRegionPage,
   type VoxelWorldRegionPageRef,
 } from "@/lib/voxel/world";
-import {
-  evaluateVoxelWorldRegions,
-  type MixedVoxelWorldRegion,
-  type VoxelWorldRegion as EvaluatedVoxelWorldRegion,
-} from "@/lib/voxel/worldRegions";
+import { evaluateVoxelWorldRegions } from "@/lib/voxel/worldRegions";
 
 type PaletteName = "simple" | "advanced";
 export type PersistedVoxelWorldArtifact = Pick<
@@ -86,7 +83,7 @@ function extendBounds(bounds: VoxelWorldBounds | null, origin: VoxelPoint, size:
 
 function appendUniformPreviewBlocks(
   blocks: VoxelBlock[],
-  region: Extract<EvaluatedVoxelWorldRegion, { kind: "uniform" }>,
+  region: Extract<VoxelWorldRegion, { kind: "uniform" }>,
   targetBlocks: number,
 ): void {
   const remaining = targetBlocks - blocks.length;
@@ -102,33 +99,6 @@ function appendUniformPreviewBlocks(
       y: region.origin.y + (Math.floor(offset / sx) % sy),
       z: region.origin.z + Math.floor(offset / plane),
       type: region.type,
-    });
-  }
-}
-
-function appendMixedPreviewBlocks(
-  blocks: VoxelBlock[],
-  region: MixedVoxelWorldRegion,
-  paletteIds: string[],
-  targetBlocks: number,
-): void {
-  const remaining = targetBlocks - blocks.length;
-  if (remaining <= 0) return;
-  const stride = Math.max(1, Math.floor(region.blockCount / Math.min(remaining, region.blockCount)));
-  const sx = region.size.x;
-  const sy = region.size.y;
-  const plane = sx * sy;
-  let seen = 0;
-  for (let index = 0; index < region.materialIndexes.length && blocks.length < targetBlocks; index += 1) {
-    const material = region.materialIndexes[index]!;
-    if (material === 0) continue;
-    seen += 1;
-    if ((seen - 1) % stride !== 0) continue;
-    blocks.push({
-      x: region.origin.x + (index % sx),
-      y: region.origin.y + (Math.floor(index / sx) % sy),
-      z: region.origin.z + Math.floor(index / plane),
-      type: paletteIds[material - 1] ?? "stone",
     });
   }
 }
@@ -353,7 +323,6 @@ export async function persistVoxelWorldArtifacts(args: {
       exactBlockCount += region.blockCount;
       bounds = extendBounds(bounds, region.origin, region.size);
       if (region.kind === "uniform") {
-        appendUniformPreviewBlocks(previewBlocks, region, args.previewTargetBlocks);
         await queueRegion({
           kind: "uniform",
           key: regionKey("uniform", region.origin, region.size),
@@ -365,7 +334,6 @@ export async function persistVoxelWorldArtifacts(args: {
         continue;
       }
 
-      appendMixedPreviewBlocks(previewBlocks, region, paletteIds, args.previewTargetBlocks);
       const bytes = encodeBinaryVoxelWorldRegion(region, paletteIds, args.sourceBuildSha256);
       const gzip = gzipSync(bytes, { level: zlibConstants.Z_BEST_SPEED });
       const gzipSha = sha256Hex(gzip);
@@ -410,16 +378,42 @@ export async function persistVoxelWorldArtifacts(args: {
     }
     await flushPage();
 
+    const readPart = async (ref: VoxelWorldPartRef) => {
+      if (!spoolDirectory) throw new Error("Voxel world mesh source is missing");
+      return readFile(join(spoolDirectory, ref.key));
+    };
+    const previewRegionCount = Math.min(meshRegions.length, Math.max(0, Math.floor(args.previewTargetBlocks)));
+    const perRegionTarget = exactBlockCount <= args.previewTargetBlocks
+      ? args.previewTargetBlocks
+      : Math.floor(args.previewTargetBlocks / Math.max(1, previewRegionCount));
+    for (let index = 0; index < previewRegionCount; index += 1) {
+      args.throwIfCanceled?.();
+      const regionIndex = previewRegionCount > 1
+        ? Math.floor(index * (meshRegions.length - 1) / (previewRegionCount - 1))
+        : 0;
+      const region = meshRegions[regionIndex]!;
+      if (region.kind === "uniform") {
+        appendUniformPreviewBlocks(previewBlocks, region, previewBlocks.length + perRegionTarget);
+        continue;
+      }
+      const bytes = await readPart(region.data);
+      args.throwIfCanceled?.();
+      const sampled = buildCustomBuildPreview({ version: "1.0", blocks: [], packed: decodeBinaryVoxelBuild(bytes) }, perRegionTarget);
+      for (const block of sampled.blocks) previewBlocks.push({
+        x: region.origin.x + block.x,
+        y: region.origin.y + block.y,
+        z: region.origin.z + block.z,
+        type: block.type,
+      });
+    }
+
     const mesh = await persistVoxelWorldMeshArtifacts({
       customBuildId: args.customBuildId,
       publicId: args.publicId,
       sourceBuildSha256: args.sourceBuildSha256,
       regions: meshRegions,
       palette: args.palette,
-      readPart: async (ref) => {
-        if (!spoolDirectory) throw new Error("Voxel world mesh source is missing");
-        return readFile(join(spoolDirectory, ref.key));
-      },
+      readPart,
       persistArtifact,
       throwIfCanceled: args.throwIfCanceled,
     });
