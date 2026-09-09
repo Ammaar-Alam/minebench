@@ -90,8 +90,6 @@ curl -sS -X POST "http://localhost:3000/api/local/voxel-exec" \
 
 In development this endpoint is enabled by default. In production it is disabled unless `MINEBENCH_ENABLE_LOCAL_EXEC_API=1`.
 
-On Vercel, tool calls above a 512 grid require sign-in and return HTTP 202 with a saved `generation`. The generation worker executes the stored tool call and prepares its artifacts; poll `/api/generations/{id}` and load the completed generation's `viewerUrl`. Imports use no provider key or generation credits and remain private. Small tool calls and local development execute inline, while build-file imports continue to run in the browser.
-
 ### Generate benchmark files with or without tool mode
 
 ```bash
