@@ -2,9 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { maxBlocksForGrid, isGridSize, type GridSize } from "@/lib/ai/limits";
 import { runVoxelExec } from "@/lib/ai/tools/voxelExec";
+import { getAuthenticatedUserId } from "@/lib/auth/request";
 import { getPalette } from "@/lib/blocks/palettes";
 import { createCustomBuildProcessingGate } from "@/lib/custom-builds/processingGate";
 import { getErrorMessage } from "@/lib/errorMessage";
+import { apiJson, apiServiceError } from "@/lib/gallery/api";
+import { createImportedGeneration } from "@/lib/generations/service";
 import {
   createVoxelBuildSourceArtifactWriter,
   type BuildSourceArtifactWriter,
@@ -257,6 +260,16 @@ export async function POST(req: Request) {
       { error: `Code payload too large (${body.code.length} chars > ${MAX_CODE_CHARS})` },
       { status: 413 },
     );
+  }
+
+  if (body.gridSize > 512 && process.env.VERCEL === "1") {
+    const ownerId = await getAuthenticatedUserId(req);
+    if (!ownerId) return apiJson({ error: "Sign in to import large builds." }, 401);
+    try {
+      return apiJson({ generation: await createImportedGeneration(ownerId, body) }, 202);
+    } catch (error) {
+      return apiServiceError(error);
+    }
   }
 
   let releaseProcessing: (() => void) | undefined;

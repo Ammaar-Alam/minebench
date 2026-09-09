@@ -36,6 +36,25 @@ async function heapFailure() {
 }
 
 async function main() {
+  const importOptions: VoxelBuildResponseOptions = { ...options, gridSize: 8192, validationMode: "import" };
+  for (const [code, blockCount] of [
+    ['block(1,0,1,"stone");', 1],
+    ['box(0,0,0,79,0,79,"stone");', 6400],
+  ] as const) {
+    const text = response(code, 8192);
+    const generated = await processVoxelBuildResponseInWorker(text, { ...options, gridSize: 8192 });
+    assert.equal(generated.ok, false, "ordinary generation must retain benchmark quality minimums");
+    const imported = await processVoxelBuildResponseInWorker(text, importOptions);
+    assert.ok(imported.ok, "imports must accept tiny and thin valid builds");
+    assert.equal(imported.blockCount, blockCount);
+    assert.deepEqual(imported.warnings, []);
+  }
+  for (const text of ["invalid JSON", response('block(1,0,1,"stone");', 256),
+    response('block(1,0,1,"unknown_material");', 8192)]) {
+    const imported = await processVoxelBuildResponseInWorker(text, importOptions);
+    assert.equal(imported.ok, false, "imports must retain structural validation");
+  }
+
   let heartbeats = 0;
   const heartbeat = setInterval(() => { heartbeats += 1; }, 10);
   const denseSignal = AbortSignal.timeout(10_000);

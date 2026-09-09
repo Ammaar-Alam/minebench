@@ -15,6 +15,7 @@ const artifacts: Array<Record<string, unknown>> = [];
 const updates: Array<Record<string, unknown>> = [];
 const queries: string[] = [];
 const notifications: string[] = [];
+const metricLogs: string[] = [];
 let keyLookups = 0;
 let providerRequests = 0;
 let keyDeletions = 0;
@@ -124,6 +125,7 @@ function reset() {
   updates.length = 0;
   queries.length = 0;
   notifications.length = 0;
+  metricLogs.length = 0;
   keyLookups = 0;
   providerRequests = 0;
   keyDeletions = 0;
@@ -150,7 +152,7 @@ async function main() {
     await import("../../../lib/custom-builds/artifacts");
   const { setMetricLogWriter } = await import("../../../lib/observability/cloudwatch");
   const { CustomBuildLeaseLostError } = await import("../../../lib/custom-builds/lease");
-  setMetricLogWriter(() => {});
+  setMetricLogWriter((line) => metricLogs.push(line));
   const saveRaw = async (text: string, gzip = false) => {
     const bytes = new TextEncoder().encode(text);
     return uploadAndRecordCustomBuildArtifact({ customBuildId, publicId, kind: "raw_text_debug",
@@ -162,6 +164,47 @@ async function main() {
     assert.equal(keyLookups, 0, "saved responses must be processed before provider key lookup");
     assert.equal(providerRequests, 0, "saved response failures must not buy another generation");
   };
+
+  const { runVoxelExec } = await import("../../../lib/ai/tools/voxelExec");
+  const importedCode = "box(0,0,0,3,0,3,'stone'); block(Math.floor(rng()*4),1,0,'gold_block');";
+  const importedSource = await writeVoxelBuildSourceArtifact(runVoxelExec({
+    code: importedCode, gridSize: 8192, palette: "simple", seed: 123,
+  }).build);
+  const importedSourceSha = importedSource.sourceSha256;
+  await importedSource.cleanup();
+  let importedArtifactHashes: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    reset();
+    current = { ...current, generationMode: "import", generationTimeMs: null, warnings: [] };
+    await saveRaw(toolCall(importedCode));
+    let gateCalls = 0;
+    await runCustomBuildGenerateJob(job as never, {
+      acquireBuildProcessing: async () => { gateCalls += 1; return () => {}; },
+      processResponse: processVoxelBuildResponseInWorker,
+    });
+    assertNoProvider();
+    assert.equal(gateCalls, 1);
+    assert.equal(current.status, "succeeded", "tiny imported builds must bypass benchmark quality minimums");
+    assert.equal(current.blockCount, 17);
+    assert.equal(current.buildSha256, importedSourceSha);
+    assert.equal(current.generationTimeMs, null);
+    assert.deepEqual(current.warnings, []);
+    assert.deepEqual(notifications, [], "imports must not send generation notifications");
+    assert.deepEqual(metricLogs, [], "imports must not emit provider generation metrics");
+    const hashes = artifacts.map(({ kind, sha256 }) => ({ kind, sha256 }));
+    if (attempt === 0) importedArtifactHashes = hashes;
+    else assert.deepEqual(hashes, importedArtifactHashes, "seeded imports must prepare identical artifacts");
+  }
+
+  reset();
+  current.generationMode = "import";
+  await assert.rejects(runCustomBuildGenerateJob(job as never), /import_source_missing/);
+  assertNoProvider();
+  assert.equal(current.status, "failed");
+  assert.equal(current.errorCode, "import_source_missing");
+  assert.equal(current.errorRetryable, false);
+  assert.deepEqual(notifications, []);
+  assert.deepEqual(metricLogs, []);
 
   reset();
   process.env.OPENROUTER_BASE_URL = "https://openrouter.test/api";

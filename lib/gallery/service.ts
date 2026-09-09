@@ -554,6 +554,7 @@ async function loadEligibleGeneration(ownerId: string, publicId: string) {
       publicId,
       ownerId,
       status: "succeeded",
+      generationMode: { not: "import" },
       removedAt: null,
       objectsDeletedAt: null,
       artifacts: { some: { kind: "build_json" } },

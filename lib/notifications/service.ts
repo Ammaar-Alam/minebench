@@ -154,7 +154,7 @@ async function enqueueNotification(tx: Prisma.TransactionClient, event: {
 export async function enqueueGenerationNotification(tx: Prisma.TransactionClient, customBuildId: string) {
   if (!notificationsEnabled()) return;
   const build = await tx.customBuild.findFirst({
-    where: { id: customBuildId, removedAt: null, status: { in: ["succeeded", "failed"] } },
+    where: { id: customBuildId, removedAt: null, generationMode: { not: "import" }, status: { in: ["succeeded", "failed"] } },
     select: { id: true, publicId: true, ownerId: true, status: true, completedAt: true },
   });
   if (!build?.ownerId || !build.completedAt) return;

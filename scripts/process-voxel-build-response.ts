@@ -15,6 +15,7 @@ export const processVoxelBuildResponseInWorker: ProcessVoxelBuildResponse = asyn
         palette: opts.palette,
         enableTools: opts.enableTools,
         buildOutput: opts.buildOutput,
+        validationMode: opts.validationMode,
       },
     },
     // parent heap flags override this and it does not cap ArrayBuffers or process RSS

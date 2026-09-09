@@ -18,9 +18,11 @@ async function main() {
   const userIds = [adminId, ownerId, nonAdminId, suspendedId];
 
   const {
+    addGalleryExample,
     getGalleryCandidate,
     GalleryServiceError,
     removeGalleryExample,
+    submitGalleryCandidate,
   } = await import("../../../lib/gallery/service");
   const {
     listAdminGenerations,
@@ -105,6 +107,38 @@ async function main() {
         { id: suspendedId, email: `publish-suspended-${suffix}@example.test`, gallerySuspendedAt: now },
       ],
     });
+
+    const importedIds: string[] = [];
+    for (const label of ["first_import", "second_import"]) {
+      const imported = await createBuild(label);
+      await db.customBuild.update({
+        where: { id: imported.id },
+        data: { generationMode: "import", modelKind: "import", promptText: "Imported build" },
+      });
+      importedIds.push(imported.publicId);
+      await assert.rejects(
+        () => submitGalleryCandidate(ownerId, { generationId: imported.publicId, postAnonymously: true }),
+        (error: unknown) => error instanceof GalleryServiceError && error.code === "generation_not_available",
+      );
+      await assert.rejects(
+        () => publishAdminGeneration(adminId, imported.publicId),
+        (error: unknown) => error instanceof GalleryServiceError && error.code === "generation_not_available",
+      );
+      assert.equal(
+        (await listAdminGenerations(adminId, { ownerId })).items.find((item) => item.id === imported.publicId)?.canPublish,
+        false,
+      );
+    }
+    assert.equal(await db.galleryCandidate.count({ where: { promptText: "Imported build" } }), 0);
+    const importCandidate = await submitGalleryCandidate(ownerId, { prompt: "Imported build", postAnonymously: true });
+    for (const generationId of importedIds) {
+      await assert.rejects(
+        () => addGalleryExample(ownerId, importCandidate.candidate.id, { generationId, postAnonymously: true }),
+        (error: unknown) => error instanceof GalleryServiceError && error.code === "generation_mismatch",
+      );
+    }
+    assert.equal(await db.galleryExample.count({ where: { candidate: { publicId: importCandidate.candidate.id } } }), 0);
+    await db.galleryCandidate.delete({ where: { publicId: importCandidate.candidate.id } });
 
     const build = await createBuild("ready");
     assert.equal(
