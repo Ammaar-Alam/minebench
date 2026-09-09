@@ -8,7 +8,6 @@
 <p align="center">
   <a href="https://minebench.ai"><img alt="Live" src="https://img.shields.io/badge/Live-minebench.ai-0ea5e9?style=flat&logo=vercel&logoColor=white" /></a>
   <a href="https://alpha.minebench.ai"><img alt="Alpha" src="https://img.shields.io/badge/Alpha-alpha.minebench.ai-f59e0b?style=flat&logo=vercel&logoColor=white" /></a>
-  <a href="https://apps.apple.com/app/minebench/id6803704037"><img alt="App Store" src="https://img.shields.io/badge/App%20Store-iOS-000000?style=flat&logo=apple&logoColor=white" /></a>
   <a href="https://github.com/Ammaar-Alam/minebench/releases/latest"><img alt="Latest Release" src="https://img.shields.io/github/v/release/Ammaar-Alam/minebench?style=flat&color=22c55e&label=release&display_name=tag" /></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-3b82f6?style=flat" /></a>
 </p>
@@ -17,6 +16,16 @@
   <a href="docs/README.md"><img alt="Docs" src="https://img.shields.io/badge/Docs-Documentation-6366f1?style=flat" /></a>
   <a href="https://buymeacoffee.com/ammaaralam"><img alt="Support" src="https://img.shields.io/badge/Support-Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=000000" /></a>
   <a href="https://x.com/minebench_ai"><img alt="MineBench on X" src="https://img.shields.io/badge/X-%40minebench_ai-000000?style=flat&logo=x&logoColor=white" /></a>
+</p>
+
+<p align="center">
+  <a href="https://apps.apple.com/us/app/minebench/id6803704037?itscg=30200&itsct=apps_box_badge&mttnsubad=6803704037">
+    <img
+      src="https://toolbox.marketingtools.apple.com/api/v2/badges/download-on-the-app-store/black/en-us?releaseDate=1787875200"
+      alt="Download MineBench on the App Store"
+      width="140"
+    />
+  </a>
 </p>
 
 <h1 align="center">MineBench</h1>
