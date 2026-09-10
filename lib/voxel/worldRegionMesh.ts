@@ -87,7 +87,6 @@ type FaceMetadata = {
   uAxis: CoordIndex;
   vAxis: CoordIndex;
   dimensionWidth: number;
-  keyPrefix: string;
 };
 
 type TypeMetadata = {
@@ -328,7 +327,6 @@ function buildTypeMetadata(typeNames: readonly string[], allowed: ReadonlySet<st
           uAxis: axisIndex(axes.u),
           vAxis: axisIndex(axes.v),
           dimensionWidth: dimensions.width,
-          keyPrefix: `${direction.face}|${bucket}|${type}|${textureKey}|${tintIndex}`,
         };
       }),
     };
@@ -370,15 +368,16 @@ function appendFaceRect(
   );
 }
 
-function faceKey(args: {
-  plane: number;
-  keyPrefix: string;
-  ao: readonly [number, number, number, number] | undefined;
-  packedAoByte: number;
-}): string | null {
-  const flat = flatAo(args.ao);
-  if (args.ao && flat === null) return null;
-  return `${args.keyPrefix}|${args.plane}|${args.packedAoByte}`;
+function faceKey(
+  plane: number,
+  typeId: number,
+  directionIndex: number,
+  ao: readonly [number, number, number, number] | undefined,
+  packedAoByte: number,
+): number | null {
+  const flat = flatAo(ao);
+  if (ao && flat === null) return null;
+  return ((typeId * DIRS.length + directionIndex) * (WORLD_QUAD_FIELD_MAX + 1) + plane) * 256 + packedAoByte;
 }
 
 function appendMergedPlane(
@@ -528,7 +527,7 @@ export function buildWorldRegionGreedyMeshPayload(
     water: createWorldQuadBucket(),
     emissive: createWorldQuadBucket(),
   };
-  const planes = new Map<string, FacePlane>();
+  const planes = new Map<number, FacePlane>();
   const { blocks: packed, paletteTypeIds } = prepared;
   const typeMetadata = buildTypeMetadata(packed.typeNames, prepared.allowed, opts.size);
 
@@ -564,8 +563,8 @@ export function buildWorldRegionGreedyMeshPayload(
       const plane = coordinate(face.planeAxis, x, y, z) + face.planeOffset;
       const u = coordinate(face.uAxis, x, y, z);
       const v = coordinate(face.vAxis, x, y, z);
-      const key = faceKey({ plane, keyPrefix: face.keyPrefix, ao, packedAoByte });
-      if (!key) {
+      const key = faceKey(plane, paletteTypeId, face.directionIndex, ao, packedAoByte);
+      if (key === null) {
         appendFaceRect(
           buckets,
           {

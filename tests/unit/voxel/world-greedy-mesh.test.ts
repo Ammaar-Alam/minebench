@@ -561,6 +561,22 @@ function decodeCompactPayload(payload: CompactMeshPayload): DecodedMeshPayload {
 }
 
 {
+  const packed = packVoxelBlocks([
+    { x: 0, y: 0, z: 0, type: "grass_block" },
+    { x: 1, y: 0, z: 0, type: "dirt" },
+  ]);
+  const words = compactPayload(buildWorldRegionGreedyMeshPayload(packed, allowed, {
+    size: { x: 2, y: 1, z: 1 },
+  })).worldQuads.opaque!;
+  const bottoms = [];
+  for (let offset = 0; offset < words.length; offset += WORLD_QUAD_WORDS) {
+    if (DIRS[(words[offset + 1] >>> 20) & 7].face === "down") bottoms.push(offset);
+  }
+  assert.equal(bottoms.length, 2, "different block types retain separate planes even when their texture matches");
+  assert.equal(words[bottoms[0] + 2], words[bottoms[1] + 2]);
+}
+
+{
   const packed = packVoxelBlocks([{ x: 0, y: 0, z: 0, type: "stone" }]);
   const halo = packVoxelBlocks([{ x: 1, y: 0, z: 0, type: "stone" }]);
   const compact = compactPayload(buildWorldRegionGreedyMeshPayload(packed, allowed, {

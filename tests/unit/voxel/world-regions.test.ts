@@ -53,6 +53,7 @@ function expandRegions(regions: VoxelWorldRegion[], palette: ReturnType<typeof g
 }
 
 function assertMatchesValidator(build: VoxelBuild, gridSize: number) {
+  const original = structuredClone(build);
   const palette = getPalette("simple");
   const expected = validateVoxelBuild(build, {
     gridSize,
@@ -61,7 +62,8 @@ function assertMatchesValidator(build: VoxelBuild, gridSize: number) {
   });
   if (!expected.ok) throw new Error(expected.error);
 
-  for (const source of [build, { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) }]) {
+  for (const source of [build, { ...build, blocks: [], packed: packVoxelBlocks(build.blocks) },
+    { ...build, blocks: build.blocks.slice(0, 300), packed: packVoxelBlocks(build.blocks.slice(300)) }]) {
     const evaluated = evaluateVoxelWorldRegions(source, { gridSize, palette });
     if (!evaluated.ok) throw new Error(evaluated.error);
     assert.deepEqual(evaluated.warnings, expected.value.warnings);
@@ -71,6 +73,7 @@ function assertMatchesValidator(build: VoxelBuild, gridSize: number) {
       assert.equal(actualBlocks.get(key(block)), block.type, key(block));
     }
   }
+  assert.deepEqual(build, original, "region evaluation must preserve the canonical source");
 }
 
 function sumBlocks(regions: VoxelWorldRegion[]): number {
@@ -167,6 +170,16 @@ function assertLargeWorldSmoke() {
 }
 
 async function main() {
+  assertMatchesValidator({
+    version: "1.0",
+    boxes: [{ x1: 0, y1: 0, z1: 0, x2: 15, y2: 3, z2: 15, type: "stone" }],
+    lines: Array.from({ length: 40 }, (_, index) => ({
+      from: { x: index * 7 % 25 - 4, y: index * 3 % 21 - 2, z: index * 13 % 25 - 4 },
+      to: { x: index * 13 % 25 - 4, y: index * 5 % 21 - 2, z: index * 7 % 25 - 4 },
+      type: ["oak-plank", "glass", "gold", "stone", "unknown"][index % 5],
+    })),
+    blocks: [{ x: 0, y: 0, z: 0, type: "water" }, { x: 0, y: 0, z: 0, type: "oak_log" }],
+  }, 16);
   const scattered = Array.from({ length: 600 }, (_, index) => ({
     x: index * 37 % 128, y: index * 17 % 96, z: index * 73 % 128,
     type: index < 300 ? "water" : "glass",
@@ -240,6 +253,14 @@ async function main() {
 
   if (process.env[MEMORY_CHILD] === "1") {
     assertLargeWorldSmoke();
+    const lines = summarizeVoxelWorldRegions({ version: "1.0", blocks: [],
+      lines: Array.from({ length: 128 }, (_, y) => ({
+        from: { x: 0, y, z: 0 }, to: { x: 8191, y, z: 0 }, type: "stone",
+      })),
+    }, { gridSize: 8192, palette: getPalette("simple") });
+    assert.ok(lines.ok);
+    assert.equal(lines.value.blockCount, 128 * 8192);
+    assert.deepEqual(lines.value.warnings, []);
     return;
   }
 

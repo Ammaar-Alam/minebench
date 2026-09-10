@@ -2,6 +2,7 @@ import type { BlockDefinition } from "@/lib/blocks/palettes";
 import { MAX_VOXEL_COORDINATE } from "@/lib/voxel/coordinateKeys";
 import type { VoxelBuild, VoxelPoint } from "@/lib/voxel/types";
 import {
+  appendPackedVoxelBox,
   appendPackedVoxelBoxes,
   createPackedVoxelBoxes,
   readPackedVoxelBox,
@@ -353,6 +354,7 @@ function preprocessBuild(
   }
   if (build.packedBoxes) addBoxSource(build.packedBoxes);
 
+  const packedLines = createPackedVoxelBoxes();
   for (const line of build.lines ?? []) {
     const x1 = line.from.x;
     const y1 = line.from.y;
@@ -377,9 +379,11 @@ function preprocessBuild(
       const x = Math.round(x1 + dx * t);
       const y = Math.round(y1 + dy * t);
       const z = Math.round(z1 + dz * t);
-      addValidBounds({ x1: x, y1: y, z1: z, x2: x, y2: y, z2: z }, normalizedType);
+      const bounds = addValidBoxBounds({ x1: x, y1: y, z1: z, x2: x, y2: y, z2: z });
+      if (bounds) appendPackedVoxelBox(packedLines, { ...bounds, type: normalizedType }, false);
     }
   }
+  addBoxSource(packedLines);
 
   for (const block of build.blocks) {
     const normalizedType = normalizeBlockType(block.type, allowed);
