@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import type { VoxelBuildResponseOptions } from "../../../lib/ai/processVoxelBuildResponse";
 import { processVoxelBuildResponseInWorker } from "../../../scripts/process-voxel-build-response";
 
@@ -36,6 +39,39 @@ async function heapFailure() {
 }
 
 async function main() {
+  const transferred = {
+    packed: { positions: new Int16Array([1, 2, 3]), typeIds: new Uint16Array([0]), count: 1, typeNames: ["stone"] },
+    packedBoxes: { count: 2, typeNames: ["stone"], chunks: [
+      { start: 0, count: 1, coordinates: new Int16Array([1, 2, 3, 4, 5, 6]), typeIds: new Uint16Array([0]) },
+      { start: 1, count: 1, coordinates: new Float64Array([40_000, 2, 3, 40_001, 5, 6]), typeIds: new Uint16Array([0]) },
+    ] },
+  };
+  const entryCode = ts.transpileModule(readFileSync("scripts/process-voxel-build-response-worker.ts", "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  let posted = false;
+  runInNewContext(entryCode, {
+    exports: {},
+    require(name: string) {
+      if (name === "@/lib/ai/processVoxelBuildResponse") return {
+        processVoxelBuildResponse: () => ({ ok: true, build: { version: "1.0", blocks: [], ...transferred }, warnings: [], blockCount: 1 }),
+      };
+      assert.equal(name, "node:worker_threads");
+      return { workerData: { text: "", opts: options }, parentPort: {
+        postMessage(result: { build: typeof transferred }, transfer: ArrayBuffer[]) {
+          const expected = structuredClone(result);
+          const received = structuredClone(result, { transfer });
+          assert.deepEqual(received, expected);
+          assert.equal(transfer.length, 6);
+          assert.ok(transfer.every((buffer) => buffer.byteLength === 0), "all point and box arrays must transfer without copying");
+          assert.equal(received.build.packedBoxes.chunks[1].coordinates[0], 40_000);
+          posted = true;
+        },
+      } };
+    },
+  });
+  assert.equal(posted, true);
+
   const importOptions: VoxelBuildResponseOptions = { ...options, gridSize: 8192, validationMode: "import" };
   for (const [code, blockCount] of [
     ['block(1,0,1,"stone");', 1],
