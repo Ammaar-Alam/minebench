@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import type { BlockDefinition, RenderKind } from "@/lib/blocks/palettes";
-import { getRenderKind } from "@/lib/blocks/registry";
+import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
 import { getTextureKey, type Face } from "@/lib/blocks/textures";
 import { decodeBinaryVoxelBuild, readBinaryVoxelBuildHeader } from "@/lib/voxel/binaryBuild";
 import {
@@ -16,7 +16,7 @@ import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelPoint } from "@/lib/voxel/types";
 import { createWorldMeshBatches, packWorldMeshBatch } from "@/lib/voxel/worldMeshSource";
 import { decodeWorldMeshPayload, isWorldMeshVersionSupported } from "@/lib/voxel/worldMesh";
-import { WORLD_QUAD_TINT_WATER, WORLD_QUAD_TINTS } from "@/lib/voxel/worldQuadData";
+import { WORLD_QUAD_TINT_GRASS, WORLD_QUAD_TINT_LEAVES, WORLD_QUAD_TINT_WATER, WORLD_QUAD_TINTS } from "@/lib/voxel/worldQuadData";
 import {
   parseVoxelWorldManifest,
   parseVoxelWorldRegionPage,
@@ -52,8 +52,8 @@ const PART_LOAD_CONCURRENCY = 2;
 const MESH_LOAD_CONCURRENCY = 4;
 
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
-const TINT_GRASS: [number, number, number] = [0.7, 1, 0.42];
-const TINT_LEAVES: [number, number, number] = [0.45, 0.85, 0.28];
+const TINT_GRASS = WORLD_QUAD_TINTS[WORLD_QUAD_TINT_GRASS];
+const TINT_LEAVES = WORLD_QUAD_TINTS[WORLD_QUAD_TINT_LEAVES];
 const TINT_WATER = WORLD_QUAD_TINTS[WORLD_QUAD_TINT_WATER];
 
 function worldCenterFromBounds(bounds: VoxelWorldBounds): WorldCenter {
@@ -106,7 +106,7 @@ function regionBounds(region: Pick<VoxelWorldRegion, "origin" | "size">): VoxelW
 }
 
 function faceTint(blockType: string, face: Face): readonly [number, number, number] {
-  if (blockType === "oak_leaves") return TINT_LEAVES;
+  if (hasLeafTint(blockType)) return TINT_LEAVES;
   if (blockType === "water") return TINT_WATER;
   if (blockType === "grass_block" && face === "up") return TINT_GRASS;
   return TINT_WHITE;
@@ -294,8 +294,8 @@ function appendUniformRegion(
     { face: "west", normal: [-1, 0, 0], verts: [[x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0]], repeat: [region.size.z, region.size.y] },
     { face: "north", normal: [0, 0, -1], verts: [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]], repeat: [region.size.x, region.size.y] },
     { face: "south", normal: [0, 0, 1], verts: [[x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1]], repeat: [region.size.x, region.size.y] },
-    { face: "up", normal: [0, 1, 0], verts: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]], repeat: [region.size.x, region.size.z] },
-    { face: "down", normal: [0, -1, 0], verts: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], repeat: [region.size.x, region.size.z] },
+    { face: "up", normal: [0, 1, 0], verts: [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]], repeat: [region.size.z, region.size.x] },
+    { face: "down", normal: [0, -1, 0], verts: [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], repeat: [region.size.z, region.size.x] },
   ];
 
   for (const face of faces) {

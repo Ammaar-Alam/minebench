@@ -1,5 +1,5 @@
 import { ATLAS, hasAtlasKey } from "@/lib/blocks/atlas";
-import { getRenderKind } from "@/lib/blocks/registry";
+import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
 import { getTextureKey, type Face } from "@/lib/blocks/textures";
 import {
   computeFaceAO,
@@ -236,7 +236,7 @@ function bucketFor(name: BucketName, buckets: WorldQuadBuckets): WorldQuadBucket
 }
 
 function tintIndexFor(blockType: string, face: Face): WorldQuadTintIndex {
-  if (blockType === "oak_leaves") return WORLD_QUAD_TINT_LEAVES;
+  if (hasLeafTint(blockType)) return WORLD_QUAD_TINT_LEAVES;
   if (blockType === WATER_BLOCK_ID) return WORLD_QUAD_TINT_WATER;
   if (blockType === "grass_block" && face === "up") return WORLD_QUAD_TINT_GRASS;
   return WORLD_QUAD_TINT_WHITE;

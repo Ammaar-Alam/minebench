@@ -153,13 +153,19 @@ for (const water of [false, true]) {
               expectedPosition[normalAxis] = 31;
               expectedPosition[uAxis] = 111 + corners[corner]![uAxis]! * 2;
               expectedPosition[vAxis] = 211 + corners[corner]![vAxis]! * 3;
-              const uvWidth = !water && face >= 4 ? 3 : 2;
-              const uvHeight = !water && face >= 4 ? 2 : 3;
+              const uvWidth = face >= 4 || (water && face < 2) ? 3 : 2;
+              const uvHeight = face >= 4 || (water && face < 2) ? 2 : 3;
               const expectedUv = [corner >= 2 ? uvWidth : 0, corner === 1 || corner === 2 ? uvHeight : 0];
               assert.deepEqual(decoded.position, expectedPosition, `${shaderKind} water=${water} face=${face} corner=${corner}`);
               assert.deepEqual(decoded.normal, normal);
               assert.deepEqual(decoded.uv, expectedUv);
               assert.equal(decoded.colorIndex, tint * 4 + corner, "AO must follow the original corner after diagonal rotation");
+              const next = decode({ x: (baseCorner + 1) % 4 }, { x: words[0]!, y: words[1]!, z: words[2]!, w: words[3]! });
+              assert.equal(
+                Math.hypot(...decoded.uv.map((value, axis) => value - next.uv[axis]!)),
+                Math.hypot(...decoded.position.map((value, axis) => value - next.position[axis]!)),
+                `${shaderKind} water=${water} face=${face} edges repeat the texture once per block`,
+              );
             }
           }
         }

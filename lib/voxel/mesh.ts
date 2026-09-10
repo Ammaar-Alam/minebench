@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
-import { getRenderKind } from "@/lib/blocks/registry";
-import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
+import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
+import { ATLAS, getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBuild } from "@/lib/voxel/types";
@@ -41,7 +41,7 @@ import {
   buildWorldRegionGreedyMeshPayload,
   type WorldRegionMeshOptions,
 } from "@/lib/voxel/worldRegionMesh";
-import type { WorldQuadPayload } from "@/lib/voxel/worldQuadData";
+import { WORLD_QUAD_TINT_LEAVES, WORLD_QUAD_TINT_WHITE, type WorldQuadPayload } from "@/lib/voxel/worldQuadData";
 import { configureWorldQuadMesh, createWorldQuadGeometry, WORLD_QUAD_TEXTURE_CAPACITY } from "@/lib/voxel/worldQuadGeometry";
 
 export type { SerializedMeshBucket } from "@/lib/voxel/meshBuckets";
@@ -219,11 +219,14 @@ const TINT_WATER = hexToLinearRgb(0x3f76e4);
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
 const WATER_TEXTURE_KEY = "water_still";
 const WATER_SURFACE_OPACITY = 0.60;
+const LEAF_ATLAS_WORDS = new Set(Object.entries(ATLAS.keys)
+  .filter(([key]) => hasLeafTint(key))
+  .map(([, tile]) => (tile.x | ((ATLAS.atlasHeight - tile.y - tile.h) << 16)) >>> 0));
 
 let cachedWaterTexture: { atlasTexture: THREE.Texture; texture: THREE.Texture } | null = null;
 
 function faceTint(blockType: string, face: Face): [number, number, number] {
-  if (blockType === "oak_leaves") return TINT_LEAVES;
+  if (hasLeafTint(blockType)) return TINT_LEAVES;
   if (blockType === WATER_BLOCK_ID) return TINT_WATER;
   if (blockType === "grass_block" && face === "up") return TINT_GRASS;
   return TINT_WHITE;
@@ -1088,6 +1091,14 @@ export function createVoxelGroupFromMeshPayload(
       return;
     }
     if (!words) return;
+    if (kind === "cutout") {
+      // saved meshes can predate advanced foliage tint support
+      for (let offset = 0; offset < words.length; offset += 4) {
+        if ((words[offset + 3]! & 3) === WORLD_QUAD_TINT_WHITE && LEAF_ATLAS_WORDS.has(words[offset + 2]!)) {
+          words[offset + 3] = (words[offset + 3]! & ~3) | WORLD_QUAD_TINT_LEAVES;
+        }
+      }
+    }
     const pageWords = WORLD_QUAD_TEXTURE_CAPACITY * 4;
     for (let offset = 0; offset < words.length; offset += pageWords) {
       append(createWorldQuadGeometry(words.subarray(offset, offset + pageWords), bounds), offset === 0 ? material : material.clone());

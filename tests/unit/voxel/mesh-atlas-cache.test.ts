@@ -13,9 +13,9 @@ import {
 
 async function main() {
   {
-    assert.equal(CACHE_VERSION, "v4");
-    assert.equal(buildPersistentMeshCacheKey("test-hash-123"), "v4:test-hash-123");
-    assert.notEqual(buildPersistentMeshCacheKey("test-hash-123"), "v3:test-hash-123");
+    assert.equal(CACHE_VERSION, "v5");
+    assert.equal(buildPersistentMeshCacheKey("test-hash-123"), "v5:test-hash-123");
+    assert.notEqual(buildPersistentMeshCacheKey("test-hash-123"), "v4:test-hash-123");
   }
 
   {
