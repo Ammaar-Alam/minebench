@@ -321,9 +321,9 @@ function cornerFactor(
   oz: number,
   table: SpatialBlockLookup,
   materialOccluding: Uint8Array,
+  sA: boolean,
+  sB: boolean,
 ): number {
-  const sA = isOccludingAt(table, materialOccluding, ox + corner.sideA[0], oy + corner.sideA[1], oz + corner.sideA[2]);
-  const sB = isOccludingAt(table, materialOccluding, ox + corner.sideB[0], oy + corner.sideB[1], oz + corner.sideB[2]);
   if (sA && sB) return 0.58;
   const sD = isOccludingAt(table, materialOccluding, ox + corner.diag[0], oy + corner.diag[1], oz + corner.diag[2]);
   const level = 3 - ((sA ? 1 : 0) + (sB ? 1 : 0) + (sD ? 1 : 0));
@@ -341,12 +341,20 @@ export function computeFaceAO(
   const ox = bx + d.dx;
   const oy = by + d.dy;
   const oz = bz + d.dz;
+  const first = d.corners[0];
+  const opposite = d.corners[2];
+  const a0 = isOccludingAt(table, materialOccluding, ox + first.sideA[0], oy + first.sideA[1], oz + first.sideA[2]);
+  const b0 = isOccludingAt(table, materialOccluding, ox + first.sideB[0], oy + first.sideB[1], oz + first.sideB[2]);
+  const a1 = isOccludingAt(table, materialOccluding, ox + opposite.sideA[0], oy + opposite.sideA[1], oz + opposite.sideA[2]);
+  const b1 = isOccludingAt(table, materialOccluding, ox + opposite.sideB[0], oy + opposite.sideB[1], oz + opposite.sideB[2]);
+  // z-facing corners vary sideB before sideA to preserve their winding
+  const sideBFirst = d.dz !== 0;
 
   return [
-    cornerFactor(d.corners[0], ox, oy, oz, table, materialOccluding),
-    cornerFactor(d.corners[1], ox, oy, oz, table, materialOccluding),
-    cornerFactor(d.corners[2], ox, oy, oz, table, materialOccluding),
-    cornerFactor(d.corners[3], ox, oy, oz, table, materialOccluding),
+    cornerFactor(first, ox, oy, oz, table, materialOccluding, a0, b0),
+    cornerFactor(d.corners[1], ox, oy, oz, table, materialOccluding, sideBFirst ? a0 : a1, sideBFirst ? b1 : b0),
+    cornerFactor(opposite, ox, oy, oz, table, materialOccluding, a1, b1),
+    cornerFactor(d.corners[3], ox, oy, oz, table, materialOccluding, sideBFirst ? a1 : a0, sideBFirst ? b0 : b1),
   ];
 }
 
