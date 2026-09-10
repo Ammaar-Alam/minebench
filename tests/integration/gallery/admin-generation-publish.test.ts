@@ -206,7 +206,7 @@ async function main() {
     const removableBuild = await createBuild("remove_saved");
     const removablePublished = await publishAdminGeneration(adminId, removableBuild.publicId);
     await assert.rejects(
-      () => removeSavedGeneration(ownerId, removableBuild.publicId, { deleteArtifact: async () => undefined }),
+      () => removeSavedGeneration(ownerId, removableBuild.publicId),
       (error: unknown) =>
         error instanceof Error &&
         "code" in error &&
@@ -215,7 +215,6 @@ async function main() {
     assert.deepEqual(
       await removeSavedGeneration(ownerId, removableBuild.publicId, {
         acknowledgePublicExamples: true,
-        deleteArtifact: async () => undefined,
       }),
       { removed: true, publicExamplesRemoved: 1 },
     );

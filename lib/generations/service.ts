@@ -208,6 +208,7 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
   const retained = await prisma.customBuild.aggregate({
     where: {
       ownerId,
+      removedAt: null,
       storedByteSize: { gt: 0 },
     },
     _sum: { storedByteSize: true },
@@ -953,7 +954,6 @@ export async function removeSavedGeneration(
   publicId: string,
   options: {
     acknowledgePublicExamples?: boolean;
-    deleteArtifact?: typeof deleteCustomBuildArtifact;
   } = {},
 ) {
   const build = await prisma.customBuild.findFirst({
@@ -978,7 +978,7 @@ export async function removeSavedGeneration(
 
   const now = new Date();
   const purgeAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const artifacts = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const activeRemoval = await tx.customBuild.updateMany({
       where: {
         id: build.id,
@@ -1044,44 +1044,6 @@ export async function removeSavedGeneration(
         },
       });
     }
-    return tx.customBuildArtifact.findMany({
-      where: { customBuildId: build.id },
-      select: { id: true, bucket: true, path: true },
-    });
   });
-
-  const removeObject = options.deleteArtifact ?? deleteCustomBuildArtifact;
-  try {
-    for (const artifact of artifacts) {
-      await removeObject({ bucket: artifact.bucket, path: artifact.path });
-    }
-    await prisma.$transaction(async (tx) => {
-      await tx.customBuildArtifact.deleteMany({
-        where: { id: { in: artifacts.map((artifact) => artifact.id) } },
-      });
-      const remaining = await tx.customBuildArtifact.aggregate({
-        where: { customBuildId: build.id },
-        _sum: { storedByteSize: true },
-        _count: true,
-      });
-      await tx.customBuild.update({
-        where: { id: build.id },
-        data: {
-          storedByteSize: customBuildStorageBigInt(remaining._sum.storedByteSize),
-          objectsDeletedAt: remaining._count === 0 ? new Date() : null,
-          deletionPendingAt: remaining._count === 0 ? null : new Date(),
-          deletionError: remaining._count === 0 ? null : "Artifact cleanup pending.",
-        },
-      });
-    });
-  } catch (error) {
-    await prisma.customBuild.update({
-      where: { id: build.id },
-      data: {
-        deletionPendingAt: new Date(),
-        deletionError: redactSensitiveText(error).slice(0, 500),
-      },
-    });
-  }
   return { removed: true, publicExamplesRemoved: build.galleryExamples.length };
 }

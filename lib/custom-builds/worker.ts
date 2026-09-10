@@ -14,6 +14,7 @@ import {
   renewCustomBuildJobLease,
 } from "@/lib/custom-builds/jobs";
 import { runCustomBuildExportJob } from "@/lib/custom-builds/exportJob";
+import { startCustomBuildCleanup } from "@/lib/custom-builds/cleanup";
 import { isTerminalCustomBuildGenerateError, runCustomBuildGenerateJob } from "@/lib/custom-builds/generateJob";
 import { createCustomBuildProcessingGate } from "@/lib/custom-builds/processingGate";
 import { startNotificationDelivery } from "@/lib/notifications/delivery";
@@ -394,6 +395,7 @@ export async function runCustomBuildWorkerLoop(
     void checkAndReportQueueHealth();
   }, 30_000);
   const stopNotifications = startNotificationDelivery();
+  const stopCleanup = startCustomBuildCleanup();
   const stop = () => {
     if (shutdownRequested) return;
     shutdownRequested = true;
@@ -480,6 +482,7 @@ export async function runCustomBuildWorkerLoop(
     process.off("SIGINT", stop);
     process.off("SIGTERM", stop);
     await stopNotifications();
+    await stopCleanup();
     await prisma.$disconnect();
   }
 }

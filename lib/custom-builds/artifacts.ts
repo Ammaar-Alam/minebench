@@ -220,7 +220,8 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
                 ? `${args.publicId}-preview.svg`
         : `${args.publicId}.${descriptor.fileExtension}`;
 
-  if (args.bytes) {
+  const shouldUpload = existingArtifact?.bucket !== bucket || existingArtifact.path !== path;
+  if (shouldUpload && args.bytes) {
     await uploadCustomBuildArtifact({
       bucket,
       path,
@@ -228,7 +229,7 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
       contentType: descriptor.contentType,
       encoding: args.encoding,
     });
-  } else if (args.filePath) {
+  } else if (shouldUpload && args.filePath) {
     await uploadCustomBuildArtifactFile({
       bucket,
       path,
@@ -237,7 +238,7 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
       contentType: descriptor.contentType,
       encoding: args.encoding,
     });
-  } else {
+  } else if (!args.bytes && !args.filePath) {
     throw new Error("Custom build artifact bytes or file path are required");
   }
 
@@ -301,28 +302,26 @@ export async function uploadAndRecordCustomBuildArtifact(args: {
     "world_part",
     "preview_svg",
   ].includes(args.kind);
-  if (generationArtifact) {
-    const updated = await client.customBuild.updateMany({
-      where: { id: args.customBuildId, removedAt: null, status: "running" },
-      data: { storedByteSize: totalStoredByteSize },
-    });
-    if (updated.count !== 1) {
-      await client.customBuild.update({
-        where: { id: args.customBuildId },
-        data: {
-          storedByteSize: totalStoredByteSize,
-          objectsDeletedAt: null,
-          deletionPendingAt: new Date(),
-          deletionError: "Artifact cleanup pending.",
-        },
-      });
-      throw new Error("Custom build is no longer active");
-    }
-  } else {
+  const updated = await client.customBuild.updateMany({
+    where: {
+      id: args.customBuildId,
+      removedAt: null,
+      ...(generationArtifact ? { status: "running" as const }
+        : args.kind === "raw_text_debug" ? { status: { in: ["queued" as const, "running" as const] } } : {}),
+    },
+    data: { storedByteSize: totalStoredByteSize },
+  });
+  if (updated.count !== 1) {
     await client.customBuild.update({
       where: { id: args.customBuildId },
-      data: { storedByteSize: totalStoredByteSize },
+      data: {
+        storedByteSize: totalStoredByteSize,
+        objectsDeletedAt: null,
+        deletionPendingAt: new Date(),
+        deletionError: "Artifact cleanup pending.",
+      },
     });
+    throw new Error("Custom build is no longer active");
   }
   return artifact;
 }
