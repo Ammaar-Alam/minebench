@@ -52,6 +52,7 @@ runProviderConfigTest(
       displayName: "DeepSeek V4 Flash 0731",
       openRouterModelId: "deepseek/deepseek-v4-flash-0731",
       slug: "deepseek-v4-flash-0731",
+      forceOpenRouter: true,
     });
 
     assert.deepEqual(deepseekThinkingConfigForModel(model.modelId), {
@@ -104,15 +105,15 @@ runProviderConfigTest(
     assert.deepEqual(profile?.totalCost, { usd: 0.28, attemptCount: 24 });
 
     const direct = await runGeneration(capture, {
-      modelKey: model.key,
+      modelKey: flash.key,
       providerKeys: { deepseek: "test-deepseek-key" },
     });
     const directRequest = direct.requests.find((request) =>
       request.url.includes("deepseek.test"),
     )?.body;
     assert.ok(directRequest, "Direct DeepSeek request should be captured");
-    assert.equal(directRequest.model, "deepseek-v4-flash");
-    assert.equal(directRequest.max_tokens, 384_000);
+    assert.equal(directRequest.model, "deepseek-flash");
+    assert.equal(directRequest.max_tokens, 393_216);
     assert.deepEqual(directRequest.thinking, { type: "enabled" });
     assert.equal(directRequest.reasoning_effort, "max");
     assert.equal("temperature" in directRequest, false);
@@ -120,8 +121,8 @@ runProviderConfigTest(
     assertTraceLine(
       direct.traces,
       [
-        "Routing via direct deepseek provider (deepseek-v4-flash)",
-        "max_output_tokens=384000",
+        "Routing via direct deepseek provider (deepseek-flash)",
+        "max_output_tokens=393216",
         "thinking_mode=thinking=max",
         "temperature=n/a",
       ],
@@ -129,7 +130,7 @@ runProviderConfigTest(
     );
 
     const overridden = await runGeneration(capture, {
-      modelKey: model.key,
+      modelKey: flash.key,
       providerKeys: { deepseek: "test-deepseek-key" },
       customHeaders: { "X-Request-Profile": "custom" },
       customBody: { reasoning_effort: "low", thinking: { type: "disabled" } },
@@ -145,7 +146,7 @@ runProviderConfigTest(
 
     const openRouter = await runGeneration(capture, {
       modelKey: model.key,
-      providerKeys: { openrouter: "test-openrouter-key" },
+      providerKeys: { deepseek: "unused-native-key", openrouter: "test-openrouter-key" },
     });
     const openRouterRequest = openRouter.requests.find((request) =>
       request.url.includes("openrouter.test"),

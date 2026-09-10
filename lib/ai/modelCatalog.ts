@@ -450,6 +450,7 @@ const CATALOG = [
     displayName: "DeepSeek V4 Flash 0731",
     enabled: true,
     openRouterModelId: "deepseek/deepseek-v4-flash-0731",
+    forceOpenRouter: true,
   },
   {
     key: "deepseek_v3_2",
