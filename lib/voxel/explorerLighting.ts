@@ -325,7 +325,7 @@ export function setExplorerWorldFog(
 }
 
 export function getExplorerWorldFogDistance(size: { x: number; z: number }): number {
-  return Math.max(2_048, Math.max(size.x, size.z) * 0.55);
+  return THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.55, 1_024, 2_048);
 }
 
 export function renderExplorerBloomOverlay(

@@ -211,6 +211,9 @@ async function main() {
       lines: [
         { from: { x: 0, y: 0, z: 0 }, to: { x: 7, y: 7, z: 0 }, type: "oak-plank" },
         { from: { x: -2, y: 1, z: 0 }, to: { x: 3, y: 1, z: 0 }, type: "gold" },
+        { from: { x: 1, y: 3, z: 1 }, to: { x: 6, y: 4, z: 1 }, type: "gold" },
+        { from: { x: 7, y: 3, z: 1 }, to: { x: 0, y: 3, z: 1 }, type: "glass" },
+        { from: { x: 6, y: 3, z: 1 }, to: { x: 8, y: 3, z: 1 }, type: "gold_block" },
         { from: { x: 5, y: 0, z: 0 }, to: { x: 10, y: 0, z: 0 }, type: "unknown" },
       ],
       blocks: [
@@ -218,6 +221,7 @@ async function main() {
         { x: 8, y: 0, z: 0, type: "stone" },
         { x: 0, y: -1, z: 0, type: "stone" },
         { x: 1, y: 1, z: 1, type: "missing" },
+        { x: 6, y: 3, z: 1, type: "oak_log" },
       ],
     },
     8,

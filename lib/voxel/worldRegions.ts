@@ -380,7 +380,7 @@ function preprocessBuild(
       const y = Math.round(y1 + dy * t);
       const z = Math.round(z1 + dz * t);
       const bounds = addValidBoxBounds({ x1: x, y1: y, z1: z, x2: x, y2: y, z2: z });
-      if (bounds) appendPackedVoxelBox(packedLines, { ...bounds, type: normalizedType }, false);
+      if (bounds) appendPackedVoxelBox(packedLines, { ...bounds, type: normalizedType });
     }
   }
   addBoxSource(packedLines);
