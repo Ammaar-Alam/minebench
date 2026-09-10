@@ -7,7 +7,7 @@ import type {
   CustomBuildArtifactKind,
   CustomBuildStorageEncoding,
 } from "@/lib/custom-builds/types";
-import { uploadSupabaseStorageFile } from "@/lib/storage/buildPayload";
+import { deleteSupabaseStorageObjects, uploadSupabaseStorageFile } from "@/lib/storage/buildPayload";
 import { getSupabaseStorageConfig, LOCAL_BUILD_STORAGE_BUCKET } from "@/lib/storage/config";
 
 const DEFAULT_CUSTOM_BUILD_STORAGE_BUCKET = "builds";
@@ -367,6 +367,13 @@ export async function deleteCustomBuildArtifact(args: {
   });
   const { error } = await client.storage.from(args.bucket).remove([args.path]);
   if (error) throw new Error(`Custom build artifact deletion failed: ${error.message}`);
+}
+
+export async function deleteCustomBuildArtifacts(artifacts: ReadonlyArray<{ bucket: string; path: string }>): Promise<void> {
+  await deleteSupabaseStorageObjects(artifacts.filter((artifact) => artifact.bucket.trim() !== LOCAL_BUILD_STORAGE_BUCKET));
+  for (const artifact of artifacts) {
+    if (artifact.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) await deleteCustomBuildArtifact(artifact);
+  }
 }
 
 async function fetchCustomBuildArtifact(args: {

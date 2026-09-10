@@ -220,6 +220,50 @@ async function main() {
     else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
   }
 
+  process.env.CUSTOM_BUILD_STORAGE_BUCKET = "__local_fs__";
+  process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = ".custom-build-storage/unit-artifact-late-write";
+  const latePath = getCustomBuildArtifactPath({ publicId: id, kind: "raw_text_debug", sha256: compensationSha });
+  const updates: Array<Record<string, unknown>> = [];
+  let alreadyOwned = false;
+  try {
+    const lateWrite = () => uploadAndRecordCustomBuildArtifact({
+      customBuildId: "removed-build", publicId: id, kind: "raw_text_debug", bytes: compensationBytes,
+      client: {
+        customBuildArtifact: {
+          findUnique: async () => {
+            if (!alreadyOwned) return null;
+            await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: latePath });
+            return { bucket: "__local_fs__", path: latePath };
+          },
+          upsert: async ({ create }: { create: unknown }) => create,
+          aggregate: async () => ({ _sum: { storedByteSize: compensationBytes.byteLength } }),
+        },
+        customBuild: {
+          updateMany: async ({ where }: { where: { removedAt?: unknown; status?: unknown } }) => {
+            assert.equal(where.removedAt, null);
+            assert.deepEqual(where.status, { in: ["queued", "running"] }, "late raw responses cannot reactivate canceled builds");
+            return { count: 0 };
+          },
+          update: async ({ data }: { data: Record<string, unknown> }) => { updates.push(data); return data; },
+        },
+      } as never,
+    });
+    await assert.rejects(lateWrite(), /no longer active/);
+    assert.equal(updates[0]?.objectsDeletedAt, null);
+    assert.ok(updates[0]?.deletionPendingAt instanceof Date, "a late raw upload must requeue physical cleanup");
+    assert.equal(updates[0]?.storedByteSize, compensationBytes.byteLength);
+    alreadyOwned = true;
+    await assert.rejects(lateWrite(), /no longer active/);
+    await assert.rejects(downloadCustomBuildArtifactBytes({ bucket: "__local_fs__", path: latePath }), /ENOENT/,
+      "a repeated upload must not recreate an immutable object while its ownership is being deleted");
+  } finally {
+    await deleteCustomBuildArtifact({ bucket: "__local_fs__", path: latePath });
+    if (originalBucket === undefined) delete process.env.CUSTOM_BUILD_STORAGE_BUCKET;
+    else process.env.CUSTOM_BUILD_STORAGE_BUCKET = originalBucket;
+    if (originalStorageDir === undefined) delete process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR;
+    else process.env.CUSTOM_BUILD_LOCAL_STORAGE_DIR = originalStorageDir;
+  }
+
   const originalFetch = globalThis.fetch;
   const originalSupabaseUrl = process.env.SUPABASE_URL;
   const originalSupabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;

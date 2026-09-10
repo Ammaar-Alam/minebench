@@ -55,6 +55,8 @@ function main() {
     assert.deepEqual(batch.neighbors, [inside, right]);
 
     const { packed, halo } = packWorldMeshBatch(batch, parts);
+    assert.equal(packed.typeIds.length, packed.count, "owned cells reserve their exact validated count");
+    assert.equal(packed.positions.length, packed.count * 3);
     assert.deepEqual(positions(packed), ["12,3,1:glass", "12,8,1:glass", "39,1,1:stone"]);
     assert.deepEqual(positions(halo), ["12,4,1:glass", "13,6,1:stone", "39,7,3:stone", "40,1,1:glass"]);
     assert.equal(packed.typeNames, halo.typeNames);

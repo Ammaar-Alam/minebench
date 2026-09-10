@@ -52,7 +52,15 @@ export function packWorldMeshBatch(
   batch: WorldMeshBatch,
   parts: ReadonlyMap<string, PackedVoxelBlocks>,
 ): { packed: PackedVoxelBlocks; halo: PackedVoxelBlocks } {
-  const packed = createPackedVoxelBlocks(0);
+  for (const region of [...batch.regions, ...batch.neighbors]) {
+    if (region.kind !== "mixed") continue;
+    const part = parts.get(region.key);
+    if (!part) throw new Error(`World mesh region ${region.key} data is missing`);
+    if (!isPackedVoxelBlocks(part) || part.count !== region.blockCount) {
+      throw new Error(`World mesh region ${region.key} packed data is invalid`);
+    }
+  }
+  const packed = createPackedVoxelBlocks(batch.regions.reduce((count, region) => count + region.blockCount, 0));
   const halo = createPackedVoxelBlocks(0);
   const typeIds = new Map<string, number>();
   halo.typeNames = packed.typeNames;
@@ -92,11 +100,7 @@ export function packWorldMeshBatch(
     target.count += 1;
   };
   const appendMixed = (region: VoxelWorldMixedRegion, target: PackedVoxelBlocks) => {
-    const part = parts.get(region.key);
-    if (!part) throw new Error(`World mesh region ${region.key} data is missing`);
-    if (!isPackedVoxelBlocks(part) || part.count !== region.blockCount) {
-      throw new Error(`World mesh region ${region.key} packed data is invalid`);
-    }
+    const part = parts.get(region.key)!;
     const remappedTypes = part.typeNames.map(typeIdFor);
     for (let index = 0; index < part.count; index += 1) {
       const x = part.positions[index * 3];

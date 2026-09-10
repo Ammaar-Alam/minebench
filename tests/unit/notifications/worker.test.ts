@@ -5,12 +5,13 @@ process.env.APNS_ENABLED = "true";
 process.env.CUSTOM_BUILD_WORKER_CONCURRENCY = "1";
 setMetricLogWriter(() => {});
 
-const timers = new Map<object, () => void>();
-let tick!: () => void;
+const timers = new Map<object, { callback: () => void; delay: number }>();
+const tick = () => {
+  for (const timer of timers.values()) if (timer.delay === 5_000) timer.callback();
+};
 globalThis.setInterval = ((callback: () => void, delay: number) => {
   const timer = {};
-  timers.set(timer, callback);
-  if (delay === 5_000) tick = callback;
+  timers.set(timer, { callback, delay });
   return timer;
 }) as typeof setInterval;
 globalThis.clearInterval = ((timer: object) => { timers.delete(timer); }) as typeof clearInterval;
@@ -41,7 +42,7 @@ const transaction = {
     return [{ id: "export-job", customBuildId: "build", type: "export", payload: { format: "glb" } }];
   },
   $executeRaw: async () => 0,
-  customBuild: { findUnique: async () => { buildStarted = true; return build; } },
+  customBuild: { findMany: async () => [], findUnique: async () => { buildStarted = true; return build; } },
   customBuildArtifact: { findFirst: async () => ({ id: "existing-export" }) },
   customBuildJob: { findFirst: async () => null, count: async () => 0, updateMany: async () => ({ count: 1 }) },
   stealthGenerationResult: { findFirst: async () => null, count: async () => 0 },

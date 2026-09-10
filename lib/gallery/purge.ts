@@ -1,8 +1,6 @@
 import type { CustomBuildArtifact } from "@prisma/client";
 import { retryPendingAuthDeletions } from "@/lib/account/service";
-import { customBuildStorageBigInt } from "@/lib/custom-builds/numericMetadata";
-import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
-import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
+import { purgePendingCustomBuildArtifacts } from "@/lib/custom-builds/cleanup";
 import { prisma } from "@/lib/prisma";
 import { PUBLIC_SESSION_RETENTION_MS } from "@/lib/publicPresence";
 
@@ -23,7 +21,6 @@ export async function purgeDueGalleryRecords(
   if (authorization.minebenchAdmin !== true) throw new Error("Gallery purge authorization is required");
   const now = options.now ?? new Date();
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_BATCH_SIZE, 500));
-  const removeObject = options.deleteArtifact ?? deleteCustomBuildArtifact;
 
   const authUsers = await retryPendingAuthDeletions({
     now,
@@ -34,72 +31,9 @@ export async function purgeDueGalleryRecords(
   const expiredSecrets = await prisma.customBuildSecret.deleteMany({
     where: { expiresAt: { lte: now } },
   });
-  const pendingBuilds = await prisma.customBuild.findMany({
-    where: {
-      OR: [
-        { deletionPendingAt: { not: null } },
-        { removedAt: { not: null }, purgeAt: { lte: now } },
-      ],
-    },
-    orderBy: [{ purgeAt: "asc" }, { removedAt: "asc" }],
-    take: limit,
-    select: {
-      id: true,
-      galleryExamples: {
-        where: { previewRetained: true, purgeAt: { gt: now } },
-        select: { id: true },
-      },
-      artifacts: { select: { id: true, kind: true, bucket: true, path: true } },
-    },
+  const { objectsDeleted, objectDeletionFailures } = await purgePendingCustomBuildArtifacts({
+    now, limit, deleteArtifact: options.deleteArtifact,
   });
-
-  let objectsDeleted = 0;
-  let objectDeletionFailures = 0;
-  for (const build of pendingBuilds) {
-    const retainPreview = build.galleryExamples.length > 0;
-    const artifacts = retainPreview
-      ? build.artifacts.filter((artifact) => artifact.kind !== "preview_svg")
-      : build.artifacts;
-    try {
-      for (const artifact of artifacts) {
-        await removeObject(artifact);
-      }
-      await prisma.$transaction(async (tx) => {
-        await tx.customBuildArtifact.deleteMany({
-          where: { id: { in: artifacts.map((artifact) => artifact.id) } },
-        });
-        const remaining = await tx.customBuildArtifact.aggregate({
-          where: { customBuildId: build.id },
-          _sum: { storedByteSize: true },
-          _count: true,
-        });
-        const cleanupPending = retainPreview
-          ? (await tx.customBuildArtifact.count({
-              where: { customBuildId: build.id, kind: { not: "preview_svg" } },
-            })) > 0
-          : remaining._count > 0;
-        await tx.customBuild.update({
-          where: { id: build.id },
-          data: {
-            storedByteSize: customBuildStorageBigInt(remaining._sum.storedByteSize),
-            objectsDeletedAt: cleanupPending ? null : now,
-            deletionPendingAt: cleanupPending ? now : null,
-            deletionError: cleanupPending ? "Artifact cleanup pending." : null,
-          },
-        });
-      });
-      objectsDeleted += artifacts.length;
-    } catch (error) {
-      objectDeletionFailures += 1;
-      await prisma.customBuild.update({
-        where: { id: build.id },
-        data: {
-          deletionPendingAt: now,
-          deletionError: redactSensitiveText(error).slice(0, 500),
-        },
-      });
-    }
-  }
 
   const moderationIds = await prisma.galleryModerationRecord.findMany({
     where: { purgeAt: { lte: now } },

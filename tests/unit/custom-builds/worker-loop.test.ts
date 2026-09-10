@@ -17,9 +17,14 @@ let claimFailed = false;
 let disconnects = 0;
 let fatal = false;
 let unavailable = false;
+let cleanupScans = 0;
 let releaseBuild!: (value: unknown) => void;
+let releaseCleanup!: () => void;
+let jobCompleted!: () => void;
 let recovered!: () => void;
 const build = new Promise((resolve) => { releaseBuild = resolve; });
+const cleanup = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+const completed = new Promise<void>((resolve) => { jobCompleted = resolve; });
 const retried = new Promise<void>((resolve) => { recovered = resolve; });
 const transaction = {
   customBuildSecret: { deleteMany: async () => ({ count: 0 }) },
@@ -49,12 +54,20 @@ const fakePrisma = {
     claimed = true;
     return [{ id: "active-export", customBuildId: "build-row", type: "export", payload: { format: "glb" } }];
   },
-  customBuild: { findUnique: async () => build },
+  customBuild: {
+    findUnique: async () => build,
+    findMany: async () => {
+      const scan = ++cleanupScans;
+      await cleanup;
+      if (scan === 1) operations.push("cleanup_complete");
+      return [];
+    },
+  },
   customBuildArtifact: { findFirst: async () => ({ id: "existing-export" }) },
   customBuildJob: {
     findFirst: async () => null,
     count: async () => 0,
-    updateMany: async () => { operations.push("job_complete"); return { count: 1 }; },
+    updateMany: async () => { operations.push("job_complete"); jobCompleted(); return { count: 1 }; },
   },
   stealthGenerationResult: { findFirst: async () => null, count: async () => 0 },
   notificationDelivery: { updateMany: async () => ({ count: 0 }) },
@@ -83,6 +96,7 @@ async function main() {
     await Promise.race([retried, loop.then(() => { throw new Error("Worker exited before retrying"); })]);
     assert.equal(claimed, true);
     assert.equal(claimFailed, true);
+    assert.equal(cleanupScans, 1, "cleanup must start independently while a generation job is active");
     assert.equal(disconnects, 0, "poll failures must not disconnect an active job");
     assert.ok(recoveries[2]! - recoveries[1]! >= 200, "recovery retries must back off");
     assert.ok(recoveries[3]! - recoveries[2]! >= 450, "consecutive claim failures must increase the delay");
@@ -91,8 +105,12 @@ async function main() {
     signalWorker();
     assert.equal(disconnects, 0, "SIGTERM must drain the active job");
     releaseBuild({ id: "build-row", publicId: "cb_existing", status: "succeeded", buildSha256: "a".repeat(64) });
+    await completed;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(disconnects, 0, "shutdown must also drain active artifact cleanup");
+    releaseCleanup();
     await loop;
-    assert.deepEqual(operations, ["export_complete", "job_complete", "disconnect"]);
+    assert.deepEqual(operations, ["export_complete", "job_complete", "cleanup_complete", "disconnect"]);
     assert.equal(process.listenerCount("SIGTERM"), initialListeners);
 
     unavailable = true;
@@ -109,11 +127,13 @@ async function main() {
     loop = runCustomBuildWorkerLoop("fatal-test");
     await assert.rejects(loop, /Invalid queue configuration/);
     assert.equal(disconnects, 3);
+    assert.equal(cleanupScans, 3, "every worker loop must start its own cleanup lifecycle");
     assert.equal(process.listenerCount("SIGTERM"), initialListeners);
     console.log("custom build worker loop recovery checks passed");
   } finally {
     signalWorker();
     releaseBuild(null);
+    releaseCleanup();
     await loop?.catch(() => {});
     clearTimeout(timeout);
     console.warn = originalWarn;
