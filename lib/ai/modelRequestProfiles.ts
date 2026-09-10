@@ -18,6 +18,7 @@ const OUTPUT_CEILINGS: readonly { tokens: number; ids: readonly string[] }[] = [
   { tokens: 1_000_000, ids: ["grok-4.3"] },
   { tokens: 496_000, ids: ["grok-4.6"] },
   { tokens: 500_000, ids: ["grok-4.5"] },
+  { tokens: 393_216, ids: ["deepseek-flash"] },
   {
     tokens: 384_000,
     ids: [

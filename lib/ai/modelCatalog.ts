@@ -434,6 +434,15 @@ const CATALOG = [
     enabled: true,
   },
   {
+    key: "deepseek_v4_1_flash",
+    slug: "deepseek-v4-1-flash",
+    provider: "deepseek",
+    modelId: "deepseek-flash",
+    displayName: "DeepSeek V4.1 Flash",
+    enabled: true,
+    openRouterModelId: "deepseek/deepseek-v4.1-flash",
+  },
+  {
     key: "deepseek_v4_flash_0731",
     slug: "deepseek-v4-flash-0731",
     provider: "deepseek",
@@ -441,6 +450,7 @@ const CATALOG = [
     displayName: "DeepSeek V4 Flash 0731",
     enabled: true,
     openRouterModelId: "deepseek/deepseek-v4-flash-0731",
+    forceOpenRouter: true,
   },
   {
     key: "deepseek_v3_2",
