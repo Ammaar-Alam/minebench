@@ -147,7 +147,7 @@ const EFFORT_LADDER_RULES: readonly EffortLadderRule[] = [
   },
   { ids: ["z-ai/glm-5.1", "z-ai/glm-5"], ladder: ["xhigh", "high", "medium", "low"] },
   {
-    ids: ["deepseek/deepseek-v4-flash-0731"],
+    ids: ["deepseek/deepseek-v4-flash-0731", "deepseek/deepseek-v4.1-flash"],
     ladder: ["max", "high", "low"],
     aliases: { xhigh: null },
     supported: "max, xhigh, high, low",
@@ -365,7 +365,7 @@ export function deepseekThinkingConfigForModel(
   override?: string,
 ): DeepSeekThinkingConfig | undefined {
   const normalized = normalizeReasoningOverride(override);
-  const isFlashModel = modelId === "deepseek-v4-flash";
+  const isFlashModel = modelId === "deepseek-v4-flash" || modelId === "deepseek-flash";
   const supportsThinking =
     modelId === "deepseek-v4-pro" ||
     isFlashModel ||

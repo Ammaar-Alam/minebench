@@ -190,6 +190,10 @@ const MODEL_RUN_PARAMETERS = {
     { label: "Thinking", value: "Enabled" },
     { label: "Reasoning effort", value: "Max" },
   ],
+  deepseek_v4_1_flash: [
+    { label: "Thinking", value: "Enabled" },
+    { label: "Reasoning effort", value: "Max" },
+  ],
   deepseek_v4_flash_0731: [
     { label: "Thinking", value: "Enabled" },
     { label: "Reasoning effort", value: "Max" },
