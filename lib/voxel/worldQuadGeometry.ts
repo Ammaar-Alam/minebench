@@ -121,7 +121,7 @@ diffuseColor.rgb *= worldSurfaceColor;
 `;
 }
 
-function patchQuadMaterial(material: THREE.Material, anchor: readonly [number, number, number], water: boolean, data: THREE.DataTexture, surface?: THREE.DataTexture): void {
+function patchQuadMaterial(material: THREE.Material, anchor: readonly [number, number, number], water: boolean, data: THREE.DataTexture, surface?: THREE.DataTexture, ranges?: Int32Array | null): void {
   material.onBeforeCompile = (shader) => {
     shader.uniforms.worldQuadAnchor = { value: new THREE.Vector3().fromArray(anchor) };
     shader.uniforms.worldQuadColors = { value: WORLD_QUAD_COLORS };
@@ -129,17 +129,26 @@ function patchQuadMaterial(material: THREE.Material, anchor: readonly [number, n
     shader.uniforms.worldQuadData = { value: data };
     shader.uniforms.worldQuadDataWidth = { value: data.image.width };
     if (surface) shader.uniforms.worldSurfaceData = { value: surface };
+    if (ranges) shader.uniforms.worldQuadRanges = { value: ranges };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", `#include <common>
 uniform highp usampler2D worldQuadData;
 uniform int worldQuadDataWidth;
+${ranges ? "uniform ivec2 worldQuadRanges[6];" : ""}
 uniform vec3 worldQuadAnchor;
 uniform vec3 worldQuadColors[16];
 uniform vec2 worldQuadAtlasTexel;
 flat varying vec2 vWorldQuadAtlasOrigin;
 ${surface ? "flat varying uvec4 vWorldSurfaceQuad;\nvarying vec2 vWorldSurfaceUv;" : ""}`)
       .replace("#include <uv_vertex>", `uint worldQuadIndex = uint(gl_InstanceID) * ${QUADS_PER_INSTANCE}u + (uint(position.x) >> 2u);
-uvec4 worldQuad = texelFetch(worldQuadData, ivec2(worldQuadIndex % uint(worldQuadDataWidth), worldQuadIndex / uint(worldQuadDataWidth)), 0);
+${ranges ? `bool worldQuadDrawn = worldQuadIndex < uint(worldQuadRanges[5].y);
+for (int range = 0; range < 6; range++) {
+  if (worldQuadIndex < uint(worldQuadRanges[range].y)) {
+    worldQuadIndex += uint(worldQuadRanges[range].x);
+    break;
+  }
+}` : ""}
+uvec4 worldQuad = ${ranges ? "worldQuadDrawn ? " : ""}texelFetch(worldQuadData, ivec2(worldQuadIndex % uint(worldQuadDataWidth), worldQuadIndex / uint(worldQuadDataWidth)), 0)${ranges ? " : uvec4(0u)" : ""};
 ${quadDecoder(water)}
 #include <uv_vertex>
 #ifdef USE_MAP
@@ -174,8 +183,82 @@ ${surface ? "uniform highp usampler2D worldSurfaceData;\nuniform vec3 worldQuadC
 #endif`);
     }
   };
-  material.customProgramCacheKey = () => `voxel-world-quad-batch-${water ? "water" : "atlas"}${surface ? "-surface" : ""}`;
+  material.customProgramCacheKey = () => `voxel-world-quad-batch-${water ? "water" : "atlas"}${surface ? "-surface" : ""}${ranges ? "-ranges" : ""}`;
   material.needsUpdate = true;
+}
+
+// sorted surface planes let one draw skip faces pointing away from the camera
+function configureSurfaceCulling(mesh: THREE.Mesh, anchor: readonly [number, number, number], data: THREE.DataTexture): Int32Array | null {
+  const geometry = mesh.geometry as THREE.InstancedBufferGeometry;
+  const count = geometry.userData.worldQuadCount as number;
+  const words = data.image.data as Uint32Array;
+  const faces: { face: number; start: number; count: number; plane: number }[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const face = (words[index * 4 + 1]! >>> 20) & 7;
+    const plane = words[index * 4]! & 1023;
+    let group = faces.at(-1);
+    if (group?.face !== face) {
+      if (faces.some((entry) => entry.face === face) || faces.length === 6) return null;
+      group = { face, start: index, count: 0, plane };
+      faces.push(group);
+    }
+    if (plane < group.plane) return null;
+    group.count += 1;
+    group.plane = plane;
+  }
+  const ranges = new Int32Array(12);
+  const cameraPosition = new THREE.Vector3();
+  const inverse = new THREE.Matrix4();
+  const reset = () => {
+    for (let i = 0; i < 6; i += 1) {
+      ranges[i * 2] = 0;
+      ranges[i * 2 + 1] = count;
+    }
+    geometry.instanceCount = Math.ceil(count / QUADS_PER_INSTANCE);
+  };
+  reset();
+  const beforeRender = mesh.onBeforeRender;
+  mesh.onBeforeRender = (...args) => {
+    const camera = args[2];
+    if (!(camera instanceof THREE.PerspectiveCamera) || args[4].side !== THREE.FrontSide) reset();
+    else {
+      cameraPosition.setFromMatrixPosition(camera.matrixWorld)
+        .applyMatrix4(inverse.copy(mesh.matrixWorld).invert());
+      let visible = 0;
+      for (let i = 0; i < 6; i += 1) {
+        const group = faces[i];
+        ranges[i * 2] = 0;
+        if (group) {
+          const axis = group.face < 2 ? 0 : group.face < 4 ? 2 : 1;
+          const position = cameraPosition.getComponent(axis) + anchor[axis];
+          const positive = group.face === 0 || group.face === 3 || group.face === 4;
+          let low = group.start, high = low + group.count;
+          if (position < (words[low * 4]! & 1023)) high = low;
+          else if (position > group.plane) low = high;
+          while (low < high) {
+            const mid = (low + high) >>> 1;
+            const plane = words[mid * 4]! & 1023;
+            if (positive ? plane <= position : plane < position) low = mid + 1;
+            else high = mid;
+          }
+          const start = positive ? group.start : low;
+          const end = positive ? low : group.start + group.count;
+          ranges[i * 2] = start - visible;
+          visible += end - start;
+        }
+        ranges[i * 2 + 1] = visible;
+      }
+      geometry.instanceCount = Math.ceil(visible / QUADS_PER_INSTANCE);
+    }
+    beforeRender.apply(mesh, args);
+  };
+  const beforeShadow = mesh.onBeforeShadow;
+  mesh.onBeforeShadow = (...args) => {
+    // shadow cameras need the complete caster
+    reset();
+    beforeShadow.apply(mesh, args);
+  };
+  return ranges;
 }
 
 export function configureWorldQuadMesh(
@@ -186,15 +269,16 @@ export function configureWorldQuadMesh(
 ): void {
   const data = mesh.geometry.userData.worldQuadTexture as THREE.DataTexture;
   if (!(data instanceof THREE.DataTexture)) throw new Error("World quad geometry data is missing");
+  const ranges = surface ? configureSurfaceCulling(mesh, anchor, data) : null;
   const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
   for (const material of materials) {
-    patchQuadMaterial(material, anchor, water, data, surface);
+    patchQuadMaterial(material, anchor, water, data, surface, ranges);
     material.vertexColors = !surface;
     material.allowOverride = false;
   }
   const source = materials[0] as THREE.MeshLambertMaterial;
   const depth = new THREE.MeshDepthMaterial({ map: source.map, alphaMap: source.alphaMap, alphaTest: source.alphaTest, side: source.side });
-  patchQuadMaterial(depth, anchor, water, data, surface);
+  patchQuadMaterial(depth, anchor, water, data, surface, ranges);
   mesh.customDepthMaterial = depth;
   const geometry = mesh.geometry;
   const disposeDepth = () => {

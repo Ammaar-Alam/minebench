@@ -254,4 +254,73 @@ for (const water of [false, true]) {
   texture.dispose();
 }
 
+{
+  const words = new Uint32Array(6 * 65 * 4);
+  for (let face = 0; face < 6; face += 1) for (let index = 0; index < 65; index += 1) {
+    const cell = quad(face);
+    cell[0] = (cell[0]! & ~1023) | (20 + index);
+    words.set(cell, (face * 65 + index) * 4);
+  }
+  const geometry = createWorldQuadGeometry(words, bounds)!;
+  const surface = new THREE.DataTexture(new Uint32Array(4), 1, 1, THREE.RedIntegerFormat, THREE.UnsignedIntType);
+  const material = new THREE.MeshLambertMaterial();
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(300, 20, -400);
+  mesh.rotation.set(.2, .6, -.1);
+  mesh.updateMatrixWorld();
+  configureWorldQuadMesh(mesh, anchor, false, surface);
+  const shader = compile(material, "lambert");
+  const ranges = shader.uniforms.worldQuadRanges.value as Int32Array;
+  const remapBody = shader.vertexShader.slice(shader.vertexShader.indexOf("uint worldQuadIndex ="), shader.vertexShader.indexOf("uvec4 worldQuad ="))
+    .replace(/\b(?:uint|int|bool)\s+(\w+)\s*=/g, "let $1 =")
+    .replace(/\b(\d+)u\b/g, "$1");
+  const remap = runInNewContext(`(worldQuadRanges, gl_InstanceID, position) => { ${remapBody} return worldQuadDrawn ? worldQuadIndex : null; }`, {
+    uint: (value: number) => value >>> 0,
+  }) as (ranges: { x: number; y: number }[], instance: number, position: { x: number }) => number | null;
+  const shaderIndex = (index: number) => remap(Array.from({ length: 6 }, (_, i) => ({ x: ranges[i * 2]!, y: ranges[i * 2 + 1]! })), Math.floor(index / 64), { x: index % 64 * 4 });
+  const mappedIndices = () => Array.from({ length: ranges[11]! }, (_, index) => {
+    const mapped = shaderIndex(index);
+    assert.notEqual(mapped, null);
+    return mapped!;
+  });
+  assert.match(shader.vertexShader, /worldQuadDrawn \? texelFetch[^\n]+ : uvec4\(0u\)/, "padding cannot repeat the last visible face");
+  assert.equal(compile(mesh.customDepthMaterial!, "depth").uniforms.worldQuadRanges.value, ranges);
+  const renderer = {} as THREE.WebGLRenderer;
+  const scene = new THREE.Scene();
+  const renderGroup = new THREE.Group();
+  const camera = new THREE.PerspectiveCamera();
+  for (const point of [new THREE.Vector3(100, 100, 100), new THREE.Vector3(-100, -100, -100), new THREE.Vector3(50, 50, 50), new THREE.Vector3(20, 84, 20)]) {
+    camera.position.copy(point).sub(new THREE.Vector3(...anchor)).applyMatrix4(mesh.matrixWorld);
+    camera.updateMatrixWorld();
+    mesh.onBeforeRender(renderer, scene, camera, geometry, material, renderGroup);
+    const actual = mappedIndices();
+    assert.ok(actual.every((index, i) => index >= 0 && index < 390 && (i === 0 || index > actual[i - 1]!)), "visible faces retain their source order");
+    for (let face = 0; face < 6; face += 1) {
+      const normal = new THREE.Vector3(DIRS[face].nx, DIRS[face].ny, DIRS[face].nz);
+      const axis = face < 2 ? 0 : face < 4 ? 2 : 1;
+      for (let i = 0; i < 65; i += 1) {
+        if ((point.getComponent(axis) - 20 - i) * normal.getComponent(axis) > 1e-8) {
+          assert.ok(actual.includes(face * 65 + i), "culling cannot remove a camera-facing face");
+        }
+      }
+    }
+    assert.equal(geometry.instanceCount, Math.ceil(actual.length / 64));
+    for (let index = actual.length; index < geometry.instanceCount * 64; index += 1) assert.equal(shaderIndex(index), null, "padding emits no face");
+    if (point.x === 100 || point.x === -100) assert.equal(actual.length, 195, "the GPU receives only the three facing groups");
+    mesh.onBeforeShadow(renderer, scene, camera, new THREE.OrthographicCamera(), geometry, mesh.customDepthMaterial!, renderGroup);
+    assert.deepEqual(mappedIndices(), Array.from({ length: 390 }, (_, i) => i), "shadow rendering keeps all caster faces");
+  }
+  for (const side of [THREE.BackSide, THREE.DoubleSide]) {
+    material.side = side;
+    mesh.onBeforeRender(renderer, scene, camera, geometry, material, renderGroup);
+    assert.equal(ranges[11], 390);
+  }
+  material.side = THREE.FrontSide;
+  mesh.onBeforeRender(renderer, scene, new THREE.OrthographicCamera(), geometry, material, renderGroup);
+  assert.equal(ranges[11], 390);
+  assert.deepEqual((geometry.userData.worldQuadTexture.image.data as Uint32Array).subarray(0, words.length), words, "culling does not rewrite geometry or surface cells");
+  geometry.dispose();
+  material.dispose();
+}
+
 console.log("world-quad-geometry tests passed");
