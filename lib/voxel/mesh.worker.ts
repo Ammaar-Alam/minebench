@@ -1,4 +1,4 @@
-import { getRenderKind } from "@/lib/blocks/registry";
+import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
 import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
@@ -129,7 +129,7 @@ const TINT_WATER = hexToLinearRgb(0x3f76e4);
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
 
 function faceTint(blockType: string, face: Face): FaceTint {
-  if (blockType === "oak_leaves") return TINT_LEAVES;
+  if (hasLeafTint(blockType)) return TINT_LEAVES;
   if (blockType === WATER_BLOCK_ID) return TINT_WATER;
   if (blockType === "grass_block" && face === "up") return TINT_GRASS;
   return TINT_WHITE;

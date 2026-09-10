@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import * as THREE from "three";
 import { getPalette } from "../../../lib/blocks/palettes";
+import { DIRS } from "../../../lib/voxel/ambientOcclusion";
 import { decodeBinaryVoxelBuild, encodeBinaryVoxelBuild } from "../../../lib/voxel/binaryBuild";
+import { buildMeshPayload } from "../../../lib/voxel/mesh.worker";
+import { packVoxelBlocks } from "../../../lib/voxel/packedBlocks";
 import { createVoxelWorldScene, isVoxelWorldScene } from "../../../lib/voxel/worldScene";
 import { encodeWorldMeshPayload, getWorldMeshVersion } from "../../../lib/voxel/worldMesh";
 import { buildWorldRegionGreedyMeshPayload } from "../../../lib/voxel/worldRegionMesh";
 import { buildWorldMeshPayloads } from "../../../lib/voxel/worldMeshSource";
-import { WORLD_QUAD_COLORS } from "../../../lib/voxel/worldQuadData";
+import { WORLD_QUAD_COLORS, WORLD_QUAD_TINT_GRASS, WORLD_QUAD_TINT_WHITE, WORLD_QUAD_TINTS } from "../../../lib/voxel/worldQuadData";
 import type {
   VoxelWorldDelivery,
   VoxelWorldManifest,
@@ -52,6 +55,38 @@ function createScene(delivery: VoxelWorldDelivery, opts?: Parameters<typeof crea
 
 async function main() {
   {
+    const blocks = packVoxelBlocks([{ x: 0, y: 0, z: 0, type: "grass_block" }]);
+    const allowed = getPalette("simple").map((block) => block.id);
+    const legacy = buildMeshPayload(blocks, allowed).opaque!;
+    const compact = buildWorldRegionGreedyMeshPayload(blocks, allowed, { size: { x: 1, y: 1, z: 1 } }).worldQuads!.opaque!;
+    const scene = await createScene({ manifest: {
+      ...BASE, exactBlockCount: 1,
+      bounds: { origin: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 } },
+      regions: [{ kind: "uniform", key: "grass", origin: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 }, type: "grass_block", blockCount: 1 }],
+    }, resolvePart: async () => { throw new Error("uniform grass requires no source read"); } });
+    try {
+      const geometry = meshes(scene.group)[0].geometry;
+      const grassColor = WORLD_QUAD_TINTS[WORLD_QUAD_TINT_GRASS].map((channel) => Math.round(channel * 255));
+      assert.equal(geometry.index?.count, 36);
+      assert.equal(legacy.indices.length, 36);
+      assert.equal(compact.length, 6 * 4);
+      for (let vertex = 0; vertex < geometry.getAttribute("position").count; vertex += 1) {
+        assert.deepEqual(Array.from(geometry.getAttribute("color").array.slice(vertex * 3, vertex * 3 + 3)),
+          geometry.getAttribute("normal").getY(vertex) === 1 ? grassColor : [255, 255, 255], "uniform grass tints only its top face");
+        assert.deepEqual(Array.from(legacy.colors.subarray(vertex * 3, vertex * 3 + 3)),
+          legacy.normals[vertex * 3 + 1] === 127 ? grassColor : [255, 255, 255], "legacy grass keeps the same top and side colors");
+      }
+      for (let offset = 0; offset < compact.length; offset += 4) {
+        const face = DIRS[(compact[offset + 1] >>> 20) & 7].face;
+        assert.equal(compact[offset + 3] & 3, face === "up" ? WORLD_QUAD_TINT_GRASS : WORLD_QUAD_TINT_WHITE);
+        assert.equal((compact[offset + 3] >>> 2) & 255, 255, "isolated grass has no ambient occlusion");
+        assert.equal(compact[offset + 1] & 1023, 1);
+        assert.equal((compact[offset + 1] >>> 10) & 1023, 1);
+      }
+    } finally { scene.dispose(); }
+  }
+
+  {
     const manifest: VoxelWorldManifest = {
       ...BASE,
       bounds: { origin: { x: 128, y: 32, z: 64 }, size: { x: 2, y: 3, z: 4 } },
@@ -78,6 +113,18 @@ async function main() {
     assert.equal(geometry.getAttribute("position").count, 24);
     assert.equal(geometry.getAttribute("atlasUvFrame").itemSize, 4);
     assert.equal(Math.max(...geometry.getAttribute("uv").array), 4);
+    const uv = geometry.getAttribute("uv");
+    for (let base = 0; base < 24; base += 4) for (let corner = 0; corner < 4; corner += 1) {
+      const current = base + corner;
+      const next = base + (corner + 1) % 4;
+      assert.equal(
+        new THREE.Vector2(uv.getX(current), uv.getY(current))
+          .distanceTo(new THREE.Vector2(uv.getX(next), uv.getY(next))),
+        new THREE.Vector3().fromBufferAttribute(geometry.getAttribute("position"), current)
+          .distanceTo(new THREE.Vector3().fromBufferAttribute(geometry.getAttribute("position"), next)),
+        "uniform face edges repeat the texture once per block",
+      );
+    }
     scene.dispose();
     scene.dispose();
     assert.equal(scene.group.children.length, 0);
@@ -145,7 +192,7 @@ async function main() {
       assert.equal(internalFaces, 0, "fully adjacent uniform water emits no internal faces");
       assert.equal(shorelineFaces, 2, "partial shoreline coverage and different transparent neighbors retain exposed water faces");
       assert.equal(geometryHash(scene.group.getObjectByName("VoxelWorldUniformRegions")!),
-        "23d4377d2cb9a3146b00a52dc9fa7a65b4f8bd6f8f6b5d3dfeac274953bfd4d7",
+        "3105a2c6802e9577d45328cb954aa99ba3df07402169579daf3c7ae735e0367e",
         "water and partial shoreline geometry remain byte-identical");
     } finally {
       scene.dispose();
@@ -170,7 +217,7 @@ async function main() {
       exactBlockCount: regions.reduce((total, region) => total + region.blockCount, 0), regions,
     }, resolvePart: async () => { throw new Error("uniform geometry must not read source parts"); } });
     try {
-      assert.equal(geometryHash(scene.group), "d175a145c0be6ce4749d89242e1b68b31a85f416121fb3b41e67636f2e1c2b62",
+      assert.equal(geometryHash(scene.group), "1e1b5b24dc436e08c0e360be196b8947a91d0c67d370bf312d2b0cdfba49a769",
         "uneven neighbors, disjoint faces, and material boundaries retain geometry and order");
     } finally {
       scene.dispose();

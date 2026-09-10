@@ -74,7 +74,7 @@ vec3 worldQuadNormal = worldQuadFace < 2u
   ? vec3(worldQuadFace == 0u ? 1.0 : -1.0, 0.0, 0.0)
   : worldQuadFace < 4u ? vec3(0.0, 0.0, worldQuadFace == 2u ? -1.0 : 1.0)
   : vec3(0.0, worldQuadFace == 4u ? 1.0 : -1.0, 0.0);
-vec2 worldQuadUv = ${water ? "vec2(worldQuadS * worldQuadWidth, worldQuadT * worldQuadHeight)" : "worldQuadFace < 4u ? vec2(worldQuadS * worldQuadWidth, worldQuadT * worldQuadHeight) : vec2(worldQuadS * worldQuadHeight, worldQuadT * worldQuadWidth)"};
+vec2 worldQuadUv = ${water ? "worldQuadFace >= 2u && worldQuadFace < 4u" : "worldQuadFace < 4u"} ? vec2(worldQuadS * worldQuadWidth, worldQuadT * worldQuadHeight) : vec2(worldQuadS * worldQuadHeight, worldQuadT * worldQuadWidth);
 int worldQuadColorIndex = int((worldQuad.w & 3u) * 4u + ((worldQuad.w >> (2u + worldQuadCorner * 2u)) & 3u));
 `;
 }
