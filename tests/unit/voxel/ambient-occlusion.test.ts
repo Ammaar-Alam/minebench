@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { computeFaceAO, DIRS, SpatialBlockTable } from "../../../lib/voxel/ambientOcclusion";
+import { computeFaceAO, computePackedFaceAO, DIRS, SpatialBlockTable } from "../../../lib/voxel/ambientOcclusion";
 import { MAX_VOXEL_COORDINATE } from "../../../lib/voxel/coordinateKeys";
 
 const occluding = new Uint8Array([1, 0]);
@@ -32,6 +32,8 @@ for (const anchor of [0, 20, 1023, MAX_VOXEL_COORDINATE]) {
         },
       }, occluding);
       assert.deepEqual(actual, expected, `${anchor}/${direction.face}/${mask}`);
+      const packed = computePackedFaceAO(direction, anchor, anchor, anchor, table, occluding);
+      expected.forEach((factor, corner) => assert.equal((packed >>> (corner * 2)) & 3, Math.round((factor - .58) / .42 * 3)));
       assert.ok([...calls.values()].every((count) => count === 1), "each face neighbor is sampled at most once");
       cases += 1;
     }

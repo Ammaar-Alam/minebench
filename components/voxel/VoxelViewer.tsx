@@ -1107,7 +1107,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
       throw new Error(VOXEL_VIEWER_WEBGL_ERROR);
     }
     // mobile retina is much more fragment-shader bound; cap lower to keep memory + frame time down
-    renderer.setPixelRatio(getViewerPixelRatio());
+    let fullPixelRatio = getViewerPixelRatio();
+    renderer.setPixelRatio(fullPixelRatio);
     // important: keep canvas css size in sync with the mount, otherwise we end up showing only a corner
     renderer.setSize(mount.clientWidth, mount.clientHeight, true);
     camera.aspect = mount.clientWidth / Math.max(1, mount.clientHeight);
@@ -1117,7 +1118,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
 
     const syncRendererSize = () => {
       // mobile retina is much more fragment-shader bound; cap lower to keep memory + frame time down
-    renderer.setPixelRatio(getViewerPixelRatio());
+      fullPixelRatio = getViewerPixelRatio();
+      renderer.setPixelRatio(fullPixelRatio);
       const w = mount.clientWidth;
       const h = mount.clientHeight;
       if (w > 0 && h > 0) {
@@ -1155,7 +1157,7 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
     };
     const onEnd = () => {
       userInteractingRef.current = false;
-      if (autoRotateRef.current) requestRenderRef.current?.();
+      requestRenderRef.current?.();
     };
     controls.addEventListener("start", onStart);
     controls.addEventListener("end", onEnd);
@@ -1208,6 +1210,8 @@ export const VoxelViewer = forwardRef<VoxelViewerHandle, ViewerProps>(function V
         const controlsChanged = (controls.update() as boolean | void) === true;
 
         const vg = voxelGroupRef.current;
+        const pixelRatio = fullPixelRatio * (isVoxelWorldScene(vg) && userInteractingRef.current && controlsChanged ? 0.9 : 1);
+        if (renderer.getPixelRatio() !== pixelRatio) renderer.setPixelRatio(pixelRatio);
         const shouldAutoRotate = Boolean(vg && autoRotateRef.current && !userInteractingRef.current);
         if (vg && shouldAutoRotate) {
           vg.group.rotation.y += dt * 0.25;

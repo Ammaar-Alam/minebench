@@ -16,6 +16,8 @@ import {
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import { getPalette } from "@/lib/blocks/palettes";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
+import { enableExplorerFog, enableExplorerSkyGradient } from "@/lib/voxel/explorerFog";
+import { enableExplorerShadows } from "@/lib/voxel/explorerShadows";
 import { parseExplorerBuildId } from "@/lib/voxel/explorerBuildId";
 import {
   EXPLORER_EYE_HEIGHT,
@@ -462,6 +464,7 @@ function configureAtmosphere(
     }),
   );
   sky.scale.setScalar(800);
+  enableExplorerSkyGradient(sky.material);
   sky.frustumCulled = false;
   sky.renderOrder = -100;
 
@@ -482,6 +485,7 @@ function configureAtmosphere(
     }),
   );
   nightSky.scale.copy(sky.scale);
+  enableExplorerSkyGradient(nightSky.material);
   nightSky.frustumCulled = false;
   nightSky.renderOrder = -99;
   nightSky.visible = false;
@@ -792,6 +796,11 @@ function ExplorerScene({
     renderer.setSize(Math.max(1, mount.clientWidth), Math.max(1, mount.clientHeight), true);
     mount.appendChild(renderer.domElement);
     const atmosphere = configureAtmosphere(scene, renderer);
+    const fogUniforms = {
+      explorerDaySky: { value: atmosphere.sky.material.map! },
+      explorerNightSky: { value: atmosphere.nightSky.material.map! },
+      explorerNightBlend: { value: 0 },
+    };
     const sceneFog = scene.fog as THREE.Fog;
     const { sun, sunFlare } = atmosphere;
     const bloomTarget = new THREE.WebGLRenderTarget(1, 1, {
@@ -904,10 +913,17 @@ function ExplorerScene({
     const prepareVoxelMeshes = (group: THREE.Object3D) => {
       hasEmissiveMeshes = false;
       worldQuadMeshes.length = 0;
+      const preparedMaterials = new Set<THREE.Material>();
       group.traverse((child) => {
         if (!(child instanceof THREE.Mesh)) return;
         if (child.customDepthMaterial) worldQuadMeshes.push(child);
         const materials = Array.isArray(child.material) ? child.material : [child.material];
+        for (const material of materials) {
+          if (preparedMaterials.has(material)) continue;
+          preparedMaterials.add(material);
+          enableExplorerFog(material, fogUniforms);
+          if (material instanceof THREE.MeshLambertMaterial) enableExplorerShadows(material);
+        }
         child.castShadow = materials.every((material) => !material.transparent);
         child.receiveShadow = true;
         if (!materials.some((material) => material instanceof THREE.MeshBasicMaterial)) return;
@@ -1079,6 +1095,7 @@ function ExplorerScene({
       atmosphere.sky.visible = nightBlend < 0.999;
       atmosphere.nightSky.visible = nightBlend > 0.001;
       atmosphere.nightSky.material.opacity = nightBlend;
+      fogUniforms.explorerNightBlend.value = nightBlend;
       atmosphere.hemisphere.color.lerpColors(
         DAY_HEMISPHERE_COLOR,
         NIGHT_HEMISPHERE_COLOR,

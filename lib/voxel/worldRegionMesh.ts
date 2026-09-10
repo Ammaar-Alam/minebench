@@ -2,7 +2,7 @@ import { ATLAS, hasAtlasKey } from "@/lib/blocks/atlas";
 import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
 import { getTextureKey, type Face } from "@/lib/blocks/textures";
 import {
-  computeFaceAO,
+  computePackedFaceAO,
   computeVisibleFaceMask,
   DIRS,
   SpatialBlockTable,
@@ -16,7 +16,6 @@ import type { VoxelPoint } from "@/lib/voxel/types";
 import {
   appendWorldQuad,
   createWorldQuadBucket,
-  packWorldQuadAo,
   serializeWorldQuadBucket,
   WORLD_QUAD_FIELD_MAX,
   WORLD_QUAD_TINT_GRASS,
@@ -130,16 +129,67 @@ class DenseWorldRegionBlockTable implements WorldRegionBlockTable {
   }
 }
 
-function createWorldRegionBlockTable(
+class PackedWorldRegionBlockTable implements WorldRegionBlockTable {
+  private readonly width: number;
+  private readonly height: number;
+  private readonly depth: number;
+  private readonly values: Uint8Array;
+
+  constructor(size: VoxelPoint, private readonly typeCodes: Uint8Array, private readonly typeIds: readonly number[]) {
+    this.width = size.x + 2;
+    this.height = size.y + 2;
+    this.depth = size.z + 2;
+    this.values = new Uint8Array(Math.ceil(this.width * this.height * this.depth / 2));
+  }
+
+  set(x: number, y: number, z: number, typeId: number): void {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height || z < 0 || z >= this.depth) return;
+    const index = (x * this.height + y) * this.depth + z;
+    const shift = (index & 1) * 4;
+    this.values[index >>> 1] = (this.values[index >>> 1]! & ~(15 << shift)) | (this.typeCodes[typeId]! << shift);
+  }
+
+  get(x: number, y: number, z: number): number {
+    if (x < 0 || x >= this.width || y < 0 || y >= this.height || z < 0 || z >= this.depth) return -1;
+    const index = (x * this.height + y) * this.depth + z;
+    return this.typeIds[(this.values[index >>> 1]! >>> ((index & 1) * 4)) & 15]!;
+  }
+}
+
+export function createWorldRegionBlockTable(
   size: VoxelPoint,
-  paletteSize: number,
+  materialOccluding: Uint8Array,
   capacity: number,
+  sourceTypeIds: Uint16Array,
+  haloTypeIds: Uint16Array | null = null,
 ): WorldRegionBlockTable {
+  const paletteSize = materialOccluding.length;
   const bytesPerCell = paletteSize <= 0xff ? 1 : paletteSize <= 0xffff ? 2 : null;
   const cells = (size.x + 2) * (size.y + 2) * (size.z + 2);
   // ponytail: fixed dense lookup cap fallback sparse if mixed batches exceed it
   if (bytesPerCell && Number.isSafeInteger(cells) && cells * bytesPerCell <= DENSE_LOOKUP_MAX_BYTES) {
     return new DenseWorldRegionBlockTable(size, bytesPerCell);
+  }
+  const packedBytes = Math.ceil(cells / 2);
+  if (Number.isSafeInteger(cells) && packedBytes <= DENSE_LOOKUP_MAX_BYTES && packedBytes <= capacity * 6) {
+    const typeCodes = new Uint8Array(paletteSize);
+    const typeIds = [-1];
+    let opaqueCode = 0;
+    // opaque neighbors share one code while source blocks retain face materials
+    for (const group of [sourceTypeIds, haloTypeIds]) {
+      if (!group) continue;
+      for (const typeId of group) {
+        if (typeId >= paletteSize || typeCodes[typeId]) continue;
+        if (materialOccluding[typeId] && opaqueCode) typeCodes[typeId] = opaqueCode;
+        else {
+          if (typeIds.length === 16) return new SpatialBlockTable(capacity);
+          typeCodes[typeId] = typeIds.length;
+          if (materialOccluding[typeId]) opaqueCode = typeIds.length;
+          typeIds.push(typeId);
+        }
+      }
+    }
+    return new PackedWorldRegionBlockTable(size, typeCodes, typeIds);
   }
   return new SpatialBlockTable(capacity);
 }
@@ -240,11 +290,6 @@ function tintIndexFor(blockType: string, face: Face): WorldQuadTintIndex {
   if (blockType === WATER_BLOCK_ID) return WORLD_QUAD_TINT_WATER;
   if (blockType === "grass_block" && face === "up") return WORLD_QUAD_TINT_GRASS;
   return WORLD_QUAD_TINT_WHITE;
-}
-
-function flatAo(ao: readonly [number, number, number, number] | undefined): number | null {
-  if (!ao) return null;
-  return ao[0] === ao[1] && ao[0] === ao[2] && ao[0] === ao[3] ? ao[0] : null;
 }
 
 function axisIndex(axis: Axis): CoordIndex {
@@ -372,11 +417,9 @@ function faceKey(
   plane: number,
   typeId: number,
   directionIndex: number,
-  ao: readonly [number, number, number, number] | undefined,
   packedAoByte: number,
 ): number | null {
-  const flat = flatAo(ao);
-  if (ao && flat === null) return null;
+  if (packedAoByte !== (packedAoByte & 3) * 85) return null;
   return ((typeId * DIRS.length + directionIndex) * (WORLD_QUAD_FIELD_MAX + 1) + plane) * 256 + packedAoByte;
 }
 
@@ -439,7 +482,7 @@ function prepareWorldRegionMesh(
     materialOccluding[typeId] = isVoxelOccluder(allowedBlockIds[typeId]!) ? 1 : 0;
   }
 
-  const table = createWorldRegionBlockTable(opts.size, allowedBlockIds.length, blocks.count + (opts.halo?.count ?? 0));
+  const table = createWorldRegionBlockTable(opts.size, materialOccluding, blocks.count + (opts.halo?.count ?? 0), paletteTypeIds, haloPaletteTypeIds);
   const visibleFaceMasks = new Uint8Array(blocks.count);
   let filteredBlockCount = 0;
   let minX = Infinity;
@@ -548,9 +591,9 @@ export function buildWorldRegionGreedyMeshPayload(
       const direction = face.direction;
       const atlasWord = face.atlasWord;
       if (atlasWord === null) continue;
-      const ao = face.bucket === "emissive" || face.bucket === "water"
-        ? undefined
-        : computeFaceAO(
+      const packedAoByte = face.bucket === "emissive" || face.bucket === "water"
+        ? 255
+        : computePackedFaceAO(
             direction,
             tableCoordinate(x),
             tableCoordinate(y),
@@ -558,12 +601,11 @@ export function buildWorldRegionGreedyMeshPayload(
             prepared.table,
             prepared.materialOccluding,
           );
-      const packedAoByte = packWorldQuadAo(ao);
       const flipDiagonal = worldQuadFlipDiagonal(face.tintIndex, packedAoByte);
       const plane = coordinate(face.planeAxis, x, y, z) + face.planeOffset;
       const u = coordinate(face.uAxis, x, y, z);
       const v = coordinate(face.vAxis, x, y, z);
-      const key = faceKey(plane, paletteTypeId, face.directionIndex, ao, packedAoByte);
+      const key = faceKey(plane, paletteTypeId, face.directionIndex, packedAoByte);
       if (key === null) {
         appendFaceRect(
           buckets,

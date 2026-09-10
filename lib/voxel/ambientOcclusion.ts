@@ -314,7 +314,7 @@ export function computeVisibleFaceMask(
   return mask;
 }
 
-function cornerFactor(
+function cornerLevel(
   corner: CornerOffset,
   ox: number,
   oy: number,
@@ -324,20 +324,19 @@ function cornerFactor(
   sA: boolean,
   sB: boolean,
 ): number {
-  if (sA && sB) return 0.58;
+  if (sA && sB) return 0;
   const sD = isOccludingAt(table, materialOccluding, ox + corner.diag[0], oy + corner.diag[1], oz + corner.diag[2]);
-  const level = 3 - ((sA ? 1 : 0) + (sB ? 1 : 0) + (sD ? 1 : 0));
-  return 0.58 + (level / 3.0) * 0.42;
+  return 3 - ((sA ? 1 : 0) + (sB ? 1 : 0) + (sD ? 1 : 0));
 }
 
-export function computeFaceAO(
+export function computePackedFaceAO(
   d: Direction,
   bx: number,
   by: number,
   bz: number,
   table: SpatialBlockLookup,
   materialOccluding: Uint8Array,
-): readonly [number, number, number, number] {
+): number {
   const ox = bx + d.dx;
   const oy = by + d.dy;
   const oz = bz + d.dz;
@@ -350,12 +349,20 @@ export function computeFaceAO(
   // z-facing corners vary sideB before sideA to preserve their winding
   const sideBFirst = d.dz !== 0;
 
-  return [
-    cornerFactor(first, ox, oy, oz, table, materialOccluding, a0, b0),
-    cornerFactor(d.corners[1], ox, oy, oz, table, materialOccluding, sideBFirst ? a0 : a1, sideBFirst ? b1 : b0),
-    cornerFactor(opposite, ox, oy, oz, table, materialOccluding, a1, b1),
-    cornerFactor(d.corners[3], ox, oy, oz, table, materialOccluding, sideBFirst ? a1 : a0, sideBFirst ? b0 : b1),
-  ];
+  return cornerLevel(first, ox, oy, oz, table, materialOccluding, a0, b0) |
+    (cornerLevel(d.corners[1], ox, oy, oz, table, materialOccluding, sideBFirst ? a0 : a1, sideBFirst ? b1 : b0) << 2) |
+    (cornerLevel(opposite, ox, oy, oz, table, materialOccluding, a1, b1) << 4) |
+    (cornerLevel(d.corners[3], ox, oy, oz, table, materialOccluding, sideBFirst ? a1 : a0, sideBFirst ? b0 : b1) << 6);
+}
+
+const AO_FACTORS = [0, 1, 2, 3].map((level) => 0.58 + (level / 3) * 0.42);
+
+export function computeFaceAO(
+  d: Direction, bx: number, by: number, bz: number,
+  table: SpatialBlockLookup, materialOccluding: Uint8Array,
+): readonly [number, number, number, number] {
+  const packed = computePackedFaceAO(d, bx, by, bz, table, materialOccluding);
+  return [AO_FACTORS[packed & 3]!, AO_FACTORS[(packed >>> 2) & 3]!, AO_FACTORS[(packed >>> 4) & 3]!, AO_FACTORS[packed >>> 6]!];
 }
 
 export function canBlockEmitAnyFace(
