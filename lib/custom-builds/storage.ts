@@ -7,7 +7,7 @@ import type {
   CustomBuildArtifactKind,
   CustomBuildStorageEncoding,
 } from "@/lib/custom-builds/types";
-import { uploadSupabaseStorageFile } from "@/lib/storage/buildPayload";
+import { deleteSupabaseStorageObjects, uploadSupabaseStorageFile } from "@/lib/storage/buildPayload";
 import { getSupabaseStorageConfig, LOCAL_BUILD_STORAGE_BUCKET } from "@/lib/storage/config";
 
 const DEFAULT_CUSTOM_BUILD_STORAGE_BUCKET = "builds";
@@ -141,6 +141,24 @@ export function getCustomBuildArtifactDescriptor(kind: CustomBuildArtifactKind):
       storageFolder: "viewer",
     };
   }
+  if (kind === "viewer_world") {
+    return {
+      kind,
+      format: "world.json.gz",
+      contentType: "application/gzip",
+      fileExtension: "world.json.gz",
+      storageFolder: "viewer",
+    };
+  }
+  if (kind === "world_part") {
+    return {
+      kind,
+      format: "world-part.gz",
+      contentType: "application/gzip",
+      fileExtension: "world-part.gz",
+      storageFolder: "viewer",
+    };
+  }
   if (kind === "preview_svg") {
     return {
       kind,
@@ -208,6 +226,8 @@ export function getCustomBuildArtifactPath(args: {
     args.kind === "preview_mbv4" ||
     args.kind === "viewer_mbv4" ||
     args.kind === "viewer_mbf1" ||
+    args.kind === "viewer_world" ||
+    args.kind === "world_part" ||
     args.kind === "preview_svg"
   ) {
     const sha = assertSha256(args.sha256, args.kind);
@@ -246,20 +266,31 @@ export async function uploadCustomBuildArtifact(args: CustomBuildArtifactUpload)
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(args.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(bucket)}/${encodedPath}`;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.serviceRoleKey}`,
-      apikey: config.serviceRoleKey,
-      "x-upsert": "true",
-      "Content-Type": args.contentType,
-      ...(args.encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}),
-    },
-    body: args.bytes as unknown as BodyInit,
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`Custom build artifact upload failed (${resp.status}): ${text || "empty response"}`);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.serviceRoleKey}`,
+          apikey: config.serviceRoleKey,
+          "x-upsert": "true",
+          "Content-Type": args.contentType,
+          ...(args.encoding === "gzip" ? { "Content-Encoding": "gzip" } : {}),
+        },
+        body: args.bytes as unknown as BodyInit,
+      });
+      if (resp.ok) {
+        await resp.body?.cancel().catch(() => undefined);
+        return;
+      }
+      const text = await resp.text().catch(() => "");
+      if (attempt >= 2 || !(resp.status === 408 || resp.status === 429 || resp.status >= 500)) {
+        throw new Error(`Custom build artifact upload failed (${resp.status}): ${text || "empty response"}`);
+      }
+    } catch (error) {
+      if (attempt >= 2 || !(error instanceof TypeError)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
   }
 }
 
@@ -338,14 +369,18 @@ export async function deleteCustomBuildArtifact(args: {
   if (error) throw new Error(`Custom build artifact deletion failed: ${error.message}`);
 }
 
-export async function downloadCustomBuildArtifactBytes(args: {
+export async function deleteCustomBuildArtifacts(artifacts: ReadonlyArray<{ bucket: string; path: string }>): Promise<void> {
+  await deleteSupabaseStorageObjects(artifacts.filter((artifact) => artifact.bucket.trim() !== LOCAL_BUILD_STORAGE_BUCKET));
+  for (const artifact of artifacts) {
+    if (artifact.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) await deleteCustomBuildArtifact(artifact);
+  }
+}
+
+async function fetchCustomBuildArtifact(args: {
   bucket: string;
   path: string;
-}): Promise<Uint8Array> {
-  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
-    return readLocalCustomBuildArtifact(resolveLocalCustomBuildStoragePath(args.path));
-  }
-
+  signal?: AbortSignal;
+}): Promise<Response> {
   const config = getSupabaseStorageConfig();
   const encodedPath = encodeStoragePath(args.path);
   const url = `${config.url}/storage/v1/object/${encodeURIComponent(args.bucket)}/${encodedPath}`;
@@ -356,10 +391,46 @@ export async function downloadCustomBuildArtifactBytes(args: {
       apikey: config.serviceRoleKey,
     },
     cache: "no-store",
+    signal: args.signal,
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`Custom build artifact download failed (${resp.status}): ${text || "empty response"}`);
   }
-  return new Uint8Array(await resp.arrayBuffer());
+  return resp;
+}
+
+export async function downloadCustomBuildArtifactBytes(args: {
+  bucket: string;
+  path: string;
+}): Promise<Uint8Array> {
+  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    return readLocalCustomBuildArtifact(resolveLocalCustomBuildStoragePath(args.path));
+  }
+  return new Uint8Array(await (await fetchCustomBuildArtifact(args)).arrayBuffer());
+}
+
+export async function* downloadCustomBuildArtifactStream(args: {
+  bucket: string;
+  path: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<Uint8Array> {
+  if (args.bucket.trim() === LOCAL_BUILD_STORAGE_BUCKET) {
+    const { createReadStream } = await import("node:fs");
+    yield* createReadStream(resolveLocalCustomBuildStoragePath(args.path), { signal: args.signal });
+    return;
+  }
+  const response = await fetchCustomBuildArtifact(args);
+  if (!response.body) throw new Error("Custom build artifact download returned an empty body");
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      yield value;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
 }

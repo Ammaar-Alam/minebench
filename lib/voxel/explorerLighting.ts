@@ -309,6 +309,25 @@ export async function applyExplorerBlockLighting(
   }
 }
 
+export function setExplorerWorldFog(
+  camera: THREE.PerspectiveCamera,
+  fog: THREE.Fog,
+  bloomFog: THREE.Fog,
+  viewDistance: number,
+): void {
+  fog.far = Math.max(camera.near, viewDistance);
+  fog.near = fog.far * 0.2;
+  camera.far = Math.max(camera.near * 2, fog.far + 64);
+  camera.updateProjectionMatrix();
+  bloomFog.near = fog.near;
+  bloomFog.far = fog.far;
+  bloomFog.color.set(0x000000);
+}
+
+export function getExplorerWorldFogDistance(size: { x: number; z: number }): number {
+  return THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.55, 1_024, 2_048);
+}
+
 export function renderExplorerBloomOverlay(
   renderer: { autoClear: boolean },
   render: () => void,

@@ -6,8 +6,9 @@ import {
   type SavedGenerationRequestConfig,
 } from "@/lib/ai/customProviderConfig";
 import type { Provider } from "@/lib/ai/modelCatalog";
+import { isVoxelBuildResourceError, processVoxelBuildResponse, type ProcessVoxelBuildResponse } from "@/lib/ai/processVoxelBuildResponse";
 import { generateVoxelBuild, type GenerateVoxelBuildParams } from "@/lib/ai/generateVoxelBuild";
-import { MAX_BLOCKS_BY_GRID, type GridSize } from "@/lib/ai/limits";
+import { MAX_BLOCKS_BY_GRID, type GridSize, isGridSize } from "@/lib/ai/limits";
 import type { ProviderApiKeys } from "@/lib/ai/types";
 import { encodeBinaryArtifact } from "@/lib/arena/binaryArtifact";
 import { recordGenerationError, recordGenerationSuccess } from "@/lib/observability/cloudwatch";
@@ -16,10 +17,13 @@ import { getPalette } from "@/lib/blocks/palettes";
 import {
   buildCustomBuildPreview,
   decodeAndVerifyCustomBuildArtifactText,
+  getCustomBuildPreviewTargetBlocks,
   gzipBytes,
+  readStoredBuildSource,
   sha256Hex,
   uploadAndRecordCustomBuildArtifact,
   writeCanonicalBuildArtifact,
+  writeVoxelBuildSourceArtifact,
 } from "@/lib/custom-builds/artifacts";
 import { appendCustomBuildEvent } from "@/lib/custom-builds/events";
 import {
@@ -31,18 +35,21 @@ import { decryptProviderKey, decryptSecretValue } from "@/lib/custom-builds/secr
 import { redactSensitiveText, safeCustomBuildRetryReason } from "@/lib/custom-builds/sanitize";
 import {
   assertCustomBuildStorageConfigured,
-  downloadCustomBuildArtifactBytes,
+  downloadCustomBuildArtifactStream,
 } from "@/lib/custom-builds/storage";
+import { persistVoxelWorldArtifacts } from "@/lib/custom-builds/worldArtifacts";
 import { prisma } from "@/lib/prisma";
 import { buildGalleryPreviewSvg } from "@/lib/gallery/preview";
-import { packVoxelBlocks } from "@/lib/voxel/packedBlocks";
+import { packVoxelBlocks, sortPackedVoxelBlocks, voxelBuildBlockCount } from "@/lib/voxel/packedBlocks";
 import { createVoxelMeshFacts, encodeVoxelMeshFacts } from "@/lib/voxel/meshFacts";
-import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { validateOwnedVoxelBuild, validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { summarizeVoxelWorldRegions } from "@/lib/voxel/worldRegions";
 import { generationProviderSignal } from "@/lib/generation-worker/providerSignal";
 
 type GenerateJobPayload = {
   stubBuild?: unknown;
+  openaiResponseId?: string;
 };
 
 type GenerateVoxelBuildModel = NonNullable<GenerateVoxelBuildParams["model"]>;
@@ -54,6 +61,7 @@ type GeneratedBuildResult = {
   generationTimeMs: number | null;
   completedAt?: Date;
   sourceArtifactSha256?: string;
+  canonicalArtifact?: { sourceSha256: string; byteSize: number | bigint; storedByteSize: number | bigint };
 };
 
 export type ImportedCustomBuildResult = Required<Pick<
@@ -62,6 +70,7 @@ export type ImportedCustomBuildResult = Required<Pick<
 >>;
 
 const CUSTOM_BUILD_MODEL_MAX_ATTEMPTS = 2;
+const MAX_RECOVERED_RAW_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 export function customBuildProviderSignal(
   signal?: AbortSignal,
@@ -82,11 +91,15 @@ class CustomBuildGenerationFailedError extends Error {
 
 function asGenerateJobPayload(payload: Prisma.JsonValue | null): GenerateJobPayload {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return {};
+  if (payload.openaiResponseId !== undefined &&
+      (typeof payload.openaiResponseId !== "string" || !/^resp_[A-Za-z0-9_-]{1,200}$/.test(payload.openaiResponseId))) {
+    throw new Error("Invalid saved OpenAI response id");
+  }
   return payload as GenerateJobPayload;
 }
 
 function assertGridSize(value: number): GridSize {
-  if (value === 64 || value === 256 || value === 512) return value;
+  if (isGridSize(value)) return value;
   throw new Error(`Unsupported custom build grid size: ${value}`);
 }
 
@@ -164,14 +177,26 @@ function isCustomBuildArtifactBookkeepingError(error: unknown): error is CustomB
 }
 
 function safeGenerateFailure(error: unknown, message: string) {
+  if (message === "import_source_missing") {
+    return { code: "import_source_missing", message: "The imported source is no longer available. Paste the tool call again." };
+  }
   if (message === "provider_key_expired") {
     return { code: "provider_key_expired", message: "Provider key expired before the worker could start." };
   }
-  if (isCustomBuildArtifactPersistenceError(error)) {
-    return { code: "artifact_persistence_failed", message: "The generated result could not be saved." };
+  if (message.includes("heap_limit_exceeded")) {
+    return { code: "heap_limit_exceeded", message: "This build exceeded the processing memory limit." };
+  }
+  if (message.includes("processing_capacity_exceeded")) {
+    return { code: "processing_capacity_exceeded", message: "This build exceeds the current processing capacity." };
+  }
+  if (message.includes("openai_response_checkpoint_failed")) {
+    return { code: "provider_checkpoint_failed", message: "The provider response could not be saved." };
   }
   if (isCustomBuildArtifactBookkeepingError(error)) {
     return { code: "artifact_bookkeeping_failed", message: "The saved generation could not be completed." };
+  }
+  if (isCustomBuildArtifactPersistenceError(error) || message.includes("custom_build_artifact_persistence_failed")) {
+    return { code: "artifact_persistence_failed", message: "The generated result could not be saved." };
   }
   if (isTerminalCustomBuildGenerateError(message)) {
     return { code: "provider_rejected", message: "The provider rejected this generation request." };
@@ -193,7 +218,9 @@ async function persistCustomBuildArtifact(args: Parameters<typeof uploadAndRecor
 export function isTerminalCustomBuildGenerateError(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (normalized.includes("custom_build_artifact_persistence_failed")) return true;
+  if (isVoxelBuildResourceError(normalized)) return true;
   if (normalized === "provider_key_expired") return true;
+  if (normalized === "import_source_missing") return true;
   if (normalized.includes("invalid_api_key")) return true;
   if (normalized.includes("invalid api key") || normalized.includes("incorrect api key")) return true;
   if (normalized.includes("api key") && normalized.includes("invalid")) return true;
@@ -219,18 +246,34 @@ export function isTerminalCustomBuildGenerateError(message: string): boolean {
 export function validateGeneratedBuildForArtifacts(
   build: unknown,
   customBuild: Pick<CustomBuild, "gridSize" | "palette">,
-): { build: VoxelBuild; warnings: string[] } {
+  output: "objects" | "packed" = "objects",
+): { build: VoxelBuild; warnings: string[]; blockCount: number } {
   const gridSize = assertGridSize(customBuild.gridSize);
   const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
-  const validated = validateVoxelBuild(build, {
+  if (gridSize > 512) {
+    const summarized = summarizeVoxelWorldRegions(build, {
+      gridSize,
+      palette: getPalette(palette),
+    });
+    if (!summarized.ok) {
+      throw new Error(`Generated custom build is invalid: ${summarized.error}`);
+    }
+    return {
+      build: summarized.value.build,
+      warnings: summarized.value.warnings,
+      blockCount: summarized.value.blockCount,
+    };
+  }
+  const validated = (output === "packed" ? validateOwnedVoxelBuild : validateVoxelBuild)(build, {
     gridSize,
     palette: getPalette(palette),
     maxBlocks: MAX_BLOCKS_BY_GRID[gridSize],
+    output,
   });
   if (!validated.ok) {
     throw new Error(`Generated custom build is invalid: ${validated.error}`);
   }
-  return validated.value;
+  return { ...validated.value, blockCount: voxelBuildBlockCount(validated.value.build) };
 }
 
 function emitCustomBuildEvent(customBuildId: string, type: string, data: Prisma.InputJsonValue): void {
@@ -245,6 +288,7 @@ async function generateBuild(
   opts: {
     signal?: AbortSignal;
     acquireBuildProcessing?: () => Promise<() => void>;
+    processResponse?: ProcessVoxelBuildResponse;
   } = {},
 ): Promise<GeneratedBuildResult> {
   throwIfCustomBuildLeaseLost(opts.signal);
@@ -260,7 +304,7 @@ async function generateBuild(
     return {
       build: validated.build,
       warnings: validated.warnings,
-      blockCount: validated.build.blocks.length,
+      blockCount: validated.blockCount,
       generationTimeMs: Date.now() - started,
     };
   }
@@ -321,6 +365,32 @@ async function generateBuild(
       onProviderRequest: (attempt) => {
         providerAttempts = Math.max(providerAttempts, attempt);
       },
+      openaiResponseId: payload.openaiResponseId,
+      onOpenAIResponseCreated: async (responseId) => {
+        throwIfCustomBuildLeaseLost(opts.signal);
+        const checkpoint = await prisma.customBuildJob.updateMany({
+          where: { id: job.id, status: "running", lockedBy: job.lockedBy },
+          data: { payload: { ...(job.payload as Prisma.InputJsonObject), openaiResponseId: responseId } },
+        });
+        if (checkpoint.count !== 1) throw new CustomBuildLeaseLostError();
+      },
+      onRawResponse: async (attempt, text) => {
+        const bytes = new TextEncoder().encode(text);
+        const sha256 = sha256Hex(bytes);
+        await persistCustomBuildArtifact({
+          customBuildId: customBuild.id,
+          publicId: customBuild.publicId,
+          kind: "raw_text_debug",
+          bytes,
+          sha256,
+          sourceBuildSha256: sha256,
+          exportStats: { attempt },
+        });
+        await prisma.customBuild.updateMany({
+          where: { id: customBuild.id, removedAt: null, status: "running" },
+          data: { currentStage: "finalizing" },
+        });
+      },
       onRetry: async (attempt, reason) => {
         const safeReason = safeCustomBuildRetryReason(reason, configuredSecrets);
         const retrying = await prisma.customBuild.updateMany({
@@ -334,7 +404,8 @@ async function generateBuild(
         await appendCustomBuildEvent(customBuild.id, "retry", { attempt, reason: safeReason });
       },
       acquireBuildProcessing: opts.acquireBuildProcessing,
-      returnExpandedBuild: true,
+      buildOutput: "packed",
+      processResponse: opts.processResponse,
     },
   );
 
@@ -350,7 +421,7 @@ async function generateBuild(
     build: result.build,
     warnings: result.warnings,
     blockCount: result.blockCount,
-    generationTimeMs: result.generationTimeMs,
+    generationTimeMs: payload.openaiResponseId ? null : result.generationTimeMs,
   };
 }
 
@@ -360,11 +431,102 @@ function persistedWarnings(value: Prisma.JsonValue | null): string[] {
     : [];
 }
 
+async function recoverStoredRawBuild(
+  customBuild: CustomBuild,
+  opts: {
+    signal?: AbortSignal;
+    acquireBuildProcessing?: () => Promise<() => void>;
+    processResponse?: ProcessVoxelBuildResponse;
+  },
+): Promise<GeneratedBuildResult | null> {
+  const artifact = await prisma.customBuildArtifact.findFirst({
+    where: { customBuildId: customBuild.id, kind: "raw_text_debug" },
+    select: {
+      bucket: true,
+      path: true,
+      encoding: true,
+      sha256: true,
+      sourceBuildSha256: true,
+      storedByteSize: true,
+      exportStats: true,
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+  if (!artifact) return null;
+  try {
+    await opts.acquireBuildProcessing?.();
+    throwIfCustomBuildLeaseLost(opts.signal);
+    if (!artifact.sha256 || !artifact.sourceBuildSha256) {
+      throw new Error("Stored raw response metadata is incomplete");
+    }
+    if (artifact.storedByteSize > MAX_RECOVERED_RAW_RESPONSE_BYTES) {
+      throw new Error("Stored raw response exceeds the 8 MiB recovery limit");
+    }
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    for await (const chunk of downloadCustomBuildArtifactStream({ ...artifact, signal: opts.signal })) {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      byteLength += chunk.byteLength;
+      if (byteLength > MAX_RECOVERED_RAW_RESPONSE_BYTES) {
+        throw new Error("Stored raw response exceeds the 8 MiB recovery limit");
+      }
+      chunks.push(chunk);
+    }
+    const text = decodeAndVerifyCustomBuildArtifactText({
+      bytes: Buffer.concat(chunks, byteLength),
+      encoding: artifact.encoding,
+      storedSha256: artifact.sha256,
+      sourceSha256: artifact.sourceBuildSha256,
+      maxOutputBytes: MAX_RECOVERED_RAW_RESPONSE_BYTES,
+    });
+    throwIfCustomBuildLeaseLost(opts.signal);
+    const finalizing = await prisma.customBuild.updateMany({
+      where: { id: customBuild.id, removedAt: null, status: "running" },
+      data: { currentStage: "finalizing" },
+    });
+    if (finalizing.count !== 1) throw new CustomBuildLeaseLostError();
+    const stats = artifact.exportStats;
+    const attempt = stats && typeof stats === "object" && !Array.isArray(stats) &&
+      typeof stats.attempt === "number" && Number.isInteger(stats.attempt) && stats.attempt > 0
+      ? stats.attempt
+      : 1;
+    try {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      const responseOptions = {
+        gridSize: assertGridSize(customBuild.gridSize),
+        palette: customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
+        buildOutput: "packed" as const,
+        validationMode: customBuild.generationMode === "import" ? "import" as const : undefined,
+      };
+      const result = opts.processResponse
+        ? await opts.processResponse(text, responseOptions, opts.signal)
+        : processVoxelBuildResponse(text, responseOptions);
+      throwIfCustomBuildLeaseLost(opts.signal);
+      if (!result.ok) throw new Error(result.error);
+      return {
+        build: result.build,
+        warnings: Array.from(new Set([...persistedWarnings(customBuild.warnings), ...result.warnings])),
+        blockCount: result.blockCount,
+        generationTimeMs: customBuild.generationTimeMs,
+        sourceArtifactSha256: artifact.sourceBuildSha256,
+      };
+    } catch (error) {
+      throwIfCustomBuildLeaseLost(opts.signal);
+      throw new CustomBuildGenerationFailedError(redactSensitiveText(error, 1_000), attempt);
+    }
+  } catch (error) {
+    throwIfCustomBuildLeaseLost(opts.signal);
+    if (isCustomBuildLeaseLostError(error) || error instanceof CustomBuildGenerationFailedError) throw error;
+    throw new CustomBuildArtifactBookkeepingError(error);
+  }
+}
+
 async function recoverStoredBuild(
   customBuild: CustomBuild,
   opts: {
     signal?: AbortSignal;
     acquireBuildProcessing?: () => Promise<() => void>;
+    processResponse?: ProcessVoxelBuildResponse;
   } = {},
 ): Promise<GeneratedBuildResult | null> {
   const artifact = await prisma.customBuildArtifact.findFirst({
@@ -376,25 +538,26 @@ async function recoverStoredBuild(
       sha256: true,
       sourceBuildSha256: true,
       blockCount: true,
+      byteSize: true,
+      storedByteSize: true,
     },
     orderBy: { createdAt: "desc" },
   });
-  if (!artifact) return null;
+  if (!artifact) return recoverStoredRawBuild(customBuild, opts);
   try {
     await opts.acquireBuildProcessing?.();
     throwIfCustomBuildLeaseLost(opts.signal);
     if (artifact.encoding !== "gzip" || !artifact.sourceBuildSha256) {
       throw new Error("Stored canonical artifact metadata is incomplete");
     }
-    const bytes = await downloadCustomBuildArtifactBytes(artifact);
-    const canonicalText = decodeAndVerifyCustomBuildArtifactText({
-      bytes,
-      encoding: artifact.encoding,
-      storedSha256: artifact.sha256,
-      sourceSha256: artifact.sourceBuildSha256,
+    const gridSize = assertGridSize(customBuild.gridSize);
+    const build = await readStoredBuildSource(artifact, {
+      signal: opts.signal,
+      maxBlocks: gridSize <= 512 ? MAX_BLOCKS_BY_GRID[gridSize] : undefined,
     });
-    const validated = validateGeneratedBuildForArtifacts(JSON.parse(canonicalText), customBuild);
-    if (artifact.blockCount != null && artifact.blockCount !== validated.build.blocks.length) {
+    throwIfCustomBuildLeaseLost(opts.signal);
+    const validated = validateGeneratedBuildForArtifacts(build, customBuild, "packed");
+    if (artifact.blockCount != null && BigInt(artifact.blockCount) !== BigInt(validated.blockCount)) {
       throw new Error("Stored canonical block count does not match");
     }
     return {
@@ -403,10 +566,16 @@ async function recoverStoredBuild(
         ...persistedWarnings(customBuild.warnings),
         ...validated.warnings,
       ])),
-      blockCount: validated.build.blocks.length,
+      blockCount: validated.blockCount,
       generationTimeMs: customBuild.generationTimeMs,
+      canonicalArtifact: {
+        sourceSha256: artifact.sourceBuildSha256,
+        byteSize: artifact.byteSize,
+        storedByteSize: artifact.storedByteSize,
+      },
     };
   } catch (error) {
+    throwIfCustomBuildLeaseLost(opts.signal);
     if (isCustomBuildLeaseLostError(error)) throw error;
     throw new CustomBuildArtifactBookkeepingError(error);
   }
@@ -417,6 +586,7 @@ export async function runCustomBuildGenerateJob(
   opts: {
     signal?: AbortSignal;
     acquireBuildProcessing?: () => Promise<() => void>;
+    processResponse?: ProcessVoxelBuildResponse;
     beforeSynchronousArtifactPackaging?: () => Promise<void> | void;
     importedBuild?: ImportedCustomBuildResult;
   } = {},
@@ -426,6 +596,7 @@ export async function runCustomBuildGenerateJob(
   });
   if (!customBuild) throw new Error("Custom build not found");
   if (customBuild.status === "succeeded") return;
+  const isImport = Boolean(opts.importedBuild) || customBuild.generationMode === "import";
   throwIfCustomBuildLeaseLost(opts.signal);
 
   const started = await prisma.customBuild.updateMany({
@@ -437,12 +608,12 @@ export async function runCustomBuildGenerateJob(
     data: {
       status: "running",
       startedAt: customBuild.startedAt ?? new Date(),
-      currentStage: opts.importedBuild ? "finalizing" : "generating",
+      currentStage: isImport ? "finalizing" : "generating",
     },
   });
   if (started.count !== 1) throw new CustomBuildLeaseLostError();
   emitCustomBuildEvent(customBuild.id, "started", {
-    stage: opts.importedBuild ? "finalizing" : "generating",
+    stage: isImport ? "finalizing" : "generating",
   });
 
   let artifactsPersisted = false;
@@ -453,43 +624,78 @@ export async function runCustomBuildGenerateJob(
       throw new CustomBuildArtifactPersistenceError(error);
     }
     const recovered = opts.importedBuild ? null : await recoverStoredBuild(customBuild, opts);
-    const generated = opts.importedBuild ?? recovered ?? await generateBuild(customBuild, job, opts);
-    if (recovered) emitCustomBuildEvent(customBuild.id, "recovered", { stage: "finalizing" });
+    if (isImport && !opts.importedBuild && !recovered) throw new Error("import_source_missing");
+    const generated: GeneratedBuildResult = opts.importedBuild ?? recovered ?? await generateBuild(customBuild, job, opts);
+    if (recovered) {
+      const finalizing = await prisma.customBuild.updateMany({
+        where: { id: customBuild.id, removedAt: null, status: "running" },
+        data: { currentStage: "finalizing" },
+      });
+      if (finalizing.count !== 1) throw new CustomBuildLeaseLostError();
+      emitCustomBuildEvent(customBuild.id, "recovered", { stage: "finalizing" });
+    }
     throwIfCustomBuildLeaseLost(opts.signal);
     await opts.beforeSynchronousArtifactPackaging?.();
     throwIfCustomBuildLeaseLost(opts.signal);
-    const canonicalBuild: VoxelBuild = {
-      version: "1.0",
-      blocks: generated.build.blocks.sort(
+    const gridSize = assertGridSize(customBuild.gridSize);
+    const palette = customBuild.palette === "advanced" ? "advanced" : "simple";
+    const useWorldArtifacts = gridSize > 512;
+    const canonicalBuild = generated.build;
+    if (!useWorldArtifacts && !generated.canonicalArtifact) {
+      if (canonicalBuild.packed) sortPackedVoxelBlocks(canonicalBuild.packed);
+      else canonicalBuild.blocks.sort(
         (a, b) => a.x - b.x || a.y - b.y || a.z - b.z || a.type.localeCompare(b.type),
-      ),
-    };
-    const canonicalArtifact = await writeCanonicalBuildArtifact(canonicalBuild);
-    const buildByteSize = canonicalArtifact.byteSize;
-    const buildCompressedByteSize = canonicalArtifact.storedByteSize;
-    const fullSha = canonicalArtifact.sourceSha256;
-    try {
-      throwIfCustomBuildLeaseLost(opts.signal);
-      await persistCustomBuildArtifact({
-        customBuildId: customBuild.id,
-        publicId: customBuild.publicId,
-        kind: "build_json",
-        filePath: canonicalArtifact.filePath,
-        storedByteSize: canonicalArtifact.storedByteSize,
-        uncompressedByteSize: canonicalArtifact.byteSize,
-        sha256: canonicalArtifact.sha256,
-        sourceBuildSha256: fullSha,
-        blockCount: generated.blockCount,
-        encoding: "gzip",
-      });
-    } finally {
-      await canonicalArtifact.cleanup();
+      );
     }
+    const canonicalBlockCount = useWorldArtifacts ? generated.blockCount : voxelBuildBlockCount(canonicalBuild);
+    let sourceArtifact = generated.canonicalArtifact;
+    if (!sourceArtifact) {
+      const canonicalArtifact = useWorldArtifacts
+        ? await writeVoxelBuildSourceArtifact(canonicalBuild)
+        : await writeCanonicalBuildArtifact(canonicalBuild);
+      try {
+        throwIfCustomBuildLeaseLost(opts.signal);
+        await persistCustomBuildArtifact({
+          customBuildId: customBuild.id,
+          publicId: customBuild.publicId,
+          kind: "build_json",
+          filePath: canonicalArtifact.filePath,
+          storedByteSize: canonicalArtifact.storedByteSize,
+          uncompressedByteSize: canonicalArtifact.byteSize,
+          sha256: canonicalArtifact.sha256,
+          sourceBuildSha256: canonicalArtifact.sourceSha256,
+          blockCount: generated.blockCount,
+          encoding: "gzip",
+        });
+        sourceArtifact = canonicalArtifact;
+      } finally {
+        await canonicalArtifact.cleanup();
+      }
+    }
+    const buildByteSize = sourceArtifact.byteSize;
+    const buildCompressedByteSize = sourceArtifact.storedByteSize;
+    const fullSha = sourceArtifact.sourceSha256;
     artifactsPersisted = true;
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "build_json" });
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const preview = buildCustomBuildPreview(canonicalBuild);
+    let preview = buildCustomBuildPreview(canonicalBuild);
+    if (useWorldArtifacts) {
+      const worldArtifacts = await persistVoxelWorldArtifacts({
+        customBuildId: customBuild.id,
+        publicId: customBuild.publicId,
+        sourceBuildSha256: fullSha,
+        sourceBuild: canonicalBuild,
+        consumeSource: true,
+        gridSize,
+        palette,
+        previewTargetBlocks: getCustomBuildPreviewTargetBlocks(),
+        persistArtifact: persistCustomBuildArtifact,
+        throwIfCanceled: () => throwIfCustomBuildLeaseLost(opts.signal),
+      });
+      preview = worldArtifacts.previewBuild;
+      emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "viewer_world" });
+    }
     const previewBytes = encodeBinaryArtifact(
       {
         buildId: customBuild.publicId,
@@ -518,40 +724,42 @@ export async function runCustomBuildGenerateJob(
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_mbv4" });
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const viewerKind =
-      canonicalBuild.blocks.length >= ARENA_MESH_FACTS_MIN_BLOCKS
-        ? "viewer_mbf1"
-        : "viewer_mbv4";
-    const viewerBytes =
-      viewerKind === "viewer_mbf1"
-        ? encodeVoxelMeshFacts(createVoxelMeshFacts(packVoxelBlocks(canonicalBuild.blocks)))
-        : encodeBinaryArtifact(
-            {
-              buildId: customBuild.publicId,
-              variant: "full",
-              checksum: fullSha,
-              serverValidated: true,
-              version: canonicalBuild.version,
-            },
-            canonicalBuild.blocks,
-            fullSha,
-          );
-    const viewerGzip = gzipBytes(viewerBytes);
-    await persistCustomBuildArtifact({
-      customBuildId: customBuild.id,
-      publicId: customBuild.publicId,
-      kind: viewerKind,
-      bytes: viewerGzip,
-      uncompressedByteSize: viewerBytes.byteLength,
-      sha256: sha256Hex(viewerGzip),
-      sourceBuildSha256: fullSha,
-      blockCount: canonicalBuild.blocks.length,
-      encoding: "gzip",
-    });
-    emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: viewerKind });
+    if (!useWorldArtifacts) {
+      const viewerKind =
+        canonicalBlockCount >= ARENA_MESH_FACTS_MIN_BLOCKS
+          ? "viewer_mbf1"
+          : "viewer_mbv4";
+      const viewerBytes =
+        viewerKind === "viewer_mbf1"
+          ? encodeVoxelMeshFacts(createVoxelMeshFacts(canonicalBuild.packed ?? packVoxelBlocks(canonicalBuild.blocks)))
+          : encodeBinaryArtifact(
+              {
+                buildId: customBuild.publicId,
+                variant: "full",
+                checksum: fullSha,
+                serverValidated: true,
+                version: canonicalBuild.version,
+              },
+              canonicalBuild.packed ?? canonicalBuild.blocks,
+              fullSha,
+            );
+      const viewerGzip = gzipBytes(viewerBytes);
+      await persistCustomBuildArtifact({
+        customBuildId: customBuild.id,
+        publicId: customBuild.publicId,
+        kind: viewerKind,
+        bytes: viewerGzip,
+        uncompressedByteSize: viewerBytes.byteLength,
+        sha256: sha256Hex(viewerGzip),
+        sourceBuildSha256: fullSha,
+        blockCount: canonicalBlockCount,
+        encoding: "gzip",
+      });
+      emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: viewerKind });
+    }
 
     throwIfCustomBuildLeaseLost(opts.signal);
-    const previewSvg = new TextEncoder().encode(buildGalleryPreviewSvg(canonicalBuild));
+    const previewSvg = new TextEncoder().encode(buildGalleryPreviewSvg(useWorldArtifacts ? preview : canonicalBuild));
     await persistCustomBuildArtifact({
       customBuildId: customBuild.id,
       publicId: customBuild.publicId,
@@ -559,7 +767,7 @@ export async function runCustomBuildGenerateJob(
       bytes: previewSvg,
       sha256: sha256Hex(previewSvg),
       sourceBuildSha256: fullSha,
-      blockCount: canonicalBuild.blocks.length,
+      blockCount: canonicalBlockCount,
     });
     emitCustomBuildEvent(customBuild.id, "artifact_ready", { kind: "preview_svg" });
     artifactsPersisted = true;
@@ -608,13 +816,13 @@ export async function runCustomBuildGenerateJob(
         update: { succeeded: { increment: 1 } },
       });
       await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
-      if (!opts.importedBuild) await enqueueGenerationNotification(tx, customBuild.id);
+      if (!isImport) await enqueueGenerationNotification(tx, customBuild.id);
     });
 
     throwIfCustomBuildLeaseLost(opts.signal);
     throwIfCustomBuildLeaseLost(opts.signal);
     emitCustomBuildEvent(customBuild.id, "complete", { stage: "complete" });
-    if (!opts.importedBuild) {
+    if (!isImport) {
       recordGenerationSuccess({
         jobType: "worker",
         model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
@@ -623,12 +831,22 @@ export async function runCustomBuildGenerateJob(
     }
   } catch (error) {
     if (isCustomBuildLeaseLostError(error)) throw error;
+    throwIfCustomBuildLeaseLost(opts.signal);
+    const infrastructureFailure = !(error instanceof CustomBuildGenerationFailedError) ||
+      error.reason.includes("custom_build_artifact_persistence_failed");
+    const retryFinalization = artifactsPersisted || (infrastructureFailure && Boolean(
+      await prisma.customBuildArtifact.findFirst({
+        where: { customBuildId: customBuild.id, kind: { in: ["build_json", "raw_text_debug"] } },
+        select: { id: true },
+      }),
+    ));
+    throwIfCustomBuildLeaseLost(opts.signal);
     const effectiveError =
-      artifactsPersisted && !isCustomBuildArtifactPersistenceError(error)
+      retryFinalization && !isCustomBuildArtifactBookkeepingError(error)
         ? new CustomBuildArtifactBookkeepingError(error)
         : error;
     const message = redactSensitiveText(effectiveError);
-    if (!opts.importedBuild) {
+    if (!isImport) {
       recordGenerationError({
         jobType: "worker",
         model: customBuild.modelKey || customBuild.modelDisplayName || customBuild.modelId,
@@ -636,12 +854,14 @@ export async function runCustomBuildGenerateJob(
       });
     }
     const manuallyRetryable =
-      effectiveError instanceof CustomBuildGenerationFailedError &&
-      !isTerminalCustomBuildGenerateError(message);
+      retryFinalization ||
+      (effectiveError instanceof CustomBuildGenerationFailedError &&
+        (!isTerminalCustomBuildGenerateError(message) || isVoxelBuildResourceError(message)));
     const terminal =
-      isCustomBuildArtifactPersistenceError(effectiveError) ||
-      effectiveError instanceof CustomBuildGenerationFailedError ||
-      isTerminalCustomBuildGenerateError(message) ||
+      (!retryFinalization && (isCustomBuildArtifactPersistenceError(effectiveError) ||
+        isCustomBuildArtifactBookkeepingError(effectiveError) ||
+        effectiveError instanceof CustomBuildGenerationFailedError ||
+        isTerminalCustomBuildGenerateError(message))) ||
       job.attempts >= job.maxAttempts;
     if (terminal) {
       const failure = safeGenerateFailure(effectiveError, message);
@@ -671,11 +891,12 @@ export async function runCustomBuildGenerateJob(
           update: { failed: { increment: 1 } },
         });
         await tx.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
-        if (!opts.importedBuild) await enqueueGenerationNotification(tx, customBuild.id);
+        if (!isImport) await enqueueGenerationNotification(tx, customBuild.id);
       });
       emitCustomBuildEvent(customBuild.id, "failed", { code: failure.code });
       throw new Error(failure.code);
     } else {
+      if (retryFinalization) await prisma.customBuildSecret.deleteMany({ where: { customBuildId: customBuild.id } });
       const requeued = await prisma.customBuild.updateMany({
         where: { id: customBuild.id, removedAt: null, status: "running" },
         data: {

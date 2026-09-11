@@ -1,5 +1,6 @@
 import { getVoxelExportMaterial } from "@/lib/voxel/export/materials";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { voxelBuildBlockAt, voxelBuildBlockCount, type RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 
 const WIDTH = 640;
 const HEIGHT = 400;
@@ -31,15 +32,21 @@ function framedRange(values: number[]): [number, number] {
   return [Math.max(fullMin, coreMin - padding), Math.min(fullMax, coreMax + padding)];
 }
 
-function compactBlocks(blocks: PreviewBlock[]): PreviewBlock[] {
-  if (blocks.length <= MAX_PREVIEW_BLOCKS) return blocks;
+function compactBlocks(build: RenderableVoxelBuild): PreviewBlock[] {
+  const count = voxelBuildBlockCount(build);
+  if (count <= MAX_PREVIEW_BLOCKS) {
+    return build.packed
+      ? Array.from({ length: count }, (_, index) => voxelBuildBlockAt(build, index)!)
+      : build.blocks;
+  }
   let minX = Infinity;
   let minY = Infinity;
   let minZ = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
   let maxZ = -Infinity;
-  for (const block of blocks) {
+  for (let index = 0; index < count; index += 1) {
+    const block = voxelBuildBlockAt(build, index)!;
     minX = Math.min(minX, block.x);
     minY = Math.min(minY, block.y);
     minZ = Math.min(minZ, block.z);
@@ -52,7 +59,8 @@ function compactBlocks(blocks: PreviewBlock[]): PreviewBlock[] {
     const yBins = Math.floor((maxY - minY) / cellSize) + 1;
     const zBins = Math.floor((maxZ - minZ) / cellSize) + 1;
     const bins = new Map<number, PreviewBlock & { score: number }>();
-    for (const block of blocks) {
+    for (let index = 0; index < count; index += 1) {
+      const block = voxelBuildBlockAt(build, index)!;
       const x = Math.floor((block.x - minX) / cellSize);
       const y = Math.floor((block.y - minY) / cellSize);
       const z = Math.floor((block.z - minZ) / cellSize);
@@ -69,8 +77,8 @@ function compactBlocks(blocks: PreviewBlock[]): PreviewBlock[] {
   }
 }
 
-export function buildGalleryPreviewSvg(build: VoxelBuild): string {
-  const ordered = compactBlocks(build.blocks).sort(
+export function buildGalleryPreviewSvg(build: RenderableVoxelBuild): string {
+  const ordered = compactBlocks(build).sort(
     (a, b) => a.x + a.z - (b.x + b.z) || a.y - b.y || a.x - b.x || a.z - b.z,
   );
   const points = ordered.map((block) => ({

@@ -104,6 +104,28 @@ async function main() {
     { ok: false, error: "Invalid block at index 0" },
   );
 
+  const highCoordinateInput = {
+    version: "1.0" as const,
+    blocks: [
+      { x: 1024, y: 0, z: 0, type: "stone" },
+      { x: 8191, y: 8191, z: 8191, type: "glass" },
+      { x: 8192, y: 0, z: 0, type: "stone" },
+    ],
+  };
+  const highCoordinate = validateOwnedVoxelBuild(
+    highCoordinateInput,
+    { gridSize: 8192, palette: getPalette("simple"), maxBlocks: 4_000_000 },
+  );
+  if (!highCoordinate.ok) throw new Error(highCoordinate.error);
+  assert.deepEqual(highCoordinate.value.build.blocks, [
+    { x: 1024, y: 0, z: 0, type: "stone" },
+    { x: 8191, y: 8191, z: 8191, type: "glass" },
+  ]);
+  assert.deepEqual(highCoordinate.value.warnings, [
+    "Dropped 1 blocks outside the grid bounds",
+  ]);
+  assert.equal(highCoordinateInput.blocks.length, 0);
+
   const oversizedPrimitive = validateOwnedVoxelBuild(
     {
       version: "1.0",

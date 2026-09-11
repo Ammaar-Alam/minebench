@@ -1,4 +1,10 @@
 import type { BlockDefinition } from "@/lib/blocks/palettes";
+import {
+  encodeVoxelPositionKey,
+  packVoxelPlaneCell,
+  unpackVoxelPlaneCellU,
+  unpackVoxelPlaneCellV,
+} from "@/lib/voxel/coordinateKeys";
 import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import { getVoxelExportMaterial, type VoxelExportMaterial } from "@/lib/voxel/export/materials";
@@ -53,25 +59,6 @@ const DIRECTIONS: Direction[] = [
   { face: "up", dx: 0, dy: 1, dz: 0 },
   { face: "down", dx: 0, dy: -1, dz: 0 },
 ];
-
-const POSITION_BITS = 10;
-const POSITION_MASK = (1 << POSITION_BITS) - 1;
-
-function encodePosition(x: number, y: number, z: number): number {
-  return x | (y << POSITION_BITS) | (z << (POSITION_BITS * 2));
-}
-
-function packPlaneCell(u: number, v: number): number {
-  return u | (v << POSITION_BITS);
-}
-
-function unpackPlaneCellU(value: number): number {
-  return value & POSITION_MASK;
-}
-
-function unpackPlaneCellV(value: number): number {
-  return value >> POSITION_BITS;
-}
 
 function makeBucket(blockId: string): VoxelExportGeometryBucket {
   return {
@@ -227,8 +214,8 @@ function appendMergedPlane(
   let maxV = -Infinity;
 
   for (const cell of plane.cells) {
-    const u = unpackPlaneCellU(cell);
-    const v = unpackPlaneCellV(cell);
+    const u = unpackVoxelPlaneCellU(cell);
+    const v = unpackVoxelPlaneCellV(cell);
     minU = Math.min(minU, u);
     minV = Math.min(minV, v);
     maxU = Math.max(maxU, u);
@@ -242,8 +229,8 @@ function appendMergedPlane(
   const mask = new Uint8Array(width * height);
 
   for (const cell of plane.cells) {
-    const u = unpackPlaneCellU(cell) - minU;
-    const v = unpackPlaneCellV(cell) - minV;
+    const u = unpackVoxelPlaneCellU(cell) - minU;
+    const v = unpackVoxelPlaneCellV(cell) - minV;
     mask[v * width + u] = 1;
   }
 
@@ -291,7 +278,7 @@ export function buildVoxelExportGeometry(
 
   for (const block of build.blocks) {
     if (!allowed.has(block.type)) continue;
-    const key = encodePosition(block.x, block.y, block.z);
+    const key = encodeVoxelPositionKey(block.x, block.y, block.z);
     blocksByPos.set(key, block);
     positionToType.set(key, block.type);
   }
@@ -332,12 +319,12 @@ export function buildVoxelExportGeometry(
     let emittedAny = false;
     for (const direction of DIRECTIONS) {
       const neighborType = positionToType.get(
-        encodePosition(block.x + direction.dx, block.y + direction.dy, block.z + direction.dz),
+        encodeVoxelPositionKey(block.x + direction.dx, block.y + direction.dy, block.z + direction.dz),
       );
       if (!shouldEmitFace(block.type, neighborType)) continue;
       const cell = getPlaneCell(block, direction.face);
       getOrCreatePlane(planes, block.type, direction.face, cell.plane).cells.add(
-        packPlaneCell(cell.u, cell.v),
+        packVoxelPlaneCell(cell.u, cell.v),
       );
       emittedAny = true;
     }

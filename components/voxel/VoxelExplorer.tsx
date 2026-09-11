@@ -16,9 +16,12 @@ import {
 import { readClientErrorResponse } from "@/lib/clientErrorResponse";
 import { getPalette } from "@/lib/blocks/palettes";
 import { VOXEL_VIEWER_WEBGL_ERROR } from "@/lib/voxel/errors";
+import { enableExplorerFog, enableExplorerSkyGradient } from "@/lib/voxel/explorerFog";
+import { enableExplorerShadows } from "@/lib/voxel/explorerShadows";
 import { parseExplorerBuildId } from "@/lib/voxel/explorerBuildId";
 import {
   EXPLORER_EYE_HEIGHT,
+  adjustExplorerNoclipSpeedMultiplier,
   createExplorerCollisionWorld,
   moveExplorerPlayerAxis,
   setExplorerMoveDirection,
@@ -28,12 +31,17 @@ import {
   applyExplorerBlockLighting,
   createExplorerBlockLightGrid,
   getExplorerMeteorOpacity,
+  getExplorerWorldFogDistance,
   isExplorerSunRayVisible,
   renderExplorerBloomOverlay,
+  setExplorerWorldFog,
 } from "@/lib/voxel/explorerLighting";
 import { createVoxelGroupAsync, type VoxelGroup } from "@/lib/voxel/mesh";
+import { createVoxelWorldScene, isVoxelWorldScene } from "@/lib/voxel/worldScene";
+import { renderWorldQuadDepth } from "@/lib/voxel/worldQuadGeometry";
 import {
   voxelBuildBlockCount,
+  type RenderableVoxelBuild,
 } from "@/lib/voxel/packedBlocks";
 import { createPublicMeshCacheKey } from "@/lib/voxel/meshPayloadCache";
 import {
@@ -76,6 +84,9 @@ const NIGHT_FOG_COLOR = new THREE.Color(0x0b1830);
 const SUN_FLARE_COLOR = new THREE.Color(0xffdf9f);
 const STAR_LAYER_COUNT = 3;
 const STARS_PER_LAYER = 560;
+const WORLD_STREAM_UPDATE_DISTANCE = 24;
+const EXPLORER_KEY_CLASS = "mb-kbd inline-flex h-5 min-w-5 items-center justify-center rounded border-current bg-transparent px-1 py-0 text-[10px] leading-none text-inherit";
+const EXPLORER_HINT_CLASS = "flex h-11 flex-col items-center justify-center gap-1";
 
 let explorerAtlasPromise: Promise<THREE.Texture> | null = null;
 
@@ -453,6 +464,7 @@ function configureAtmosphere(
     }),
   );
   sky.scale.setScalar(800);
+  enableExplorerSkyGradient(sky.material);
   sky.frustumCulled = false;
   sky.renderOrder = -100;
 
@@ -473,6 +485,7 @@ function configureAtmosphere(
     }),
   );
   nightSky.scale.copy(sky.scale);
+  enableExplorerSkyGradient(nightSky.material);
   nightSky.frustumCulled = false;
   nightSky.renderOrder = -99;
   nightSky.visible = false;
@@ -625,22 +638,18 @@ function configureAtmosphere(
 
 function frameAtmosphere(
   camera: THREE.PerspectiveCamera,
-  scene: THREE.Scene,
+  fog: THREE.Fog,
   atmosphere: ReturnType<typeof configureAtmosphere>,
   bounds: VoxelGroup["bounds"],
   lightDirection: THREE.Vector3,
+  viewDistance?: number,
+  cameraFar?: number,
 ) {
   const size = bounds.box.getSize(new THREE.Vector3());
   const radius = Math.max(8, bounds.radius);
-  const fog = scene.fog as THREE.Fog;
-  fog.near = THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.35, 48, 96);
-  fog.far = THREE.MathUtils.clamp(Math.max(size.x, size.z) * 1.5, 160, 512);
-  camera.far = Math.max(1_000, fog.far * 3);
-  camera.updateProjectionMatrix();
-  atmosphere.sky.scale.setScalar(camera.far * 0.96);
-  atmosphere.nightSky.scale.copy(atmosphere.sky.scale);
-  atmosphere.stars.scale.setScalar(camera.far * 0.88);
-  atmosphere.meteorGroup.scale.setScalar(camera.far * 0.84);
+  fog.near = viewDistance ? viewDistance * 0.2 : THREE.MathUtils.clamp(Math.max(size.x, size.z) * 0.35, 48, 96);
+  fog.far = viewDistance ?? THREE.MathUtils.clamp(Math.max(size.x, size.z) * 1.5, 160, 512);
+  setExplorerCameraFar(camera, atmosphere, cameraFar ?? Math.max(1_000, fog.far * 3));
 
   const lightDistance = Math.max(80, radius * 2.2);
   atmosphere.sun.target.position.copy(bounds.center);
@@ -656,6 +665,19 @@ function frameAtmosphere(
   shadowCamera.updateProjectionMatrix();
   atmosphere.sun.target.updateMatrixWorld();
   atmosphere.sun.shadow.needsUpdate = true;
+}
+
+function setExplorerCameraFar(
+  camera: THREE.PerspectiveCamera,
+  atmosphere: ReturnType<typeof configureAtmosphere>,
+  far: number,
+) {
+  camera.far = far;
+  camera.updateProjectionMatrix();
+  atmosphere.sky.scale.setScalar(camera.far * 0.96);
+  atmosphere.nightSky.scale.copy(atmosphere.sky.scale);
+  atmosphere.stars.scale.setScalar(camera.far * 0.88);
+  atmosphere.meteorGroup.scale.setScalar(camera.far * 0.84);
 }
 
 function hasKey(keys: Set<string>, left: string, right?: string): boolean {
@@ -677,11 +699,14 @@ function ExplorerScene({
 }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const startRef = useRef<(() => void) | null>(null);
+  const toggleFogRef = useRef<(() => void) | null>(null);
+  const toggleNightRef = useRef<(() => void) | null>(null);
   const browseButtonRef = useRef<HTMLButtonElement | null>(null);
   const [ready, setReady] = useState(false);
   const [locked, setLocked] = useState(false);
   const [entered, setEntered] = useState(false);
   const [noclip, setNoclip] = useState(true);
+  const [fogEnabled, setFogEnabled] = useState(true);
   const [night, setNight] = useState(false);
   const [fps, setFps] = useState(0);
   const [loading, setLoading] = useState("Building");
@@ -699,6 +724,8 @@ function ExplorerScene({
   );
 
   const enter = useCallback(() => startRef.current?.(), []);
+  const toggleFog = useCallback(() => toggleFogRef.current?.(), []);
+  const toggleNight = useCallback(() => toggleNightRef.current?.(), []);
   const closeBuildMenu = useCallback(() => {
     setBuildMenuOpen(false);
     window.requestAnimationFrame(() => browseButtonRef.current?.focus());
@@ -715,8 +742,17 @@ function ExplorerScene({
     let disposed = false;
     let voxelGroup: VoxelGroup | null = null;
     let collisionWorld: ExplorerCollisionWorld | null = null;
+    const worldBounds = build.voxelBuild.world?.manifest.bounds;
+    const worldFogDistance = worldBounds
+      ? getExplorerWorldFogDistance(worldBounds.size)
+      : undefined;
+    const worldFullCameraFar = worldBounds
+      ? Math.max(2_048, Math.hypot(worldBounds.size.x, worldBounds.size.y, worldBounds.size.z) * 1.25) * 3
+      : undefined;
     let worldReady = false;
     let isNoclip = true;
+    let noclipSpeedMultiplier = 1;
+    let fogActive = true;
     let verticalVelocity = 0;
     let grounded = false;
     let bobWalking = false;
@@ -738,6 +774,7 @@ function ExplorerScene({
     setLocked(false);
     setEntered(false);
     setNoclip(true);
+    setFogEnabled(true);
     setNight(false);
     setFps(0);
     setLoading("Building");
@@ -759,6 +796,12 @@ function ExplorerScene({
     renderer.setSize(Math.max(1, mount.clientWidth), Math.max(1, mount.clientHeight), true);
     mount.appendChild(renderer.domElement);
     const atmosphere = configureAtmosphere(scene, renderer);
+    const fogUniforms = {
+      explorerDaySky: { value: atmosphere.sky.material.map! },
+      explorerNightSky: { value: atmosphere.nightSky.material.map! },
+      explorerNightBlend: { value: 0 },
+    };
+    const sceneFog = scene.fog as THREE.Fog;
     const { sun, sunFlare } = atmosphere;
     const bloomTarget = new THREE.WebGLRenderTarget(1, 1, {
       type: THREE.HalfFloatType,
@@ -782,6 +825,36 @@ function ExplorerScene({
     });
     const bloomOverlay = new FullScreenQuad(bloomOverlayMaterial);
     const bloomDepthMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
+    const worldBloomFog = new THREE.Fog(0x000000);
+    const applyFogState = () => {
+      if (!fogActive) {
+        scene.fog = null;
+        if (worldFullCameraFar) setExplorerCameraFar(camera, atmosphere, worldFullCameraFar);
+        return;
+      }
+      scene.fog = sceneFog;
+      if (worldFogDistance) {
+        setExplorerWorldFog(camera, sceneFog, worldBloomFog, worldFogDistance);
+        setExplorerCameraFar(camera, atmosphere, camera.far);
+      }
+    };
+    const setFogMode = (next: boolean) => {
+      fogActive = next;
+      setFogEnabled(next);
+      applyFogState();
+    };
+    const setNightMode = (next: boolean) => {
+      nightTarget = next;
+      setNight(next);
+      if (next) {
+        nightElapsed = 0;
+        nextShowerAt = 10;
+        showerStartedAt = -1;
+        showerCount = 0;
+      }
+    };
+    toggleFogRef.current = () => setFogMode(!fogActive);
+    toggleNightRef.current = () => setNightMode(!nightTarget);
     const sunRayTexture = createSunHaloTexture();
     const sunRaySpriteMaterial = new THREE.SpriteMaterial({
       map: sunRayTexture,
@@ -836,6 +909,28 @@ function ExplorerScene({
     });
     const sunRayOverlay = new FullScreenQuad(sunRayMaterial);
     let hasEmissiveMeshes = false;
+    const worldQuadMeshes: THREE.Mesh[] = [];
+    const prepareVoxelMeshes = (group: THREE.Object3D) => {
+      hasEmissiveMeshes = false;
+      worldQuadMeshes.length = 0;
+      const preparedMaterials = new Set<THREE.Material>();
+      group.traverse((child) => {
+        if (!(child instanceof THREE.Mesh)) return;
+        if (child.customDepthMaterial) worldQuadMeshes.push(child);
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        for (const material of materials) {
+          if (preparedMaterials.has(material)) continue;
+          preparedMaterials.add(material);
+          enableExplorerFog(material, fogUniforms);
+          if (material instanceof THREE.MeshLambertMaterial) enableExplorerShadows(material);
+        }
+        child.castShadow = materials.every((material) => !material.transparent);
+        child.receiveShadow = true;
+        if (!materials.some((material) => material instanceof THREE.MeshBasicMaterial)) return;
+        hasEmissiveMeshes = true;
+        child.layers.enable(EMISSIVE_LAYER);
+      });
+    };
 
     const controls = new PointerLockControls(camera, renderer.domElement);
     controls.pointerSpeed = 0.9;
@@ -862,7 +957,7 @@ function ExplorerScene({
         event.code === "KeyD" || event.code === "Space" ||
         event.code === "ShiftLeft" || event.code === "ShiftRight" ||
         event.code === "ControlLeft" || event.code === "ControlRight" ||
-        event.code === "KeyF" || event.code === "KeyT"
+        event.code === "KeyF" || event.code === "KeyT" || event.code === "KeyG"
       ) {
         event.preventDefault();
       }
@@ -871,22 +966,29 @@ function ExplorerScene({
         isNoclip = !isNoclip;
         verticalVelocity = 0;
         grounded = false;
+        lastWorldStreamPosition.set(Number.POSITIVE_INFINITY, 0, 0);
         setNoclip(isNoclip);
       }
       if (event.code === "KeyT" && !event.repeat) {
-        nightTarget = !nightTarget;
-        setNight(nightTarget);
-        if (nightTarget) {
-          nightElapsed = 0;
-          nextShowerAt = 10;
-          showerStartedAt = -1;
-          showerCount = 0;
-        }
+        toggleNightRef.current?.();
+      }
+      if (event.code === "KeyG" && !event.repeat) {
+        toggleFogRef.current?.();
       }
     };
     const onKeyUp = (event: KeyboardEvent) => keys.delete(event.code);
+    const onWheel = (event: WheelEvent) => {
+      if (!controls.isLocked || event.deltaY === 0) return;
+      event.preventDefault();
+      if (!isNoclip) return;
+      noclipSpeedMultiplier = adjustExplorerNoclipSpeedMultiplier(
+        noclipSpeedMultiplier,
+        event.deltaY,
+      );
+    };
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("blur", clearKeys);
     const reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
     let reducedMotion = reducedMotionQuery.matches;
@@ -939,13 +1041,13 @@ function ExplorerScene({
       const clearAlpha = renderer.getClearAlpha();
       try {
         scene.background = null;
-        scene.fog = null;
+        scene.fog = fogActive && isVoxelWorldScene(voxelGroup) ? worldBloomFog : null;
         atmosphere.root.visible = false;
         renderer.setClearColor(0x000000, 0);
         renderer.setRenderTarget(bloomTarget);
         camera.layers.set(0);
         scene.overrideMaterial = bloomDepthMaterial;
-        renderer.render(scene, camera);
+        renderWorldQuadDepth(worldQuadMeshes, () => renderer.render(scene, camera));
         scene.overrideMaterial = null;
 
         if (hasSunRays) {
@@ -993,6 +1095,7 @@ function ExplorerScene({
       atmosphere.sky.visible = nightBlend < 0.999;
       atmosphere.nightSky.visible = nightBlend > 0.001;
       atmosphere.nightSky.material.opacity = nightBlend;
+      fogUniforms.explorerNightBlend.value = nightBlend;
       atmosphere.hemisphere.color.lerpColors(
         DAY_HEMISPHERE_COLOR,
         NIGHT_HEMISPHERE_COLOR,
@@ -1009,7 +1112,7 @@ function ExplorerScene({
       sun.color.lerpColors(DAY_SUN_COLOR, NIGHT_MOONLIGHT_COLOR, moonLight);
       sun.intensity = 3.5 * dayLight + 0.42 * moonLight;
       (scene.background as THREE.Color).lerpColors(DAY_FOG_COLOR, NIGHT_FOG_COLOR, nightBlend);
-      (scene.fog as THREE.Fog).color.lerpColors(DAY_FOG_COLOR, NIGHT_FOG_COLOR, nightBlend);
+      sceneFog.color.lerpColors(DAY_FOG_COLOR, NIGHT_FOG_COLOR, nightBlend);
       renderer.toneMappingExposure = THREE.MathUtils.lerp(1.1, 1.04, nightBlend);
 
       atmosphere.moonMaterial.opacity =
@@ -1034,11 +1137,14 @@ function ExplorerScene({
         moonLightActive = shouldUseMoonLight;
         frameAtmosphere(
           camera,
-          scene,
+          sceneFog,
           atmosphere,
           voxelGroup.bounds,
           moonLightActive ? MOON_DIRECTION : SUN_DIRECTION,
+          worldFogDistance,
+          worldFullCameraFar,
         );
+        applyFogState();
       }
 
       if (reducedMotion || !nightTarget || nightBlend < 0.9) {
@@ -1078,6 +1184,29 @@ function ExplorerScene({
       }
       atmosphere.meteorGroup.visible = meteorVisible;
     };
+    let activeWorldCameraUpdate: Promise<void> | null = null;
+    const lastWorldStreamPosition = new THREE.Vector3(Number.POSITIVE_INFINITY, 0, 0);
+    const updateWorldStreaming = () => {
+      if (isNoclip || activeWorldCameraUpdate || lastWorldStreamPosition.distanceToSquared(camera.position) < WORLD_STREAM_UPDATE_DISTANCE ** 2) return;
+      const collisionUpdate = collisionWorld?.updateActiveCamera;
+      if (!collisionUpdate) return;
+      lastWorldStreamPosition.copy(camera.position);
+      activeWorldCameraUpdate = collisionUpdate(camera.position)
+        .then(() => undefined)
+        .catch((error: unknown) => {
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            console.warn("Voxel world stream failed", error);
+            if (!disposed) {
+              setError(error instanceof Error ? error.message : "World failed to load");
+              controls.unlock();
+            }
+          }
+        })
+        .finally(() => {
+          activeWorldCameraUpdate = null;
+        });
+    };
+
     const updatePlayer = (seconds: number) => {
       if (!controls.isLocked || !collisionWorld) {
         bobWalking = false;
@@ -1104,7 +1233,10 @@ function ExplorerScene({
 
       const running = hasKey(keys, "ShiftLeft", "ShiftRight");
       if (isNoclip) {
-        camera.position.addScaledVector(movement, (running ? FLY_RUN_SPEED : FLY_SPEED) * seconds);
+        camera.position.addScaledVector(
+          movement,
+          (running ? FLY_RUN_SPEED : FLY_SPEED) * noclipSpeedMultiplier * seconds,
+        );
         bobWalking = false;
         return;
       }
@@ -1159,6 +1291,7 @@ function ExplorerScene({
       const seconds = Math.min(MAX_FRAME_SECONDS, Math.max(0, (now - lastFrameAt) / 1_000));
       lastFrameAt = now;
       updatePlayer(seconds);
+      updateWorldStreaming();
       updateAtmosphere(seconds);
 
       if (reducedMotion) {
@@ -1210,26 +1343,36 @@ function ExplorerScene({
     void (async () => {
       try {
         const atlasPromise = loadAtlasTexture();
+        const worldDelivery = build.voxelBuild.world;
         const collisionPromise = createExplorerCollisionWorld(build.voxelBuild, {
           signal: abortController.signal,
           onProgress() {
             if (!disposed) setLoading("Preparing collision");
           },
         });
-        const blockLightPromise = createExplorerBlockLightGrid(build.voxelBuild, {
-          signal: abortController.signal,
-          onProgress(stage) {
-            if (!disposed) setLoading(stage);
-          },
-        });
+        const blockLightPromise = worldDelivery
+          ? Promise.resolve(null)
+          : createExplorerBlockLightGrid(build.voxelBuild, {
+              signal: abortController.signal,
+              onProgress(stage) {
+                if (!disposed) setLoading(stage);
+              },
+            });
         const atlas = await atlasPromise;
-        const groupPromise = createVoxelGroupAsync(build.voxelBuild, getPalette(build.palette), atlas, {
-          signal: abortController.signal,
-          cacheKey: meshCacheKey,
-          onProgress(progress) {
-            if (!disposed) setLoading(progress.stageLabel ?? "Building");
-          },
-        });
+        const groupPromise: Promise<VoxelGroup> = worldDelivery
+          ? createVoxelWorldScene(worldDelivery, getPalette(build.palette), atlas, {
+              signal: abortController.signal,
+              onProgress(progress) {
+                if (!disposed) setLoading(progress ? progress.stageLabel ?? "Loading world" : "");
+              },
+            })
+          : createVoxelGroupAsync(build.voxelBuild, getPalette(build.palette), atlas, {
+              signal: abortController.signal,
+              cacheKey: meshCacheKey,
+              onProgress(progress) {
+                if (!disposed) setLoading(progress.stageLabel ?? "Building");
+              },
+            });
         const [nextCollisionWorld, nextVoxelGroup, blockLightGrid] = await Promise.all([
           collisionPromise,
           groupPromise,
@@ -1255,27 +1398,43 @@ function ExplorerScene({
             },
           );
         }
-        voxelGroup.group.traverse((child) => {
-          if (!(child instanceof THREE.Mesh)) return;
-          const materials = Array.isArray(child.material) ? child.material : [child.material];
-          child.castShadow = materials.every((material) => !material.transparent);
-          child.receiveShadow = true;
-          if (!materials.some((material) => material instanceof THREE.MeshBasicMaterial)) return;
-          hasEmissiveMeshes = true;
-          child.layers.enable(EMISSIVE_LAYER);
-        });
+        prepareVoxelMeshes(voxelGroup.group);
         scene.add(voxelGroup.group);
-        frameAtmosphere(camera, scene, atmosphere, voxelGroup.bounds, SUN_DIRECTION);
+        frameAtmosphere(camera, sceneFog, atmosphere, voxelGroup.bounds, SUN_DIRECTION, worldFogDistance, worldFullCameraFar);
+        applyFogState();
         resize();
 
-        camera.position.set(0, collisionWorld.height + 8, 0);
-        camera.lookAt(0, Math.max(0, collisionWorld.height - 4), -12);
+        if (worldDelivery) {
+          camera.position.set(
+            collisionWorld.spawnPosition.x,
+            collisionWorld.spawnPosition.y,
+            collisionWorld.spawnPosition.z,
+          );
+          camera.lookAt(
+            collisionWorld.spawnPosition.x,
+            Math.max(0, collisionWorld.spawnPosition.y - 4),
+            collisionWorld.spawnPosition.z - 12,
+          );
+        } else {
+          camera.position.set(0, collisionWorld.height + 8, 0);
+          camera.lookAt(0, Math.max(0, collisionWorld.height - 4), -12);
+        }
         renderer.shadowMap.needsUpdate = true;
+        if (worldDelivery) {
+          await collisionWorld.updateActiveCamera?.(camera.position);
+          if (disposed || abortController.signal.aborted) return;
+        }
         worldReady = true;
         setLoading("");
         setReady(true);
       } catch (loadError) {
         if (loadError instanceof DOMException && loadError.name === "AbortError") return;
+        abortController.abort();
+        if (voxelGroup) {
+          scene.remove(voxelGroup.group);
+          voxelGroup.dispose();
+          voxelGroup = null;
+        }
         console.warn("Voxel explorer setup failed", loadError);
         if (!disposed) {
           setError(loadError instanceof Error ? loadError.message : "Explorer failed to start");
@@ -1287,9 +1446,12 @@ function ExplorerScene({
       disposed = true;
       abortController.abort();
       startRef.current = null;
+      toggleFogRef.current = null;
+      toggleNightRef.current = null;
       resizeObserver.disconnect();
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("wheel", onWheel);
       window.removeEventListener("blur", clearKeys);
       reducedMotionQuery.removeEventListener("change", onReducedMotionChange);
       controls.removeEventListener("lock", onLock);
@@ -1350,14 +1512,7 @@ function ExplorerScene({
           <span>{noclip ? "Noclip" : "Walking"}</span>
           <span className="text-white/45">·</span>
           <span className="tabular-nums text-white/75">{fps} FPS</span>
-        </div>
-      ) : null}
-
-      {ready && locked ? (
-        <div className="pointer-events-none absolute inset-x-3 bottom-3 flex justify-center">
-          <div className="rounded bg-slate-950/55 px-3 py-1.5 text-[10px] font-medium text-white/75 backdrop-blur-sm">
-            WASD Move · Shift Run · Space {noclip ? "Rise · Control Descend" : "Jump / Swim"} · F Noclip · T {night ? "Day" : "Night"} · Esc Menu
-          </div>
+          {loading ? <span role="status" className="text-white/75">{loading}</span> : null}
         </div>
       ) : null}
 
@@ -1403,6 +1558,74 @@ function ExplorerScene({
               </div>
             </div>
           )}
+        </div>
+      ) : null}
+
+      {ready && !buildMenuOpen ? (
+        <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex justify-center">
+          <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-x-3 gap-y-2 rounded-md bg-slate-950/70 p-1 text-sm font-medium text-white/80 backdrop-blur-sm sm:text-xs">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-pressed={fogEnabled}
+                onClick={toggleFog}
+                className={`inline-flex h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:px-2.5 motion-reduce:transition-none ${fogEnabled ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
+              >
+                <kbd aria-hidden="true" className={EXPLORER_KEY_CLASS}>
+                  G
+                </kbd>
+                Fog
+              </button>
+              <button
+                type="button"
+                aria-label="Night mode"
+                aria-pressed={night}
+                onClick={toggleNight}
+                className={`inline-flex h-11 items-center gap-1.5 rounded px-3 font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/65 sm:px-2.5 motion-reduce:transition-none ${night ? "bg-white/90 text-slate-950" : "hover:bg-white/10 hover:text-white"}`}
+              >
+                <kbd aria-hidden="true" className={EXPLORER_KEY_CLASS}>
+                  T
+                </kbd>
+                {night ? "Night" : "Day"}
+              </button>
+            </div>
+            <div role="group" aria-label="Movement controls" className="flex max-w-full flex-wrap justify-center gap-x-4 gap-y-2 px-2 text-white/65">
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>WASD</kbd>
+                <span>Move</span>
+              </span>
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>Shift</kbd>
+                <span>Run</span>
+              </span>
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>F</kbd>
+                <span>Flight</span>
+              </span>
+              {noclip ? (
+                <span className={EXPLORER_HINT_CLASS}>
+                  <span className="inline-flex h-5 items-center text-[10px]">Scroll</span>
+                  <span>Speed</span>
+                </span>
+              ) : null}
+              <span className="flex items-center gap-1">
+                <span className={EXPLORER_HINT_CLASS}>
+                  <kbd className={EXPLORER_KEY_CLASS}>Space</kbd>
+                  <span>{noclip ? "Up" : "Jump / swim"}</span>
+                </span>
+                {noclip ? (
+                  <span className={EXPLORER_HINT_CLASS}>
+                    <kbd className={EXPLORER_KEY_CLASS}>Ctrl</kbd>
+                    <span>Down</span>
+                  </span>
+                ) : null}
+              </span>
+              <span className={EXPLORER_HINT_CLASS}>
+                <kbd className={EXPLORER_KEY_CLASS}>Esc</kbd>
+                <span>Menu</span>
+              </span>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

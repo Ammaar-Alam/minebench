@@ -4,6 +4,7 @@ import { PrismaClient, type Prisma } from "@prisma/client";
 import type { sendApnsNotification } from "../../lib/notifications/apns";
 
 process.env.APNS_ENABLED = "true";
+process.env.EMAIL_NOTIFICATIONS_ENABLED = "false";
 delete process.env.APNS_KEY_ID;
 delete process.env.APNS_TEAM_ID;
 delete process.env.APNS_PRIVATE_KEY;
@@ -193,6 +194,15 @@ async function main() {
     });
     assert.equal(deliveries.length, 2, "generation events should enqueue once per account device");
     assert.deepEqual(new Set(deliveries.map((delivery) => delivery.deviceId)), new Set([ownerDeviceA.id, ownerDeviceB.id]));
+
+    for (const status of ["succeeded", "failed"] as const) {
+      const importedBuild = await createBuild(ownerId, `import-${status}`, status, { generationMode: "import" });
+      await db.$transaction((tx) => enqueueGenerationNotification(tx, importedBuild.id));
+      assert.equal(
+        await db.notificationDelivery.count({ where: { subjectId: importedBuild.publicId } }), 0,
+        "pasted imports do not enqueue provider-generation notifications",
+      );
+    }
 
     const failedBuild = await createBuild(ownerId, "failed-entrypoint", "running");
     const job = await db.customBuildJob.create({

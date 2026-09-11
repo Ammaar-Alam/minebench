@@ -1,7 +1,12 @@
-import { getRenderKind } from "@/lib/blocks/registry";
+import { getRenderKind, hasLeafTint } from "@/lib/blocks/registry";
 import { getAtlasUv, hasAtlasKey } from "@/lib/blocks/atlas";
 import { Face, getTextureKey } from "@/lib/blocks/textures";
 import { isVoxelOccluder } from "@/lib/voxel/renderVisibility";
+import {
+  packVoxelPlaneCell,
+  unpackVoxelPlaneCellU,
+  unpackVoxelPlaneCellV,
+} from "@/lib/voxel/coordinateKeys";
 import type {
   SerializedBuildBounds,
   TransferableVoxelBlocks,
@@ -16,6 +21,10 @@ import {
   type Direction,
 } from "@/lib/voxel/ambientOcclusion";
 import type { VoxelMeshFacts } from "@/lib/voxel/meshFacts";
+import {
+  buildWorldRegionGreedyMeshPayload,
+  type WorldRegionMeshOptions,
+} from "@/lib/voxel/worldRegionMesh";
 
 type BuildProgress = {
   processedBlocks: number;
@@ -29,6 +38,7 @@ type WorkerRequest =
       blocks: TransferableVoxelBlocks;
       allowedBlockIds: string[];
       blockLimit?: number;
+      worldRegion?: WorldRegionMeshOptions;
     }
   | {
       type: "mesh-facts";
@@ -90,8 +100,6 @@ const workerScope = (typeof self !== "undefined" ? self : globalThis) as unknown
   postMessage?: (message: WorkerResponse, transfer?: Transferable[]) => void;
   onmessage?: ((event: MessageEvent<WorkerRequest>) => void) | null;
 };
-const POSITION_BITS = 10;
-const POSITION_MASK = (1 << POSITION_BITS) - 1;
 const WATER_BLOCK_ID = "water";
 const PROGRESS_EVERY = 4096;
 const AO_FACTORS = [0.58, 0.72, 0.86, 1] as const;
@@ -101,18 +109,6 @@ const AMBIENT_OCCLUSION_BY_BYTE = Array.from({ length: 256 }, (_, packed) => [
   AO_FACTORS[(packed >> 4) & 0x03],
   AO_FACTORS[(packed >> 6) & 0x03],
 ] as const);
-
-function packPlaneCell(u: number, v: number): number {
-  return u | (v << POSITION_BITS);
-}
-
-function unpackPlaneCellU(value: number): number {
-  return value & POSITION_MASK;
-}
-
-function unpackPlaneCellV(value: number): number {
-  return value >> POSITION_BITS;
-}
 
 function srgbByteToLinear(byte: number): number {
   const s = Math.min(1, Math.max(0, byte / 255));
@@ -133,7 +129,7 @@ const TINT_WATER = hexToLinearRgb(0x3f76e4);
 const TINT_WHITE: [number, number, number] = [1, 1, 1];
 
 function faceTint(blockType: string, face: Face): FaceTint {
-  if (blockType === "oak_leaves") return TINT_LEAVES;
+  if (hasLeafTint(blockType)) return TINT_LEAVES;
   if (blockType === WATER_BLOCK_ID) return TINT_WATER;
   if (blockType === "grass_block" && face === "up") return TINT_GRASS;
   return TINT_WHITE;
@@ -660,8 +656,8 @@ function appendMergedPlaneFaces(
   let maxV = -Infinity;
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell);
-    const v = unpackPlaneCellV(cell);
+    const u = unpackVoxelPlaneCellU(cell);
+    const v = unpackVoxelPlaneCellV(cell);
     minU = Math.min(minU, u);
     minV = Math.min(minV, v);
     maxU = Math.max(maxU, u);
@@ -675,8 +671,8 @@ function appendMergedPlaneFaces(
   const mask = new Uint8Array(width * height);
 
   for (const cell of cells) {
-    const u = unpackPlaneCellU(cell) - minU;
-    const v = unpackPlaneCellV(cell) - minV;
+    const u = unpackVoxelPlaneCellU(cell) - minU;
+    const v = unpackVoxelPlaneCellV(cell) - minV;
     mask[v * width + u] = 1;
   }
 
@@ -725,22 +721,22 @@ function buildWaterSurfaceBucket(prepared: PreparedMeshData): MeshBucket {
       const d = DIRS[dIdx];
       switch (d.face) {
         case "east":
-          getOrCreatePlane(planes, d.face, x + 1).cells.add(packPlaneCell(y, z));
+          getOrCreatePlane(planes, d.face, x + 1).cells.add(packVoxelPlaneCell(y, z));
           break;
         case "west":
-          getOrCreatePlane(planes, d.face, x).cells.add(packPlaneCell(y, z));
+          getOrCreatePlane(planes, d.face, x).cells.add(packVoxelPlaneCell(y, z));
           break;
         case "north":
-          getOrCreatePlane(planes, d.face, z).cells.add(packPlaneCell(x, y));
+          getOrCreatePlane(planes, d.face, z).cells.add(packVoxelPlaneCell(x, y));
           break;
         case "south":
-          getOrCreatePlane(planes, d.face, z + 1).cells.add(packPlaneCell(x, y));
+          getOrCreatePlane(planes, d.face, z + 1).cells.add(packVoxelPlaneCell(x, y));
           break;
         case "up":
-          getOrCreatePlane(planes, d.face, y + 1).cells.add(packPlaneCell(x, z));
+          getOrCreatePlane(planes, d.face, y + 1).cells.add(packVoxelPlaneCell(x, z));
           break;
         case "down":
-          getOrCreatePlane(planes, d.face, y).cells.add(packPlaneCell(x, z));
+          getOrCreatePlane(planes, d.face, y).cells.add(packVoxelPlaneCell(x, z));
           break;
       }
     }
@@ -767,7 +763,9 @@ export function buildMeshPayload(
   blocks: TransferableVoxelBlocks,
   allowedBlockIds: string[],
   blockLimit?: number,
+  worldRegion?: WorldRegionMeshOptions,
 ): VoxelMeshPayload {
+  if (worldRegion) return buildWorldRegionGreedyMeshPayload(blocks, allowedBlockIds, worldRegion);
   const prepared = prepareMeshData(blocks, allowedBlockIds, blockLimit);
   const faceTable = buildFaceTable(prepared.typeNames, prepared.allowed);
   const opaque = makeBucket();
@@ -882,6 +880,14 @@ function collectTransferables(payload: VoxelMeshPayload): Transferable[] {
       bucket.indices.buffer,
     );
   }
+  for (const quads of Object.values(payload.worldQuads ?? {})) {
+    if (quads instanceof Uint32Array) transferables.push(quads.buffer);
+  }
+  const depth = payload.worldQuads?.transparentDepth;
+  if (depth?.quads) transferables.push(depth.quads.buffer);
+  for (const page of [...payload.worldQuads?.surfaces ?? [], ...depth?.surfaces ?? []]) {
+    transferables.push(page.quads.buffer, page.texels.buffer);
+  }
   return transferables;
 }
 
@@ -893,7 +899,12 @@ if (typeof self !== "undefined") {
     try {
       const payload = message.type === "mesh-facts"
         ? buildMeshPayloadFromFacts(message.facts, message.allowedBlockIds)
-        : buildMeshPayload(message.blocks, message.allowedBlockIds, message.blockLimit);
+        : buildMeshPayload(
+            message.blocks,
+            message.allowedBlockIds,
+            message.blockLimit,
+            message.worldRegion,
+          );
       const response: WorkerResponse = { type: "complete", payload };
       workerScope.postMessage?.(response, collectTransferables(payload));
     } catch (err) {

@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { sha256Hex } from "@/lib/custom-builds/hash";
+import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-builds/numericMetadata";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
 import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
+import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
 import {
   sendGalleryAccountNotification,
   sendGalleryAdminNotification,
@@ -124,7 +126,7 @@ const exampleSelect = {
       buildSha256: true,
       ...galleryModelSelect,
       artifacts: {
-        where: { kind: { in: ["preview_svg", "preview_mbv4", "viewer_mbv4", "viewer_mbf1"] } },
+        where: { kind: { in: ["preview_svg", "preview_mbv4", "viewer_mbv4", "viewer_mbf1", "viewer_world"] } },
         select: { kind: true },
       },
     },
@@ -180,8 +182,8 @@ function publicExample(example: ExampleRow, viewerUserId?: string | null) {
     model: publicGalleryModel(example.customBuild),
     gridSize: example.customBuild.gridSize,
     palette: example.customBuild.palette === "advanced" ? "advanced" as const : "simple" as const,
-    blockCount: example.customBuild.blockCount,
-    jsonBytes: example.customBuild.buildByteSize,
+    blockCount: customBuildJsonNumber(example.customBuild.blockCount, "CustomBuild.blockCount"),
+    jsonBytes: customBuildJsonNumber(example.customBuild.buildByteSize, "CustomBuild.buildByteSize"),
     generationTimeMs: example.customBuild.generationTimeMs,
     checksum: example.customBuild.buildSha256,
     previewUrl: kinds.has("preview_svg")
@@ -190,7 +192,7 @@ function publicExample(example: ExampleRow, viewerUserId?: string | null) {
     thumbnailUrl: kinds.has("preview_mbv4")
       ? `/api/gallery/examples/${example.id}/thumbnail`
       : null,
-    viewerUrl: kinds.has("viewer_mbv4") || kinds.has("viewer_mbf1")
+    viewerUrl: kinds.has("viewer_world") || kinds.has("viewer_mbv4") || kinds.has("viewer_mbf1")
       ? `/api/gallery/examples/${example.id}/viewer`
       : null,
   };
@@ -552,6 +554,7 @@ async function loadEligibleGeneration(ownerId: string, publicId: string) {
       publicId,
       ownerId,
       status: "succeeded",
+      generationMode: { not: "import" },
       removedAt: null,
       objectsDeletedAt: null,
       artifacts: { some: { kind: "build_json" } },
@@ -1251,7 +1254,7 @@ export async function submitGalleryReport(input: {
 
 export async function getPublicGalleryExampleArtifact(
   exampleId: string,
-  kinds: Array<"preview_svg" | "preview_mbv4" | "viewer_mbv4" | "viewer_mbf1">,
+  kinds: Array<"preview_svg" | "preview_mbv4" | "viewer_mbv4" | "viewer_mbf1" | "viewer_world">,
 ) {
   return prisma.customBuildArtifact.findFirst({
     where: {
@@ -1274,6 +1277,41 @@ export async function getPublicGalleryExampleArtifact(
       path: true,
       contentType: true,
       encoding: true,
+      sha256: true,
+      sourceBuildSha256: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function getPublicGalleryExampleWorldPart(
+  exampleId: string,
+  sourceBuildSha256: string,
+  partKey: string,
+) {
+  return prisma.customBuildArtifact.findFirst({
+    where: {
+      kind: "world_part",
+      sourceBuildSha256: voxelWorldPartSourceSha256(sourceBuildSha256, partKey),
+      customBuild: {
+        removedAt: null,
+        status: "succeeded",
+        galleryExamples: {
+          some: {
+            id: exampleId,
+            ...publicExampleWhere,
+            candidate: publicCandidateWhere,
+          },
+        },
+      },
+    },
+    select: {
+      bucket: true,
+      path: true,
+      contentType: true,
+      encoding: true,
+      sha256: true,
+      sourceBuildSha256: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -1288,7 +1326,7 @@ export async function listPublicGalleryExplorerBuilds() {
           candidate: publicCandidateWhere,
           customBuild: {
             blockCount: { gt: 0 },
-            artifacts: { some: { kind: { in: ["viewer_mbf1", "viewer_mbv4"] } } },
+            artifacts: { some: { kind: { in: ["viewer_world", "viewer_mbf1", "viewer_mbv4"] } } },
           },
         },
       ],
@@ -1310,7 +1348,7 @@ export async function listPublicGalleryExplorerBuilds() {
     id: example.id,
     model: publicGalleryModel(example.customBuild).label,
     prompt: example.candidate.promptText,
-    blockCount: example.customBuild.blockCount ?? 0,
+    blockCount: customBuildJsonNumber(example.customBuild.blockCount, "CustomBuild.blockCount") ?? 0,
   }));
 }
 
@@ -1428,7 +1466,7 @@ export async function hideGalleryExample(
       prisma.customBuild.update({
         where: { id: example.customBuildId },
         data: {
-          storedByteSize: retained._sum.storedByteSize ?? 0,
+          storedByteSize: customBuildStorageBigInt(retained._sum.storedByteSize),
           objectsDeletedAt: now,
           deletionPendingAt: null,
           deletionError: null,

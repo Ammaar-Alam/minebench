@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 
 process.env.APNS_ENABLED = "true";
+process.env.EMAIL_NOTIFICATIONS_ENABLED = "false";
 delete process.env.APNS_KEY_ID;
 delete process.env.APNS_TEAM_ID;
 delete process.env.APNS_PRIVATE_KEY;

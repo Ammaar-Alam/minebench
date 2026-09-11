@@ -1,9 +1,19 @@
+import { isGridSize, type GridSize } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
+import { readBuildVariantPayload } from "@/lib/arena/clientBuildResponse";
 import { getPalette } from "@/lib/blocks/palettes";
+import type { SavedGenerationPayload } from "@/lib/generations/service";
+import {
+  createLocalVoxelWorld,
+  LocalVoxelWorldSourceError,
+  type LocalVoxelWorldProgress,
+  type LocalVoxelWorldOwnership,
+} from "@/lib/voxel/localWorld";
+import type { RenderableVoxelBuild } from "@/lib/voxel/packedBlocks";
 import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
+import { parseVoxelWorldManifest } from "@/lib/voxel/world";
 
-type GridSize = 64 | 256 | 512;
 type Palette = "simple" | "advanced";
 type ParseSource = "build-json" | "tool-call";
 
@@ -16,6 +26,7 @@ type ParseRequest = {
   type: "parse";
   requestId: number;
   rawText: string;
+  file?: File;
   gridSize: GridSize;
   palette: Palette;
   maxBlocksByGrid: Record<GridSize, number>;
@@ -24,6 +35,7 @@ type ParseRequest = {
 type CancelRequest = {
   type: "cancel";
   requestId?: number;
+  shutdown?: boolean;
 };
 
 type WorkerRequest = ParseRequest | CancelRequest;
@@ -34,17 +46,23 @@ type ProgressMessage = {
   deltaBlocks: VoxelBlock[];
   receivedBlocks: number;
   totalBlocks: number | null;
+  stage?: LocalVoxelWorldProgress["stage"];
+  bytesRead?: number;
+  totalBytes?: number;
+  processedBlocks?: number;
+  processedTotalBlocks?: number;
 };
 
 type CompleteMessage = {
   type: "complete";
   requestId: number;
-  voxelBuild: VoxelBuild;
+  voxelBuild: RenderableVoxelBuild;
   warnings: string[];
   receivedBlocks: number;
   totalBlocks: number | null;
   source: ParseSource;
   resolved: ResolvedSettings;
+  localWorld?: LocalVoxelWorldOwnership;
 };
 
 type ErrorMessage = {
@@ -60,6 +78,9 @@ const EMIT_BLOCK_THRESHOLD = 6_000;
 const CANCELLED_ERROR = "__cancelled__";
 
 let activeRequestId = -1;
+let activeAbortController: AbortController | null = null;
+let shuttingDown = false;
+const pendingParses = new Set<Promise<void>>();
 
 function isCancelled(requestId: number): boolean {
   return activeRequestId !== requestId;
@@ -162,7 +183,7 @@ function parseToolCallInput(value: unknown): ToolCallInput | null {
 
   const input = obj.input as { code?: unknown; gridSize?: unknown; palette?: unknown; seed?: unknown };
   if (typeof input.code !== "string" || input.code.trim().length === 0) return null;
-  if (input.gridSize !== 64 && input.gridSize !== 256 && input.gridSize !== 512) return null;
+  if (!isGridSize(input.gridSize)) return null;
   if (input.palette !== "simple" && input.palette !== "advanced") return null;
   if (input.seed != null && (!Number.isInteger(input.seed) || !Number.isFinite(input.seed))) return null;
 
@@ -226,15 +247,84 @@ function parseTopLevelJsonObjects(text: string, limit = 4): unknown[] {
   return parsed;
 }
 
-async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: unknown; warnings: string[] }> {
+type ExecutionResult = { build: unknown; warnings: string[]; generationId?: string };
+
+async function executeVoxelExecToolCall(input: ToolCallInput, signal: AbortSignal): Promise<ExecutionResult> {
   const response = await fetch("/api/local/voxel-exec", {
     method: "POST",
     headers: {
       "content-type": "application/json",
     },
     body: JSON.stringify(input),
+    signal,
   });
+  return readExecutionResponse(response, signal);
+}
 
+function executionDelay(ms: number, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function readQueuedExecution(generation: SavedGenerationPayload, signal: AbortSignal): Promise<ExecutionResult> {
+  if (!generation || typeof generation.id !== "string" || !generation.id) {
+    throw new Error("Import returned an invalid generation");
+  }
+  const generationId = generation.id;
+  const statusPath = `/api/generations/${encodeURIComponent(generationId)}`;
+  const viewerPath = `${statusPath}/artifacts/viewer`;
+  let failures = 0;
+  for (;;) {
+    signal.throwIfAborted();
+    if (generation.status === "failed" || generation.status === "canceled") {
+      throw new Error(generation.error?.message ?? "Import could not be completed");
+    }
+    if (!["queued", "running", "succeeded"].includes(generation.status)) {
+      throw new Error("Import returned an invalid status");
+    }
+    try {
+      const ready = generation.status === "succeeded";
+      const response = await fetch(ready ? viewerPath : statusPath, { cache: "no-store", signal });
+      if (!response.ok) {
+        if (response.status === 408 || response.status === 429 || response.status >= 500) {
+          throw new TypeError(`Import temporarily unavailable (${response.status})`);
+        }
+        return readExecutionResponse(response, signal);
+      }
+      if (ready) {
+        const result = await readBuildVariantPayload(response, {
+          fallbackIdentity: { buildId: generationId, variant: "full", checksum: generation.sha256 },
+        });
+        return {
+          build: result.payload.voxelBuild,
+          warnings: Array.isArray(generation.warnings) ? generation.warnings.filter((warning) => typeof warning === "string") : [],
+          generationId,
+        };
+      }
+      const body = await response.json() as { generation?: SavedGenerationPayload };
+      if (!body?.generation || body.generation.id !== generationId) throw new Error("Import returned an invalid generation");
+      generation = body.generation;
+      failures = 0;
+    } catch (error) {
+      if (!(error instanceof TypeError) || signal.aborted || ++failures >= 5) throw error;
+    }
+    if (failures || generation.status === "queued" || generation.status === "running") {
+      await executionDelay(failures ? Math.min(10_000, 1_000 * 2 ** (failures - 1)) : 2500, signal);
+    }
+  }
+}
+
+async function readExecutionResponse(response: Response, signal: AbortSignal): Promise<ExecutionResult> {
   const bodyText = await response.text();
   let parsed: unknown = null;
   try {
@@ -244,10 +334,10 @@ async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: 
   }
 
   if (!response.ok) {
-    const serverError =
-      parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string"
-        ? ((parsed as { error: string }).error ?? "")
-        : "";
+    const error = parsed && typeof parsed === "object" ? (parsed as { error?: unknown }).error : null;
+    const serverError = typeof error === "string" ? error
+      : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+        ? error.message : "";
 
     if (response.status === 429) {
       const retryAfterRaw = response.headers.get("retry-after") ?? "";
@@ -278,6 +368,10 @@ async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: 
     throw new Error("Tool execution returned an invalid response");
   }
 
+  if (response.status === 202) {
+    return readQueuedExecution((parsed as { generation: SavedGenerationPayload }).generation, signal);
+  }
+
   const build = (parsed as { build?: unknown }).build;
   if (!build) {
     throw new Error("Tool execution returned no build");
@@ -290,6 +384,20 @@ async function executeVoxelExecToolCall(input: ToolCallInput): Promise<{ build: 
       : [];
 
   return { build, warnings };
+}
+
+function readServerWorld(build: unknown, generationId?: string): RenderableVoxelBuild | null {
+  if (!build || typeof build !== "object" || !("world" in build)) return null;
+  const world = build.world as { manifest?: unknown; partBaseUrl?: unknown } | null;
+  if (!world || typeof world.partBaseUrl !== "string") throw new Error("World delivery URL is missing");
+  const url = new URL(world.partBaseUrl, self.location.origin);
+  const expectedPath = generationId ? `/api/generations/${encodeURIComponent(generationId)}/artifacts/viewer` : "/api/local/voxel-exec";
+  if (url.origin !== self.location.origin || url.pathname !== expectedPath || (generationId && (url.search || url.hash || url.username || url.password))) {
+    throw new Error("Invalid local world delivery URL");
+  }
+  const parsed = parseVoxelWorldManifest(world.manifest);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return { version: "1.0", blocks: [], world: { manifest: parsed.value, partBaseUrl: world.partBaseUrl } };
 }
 
 function streamBlocksFromText(
@@ -408,16 +516,22 @@ function streamBlocksFromText(
 }
 
 async function runParse(request: ParseRequest) {
+  activeAbortController?.abort();
+  const abortController = new AbortController();
+  activeAbortController = abortController;
   activeRequestId = request.requestId;
 
-  const raw = trimOuterWhitespace(request.rawText);
-  if (!raw) {
+  let raw = trimOuterWhitespace(request.rawText);
+  if (!raw && !request.file) {
     const message: ErrorMessage = {
       type: "error",
       requestId: request.requestId,
       message: "Paste a JSON object first.",
     };
     postMessage(message satisfies WorkerResponse);
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
     return;
   }
 
@@ -425,8 +539,114 @@ async function runParse(request: ParseRequest) {
     if (isCancelled(request.requestId)) return;
     postMessage(msg satisfies WorkerResponse);
   };
+  let lastWorldProgressAt = -Infinity;
+  const postWorldProgress = (progress: LocalVoxelWorldProgress) => {
+    if (isCancelled(request.requestId)) return;
+    const now = performance.now();
+    const complete =
+      progress.stage === "building" &&
+      progress.processedBlocks !== undefined &&
+      progress.totalBlocks !== undefined &&
+      progress.processedBlocks >= progress.totalBlocks;
+    const readingComplete =
+      progress.stage === "reading" &&
+      progress.bytesRead !== undefined &&
+      progress.totalBytes !== undefined &&
+      progress.bytesRead >= progress.totalBytes;
+    if (!complete && !readingComplete && now - lastWorldProgressAt < EMIT_INTERVAL_MS) return;
+    lastWorldProgressAt = now;
+    postProgress({
+      type: "progress",
+      requestId: request.requestId,
+      deltaBlocks: [],
+      receivedBlocks: 0,
+      totalBlocks: null,
+      stage: progress.stage,
+      bytesRead: progress.bytesRead,
+      totalBytes: progress.totalBytes,
+      processedBlocks: progress.processedBlocks,
+      processedTotalBlocks: progress.totalBlocks,
+    });
+  };
 
   try {
+    const finishWorld = (
+      build: RenderableVoxelBuild,
+      warnings: string[],
+      source: ParseSource,
+      localWorld?: LocalVoxelWorldOwnership,
+    ) => {
+      if (isCancelled(request.requestId)) return;
+      const manifest = build.world!.manifest;
+      postMessage({
+        type: "complete",
+        requestId: request.requestId,
+        voxelBuild: build,
+        warnings,
+        receivedBlocks: manifest.exactBlockCount,
+        totalBlocks: manifest.exactBlockCount,
+        source,
+        resolved: { gridSize: manifest.gridSize as GridSize, palette: manifest.palette },
+        ...(localWorld ? { localWorld } : {}),
+      } satisfies CompleteMessage);
+    };
+    if (request.gridSize > 512) {
+      try {
+        const world = await createLocalVoxelWorld(request.file ?? new Blob([request.rawText]), {
+          gridSize: request.gridSize,
+          palette: request.palette,
+          signal: abortController.signal,
+          onProgress: postWorldProgress,
+        });
+        if (isCancelled(request.requestId)) {
+          throw new Error(CANCELLED_ERROR);
+        }
+
+        finishWorld(world.build, world.warnings, "build-json", {
+          worldId: world.worldId,
+          partKeys: world.partKeys,
+        });
+        return;
+      } catch (error) {
+        if (request.file || !(error instanceof LocalVoxelWorldSourceError)) throw error;
+        postProgress({
+          type: "progress",
+          requestId: request.requestId,
+          deltaBlocks: [],
+          receivedBlocks: 0,
+          totalBlocks: null,
+        });
+      }
+    }
+    if (request.file) {
+      postProgress({
+        type: "progress",
+        requestId: request.requestId,
+        deltaBlocks: [],
+        receivedBlocks: 0,
+        totalBlocks: null,
+        stage: "reading",
+        bytesRead: 0,
+        totalBytes: request.file.size,
+      });
+      raw = trimOuterWhitespace(await request.file.text());
+      if (isCancelled(request.requestId)) {
+        throw new Error(CANCELLED_ERROR);
+      }
+      postProgress({
+        type: "progress",
+        requestId: request.requestId,
+        deltaBlocks: [],
+        receivedBlocks: 0,
+        totalBlocks: null,
+        stage: "reading",
+        bytesRead: request.file.size,
+        totalBytes: request.file.size,
+      });
+      if (!raw) {
+        throw new Error("Paste a JSON object first.");
+      }
+    }
     let baseBuild: VoxelBuild | null = null;
     let totalBlocks: number | null = null;
     let source: ParseSource = "build-json";
@@ -434,7 +654,8 @@ async function runParse(request: ParseRequest) {
     let resolvedPalette: Palette = request.palette;
     const sourceWarnings: string[] = [];
 
-    const streamed = streamBlocksFromText(request, postProgress);
+    const parseRequest = raw === request.rawText ? request : { ...request, rawText: raw };
+    const streamed = request.gridSize > 512 ? null : streamBlocksFromText(parseRequest, postProgress);
     // If we didn't manage to extract any blocks, fall back to full JSON extraction so we can
     // handle builds that rely on `boxes`/`lines` primitives (or non-standard block encodings).
     if (streamed && streamed.blocks.length > 0) {
@@ -456,7 +677,7 @@ async function runParse(request: ParseRequest) {
           : extractBestVoxelBuildJson(raw);
 
       if (toolCall) {
-        const executed = await executeVoxelExecToolCall(toolCall);
+        const executed = await executeVoxelExecToolCall(toolCall, abortController.signal);
         if (isCancelled(request.requestId)) {
           throw new Error(CANCELLED_ERROR);
         }
@@ -465,6 +686,45 @@ async function runParse(request: ParseRequest) {
         resolvedGridSize = toolCall.gridSize;
         resolvedPalette = toolCall.palette;
         sourceWarnings.push(...executed.warnings);
+
+        const serverWorld = readServerWorld(executed.build, executed.generationId);
+        if (serverWorld) {
+          finishWorld(serverWorld, sourceWarnings, source);
+          return;
+        }
+        if (executed.generationId) throw new Error("Import returned no prepared world");
+
+        if (resolvedGridSize > 512) {
+          const world = await createLocalVoxelWorld(executed.build, {
+            gridSize: resolvedGridSize,
+            palette: resolvedPalette,
+            signal: abortController.signal,
+            onProgress: postWorldProgress,
+          });
+          if (isCancelled(request.requestId)) {
+            throw new Error(CANCELLED_ERROR);
+          }
+
+          const complete: CompleteMessage = {
+            type: "complete",
+            requestId: request.requestId,
+            voxelBuild: world.build,
+            warnings: sourceWarnings.concat(world.warnings),
+            receivedBlocks: world.blockCount,
+            totalBlocks: world.blockCount,
+            source,
+            resolved: {
+              gridSize: resolvedGridSize,
+              palette: resolvedPalette,
+            },
+            localWorld: {
+              worldId: world.worldId,
+              partKeys: world.partKeys,
+            },
+          };
+          postMessage(complete satisfies WorkerResponse);
+          return;
+        }
 
         const validatedTool = validateVoxelBuild(executed.build, {
           gridSize: resolvedGridSize,
@@ -495,6 +755,38 @@ async function runParse(request: ParseRequest) {
 
       if (!extracted) {
         throw new Error("Could not find a valid JSON object. Paste the raw JSON if possible.");
+      }
+
+      if (resolvedGridSize > 512) {
+        const world = await createLocalVoxelWorld(extracted, {
+          gridSize: resolvedGridSize,
+          palette: resolvedPalette,
+          signal: abortController.signal,
+          onProgress: postWorldProgress,
+        });
+        if (isCancelled(request.requestId)) {
+          throw new Error(CANCELLED_ERROR);
+        }
+
+        const complete: CompleteMessage = {
+          type: "complete",
+          requestId: request.requestId,
+          voxelBuild: world.build,
+          warnings: world.warnings,
+          receivedBlocks: world.blockCount,
+          totalBlocks: world.blockCount,
+          source,
+          resolved: {
+            gridSize: resolvedGridSize,
+            palette: resolvedPalette,
+          },
+          localWorld: {
+            worldId: world.worldId,
+            partKeys: world.partKeys,
+          },
+        };
+        postMessage(complete satisfies WorkerResponse);
+        return;
       }
 
       const validatedDirect = validateVoxelBuild(extracted, {
@@ -567,21 +859,38 @@ async function runParse(request: ParseRequest) {
       message: err instanceof Error ? err.message : "Failed to parse build",
     };
     postMessage(message satisfies WorkerResponse);
+  } finally {
+    if (activeAbortController === abortController) {
+      activeAbortController = null;
+    }
   }
 }
 
-self.onmessage = (event: MessageEvent<WorkerRequest>) => {
+self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
   const message = event.data;
-  if (!message) return;
+  if (!message || shuttingDown) return;
 
   if (message.type === "cancel") {
-    if (message.requestId == null || message.requestId === activeRequestId) {
+    if (message.shutdown || message.requestId == null || message.requestId === activeRequestId) {
       activeRequestId = -1;
+      activeAbortController?.abort();
+      activeAbortController = null;
+    }
+    if (message.shutdown) {
+      shuttingDown = true;
+      await Promise.allSettled(pendingParses);
+      self.close();
     }
     return;
   }
 
-  void runParse(message);
+  const pending = runParse(message);
+  pendingParses.add(pending);
+  try {
+    await pending;
+  } finally {
+    pendingParses.delete(pending);
+  }
 };
 
 export {};

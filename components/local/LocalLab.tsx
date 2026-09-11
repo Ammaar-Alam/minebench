@@ -6,6 +6,17 @@ import { buildSystemPrompt, buildUserPrompt, buildWebPrompt } from "@/lib/ai/pro
 import { MAX_BLOCKS_BY_GRID, MIN_BLOCKS_BY_GRID, GRID_SIZES, type GridSize } from "@/lib/ai/limits";
 import { extractBestVoxelBuildJson } from "@/lib/ai/jsonExtract";
 import { getPalette } from "@/lib/blocks/palettes";
+import {
+  attachLocalVoxelWorldResolver,
+  createLocalVoxelWorld,
+  deleteLocalVoxelWorldParts,
+  type LocalVoxelWorldProgress,
+  type LocalVoxelWorldOwnership,
+} from "@/lib/voxel/localWorld";
+import {
+  voxelBuildBlockCount,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 import { validateVoxelBuild } from "@/lib/voxel/validate";
 import type { VoxelBuild } from "@/lib/voxel/types";
 import { VoxelViewerCard } from "@/components/voxel/VoxelViewerCard";
@@ -14,11 +25,22 @@ import { formatVoxelLoadingMessage } from "@/components/voxel/VoxelLoadingHud";
 
 type Palette = "simple" | "advanced";
 
+type LocalParseProgress = {
+  receivedBlocks: number;
+  totalBlocks: number | null;
+  stage?: LocalVoxelWorldProgress["stage"];
+  bytesRead?: number;
+  totalBytes?: number;
+  processedBlocks?: number;
+  processedTotalBlocks?: number;
+};
+
 type LocalParseWorkerRequest =
   | {
       type: "parse";
       requestId: number;
       rawText: string;
+      file?: File;
       gridSize: GridSize;
       palette: Palette;
       maxBlocksByGrid: Record<GridSize, number>;
@@ -26,6 +48,7 @@ type LocalParseWorkerRequest =
   | {
       type: "cancel";
       requestId?: number;
+      shutdown?: boolean;
     };
 
 type LocalParseWorkerResponse =
@@ -35,11 +58,16 @@ type LocalParseWorkerResponse =
       deltaBlocks: VoxelBuild["blocks"];
       receivedBlocks: number;
       totalBlocks: number | null;
+      stage?: LocalVoxelWorldProgress["stage"];
+      bytesRead?: number;
+      totalBytes?: number;
+      processedBlocks?: number;
+      processedTotalBlocks?: number;
     }
   | {
       type: "complete";
       requestId: number;
-      voxelBuild: VoxelBuild;
+      voxelBuild: RenderableVoxelBuild;
       warnings: string[];
       receivedBlocks: number;
       totalBlocks: number | null;
@@ -48,6 +76,7 @@ type LocalParseWorkerResponse =
         gridSize: GridSize;
         palette: Palette;
       };
+      localWorld?: LocalVoxelWorldOwnership;
     }
   | {
       type: "error";
@@ -65,11 +94,32 @@ function formatCompactCount(value: number): string {
   return value.toLocaleString();
 }
 
-function formatApproxMbFromChars(chars: number): string {
-  const mb = chars / 1_000_000;
+function formatApproxMb(bytes: number): string {
+  const mb = bytes / 1_000_000;
   if (mb >= 100) return `${Math.round(mb)}MB`;
   if (mb >= 10) return `${mb.toFixed(1)}MB`;
   return `${mb.toFixed(2)}MB`;
+}
+
+function formatLocalLoadingMessage(progress?: LocalParseProgress): string {
+  if (progress?.stage === "reading" && progress.bytesRead !== undefined) {
+    const read = formatApproxMb(progress.bytesRead);
+    if (progress.totalBytes !== undefined && progress.totalBytes > 0) {
+      const pct = Math.max(0, Math.min(100, Math.round((progress.bytesRead / progress.totalBytes) * 100)));
+      return `Reading file ${read} / ${formatApproxMb(progress.totalBytes)} (${pct}%)`;
+    }
+    return `Reading file ${read}`;
+  }
+  if (progress?.stage === "building") {
+    const total = progress.processedTotalBlocks ?? null;
+    const processed = progress.processedBlocks ?? 0;
+    if (total && total > 0) {
+      const pct = Math.max(1, Math.min(99, Math.round((processed / total) * 100)));
+      return `Building world ${pct}%`;
+    }
+    return "Building world...";
+  }
+  return formatVoxelLoadingMessage("Retrieving build", progress);
 }
 
 function trimOuterWhitespace(text: string): string {
@@ -261,8 +311,8 @@ export function LocalLab() {
   );
 
   const modelOutputRef = useRef<HTMLTextAreaElement | null>(null);
-  const bufferedOutputRef = useRef<string | null>(null);
-  const [inputStats, setInputStats] = useState<{ mode: "empty" | "editor" | "buffered"; chars: number }>({
+  const bufferedOutputRef = useRef<string | File | null>(null);
+  const [inputStats, setInputStats] = useState<{ mode: "empty" | "editor" | "buffered" | "file"; chars: number }>({
     mode: "empty",
     chars: 0,
   });
@@ -270,18 +320,16 @@ export function LocalLab() {
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const [rendered, setRendered] = useState<{
     kind: "idle" | "loading" | "ready" | "error";
-    build: VoxelBuild | null;
+    build: RenderableVoxelBuild | null;
     warnings: string[];
-    progress?: {
-      receivedBlocks: number;
-      totalBlocks: number | null;
-    };
+    progress?: LocalParseProgress;
     message?: string;
   }>({ kind: "idle", build: null, warnings: [] });
   const previewViewerRef = useRef<VoxelViewerHandle | null>(null);
   const parseWorkerRef = useRef<Worker | null>(null);
   const parseRequestIdRef = useRef(0);
   const streamedBlocksRef = useRef<VoxelBuild["blocks"]>([]);
+  const localWorldRef = useRef<LocalVoxelWorldOwnership | null>(null);
   const gridSizeRef = useRef<GridSize>(gridSize);
   const paletteRef = useRef<Palette>(palette);
 
@@ -296,12 +344,18 @@ export function LocalLab() {
   useEffect(() => {
     const worker = new Worker(new URL("./localBuildParse.worker.ts", import.meta.url));
     parseWorkerRef.current = worker;
+    let disposed = false;
 
     const onMessage = (event: MessageEvent<LocalParseWorkerResponse>) => {
       const message = event.data;
       if (!message) return;
 
-      if (message.requestId !== parseRequestIdRef.current) return;
+      if (disposed || message.requestId !== parseRequestIdRef.current) {
+        if (message.type === "complete" && message.localWorld) {
+          void deleteLocalVoxelWorldParts(message.localWorld.partKeys, message.localWorld.worldId);
+        }
+        return;
+      }
 
       if (message.type === "progress") {
         if (message.deltaBlocks.length > 0) {
@@ -310,20 +364,28 @@ export function LocalLab() {
 
         setRendered({
           kind: "loading",
-          build: {
-            version: "1.0",
-            blocks: streamedBlocksRef.current,
-          },
+          build: streamedBlocksRef.current.length > 0
+            ? {
+                version: "1.0",
+                blocks: streamedBlocksRef.current,
+              }
+            : null,
           warnings: [],
           progress: {
             receivedBlocks: message.receivedBlocks,
             totalBlocks: message.totalBlocks,
+            stage: message.stage,
+            bytesRead: message.bytesRead,
+            totalBytes: message.totalBytes,
+            processedBlocks: message.processedBlocks,
+            processedTotalBlocks: message.processedTotalBlocks,
           },
         });
         return;
       }
 
       if (message.type === "complete") {
+        replaceLocalWorld(message.localWorld ?? null);
         if (message.resolved.gridSize !== gridSizeRef.current) {
           setGridSize(message.resolved.gridSize);
         }
@@ -344,7 +406,7 @@ export function LocalLab() {
 
         setRendered({
           kind: "ready",
-          build: message.voxelBuild,
+          build: attachLocalVoxelWorldResolver(message.voxelBuild),
           warnings: message.warnings,
           progress: {
             receivedBlocks: message.receivedBlocks,
@@ -356,6 +418,7 @@ export function LocalLab() {
 
       if (message.type === "error") {
         setStatusNote(null);
+        replaceLocalWorld(null);
         setRendered({
           kind: "error",
           build: null,
@@ -368,14 +431,15 @@ export function LocalLab() {
     worker.addEventListener("message", onMessage);
 
     return () => {
-      worker.removeEventListener("message", onMessage);
+      // allow queued completions to release their stored parts
+      disposed = true;
       try {
-        worker.postMessage({ type: "cancel" } satisfies LocalParseWorkerRequest);
+        worker.postMessage({ type: "cancel", shutdown: true } satisfies LocalParseWorkerRequest);
       } catch {
         // ignore
       }
-      worker.terminate();
       if (parseWorkerRef.current === worker) parseWorkerRef.current = null;
+      replaceLocalWorld(null);
     };
   }, []);
 
@@ -386,7 +450,7 @@ export function LocalLab() {
         viewerRef: previewViewerRef,
         modelName: "Local Preview",
         company: "MineBench",
-        blockCount: rendered.build.blocks.length,
+        blockCount: voxelBuildBlockCount(rendered.build),
       },
     ];
   }, [rendered]);
@@ -396,6 +460,14 @@ export function LocalLab() {
   function readActiveInputText() {
     if (typeof bufferedOutputRef.current === "string") return bufferedOutputRef.current;
     return modelOutputRef.current?.value ?? "";
+  }
+
+  function replaceLocalWorld(next: LocalVoxelWorldOwnership | null) {
+    const previous = localWorldRef.current;
+    if (previous && previous.worldId !== next?.worldId) {
+      void deleteLocalVoxelWorldParts(previous.partKeys, previous.worldId);
+    }
+    localWorldRef.current = next;
   }
 
   function clearModelInput() {
@@ -412,6 +484,13 @@ export function LocalLab() {
     }
 
     try {
+      if (file.size >= LARGE_PASTE_CHAR_THRESHOLD) {
+        bufferedOutputRef.current = file;
+        if (modelOutputRef.current) modelOutputRef.current.value = "";
+        setInputStats({ mode: "file", chars: file.size });
+        setStatusNote(`${file.name} ready.`);
+        return;
+      }
       const text = await file.text();
       if (!trimOuterWhitespace(text)) {
         setStatusNote(`${file.name} is empty.`);
@@ -428,9 +507,9 @@ export function LocalLab() {
     }
   }
 
-  function renderFromText(text: string) {
+  function renderFromText(text: string, file?: File) {
     const trimmed = trimOuterWhitespace(text);
-    if (!trimmed) {
+    if (!trimmed && !file) {
       setStatusNote(null);
       setRendered({
         kind: "error",
@@ -441,7 +520,16 @@ export function LocalLab() {
       return;
     }
 
-    const fallbackSync = () => {
+    const fallbackParse = async () => {
+      const requestId = ++parseRequestIdRef.current;
+      replaceLocalWorld(null);
+      setRendered({
+        kind: "loading",
+        build: null,
+        warnings: [],
+        progress: { receivedBlocks: 0, totalBlocks: null },
+      });
+
       let json: unknown = null;
       try {
         json = JSON.parse(trimmed) as unknown;
@@ -460,6 +548,37 @@ export function LocalLab() {
         return;
       }
 
+      if (gridSize > 512) {
+        try {
+          const world = await createLocalVoxelWorld(json, { gridSize, palette });
+          if (requestId !== parseRequestIdRef.current) {
+            void deleteLocalVoxelWorldParts(world.partKeys, world.worldId);
+            return;
+          }
+          replaceLocalWorld({ worldId: world.worldId, partKeys: world.partKeys });
+          setStatusNote(null);
+          setRendered({
+            kind: "ready",
+            build: attachLocalVoxelWorldResolver(world.build),
+            warnings: world.warnings,
+            progress: {
+              receivedBlocks: world.blockCount,
+              totalBlocks: world.blockCount,
+            },
+          });
+        } catch (error) {
+          if (requestId !== parseRequestIdRef.current) return;
+          setStatusNote(null);
+          setRendered({
+            kind: "error",
+            build: null,
+            warnings: [],
+            message: error instanceof Error ? error.message : "Failed to parse build",
+          });
+        }
+        return;
+      }
+
       const paletteDefs = getPalette(palette);
       const validated = validateVoxelBuild(json, {
         gridSize,
@@ -474,6 +593,7 @@ export function LocalLab() {
       }
 
       setStatusNote(null);
+      replaceLocalWorld(null);
       setRendered({
         kind: "ready",
         build: validated.value.build,
@@ -487,11 +607,16 @@ export function LocalLab() {
 
     const worker = parseWorkerRef.current;
     if (!worker) {
-      fallbackSync();
+      if (file) {
+        setRendered({ kind: "error", build: null, warnings: [], message: "Reload the page to import this file." });
+        return;
+      }
+      void fallbackParse();
       return;
     }
 
     setStatusNote(null);
+    replaceLocalWorld(null);
     const currentRequestId = parseRequestIdRef.current;
     if (currentRequestId > 0) {
       try {
@@ -515,22 +640,24 @@ export function LocalLab() {
         type: "parse",
         requestId,
         rawText: trimmed,
+        file,
         gridSize,
         palette,
         maxBlocksByGrid: MAX_BLOCKS_BY_GRID,
       } satisfies LocalParseWorkerRequest);
     } catch {
-      fallbackSync();
+      void fallbackParse();
     }
   }
 
   function renderFromInput() {
-    renderFromText(readActiveInputText());
+    const input = bufferedOutputRef.current;
+    renderFromText(readActiveInputText(), input instanceof File ? input : undefined);
   }
 
   const loadingMessage =
     rendered.kind === "loading"
-      ? formatVoxelLoadingMessage("Retrieving build", rendered.progress)
+      ? formatLocalLoadingMessage(rendered.progress)
       : undefined;
 
   return (
@@ -750,7 +877,7 @@ export function LocalLab() {
                 if (modelOutputRef.current) modelOutputRef.current.value = "";
                 setInputStats({ mode: "buffered", chars: pasted.length });
                 setStatusNote(
-                  `Large paste ready (~${formatApproxMbFromChars(pasted.length)}).`,
+                  `Large paste ready (~${formatApproxMb(pasted.length)}).`,
                 );
               }}
               onChange={(e) => {
@@ -770,7 +897,7 @@ export function LocalLab() {
 
             {inputStats.mode !== "empty" ? (
               <div className="text-[11px] text-muted">
-                {formatCompactCount(inputStats.chars)} chars (~{formatApproxMbFromChars(inputStats.chars)})
+                {inputStats.mode === "file" ? formatApproxMb(inputStats.chars) : `${formatCompactCount(inputStats.chars)} chars (~${formatApproxMb(inputStats.chars)})`}
                 {inputStats.mode === "buffered" ? " held in memory" : ""}
               </div>
             ) : null}
@@ -831,7 +958,7 @@ export function LocalLab() {
               rendered.kind === "ready" || rendered.kind === "loading"
                 ? {
                     blockCount:
-                      rendered.progress?.receivedBlocks ?? rendered.build?.blocks.length ?? 0,
+                      rendered.progress?.receivedBlocks ?? voxelBuildBlockCount(rendered.build),
                     warnings: rendered.warnings,
                   }
                 : undefined

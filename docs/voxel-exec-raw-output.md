@@ -2,7 +2,7 @@
 
 This document explains what `voxel.exec` is in MineBench today, what models can do with it, and the practical commands for converting, running, and importing tool-call output.
 
-Default runtime behavior in MineBench: model generations run in `voxel.exec` tool mode. The persisted and rendered artifact is always final voxel build JSON in `version/boxes/lines/blocks` format.
+Model generations run in `voxel.exec` tool mode. Canonical build JSON uses the `version/boxes/lines/blocks` format; viewer payloads are derived from that saved source.
 
 ## 1) What `voxel.exec` is
 
@@ -11,7 +11,7 @@ Default runtime behavior in MineBench: model generations run in `voxel.exec` too
 - Tool name: `voxel.exec`
 - Input schema:
   - `code` (string)
-  - `gridSize` (`64 | 256 | 512`)
+  - `gridSize` (`32 | 64 | 256 | 512 | 2048 | 8192`)
   - `palette` (`simple | advanced`)
   - `seed` (optional int)
 
@@ -19,6 +19,7 @@ Implementation:
 
 - Tool schema and runtime: `lib/ai/tools/voxelExec.ts`
 - Generation integration: `lib/ai/generateVoxelBuild.ts`
+- Response processing: `lib/ai/processVoxelBuildResponse.ts`
 - Local execution API: `app/api/local/voxel-exec/route.ts`
 - Conversion utility: `scripts/convert-voxel-tool-call.ts`
 
@@ -139,6 +140,10 @@ Relevant runtime controls:
 - `MINEBENCH_TOOL_MAX_LINES`
 - `MINEBENCH_TOOL_MAX_BLOCKS`
 
+Execution defaults to 30 seconds through grid size 512 and 15 minutes for larger worlds. Custom generations save the raw response before processing and reuse it during recovery.
+
+Durable expanded-artifact jobs support up to 16,777,216 occupied cells within their grid bounds, with raw point emission limited to twice the applicable cell limit. Exceeding capacity fails the job without clipping its output or requesting another provider response. Spatial worlds use compact region evaluation instead of the expanded-cell path.
+
 ## 6) How raw output becomes a final build
 
 ### Step A: extract the JSON object from model text
@@ -172,7 +177,7 @@ The runtime collects primitives into build spec format:
 - `validateVoxelBuild(...)`
 - File: `lib/voxel/validate.ts`
 
-Validation does all of this:
+For grids through 512, validation does all of this:
 
 - expands `boxes` and `lines` to discrete blocks
 - normalizes block IDs, including common aliases
@@ -180,6 +185,8 @@ Validation does all of this:
 - drops unknown block types
 - deduplicates final coordinates
 - enforces block-count and structure limits
+
+For 2048 and 8192, `worldRegions.ts` evaluates primitive precedence and exact occupied counts by region; uniform volumes remain compact.
 
 ### Step E: parse final spec
 
@@ -208,6 +215,8 @@ MineBench executes the first and stores the second.
 ## 8) Exporting builds
 
 Arena and Sandbox build cards can export the rendered build to these formats:
+
+Spatial worlds support canonical JSON export. The mesh and game formats below apply to the expanded-build path.
 
 - GLB (`.glb`) for Blender and other glTF tools. MineBench writes one glTF material per block type, with `extras.minebenchBlockId` and `extras.minecraftBlockState` metadata so downstream tools can inspect the original block mapping.
 - STL (`.stl`) for mesh and print workflows. STL is geometry-only, so block colors and material names are not part of the file.

@@ -14,7 +14,7 @@ export function buildSystemPrompt(opts: {
   const minBlocksLabel = opts.minBlocks.toLocaleString("en-US");
   const maxBlocksLabel = opts.maxBlocks.toLocaleString("en-US");
   const targetLow = Math.max(10_000, opts.minBlocks);
-  const targetHigh = Math.max(3_000_000, targetLow);
+  const targetHigh = opts.gridSize === 32 ? opts.maxBlocks : Math.max(3_000_000, targetLow);
   const targetLowLabel = targetLow.toLocaleString("en-US");
   const targetHighLabel = targetHigh.toLocaleString("en-US");
   return `You are competing in MineBench, a competitive benchmark where AI models create 3D voxel structures in a Minecraft-style grid. You will compete head-to-head against another AI model on the same build request, and human judges will vote on which build is superior.

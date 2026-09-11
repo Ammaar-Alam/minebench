@@ -1,6 +1,18 @@
 import { z } from "zod";
 import type { BlockDefinition } from "@/lib/blocks/palettes";
-import type { VoxelBuild } from "@/lib/voxel/types";
+import {
+  decodeVoxelPositionKey,
+  encodeVoxelPositionKey,
+  MAX_VOXEL_COORDINATE,
+} from "@/lib/voxel/coordinateKeys";
+import type { VoxelBlock, VoxelBuild } from "@/lib/voxel/types";
+import {
+  createPackedVoxelBlocks,
+  isPackedVoxelBlocks,
+  isPackedVoxelBoxes,
+  voxelBuildBoxes,
+  type RenderableVoxelBuild,
+} from "@/lib/voxel/packedBlocks";
 
 const blockSchema = z.object({
   x: z.number().int(),
@@ -42,12 +54,17 @@ export type ValidateVoxelOptions = {
   gridSize: number;
   palette: BlockDefinition[];
   maxBlocks: number;
+  output?: "objects" | "packed";
 };
 
-export type ValidatedVoxelBuild = {
-  build: VoxelBuild;
+export type ValidatedVoxelBuild<Build extends VoxelBuild = RenderableVoxelBuild> = {
+  build: Build;
   warnings: string[];
 };
+
+type VoxelValidationResult<Build extends VoxelBuild = RenderableVoxelBuild> =
+  | { ok: true; value: ValidatedVoxelBuild<Build> }
+  | { ok: false; error: string };
 
 function normalizeParsedBuild(data: z.infer<typeof buildSchema>): VoxelBuild {
   return {
@@ -61,6 +78,7 @@ function normalizeParsedBuild(data: z.infer<typeof buildSchema>): VoxelBuild {
 export function parseVoxelBuildSpec(
   input: unknown,
 ): { ok: true; value: VoxelBuild } | { ok: false; error: string } {
+  if (isRecord(input) && (input.packed !== undefined || input.packedBoxes !== undefined)) return parseOwnedVoxelBuildSpec(input);
   const parsed = buildSchema.safeParse(input);
   if (!parsed.success) return { ok: false, error: parsed.error.message };
 
@@ -88,7 +106,7 @@ const TYPE_ALIASES: Record<string, string> = {
   ice_block: "ice",
 };
 
-function normalizeBlockType(rawType: string, allowed: Set<string>): string | null {
+export function normalizeBlockType(rawType: string, allowed: Set<string>): string | null {
   const trimmed = rawType.trim();
   if (!trimmed) return null;
 
@@ -110,26 +128,57 @@ function clampInt(n: number, min: number, max: number): number {
   return n;
 }
 
+const LEGACY_COORDINATE_KEY_GRID_EXTENT = 1024;
+
+function encodeLegacyPositionKey(x: number, y: number, z: number): number {
+  return ((x & 1023) | ((y & 1023) << 10) | ((z & 1023) << 20)) >>> 0;
+}
+
+function decodeLegacyPositionKey(value: number): [number, number, number] {
+  return [value & 1023, (value >>> 10) & 1023, (value >>> 20) & 1023];
+}
+
 function validateVoxelBuildSpecInternal(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
   opts: ValidateVoxelOptions,
   releaseInput: boolean,
-): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+): VoxelValidationResult {
+  if (build.packed !== undefined && !isPackedVoxelBlocks(build.packed)) {
+    return { ok: false, error: "Invalid packed blocks" };
+  }
+  if (build.packedBoxes !== undefined && !isPackedVoxelBoxes(build.packedBoxes)) {
+    return { ok: false, error: "Invalid packed boxes" };
+  }
   const allowed = new Set(opts.palette.map((b) => b.id));
   const paletteIndex = new Map(opts.palette.map((block, index) => [block.id, index + 1]));
   const warnings: string[] = [];
   let droppedNegative = 0;
   let droppedOutOfBounds = 0;
   const droppedUnknownTypeCounts = new Map<string, number>();
+  const gridExtent = Number.isFinite(opts.gridSize)
+    ? Math.min(Math.max(0, Math.floor(opts.gridSize)), MAX_VOXEL_COORDINATE + 1)
+    : 0;
+  const useLegacyCoordinateKeys = gridExtent <= LEGACY_COORDINATE_KEY_GRID_EXTENT;
+  const makeOccupiedArray = (length: number) =>
+    useLegacyCoordinateKeys ? new Uint32Array(length) : new Float64Array(length);
+  const encodeOccupiedKey = useLegacyCoordinateKeys
+    ? encodeLegacyPositionKey
+    : encodeVoxelPositionKey;
+  const decodeOccupiedKey = useLegacyCoordinateKeys
+    ? decodeLegacyPositionKey
+    : decodeVoxelPositionKey;
 
   // Sparse typed chunks keep coordinate dedupe outside V8's object heap
   const chunks = new Map<number, Uint8Array | Uint16Array>();
-  let occupied = new Uint32Array(16_384);
+  let occupied = makeOccupiedArray(16_384);
   let occupiedCount = 0;
   const makeChunk = () =>
     opts.palette.length <= 255 ? new Uint8Array(16 ** 3) : new Uint16Array(16 ** 3);
-  // 10 bits per coordinate supports up to 1024³ grids (covers 512³)
-  const encode = (x: number, y: number, z: number) => x | (y << 10) | (z << 20);
+  // Keep the old 10-bit keys for <=1024 grids; wider worlds need 9 chunk bits per axis.
+  const chunkKey = (x: number, y: number, z: number) =>
+    useLegacyCoordinateKeys
+      ? (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12)
+      : (x >> 4) | ((y >> 4) << 9) | ((z >> 4) << 18);
 
   // Hard cap to prevent pathological expansions from primitives. We enforce this BEFORE building any huge intermediate arrays.
   const expansionBudget = Math.max(opts.maxBlocks * 2, 20000);
@@ -151,22 +200,22 @@ function validateVoxelBuildSpecInternal(
       droppedNegative += 1;
       return;
     }
-    if (xRaw >= opts.gridSize || yRaw >= opts.gridSize || zRaw >= opts.gridSize) {
+    if (xRaw >= gridExtent || yRaw >= gridExtent || zRaw >= gridExtent) {
       droppedOutOfBounds += 1;
       return;
     }
 
-    const x = clampInt(Math.trunc(xRaw), 0, opts.gridSize - 1);
-    const y = clampInt(Math.trunc(yRaw), 0, opts.gridSize - 1);
-    const z = clampInt(Math.trunc(zRaw), 0, opts.gridSize - 1);
+    const x = clampInt(Math.trunc(xRaw), 0, gridExtent - 1);
+    const y = clampInt(Math.trunc(yRaw), 0, gridExtent - 1);
+    const z = clampInt(Math.trunc(zRaw), 0, gridExtent - 1);
     const encodedType = paletteIndex.get(type);
     if (encodedType === undefined) return;
 
-    const chunkKey = (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12);
-    let chunk = chunks.get(chunkKey);
+    const key = chunkKey(x, y, z);
+    let chunk = chunks.get(key);
     if (!chunk) {
       chunk = makeChunk();
-      chunks.set(chunkKey, chunk);
+      chunks.set(key, chunk);
     }
     const localIndex = (x & 15) | ((y & 15) << 4) | ((z & 15) << 8);
     if (chunk[localIndex] === 0) {
@@ -176,18 +225,18 @@ function validateVoxelBuildSpecInternal(
         );
       }
       if (occupiedCount === occupied.length) {
-        const grown = new Uint32Array(occupied.length * 2);
+        const grown = makeOccupiedArray(occupied.length * 2);
         grown.set(occupied);
         occupied = grown;
       }
-      occupied[occupiedCount] = encode(x, y, z);
+      occupied[occupiedCount] = encodeOccupiedKey(x, y, z);
       occupiedCount += 1;
     }
     chunk[localIndex] = encodedType;
   };
 
   try {
-    const boxes = build.boxes ?? [];
+    const boxes = voxelBuildBoxes(build);
     const lines = build.lines ?? [];
 
     for (const box of boxes) {
@@ -264,6 +313,17 @@ function validateVoxelBuildSpecInternal(
       }
       put(b.x, b.y, b.z, normalizedType);
     }
+    if (build.packed) {
+      const packed = build.packed;
+      charge(packed.count);
+      const types = packed.typeNames.map((type) => normalizeBlockType(type, allowed));
+      for (let index = 0; index < packed.count; index += 1) {
+        const typeId = packed.typeIds[index]!;
+        const type = types[typeId];
+        if (!type) bumpUnknownType(packed.typeNames[typeId]!, 1);
+        else put(packed.positions[index * 3]!, packed.positions[index * 3 + 1]!, packed.positions[index * 3 + 2]!, type);
+      }
+    }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Failed to expand primitives" };
   }
@@ -288,41 +348,73 @@ function validateVoxelBuildSpecInternal(
     build.blocks.length = 0;
     if (build.boxes) build.boxes.length = 0;
     if (build.lines) build.lines.length = 0;
+    delete build.packed;
+    delete build.packedBoxes;
   }
-  const blocks = Array.from({ length: occupiedCount }, (_, index) => {
+  const packed = opts.output === "packed" ? createPackedVoxelBlocks(occupiedCount) : undefined;
+  const packedTypeIds = packed ? new Int32Array(opts.palette.length).fill(-1) : undefined;
+  const blocks: VoxelBlock[] = packed ? [] : new Array(occupiedCount);
+  for (let index = 0; index < occupiedCount; index += 1) {
     const key = occupied[index]!;
-    const x = key & 1023;
-    const y = (key >>> 10) & 1023;
-    const z = (key >>> 20) & 1023;
-    const chunkKey = (x >> 4) | ((y >> 4) << 6) | ((z >> 4) << 12);
+    const [x, y, z] = decodeOccupiedKey(key);
+    const key2 = chunkKey(x, y, z);
     const localIndex = (x & 15) | ((y & 15) << 4) | ((z & 15) << 8);
-    const type = opts.palette[(chunks.get(chunkKey)?.[localIndex] ?? 1) - 1]!.id;
-    return { x, y, z, type };
-  });
-  if (blocks.length > opts.maxBlocks) {
-    return {
-      ok: false,
-      error: `Too many blocks (${blocks.length}) > maxBlocks (${opts.maxBlocks})`,
-    };
+    const paletteId = (chunks.get(key2)?.[localIndex] ?? 1) - 1;
+    const type = opts.palette[paletteId]!.id;
+    if (packed) {
+      let typeId = packedTypeIds![paletteId]!;
+      if (typeId < 0) {
+        typeId = packed.typeNames.length;
+        packed.typeNames.push(type);
+        packedTypeIds![paletteId] = typeId;
+      }
+      packed.positions[index * 3] = x;
+      packed.positions[index * 3 + 1] = y;
+      packed.positions[index * 3 + 2] = z;
+      packed.typeIds[index] = typeId;
+    } else {
+      blocks[index] = { x, y, z, type };
+    }
   }
 
-  return { ok: true, value: { build: { version: "1.0", blocks }, warnings } };
+  const normalizedBuild: RenderableVoxelBuild = { version: "1.0", blocks };
+  if (packed) {
+    packed.count = occupiedCount;
+    normalizedBuild.packed = packed;
+  }
+  return { ok: true, value: { build: normalizedBuild, warnings } };
 }
 
 export function validateVoxelBuildSpec(
-  build: VoxelBuild,
+  build: RenderableVoxelBuild,
+  opts: ValidateVoxelOptions & { output?: "objects" },
+): VoxelValidationResult<Omit<VoxelBuild, "packed">>;
+export function validateVoxelBuildSpec(
+  build: RenderableVoxelBuild,
   opts: ValidateVoxelOptions,
-): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+): VoxelValidationResult;
+export function validateVoxelBuildSpec(
+  build: RenderableVoxelBuild,
+  opts: ValidateVoxelOptions,
+): VoxelValidationResult {
   return validateVoxelBuildSpecInternal(build, opts, false);
 }
 
 export function validateVoxelBuild(
   input: unknown,
+  opts: ValidateVoxelOptions & { output?: "objects" },
+): VoxelValidationResult<Omit<VoxelBuild, "packed">>;
+export function validateVoxelBuild(
+  input: unknown,
   opts: ValidateVoxelOptions,
-): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
-  const parsed = buildSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: parsed.error.message };
-  return validateVoxelBuildSpec(normalizeParsedBuild(parsed.data), opts);
+): VoxelValidationResult;
+export function validateVoxelBuild(
+  input: unknown,
+  opts: ValidateVoxelOptions,
+): VoxelValidationResult {
+  const parsed = parseVoxelBuildSpec(input);
+  if (!parsed.ok) return parsed;
+  return validateVoxelBuildSpec(parsed.value, opts);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -338,11 +430,9 @@ function isPoint(value: unknown): boolean {
   );
 }
 
-// Large uploaded builds are already owned by the worker, so avoid Zod's deep copy
-export function validateOwnedVoxelBuild(
+export function parseOwnedVoxelBuildSpec(
   input: unknown,
-  opts: ValidateVoxelOptions,
-): { ok: true; value: ValidatedVoxelBuild } | { ok: false; error: string } {
+): { ok: true; value: RenderableVoxelBuild } | { ok: false; error: string } {
   if (!isRecord(input) || input.version !== "1.0" || !Array.isArray(input.blocks)) {
     return { ok: false, error: "Build must contain version 1.0 and a blocks list" };
   }
@@ -386,5 +476,29 @@ export function validateOwnedVoxelBuild(
       }
     }
   }
-  return validateVoxelBuildSpecInternal(input as VoxelBuild, opts, true);
+  if (input.packed !== undefined && !isPackedVoxelBlocks(input.packed)) {
+    return { ok: false, error: "Invalid packed blocks" };
+  }
+  if (input.packedBoxes !== undefined && !isPackedVoxelBoxes(input.packedBoxes)) {
+    return { ok: false, error: "Invalid packed boxes" };
+  }
+  return { ok: true, value: input as RenderableVoxelBuild };
+}
+
+// Large uploaded builds are already owned by the worker, so avoid Zod's deep copy
+export function validateOwnedVoxelBuild(
+  input: unknown,
+  opts: ValidateVoxelOptions & { output?: "objects" },
+): VoxelValidationResult<Omit<VoxelBuild, "packed">>;
+export function validateOwnedVoxelBuild(
+  input: unknown,
+  opts: ValidateVoxelOptions,
+): VoxelValidationResult;
+export function validateOwnedVoxelBuild(
+  input: unknown,
+  opts: ValidateVoxelOptions,
+): VoxelValidationResult {
+  const parsed = parseOwnedVoxelBuildSpec(input);
+  if (!parsed.ok) return parsed;
+  return validateVoxelBuildSpecInternal(parsed.value, opts, true);
 }

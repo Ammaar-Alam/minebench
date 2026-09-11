@@ -4,18 +4,26 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as vm from "node:vm";
 import { z } from "zod";
-import type { GridSize } from "@/lib/ai/limits";
+import { type GridSize, GRID_SIZES, isGridSize, MAX_BLOCKS_BY_GRID } from "@/lib/ai/limits";
 import type { PaletteMode } from "@/lib/ai/types";
 import type { VoxelBuild } from "@/lib/voxel/types";
+import { voxelBuildSourceJsonChunks } from "@/lib/voxel/canonicalArtifact";
+import {
+  appendPackedVoxelBox,
+  appendPackedVoxelBlocks,
+  createPackedVoxelBlocks,
+  createPackedVoxelBoxes,
+} from "@/lib/voxel/packedBlocks";
 
 export const VOXEL_EXEC_TOOL_NAME = "voxel.exec" as const;
 export const DEFAULT_VOXEL_EXEC_TIMEOUT_MS = 30_000;
+export const LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS = 15 * 60_000;
 
 export const voxelExecToolCallSchema = z.object({
   tool: z.literal(VOXEL_EXEC_TOOL_NAME),
   input: z.object({
     code: z.string().min(1),
-    gridSize: z.union([z.literal(64), z.literal(256), z.literal(512)]),
+    gridSize: z.custom<GridSize>(isGridSize),
     palette: z.union([z.literal("simple"), z.literal("advanced")]),
     seed: z.number().int().optional(),
   }),
@@ -32,7 +40,7 @@ export function voxelExecToolCallJsonSchema() {
         type: "object",
         properties: {
           code: { type: "string", minLength: 1 },
-          gridSize: { type: "integer", enum: [64, 256, 512] },
+          gridSize: { type: "integer", enum: GRID_SIZES },
           palette: { type: "string", enum: ["simple", "advanced"] },
           seed: { type: "integer" },
         },
@@ -51,6 +59,7 @@ export type VoxelExecRunParams = {
   gridSize: GridSize;
   palette: PaletteMode;
   seed?: number;
+  packedOutput?: boolean;
   // Optional: for deterministic file layout in scripts.
   outputDir?: string;
 };
@@ -140,25 +149,45 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   const timeoutMs = Math.max(
     250,
     Math.min(
-      60_000,
-      Math.floor(Number(process.env.MINEBENCH_TOOL_TIMEOUT_MS ?? DEFAULT_VOXEL_EXEC_TIMEOUT_MS)),
+      LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS,
+      readOptionalLimitEnv("MINEBENCH_TOOL_TIMEOUT_MS") ??
+        (params.gridSize > 512 ? LARGE_WORLD_VOXEL_EXEC_TIMEOUT_MS : DEFAULT_VOXEL_EXEC_TIMEOUT_MS),
     ),
   );
-  const maxBoxes = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
-  const maxLines = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_LINES");
-  const maxBlocks = readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BLOCKS");
+  const maxBoxes = params.gridSize > 512 ? null : readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BOXES");
+  const maxLines = params.gridSize > 512 ? null : readOptionalLimitEnv("MINEBENCH_TOOL_MAX_LINES");
+  const maxBlocks = params.gridSize > 512 ? null : readOptionalLimitEnv("MINEBENCH_TOOL_MAX_BLOCKS");
+  const packedBlockLimit = params.packedOutput && params.gridSize <= 512
+    ? Math.min(MAX_BLOCKS_BY_GRID[params.gridSize], MAX_BLOCKS_BY_GRID[256]) * 2
+    : Infinity;
 
   const boxes: { x1: number; y1: number; z1: number; x2: number; y2: number; z2: number; type: string }[] =
     [];
   const lines: { from: { x: number; y: number; z: number }; to: { x: number; y: number; z: number }; type: string }[] =
     [];
   const blocks: { x: number; y: number; z: number; type: string }[] = [];
+  const packed = params.gridSize > 512 || params.packedOutput ? createPackedVoxelBlocks(0) : undefined;
+  const packedBoxes = packed ? createPackedVoxelBoxes() : undefined;
+  const blockBatch: typeof blocks = [];
+  let blockCount = 0;
+  let boxCount = 0;
+  const flushBlocks = () => {
+    if (!packed || blockBatch.length === 0) return;
+    appendPackedVoxelBlocks(packed, blockBatch);
+    blockBatch.length = 0;
+  };
 
   const block = (x: unknown, y: unknown, z: unknown, type: unknown) => {
-    if (maxBlocks !== null && blocks.length >= maxBlocks) {
-      throw new Error(`Too many blocks (${blocks.length})`);
+    if (blockCount >= packedBlockLimit) throw new Error("processing_capacity_exceeded");
+    if (maxBlocks !== null && blockCount >= maxBlocks) {
+      throw new Error(`Too many blocks (${blockCount})`);
     }
-    blocks.push({ x: toInt(x), y: toInt(y), z: toInt(z), type: toType(type) });
+    const value = { x: toInt(x), y: toInt(y), z: toInt(z), type: toType(type) };
+    blockCount += 1;
+    if (packed && value.x >= -32_768 && value.x <= 32_767 && value.y >= -32_768 && value.y <= 32_767 && value.z >= -32_768 && value.z <= 32_767) {
+      blockBatch.push(value);
+      if (blockBatch.length === 4096) flushBlocks();
+    } else blocks.push(value);
   };
   const box = (
     x1: unknown,
@@ -169,10 +198,10 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
     z2: unknown,
     type: unknown,
   ) => {
-    if (maxBoxes !== null && boxes.length >= maxBoxes) {
-      throw new Error(`Too many boxes (${boxes.length})`);
+    if (maxBoxes !== null && boxCount >= maxBoxes) {
+      throw new Error(`Too many boxes (${boxCount})`);
     }
-    boxes.push({
+    const value = {
       x1: toInt(x1),
       y1: toInt(y1),
       z1: toInt(z1),
@@ -180,7 +209,10 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
       y2: toInt(y2),
       z2: toInt(z2),
       type: toType(type),
-    });
+    };
+    boxCount += 1;
+    if (packedBoxes) appendPackedVoxelBox(packedBoxes, value);
+    else boxes.push(value);
   };
   const line = (...args: unknown[]) => {
     if (maxLines !== null && lines.length >= maxLines) {
@@ -229,16 +261,22 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
   });
 
   // Wrap code to reduce accidental top-level await / module syntax issues.
-  const wrapped = `"use strict";\n${params.code}\n`;
+  // lexical helper bindings avoid repeated context-global lookups in large loops
+  const wrapped = params.gridSize > 512
+    ? `"use strict";\n((block, box, line, rng, Math, GRID_SIZE, PALETTE) => (() => {\n${params.code}\n})())(block, box, line, rng, Math, GRID_SIZE, PALETTE);`
+    : `"use strict";\n${params.code}\n`;
   const script = new vm.Script(wrapped, { filename: "voxel.exec.js" });
 
   script.runInContext(ctx, { timeout: timeoutMs });
+  flushBlocks();
 
   const build: VoxelBuild = {
     version: "1.0",
     boxes,
     lines,
     blocks,
+    ...(packed ? { packed } : {}),
+    ...(packedBoxes ? { packedBoxes } : {}),
   };
 
   const outDir = pickOutputDir(params.outputDir);
@@ -249,13 +287,20 @@ export function runVoxelExec(params: VoxelExecRunParams): VoxelExecRunResult {
         ? crypto.randomUUID()
         : crypto.randomBytes(16).toString("hex");
     filePath = path.join(outDir, `voxel-exec-${Date.now()}-${runId}.json`);
-    fs.writeFileSync(filePath, JSON.stringify(build));
+    if (build.packed) {
+      const fd = fs.openSync(filePath, "wx");
+      try {
+        for (const bytes of voxelBuildSourceJsonChunks(build)) fs.writeSync(fd, bytes);
+      } finally {
+        fs.closeSync(fd);
+      }
+    } else fs.writeFileSync(filePath, JSON.stringify(build));
   }
 
   return {
     filePath,
-    blockCount: blocks.length,
-    boxCount: boxes.length,
+    blockCount,
+    boxCount,
     lineCount: lines.length,
     seed: params.seed,
     build,

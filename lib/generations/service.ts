@@ -1,3 +1,4 @@
+import { MAX_GENERATION_PROMPT_CHARS, type GridSize } from "@/lib/ai/limits";
 import { randomUUID } from "node:crypto";
 import { Prisma, type CustomBuildArtifactKind } from "@prisma/client";
 import {
@@ -9,14 +10,23 @@ import {
   type CustomRequestHeaders,
 } from "@/lib/ai/customProviderConfig";
 import type { GenerateModelRequest, PaletteMode, ProviderApiKeys } from "@/lib/ai/types";
+import type { VoxelExecToolCall } from "@/lib/ai/tools/voxelExec";
 import { isProviderApiKeyName } from "@/lib/ai/providerKeys";
 import { assertSafeCustomApiUrl } from "@/lib/ai/providers/customApiGuard";
 import { sha256Hex } from "@/lib/custom-builds/hash";
 import { generateCustomBuildPublicId } from "@/lib/custom-builds/ids";
+import { customBuildJsonNumber, customBuildStorageBigInt } from "@/lib/custom-builds/numericMetadata";
 import { safeCustomBuildRetryReason } from "@/lib/custom-builds/sanitize";
 import { encryptProviderKey, encryptSecretValue } from "@/lib/custom-builds/secrets";
 import { redactSensitiveText } from "@/lib/custom-builds/sanitize";
-import { deleteCustomBuildArtifact } from "@/lib/custom-builds/storage";
+import {
+  deleteCustomBuildArtifact,
+  getCustomBuildArtifactDescriptor,
+  getCustomBuildArtifactPath,
+  getCustomBuildStorageBucket,
+  uploadCustomBuildArtifact,
+} from "@/lib/custom-builds/storage";
+import { voxelWorldPartSourceSha256 } from "@/lib/custom-builds/worldArtifacts";
 import { resolveSavedGenerationModel } from "@/lib/generations/model";
 import { prisma } from "@/lib/prisma";
 import {
@@ -53,7 +63,7 @@ export class GenerationServiceError extends Error {
 export type CreateSavedGenerationsInput = {
   ownerId: string;
   prompt: string;
-  gridSize: 64 | 256 | 512;
+  gridSize: GridSize;
   palette: PaletteMode;
   models: GenerateModelRequest[];
   providerKeys: ProviderApiKeys;
@@ -75,6 +85,7 @@ const generationSelect = {
   promptText: true,
   gridSize: true,
   palette: true,
+  generationMode: true,
   modelKind: true,
   modelKey: true,
   modelProvider: true,
@@ -126,11 +137,13 @@ function serializeGeneration(row: GenerationRow) {
   const artifactKinds = new Set(row.artifacts.map((artifact) => artifact.kind));
   const artifactsAvailable = row.status === "succeeded";
   const progress = readGenerationProgress(row.progress);
-  const viewerKind = artifactKinds.has("viewer_mbf1")
-    ? "viewer_mbf1"
-    : artifactKinds.has("viewer_mbv4")
-      ? "viewer_mbv4"
-      : null;
+  const viewerKind = artifactKinds.has("viewer_world")
+    ? "viewer_world"
+    : artifactKinds.has("viewer_mbf1")
+      ? "viewer_mbf1"
+      : artifactKinds.has("viewer_mbv4")
+        ? "viewer_mbv4"
+        : null;
   return {
     id: row.publicId,
     createdAt: row.createdAt.toISOString(),
@@ -156,12 +169,12 @@ function serializeGeneration(row: GenerationRow) {
           ? "openrouter"
           : "direct",
     },
-    blockCount: row.blockCount,
+    blockCount: customBuildJsonNumber(row.blockCount, "CustomBuild.blockCount"),
     generationTimeMs: row.generationTimeMs,
     warnings: Array.isArray(row.warnings) ? row.warnings.filter((value): value is string => typeof value === "string") : [],
-    expandedBytes: row.buildByteSize,
-    canonicalStoredBytes: row.buildCompressedByteSize,
-    storedBytes: row.storedByteSize,
+    expandedBytes: customBuildJsonNumber(row.buildByteSize, "CustomBuild.buildByteSize"),
+    canonicalStoredBytes: customBuildJsonNumber(row.buildCompressedByteSize, "CustomBuild.buildCompressedByteSize"),
+    storedBytes: customBuildJsonNumber(row.storedByteSize, "CustomBuild.storedByteSize"),
     sha256: row.buildSha256,
     error: row.errorCode
       ? {
@@ -195,11 +208,12 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
   const retained = await prisma.customBuild.aggregate({
     where: {
       ownerId,
+      removedAt: null,
       storedByteSize: { gt: 0 },
     },
     _sum: { storedByteSize: true },
   });
-  if ((retained._sum.storedByteSize ?? 0) >= STORAGE_FAILSAFE_BYTES) {
+  if (customBuildStorageBigInt(retained._sum.storedByteSize) >= BigInt(STORAGE_FAILSAFE_BYTES)) {
     throw new GenerationServiceError(
       "storage_failsafe",
       "Remove a saved generation before starting another.",
@@ -207,9 +221,75 @@ export async function assertSavedGenerationStorageAvailable(ownerId: string): Pr
   }
 }
 
+export async function createImportedGeneration(ownerId: string, input: VoxelExecToolCall["input"]) {
+  await assertSavedGenerationStorageAvailable(ownerId);
+  const publicId = generateCustomBuildPublicId();
+  const bytes = new TextEncoder().encode(JSON.stringify({ tool: "voxel.exec", input }));
+  const sha256 = sha256Hex(bytes);
+  const descriptor = getCustomBuildArtifactDescriptor("raw_text_debug");
+  const bucket = getCustomBuildStorageBucket();
+  const path = getCustomBuildArtifactPath({ publicId, kind: "raw_text_debug", sha256 });
+  const promptText = "Imported build";
+  await uploadCustomBuildArtifact({ bucket, path, bytes, contentType: descriptor.contentType });
+  let row: GenerationRow;
+  try {
+    row = await prisma.$transaction(async (tx) => {
+      const created = await tx.customBuild.create({
+        data: {
+          publicId,
+          ownerId,
+          status: "queued",
+          currentStage: "queued",
+          promptText,
+          promptSha256: sha256Hex(promptText),
+          gridSize: input.gridSize,
+          palette: input.palette,
+          generationMode: "import",
+          modelKind: "import",
+          modelProvider: "import",
+          modelId: "voxel.exec",
+          modelDisplayName: promptText,
+          storedByteSize: bytes.byteLength,
+          artifacts: {
+            create: {
+              kind: "raw_text_debug",
+              format: descriptor.format,
+              bucket,
+              path,
+              encoding: "identity",
+              contentType: descriptor.contentType,
+              fileName: `${publicId}.txt`,
+              sha256,
+              sourceBuildSha256: sha256,
+              byteSize: bytes.byteLength,
+              storedByteSize: bytes.byteLength,
+            },
+          },
+          jobs: { create: { type: "generate", status: "queued", maxAttempts: GENERATE_JOB_MAX_ATTEMPTS } },
+          events: { create: { seq: 1, type: "queued", data: { stage: "queued" } } },
+        },
+        select: generationSelect,
+      });
+      const day = dayKey(new Date());
+      await tx.customBuildStatsDaily.upsert({
+        where: { day }, create: { day, created: 1 }, update: { created: { increment: 1 } },
+      });
+      return created;
+    });
+  } catch (error) {
+    try {
+      await deleteCustomBuildArtifact({ bucket, path });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Build import queueing and source cleanup failed");
+    }
+    throw error;
+  }
+  return serializeGeneration(row);
+}
+
 export async function createSavedGenerations(input: CreateSavedGenerationsInput) {
   const prompt = input.prompt.trim();
-  if (!prompt || prompt.length > 800 || input.models.length < 1 || input.models.length > 8) {
+  if (!prompt || prompt.length > MAX_GENERATION_PROMPT_CHARS || input.models.length < 1 || input.models.length > 8) {
     throw new GenerationServiceError("invalid_request", "Check the prompt and model selection.");
   }
   if (new Set(input.models.map((model) => model.id)).size !== input.models.length) {
@@ -465,6 +545,7 @@ export async function listAdminGenerations(
         canPublish: Boolean(
           row.owner &&
           !row.owner.gallerySuspendedAt &&
+          row.generationMode !== "import" &&
           generation.status === "succeeded" &&
           generation.viewerUrl &&
           row._count.galleryExamples === 0
@@ -488,6 +569,7 @@ export async function publishAdminGeneration(adminId: string, publicId: string) 
       removedAt: true,
       objectsDeletedAt: true,
       promptText: true,
+      generationMode: true,
       modelKind: true,
       modelDisplayName: true,
       modelId: true,
@@ -514,6 +596,7 @@ export async function publishAdminGeneration(adminId: string, publicId: string) 
   if (!build) throw new GalleryServiceError("not_found", "Saved generation not found.");
   if (
     !build.ownerId ||
+    build.generationMode === "import" ||
     build.status !== "succeeded" ||
     build.removedAt ||
     build.objectsDeletedAt ||
@@ -634,7 +717,9 @@ export async function retrySavedGeneration(
     select: {
       id: true,
       status: true,
+      errorCode: true,
       errorRetryable: true,
+      generationMode: true,
       modelKind: true,
       modelKey: true,
       modelProvider: true,
@@ -646,19 +731,27 @@ export async function retrySavedGeneration(
   if (build.status !== "failed" || build.errorRetryable !== true) {
     throw new GenerationServiceError("not_retryable", "This generation cannot be retried.");
   }
+  const recoveryOnly = build.generationMode === "import" ||
+    ["lease_expired", "provider_key_expired", "artifact_bookkeeping_failed"].includes(build.errorCode ?? "");
+  if (recoveryOnly && !await prisma.customBuildArtifact.findFirst({
+    where: { customBuildId: build.id, kind: { in: ["build_json", "raw_text_debug"] } },
+    select: { id: true },
+  })) {
+    throw new GenerationServiceError("not_retryable", "The saved generation output is no longer available.");
+  }
   const provider = retryCredentialProvider(build);
-  const providerKey = input.providerKey?.trim() || (
+  const providerKey = recoveryOnly ? undefined : input.providerKey?.trim() || (
     build.usesHostedGeneration &&
     HOSTED_GEMINI_RETRY_MODEL_KEYS.has(build.modelKey ?? "") &&
     provider === "openrouter"
       ? process.env.MINEBENCH_FREE_OPENROUTER_API_KEY?.trim()
       : undefined
   );
-  if (!provider || !providerKey) {
+  if (!recoveryOnly && (!provider || !providerKey)) {
     throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
   }
   let requestConfig: SavedGenerationRequestConfig | undefined;
-  if (provider === "custom") {
+  if (!recoveryOnly && provider === "custom") {
     if (!input.customBaseUrl?.trim()) {
       throw new GenerationServiceError("missing_provider_key", "Reconnect this model in Generate.");
     }
@@ -672,7 +765,7 @@ export async function retrySavedGeneration(
     } catch {
       throw new GenerationServiceError("invalid_model", "Check the custom model endpoint.");
     }
-  } else {
+  } else if (!recoveryOnly) {
     try {
       requestConfig = normalizeProviderRequestOverrides({
         headers: input.customHeaders,
@@ -682,7 +775,7 @@ export async function retrySavedGeneration(
       throw new GenerationServiceError("invalid_model", "Check the request overrides.");
     }
   }
-  const credential = encryptProviderKey(providerKey, { provider, binding: build.id });
+  const credential = providerKey && provider ? encryptProviderKey(providerKey, { provider, binding: build.id }) : null;
   const endpoint = requestConfig && (requestConfig.baseUrl || requestConfig.headers || requestConfig.body)
     ? encryptSecretValue(serializeSavedGenerationRequestConfig(requestConfig), build.id)
     : null;
@@ -713,7 +806,7 @@ export async function retrySavedGeneration(
       throw new GenerationServiceError("already_retried", "This generation is already retrying.");
     }
     await tx.customBuildSecret.deleteMany({ where: { customBuildId: build.id } });
-    await tx.customBuildSecret.create({
+    if (credential) await tx.customBuildSecret.create({
       data: {
         customBuildId: build.id,
         provider: credential.provider,
@@ -826,6 +919,31 @@ export async function getOwnedGenerationArtifact(
       encoding: true,
       fileName: true,
       sha256: true,
+      sourceBuildSha256: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function getOwnedGenerationWorldPart(
+  ownerId: string,
+  publicId: string,
+  sourceBuildSha256: string,
+  partKey: string,
+) {
+  return prisma.customBuildArtifact.findFirst({
+    where: {
+      kind: "world_part",
+      sourceBuildSha256: voxelWorldPartSourceSha256(sourceBuildSha256, partKey),
+      customBuild: { publicId, ownerId, removedAt: null, status: "succeeded" },
+    },
+    select: {
+      bucket: true,
+      path: true,
+      contentType: true,
+      encoding: true,
+      sha256: true,
+      sourceBuildSha256: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -836,7 +954,6 @@ export async function removeSavedGeneration(
   publicId: string,
   options: {
     acknowledgePublicExamples?: boolean;
-    deleteArtifact?: typeof deleteCustomBuildArtifact;
   } = {},
 ) {
   const build = await prisma.customBuild.findFirst({
@@ -861,7 +978,7 @@ export async function removeSavedGeneration(
 
   const now = new Date();
   const purgeAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const artifacts = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
     const activeRemoval = await tx.customBuild.updateMany({
       where: {
         id: build.id,
@@ -927,44 +1044,6 @@ export async function removeSavedGeneration(
         },
       });
     }
-    return tx.customBuildArtifact.findMany({
-      where: { customBuildId: build.id },
-      select: { id: true, bucket: true, path: true },
-    });
   });
-
-  const removeObject = options.deleteArtifact ?? deleteCustomBuildArtifact;
-  try {
-    for (const artifact of artifacts) {
-      await removeObject({ bucket: artifact.bucket, path: artifact.path });
-    }
-    await prisma.$transaction(async (tx) => {
-      await tx.customBuildArtifact.deleteMany({
-        where: { id: { in: artifacts.map((artifact) => artifact.id) } },
-      });
-      const remaining = await tx.customBuildArtifact.aggregate({
-        where: { customBuildId: build.id },
-        _sum: { storedByteSize: true },
-        _count: true,
-      });
-      await tx.customBuild.update({
-        where: { id: build.id },
-        data: {
-          storedByteSize: remaining._sum.storedByteSize ?? 0,
-          objectsDeletedAt: remaining._count === 0 ? new Date() : null,
-          deletionPendingAt: remaining._count === 0 ? null : new Date(),
-          deletionError: remaining._count === 0 ? null : "Artifact cleanup pending.",
-        },
-      });
-    });
-  } catch (error) {
-    await prisma.customBuild.update({
-      where: { id: build.id },
-      data: {
-        deletionPendingAt: new Date(),
-        deletionError: redactSensitiveText(error).slice(0, 500),
-      },
-    });
-  }
   return { removed: true, publicExamplesRemoved: build.galleryExamples.length };
 }
