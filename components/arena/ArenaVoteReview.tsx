@@ -222,6 +222,8 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
   const listRequest = useRef(0);
   const votesRequest = useRef(0);
   const activeSession = useRef<string | null>(null);
+  const votesRef = useRef<Vote[]>([]);
+  votesRef.current = votes;
 
   const loadList = useCallback(async () => {
     const request = ++listRequest.current;
@@ -256,13 +258,51 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         return;
       }
       const voteIds = result.data.votes.map((vote) => vote.id);
-      setVotes((current) => append ? [...current, ...result.data.votes] : result.data.votes);
+      setVotes((current) => {
+        if (!append) return result.data.votes;
+        const existing = new Set(current.map((vote) => vote.id));
+        return [...current, ...result.data.votes.filter((vote) => !existing.has(vote.id))];
+      });
       setLoadedSessionId(sessionId);
       setPageVoteIds(voteIds);
       setNextCursor(result.data.nextCursor);
       if (!append) {
         const liveIds = new Set(voteIds);
         setSelectedVoteIds((current) => new Set([...current].filter((id) => liveIds.has(id))));
+      }
+    } catch {
+      if (request === votesRequest.current) setVotesError("Could not load vote history.");
+    } finally {
+      if (request === votesRequest.current) setVotesLoading(false);
+    }
+  }, []);
+
+  const loadNewVotes = useCallback(async (sessionId: string) => {
+    if (sessionId !== activeSession.current) return;
+    const request = ++votesRequest.current;
+    setVotesLoading(true);
+    setVotesError(null);
+    try {
+      const result = await loadArenaVotePage(sessionId);
+      if (request !== votesRequest.current || sessionId !== activeSession.current) return;
+      if (!result.ok) {
+        setVotesError(result.error);
+        return;
+      }
+      const newestLoadedId = votesRef.current[0]?.id;
+      const freshIds = result.data.votes.map((vote) => vote.id);
+      setVotes((current) => {
+        const existing = new Set(current.map((vote) => vote.id));
+        const fresh = result.data.votes.filter((vote) => !existing.has(vote.id));
+        return [...fresh, ...current];
+      });
+      setLoadedSessionId(sessionId);
+      setPageVoteIds(freshIds);
+      // Keep the existing cursor when the fresh page overlaps the loaded history so "Load
+      // more" continues from the oldest loaded vote; otherwise advance to the fresh page's
+      // next cursor so "Load more" can fill the gap between the fresh and older history.
+      if (!(newestLoadedId != null && result.data.votes.some((vote) => vote.id === newestLoadedId))) {
+        setNextCursor(result.data.nextCursor);
       }
     } catch {
       if (request === votesRequest.current) setVotesError("Could not load vote history.");
@@ -491,7 +531,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
               <span>{metric(selectedSession.upsets, "ranking upsets")}</span>
               <span>Median gap {formatGap(selectedSession.medianGapSeconds)}</span>
               <span>{votes.length.toLocaleString()} loaded · {selectedVoteIds.size.toLocaleString()} selected</span>
-              {hasNewVotes && !votesError ? <button type="button" className="font-medium text-accent underline underline-offset-4" disabled={busy} onClick={() => selectedSessionId && void loadVotes(selectedSessionId)}>New votes</button> : null}
+              {hasNewVotes && !votesError ? <button type="button" className="font-medium text-accent underline underline-offset-4" disabled={busy} onClick={() => selectedSessionId && void loadNewVotes(selectedSessionId)}>New votes</button> : null}
             </p>
           ) : null}
           <div className="divide-y divide-border">
