@@ -209,6 +209,37 @@ export async function getArenaVotePage(adminId: string, sessionId: string, curso
   };
 }
 
+// Routing-independent reversal of the GalleryVoteBlock rows attributable to a reviewed
+// session. Once a session is attributed, the unblock routes through the "user:<id>" branch,
+// whose resolveGalleryAdminPerson only enumerates a bounded window of recent sessions, so a
+// session blocked while anonymous can fall out of that window once the user accrues newer
+// sessions and its original sessionHash/ipHmac block rows survive the delegated unblock. This
+// keys directly on the session's sessionHash and recovers any companion ipHmac, so it releases
+// the original records regardless of that cap or whether the session still sorts into the window.
+async function reverseArenaSessionVoteBlocks(adminId: string, sessionId: string) {
+  const sessionHash = hashVoteSession(sessionId);
+  if (!sessionHash) return;
+  const [presence, existing] = await Promise.all([
+    prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { ipHmac: true } }),
+    prisma.galleryVoteBlock.findMany({ where: { sessionHash, reversedAt: null }, select: { ipHmac: true } }),
+  ]);
+  if (existing.length === 0 && !presence?.ipHmac) return;
+  const ipHmacs = Array.from(new Set(
+    [
+      ...(presence?.ipHmac ? [presence.ipHmac] : []),
+      ...existing.flatMap((row) => (row.ipHmac ? [row.ipHmac] : [])),
+    ].filter((value): value is string => Boolean(value)),
+  ));
+  const identities = [
+    { sessionHash },
+    ...ipHmacs.map((ipHmac) => ({ ipHmac })),
+  ];
+  await prisma.galleryVoteBlock.updateMany({
+    where: { reversedAt: null, OR: identities },
+    data: { reversedAt: new Date(), reversedById: adminId },
+  });
+}
+
 export async function setArenaVoteSessionBlocked(adminId: string, sessionId: string, blocked: boolean) {
   await requireMineBenchAdmin(adminId);
   checkSession(sessionId);
@@ -216,9 +247,17 @@ export async function setArenaVoteSessionBlocked(adminId: string, sessionId: str
     where: { sessionId, userId: { not: null }, matchup: { stealthVariantId: null } },
     orderBy: { createdAt: "desc" }, select: { userId: true },
   });
-  if (vote?.userId) return setGalleryPersonVoteBlocked(adminId, `user:${vote.userId}`, blocked);
+  if (vote?.userId) {
+    await setGalleryPersonVoteBlocked(adminId, `user:${vote.userId}`, blocked);
+    if (!blocked) await reverseArenaSessionVoteBlocks(adminId, sessionId);
+    return { blocked };
+  }
   const presence = await prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { id: true, userId: true } });
-  if (presence) return setGalleryPersonVoteBlocked(adminId, presence.userId ? `user:${presence.userId}` : `session:${presence.id}`, blocked);
+  if (presence) {
+    await setGalleryPersonVoteBlocked(adminId, presence.userId ? `user:${presence.userId}` : `session:${presence.id}`, blocked);
+    if (!blocked) await reverseArenaSessionVoteBlocks(adminId, sessionId);
+    return { blocked };
+  }
   const sessionHash = hashVoteSession(sessionId)!;
   const existing = await prisma.galleryVoteBlock.findMany({ where: { sessionHash, reversedAt: null }, select: { id: true } });
   if (blocked && existing.length === 0) await createVoteBlock(adminId, { sessionId });

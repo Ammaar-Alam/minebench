@@ -7,10 +7,16 @@ async function main() {
   const db = new PrismaClient();
   const { getArenaVoteReview, getArenaVotePage, setArenaVoteSessionBlocked } = await import("../../../lib/arena/voteReview");
   const { hashVoteSession } = await import("../../../lib/voteBlock");
+  const { setGalleryPersonVoteBlocked } = await import("../../../lib/gallery/service");
   const adminId = randomUUID(), memberId = randomUUID(), suffix = randomUUID();
   const sessionId = `review-${suffix}`, peerSession = `review-peer-${suffix}`;
   const oldBlockedSession = `review-restricted-${suffix}`;
   const hashOnlySession = `review-hash-${suffix}`, accountOnlySession = `review-account-${suffix}`;
+  const orphanSession = `review-orphan-${suffix}`, orphanIp = `review-orphan-ip-${suffix}`;
+  const dashSession = `review-dash-${suffix}`, dashIp = `review-dash-ip-${suffix}`;
+  const purgedSession = `review-purged-${suffix}`, purgedIp = `review-purged-ip-${suffix}`;
+  const orphanNewerSessions = Array.from({ length: 51 }, (_, i) => `review-orphan-newer-${suffix}-${i}`);
+  const dashNewerSessions = Array.from({ length: 51 }, (_, i) => `review-dash-newer-${suffix}-${i}`);
   const now = new Date();
   const capturedAt = new Date(now.getTime() - 60_000);
   try {
@@ -113,11 +119,65 @@ async function main() {
     assert.equal(await db.galleryVoteBlock.count({ where: { userId: memberId, reversedAt: null } }), 0);
     assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(accountOnlySession), reversedAt: null } }), 0);
 
+    // Regression: a session blocked while anonymous, then attributed via claimAnonymousPublicVotes,
+    // must have its original sessionHash/ipHmac block rows reversed on unblock even after the user
+    // accrues >=50 newer attributed sessions (which push the original session outside
+    // resolveGalleryAdminPerson's take:50 recent-activity window). Before the fix the "user:<id>"
+    // unblock enumerated only the 50 newest sessions and silently no-oped on the original rows.
+    await db.publicSessionActivity.createMany({ data: Array.from({ length: 51 }, (_, i) => ({
+      sessionId: orphanNewerSessions[i], userId: memberId, ipHmac: `review-orphan-newer-ip-${suffix}-${i}`,
+      lastSeenAt: new Date(capturedAt.getTime() + (i + 1) * 60_000),
+    })) });
+    await db.publicSessionActivity.create({ data: { sessionId: orphanSession, ipHmac: orphanIp, lastSeenAt: capturedAt } });
+    await setArenaVoteSessionBlocked(adminId, orphanSession, true);
+    assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(orphanSession), reversedAt: null } }), 1, "orphan sessionHash block created while anonymous");
+    assert.equal(await db.galleryVoteBlock.count({ where: { ipHmac: orphanIp, reversedAt: null } }), 1, "orphan ipHmac block created while anonymous");
+    // Mirror claimAnonymousPublicVotes: attribute the session without touching its frozen lastSeenAt.
+    await db.publicSessionActivity.update({ where: { sessionId: orphanSession }, data: { userId: memberId } });
+    await setArenaVoteSessionBlocked(adminId, orphanSession, false);
+    assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(orphanSession), reversedAt: null } }), 0, "orphan sessionHash block reversed despite >=50 newer sessions");
+    assert.equal(await db.galleryVoteBlock.count({ where: { ipHmac: orphanIp, reversedAt: null } }), 0, "orphan ipHmac block reversed despite >=50 newer sessions");
+
+    // Regression (gallery dashboard path): setGalleryPersonVoteBlocked("user:<id>", false) invoked
+    // directly does not go through setArenaVoteSessionBlocked, so the exhaustive enumeration on the
+    // unblock path is the only fix covering it. The out-of-window sessionHash/ipHmac blocks must reverse.
+    await db.publicSessionActivity.createMany({ data: Array.from({ length: 51 }, (_, i) => ({
+      sessionId: dashNewerSessions[i], userId: memberId, ipHmac: `review-dash-newer-ip-${suffix}-${i}`,
+      lastSeenAt: new Date(capturedAt.getTime() + (i + 1) * 60_000 + 1),
+    })) });
+    await db.publicSessionActivity.create({ data: { sessionId: dashSession, userId: memberId, ipHmac: dashIp, lastSeenAt: capturedAt } });
+    await db.galleryVoteBlock.createMany({ data: [
+      { sessionHash: hashVoteSession(dashSession), createdById: adminId },
+      { ipHmac: dashIp, createdById: adminId },
+    ] });
+    await setGalleryPersonVoteBlocked(adminId, `user:${memberId}`, false);
+    assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(dashSession), reversedAt: null } }), 0, "dashboard unblock reverses out-of-window sessionHash block");
+    assert.equal(await db.galleryVoteBlock.count({ where: { ipHmac: dashIp, reversedAt: null } }), 0, "dashboard unblock reverses out-of-window ipHmac block");
+
+    // Regression (post-purge): once the session's PublicSessionActivity is purged (30-day retention),
+    // the "user:<id>" branch cannot enumerate it at all, so only the routing-independent reversal
+    // (keyed on the surviving GalleryVoteBlock sessionHash) can release the original sessionHash block.
+    // Post-purge ipHmac recovery is not guaranteed — the sessionHash row carries no ipHmac and the PSA
+    // is gone — so only the sessionHash block is asserted here.
+    await db.publicSessionActivity.create({ data: { sessionId: purgedSession, ipHmac: purgedIp, lastSeenAt: capturedAt } });
+    await setArenaVoteSessionBlocked(adminId, purgedSession, true);
+    assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(purgedSession), reversedAt: null } }), 1, "purged sessionHash block created while anonymous");
+    // Attribute via a vote + PSA (mirrors claimAnonymousPublicVotes), then purge the PSA.
+    await db.vote.create({ data: { sessionId: purgedSession, matchupId: matchup.id, choice: "A", createdAt: capturedAt } });
+    await db.vote.updateMany({ where: { sessionId: purgedSession }, data: { userId: memberId } });
+    await db.publicSessionActivity.update({ where: { sessionId: purgedSession }, data: { userId: memberId } });
+    await db.publicSessionActivity.delete({ where: { sessionId: purgedSession } });
+    await setArenaVoteSessionBlocked(adminId, purgedSession, false);
+    assert.equal(await db.galleryVoteBlock.count({ where: { sessionHash: hashVoteSession(purgedSession), reversedAt: null } }), 0, "purged sessionHash block reversed via routing-independent lookup");
+
     console.log("vote review database checks passed");
   } finally {
     await db.galleryVoteBlock.deleteMany({ where: { createdById: adminId } });
     await db.galleryModerationRecord.deleteMany({ where: { actorUserId: adminId } });
-    await db.publicSessionActivity.deleteMany({ where: { sessionId: { in: [sessionId, peerSession, oldBlockedSession, hashOnlySession, accountOnlySession] } } });
+    await db.publicSessionActivity.deleteMany({ where: { sessionId: { in: [
+      sessionId, peerSession, oldBlockedSession, hashOnlySession, accountOnlySession,
+      orphanSession, dashSession, purgedSession, ...orphanNewerSessions, ...dashNewerSessions,
+    ] } } });
     await db.prompt.deleteMany({ where: { text: `Review ${suffix}` } });
     await db.model.deleteMany({ where: { key: { startsWith: `review-${suffix}` } } });
     await db.user.deleteMany({ where: { id: { in: [adminId, memberId] } } });
