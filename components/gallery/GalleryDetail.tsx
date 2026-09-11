@@ -313,7 +313,12 @@ export function GalleryDetail({ candidate }: { candidate: GalleryDetailPayload }
       });
       if (!response.ok) throw new Error("Build could not be removed");
       setExamples((current) => current.filter((example) => example.id !== exampleId));
-      setSelectedIds((current) => current.filter((id) => id !== exampleId));
+      setSelectedIds((current) => {
+        const next = current.filter((id) => id !== exampleId);
+        if (next.length > 0) return next;
+        const fallbackId = examples.find((example) => example.id !== exampleId)?.id;
+        return fallbackId ? [fallbackId] : [];
+      });
       router.refresh();
     } catch {
       setActionError("Build could not be removed");
