@@ -402,19 +402,25 @@ export function deepseekThinkingConfigForModel(
     return { type: "enabled", reasoningEffort: "high" };
   }
 
+  // Flash models are reachable via both the direct DeepSeek route and OpenRouter,
+  // and OpenRouter exposes no first-class reasoning disable for them (the
+  // effort ladder omits a disabling terminal, matching every other non-OpenAI
+  // reasoning family). Reject disabling tokens here so a dual-route flash model
+  // does not advertise/accept a capability the OpenRouter route hard-fails on.
   if (
-    normalized === "disabled" ||
-    normalized === "off" ||
-    normalized === "false" ||
-    normalized === "none" ||
-    normalized === "non-think" ||
-    normalized === "nonthinking"
+    !isFlashModel &&
+    (normalized === "disabled" ||
+      normalized === "off" ||
+      normalized === "false" ||
+      normalized === "none" ||
+      normalized === "non-think" ||
+      normalized === "nonthinking")
   ) {
     return { type: "disabled" };
   }
 
   throw new Error(
-    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high${isFlashModel ? ", low" : ""}, disabled.`,
+    `DeepSeek model ${modelId} does not support reasoning '${override}'. Supported values: max, high${isFlashModel ? ", low" : ", disabled"}.`,
   );
 }
 

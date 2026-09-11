@@ -29,6 +29,34 @@ runProviderConfigTest(
       { label: "Thinking", value: "Enabled" },
       { label: "Reasoning effort", value: "Max" },
     ]);
+    // The flash model is reachable on both the direct and OpenRouter routes,
+    // and neither route can disable reasoning (the OpenRouter ladder has no
+    // disabling terminal, matching every other non-OpenAI reasoning family).
+    // The same disabling token must therefore be rejected consistently across
+    // both routes rather than succeeding on one and hard-failing on the other.
+    for (const token of ["disabled", "off", "false", "none", "non-think", "nonthinking"]) {
+      assert.throws(
+        () => deepseekThinkingConfigForModel(flash.modelId, token),
+        /does not support reasoning/,
+        `direct route should reject disabling token '${token}' for the dual-route flash model`,
+      );
+      assert.throws(
+        () => openRouterReasoningEffortAttempts(flash.openRouterModelId!, token),
+        /does not support reasoning/,
+        `OpenRouter route should reject disabling token '${token}' for the dual-route flash model`,
+      );
+    }
+    // Neither route advertises `disabled` as a supported value for the flash model
+    assert.throws(
+      () => deepseekThinkingConfigForModel(flash.modelId, "disabled"),
+      /Supported values: max, high, low\.$/,
+      "direct flash route must not advertise `disabled` as a supported value",
+    );
+    assert.throws(
+      () => openRouterReasoningEffortAttempts(flash.openRouterModelId!, "disabled"),
+      /Supported values: max, xhigh, high, low\.$/,
+      "OpenRouter flash route must not advertise `disabled` as a supported value",
+    );
     for (const provider of ["deepseek", "openrouter"] as const) {
       const { requests } = await runGeneration(capture, {
         modelKey: flash.key,
@@ -71,6 +99,15 @@ runProviderConfigTest(
       () => deepseekThinkingConfigForModel("deepseek-v4-pro", "low"),
       /Supported values: max, high, disabled\./,
     );
+    // The direct-only DeepSeek V4 Pro has no OpenRouter route to contradict, so
+    // its reasoning-disable capability is preserved across all disabling tokens.
+    for (const token of ["disabled", "off", "false", "none", "non-think", "nonthinking"]) {
+      assert.deepEqual(
+        deepseekThinkingConfigForModel("deepseek-v4-pro", token),
+        { type: "disabled" },
+        `direct-only DeepSeek V4 Pro should still honor disabling token '${token}'`,
+      );
+    }
     assert.deepEqual(openRouterReasoningEffortAttempts(model.openRouterModelId!), [
       "max",
       "high",
@@ -127,6 +164,40 @@ runProviderConfigTest(
         "temperature=n/a",
       ],
       "Direct DeepSeek trace should report the maximum output and reasoning settings",
+    );
+
+    // A disabling token fails fast on BOTH routes of the dual-route flash model,
+    // before any provider request is issued, so neither route silently succeeds
+    // while the other hard-fails. The direct and OpenRouter routes also report
+    // supported-values lists that no longer mention `disabled`.
+    const directDisabled = await runGeneration(capture, {
+      modelKey: flash.key,
+      providerKeys: { deepseek: "test-deepseek-key" },
+      reasoning: "disabled",
+    });
+    assert.equal(directDisabled.result.ok, false);
+    assert.ok(!directDisabled.result.ok);
+    assert.match(directDisabled.result.error, /does not support reasoning 'disabled'/);
+    assert.match(directDisabled.result.error, /Supported values: max, high, low\.$/);
+    assert.equal(
+      directDisabled.requests.length,
+      0,
+      "direct route must not issue a provider request for an unsupported reasoning token",
+    );
+
+    const openRouterDisabled = await runGeneration(capture, {
+      modelKey: flash.key,
+      providerKeys: { openrouter: "test-openrouter-key" },
+      reasoning: "disabled",
+    });
+    assert.equal(openRouterDisabled.result.ok, false);
+    assert.ok(!openRouterDisabled.result.ok);
+    assert.match(openRouterDisabled.result.error, /does not support reasoning 'disabled'/);
+    assert.match(openRouterDisabled.result.error, /Supported values: max, xhigh, high, low\.$/);
+    assert.equal(
+      openRouterDisabled.requests.length,
+      0,
+      "OpenRouter route must not issue a provider request for an unsupported reasoning token",
     );
 
     const overridden = await runGeneration(capture, {
