@@ -6,6 +6,7 @@ import { PUBLIC_SESSION_RETENTION_MS } from "@/lib/publicPresence";
 
 const SESSION_LIMIT = 1000;
 const PAGE_SIZE = 100;
+const VOTE_REVIEW_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export type VoteReviewSession = {
   sessionId: string;
@@ -82,7 +83,7 @@ async function latestRanks() {
 export async function getArenaVoteReview(adminId: string): Promise<VoteReviewData> {
   await requireMineBenchAdmin(adminId);
   const now = new Date();
-  const since = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const since = new Date(now.getTime() - VOTE_REVIEW_WINDOW_MS);
   const retainedSince = new Date(now.getTime() - PUBLIC_SESSION_RETENTION_MS);
   const ranking = await latestRanks();
   type Summary = Metrics & { sessionId: string; userId: string | null; lastVoteAt: Date | null; lastVoteId: string | null; ties: number; medianGapSeconds: number | null };
@@ -102,7 +103,9 @@ export async function getArenaVoteReview(adminId: string): Promise<VoteReviewDat
         WHERE v."createdAt" >= (${since}::timestamptz AT TIME ZONE 'UTC')
           AND v."createdAt" <= (${now}::timestamptz AT TIME ZONE 'UTC') AND m."stealthVariantId" IS NULL
       )
-      SELECT "sessionId", MAX("userId"::text) AS "userId", MAX("createdAt") AS "lastVoteAt",
+      SELECT "sessionId",
+        (array_agg(("userId"::text) ORDER BY "createdAt" DESC, "id" DESC) FILTER (WHERE "userId" IS NOT NULL))[1] AS "userId",
+        MAX("createdAt") AS "lastVoteAt",
         MAX(latest_id) AS "lastVoteId",
         COUNT(*)::int AS votes,
         COUNT(*) FILTER (WHERE choice = 'A')::int AS "choiceA",
@@ -209,19 +212,33 @@ export async function getArenaVotePage(adminId: string, sessionId: string, curso
   };
 }
 
-export async function setArenaVoteSessionBlocked(adminId: string, sessionId: string, blocked: boolean) {
+export async function setArenaVoteSessionBlocked(
+  adminId: string,
+  sessionId: string,
+  blocked: boolean,
+): Promise<{ blocked: boolean; personId: string | null; label: string }> {
   await requireMineBenchAdmin(adminId);
   checkSession(sessionId);
+  const since = new Date(Date.now() - VOTE_REVIEW_WINDOW_MS);
   const vote = await prisma.vote.findFirst({
-    where: { sessionId, userId: { not: null }, matchup: { stealthVariantId: null } },
-    orderBy: { createdAt: "desc" }, select: { userId: true },
+    where: { sessionId, userId: { not: null }, createdAt: { gte: since }, matchup: { stealthVariantId: null } },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { userId: true },
   });
-  if (vote?.userId) return setGalleryPersonVoteBlocked(adminId, `user:${vote.userId}`, blocked);
+  if (vote?.userId) {
+    const personId = `user:${vote.userId}`;
+    const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
+    return { blocked, personId, label };
+  }
   const presence = await prisma.publicSessionActivity.findUnique({ where: { sessionId }, select: { id: true, userId: true } });
-  if (presence) return setGalleryPersonVoteBlocked(adminId, presence.userId ? `user:${presence.userId}` : `session:${presence.id}`, blocked);
+  if (presence) {
+    const personId = presence.userId ? `user:${presence.userId}` : `session:${presence.id}`;
+    const { label } = await setGalleryPersonVoteBlocked(adminId, personId, blocked);
+    return { blocked, personId, label };
+  }
   const sessionHash = hashVoteSession(sessionId)!;
   const existing = await prisma.galleryVoteBlock.findMany({ where: { sessionHash, reversedAt: null }, select: { id: true } });
   if (blocked && existing.length === 0) await createVoteBlock(adminId, { sessionId });
   if (!blocked) for (const block of existing) await reverseVoteBlock(adminId, block.id);
-  return { blocked };
+  return { blocked, personId: null, label: `Guest ${sessionHash.slice(0, 6).toUpperCase()}` };
 }

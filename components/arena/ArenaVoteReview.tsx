@@ -402,7 +402,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         return;
       }
       await refreshSelectedSession();
-      setNotice(blocked ? "Votes restricted." : "Voting restriction removed.");
+      setNotice(blocked ? `Restricted ${result.label}.` : `Removed restriction on ${result.label}.`);
     } catch {
       setNotice("Could not update this restriction.");
     } finally {
