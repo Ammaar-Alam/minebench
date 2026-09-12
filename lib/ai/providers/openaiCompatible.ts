@@ -373,6 +373,7 @@ export async function openAiCompatibleGenerateText(params: {
     if (params.onDelta) {
       let text = "";
       await consumeNodeSseStream(res.body, (evt) => {
+        if (controller.signal.aborted) return;
         if (evt.data === "[DONE]") return;
         let parsed: OpenAiCompatibleChatStreamChunk | null = null;
         try {
