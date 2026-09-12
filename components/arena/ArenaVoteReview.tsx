@@ -265,10 +265,6 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         return;
       }
       const voteIds = result.data.votes.map((vote) => vote.id);
-      // Compute how many incoming votes are genuinely new before setVotes updates votesRef.
-      const incomingNewCount = append
-        ? result.data.votes.filter((vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)).length
-        : 0;
       setVotes((current) => {
         if (!append) return result.data.votes;
         const existing = new Set(current.map((vote) => vote.id));
@@ -285,7 +281,12 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       if (!append) {
         freshPrefixCount.current = 0;
       } else {
-        freshPrefixCount.current += incomingNewCount;
+        // Advance the insertion boundary by the full incoming page size, not just the
+        // new-vote count. When a gap-fill page overlaps votes already in the retained
+        // history (duplicate IDs at the tail of the page), those retained votes are now
+        // contiguous with the fresh prefix and must be included in the boundary so the
+        // next gap-fill page is inserted at the correct position.
+        freshPrefixCount.current += result.data.votes.length;
       }
       setLoadedSessionId(sessionId);
       setPageVoteIds(voteIds);
