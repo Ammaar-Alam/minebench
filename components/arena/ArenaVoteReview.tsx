@@ -224,6 +224,13 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
   const activeSession = useRef<string | null>(null);
   const votesRef = useRef<Vote[]>([]);
   votesRef.current = votes;
+  // Tracks the number of "fresh" votes prepended by loadNewVotes when there is a gap between
+  // the fresh page and the previously-loaded history.  Gap-fill pages from "Load more" must be
+  // inserted at this position so that the list stays in descending order.
+  const freshPrefixCount = useRef(0);
+  // Remembers whether the last failed votes request was a new-vote refresh so the Retry button
+  // can replay the correct operation instead of always calling loadVotes (which replaces history).
+  const lastFailedNewVotes = useRef(false);
 
   const loadList = useCallback(async () => {
     const request = ++listRequest.current;
@@ -261,8 +268,23 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       setVotes((current) => {
         if (!append) return result.data.votes;
         const existing = new Set(current.map((vote) => vote.id));
-        return [...current, ...result.data.votes.filter((vote) => !existing.has(vote.id))];
+        const incoming = result.data.votes.filter((vote) => !existing.has(vote.id));
+        // Insert gap-fill pages between the fresh prefix and the retained older history so that
+        // the list remains in descending order.
+        const insertAt = freshPrefixCount.current;
+        return [
+          ...current.slice(0, insertAt),
+          ...incoming,
+          ...current.slice(insertAt),
+        ];
       });
+      if (!append) {
+        freshPrefixCount.current = 0;
+      } else {
+        freshPrefixCount.current += result.data.votes.filter(
+          (vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)
+        ).length;
+      }
       setLoadedSessionId(sessionId);
       setPageVoteIds(voteIds);
       setNextCursor(result.data.nextCursor);
@@ -270,6 +292,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         const liveIds = new Set(voteIds);
         setSelectedVoteIds((current) => new Set([...current].filter((id) => liveIds.has(id))));
       }
+      lastFailedNewVotes.current = false;
     } catch {
       if (request === votesRequest.current) setVotesError("Could not load vote history.");
     } finally {
@@ -287,25 +310,40 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       if (request !== votesRequest.current || sessionId !== activeSession.current) return;
       if (!result.ok) {
         setVotesError(result.error);
+        lastFailedNewVotes.current = true;
         return;
       }
       const newestLoadedId = votesRef.current[0]?.id;
       const freshIds = result.data.votes.map((vote) => vote.id);
+      const hasGap = !(newestLoadedId != null && result.data.votes.some((vote) => vote.id === newestLoadedId));
       setVotes((current) => {
         const existing = new Set(current.map((vote) => vote.id));
         const fresh = result.data.votes.filter((vote) => !existing.has(vote.id));
         return [...fresh, ...current];
       });
+      // When there is a gap, track how many fresh votes sit before the retained older history so
+      // that subsequent gap-fill pages (from "Load more") are inserted at the correct position.
+      if (hasGap) {
+        freshPrefixCount.current = result.data.votes.filter(
+          (vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)
+        ).length;
+      } else {
+        freshPrefixCount.current = 0;
+      }
       setLoadedSessionId(sessionId);
       setPageVoteIds(freshIds);
       // Keep the existing cursor when the fresh page overlaps the loaded history so "Load
       // more" continues from the oldest loaded vote; otherwise advance to the fresh page's
       // next cursor so "Load more" can fill the gap between the fresh and older history.
-      if (!(newestLoadedId != null && result.data.votes.some((vote) => vote.id === newestLoadedId))) {
+      if (hasGap) {
         setNextCursor(result.data.nextCursor);
       }
+      lastFailedNewVotes.current = false;
     } catch {
-      if (request === votesRequest.current) setVotesError("Could not load vote history.");
+      if (request === votesRequest.current) {
+        setVotesError("Could not load vote history.");
+        lastFailedNewVotes.current = true;
+      }
     } finally {
       if (request === votesRequest.current) setVotesLoading(false);
     }
@@ -315,6 +353,8 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
     if (sessionId === activeSession.current) return;
     activeSession.current = sessionId;
     votesRequest.current += 1;
+    freshPrefixCount.current = 0;
+    lastFailedNewVotes.current = false;
     setLoadedSessionId(null);
     setVotesError(null);
     setSelectedSessionId(sessionId);
@@ -536,7 +576,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
           ) : null}
           <div className="divide-y divide-border">
             {selectedSession && !votesError && (votesLoading || loadedSessionId !== selectedSessionId) && votes.length === 0 ? <p role="status" className="py-8 text-sm text-muted">Loading votes...</p> : null}
-            {votesError ? <div className="flex items-center gap-3 py-4"><p role="alert" className="text-sm text-danger">{votesError}</p><button type="button" className="mb-btn h-10" disabled={busy} onClick={() => selectedSessionId && void loadVotes(selectedSessionId)}>Retry</button></div> : null}
+            {votesError ? <div className="flex items-center gap-3 py-4"><p role="alert" className="text-sm text-danger">{votesError}</p><button type="button" className="mb-btn h-10" disabled={busy} onClick={() => { if (!selectedSessionId) return; if (lastFailedNewVotes.current) { void loadNewVotes(selectedSessionId); } else { void loadVotes(selectedSessionId); } }}>Retry</button></div> : null}
             {!votesLoading && !votesError && selectedSession && loadedSessionId === selectedSessionId && votes.length === 0 ? <p className="py-8 text-sm text-muted">No votes in this session.</p> : null}
             {votes.map((vote) => (
               <VoteCard
