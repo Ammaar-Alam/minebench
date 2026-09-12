@@ -265,6 +265,10 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
         return;
       }
       const voteIds = result.data.votes.map((vote) => vote.id);
+      // Compute how many incoming votes are genuinely new before setVotes updates votesRef.
+      const incomingNewCount = append
+        ? result.data.votes.filter((vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)).length
+        : 0;
       setVotes((current) => {
         if (!append) return result.data.votes;
         const existing = new Set(current.map((vote) => vote.id));
@@ -281,9 +285,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       if (!append) {
         freshPrefixCount.current = 0;
       } else {
-        freshPrefixCount.current += result.data.votes.filter(
-          (vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)
-        ).length;
+        freshPrefixCount.current += incomingNewCount;
       }
       setLoadedSessionId(sessionId);
       setPageVoteIds(voteIds);
@@ -316,6 +318,11 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       const newestLoadedId = votesRef.current[0]?.id;
       const freshIds = result.data.votes.map((vote) => vote.id);
       const hasGap = !(newestLoadedId != null && result.data.votes.some((vote) => vote.id === newestLoadedId));
+      // Compute the count of truly new votes before setVotes updates votesRef so the
+      // existing-id set still reflects the pre-update state.
+      const newFreshCount = hasGap
+        ? result.data.votes.filter((vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)).length
+        : 0;
       setVotes((current) => {
         const existing = new Set(current.map((vote) => vote.id));
         const fresh = result.data.votes.filter((vote) => !existing.has(vote.id));
@@ -323,13 +330,7 @@ export function ArenaVoteReview({ refreshedAt }: { refreshedAt: string }) {
       });
       // When there is a gap, track how many fresh votes sit before the retained older history so
       // that subsequent gap-fill pages (from "Load more") are inserted at the correct position.
-      if (hasGap) {
-        freshPrefixCount.current = result.data.votes.filter(
-          (vote) => !new Set(votesRef.current.map((v) => v.id)).has(vote.id)
-        ).length;
-      } else {
-        freshPrefixCount.current = 0;
-      }
+      freshPrefixCount.current = newFreshCount;
       setLoadedSessionId(sessionId);
       setPageVoteIds(freshIds);
       // Keep the existing cursor when the fresh page overlaps the loaded history so "Load
