@@ -32,7 +32,10 @@ function topLevelJsonObjectSlices(text: string): string[] {
       continue;
     }
 
-    if (ch === '"') {
+    // Only treat " as a JSON string delimiter once we are inside an object. A "
+    // at top level (depth 0) is prose, not a JSON string; an unbalanced prose
+    // quote must not desync the brace scanner into swallowing the real object.
+    if (depth > 0 && ch === '"') {
       inString = true;
       continue;
     }
